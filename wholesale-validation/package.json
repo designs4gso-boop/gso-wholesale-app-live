@@ -1,0 +1,15 @@
+{
+  "name": "wholesale-validation",
+  "version": "0.0.1",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "shopify": "npm exec -- shopify",
+    "typegen": "npm exec -- shopify app function typegen",
+    "build": "npm exec -- shopify app function build"
+  },
+  "dependencies": {
+    "@shopify/shopify_function": "^2.0.0",
+    "wholesale-lite-mvp": "file:../.."
+  }
+}

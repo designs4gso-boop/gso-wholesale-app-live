@@ -1,0 +1,7 @@
+api_version = "2026-01"
+
+[[extensions]]
+uid = "e0ecb88d-6710-e9b0-fc75-ba316f3754bfb1db70f4"
+type = "theme_app_extension"
+name = "wholesale-theme"
+handle = "wholesale-theme"

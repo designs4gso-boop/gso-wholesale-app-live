@@ -1,0 +1,39 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "30606090ba14770084410af7b31ff7ae"
+name = "GSO Wholesale Pricing Data"
+application_url = "https://gso-wholesale-app-live.onrender.com"
+embedded = true
+handle = "gso-wholesale-pricing-data-9420752"
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-01"
+
+[[webhooks.subscriptions]]
+topics = [ "app/uninstalled" ]
+uri = "/webhooks/app/uninstalled"
+
+[[webhooks.subscriptions]]
+uri = "/webhooks/compliance"
+compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
+[access_scopes]
+scopes = "read_customers,read_orders,read_products"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [
+  "https://gso-wholesale-app-live.onrender.com/auth/callback"
+]
+
+[app_proxy]
+url = "https://gso-wholesale-app-live.onrender.com/apps/wholesale-lite"
+subpath = "wholesale-lite"
+prefix = "apps"
+
+[pos]
+embedded = false

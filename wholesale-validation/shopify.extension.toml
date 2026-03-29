@@ -1,0 +1,16 @@
+api_version = "2026-01"
+
+[[extensions]]
+name = "Wholesale Validation"
+handle = "wholesale-validation"
+uid = "ac1a567d-903d-b168-58bb-d9fdaffc727fe467aa2d"
+type = "function"
+
+[[extensions.targeting]]
+target = "cart.validations.generate.run"
+input_query = "src/run.graphql"
+export = "run"
+
+[extensions.build]
+command = "npm run build"
+path = "dist/function.wasm"

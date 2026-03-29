@@ -1,0 +1,19 @@
+query Input {
+  cart {
+    cost {
+      subtotalAmount {
+        amount
+      }
+    }
+    buyerIdentity {
+      customer {
+        tags
+      }
+    }
+  }
+  validation {
+    metafield(namespace: "$app:wholesale-lite", key: "validation-configuration") {
+      value
+    }
+  }
+}

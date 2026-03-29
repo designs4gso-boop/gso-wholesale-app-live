@@ -1,0 +1,63 @@
+{% schema %}
+{
+  "name": "Wholesale registration",
+  "target": "section",
+  "javascript": "wholesale-registration.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Apply for wholesale access"
+    },
+    {
+      "type": "textarea",
+      "id": "copy",
+      "label": "Copy",
+      "default": "Already approved? Log in with your customer account and your wholesale pricing will apply automatically in cart and checkout."
+    }
+  ]
+}
+{% endschema %}
+
+<div class="wholesale-registration-block" data-wholesale-app-proxy="/apps/wholesale-lite/">
+  <h2>{{ block.settings.heading }}</h2>
+  <p>{{ block.settings.copy }}</p>
+
+  <form class="wholesale-registration-form">
+    <div>
+      <label>First name</label>
+      <input type="text" name="first_name" />
+    </div>
+    <div>
+      <label>Last name</label>
+      <input type="text" name="last_name" />
+    </div>
+    <div>
+      <label>Email</label>
+      <input type="email" name="email" required />
+    </div>
+    <div>
+      <label>Company name</label>
+      <input type="text" name="company_name" />
+    </div>
+    <div>
+      <label>Phone</label>
+      <input type="text" name="phone" />
+    </div>
+    <div>
+      <label>Resale number</label>
+      <input type="text" name="resale_number" />
+    </div>
+    <div>
+      <label>Tax ID</label>
+      <input type="text" name="tax_id" />
+    </div>
+    <div>
+      <label>Notes</label>
+      <textarea name="notes"></textarea>
+    </div>
+    <button type="submit">Submit application</button>
+    <p class="wholesale-registration-message" aria-live="polite"></p>
+  </form>
+</div>
