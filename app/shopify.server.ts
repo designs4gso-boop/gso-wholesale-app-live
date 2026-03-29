@@ -11,12 +11,15 @@ import { db } from "./db.server";
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
-  apiVersion: ApiVersion.January26,
+  apiVersion: ApiVersion.October25,
   scopes: process.env.SCOPES?.split(",") || [],
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(db),
-  distribution: AppDistribution.AppStore,
+  distribution: AppDistribution.SingleMerchant,
+  future: {
+    expiringOfflineAccessTokens: true,
+  },
   webhooks: {
     APP_UNINSTALLED: {
       deliveryMethod: DeliveryMethod.Http,
@@ -36,9 +39,10 @@ const shopify = shopifyApp({
 });
 
 export default shopify;
+export const apiVersion = ApiVersion.October25;
+export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
 export const authenticate = shopify.authenticate;
 export const unauthenticated = shopify.unauthenticated;
 export const login = shopify.login;
 export const registerWebhooks = shopify.registerWebhooks;
-export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
 export const sessionStorage = shopify.sessionStorage;
