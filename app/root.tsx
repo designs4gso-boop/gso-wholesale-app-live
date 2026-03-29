@@ -1,22 +1,4 @@
-import type { HeadersFunction } from "react-router";
-import {
-  Links,
-  Meta,
-  Outlet,
-  Scripts,
-  ScrollRestoration,
-} from "react-router";
-
-import { addDocumentResponseHeaders } from "./shopify.server";
-
-export const headers: HeadersFunction = (headersArgs) => {
-  try {
-    return addDocumentResponseHeaders(headersArgs);
-  } catch (error) {
-    console.error("root headers failed", error);
-    return {};
-  }
-};
+import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
 export default function App() {
   return (
