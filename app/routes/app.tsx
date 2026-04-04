@@ -18,6 +18,9 @@ export default function App() {
 
   return (
     <AppProvider embedded apiKey={apiKey}>
+      <s-app-nav>
+        <s-link href="/app">Wholesale Lite</s-link>
+      </s-app-nav>
       <Outlet />
     </AppProvider>
   );

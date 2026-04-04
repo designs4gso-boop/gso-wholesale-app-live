@@ -1,4 +1,4 @@
-import { json } from "react-router";
+import { data } from "react-router";
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { createWholesaleApplication, getWholesaleConfig } from "../lib/wholesale.server";
@@ -13,20 +13,20 @@ async function tagsAdd(admin: any, id: string, tags: string[]) {
     }`,
     { variables: { id, tags } },
   );
-  const data = await res.json();
-  const errs = data?.data?.tagsAdd?.userErrors || [];
+  const payload = await res.json();
+  const errs = payload?.data?.tagsAdd?.userErrors || [];
   if (errs.length) throw new Error(errs.map((e: any) => e.message).join(", "));
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.public.appProxy(request);
   if (!admin || !session) {
-    return json({ ok: false, message: "App not installed." }, { status: 400 });
+    return data({ ok: false, message: "App not installed." }, { status: 400 });
   }
 
   const body = await request.formData();
   const email = String(body.get("email") || "").trim();
-  if (!email) return json({ ok: false, message: "Email is required." }, { status: 400 });
+  if (!email) return data({ ok: false, message: "Email is required." }, { status: 400 });
 
   const companyName = String(body.get("company_name") || "").trim() || null;
   const phone = String(body.get("phone") || "").trim() || null;
@@ -74,7 +74,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const createData = await createRes.json();
     const errs = createData?.data?.customerCreate?.userErrors || [];
     if (errs.length) {
-      return json({ ok: false, message: errs.map((e: any) => e.message).join(", ") }, { status: 400 });
+      return data({ ok: false, message: errs.map((e: any) => e.message).join(", ") }, { status: 400 });
     }
     customerId = createData?.data?.customerCreate?.customer?.id;
   } else {
@@ -91,5 +91,5 @@ export async function action({ request }: ActionFunctionArgs) {
     notes: notes || undefined,
   });
 
-  return json({ ok: true, message: "Application submitted." });
+  return data({ ok: true, message: "Application submitted." });
 }

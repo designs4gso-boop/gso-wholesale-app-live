@@ -1,4 +1,4 @@
-import { json, redirect } from "react-router";
+import { data, redirect } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { Page, Layout, Card, Text, BlockStack, Button, Banner } from "@shopify/polaris";
@@ -11,7 +11,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     getRules(session.shop),
     getWholesaleConfig(session.shop),
   ]);
-  return json({ rules, config });
+  return data({ rules, config });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -38,8 +38,8 @@ export async function action({ request }: ActionFunctionArgs) {
       ? Number(formData.get("minSubtotal"))
       : null;
 
-    if (!title) return json({ ok: false, error: "Title is required." });
-    if (!customerTag) return json({ ok: false, error: "Customer tag is required." });
+    if (!title) return data({ ok: false, error: "Title is required." });
+    if (!customerTag) return data({ ok: false, error: "Customer tag is required." });
 
     await createRule(session.shop, {
       title,
@@ -64,7 +64,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return redirect("/app/wholesale/rules");
   }
 
-  return json({ ok: false, error: "Unknown action." });
+  return data({ ok: false, error: "Unknown action." });
 }
 
 export default function PricingRulesPage() {

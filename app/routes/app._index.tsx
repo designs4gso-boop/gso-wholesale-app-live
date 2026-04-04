@@ -1,8 +1,20 @@
+import type { LoaderFunctionArgs } from "react-router";
+
+import { authenticate } from "../shopify.server";
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  await authenticate.admin(request);
+  return null;
+};
+
 export default function AppIndex() {
   return (
-    <div style={{ padding: 24 }}>
-      <h1>Wholesale Lite MVP</h1>
-      <p>Embedded Shopify admin app is authenticated and loading.</p>
-    </div>
+    <s-page>
+      <s-section heading="Wholesale Lite">
+        <s-text>
+          Shopify embedded app auth is working.
+        </s-text>
+      </s-section>
+    </s-page>
   );
 }

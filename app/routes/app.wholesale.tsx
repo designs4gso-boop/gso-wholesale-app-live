@@ -1,4 +1,4 @@
-import { json } from "react-router";
+import { data } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import {
@@ -10,7 +10,7 @@ import { getWholesaleConfig, saveWholesaleConfig } from "../lib/wholesale.server
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const config = await getWholesaleConfig(session.shop);
-  return json({ config, shop: session.shop });
+  return data({ config, shop: session.shop });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -28,7 +28,7 @@ export async function action({ request }: ActionFunctionArgs) {
     lockWholesaleAccess: formData.get("lockWholesaleAccess") === "on",
   });
 
-  return json({ ok: true });
+  return data({ ok: true });
 }
 
 export default function WholesaleSettingsPage() {

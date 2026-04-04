@@ -1,4 +1,4 @@
-import { json } from "react-router";
+import { data } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getProductWholesalePricing } from "../lib/wholesale.server";
@@ -14,14 +14,14 @@ async function customerTagsForEmail(admin: any, email: string | null) {
     }`,
     { variables: { query: `email:${email}` } },
   );
-  const data = await res.json();
-  return data?.data?.customers?.nodes?.[0]?.tags || [];
+  const payload = await res.json();
+  return payload?.data?.customers?.nodes?.[0]?.tags || [];
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.public.appProxy(request);
   if (!admin || !session) {
-    return json({ ok: false, message: "App not installed." }, { status: 400 });
+    return data({ ok: false, message: "App not installed." }, { status: 400 });
   }
 
   const url = new URL(request.url);
@@ -32,7 +32,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const cartQuantity = Number(url.searchParams.get("cart_quantity") || 0);
 
   if (!productId || variantIds.length === 0) {
-    return json({ ok: false, message: "product_id and variant_ids required." }, { status: 400 });
+    return data({ ok: false, message: "product_id and variant_ids required." }, { status: 400 });
   }
 
   const customerTags = await customerTagsForEmail(admin, customerEmail);
@@ -46,7 +46,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     cartQuantity,
   );
 
-  return json({
+  return data({
     ok: true,
     customerTags,
     settings: {

@@ -1,4 +1,4 @@
-import { json, redirect } from "react-router";
+import { data, redirect } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useLoaderData } from "react-router";
 import { Page, Card, BlockStack, Text, Button } from "@shopify/polaris";
@@ -11,7 +11,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     where: { shop: session.shop },
     orderBy: { createdAt: "desc" },
   });
-  return json({ registrations });
+  return data({ registrations });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
