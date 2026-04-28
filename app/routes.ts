@@ -8,6 +8,9 @@ export default [
 
   route("app", "routes/app.tsx", [
     index("routes/app._index.tsx"),
+    route("wholesale", "routes/app.wholesale.tsx"),
+    route("wholesale/rules", "routes/app.wholesale.rules.tsx"),
+    route("wholesale/customers", "routes/app.wholesale.customers.tsx"),
   ]),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
