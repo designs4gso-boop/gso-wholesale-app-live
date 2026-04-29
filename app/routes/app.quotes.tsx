@@ -46,6 +46,15 @@ type Quote = {
 
 const STORAGE_KEY = "gso_quotes_v1";
 
+const statuses = [
+  { label: "Draft", value: "draft" },
+  { label: "Sent", value: "sent" },
+  { label: "Approved", value: "approved" },
+  { label: "Paid", value: "paid" },
+  { label: "In Production", value: "production" },
+  { label: "Completed", value: "completed" },
+];
+
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -67,6 +76,8 @@ export default function QuotesPage() {
   const navigate = useNavigate();
 
   const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
   const [customerName, setCustomerName] = useState("");
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
@@ -83,6 +94,17 @@ export default function QuotesPage() {
   function saveAll(next: Quote[]) {
     setQuotes(next);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  }
+
+  function resetQuote() {
+    setEditingId(null);
+    setCustomerName("");
+    setCompany("");
+    setEmail("");
+    setPhone("");
+    setStatus("draft");
+    setNotes("");
+    setItems([emptyItem()]);
   }
 
   function addItem() {
@@ -117,7 +139,7 @@ export default function QuotesPage() {
 
   function saveQuote() {
     const quote: Quote = {
-      id: uid(),
+      id: editingId || uid(),
       customerName,
       company,
       email,
@@ -125,13 +147,21 @@ export default function QuotesPage() {
       status,
       items,
       notes,
-      createdAt: new Date().toLocaleString(),
+      createdAt: editingId
+        ? quotes.find((q) => q.id === editingId)?.createdAt || new Date().toLocaleString()
+        : new Date().toLocaleString(),
     };
 
-    saveAll([quote, ...quotes]);
+    const next = editingId
+      ? quotes.map((q) => (q.id === editingId ? quote : q))
+      : [quote, ...quotes];
+
+    saveAll(next);
+    setEditingId(quote.id);
   }
 
   function loadQuote(quote: Quote) {
+    setEditingId(quote.id);
     setCustomerName(quote.customerName);
     setCompany(quote.company);
     setEmail(quote.email);
@@ -143,6 +173,14 @@ export default function QuotesPage() {
 
   function deleteQuote(id: string) {
     saveAll(quotes.filter((quote) => quote.id !== id));
+    if (editingId === id) resetQuote();
+  }
+
+  function updateQuoteStatus(id: string, nextStatus: string) {
+    const next = quotes.map((quote) =>
+      quote.id === id ? { ...quote, status: nextStatus } : quote
+    );
+    saveAll(next);
   }
 
   function printQuote() {
@@ -151,7 +189,7 @@ export default function QuotesPage() {
 
   function emailQuote() {
     const body = encodeURIComponent(
-      `Quote for ${company || customerName}\n\nTotal: $${totals.revenue.toFixed(
+      `GSO Packaging Quote\n\nCustomer: ${customerName}\nCompany: ${company}\n\nTotal: $${totals.revenue.toFixed(
         2
       )}\nProfit: $${totals.profit.toFixed(2)}\nMargin: ${totals.margin.toFixed(
         1
@@ -168,10 +206,11 @@ export default function QuotesPage() {
   return (
     <Page
       title="GSO Quote Builder"
-      subtitle="Create customer quotes, calculate profit, save quote history, and send or print quotes."
+      subtitle="Create quotes, save customer history, track pipeline status, and send or print quotes."
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
-      primaryAction={{ content: "Save Quote", onAction: saveQuote }}
+      primaryAction={{ content: editingId ? "Update Quote" : "Save Quote", onAction: saveQuote }}
       secondaryActions={[
+        { content: "New Quote", onAction: resetQuote },
         { content: "Print / PDF", onAction: printQuote },
         { content: "Email Quote", onAction: emailQuote },
         { content: "Pricing Calculator", onAction: () => navigate("/app/wholesale/calculator") },
@@ -196,19 +235,7 @@ export default function QuotesPage() {
                 <TextField label="Phone" value={phone} onChange={setPhone} autoComplete="off" />
               </InlineStack>
 
-              <Select
-                label="Quote Status"
-                value={status}
-                onChange={setStatus}
-                options={[
-                  { label: "Draft", value: "draft" },
-                  { label: "Sent", value: "sent" },
-                  { label: "Approved", value: "approved" },
-                  { label: "Paid", value: "paid" },
-                  { label: "In Production", value: "production" },
-                  { label: "Completed", value: "completed" },
-                ]}
-              />
+              <Select label="Quote Status" value={status} onChange={setStatus} options={statuses} />
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -237,7 +264,6 @@ export default function QuotesPage() {
                     </InlineStack>
 
                     <TextField label="Item Notes" value={item.notes} onChange={(v) => updateItem(item.id, "notes", v)} autoComplete="off" />
-
                     <Button tone="critical" onClick={() => deleteItem(item.id)}>Delete Item</Button>
                   </BlockStack>
                 </Card>
@@ -259,7 +285,9 @@ export default function QuotesPage() {
               <TextField label="Quote Notes" value={notes} onChange={setNotes} multiline={4} autoComplete="off" />
 
               <InlineStack gap="300">
-                <Button variant="primary" onClick={saveQuote}>Save Quote</Button>
+                <Button variant="primary" onClick={saveQuote}>
+                  {editingId ? "Update Quote" : "Save Quote"}
+                </Button>
                 <Button onClick={printQuote}>Download / Print PDF</Button>
                 <Button onClick={emailQuote}>Email Quote</Button>
               </InlineStack>
@@ -270,30 +298,52 @@ export default function QuotesPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Saved Quotes / CRM Pipeline</Text>
+              <Text as="h2" variant="headingMd">CRM Pipeline</Text>
 
-              {quotes.length === 0 ? (
-                <Text as="p" tone="subdued">No saved quotes yet.</Text>
-              ) : (
-                quotes.map((quote) => (
-                  <Card key={quote.id}>
-                    <InlineStack align="space-between">
-                      <BlockStack gap="100">
+              <InlineStack gap="300" align="start">
+                {statuses.map((stage) => {
+                  const stageQuotes = quotes.filter((q) => q.status === stage.value);
+
+                  return (
+                    <Card key={stage.value}>
+                      <BlockStack gap="200">
                         <Text as="h3" variant="headingSm">
-                          {quote.company || quote.customerName || "Unnamed Quote"}
+                          {stage.label} ({stageQuotes.length})
                         </Text>
-                        <Text as="p" tone="subdued">{quote.createdAt}</Text>
-                        <Badge>{quote.status}</Badge>
-                      </BlockStack>
 
-                      <InlineStack gap="200">
-                        <Button onClick={() => loadQuote(quote)}>Open</Button>
-                        <Button tone="critical" onClick={() => deleteQuote(quote.id)}>Delete</Button>
-                      </InlineStack>
-                    </InlineStack>
-                  </Card>
-                ))
-              )}
+                        {stageQuotes.length === 0 ? (
+                          <Text as="p" tone="subdued">No quotes</Text>
+                        ) : (
+                          stageQuotes.map((quote) => (
+                            <Card key={quote.id}>
+                              <BlockStack gap="200">
+                                <Text as="p" fontWeight="bold">
+                                  {quote.company || quote.customerName || "Unnamed Quote"}
+                                </Text>
+                                <Text as="p" tone="subdued">{quote.createdAt}</Text>
+
+                                <Select
+                                  label="Move"
+                                  value={quote.status}
+                                  onChange={(v) => updateQuoteStatus(quote.id, v)}
+                                  options={statuses}
+                                />
+
+                                <InlineStack gap="200">
+                                  <Button onClick={() => loadQuote(quote)}>Open</Button>
+                                  <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
+                                    Delete
+                                  </Button>
+                                </InlineStack>
+                              </BlockStack>
+                            </Card>
+                          ))
+                        )}
+                      </BlockStack>
+                    </Card>
+                  );
+                })}
+              </InlineStack>
             </BlockStack>
           </Card>
         </Layout.Section>
