@@ -1,6 +1,6 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 import { AppProvider } from "@shopify/polaris";
-import { AppProvider as AppBridgeProvider } from "@shopify/shopify-app-react-router";
+import { AppProvider as AppBridgeProvider } from "@shopify/shopify-app-react-router/react";
 import "@shopify/polaris/build/esm/styles.css";
 
 export default function App() {
