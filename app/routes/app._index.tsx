@@ -1,46 +1,95 @@
-import type { LoaderFunctionArgs } from "react-router";
-
-import { authenticate } from "../shopify.server";
-
-import { Page, Card, Text, Button, BlockStack } from "@shopify/polaris";
+import {
+  Page,
+  Layout,
+  Card,
+  Text,
+  Button,
+  BlockStack,
+  InlineStack,
+  Badge,
+} from "@shopify/polaris";
 
 export default function Index() {
   return (
-    <Page title="GSO Wholesale Dashboard">
-      <BlockStack gap="400">
+    <Page
+      title="GSO Wholesale Command Center"
+      subtitle="Manage wholesale pricing, customers, calculators, rules, and applications."
+    >
+      <Layout>
+        <Layout.Section>
+          <BlockStack gap="400">
+            <Card>
+              <BlockStack gap="400">
+                <InlineStack align="space-between" blockAlign="center">
+                  <BlockStack gap="100">
+                    <Text as="h2" variant="headingLg">
+                      Wholesale Lite
+                    </Text>
+                    <Text as="p" tone="subdued">
+                      Shopify embedded app auth is working.
+                    </Text>
+                  </BlockStack>
 
-        <Card>
-          <Text as="p">
-            Shopify embedded app auth is working.
-          </Text>
-        </Card>
+                  <Badge tone="success">Live</Badge>
+                </InlineStack>
 
-        {/* 🔥 YOUR NEW BUTTON */}
-        <Card>
-          <BlockStack gap="200">
-            <Text variant="headingMd">
-              Wholesale Tools
-            </Text>
+                <InlineStack gap="300">
+                  <Button variant="primary" url="/app/wholesale/calculator">
+                    Cost Calculator
+                  </Button>
 
-            <Button url="/app/wholesale/calculator">
-              Open Cost Calculator
-            </Button>
+                  <Button url="/app/wholesale/rules">
+                    Pricing Rules
+                  </Button>
+
+                  <Button url="/app/wholesale/customers">
+                    Wholesale Customers
+                  </Button>
+
+                  <Button url="/app/wholesale">
+                    Wholesale Settings
+                  </Button>
+                </InlineStack>
+              </BlockStack>
+            </Card>
+
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Wholesale Engine Status
+                </Text>
+
+                <Text as="p">Customer tag pricing enabled</Text>
+                <Text as="p">Tier pricing enabled</Text>
+                <Text as="p">Cost calculator database ready</Text>
+                <Text as="p">Shopify discount function deployed</Text>
+              </BlockStack>
+            </Card>
           </BlockStack>
-        </Card>
+        </Layout.Section>
 
-      </BlockStack>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Quick Actions
+              </Text>
+
+              <Button fullWidth url="/app/wholesale/calculator">
+                Build Quote
+              </Button>
+
+              <Button fullWidth url="/app/wholesale/rules">
+                Create Pricing Tier
+              </Button>
+
+              <Button fullWidth url="/app/create-wholesale-discount">
+                Create Shopify Discount
+              </Button>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+      </Layout>
     </Page>
-  );
-}
-
-export default function AppIndex() {
-  return (
-    <s-page>
-      <s-section heading="Wholesale Lite">
-        <s-text>
-          Shopify embedded app auth is working.
-        </s-text>
-      </s-section>
-    </s-page>
   );
 }
