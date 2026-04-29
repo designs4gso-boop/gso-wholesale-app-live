@@ -18,4 +18,5 @@ export default [
   route("apps/wholesale-lite/validate", "routes/apps.wholesale-lite.validate.ts"),
 
   route("webhooks/app/uninstalled", "routes/webhooks.app.uninstalled.ts"),
+  route("app/create-wholesale-discount", "routes/app.create-wholesale-discount.tsx"),
 ] satisfies RouteConfig;
