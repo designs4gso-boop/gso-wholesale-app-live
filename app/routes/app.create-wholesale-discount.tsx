@@ -34,10 +34,7 @@ export const loader = async ({ request }: { request: Request }) => {
           title: "Wholesale Pricing"
           functionId: $functionId
           startsAt: "2024-01-01T00:00:00Z"
-          combinesWith: {
-            orderDiscounts: true
-            productDiscounts: true
-            shippingDiscounts: true
+          discountClasses: ["ORDER"],
           }
         }
       ) {
