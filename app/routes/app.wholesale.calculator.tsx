@@ -11,8 +11,17 @@ import {
   Divider,
 } from "@shopify/polaris";
 import { useState } from "react";
+import { useNavigate } from "@remix-run/react";
+import { authenticate } from "../shopify.server";
+
+export async function loader({ request }: { request: Request }) {
+  await authenticate.admin(request);
+  return null;
+}
 
 export default function WholesaleCalculator() {
+  const navigate = useNavigate();
+
   const [materialCost, setMaterialCost] = useState("0.18");
   const [printCost, setPrintCost] = useState("0.08");
   const [laborCost, setLaborCost] = useState("0.06");
@@ -73,21 +82,30 @@ export default function WholesaleCalculator() {
     <Page
       title="Wholesale Cost Calculator"
       subtitle="Calculate print costs, minimum quantities, wholesale price, profit, and margins."
-      backAction={{ content: "Dashboard", url: "/app" }}
+      backAction={{
+        content: "Dashboard",
+        onAction: () => navigate("/app"),
+      }}
       primaryAction={{
         content: "Pricing Rules",
-        url: "/app/wholesale/rules",
+        onAction: () => navigate("/app/wholesale/rules"),
       }}
       secondaryActions={[
-        { content: "Customers", url: "/app/wholesale/customers" },
-        { content: "Settings", url: "/app/wholesale" },
+        {
+          content: "Customers",
+          onAction: () => navigate("/app/wholesale/customers"),
+        },
+        {
+          content: "Settings",
+          onAction: () => navigate("/app/wholesale"),
+        },
       ]}
     >
       <Layout>
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <InlineStack align="space-between">
+              <InlineStack align="space-between" blockAlign="center">
                 <Text as="h2" variant="headingMd">
                   Quick Wholesale Tiers
                 </Text>
@@ -162,7 +180,7 @@ export default function WholesaleCalculator() {
           </Card>
         </Layout.Section>
 
-        <Layout.Section variant="oneThird">
+        <Layout.Section>
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">
@@ -192,7 +210,7 @@ export default function WholesaleCalculator() {
                 Save Calculator Preset
               </Button>
 
-              <Button fullWidth url="/app/wholesale/rules">
+              <Button fullWidth onClick={() => navigate("/app/wholesale/rules")}>
                 Turn Into Pricing Rule
               </Button>
             </BlockStack>
