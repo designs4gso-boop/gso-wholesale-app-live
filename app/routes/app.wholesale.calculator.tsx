@@ -10,14 +10,10 @@ import {
   Badge,
   Divider,
 } from "@shopify/polaris";
-import { useState } from "react";
-import { useNavigate } from "@remix-run/react";
-import { authenticate } from "../shopify.server";
 
-export async function loader({ request }: { request: Request }) {
-  await authenticate.admin(request);
-  return null;
-}
+import { useState } from "react";
+import { useNavigate } from "react-router";
+
 
 export default function WholesaleCalculator() {
   const navigate = useNavigate();
