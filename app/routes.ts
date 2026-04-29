@@ -1,23 +1,98 @@
-import { type RouteConfig, index, route } from "@react-router/dev/routes";
+import {
+  Page,
+  Layout,
+  Card,
+  Text,
+  Button,
+  BlockStack,
+  InlineStack,
+  Badge,
+} from "@shopify/polaris";
+import { useNavigate } from "@remix-run/react";
 
-export default [
-  index("routes/_index.tsx"),
+export default function Index() {
+  const navigate = useNavigate();
 
-  route("auth/login", "routes/auth.login/route.tsx"),
-  route("auth/*", "routes/auth.$.tsx"),
+  return (
+    <Page
+      title="GSO Wholesale Command Center"
+      subtitle="Manage wholesale pricing, customers, calculators, rules, and applications."
+    >
+      <Layout>
+        <Layout.Section>
+          <BlockStack gap="400">
+            <Card>
+              <BlockStack gap="400">
+                <InlineStack align="space-between" blockAlign="center">
+                  <BlockStack gap="100">
+                    <Text as="h2" variant="headingLg">
+                      Wholesale Lite
+                    </Text>
+                    <Text as="p" tone="subdued">
+                      Shopify embedded app auth is working.
+                    </Text>
+                  </BlockStack>
 
-  route("app", "routes/app.tsx", [
-  index("routes/app._index.tsx"),
-  route("wholesale", "routes/app.wholesale.tsx"),
-  route("wholesale/rules", "routes/app.wholesale.rules.tsx"),
-  route("wholesale/customers", "routes/app.wholesale.customers.tsx"),
-  route("wholesale/calculator", "routes/app.wholesale.calculator.tsx"),
-]),
+                  <Badge tone="success">Live</Badge>
+                </InlineStack>
 
-  route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
-  route("apps/wholesale-lite/pricing", "routes/apps.wholesale-lite.pricing.ts"),
-  route("apps/wholesale-lite/validate", "routes/apps.wholesale-lite.validate.ts"),
+                <InlineStack gap="300">
+                  <Button variant="primary" onClick={() => navigate("/app/wholesale/calculator")}>
+                    Cost Calculator
+                  </Button>
 
-  route("webhooks/app/uninstalled", "routes/webhooks.app.uninstalled.ts"),
-  route("app/create-wholesale-discount", "routes/app.create-wholesale-discount.tsx"),
-] satisfies RouteConfig;
+                  <Button onClick={() => navigate("/app/wholesale/rules")}>
+                    Pricing Rules
+                  </Button>
+
+                  <Button onClick={() => navigate("/app/wholesale/customers")}>
+                    Wholesale Customers
+                  </Button>
+
+                  <Button onClick={() => navigate("/app/wholesale")}>
+                    Wholesale Settings
+                  </Button>
+                </InlineStack>
+              </BlockStack>
+            </Card>
+
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Wholesale Engine Status
+                </Text>
+
+                <Text as="p">Customer tag pricing enabled</Text>
+                <Text as="p">Tier pricing enabled</Text>
+                <Text as="p">Cost calculator database ready</Text>
+                <Text as="p">Shopify discount function deployed</Text>
+              </BlockStack>
+            </Card>
+          </BlockStack>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Quick Actions
+              </Text>
+
+              <Button fullWidth onClick={() => navigate("/app/wholesale/calculator")}>
+                Build Quote
+              </Button>
+
+              <Button fullWidth onClick={() => navigate("/app/wholesale/rules")}>
+                Create Pricing Tier
+              </Button>
+
+              <Button fullWidth onClick={() => navigate("/app/create-wholesale-discount")}>
+                Create Shopify Discount
+              </Button>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+      </Layout>
+    </Page>
+  );
+}
