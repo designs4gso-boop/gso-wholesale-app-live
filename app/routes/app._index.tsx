@@ -563,6 +563,10 @@ export default function WholesaleCalculator() {
                           prefix="$"
                           autoComplete="off"
                         />
+                        
+                        <Button variant="primary" onClick={() => navigate("quotes")}>
+                          Quote Builder
+</                       Button>
 
                         <Button tone="critical" onClick={() => deleteItem(sectionKey, row.id)}>
                           Delete

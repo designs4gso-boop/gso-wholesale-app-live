@@ -12,6 +12,7 @@ export default [
     route("wholesale/rules", "routes/app.wholesale.rules.tsx"),
     route("wholesale/customers", "routes/app.wholesale.customers.tsx"),
     route("wholesale/calculator", "routes/app.wholesale.calculator.tsx"),
+    route("quotes", "routes/app.quotes.tsx"),
   ]),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
