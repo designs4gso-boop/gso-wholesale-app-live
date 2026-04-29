@@ -1,12 +1,12 @@
-import { redirect } from "react-router";
+import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 
-export const loader = async ({ request }: { request: Request }) => {
+export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
 
   const functionsRes = await admin.graphql(`
     query {
-      shopifyFunctions(first: 20) {
+      shopifyFunctions(first: 25) {
         nodes {
           id
           title
@@ -18,36 +18,52 @@ export const loader = async ({ request }: { request: Request }) => {
 
   const functionsJson = await functionsRes.json();
 
-  const fn = functionsJson.data.shopifyFunctions.nodes.find((f: any) =>
-    f.title.toLowerCase().includes("gso-wholesale-discount")
+  const fn = functionsJson?.data?.shopifyFunctions?.nodes?.find((f: any) =>
+    String(f.title || "").toLowerCase().includes("gso-wholesale-discount")
   );
 
-  if (!fn) {
-    return new Response("Function not found", { status: 404 });
+  if (!fn?.id) {
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "Function not found",
+        availableFunctions: functionsJson?.data?.shopifyFunctions?.nodes || [],
+      }),
+      {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   }
 
   const createRes = await admin.graphql(
     `
-    mutation CreateWholesaleDiscount($functionId: String!) {
-      discountAutomaticAppCreate(
-        automaticAppDiscount: {
-          title: "Wholesale Pricing"
-          functionId: $functionId
-          startsAt: "2024-01-01T00:00:00Z"
-          discountClasses: ["ORDER"],
+      mutation CreateWholesaleDiscount($functionId: String!) {
+        discountAutomaticAppCreate(
+          automaticAppDiscount: {
+            title: "Wholesale Pricing"
+            functionId: $functionId
+            startsAt: "2024-01-01T00:00:00Z"
+            discountClasses: [PRODUCT]
+            combinesWith: {
+              orderDiscounts: true
+              productDiscounts: true
+              shippingDiscounts: true
+            }
+          }
+        ) {
+          automaticAppDiscount {
+            discountId
+            title
+            status
+          }
+          userErrors {
+            field
+            message
           }
         }
-      ) {
-        automaticAppDiscount {
-          discountId
-        }
-        userErrors {
-          field
-          message
-        }
       }
-    }
-  `,
+    `,
     {
       variables: {
         functionId: fn.id,
