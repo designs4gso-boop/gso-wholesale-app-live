@@ -8,11 +8,10 @@ import {
   InlineStack,
   Badge,
 } from "@shopify/polaris";
+import { useNavigate } from "react-router";
 
 export default function Index() {
-  function goTo(path: string) {
-    window.open(path, "_top");
-  }
+  const navigate = useNavigate();
 
   return (
     <Page
@@ -38,22 +37,19 @@ export default function Index() {
                 </InlineStack>
 
                 <InlineStack gap="300">
-                  <Button
-                    variant="primary"
-                    onClick={() => goTo("/app/wholesale/calculator")}
-                  >
+                  <Button variant="primary" onClick={() => navigate("wholesale/calculator")}>
                     Cost Calculator
                   </Button>
 
-                  <Button onClick={() => goTo("/app/wholesale/rules")}>
+                  <Button onClick={() => navigate("wholesale/rules")}>
                     Pricing Rules
                   </Button>
 
-                  <Button onClick={() => goTo("/app/wholesale/customers")}>
+                  <Button onClick={() => navigate("wholesale/customers")}>
                     Wholesale Customers
                   </Button>
 
-                  <Button onClick={() => goTo("/app/wholesale")}>
+                  <Button onClick={() => navigate("wholesale")}>
                     Wholesale Settings
                   </Button>
                 </InlineStack>
@@ -65,7 +61,6 @@ export default function Index() {
                 <Text as="h2" variant="headingMd">
                   Wholesale Engine Status
                 </Text>
-
                 <Text as="p">Customer tag pricing enabled</Text>
                 <Text as="p">Tier pricing enabled</Text>
                 <Text as="p">Cost calculator database ready</Text>
@@ -79,24 +74,15 @@ export default function Index() {
                   Quick Actions
                 </Text>
 
-                <Button
-                  fullWidth
-                  onClick={() => goTo("/app/wholesale/calculator")}
-                >
+                <Button fullWidth onClick={() => navigate("wholesale/calculator")}>
                   Build Quote
                 </Button>
 
-                <Button
-                  fullWidth
-                  onClick={() => goTo("/app/wholesale/rules")}
-                >
+                <Button fullWidth onClick={() => navigate("wholesale/rules")}>
                   Create Pricing Tier
                 </Button>
 
-                <Button
-                  fullWidth
-                  onClick={() => goTo("/app/create-wholesale-discount")}
-                >
+                <Button fullWidth onClick={() => navigate("create-wholesale-discount")}>
                   Create Shopify Discount
                 </Button>
               </BlockStack>
