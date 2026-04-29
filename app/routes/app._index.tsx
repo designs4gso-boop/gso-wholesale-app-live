@@ -10,6 +10,10 @@ import {
 } from "@shopify/polaris";
 
 export default function Index() {
+  function goTo(path: string) {
+    window.open(path, "_top");
+  }
+
   return (
     <Page
       title="GSO Wholesale Command Center"
@@ -34,19 +38,22 @@ export default function Index() {
                 </InlineStack>
 
                 <InlineStack gap="300">
-                  <Button variant="primary" url="/app/wholesale/calculator">
+                  <Button
+                    variant="primary"
+                    onClick={() => goTo("/app/wholesale/calculator")}
+                  >
                     Cost Calculator
                   </Button>
 
-                  <Button url="/app/wholesale/rules">
+                  <Button onClick={() => goTo("/app/wholesale/rules")}>
                     Pricing Rules
                   </Button>
 
-                  <Button url="/app/wholesale/customers">
+                  <Button onClick={() => goTo("/app/wholesale/customers")}>
                     Wholesale Customers
                   </Button>
 
-                  <Button url="/app/wholesale">
+                  <Button onClick={() => goTo("/app/wholesale")}>
                     Wholesale Settings
                   </Button>
                 </InlineStack>
@@ -65,29 +72,36 @@ export default function Index() {
                 <Text as="p">Shopify discount function deployed</Text>
               </BlockStack>
             </Card>
+
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Quick Actions
+                </Text>
+
+                <Button
+                  fullWidth
+                  onClick={() => goTo("/app/wholesale/calculator")}
+                >
+                  Build Quote
+                </Button>
+
+                <Button
+                  fullWidth
+                  onClick={() => goTo("/app/wholesale/rules")}
+                >
+                  Create Pricing Tier
+                </Button>
+
+                <Button
+                  fullWidth
+                  onClick={() => goTo("/app/create-wholesale-discount")}
+                >
+                  Create Shopify Discount
+                </Button>
+              </BlockStack>
+            </Card>
           </BlockStack>
-        </Layout.Section>
-
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Quick Actions
-              </Text>
-
-              <Button fullWidth url="/app/wholesale/calculator">
-                Build Quote
-              </Button>
-
-              <Button fullWidth url="/app/wholesale/rules">
-                Create Pricing Tier
-              </Button>
-
-              <Button fullWidth url="/app/create-wholesale-discount">
-                Create Shopify Discount
-              </Button>
-            </BlockStack>
-          </Card>
         </Layout.Section>
       </Layout>
     </Page>
