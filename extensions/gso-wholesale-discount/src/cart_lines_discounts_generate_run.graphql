@@ -1,0 +1,26 @@
+query CartInput {
+  cart {
+    buyerIdentity {
+      customer {
+        hasTags(tags: ["wholesale_approved", "wholesale", "my_wholesale"]) {
+          tag
+          hasTag
+        }
+      }
+    }
+    lines {
+      id
+      quantity
+      cost {
+        amountPerQuantity {
+          amount
+        }
+      }
+      merchandise {
+        ... on ProductVariant {
+          id
+        }
+      }
+    }
+  }
+}

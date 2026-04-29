@@ -12,23 +12,22 @@ automatically_update_urls_on_dev = true
 [webhooks]
 api_version = "2026-01"
 
-[[webhooks.subscriptions]]
-topics = [ "app/uninstalled" ]
-uri = "/webhooks/app/uninstalled"
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
 
-[[webhooks.subscriptions]]
-uri = "/webhooks/compliance"
-compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
 
 [access_scopes]
-scopes = "read_customers,read_orders,read_products"
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,read_orders,read_products,write_discounts"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [
-  "https://gso-wholesale-app-live.onrender.com/auth/callback"
-]
+redirect_urls = [ "https://gso-wholesale-app-live.onrender.com/auth/callback" ]
 
 [app_proxy]
 url = "https://gso-wholesale-app-live.onrender.com/apps/wholesale-lite"
