@@ -220,10 +220,11 @@ export async function action({ request }: { request: Request }) {
     const lineItems = quote.items.map((item: any) => ({
       title: item.productName || "Custom print item",
       quantity: Math.max(1, Number(item.quantity) || 1),
-      originalUnitPrice: Number(item.unitPrice) || 0,originalUnitPriceWithCurrency: {
+      originalUnitPriceWithCurrency: {
         amount: String(Number(item.unitPrice) || 0),
         currencyCode: "USD",
-},
+      },
+      
       customAttributes: [
         { key: "Variant", value: item.variant || "" },
         { key: "SKU", value: item.sku || "" },
