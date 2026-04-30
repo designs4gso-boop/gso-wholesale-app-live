@@ -145,14 +145,14 @@ model Quote {
 }
 
 model QuoteItem {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   quoteId     String
   productName String?
   variant     String?
   sku         String?
-  quantity    Int      @default(1)
-  unitPrice   Float    @default(0)
-  unitCost    Float    @default(0)
+  quantity    Int     @default(1)
+  unitPrice   Float   @default(0)
+  unitCost    Float   @default(0)
   notes       String?
 
   quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
@@ -161,18 +161,28 @@ model QuoteItem {
 }
 
 model ProductCost {
-  id            String   @id @default(cuid())
-  productId     String
-  variantId     String
-  name          String
+  id   String @id @default(cuid())
+  shop String @default("")
 
-  materialCost  Float    @default(0)
-  printCost     Float    @default(0)
-  laborCost     Float    @default(0)
-  machineCost   Float    @default(0)
-  packagingCost Float    @default(0)
+  productId   String?
+  variantId   String?
+  sku         String?
+  productName String?
+  name        String?
 
-  customCosts   Json?
+  materialCost  Float @default(0)
+  printCost     Float @default(0)
+  laborCost     Float @default(0)
+  machineCost   Float @default(0)
+  packagingCost Float @default(0)
 
-  createdAt     DateTime @default(now())
+  customCosts Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shop])
+  @@index([variantId])
+  @@index([sku])
+  @@index([productName])
 }
