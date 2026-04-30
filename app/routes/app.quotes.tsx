@@ -198,89 +198,106 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "approveCreateOrder") {
-  const quote = await db.quote.findFirst({
-    where: {
-      id: payload.quoteId,
-      shop,
-    },
-    include: {
-      items: true,
-    },
-  });
-
-  if (!quote) {
-    return Response.json({
-      intent: "approveCreateOrder",
-      ok: false,
-      error: "Quote not found",
+  try {
+    const quote = await db.quote.findFirst({
+      where: {
+        id: payload.quoteId,
+        shop,
+      },
+      include: {
+        items: true,
+      },
     });
-  }
 
-const lineItems = quote.items.map((item: any) => ({
-  title: item.productName || "Custom print item",
-  quantity: Number(item.quantity) || 1,
-  originalUnitPriceWithCurrency: {
-    amount: String(Number(item.unitPrice) || 0),
-    currencyCode: "USD",
-  },
-  customAttributes: [
-    { key: "Variant", value: item.variant || "" },
-    { key: "SKU", value: item.sku || "" },
-    { key: "Notes", value: item.notes || "" },
-  ],
-}));
+    if (!quote) {
+      return Response.json({
+        intent: "approveCreateOrder",
+        ok: false,
+        error: "Quote not found",
+      });
+    }
 
-  const response = await admin.graphql(
-    `#graphql
-      mutation draftOrderCreate($input: DraftOrderInput!) {
-        draftOrderCreate(input: $input) {
-          draftOrder {
-            id
-            invoiceUrl
-          }
-          userErrors {
-            field
-            message
+    const lineItems = quote.items.map((item: any) => ({
+      title: item.productName || "Custom print item",
+      quantity: Math.max(1, Number(item.quantity) || 1),
+      originalUnitPrice: Number(item.unitPrice) || 0,,
+      customAttributes: [
+        { key: "Variant", value: item.variant || "" },
+        { key: "SKU", value: item.sku || "" },
+        { key: "Notes", value: item.notes || "" },
+      ],
+    }));
+
+    const response = await admin.graphql(
+      `#graphql
+        mutation draftOrderCreate($input: DraftOrderInput!) {
+          draftOrderCreate(input: $input) {
+            draftOrder {
+              id
+              invoiceUrl
+            }
+            userErrors {
+              field
+              message
+            }
           }
         }
-      }
-    `,
-    {
-      variables: {
-        input: {
-          email: quote.email || undefined,
-          note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
-          tags: ["GSO Quote", "Wholesale"],
-          lineItems,
+      `,
+      {
+        variables: {
+          input: {
+            email: quote.email || null,
+            presentmentCurrencyCode: "USD",
+            note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
+            tags: ["GSO Quote", "Wholesale"],
+            lineItems,
+          },
         },
-      },
+      }
+    );
+
+    const data = await response.json();
+
+    const graphqlErrors = data.errors || data.graphQLErrors || [];
+    const userErrors = data.data?.draftOrderCreate?.userErrors || [];
+
+    if (graphqlErrors.length || userErrors.length) {
+      return Response.json({
+        intent: "approveCreateOrder",
+        ok: false,
+        error: "Shopify rejected the draft order.",
+        graphqlErrors,
+        userErrors,
+        raw: data,
+      });
     }
-  );
 
-  const data = await response.json();
-  const errors = data.data?.draftOrderCreate?.userErrors || [];
+    const draftOrder = data.data?.draftOrderCreate?.draftOrder;
 
-  if (errors.length) {
+    await db.quote.update({
+      where: { id: quote.id },
+      data: { status: "approved" },
+    });
+
+    const quotes = await getQuotes(shop);
+
+    return Response.json({
+      intent: "approveCreateOrder",
+      ok: true,
+      quotes,
+      invoiceUrl: draftOrder?.invoiceUrl,
+      draftOrderId: draftOrder?.id,
+    });
+  } catch (error: any) {
+    console.error("APPROVE_CREATE_ORDER_ERROR", error);
+
     return Response.json({
       intent: "approveCreateOrder",
       ok: false,
-      errors,
+      error: error?.message || "Unknown draft order error",
+      graphQLErrors: error?.graphQLErrors || [],
     });
   }
-
-  await db.quote.update({
-    where: { id: quote.id },
-    data: { status: "approved" },
-  });
-
-  const quotes = await getQuotes(shop);
-
-  return Response.json({
-    intent: "approveCreateOrder",
-    ok: true,
-    quotes,
-    invoiceUrl: data.data?.draftOrderCreate?.draftOrder?.invoiceUrl,
-  });
 }
 
   if (payload.intent === "save") {
