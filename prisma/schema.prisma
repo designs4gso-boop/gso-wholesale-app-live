@@ -126,3 +126,36 @@ model CostCalculator {
   suggestedMargin Float
   createdAt       DateTime @default(now())
 }
+
+model Quote {
+  id           String      @id @default(cuid())
+  shop         String
+  customerName String?
+  company      String?
+  email        String?
+  phone        String?
+  status       String      @default("draft")
+  notes        String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  items        QuoteItem[]
+
+  @@index([shop, status])
+  @@index([shop, createdAt])
+}
+
+model QuoteItem {
+  id          String   @id @default(cuid())
+  quoteId     String
+  productName String?
+  variant     String?
+  sku         String?
+  quantity    Int      @default(1)
+  unitPrice   Float    @default(0)
+  unitCost    Float    @default(0)
+  notes       String?
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@index([quoteId])
+}

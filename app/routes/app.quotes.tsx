@@ -13,16 +13,18 @@ import {
 } from "@shopify/polaris";
 
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import {
+  useActionData,
+  useFetcher,
+  useLoaderData,
+  useNavigate,
+} from "react-router";
+
 import { authenticate } from "../shopify.server";
+import db from "../db.server";
 
-export async function loader({ request }: { request: Request }) {
-  await authenticate.admin(request);
-  return null;
-}
-
-type QuoteItem = {
-  id: string;
+type QuoteItemInput = {
+  id?: string;
   productName: string;
   variant: string;
   sku: string;
@@ -32,19 +34,16 @@ type QuoteItem = {
   notes: string;
 };
 
-type Quote = {
-  id: string;
+type QuoteInput = {
+  id?: string | null;
   customerName: string;
   company: string;
   email: string;
   phone: string;
   status: string;
-  items: QuoteItem[];
   notes: string;
-  createdAt: string;
+  items: QuoteItemInput[];
 };
-
-const STORAGE_KEY = "gso_quotes_v1";
 
 const statuses = [
   { label: "Draft", value: "draft" },
@@ -59,7 +58,7 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-function emptyItem(): QuoteItem {
+function emptyItem(): QuoteItemInput {
   return {
     id: uid(),
     productName: "",
@@ -72,10 +71,156 @@ function emptyItem(): QuoteItem {
   };
 }
 
+function normalizeQuote(quote: any): QuoteInput {
+  return {
+    id: quote.id,
+    customerName: quote.customerName || "",
+    company: quote.company || "",
+    email: quote.email || "",
+    phone: quote.phone || "",
+    status: quote.status || "draft",
+    notes: quote.notes || "",
+    items: (quote.items || []).map((item: any) => ({
+      id: item.id,
+      productName: item.productName || "",
+      variant: item.variant || "",
+      sku: item.sku || "",
+      quantity: String(item.quantity || 1),
+      unitPrice: String(item.unitPrice || 0),
+      unitCost: String(item.unitCost || 0),
+      notes: item.notes || "",
+    })),
+  };
+}
+
+async function getQuotes(shop: string) {
+  return db.quote.findMany({
+    where: { shop },
+    orderBy: { updatedAt: "desc" },
+    include: { items: true },
+  });
+}
+
+export async function loader({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const quotes = await getQuotes(session.shop);
+
+  return Response.json({
+    quotes,
+  });
+}
+
+export async function action({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+
+  const payload = await request.json();
+
+  if (payload.intent === "delete") {
+    await db.quote.deleteMany({
+      where: {
+        id: payload.id,
+        shop,
+      },
+    });
+
+    const quotes = await getQuotes(shop);
+    return Response.json({ ok: true, quotes });
+  }
+
+  if (payload.intent === "status") {
+    await db.quote.updateMany({
+      where: {
+        id: payload.id,
+        shop,
+      },
+      data: {
+        status: payload.status,
+      },
+    });
+
+    const quotes = await getQuotes(shop);
+    return Response.json({ ok: true, quotes });
+  }
+
+  if (payload.intent === "save") {
+    const quote = payload.quote as QuoteInput;
+
+    if (quote.id) {
+      await db.$transaction([
+        db.quote.updateMany({
+          where: {
+            id: quote.id,
+            shop,
+          },
+          data: {
+            customerName: quote.customerName,
+            company: quote.company,
+            email: quote.email,
+            phone: quote.phone,
+            status: quote.status,
+            notes: quote.notes,
+          },
+        }),
+
+        db.quoteItem.deleteMany({
+          where: {
+            quoteId: quote.id,
+          },
+        }),
+
+        db.quoteItem.createMany({
+          data: quote.items.map((item) => ({
+            quoteId: quote.id as string,
+            productName: item.productName,
+            variant: item.variant,
+            sku: item.sku,
+            quantity: Number(item.quantity) || 1,
+            unitPrice: Number(item.unitPrice) || 0,
+            unitCost: Number(item.unitCost) || 0,
+            notes: item.notes,
+          })),
+        }),
+      ]);
+    } else {
+      await db.quote.create({
+        data: {
+          shop,
+          customerName: quote.customerName,
+          company: quote.company,
+          email: quote.email,
+          phone: quote.phone,
+          status: quote.status,
+          notes: quote.notes,
+          items: {
+            create: quote.items.map((item) => ({
+              productName: item.productName,
+              variant: item.variant,
+              sku: item.sku,
+              quantity: Number(item.quantity) || 1,
+              unitPrice: Number(item.unitPrice) || 0,
+              unitCost: Number(item.unitCost) || 0,
+              notes: item.notes,
+            })),
+          },
+        },
+      });
+    }
+
+    const quotes = await getQuotes(shop);
+    return Response.json({ ok: true, quotes });
+  }
+
+  const quotes = await getQuotes(shop);
+  return Response.json({ ok: false, quotes });
+}
+
 export default function QuotesPage() {
   const navigate = useNavigate();
+  const loaderData = useLoaderData<typeof loader>() as any;
+  const fetcher = useFetcher<any>();
 
-  const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [quotes, setQuotes] = useState<any[]>(loaderData.quotes || []);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [customerName, setCustomerName] = useState("");
@@ -84,17 +229,13 @@ export default function QuotesPage() {
   const [phone, setPhone] = useState("");
   const [status, setStatus] = useState("draft");
   const [notes, setNotes] = useState("");
-  const [items, setItems] = useState<QuoteItem[]>([emptyItem()]);
+  const [items, setItems] = useState<QuoteItemInput[]>([emptyItem()]);
 
   useEffect(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) setQuotes(JSON.parse(raw));
-  }, []);
-
-  function saveAll(next: Quote[]) {
-    setQuotes(next);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  }
+    if (fetcher.data?.quotes) {
+      setQuotes(fetcher.data.quotes);
+    }
+  }, [fetcher.data]);
 
   function resetQuote() {
     setEditingId(null);
@@ -111,13 +252,13 @@ export default function QuotesPage() {
     setItems([...items, emptyItem()]);
   }
 
-  function updateItem(id: string, field: keyof QuoteItem, value: string) {
+  function updateItem(id: string | undefined, field: keyof QuoteItemInput, value: string) {
     setItems((prev) =>
       prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
     );
   }
 
-  function deleteItem(id: string) {
+  function deleteItem(id: string | undefined) {
     setItems((prev) => prev.filter((item) => item.id !== id));
   }
 
@@ -137,50 +278,72 @@ export default function QuotesPage() {
     return { revenue, cost, profit, margin };
   }, [items]);
 
-  function saveQuote() {
-    const quote: Quote = {
-      id: editingId || uid(),
+  function currentQuote(): QuoteInput {
+    return {
+      id: editingId,
       customerName,
       company,
       email,
       phone,
       status,
-      items,
       notes,
-      createdAt: editingId
-        ? quotes.find((q) => q.id === editingId)?.createdAt || new Date().toLocaleString()
-        : new Date().toLocaleString(),
+      items,
     };
-
-    const next = editingId
-      ? quotes.map((q) => (q.id === editingId ? quote : q))
-      : [quote, ...quotes];
-
-    saveAll(next);
-    setEditingId(quote.id);
   }
 
-  function loadQuote(quote: Quote) {
-    setEditingId(quote.id);
-    setCustomerName(quote.customerName);
-    setCompany(quote.company);
-    setEmail(quote.email);
-    setPhone(quote.phone);
-    setStatus(quote.status);
-    setItems(quote.items);
-    setNotes(quote.notes);
+  function saveQuote() {
+    fetcher.submit(
+      {
+        intent: "save",
+        quote: currentQuote(),
+      },
+      {
+        method: "post",
+        encType: "application/json",
+      }
+    );
+  }
+
+  function loadQuote(quote: any) {
+    const normalized = normalizeQuote(quote);
+
+    setEditingId(normalized.id || null);
+    setCustomerName(normalized.customerName);
+    setCompany(normalized.company);
+    setEmail(normalized.email);
+    setPhone(normalized.phone);
+    setStatus(normalized.status);
+    setNotes(normalized.notes);
+    setItems(normalized.items.length ? normalized.items : [emptyItem()]);
   }
 
   function deleteQuote(id: string) {
-    saveAll(quotes.filter((quote) => quote.id !== id));
+    fetcher.submit(
+      {
+        intent: "delete",
+        id,
+      },
+      {
+        method: "post",
+        encType: "application/json",
+      }
+    );
+
     if (editingId === id) resetQuote();
   }
 
   function updateQuoteStatus(id: string, nextStatus: string) {
-    const next = quotes.map((quote) =>
-      quote.id === id ? { ...quote, status: nextStatus } : quote
+    fetcher.submit(
+      {
+        intent: "status",
+        id,
+        status: nextStatus,
+      },
+      {
+        method: "post",
+        encType: "application/json",
+      }
     );
-    saveAll(next);
   }
 
   function printQuote() {
@@ -206,14 +369,20 @@ export default function QuotesPage() {
   return (
     <Page
       title="GSO Quote Builder"
-      subtitle="Create quotes, save customer history, track pipeline status, and send or print quotes."
+      subtitle="Database-backed CRM quotes, customer quote history, pipeline status, and print/email tools."
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
-      primaryAction={{ content: editingId ? "Update Quote" : "Save Quote", onAction: saveQuote }}
+      primaryAction={{
+        content: editingId ? "Update Quote" : "Save Quote",
+        onAction: saveQuote,
+      }}
       secondaryActions={[
         { content: "New Quote", onAction: resetQuote },
         { content: "Print / PDF", onAction: printQuote },
         { content: "Email Quote", onAction: emailQuote },
-        { content: "Pricing Calculator", onAction: () => navigate("/app/wholesale/calculator") },
+        {
+          content: "Pricing Calculator",
+          onAction: () => navigate("/app/wholesale/calculator"),
+        },
       ]}
     >
       <Layout>
@@ -221,7 +390,9 @@ export default function QuotesPage() {
           <Card>
             <BlockStack gap="400">
               <InlineStack align="space-between">
-                <Text as="h2" variant="headingMd">Customer Info</Text>
+                <Text as="h2" variant="headingMd">
+                  Customer Info
+                </Text>
                 <Badge tone={tone}>Margin {totals.margin.toFixed(1)}%</Badge>
               </InlineStack>
 
@@ -244,7 +415,9 @@ export default function QuotesPage() {
           <Card>
             <BlockStack gap="400">
               <InlineStack align="space-between">
-                <Text as="h2" variant="headingMd">Quote Items</Text>
+                <Text as="h2" variant="headingMd">
+                  Quote Items
+                </Text>
                 <Button onClick={addItem}>Add Item</Button>
               </InlineStack>
 
@@ -264,7 +437,10 @@ export default function QuotesPage() {
                     </InlineStack>
 
                     <TextField label="Item Notes" value={item.notes} onChange={(v) => updateItem(item.id, "notes", v)} autoComplete="off" />
-                    <Button tone="critical" onClick={() => deleteItem(item.id)}>Delete Item</Button>
+
+                    <Button tone="critical" onClick={() => deleteItem(item.id)}>
+                      Delete Item
+                    </Button>
                   </BlockStack>
                 </Card>
               ))}
@@ -275,8 +451,12 @@ export default function QuotesPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Quote Summary</Text>
+              <Text as="h2" variant="headingMd">
+                Quote Summary
+              </Text>
+
               <Divider />
+
               <Text as="p">Total Revenue: ${totals.revenue.toFixed(2)}</Text>
               <Text as="p">Total Cost: ${totals.cost.toFixed(2)}</Text>
               <Text as="p">Total Profit: ${totals.profit.toFixed(2)}</Text>
@@ -288,6 +468,7 @@ export default function QuotesPage() {
                 <Button variant="primary" onClick={saveQuote}>
                   {editingId ? "Update Quote" : "Save Quote"}
                 </Button>
+
                 <Button onClick={printQuote}>Download / Print PDF</Button>
                 <Button onClick={emailQuote}>Email Quote</Button>
               </InlineStack>
@@ -298,7 +479,9 @@ export default function QuotesPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">CRM Pipeline</Text>
+              <Text as="h2" variant="headingMd">
+                CRM Pipeline
+              </Text>
 
               <InlineStack gap="300" align="start">
                 {statuses.map((stage) => {
@@ -312,7 +495,9 @@ export default function QuotesPage() {
                         </Text>
 
                         {stageQuotes.length === 0 ? (
-                          <Text as="p" tone="subdued">No quotes</Text>
+                          <Text as="p" tone="subdued">
+                            No quotes
+                          </Text>
                         ) : (
                           stageQuotes.map((quote) => (
                             <Card key={quote.id}>
@@ -320,7 +505,10 @@ export default function QuotesPage() {
                                 <Text as="p" fontWeight="bold">
                                   {quote.company || quote.customerName || "Unnamed Quote"}
                                 </Text>
-                                <Text as="p" tone="subdued">{quote.createdAt}</Text>
+
+                                <Text as="p" tone="subdued">
+                                  {new Date(quote.updatedAt || quote.createdAt).toLocaleString()}
+                                </Text>
 
                                 <Select
                                   label="Move"
@@ -330,7 +518,10 @@ export default function QuotesPage() {
                                 />
 
                                 <InlineStack gap="200">
-                                  <Button onClick={() => loadQuote(quote)}>Open</Button>
+                                  <Button onClick={() => loadQuote(quote)}>
+                                    Open
+                                  </Button>
+
                                   <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
                                     Delete
                                   </Button>
