@@ -289,10 +289,6 @@ export default function QuotesPage() {
     if (fetcher.data?.productCosts) setProductCosts(fetcher.data.productCosts);
   }, [fetcher.data]);
 
-  useEffect(() => {
-    console.log("PRODUCT COSTS:", productCosts);
-  }, [productCosts]);
-
   function resetQuote() {
     setEditingId(null);
     setCustomerName("");
@@ -325,13 +321,9 @@ export default function QuotesPage() {
     return productCosts.find((cost: any) => {
       const costVariantId = clean(cost.variantId);
       const selectedVariantId = clean(variantId);
-
       const costSku = clean(cost.sku);
       const selectedSku = clean(selected.sku);
-
-      const costProductName = clean(
-        cost.productName || cost.name || cost.title || cost.productTitle
-      );
+      const costProductName = clean(cost.productName || cost.name || cost.title || cost.productTitle);
       const selectedProductTitle = clean(selected.productTitle);
 
       return (
@@ -357,9 +349,6 @@ export default function QuotesPage() {
           Number(matchedCost.packagingCost || 0)
         ).toFixed(2)
       : undefined;
-
-    console.log("SELECTED PRODUCT:", selected);
-    console.log("MATCHED COST:", matchedCost || "No saved product cost found");
 
     setItems((prev) =>
       prev.map((item) =>
@@ -460,6 +449,30 @@ export default function QuotesPage() {
     );
 
     window.location.href = `mailto:${email}?subject=GSO Packaging Quote&body=${body}`;
+  }
+
+  async function approveAndCreateOrder(quoteId: string) {
+    const response = await fetch("/app/create-order", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ quoteId }),
+    });
+
+    const data = await response.json();
+
+    if (!data.ok) {
+      alert("Failed to create Shopify draft order. Check Render logs.");
+      console.log("Draft order error:", data);
+      return;
+    }
+
+    updateQuoteStatus(quoteId, "approved");
+
+    if (data.invoiceUrl) {
+      window.open(data.invoiceUrl, "_blank");
+    }
   }
 
   let tone: "success" | "warning" | "critical" = "success";
@@ -645,6 +658,14 @@ export default function QuotesPage() {
 
                                 <InlineStack gap="200">
                                   <Button onClick={() => loadQuote(quote)}>Open</Button>
+
+                                  <Button
+                                    variant="primary"
+                                    onClick={() => approveAndCreateOrder(quote.id)}
+                                  >
+                                    Approve & Create Order
+                                  </Button>
+
                                   <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
                                     Delete
                                   </Button>
