@@ -13,13 +13,7 @@ import {
 } from "@shopify/polaris";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  useActionData,
-  useFetcher,
-  useLoaderData,
-  useNavigate,
-} from "react-router";
-
+import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -32,6 +26,15 @@ type QuoteItemInput = {
   unitPrice: string;
   unitCost: string;
   notes: string;
+};
+
+type ShopifyVariantOption = {
+  label: string;
+  value: string;
+  productTitle: string;
+  variantTitle: string;
+  sku: string;
+  price: string;
 };
 
 type QuoteInput = {
@@ -101,27 +104,76 @@ async function getQuotes(shop: string) {
   });
 }
 
+async function searchShopifyProducts(admin: any, search: string) {
+  const response = await admin.graphql(
+    `#graphql
+      query SearchProducts($query: String!) {
+        products(first: 20, query: $query) {
+          nodes {
+            title
+            variants(first: 50) {
+              nodes {
+                id
+                title
+                sku
+                price
+              }
+            }
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        query: search ? `title:*${search}*` : "",
+      },
+    }
+  );
+
+  const json = await response.json();
+
+  const options: ShopifyVariantOption[] = [];
+
+  for (const product of json.data?.products?.nodes || []) {
+    for (const variant of product.variants?.nodes || []) {
+      options.push({
+        label: `${product.title} — ${variant.title} — $${variant.price}`,
+        value: variant.id,
+        productTitle: product.title,
+        variantTitle: variant.title,
+        sku: variant.sku || "",
+        price: String(variant.price || "0"),
+      });
+    }
+  }
+
+  return options;
+}
+
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const quotes = await getQuotes(session.shop);
+  const productOptions = await searchShopifyProducts(admin, "");
 
   return Response.json({
     quotes,
+    productOptions,
   });
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
-
   const payload = await request.json();
+
+  if (payload.intent === "searchProducts") {
+    const productOptions = await searchShopifyProducts(admin, payload.search || "");
+    return Response.json({ ok: true, productOptions });
+  }
 
   if (payload.intent === "delete") {
     await db.quote.deleteMany({
-      where: {
-        id: payload.id,
-        shop,
-      },
+      where: { id: payload.id, shop },
     });
 
     const quotes = await getQuotes(shop);
@@ -130,13 +182,8 @@ export async function action({ request }: { request: Request }) {
 
   if (payload.intent === "status") {
     await db.quote.updateMany({
-      where: {
-        id: payload.id,
-        shop,
-      },
-      data: {
-        status: payload.status,
-      },
+      where: { id: payload.id, shop },
+      data: { status: payload.status },
     });
 
     const quotes = await getQuotes(shop);
@@ -149,10 +196,7 @@ export async function action({ request }: { request: Request }) {
     if (quote.id) {
       await db.$transaction([
         db.quote.updateMany({
-          where: {
-            id: quote.id,
-            shop,
-          },
+          where: { id: quote.id, shop },
           data: {
             customerName: quote.customerName,
             company: quote.company,
@@ -164,9 +208,7 @@ export async function action({ request }: { request: Request }) {
         }),
 
         db.quoteItem.deleteMany({
-          where: {
-            quoteId: quote.id,
-          },
+          where: { quoteId: quote.id },
         }),
 
         db.quoteItem.createMany({
@@ -221,20 +263,23 @@ export default function QuotesPage() {
   const fetcher = useFetcher<any>();
 
   const [quotes, setQuotes] = useState<any[]>(loaderData.quotes || []);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [productOptions, setProductOptions] = useState<ShopifyVariantOption[]>(
+    loaderData.productOptions || []
+  );
 
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [status, setStatus] = useState("draft");
   const [notes, setNotes] = useState("");
+  const [productSearch, setProductSearch] = useState("");
   const [items, setItems] = useState<QuoteItemInput[]>([emptyItem()]);
 
   useEffect(() => {
-    if (fetcher.data?.quotes) {
-      setQuotes(fetcher.data.quotes);
-    }
+    if (fetcher.data?.quotes) setQuotes(fetcher.data.quotes);
+    if (fetcher.data?.productOptions) setProductOptions(fetcher.data.productOptions);
   }, [fetcher.data]);
 
   function resetQuote() {
@@ -248,6 +293,13 @@ export default function QuotesPage() {
     setItems([emptyItem()]);
   }
 
+  function searchProducts() {
+    fetcher.submit(
+      { intent: "searchProducts", search: productSearch },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
   function addItem() {
     setItems([...items, emptyItem()]);
   }
@@ -255,6 +307,25 @@ export default function QuotesPage() {
   function updateItem(id: string | undefined, field: keyof QuoteItemInput, value: string) {
     setItems((prev) =>
       prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+    );
+  }
+
+  function selectProductVariant(itemId: string | undefined, variantId: string) {
+    const selected = productOptions.find((option) => option.value === variantId);
+    if (!selected) return;
+
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              productName: selected.productTitle,
+              variant: selected.variantTitle,
+              sku: selected.sku,
+              unitPrice: selected.price,
+            }
+          : item
+      )
     );
   }
 
@@ -293,14 +364,8 @@ export default function QuotesPage() {
 
   function saveQuote() {
     fetcher.submit(
-      {
-        intent: "save",
-        quote: currentQuote(),
-      },
-      {
-        method: "post",
-        encType: "application/json",
-      }
+      { intent: "save", quote: currentQuote() },
+      { method: "post", encType: "application/json" }
     );
   }
 
@@ -319,14 +384,8 @@ export default function QuotesPage() {
 
   function deleteQuote(id: string) {
     fetcher.submit(
-      {
-        intent: "delete",
-        id,
-      },
-      {
-        method: "post",
-        encType: "application/json",
-      }
+      { intent: "delete", id },
+      { method: "post", encType: "application/json" }
     );
 
     if (editingId === id) resetQuote();
@@ -334,15 +393,8 @@ export default function QuotesPage() {
 
   function updateQuoteStatus(id: string, nextStatus: string) {
     fetcher.submit(
-      {
-        intent: "status",
-        id,
-        status: nextStatus,
-      },
-      {
-        method: "post",
-        encType: "application/json",
-      }
+      { intent: "status", id, status: nextStatus },
+      { method: "post", encType: "application/json" }
     );
   }
 
@@ -366,10 +418,18 @@ export default function QuotesPage() {
   if (totals.margin < 25) tone = "critical";
   else if (totals.margin < 40) tone = "warning";
 
+  const productSelectOptions = [
+    { label: "Select Shopify product / variant", value: "" },
+    ...productOptions.map((option) => ({
+      label: option.label,
+      value: option.value,
+    })),
+  ];
+
   return (
     <Page
       title="GSO Quote Builder"
-      subtitle="Database-backed CRM quotes, customer quote history, pipeline status, and print/email tools."
+      subtitle="Database CRM quotes with Shopify product picker, margins, pipeline, print, and email tools."
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
       primaryAction={{
         content: editingId ? "Update Quote" : "Save Quote",
@@ -390,9 +450,7 @@ export default function QuotesPage() {
           <Card>
             <BlockStack gap="400">
               <InlineStack align="space-between">
-                <Text as="h2" variant="headingMd">
-                  Customer Info
-                </Text>
+                <Text as="h2" variant="headingMd">Customer Info</Text>
                 <Badge tone={tone}>Margin {totals.margin.toFixed(1)}%</Badge>
               </InlineStack>
 
@@ -413,17 +471,46 @@ export default function QuotesPage() {
 
         <Layout.Section>
           <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">Shopify Product Picker</Text>
+
+              <InlineStack gap="300" blockAlign="end">
+                <TextField
+                  label="Search Shopify products"
+                  value={productSearch}
+                  onChange={setProductSearch}
+                  autoComplete="off"
+                  placeholder="Example: Ritz, bag, jar, label"
+                />
+
+                <Button onClick={searchProducts}>Search Products</Button>
+              </InlineStack>
+
+              <Text as="p" tone="subdued">
+                Search products, then choose a product/variant inside each quote item.
+              </Text>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
             <BlockStack gap="400">
               <InlineStack align="space-between">
-                <Text as="h2" variant="headingMd">
-                  Quote Items
-                </Text>
+                <Text as="h2" variant="headingMd">Quote Items</Text>
                 <Button onClick={addItem}>Add Item</Button>
               </InlineStack>
 
               {items.map((item) => (
                 <Card key={item.id}>
                   <BlockStack gap="300">
+                    <Select
+                      label="Pick Shopify product / variant"
+                      value=""
+                      onChange={(variantId) => selectProductVariant(item.id, variantId)}
+                      options={productSelectOptions}
+                    />
+
                     <InlineStack gap="300">
                       <TextField label="Product / Service" value={item.productName} onChange={(v) => updateItem(item.id, "productName", v)} autoComplete="off" />
                       <TextField label="Variant / Options" value={item.variant} onChange={(v) => updateItem(item.id, "variant", v)} autoComplete="off" />
@@ -451,12 +538,8 @@ export default function QuotesPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Quote Summary
-              </Text>
-
+              <Text as="h2" variant="headingMd">Quote Summary</Text>
               <Divider />
-
               <Text as="p">Total Revenue: ${totals.revenue.toFixed(2)}</Text>
               <Text as="p">Total Cost: ${totals.cost.toFixed(2)}</Text>
               <Text as="p">Total Profit: ${totals.profit.toFixed(2)}</Text>
@@ -468,7 +551,6 @@ export default function QuotesPage() {
                 <Button variant="primary" onClick={saveQuote}>
                   {editingId ? "Update Quote" : "Save Quote"}
                 </Button>
-
                 <Button onClick={printQuote}>Download / Print PDF</Button>
                 <Button onClick={emailQuote}>Email Quote</Button>
               </InlineStack>
@@ -479,9 +561,7 @@ export default function QuotesPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                CRM Pipeline
-              </Text>
+              <Text as="h2" variant="headingMd">CRM Pipeline</Text>
 
               <InlineStack gap="300" align="start">
                 {statuses.map((stage) => {
@@ -495,9 +575,7 @@ export default function QuotesPage() {
                         </Text>
 
                         {stageQuotes.length === 0 ? (
-                          <Text as="p" tone="subdued">
-                            No quotes
-                          </Text>
+                          <Text as="p" tone="subdued">No quotes</Text>
                         ) : (
                           stageQuotes.map((quote) => (
                             <Card key={quote.id}>
@@ -518,10 +596,7 @@ export default function QuotesPage() {
                                 />
 
                                 <InlineStack gap="200">
-                                  <Button onClick={() => loadQuote(quote)}>
-                                    Open
-                                  </Button>
-
+                                  <Button onClick={() => loadQuote(quote)}>Open</Button>
                                   <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
                                     Delete
                                   </Button>
