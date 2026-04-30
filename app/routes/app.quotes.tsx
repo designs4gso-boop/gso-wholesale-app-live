@@ -549,7 +549,7 @@ useEffect(() => {
   }
 
   function approveAndCreateOrder(quoteId: string) {
-   fetcher.submit(
+  fetcher.submit(
     {
       intent: "approveCreateOrder",
       quoteId,
@@ -560,21 +560,6 @@ useEffect(() => {
     }
   );
 }
-
-    const data = await response.json();
-
-    if (!data.ok) {
-      alert("Failed to create Shopify draft order. Check Render logs.");
-      console.log("Draft order error:", data);
-      return;
-    }
-
-    updateQuoteStatus(quoteId, "approved");
-
-    if (data.invoiceUrl) {
-      window.open(data.invoiceUrl, "_blank");
-    }
-  }
 
   let tone: "success" | "warning" | "critical" = "success";
   if (totals.margin < 25) tone = "critical";
