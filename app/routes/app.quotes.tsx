@@ -197,6 +197,89 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: true, quotes });
   }
 
+  if (payload.intent === "approveCreateOrder") {
+  const quote = await db.quote.findFirst({
+    where: {
+      id: payload.quoteId,
+      shop,
+    },
+    include: {
+      items: true,
+    },
+  });
+
+  if (!quote) {
+    return Response.json({
+      intent: "approveCreateOrder",
+      ok: false,
+      error: "Quote not found",
+    });
+  }
+
+  const lineItems = quote.items.map((item: any) => ({
+    title: item.productName || "Custom print item",
+    quantity: Number(item.quantity) || 1,
+    originalUnitPrice: String(Number(item.unitPrice) || 0),
+    customAttributes: [
+      { key: "Variant", value: item.variant || "" },
+      { key: "SKU", value: item.sku || "" },
+      { key: "Notes", value: item.notes || "" },
+    ],
+  }));
+
+  const response = await admin.graphql(
+    `#graphql
+      mutation draftOrderCreate($input: DraftOrderInput!) {
+        draftOrderCreate(input: $input) {
+          draftOrder {
+            id
+            invoiceUrl
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        input: {
+          email: quote.email || undefined,
+          note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
+          tags: ["GSO Quote", "Wholesale"],
+          lineItems,
+        },
+      },
+    }
+  );
+
+  const data = await response.json();
+  const errors = data.data?.draftOrderCreate?.userErrors || [];
+
+  if (errors.length) {
+    return Response.json({
+      intent: "approveCreateOrder",
+      ok: false,
+      errors,
+    });
+  }
+
+  await db.quote.update({
+    where: { id: quote.id },
+    data: { status: "approved" },
+  });
+
+  const quotes = await getQuotes(shop);
+
+  return Response.json({
+    intent: "approveCreateOrder",
+    ok: true,
+    quotes,
+    invoiceUrl: data.data?.draftOrderCreate?.draftOrder?.invoiceUrl,
+  });
+}
+
   if (payload.intent === "save") {
     const quote = payload.quote as QuoteInput;
 
@@ -283,11 +366,25 @@ export default function QuotesPage() {
   const [productSearch, setProductSearch] = useState("");
   const [items, setItems] = useState<QuoteItemInput[]>([emptyItem()]);
 
-  useEffect(() => {
-    if (fetcher.data?.quotes) setQuotes(fetcher.data.quotes);
-    if (fetcher.data?.productOptions) setProductOptions(fetcher.data.productOptions);
-    if (fetcher.data?.productCosts) setProductCosts(fetcher.data.productCosts);
-  }, [fetcher.data]);
+useEffect(() => {
+  if (fetcher.data?.quotes) setQuotes(fetcher.data.quotes);
+  if (fetcher.data?.productOptions) setProductOptions(fetcher.data.productOptions);
+  if (fetcher.data?.productCosts) setProductCosts(fetcher.data.productCosts);
+
+  if (fetcher.data?.intent === "approveCreateOrder") {
+    if (!fetcher.data.ok) {
+      alert("Draft order failed. Check Render logs.");
+      console.log("Draft order error:", fetcher.data);
+      return;
+    }
+
+    alert("Draft order created!");
+
+    if (fetcher.data.invoiceUrl) {
+      window.open(fetcher.data.invoiceUrl, "_blank");
+    }
+  }
+}, [fetcher.data]);
 
   function resetQuote() {
     setEditingId(null);
@@ -451,14 +548,18 @@ export default function QuotesPage() {
     window.location.href = `mailto:${email}?subject=GSO Packaging Quote&body=${body}`;
   }
 
-  async function approveAndCreateOrder(quoteId: string) {
-    const response = await fetch("/app/create-order", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ quoteId }),
-    });
+  function approveAndCreateOrder(quoteId: string) {
+   fetcher.submit(
+    {
+      intent: "approveCreateOrder",
+      quoteId,
+    },
+    {
+      method: "post",
+      encType: "application/json",
+    }
+  );
+}
 
     const data = await response.json();
 
