@@ -61,6 +61,10 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+function clean(value: any) {
+  return String(value || "").trim().toLowerCase();
+}
+
 function emptyItem(): QuoteItemInput {
   return {
     id: uid(),
@@ -178,10 +182,7 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "delete") {
-    await db.quote.deleteMany({
-      where: { id: payload.id, shop },
-    });
-
+    await db.quote.deleteMany({ where: { id: payload.id, shop } });
     const quotes = await getQuotes(shop);
     return Response.json({ ok: true, quotes });
   }
@@ -212,9 +213,7 @@ export async function action({ request }: { request: Request }) {
             notes: quote.notes,
           },
         }),
-        db.quoteItem.deleteMany({
-          where: { quoteId: quote.id },
-        }),
+        db.quoteItem.deleteMany({ where: { quoteId: quote.id } }),
         db.quoteItem.createMany({
           data: quote.items.map((item) => ({
             quoteId: quote.id as string,
@@ -322,11 +321,32 @@ export default function QuotesPage() {
     );
   }
 
+  function getMatchedProductCost(selected: ShopifyVariantOption, variantId: string) {
+    return productCosts.find((cost: any) => {
+      const costVariantId = clean(cost.variantId);
+      const selectedVariantId = clean(variantId);
+
+      const costSku = clean(cost.sku);
+      const selectedSku = clean(selected.sku);
+
+      const costProductName = clean(
+        cost.productName || cost.name || cost.title || cost.productTitle
+      );
+      const selectedProductTitle = clean(selected.productTitle);
+
+      return (
+        (costVariantId && costVariantId === selectedVariantId) ||
+        (costSku && selectedSku && costSku === selectedSku) ||
+        (costProductName && selectedProductTitle && costProductName === selectedProductTitle)
+      );
+    });
+  }
+
   function selectProductVariant(itemId: string | undefined, variantId: string) {
     const selected = productOptions.find((option) => option.value === variantId);
     if (!selected) return;
 
-    const matchedCost = productCosts.find((cost: any) => cost.variantId === variantId);
+    const matchedCost = getMatchedProductCost(selected, variantId);
 
     const savedUnitCost = matchedCost
       ? (
@@ -337,6 +357,9 @@ export default function QuotesPage() {
           Number(matchedCost.packagingCost || 0)
         ).toFixed(2)
       : undefined;
+
+    console.log("SELECTED PRODUCT:", selected);
+    console.log("MATCHED COST:", matchedCost || "No saved product cost found");
 
     setItems((prev) =>
       prev.map((item) =>
