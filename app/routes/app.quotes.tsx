@@ -216,16 +216,19 @@ export async function action({ request }: { request: Request }) {
     });
   }
 
-  const lineItems = quote.items.map((item: any) => ({
-    title: item.productName || "Custom print item",
-    quantity: Number(item.quantity) || 1,
-    originalUnitPrice: String(Number(item.unitPrice) || 0),
-    customAttributes: [
-      { key: "Variant", value: item.variant || "" },
-      { key: "SKU", value: item.sku || "" },
-      { key: "Notes", value: item.notes || "" },
-    ],
-  }));
+const lineItems = quote.items.map((item: any) => ({
+  title: item.productName || "Custom print item",
+  quantity: Number(item.quantity) || 1,
+  originalUnitPriceWithCurrency: {
+    amount: String(Number(item.unitPrice) || 0),
+    currencyCode: "USD",
+  },
+  customAttributes: [
+    { key: "Variant", value: item.variant || "" },
+    { key: "SKU", value: item.sku || "" },
+    { key: "Notes", value: item.notes || "" },
+  ],
+}));
 
   const response = await admin.graphql(
     `#graphql
