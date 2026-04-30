@@ -159,3 +159,20 @@ model QuoteItem {
 
   @@index([quoteId])
 }
+
+model ProductCost {
+  id            String   @id @default(cuid())
+  productId     String
+  variantId     String
+  name          String
+
+  materialCost  Float    @default(0)
+  printCost     Float    @default(0)
+  laborCost     Float    @default(0)
+  machineCost   Float    @default(0)
+  packagingCost Float    @default(0)
+
+  customCosts   Json?
+
+  createdAt     DateTime @default(now())
+}

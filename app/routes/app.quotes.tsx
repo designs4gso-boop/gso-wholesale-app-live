@@ -131,7 +131,6 @@ async function searchShopifyProducts(admin: any, search: string) {
   );
 
   const json = await response.json();
-
   const options: ShopifyVariantOption[] = [];
 
   for (const product of json.data?.products?.nodes || []) {
@@ -152,12 +151,19 @@ async function searchShopifyProducts(admin: any, search: string) {
 
 export async function loader({ request }: { request: Request }) {
   const { session, admin } = await authenticate.admin(request);
+
   const quotes = await getQuotes(session.shop);
   const productOptions = await searchShopifyProducts(admin, "");
+
+  const productCosts = await db.productCost.findMany({
+    where: { shop: session.shop },
+    orderBy: { createdAt: "desc" },
+  });
 
   return Response.json({
     quotes,
     productOptions,
+    productCosts,
   });
 }
 
@@ -206,11 +212,9 @@ export async function action({ request }: { request: Request }) {
             notes: quote.notes,
           },
         }),
-
         db.quoteItem.deleteMany({
           where: { quoteId: quote.id },
         }),
-
         db.quoteItem.createMany({
           data: quote.items.map((item) => ({
             quoteId: quote.id as string,
@@ -266,6 +270,9 @@ export default function QuotesPage() {
   const [productOptions, setProductOptions] = useState<ShopifyVariantOption[]>(
     loaderData.productOptions || []
   );
+  const [productCosts, setProductCosts] = useState<any[]>(
+    loaderData.productCosts || []
+  );
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState("");
@@ -280,7 +287,12 @@ export default function QuotesPage() {
   useEffect(() => {
     if (fetcher.data?.quotes) setQuotes(fetcher.data.quotes);
     if (fetcher.data?.productOptions) setProductOptions(fetcher.data.productOptions);
+    if (fetcher.data?.productCosts) setProductCosts(fetcher.data.productCosts);
   }, [fetcher.data]);
+
+  useEffect(() => {
+    console.log("PRODUCT COSTS:", productCosts);
+  }, [productCosts]);
 
   function resetQuote() {
     setEditingId(null);
@@ -314,6 +326,18 @@ export default function QuotesPage() {
     const selected = productOptions.find((option) => option.value === variantId);
     if (!selected) return;
 
+    const matchedCost = productCosts.find((cost: any) => cost.variantId === variantId);
+
+    const savedUnitCost = matchedCost
+      ? (
+          Number(matchedCost.materialCost || 0) +
+          Number(matchedCost.printCost || 0) +
+          Number(matchedCost.laborCost || 0) +
+          Number(matchedCost.machineCost || 0) +
+          Number(matchedCost.packagingCost || 0)
+        ).toFixed(2)
+      : undefined;
+
     setItems((prev) =>
       prev.map((item) =>
         item.id === itemId
@@ -323,6 +347,7 @@ export default function QuotesPage() {
               variant: selected.variantTitle,
               sku: selected.sku,
               unitPrice: selected.price,
+              unitCost: savedUnitCost || item.unitCost,
             }
           : item
       )
