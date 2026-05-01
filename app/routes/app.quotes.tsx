@@ -403,6 +403,18 @@ export async function action({ request }: { request: Request }) {
         },
       });
 
+      const quotes = await getQuotes(shop);
+
+      return Response.json({
+        intent: "createDepositOrder",
+        ok: true,
+        quotes,
+        invoiceUrl: draftOrder?.invoiceUrl,
+        draftOrderId: draftOrder?.id,
+        depositAmount,
+        balanceDue,
+      });
+
     } catch (error: any) {
       console.error("CREATE_DEPOSIT_ORDER_ERROR", error);
 
