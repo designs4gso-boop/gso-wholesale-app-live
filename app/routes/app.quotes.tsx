@@ -520,7 +520,6 @@ useEffect(() => {
     if (fetcher.data.invoiceUrl) {
       window.open(fetcher.data.invoiceUrl, "_blank", "noopener,noreferrer");
     }
-}
   }
 }, [fetcher.data]);
 
