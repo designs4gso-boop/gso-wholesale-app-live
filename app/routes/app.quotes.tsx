@@ -277,6 +277,7 @@ export async function action({ request }: { request: Request }) {
          status: "approved",
          fullOrderCreated: true,
          fullDraftOrderId: draftOrder?.id || null,
+         fullInvoiceUrl: draftOrder?.invoiceUrl || null,
       },
     });
 
@@ -400,6 +401,7 @@ export async function action({ request }: { request: Request }) {
           depositAmount,
           balanceDue,
           depositDraftOrderId: draftOrder?.id || null,
+          depositInvoiceUrl: draftOrder?.invoiceUrl || null,
         },
       });
 
@@ -521,6 +523,7 @@ export async function action({ request }: { request: Request }) {
   data: {
     balanceCreated: true,
     balanceDraftOrderId: draftOrder?.id || null,
+    balanceInvoiceUrl: draftOrder?.invoiceUrl || null,
   },
 });
 

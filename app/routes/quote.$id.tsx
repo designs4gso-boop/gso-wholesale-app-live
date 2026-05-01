@@ -58,13 +58,18 @@ export default function QuotePortal() {
 
 <h2>Payments</h2>
 
-{quote.depositCreated && quote.depositDraftOrderId && (
-  <a
-    href={`https://admin.shopify.com/store/942075-2/draft_orders/${quote.depositDraftOrderId}`}
-    target="_blank"
-  >
+{quote.depositCreated && quote.depositInvoiceUrl && (
+  <a href={quote.depositInvoiceUrl} target="_blank" rel="noreferrer">
     <button style={{ padding: "12px 20px", marginRight: 10 }}>
       Pay Deposit
+    </button>
+  </a>
+)}
+
+{quote.balanceCreated && quote.balanceInvoiceUrl && (
+  <a href={quote.balanceInvoiceUrl} target="_blank" rel="noreferrer">
+    <button style={{ padding: "12px 20px" }}>
+      Pay Remaining Balance
     </button>
   </a>
 )}

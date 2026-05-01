@@ -148,6 +148,9 @@ model Quote {
   depositDraftOrderId String?
   balanceDraftOrderId String?
   fullDraftOrderId    String?
+  depositInvoiceUrl String?
+  balanceInvoiceUrl String?
+  fullInvoiceUrl    String?
 
   @@index([shop, status])
   @@index([shop, createdAt])
