@@ -416,6 +416,116 @@ export async function action({ request }: { request: Request }) {
     }
   }
 
+  if (payload.intent === "createBalanceOrder") {
+  try {
+    const quote = await db.quote.findFirst({
+      where: { id: payload.quoteId, shop },
+      include: { items: true },
+    });
+
+    if (!quote) {
+      return Response.json({
+        intent: "createBalanceOrder",
+        ok: false,
+        error: "Quote not found",
+      });
+    }
+
+    const quoteTotal = quote.items.reduce((sum: number, item: any) => {
+      const qty = Math.max(1, Number(item.quantity) || 1);
+      const unitPrice = Number(item.unitPrice) || 0;
+      return sum + qty * unitPrice;
+    }, 0);
+
+    const depositPercent = Number(payload.depositPercent) || 50;
+    const depositAmount = Math.round(quoteTotal * (depositPercent / 100) * 100) / 100;
+    const balanceDue = Math.round((quoteTotal - depositAmount) * 100) / 100;
+
+    const lineItems = [
+      {
+        title: `Remaining Balance - Quote ${quote.id}`,
+        quantity: 1,
+        originalUnitPriceWithCurrency: {
+          amount: String(balanceDue),
+          currencyCode: "USD",
+        },
+        customAttributes: [
+          { key: "Quote ID", value: quote.id },
+          { key: "Quote Total", value: `$${quoteTotal.toFixed(2)}` },
+          { key: "Deposit Paid", value: `$${depositAmount.toFixed(2)}` },
+          { key: "Balance Due", value: `$${balanceDue.toFixed(2)}` },
+        ],
+      },
+    ];
+
+    const response = await admin.graphql(
+      `#graphql
+        mutation draftOrderCreate($input: DraftOrderInput!) {
+          draftOrderCreate(input: $input) {
+            draftOrder {
+              id
+              invoiceUrl
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `,
+      {
+        variables: {
+          input: {
+            email: quote.email || null,
+            presentmentCurrencyCode: "USD",
+            note: `Remaining balance created from GSO Quote Builder. Quote ID: ${quote.id}. Quote total: $${quoteTotal.toFixed(
+              2
+            )}. Deposit paid: $${depositAmount.toFixed(2)}. Balance due: $${balanceDue.toFixed(2)}.`,
+            tags: ["GSO Quote", "Wholesale", "Remaining Balance"],
+            lineItems,
+          },
+        },
+      }
+    );
+
+    const data = await response.json();
+    const graphqlErrors = data.errors || data.graphQLErrors || [];
+    const userErrors = data.data?.draftOrderCreate?.userErrors || [];
+
+    if (graphqlErrors.length || userErrors.length) {
+      return Response.json({
+        intent: "createBalanceOrder",
+        ok: false,
+        error: "Shopify rejected the balance draft order.",
+        graphqlErrors,
+        userErrors,
+        raw: data,
+      });
+    }
+
+    const draftOrder = data.data?.draftOrderCreate?.draftOrder;
+    const quotes = await getQuotes(shop);
+
+    return Response.json({
+      intent: "createBalanceOrder",
+      ok: true,
+      quotes,
+      invoiceUrl: draftOrder?.invoiceUrl,
+      draftOrderId: draftOrder?.id,
+      balanceDue,
+    });
+  } catch (error: any) {
+    console.error("CREATE_BALANCE_ORDER_ERROR", error);
+
+    return Response.json({
+      intent: "createBalanceOrder",
+      ok: false,
+      error: error?.message || "Unknown balance draft order error",
+      graphQLErrors: error?.graphQLErrors || [],
+    });
+  }
+}
+
   if (payload.intent === "save") {
     const quote = payload.quote as QuoteInput;
 
@@ -509,7 +619,8 @@ useEffect(() => {
 
   if (
     fetcher.data?.intent === "approveCreateOrder" ||
-    fetcher.data?.intent === "createDepositOrder"
+    fetcher.data?.intent === "createDepositOrder" ||
+    fetcher.data?.intent === "createBalanceOrder" 
   ) {
     if (!fetcher.data.ok) {
       console.error("Draft order error:", fetcher.data);
@@ -702,6 +813,20 @@ function createDepositOrder(quoteId: string, depositPercent: number) {
   fetcher.submit(
     {
       intent: "createDepositOrder",
+      quoteId,
+      depositPercent,
+    },
+    {
+      method: "post",
+      encType: "application/json",
+    }
+  );
+}
+
+function createBalanceOrder(quoteId: string, depositPercent: number) {
+  fetcher.submit(
+    {
+      intent: "createBalanceOrder",
       quoteId,
       depositPercent,
     },
@@ -907,9 +1032,14 @@ function createDepositOrder(quoteId: string, depositPercent: number) {
                                     Create 50% Deposit
                                   </Button>
 
+                                   <Button onClick={() => createBalanceOrder(quote.id, 50)}>
+                                    Create Remaining Balance
+                                  </Button>
+
                                   <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
                                     Delete
                                   </Button>
+                                  
                                 </InlineStack>
                               </BlockStack>
                             </Card>
