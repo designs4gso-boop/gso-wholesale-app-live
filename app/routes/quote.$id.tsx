@@ -22,8 +22,15 @@ export default function QuotePortal() {
   const { quote, total } = useLoaderData<typeof loader>() as any;
 
   return (
-    <main style={{ maxWidth: 900, margin: "40px auto", padding: 24, fontFamily: "Arial" }}>
-      <h1>GSO Packaging Quote</h1>
+    <main style={{
+      maxWidth: 900,
+      margin: "40px auto",
+      padding: 24,
+      fontFamily: "Inter, Arial",
+      background: "#111",
+      color: "#fff",
+      borderRadius: 12
+    }}>
 
       <p><strong>Customer:</strong> {quote.customerName || "Customer"}</p>
       <p><strong>Company:</strong> {quote.company || "N/A"}</p>
@@ -47,6 +54,32 @@ export default function QuotePortal() {
 
       <h2>Total: ${total.toFixed(2)}</h2>
 
+<hr />
+
+<h2>Payments</h2>
+
+{quote.depositCreated && quote.depositDraftOrderId && (
+  <a
+    href={`https://admin.shopify.com/store/942075-2/draft_orders/${quote.depositDraftOrderId}`}
+    target="_blank"
+  >
+    <button style={{ padding: "12px 20px", marginRight: 10 }}>
+      Pay Deposit
+    </button>
+  </a>
+)}
+
+{quote.balanceCreated && quote.balanceDraftOrderId && (
+  <a
+    href={`https://admin.shopify.com/store/YOUR_STORE/draft_orders/${quote.balanceDraftOrderId}`}
+    target="_blank"
+  >
+    <button style={{ padding: "12px 20px" }}>
+      Pay Remaining Balance
+    </button>
+  </a>
+)}
+
       {quote.depositCreated && (
         <>
           <p><strong>Deposit:</strong> ${Number(quote.depositAmount || 0).toFixed(2)}</p>
@@ -58,17 +91,40 @@ export default function QuotePortal() {
 
       <h2>Payment Status</h2>
 
-      <p>
-        Deposit Created: {quote.depositCreated ? "Yes" : "No"}
-      </p>
+      {quote.fullOrderCreated && (
+        <p>
+          ✅ Full payment invoice has been created. Please complete payment using the checkout link provided by GSO.
+        </p>
+     )}
 
-      <p>
-        Balance Created: {quote.balanceCreated ? "Yes" : "No"}
-      </p>
+      {quote.depositCreated && !quote.balanceCreated && !quote.fullOrderCreated && (
+        <p>
+          ✅ Deposit invoice has been created. Once deposit is paid, GSO will prepare your order and send the remaining balance invoice.
+        </p>
+     )}
 
-      <p>
-        Full Order Created: {quote.fullOrderCreated ? "Yes" : "No"}
-      </p>
+      {quote.depositCreated && quote.balanceCreated && !quote.fullOrderCreated && (
+        <p>
+          ✅ Deposit invoice created. ✅ Remaining balance invoice created. Please complete any unpaid invoices sent by GSO.
+        </p>
+     )}
+
+      {!quote.depositCreated && !quote.balanceCreated && !quote.fullOrderCreated && (
+        <p>
+          Your quote is ready. GSO will send your payment invoice when approved.
+       </p>
+     )}
+
+      {quote.depositCreated && (
+        <>
+         <p>
+           <strong>Deposit Amount:</strong> ${Number(quote.depositAmount || 0).toFixed(2)}
+         </p>
+         <p>
+          <strong>Balance Due:</strong> ${Number(quote.balanceDue || 0).toFixed(2)}
+         </p>
+       </>
+     )}
 
       <p style={{ marginTop: 32 }}>
         Questions? Contact GSO Packaging directly.
