@@ -1067,6 +1067,18 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                   Delete
                                 </Button>
                                   
+                                <Button
+                                  onClick={() =>
+                                    window.open(
+                                      `https://gso-wholesale-app-live.onrender.com/quote/${quote.id}`,
+                                      "_blank",
+                                      "noopener,noreferrer"
+                                    )
+                                  }
+                                >
+                                 Client Portal
+                                </Button>
+
                                 </InlineStack>
                               </BlockStack>
                             </Card>
