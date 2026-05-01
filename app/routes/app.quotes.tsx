@@ -1062,6 +1062,10 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                     Create Remaining Balance
                                   </Button>
                                 )}
+
+                                <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
+                                  Delete
+                                </Button>
                                   
                                 </InlineStack>
                               </BlockStack>
