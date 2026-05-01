@@ -198,111 +198,223 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "approveCreateOrder") {
-  try {
-    const quote = await db.quote.findFirst({
-      where: {
-        id: payload.quoteId,
-        shop,
-      },
-      include: {
-        items: true,
-      },
-    });
-
-    if (!quote) {
-      return Response.json({
-        intent: "approveCreateOrder",
-        ok: false,
-        error: "Quote not found",
+    try {
+      const quote = await db.quote.findFirst({
+        where: { id: payload.quoteId, shop },
+        include: { items: true },
       });
-    }
 
-    const lineItems = quote.items.map((item: any) => ({
-      title: item.productName || "Custom print item",
-      quantity: Math.max(1, Number(item.quantity) || 1),
-      originalUnitPriceWithCurrency: {
-        amount: String(Number(item.unitPrice) || 0),
-        currencyCode: "USD",
-      },
-      
-      customAttributes: [
-        { key: "Variant", value: item.variant || "" },
-        { key: "SKU", value: item.sku || "" },
-        { key: "Notes", value: item.notes || "" },
-      ],
-    }));
+      if (!quote) {
+        return Response.json({
+          intent: "approveCreateOrder",
+          ok: false,
+          error: "Quote not found",
+        });
+      }
 
-    const response = await admin.graphql(
-      `#graphql
-        mutation draftOrderCreate($input: DraftOrderInput!) {
-          draftOrderCreate(input: $input) {
-            draftOrder {
-              id
-              invoiceUrl
-            }
-            userErrors {
-              field
-              message
+      const lineItems = quote.items.map((item: any) => ({
+        title: item.productName || "Custom print item",
+        quantity: Math.max(1, Number(item.quantity) || 1),
+        originalUnitPriceWithCurrency: {
+          amount: String(Number(item.unitPrice) || 0),
+          currencyCode: "USD",
+        },
+        customAttributes: [
+          { key: "Variant", value: item.variant || "" },
+          { key: "SKU", value: item.sku || "" },
+          { key: "Notes", value: item.notes || "" },
+        ],
+      }));
+
+      const response = await admin.graphql(
+        `#graphql
+          mutation draftOrderCreate($input: DraftOrderInput!) {
+            draftOrderCreate(input: $input) {
+              draftOrder {
+                id
+                invoiceUrl
+              }
+              userErrors {
+                field
+                message
+              }
             }
           }
-        }
-      `,
-      {
-        variables: {
-          input: {
-            email: quote.email || null,
-            presentmentCurrencyCode: "USD",
-            note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
-            tags: ["GSO Quote", "Wholesale"],
-            lineItems,
+        `,
+        {
+          variables: {
+            input: {
+              email: quote.email || null,
+              presentmentCurrencyCode: "USD",
+              note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
+              tags: ["GSO Quote", "Wholesale", "Full Payment"],
+              lineItems,
+            },
           },
-        },
+        }
+      );
+
+      const data = await response.json();
+      const graphqlErrors = data.errors || data.graphQLErrors || [];
+      const userErrors = data.data?.draftOrderCreate?.userErrors || [];
+
+      if (graphqlErrors.length || userErrors.length) {
+        return Response.json({
+          intent: "approveCreateOrder",
+          ok: false,
+          error: "Shopify rejected the draft order.",
+          graphqlErrors,
+          userErrors,
+          raw: data,
+        });
       }
-    );
 
-    const data = await response.json();
+      const draftOrder = data.data?.draftOrderCreate?.draftOrder;
 
-    const graphqlErrors = data.errors || data.graphQLErrors || [];
-    const userErrors = data.data?.draftOrderCreate?.userErrors || [];
+      await db.quote.update({
+        where: { id: quote.id },
+        data: { status: "approved" },
+      });
 
-    if (graphqlErrors.length || userErrors.length) {
+      const quotes = await getQuotes(shop);
+
+      return Response.json({
+        intent: "approveCreateOrder",
+        ok: true,
+        quotes,
+        invoiceUrl: draftOrder?.invoiceUrl,
+        draftOrderId: draftOrder?.id,
+      });
+    } catch (error: any) {
+      console.error("APPROVE_CREATE_ORDER_ERROR", error);
+
       return Response.json({
         intent: "approveCreateOrder",
         ok: false,
-        error: "Shopify rejected the draft order.",
-        graphqlErrors,
-        userErrors,
-        raw: data,
+        error: error?.message || "Unknown draft order error",
+        graphQLErrors: error?.graphQLErrors || [],
       });
     }
-
-    const draftOrder = data.data?.draftOrderCreate?.draftOrder;
-
-    await db.quote.update({
-      where: { id: quote.id },
-      data: { status: "approved" },
-    });
-
-    const quotes = await getQuotes(shop);
-
-    return Response.json({
-      intent: "approveCreateOrder",
-      ok: true,
-      quotes,
-      invoiceUrl: draftOrder?.invoiceUrl,
-      draftOrderId: draftOrder?.id,
-    });
-  } catch (error: any) {
-    console.error("APPROVE_CREATE_ORDER_ERROR", error);
-
-    return Response.json({
-      intent: "approveCreateOrder",
-      ok: false,
-      error: error?.message || "Unknown draft order error",
-      graphQLErrors: error?.graphQLErrors || [],
-    });
   }
-}
+
+  if (payload.intent === "createDepositOrder") {
+    try {
+      const quote = await db.quote.findFirst({
+        where: { id: payload.quoteId, shop },
+        include: { items: true },
+      });
+
+      if (!quote) {
+        return Response.json({
+          intent: "createDepositOrder",
+          ok: false,
+          error: "Quote not found",
+        });
+      }
+
+      const quoteTotal = quote.items.reduce((sum: number, item: any) => {
+        const qty = Math.max(1, Number(item.quantity) || 1);
+        const unitPrice = Number(item.unitPrice) || 0;
+        return sum + qty * unitPrice;
+      }, 0);
+
+      const depositPercent = Number(payload.depositPercent) || 50;
+      const depositAmount =
+        Math.round(quoteTotal * (depositPercent / 100) * 100) / 100;
+      const balanceDue =
+        Math.round((quoteTotal - depositAmount) * 100) / 100;
+
+      const lineItems = [
+        {
+          title: `Deposit Payment - ${depositPercent}%`,
+          quantity: 1,
+          originalUnitPriceWithCurrency: {
+            amount: String(depositAmount),
+            currencyCode: "USD",
+          },
+          customAttributes: [
+            { key: "Quote ID", value: quote.id },
+            { key: "Quote Total", value: `$${quoteTotal.toFixed(2)}` },
+            { key: "Deposit Percent", value: `${depositPercent}%` },
+            { key: "Balance Due", value: `$${balanceDue.toFixed(2)}` },
+          ],
+        },
+      ];
+
+      const response = await admin.graphql(
+        `#graphql
+          mutation draftOrderCreate($input: DraftOrderInput!) {
+            draftOrderCreate(input: $input) {
+              draftOrder {
+                id
+                invoiceUrl
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `,
+        {
+          variables: {
+            input: {
+              email: quote.email || null,
+              presentmentCurrencyCode: "USD",
+              note: `Deposit created from GSO Quote Builder. Quote ID: ${quote.id}. Quote total: $${quoteTotal.toFixed(
+                2
+              )}. Balance due: $${balanceDue.toFixed(2)}.`,
+              tags: ["GSO Quote", "Wholesale", "Deposit"],
+              lineItems,
+            },
+          },
+        }
+      );
+
+      const data = await response.json();
+      const graphqlErrors = data.errors || data.graphQLErrors || [];
+      const userErrors = data.data?.draftOrderCreate?.userErrors || [];
+
+      if (graphqlErrors.length || userErrors.length) {
+        return Response.json({
+          intent: "createDepositOrder",
+          ok: false,
+          error: "Shopify rejected the deposit draft order.",
+          graphqlErrors,
+          userErrors,
+          raw: data,
+        });
+      }
+
+      const draftOrder = data.data?.draftOrderCreate?.draftOrder;
+
+      await db.quote.update({
+        where: { id: quote.id },
+        data: { status: "approved" },
+      });
+
+      const quotes = await getQuotes(shop);
+
+      return Response.json({
+        intent: "createDepositOrder",
+        ok: true,
+        quotes,
+        invoiceUrl: draftOrder?.invoiceUrl,
+        draftOrderId: draftOrder?.id,
+        depositAmount,
+        balanceDue,
+      });
+    } catch (error: any) {
+      console.error("CREATE_DEPOSIT_ORDER_ERROR", error);
+
+      return Response.json({
+        intent: "createDepositOrder",
+        ok: false,
+        error: error?.message || "Unknown deposit draft order error",
+        graphQLErrors: error?.graphQLErrors || [],
+      });
+    }
+  }
 
   if (payload.intent === "save") {
     const quote = payload.quote as QuoteInput;
@@ -395,17 +507,18 @@ useEffect(() => {
   if (fetcher.data?.productOptions) setProductOptions(fetcher.data.productOptions);
   if (fetcher.data?.productCosts) setProductCosts(fetcher.data.productCosts);
 
-  if (fetcher.data?.intent === "approveCreateOrder") {
+  if (
+    fetcher.data?.intent === "approveCreateOrder" ||
+    fetcher.data?.intent === "createDepositOrder"
+  ) {
     if (!fetcher.data.ok) {
-      alert("Draft order failed. Check Render logs.");
-      console.log("Draft order error:", fetcher.data);
+      console.error("Draft order error:", fetcher.data);
+      alert("Draft order failed. Check logs.");
       return;
     }
 
-    alert("Draft order created!");
-
     if (fetcher.data.invoiceUrl) {
-      window.open(fetcher.data.invoiceUrl, "_blank");
+      window.location.href = fetcher.data.invoiceUrl;
     }
   }
 }, [fetcher.data]);
@@ -577,6 +690,20 @@ useEffect(() => {
     {
       intent: "approveCreateOrder",
       quoteId,
+    },
+    {
+      method: "post",
+      encType: "application/json",
+    }
+  );
+}
+
+function createDepositOrder(quoteId: string, depositPercent: number) {
+  fetcher.submit(
+    {
+      intent: "createDepositOrder",
+      quoteId,
+      depositPercent,
     },
     {
       method: "post",
@@ -774,6 +901,10 @@ useEffect(() => {
                                     onClick={() => approveAndCreateOrder(quote.id)}
                                   >
                                     Approve & Create Order
+                                  </Button>
+
+                                  <Button onClick={() => createDepositOrder(quote.id, 50)}>
+                                    Create 50% Deposit
                                   </Button>
 
                                   <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
