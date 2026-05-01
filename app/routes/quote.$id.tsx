@@ -74,17 +74,6 @@ export default function QuotePortal() {
   </a>
 )}
 
-{quote.balanceCreated && quote.balanceDraftOrderId && (
-  <a
-    href={`https://admin.shopify.com/store/942075-2/draft_orders/${quote.balanceDraftOrderId}`}
-    target="_blank"
-  >
-    <button style={{ padding: "12px 20px" }}>
-      Pay Remaining Balance
-    </button>
-  </a>
-)}
-
       {quote.depositCreated && (
         <>
           <p><strong>Deposit:</strong> ${Number(quote.depositAmount || 0).toFixed(2)}</p>
