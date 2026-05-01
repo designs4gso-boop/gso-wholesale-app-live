@@ -128,37 +128,47 @@ model CostCalculator {
 }
 
 model Quote {
-  id           String      @id @default(cuid())
+  id           String   @id @default(cuid())
   shop         String
   customerName String?
   company      String?
   email        String?
   phone        String?
-  status       String      @default("draft")
+  status       String   @default("draft")
   notes        String?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
   items        QuoteItem[]
+
+  depositAmount       Float   @default(0)
+  balanceDue          Float   @default(0)
+  depositCreated      Boolean @default(false)
+  balanceCreated      Boolean @default(false)
+  fullOrderCreated    Boolean @default(false)
+  depositDraftOrderId String?
+  balanceDraftOrderId String?
+  fullDraftOrderId    String?
 
   @@index([shop, status])
   @@index([shop, createdAt])
 }
 
 model QuoteItem {
-  id          String  @id @default(cuid())
+  id          String @id @default(cuid())
   quoteId     String
-  productName String?
+  productName String
   variant     String?
   sku         String?
-  quantity    Int     @default(1)
-  unitPrice   Float   @default(0)
-  unitCost    Float   @default(0)
+  quantity    Int
+  unitPrice   Float
+  unitCost    Float
   notes       String?
 
   quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@index([quoteId])
 }
+
 
 model ProductCost {
   id   String @id @default(cuid())

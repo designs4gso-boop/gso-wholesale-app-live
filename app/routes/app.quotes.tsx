@@ -273,8 +273,12 @@ export async function action({ request }: { request: Request }) {
 
       await db.quote.update({
         where: { id: quote.id },
-        data: { status: "approved" },
-      });
+        data: {
+         status: "approved",
+         fullOrderCreated: true,
+         fullDraftOrderId: draftOrder?.id || null,
+      },
+    });
 
       const quotes = await getQuotes(shop);
 
@@ -390,20 +394,15 @@ export async function action({ request }: { request: Request }) {
 
       await db.quote.update({
         where: { id: quote.id },
-        data: { status: "approved" },
+        data: {
+          status: "approved",
+          depositCreated: true,
+          depositAmount,
+          balanceDue,
+          depositDraftOrderId: draftOrder?.id || null,
+        },
       });
 
-      const quotes = await getQuotes(shop);
-
-      return Response.json({
-        intent: "createDepositOrder",
-        ok: true,
-        quotes,
-        invoiceUrl: draftOrder?.invoiceUrl,
-        draftOrderId: draftOrder?.id,
-        depositAmount,
-        balanceDue,
-      });
     } catch (error: any) {
       console.error("CREATE_DEPOSIT_ORDER_ERROR", error);
 
@@ -504,8 +503,18 @@ export async function action({ request }: { request: Request }) {
     }
 
     const draftOrder = data.data?.draftOrderCreate?.draftOrder;
-    const quotes = await getQuotes(shop);
 
+    await db.quote.update({
+  where: { id: quote.id },
+  data: {
+    balanceCreated: true,
+    balanceDraftOrderId: draftOrder?.id || null,
+  },
+});
+
+    const quotes = await getQuotes(shop);
+    
+    
     return Response.json({
       intent: "createBalanceOrder",
       ok: true,
@@ -1021,24 +1030,26 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                 <InlineStack gap="200">
                                   <Button onClick={() => loadQuote(quote)}>Open</Button>
 
-                                  <Button
-                                    variant="primary"
-                                    onClick={() => approveAndCreateOrder(quote.id)}
+                                  {!quote.depositCreated && !quote.fullOrderCreated && (
+                                    <Button
+                                      variant="primary"
+                                      onClick={() => approveAndCreateOrder(quote.id)}
                                   >
-                                    Approve & Create Order
-                                  </Button>
+                                      Approve & Create Order
+                                    </Button>
+                                )}
 
+                                {!quote.depositCreated && !quote.fullOrderCreated && (
                                   <Button onClick={() => createDepositOrder(quote.id, 50)}>
                                     Create 50% Deposit
                                   </Button>
+                                )}
 
-                                   <Button onClick={() => createBalanceOrder(quote.id, 50)}>
+                                {quote.depositCreated && !quote.balanceCreated && (
+                                  <Button onClick={() => createBalanceOrder(quote.id, 50)}>
                                     Create Remaining Balance
                                   </Button>
-
-                                  <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
-                                    Delete
-                                  </Button>
+                                )}
                                   
                                 </InlineStack>
                               </BlockStack>
