@@ -1082,6 +1082,16 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                  Client Portal
                                 </Button>
 
+                                <Button
+                                  onClick={() => {
+                                    const url = `https://gso-wholesale-app-live.onrender.com/quote/${quote.id}`;
+                                    navigator.clipboard.writeText(url);
+                                    alert("Client portal link copied!");
+                                 }}
+                               >
+                                 Copy Portal Link
+                               </Button>
+
                                 </InlineStack>
                               </BlockStack>
                             </Card>
