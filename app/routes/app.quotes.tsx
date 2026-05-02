@@ -206,109 +206,6 @@ async function sendDraftOrderInvoice(admin: any, draftOrderId: string) {
   return data;
 }
 
-async function findOrCreateShopifyCustomer(admin: any, quote: any) {
-  if (!quote.email) return null;
-
-  const searchResponse = await admin.graphql(
-    `#graphql
-      query FindCustomer($query: String!) {
-        customers(first: 1, query: $query) {
-          nodes {
-            id
-            email
-          }
-        }
-      }
-    `,
-    {
-      variables: {
-        query: `email:${quote.email}`,
-      },
-    }
-  );
-
-  const searchData = await searchResponse.json();
-  const existingCustomer = searchData.data?.customers?.nodes?.[0];
-
-  if (existingCustomer?.id) {
-    return existingCustomer.id;
-  }
-
-  const nameParts = String(quote.customerName || "").trim().split(" ");
-  const firstName = nameParts[0] || "";
-  const lastName = nameParts.slice(1).join(" ") || "";
-
-  const createResponse = await admin.graphql(
-    `#graphql
-      mutation CustomerCreate($input: CustomerInput!) {
-        customerCreate(input: $input) {
-          customer {
-            id
-            email
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `,
-    {
-      variables: {
-        input: {
-          email: quote.email,
-          firstName,
-          lastName,
-          phone: quote.phone || null,
-          note: `Created from GSO Quote Builder. Company: ${quote.company || "N/A"}`,
-          tags: ["GSO Quote Customer", "Wholesale"],
-        },
-      },
-    }
-  );
-
-  const response = await admin.graphql(
-    `#graphql
-      mutation draftOrderInvoiceSend($id: ID!) {
-        draftOrderInvoiceSend(id: $id) {
-          draftOrder {
-            id
-            invoiceUrl
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `,
-    {
-      variables: {
-        id: draftOrderId,
-      },
-    }
-  );
-
-  const data = await response.json();
-  const userErrors = data.data?.draftOrderInvoiceSend?.userErrors || [];
-
-  if (userErrors.length) {
-    console.error("DRAFT_ORDER_INVOICE_SEND_ERRORS", userErrors);
-  }
-
-  return data;
-}
-
-  const createData = await createResponse.json();
-  const userErrors = createData.data?.customerCreate?.userErrors || [];
-
-  if (userErrors.length) {
-    console.error("CUSTOMER_CREATE_ERRORS", userErrors);
-    return null;
-  }
-
-  return createData.data?.customerCreate?.customer?.id || null;
-}
 
 export async function action({ request }: { request: Request }) {
   const { session, admin } = await authenticate.admin(request);
@@ -434,7 +331,7 @@ export async function action({ request }: { request: Request }) {
         draftOrderId: draftOrder?.id,
       });
     } catch (error: any) {
-      console.error("APPROVE_CREATE_ORDER_ERROR", error);
+        console.error("CREATE_DEPOSIT_ORDER_ERROR", JSON.stringify(error, null, 2));
 
       return Response.json({
         intent: "approveCreateOrder",
@@ -565,7 +462,7 @@ export async function action({ request }: { request: Request }) {
       });
 
     } catch (error: any) {
-      console.error("CREATE_DEPOSIT_ORDER_ERROR", error);
+        console.error("CREATE_DEPOSIT_ORDER_ERROR", JSON.stringify(error, null, 2));
 
       return Response.json({
         intent: "createDepositOrder",
@@ -690,7 +587,7 @@ export async function action({ request }: { request: Request }) {
       balanceDue,
     });
   } catch (error: any) {
-    console.error("CREATE_BALANCE_ORDER_ERROR", error);
+      console.error("CREATE_DEPOSIT_ORDER_ERROR", JSON.stringify(error, null, 2));
 
     return Response.json({
       intent: "createBalanceOrder",
