@@ -317,8 +317,9 @@ export async function action({ request }: { request: Request }) {
         {
           variables: {
             input: {
-              email: quote.email || null,
-              customerId: customerId || null,
+              ...(customerId
+                ? { customerId }
+                : { email: quote.email || null }),
               presentmentCurrencyCode: "USD",
               note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
               tags: ["GSO Quote", "Wholesale", "Full Payment"],
@@ -439,8 +440,9 @@ export async function action({ request }: { request: Request }) {
         {
           variables: {
             input: {
-              email: quote.email || null,
-              customerId: customerId || null,
+              ...(customerId
+                ? { customerId }
+                : { email: quote.email || null }),
               presentmentCurrencyCode: "USD",
               note: `Deposit created from GSO Quote Builder. Quote ID: ${quote.id}. Quote total: $${quoteTotal.toFixed(
                 2
@@ -566,8 +568,9 @@ export async function action({ request }: { request: Request }) {
       {
         variables: {
           input: {
-            email: quote.email || null,
-            customerId: customerId || null,
+            ...(customerId
+              ? { customerId }
+              : { email: quote.email || null }),
             presentmentCurrencyCode: "USD",
             note: `Remaining balance created from GSO Quote Builder. Quote ID: ${quote.id}. Quote total: $${quoteTotal.toFixed(
               2
