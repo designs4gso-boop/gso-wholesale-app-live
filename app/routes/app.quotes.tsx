@@ -171,6 +171,41 @@ export async function loader({ request }: { request: Request }) {
   });
 }
 
+async function sendDraftOrderInvoice(admin: any, draftOrderId: string) {
+  if (!draftOrderId) return null;
+
+  const response = await admin.graphql(
+    `#graphql
+      mutation draftOrderInvoiceSend($id: ID!) {
+        draftOrderInvoiceSend(id: $id) {
+          draftOrder {
+            id
+            invoiceUrl
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        id: draftOrderId,
+      },
+    }
+  );
+
+  const data = await response.json();
+  const userErrors = data.data?.draftOrderInvoiceSend?.userErrors || [];
+
+  if (userErrors.length) {
+    console.error("DRAFT_ORDER_INVOICE_SEND_ERRORS", userErrors);
+  }
+
+  return data;
+}
+
 async function findOrCreateShopifyCustomer(admin: any, quote: any) {
   if (!quote.email) return null;
 
@@ -231,9 +266,6 @@ async function findOrCreateShopifyCustomer(admin: any, quote: any) {
       },
     }
   );
-
-  async function sendDraftOrderInvoice(admin: any, draftOrderId: string) {
-  if (!draftOrderId) return null;
 
   const response = await admin.graphql(
     `#graphql
