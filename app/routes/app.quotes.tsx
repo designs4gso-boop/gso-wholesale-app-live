@@ -283,7 +283,8 @@ export async function action({ request }: { request: Request }) {
           error: "Quote not found",
         });
       }
-      const customerId = await findOrCreateShopifyCustomer(admin, quote);
+      
+      await findOrCreateShopifyCustomer(admin, quote);
 
       const lineItems = quote.items.map((item: any) => ({
         title: item.productName || "Custom print item",
@@ -317,9 +318,7 @@ export async function action({ request }: { request: Request }) {
         {
           variables: {
             input: {
-              ...(customerId
-                ? { customerId }
-                : { email: quote.email || null }),
+              email: quote.email || null,
               presentmentCurrencyCode: "USD",
               note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
               tags: ["GSO Quote", "Wholesale", "Full Payment"],
@@ -391,7 +390,8 @@ export async function action({ request }: { request: Request }) {
           error: "Quote not found",
         });
       }
-      const customerId = await findOrCreateShopifyCustomer(admin, quote);
+      
+      await findOrCreateShopifyCustomer(admin, quote);
 
       const quoteTotal = quote.items.reduce((sum: number, item: any) => {
         const qty = Math.max(1, Number(item.quantity) || 1);
@@ -440,9 +440,7 @@ export async function action({ request }: { request: Request }) {
         {
           variables: {
             input: {
-              ...(customerId
-                ? { customerId }
-                : { email: quote.email || null }),
+              email: quote.email || null,
               presentmentCurrencyCode: "USD",
               note: `Deposit created from GSO Quote Builder. Quote ID: ${quote.id}. Quote total: $${quoteTotal.toFixed(
                 2
@@ -521,7 +519,7 @@ export async function action({ request }: { request: Request }) {
         error: "Quote not found",
       });
     }
-    const customerId = await findOrCreateShopifyCustomer(admin, quote);
+    await findOrCreateShopifyCustomer(admin, quote);
 
     const quoteTotal = quote.items.reduce((sum: number, item: any) => {
       const qty = Math.max(1, Number(item.quantity) || 1);
@@ -568,9 +566,7 @@ export async function action({ request }: { request: Request }) {
       {
         variables: {
           input: {
-            ...(customerId
-              ? { customerId }
-              : { email: quote.email || null }),
+            email: quote.email || null,
             presentmentCurrencyCode: "USD",
             note: `Remaining balance created from GSO Quote Builder. Quote ID: ${quote.id}. Quote total: $${quoteTotal.toFixed(
               2
