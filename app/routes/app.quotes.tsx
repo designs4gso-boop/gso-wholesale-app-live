@@ -171,6 +171,78 @@ export async function loader({ request }: { request: Request }) {
   });
 }
 
+async function findOrCreateShopifyCustomer(admin: any, quote: any) {
+  if (!quote.email) return null;
+
+  const searchResponse = await admin.graphql(
+    `#graphql
+      query FindCustomer($query: String!) {
+        customers(first: 1, query: $query) {
+          nodes {
+            id
+            email
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        query: `email:${quote.email}`,
+      },
+    }
+  );
+
+  const searchData = await searchResponse.json();
+  const existingCustomer = searchData.data?.customers?.nodes?.[0];
+
+  if (existingCustomer?.id) {
+    return existingCustomer.id;
+  }
+
+  const nameParts = String(quote.customerName || "").trim().split(" ");
+  const firstName = nameParts[0] || "";
+  const lastName = nameParts.slice(1).join(" ") || "";
+
+  const createResponse = await admin.graphql(
+    `#graphql
+      mutation CustomerCreate($input: CustomerInput!) {
+        customerCreate(input: $input) {
+          customer {
+            id
+            email
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        input: {
+          email: quote.email,
+          firstName,
+          lastName,
+          phone: quote.phone || null,
+          note: `Created from GSO Quote Builder. Company: ${quote.company || "N/A"}`,
+          tags: ["GSO Quote Customer", "Wholesale"],
+        },
+      },
+    }
+  );
+
+  const createData = await createResponse.json();
+  const userErrors = createData.data?.customerCreate?.userErrors || [];
+
+  if (userErrors.length) {
+    console.error("CUSTOMER_CREATE_ERRORS", userErrors);
+    return null;
+  }
+
+  return createData.data?.customerCreate?.customer?.id || null;
+}
+
 export async function action({ request }: { request: Request }) {
   const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
@@ -211,6 +283,7 @@ export async function action({ request }: { request: Request }) {
           error: "Quote not found",
         });
       }
+      const customerId = await findOrCreateShopifyCustomer(admin, quote);
 
       const lineItems = quote.items.map((item: any) => ({
         title: item.productName || "Custom print item",
@@ -245,6 +318,7 @@ export async function action({ request }: { request: Request }) {
           variables: {
             input: {
               email: quote.email || null,
+              customerId: customerId || null,
               presentmentCurrencyCode: "USD",
               note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
               tags: ["GSO Quote", "Wholesale", "Full Payment"],
@@ -316,6 +390,7 @@ export async function action({ request }: { request: Request }) {
           error: "Quote not found",
         });
       }
+      const customerId = await findOrCreateShopifyCustomer(admin, quote);
 
       const quoteTotal = quote.items.reduce((sum: number, item: any) => {
         const qty = Math.max(1, Number(item.quantity) || 1);
@@ -365,6 +440,7 @@ export async function action({ request }: { request: Request }) {
           variables: {
             input: {
               email: quote.email || null,
+              customerId: customerId || null,
               presentmentCurrencyCode: "USD",
               note: `Deposit created from GSO Quote Builder. Quote ID: ${quote.id}. Quote total: $${quoteTotal.toFixed(
                 2
@@ -443,6 +519,7 @@ export async function action({ request }: { request: Request }) {
         error: "Quote not found",
       });
     }
+    const customerId = await findOrCreateShopifyCustomer(admin, quote);
 
     const quoteTotal = quote.items.reduce((sum: number, item: any) => {
       const qty = Math.max(1, Number(item.quantity) || 1);
@@ -490,6 +567,7 @@ export async function action({ request }: { request: Request }) {
         variables: {
           input: {
             email: quote.email || null,
+            customerId: customerId || null,
             presentmentCurrencyCode: "USD",
             note: `Remaining balance created from GSO Quote Builder. Quote ID: ${quote.id}. Quote total: $${quoteTotal.toFixed(
               2
@@ -1091,6 +1169,33 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                >
                                  Copy Portal Link
                                </Button>
+
+                               <Button
+                                 onClick={() => {
+                                   const url = `https://gso-wholesale-app-live.onrender.com/quote/${quote.id}`;
+
+                                   const subject = encodeURIComponent(
+                                    `Your GSO Packaging Quote - ${quote.company || ""}`
+                                  );
+
+                                   const body = encodeURIComponent(
+                               `Hi ${quote.customerName || "there"},
+
+                                Your custom packaging quote is ready.
+
+                                You can view and pay here:
+                                ${url}
+
+                                If you have any questions, feel free to reach out.
+
+                                — GSO Packaging`
+                                    );
+
+                                    window.open(`mailto:${quote.email}?subject=${subject}&body=${body}`);
+                                  }}
+                                >
+                                  Email Client Portal
+                                </Button>
 
                                 </InlineStack>
                               </BlockStack>
