@@ -232,6 +232,41 @@ async function findOrCreateShopifyCustomer(admin: any, quote: any) {
     }
   );
 
+  async function sendDraftOrderInvoice(admin: any, draftOrderId: string) {
+  if (!draftOrderId) return null;
+
+  const response = await admin.graphql(
+    `#graphql
+      mutation draftOrderInvoiceSend($id: ID!) {
+        draftOrderInvoiceSend(id: $id) {
+          draftOrder {
+            id
+            invoiceUrl
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        id: draftOrderId,
+      },
+    }
+  );
+
+  const data = await response.json();
+  const userErrors = data.data?.draftOrderInvoiceSend?.userErrors || [];
+
+  if (userErrors.length) {
+    console.error("DRAFT_ORDER_INVOICE_SEND_ERRORS", userErrors);
+  }
+
+  return data;
+}
+
   const createData = await createResponse.json();
   const userErrors = createData.data?.customerCreate?.userErrors || [];
 
@@ -343,6 +378,9 @@ export async function action({ request }: { request: Request }) {
       }
 
       const draftOrder = data.data?.draftOrderCreate?.draftOrder;
+      if (draftOrder?.id) {
+        await sendDraftOrderInvoice(admin, draftOrder.id);
+      }
 
       await db.quote.update({
         where: { id: quote.id },
@@ -466,6 +504,9 @@ export async function action({ request }: { request: Request }) {
       }
 
       const draftOrder = data.data?.draftOrderCreate?.draftOrder;
+      if (draftOrder?.id) {
+        await sendDraftOrderInvoice(admin, draftOrder.id);
+      }
 
       await db.quote.update({
         where: { id: quote.id },
@@ -592,6 +633,9 @@ export async function action({ request }: { request: Request }) {
     }
 
     const draftOrder = data.data?.draftOrderCreate?.draftOrder;
+    if (draftOrder?.id) {
+      await sendDraftOrderInvoice(admin, draftOrder.id);
+    }
 
     await db.quote.update({
   where: { id: quote.id },
