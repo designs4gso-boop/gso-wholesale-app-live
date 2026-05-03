@@ -1099,7 +1099,7 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                 <InlineStack gap="200">
                                   <Button onClick={() => loadQuote(quote)}>Open</Button>
 
-                                  {{!isPaid && !quote.depositCreated && !quote.fullOrderCreated && (
+                                  {!isPaid && !quote.depositCreated && !quote.fullOrderCreated && (
                                     <Button
                                       variant="primary"
                                       onClick={() => approveAndCreateOrder(quote.id)}
