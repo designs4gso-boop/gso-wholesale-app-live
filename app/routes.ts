@@ -15,6 +15,7 @@ export default [
     route("quotes", "routes/app.quotes.tsx"),
     route("product-costs", "routes/app.product-costs.tsx"),
     route("create-order", "routes/app.create-order.tsx"),
+    route("webhooks/orders_paid", "routes/webhooks.orders_paid.tsx"),
   ]),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
@@ -22,6 +23,5 @@ export default [
   route("apps/wholesale-lite/validate", "routes/apps.wholesale-lite.validate.ts"),
   route("quote/:id", "routes/quote.$id.tsx"),
   route("webhooks/app/uninstalled", "routes/webhooks.app.uninstalled.ts"),
-  route("webhooks/orders_paid", "routes/webhooks.orders_paid.tsx"),
   route("app/create-wholesale-discount", "routes/app.create-wholesale-discount.tsx"),
 ] satisfies RouteConfig;
