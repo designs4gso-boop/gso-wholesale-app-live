@@ -1072,12 +1072,17 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                         {stageQuotes.length === 0 ? (
                           <Text as="p" tone="subdued">No quotes</Text>
                         ) : (
-                          stageQuotes.map((quote) => (
+                          stageQuotes.map((quote) => {
+                            const isPaid = quote.status === "paid";
+                            return (
                             <Card key={quote.id}>
                               <BlockStack gap="200">
                                 <Text as="p" fontWeight="bold">
                                   {quote.company || quote.customerName || "Unnamed Quote"}
                                 </Text>
+                                {isPaid && (
+                                  <Badge tone="success">PAID — Quote locked</Badge>
+                                )}
 
                                 <Text as="p" tone="subdued">
                                   {new Date(quote.updatedAt || quote.createdAt).toLocaleString()}
@@ -1086,6 +1091,7 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                 <Select
                                   label="Move"
                                   value={quote.status}
+                                  disabled={isPaid}
                                   onChange={(v) => updateQuoteStatus(quote.id, v)}
                                   options={statuses}
                                 />
@@ -1093,7 +1099,7 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                 <InlineStack gap="200">
                                   <Button onClick={() => loadQuote(quote)}>Open</Button>
 
-                                  {!quote.depositCreated && !quote.fullOrderCreated && (
+                                  {{!isPaid && !quote.depositCreated && !quote.fullOrderCreated && (
                                     <Button
                                       variant="primary"
                                       onClick={() => approveAndCreateOrder(quote.id)}
@@ -1102,21 +1108,23 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                     </Button>
                                 )}
 
-                                {!quote.depositCreated && !quote.fullOrderCreated && (
+                                {!isPaid && !quote.depositCreated && !quote.fullOrderCreated && (
                                   <Button onClick={() => createDepositOrder(quote.id, 50)}>
                                     Create 50% Deposit
                                   </Button>
                                 )}
 
-                                {quote.depositCreated && !quote.balanceCreated && (
+                                {!isPaid && quote.depositCreated && !quote.balanceCreated && (
                                   <Button onClick={() => createBalanceOrder(quote.id, 50)}>
                                     Create Remaining Balance
                                   </Button>
                                 )}
 
-                                <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
-                                  Delete
-                                </Button>
+                                {!isPaid && (
+                                  <Button tone="critical" onClick={() => deleteQuote(quote.id)}>
+                                    Delete
+                                  </Button>
+                                )}
                                   
                                 <Button
                                   onClick={() =>
@@ -1170,7 +1178,8 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
                                 </InlineStack>
                               </BlockStack>
                             </Card>
-                          ))
+                          );
+                          })
                         )}
                       </BlockStack>
                     </Card>
