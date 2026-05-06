@@ -797,6 +797,46 @@ useEffect(() => {
       cost += qty * (Number(item.unitCost) || 0);
     }
 
+  const clientProfitStats = useMemo(() => {
+  const stats: Record<string, any> = {};
+
+  for (const quote of quotes) {
+    const key = quote.email || quote.company || quote.customerName || "Unknown Client";
+
+    if (!stats[key]) {
+      stats[key] = {
+        client: quote.company || quote.customerName || key,
+        email: quote.email || "",
+        revenue: 0,
+        cost: 0,
+        profit: 0,
+        quotes: 0,
+      };
+    }
+
+    let quoteRevenue = 0;
+    let quoteCost = 0;
+
+    for (const item of quote.items || []) {
+      const qty = Number(item.quantity) || 0;
+      quoteRevenue += qty * (Number(item.unitPrice) || 0);
+      quoteCost += qty * (Number(item.unitCost) || 0);
+    }
+
+    stats[key].revenue += quoteRevenue;
+    stats[key].cost += quoteCost;
+    stats[key].profit += quoteRevenue - quoteCost;
+    stats[key].quotes += 1;
+  }
+
+  return Object.values(stats)
+    .map((client: any) => ({
+      ...client,
+      margin: client.revenue > 0 ? (client.profit / client.revenue) * 100 : 0,
+    }))
+    .sort((a: any, b: any) => b.profit - a.profit);
+}, [quotes]);  
+
     const profit = revenue - cost;
     const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
 
@@ -1052,6 +1092,49 @@ function createBalanceOrder(quoteId: string, depositPercent: number) {
             </BlockStack>
           </Card>
         </Layout.Section>
+
+        <Layout.Section>
+  <Card>
+    <BlockStack gap="300">
+      <Text as="h2" variant="headingMd">Profit Per Client</Text>
+      <Divider />
+
+      {clientProfitStats.length === 0 ? (
+        <Text as="p" tone="subdued">No client profit data yet.</Text>
+      ) : (
+        clientProfitStats.map((client: any) => (
+          <Card key={client.email || client.client}>
+            <BlockStack gap="100">
+              <Text as="p" fontWeight="bold">
+                {client.client}
+              </Text>
+
+              <Text as="p" tone="subdued">
+                {client.email || "No email"} • {client.quotes} quote(s)
+              </Text>
+
+              <Text as="p">
+                Revenue: ${client.revenue.toFixed(2)}
+              </Text>
+
+              <Text as="p">
+                Cost: ${client.cost.toFixed(2)}
+              </Text>
+
+              <Text as="p">
+                Profit: ${client.profit.toFixed(2)}
+              </Text>
+
+              <Text as="p">
+                Margin: {client.margin.toFixed(1)}%
+              </Text>
+            </BlockStack>
+          </Card>
+        ))
+      )}
+    </BlockStack>
+  </Card>
+</Layout.Section>
 
         <Layout.Section>
           <Card>

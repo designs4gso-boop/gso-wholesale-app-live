@@ -20,6 +20,7 @@ export async function loader({ params }: { params: { id: string } }) {
 
 export default function QuotePortal() {
   const { quote, total } = useLoaderData<typeof loader>() as any;
+  const isPaid = quote.status === "paid";
 
   return (
     <main style={styles.page}>
@@ -80,41 +81,68 @@ export default function QuotePortal() {
 
         <h2 style={styles.sectionTitle}>Payments</h2>
 
-        <div style={styles.paymentGrid}>
-          {quote.depositCreated && quote.depositInvoiceUrl && (
-            <a href={quote.depositInvoiceUrl} target="_blank" rel="noreferrer" style={styles.primaryButton}>
-              Pay Deposit
-            </a>
-          )}
+<div style={styles.paymentGrid}>
+  {isPaid ? (
+    <div
+      style={{
+        display: "inline-block",
+        padding: "12px 18px",
+        borderRadius: 999,
+        background: "#22c55e",
+        color: "#000",
+        fontWeight: 700,
+      }}
+    >
+      Paid
+    </div>
+  ) : (
+    <>
+      {quote.depositCreated && quote.depositInvoiceUrl && (
+        <a
+          href={quote.depositInvoiceUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={styles.primaryButton}
+        >
+          Pay Deposit
+        </a>
+      )}
 
-          {quote.balanceCreated && quote.balanceInvoiceUrl && (
-            <a href={quote.balanceInvoiceUrl} target="_blank" rel="noreferrer" style={styles.secondaryButton}>
-              Pay Remaining Balance
-            </a>
-          )}
+      {quote.balanceCreated && quote.balanceInvoiceUrl && (
+        <a
+          href={quote.balanceInvoiceUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={styles.secondaryButton}
+        >
+          Pay Remaining Balance
+        </a>
+      )}
 
-          {quote.fullOrderCreated && quote.fullInvoiceUrl && (
-            <a href={quote.fullInvoiceUrl} target="_blank" rel="noreferrer" style={styles.primaryButton}>
-              Pay Full Invoice
-            </a>
-          )}
-        </div>
-
-        {quote.depositCreated && (
-          <div style={styles.balanceBox}>
-            <p><strong>Deposit:</strong> ${Number(quote.depositAmount || 0).toFixed(2)}</p>
-            <p><strong>Balance Due:</strong> ${Number(quote.balanceDue || 0).toFixed(2)}</p>
-          </div>
-        )}
+      {quote.fullOrderCreated && quote.fullInvoiceUrl && (
+        <a
+          href={quote.fullInvoiceUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={styles.primaryButton}
+        >
+          Pay Full Invoice
+        </a>
+      )}
+    </>
+  )}
+</div>
 
         <hr style={styles.hr} />
 
         <h2 style={styles.sectionTitle}>Payment Status</h2>
 
         <div style={styles.statusBox}>
-          {quote.fullOrderCreated && (
+          {isPaid ? (
+            <p>✅ Payment received. Your order is confirmed and being processed.</p>
+          ) : quote.fullOrderCreated ? (
             <p>✅ Full payment invoice has been created. Please complete payment using the checkout link above.</p>
-          )}
+          ) : null}
 
           {quote.depositCreated && !quote.balanceCreated && !quote.fullOrderCreated && (
             <p>✅ Deposit invoice has been created. Once deposit is paid, GSO will prepare your order and send the remaining balance invoice.</p>
