@@ -795,13 +795,23 @@ useEffect(() => {
       const qty = Number(item.quantity) || 0;
       revenue += qty * (Number(item.unitPrice) || 0);
       cost += qty * (Number(item.unitCost) || 0);
-    }
+    }  
+
+    const profit = revenue - cost;
+    const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
+
+    return { revenue, cost, profit, margin };
+  }, [items]);
 
   const clientProfitStats = useMemo(() => {
   const stats: Record<string, any> = {};
 
   for (const quote of quotes) {
-    const key = quote.email || quote.company || quote.customerName || "Unknown Client";
+    const key =
+      quote.email ||
+      quote.company ||
+      quote.customerName ||
+      "Unknown Client";
 
     if (!stats[key]) {
       stats[key] = {
@@ -819,7 +829,9 @@ useEffect(() => {
 
     for (const item of quote.items || []) {
       const qty = Number(item.quantity) || 0;
+
       quoteRevenue += qty * (Number(item.unitPrice) || 0);
+
       quoteCost += qty * (Number(item.unitCost) || 0);
     }
 
@@ -832,16 +844,13 @@ useEffect(() => {
   return Object.values(stats)
     .map((client: any) => ({
       ...client,
-      margin: client.revenue > 0 ? (client.profit / client.revenue) * 100 : 0,
+      margin:
+        client.revenue > 0
+          ? (client.profit / client.revenue) * 100
+          : 0,
     }))
     .sort((a: any, b: any) => b.profit - a.profit);
-}, [quotes]);  
-
-    const profit = revenue - cost;
-    const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
-
-    return { revenue, cost, profit, margin };
-  }, [items]);
+}, [quotes]);
 
   function currentQuote(): QuoteInput {
     return {
