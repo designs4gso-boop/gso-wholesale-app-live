@@ -114,6 +114,7 @@ async function searchShopifyProducts(admin: any, search: string) {
       query SearchProducts($query: String!) {
         products(first: 20, query: $query) {
           nodes {
+            id
             title
             variants(first: 50) {
               nodes {
@@ -142,6 +143,7 @@ async function searchShopifyProducts(admin: any, search: string) {
       options.push({
         label: `${product.title} — ${variant.title} — $${variant.price}`,
         value: variant.id,
+        productId: product.id,
         productTitle: product.title,
         variantTitle: variant.title,
         sku: variant.sku || "",
