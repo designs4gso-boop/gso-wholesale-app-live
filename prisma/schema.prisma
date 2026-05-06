@@ -100,16 +100,29 @@ model PricingRule {
   id          String   @id @default(cuid())
   shop        String
   title       String
-  customerTag String
+
+  customerTag String?
+  productTag  String?
   productGid  String?
   variantGid  String?
-  minQty      Int
-  tierQty     Int
-  sellPrice   Float
-  unitCost    Float?
+  sku         String?
+
+  minQty       Int     @default(1)
+  discountType String  @default("fixed_price") // fixed_price or percent_off
+  sellPrice    Float?
+  percentOff   Float?
+  unitCost     Float?
+
+  priority    Int      @default(100)
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([shop, active])
+  @@index([shop, customerTag])
+  @@index([shop, productTag])
+  @@index([shop, variantGid])
+  @@index([shop, sku])
 }
 
 model CostCalculator {
