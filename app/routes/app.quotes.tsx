@@ -164,11 +164,23 @@ export async function loader({ request }: { request: Request }) {
     orderBy: { createdAt: "desc" },
   });
 
+  const pricingRules = await db.pricingRule.findMany({
+  where: {
+    shop: session.shop,
+    active: true,
+  },
+  orderBy: [
+    { priority: "asc" },
+    { minQty: "desc" },
+  ],
+});
+
   return Response.json({
-    quotes,
-    productOptions,
-    productCosts,
-  });
+  quotes,
+  productOptions,
+  productCosts,
+  pricingRules,
+});
 }
 
 async function sendDraftOrderInvoice(admin: any, draftOrderId: string) {
@@ -673,6 +685,9 @@ export default function QuotesPage() {
   const [productCosts, setProductCosts] = useState<any[]>(
     loaderData.productCosts || []
   );
+  const [pricingRules, setPricingRules] = useState<any[]>(
+    loaderData.pricingRules || []
+  );
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState("");
@@ -688,6 +703,7 @@ useEffect(() => {
   if (fetcher.data?.quotes) setQuotes(fetcher.data.quotes);
   if (fetcher.data?.productOptions) setProductOptions(fetcher.data.productOptions);
   if (fetcher.data?.productCosts) setProductCosts(fetcher.data.productCosts);
+  if (fetcher.data?.pricingRules) setPricingRules(fetcher.data.pricingRules);
 
   if (
     fetcher.data?.intent === "approveCreateOrder" ||
@@ -751,11 +767,44 @@ useEffect(() => {
     });
   }
 
+  function getBestPricingRule(selected: ShopifyVariantOption, variantId: string, qty: string) {
+  const quantity = Number(qty) || 1;
+  const customerKey = clean(email || company || customerName);
+
+  return pricingRules.find((rule: any) => {
+    if (!rule.active) return false;
+    if (quantity < Number(rule.minQty || 1)) return false;
+
+    const matchesCustomer =
+      !rule.customerTag || customerKey.includes(clean(rule.customerTag));
+
+    const matchesVariant =
+      rule.variantGid && clean(rule.variantGid) === clean(variantId);
+
+    const matchesSku =
+      rule.sku && clean(rule.sku) === clean(selected.sku);
+
+    const matchesProduct =
+      rule.productGid && clean(rule.productGid) === clean(selected.productId);
+
+    const matchesProductTag =
+      rule.productTag &&
+      clean(selected.productTitle).includes(clean(rule.productTag));
+
+    const hasProductMatch =
+      matchesVariant || matchesSku || matchesProduct || matchesProductTag;
+
+    return matchesCustomer && hasProductMatch;
+  });
+}
+
   function selectProductVariant(itemId: string | undefined, variantId: string) {
     const selected = productOptions.find((option) => option.value === variantId);
     if (!selected) return;
 
     const matchedCost = getMatchedProductCost(selected, variantId);
+    const currentItem = items.find((item) => item.id === itemId);
+    const pricingRule = getBestPricingRule(selected, variantId, currentItem?.quantity || "1");
 
     const savedUnitCost = matchedCost
       ? (
@@ -775,7 +824,12 @@ useEffect(() => {
               productName: selected.productTitle,
               variant: selected.variantTitle,
               sku: selected.sku,
-              unitPrice: selected.price,
+              unitPrice:
+                pricingRule?.discountType === "percent_off"
+                  ? (Number(selected.price) * (1 - Number(pricingRule.percentOff || 0) / 100)).toFixed(2)
+                  : pricingRule?.sellPrice
+                    ? String(pricingRule.sellPrice)
+                    : selected.price,
               unitCost: savedUnitCost || item.unitCost,
             }
           : item
