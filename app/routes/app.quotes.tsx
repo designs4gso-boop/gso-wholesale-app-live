@@ -31,6 +31,7 @@ type QuoteItemInput = {
 type ShopifyVariantOption = {
   label: string;
   value: string;
+  productId: string;
   productTitle: string;
   variantTitle: string;
   sku: string;
