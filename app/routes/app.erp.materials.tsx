@@ -127,8 +127,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
             shop,
             materialId: material.id,
             oldCost: Number(oldMaterial.costPerUnit) || 0,
-            newCost: Number(payload.costPerUnit) || 0,
-            vendor: payload.vendor || null,
+            newCost: calculatedUnitCost,            vendor: payload.vendor || null,
             reason: payload.reason || "Cost updated",
             changedBy: session.shop,
           },
@@ -165,7 +164,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
           shop,
           materialId: material.id,
           oldCost: 0,
-          newCost: Number(payload.costPerUnit) || 0,
+          newCost: calculatedUnitCost,          
           vendor: payload.vendor || null,
           reason: "Material created",
           changedBy: session.shop,
@@ -300,8 +299,6 @@ export default function MaterialsPage() {
 
   const [name, setName] = useState("");
   const [materialType, setMaterialType] = useState("label");
-  const [unit, setUnit] = useState("each");
-  const [costPerUnit, setCostPerUnit] = useState("");
   const [vendor, setVendor] = useState("");
   const [sku, setSku] = useState("");
   const [stockOnHand, setStockOnHand] = useState("");
@@ -350,8 +347,6 @@ export default function MaterialsPage() {
         id: editingId,
         name,
         materialType,
-        unit,
-        costPerUnit,
         vendor,
         sku,
         stockOnHand,
@@ -403,7 +398,6 @@ export default function MaterialsPage() {
         vendorName,
         vendorSku,
         unitCost: vendorUnitCost,
-        unit,
         moq: vendorMoq,
         leadTimeDays: vendorLeadTimeDays,
       },
