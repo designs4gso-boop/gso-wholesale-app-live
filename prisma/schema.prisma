@@ -247,6 +247,19 @@ model Material {
   active          Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  purchaseUnit       String   @default("each") // roll, cartridge, gallon, case, each, hour
+purchaseCost       Float    @default(0)
+
+baseUnit           String   @default("each") // sqft, sqin, ml, each, hour
+yieldQuantity      Float?
+yieldUnit          String?
+
+rollWidthIn        Float?
+rollLengthFt       Float?
+volumeMl           Float?
+caseQuantity       Float?
+
+calculatedUnitCost Float    @default(0)
 
   category        ProductCategory? @relation(fields: [categoryId], references: [id])
   recipeMaterials RecipeMaterial[]
