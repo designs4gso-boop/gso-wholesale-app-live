@@ -739,14 +739,6 @@ export default function MaterialsPage() {
             </BlockStack>
           </Card>
         </Layout.Section>
-                      </BlockStack>
-                    </Card>
-                  );
-                })
-              )}
-            </BlockStack>
-          </Card>
-        </Layout.Section>
       </Layout>
     </Page>
   );
