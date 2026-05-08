@@ -213,3 +213,112 @@ model ProductCost {
   @@index([sku])
   @@index([productName])
 }
+
+model ProductCategory {
+  id        String   @id @default(cuid())
+  shop      String
+  name      String
+  slug      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  recipes   ProductRecipe[]
+  materials Material[]
+
+  @@index([shop])
+  @@unique([shop, slug])
+}
+
+model Material {
+  id              String   @id @default(cuid())
+  shop            String
+  categoryId      String?
+  name            String
+  materialType    String   @default("general") // label, dtp, box, ink, laminate, labor, machine, general
+  unit            String   @default("each") // each, sqft, linear_ft, ml, hour, roll, sheet
+  costPerUnit     Float    @default(0)
+  vendor          String?
+  sku             String?
+  stockOnHand     Float?
+  reorderPoint    Float?
+  leadTimeDays    Int?
+  notes           String?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  category        ProductCategory? @relation(fields: [categoryId], references: [id])
+  recipeMaterials RecipeMaterial[]
+
+  @@index([shop])
+  @@index([shop, materialType])
+  @@index([shop, active])
+}
+
+model ProductRecipe {
+  id              String   @id @default(cuid())
+  shop            String
+  categoryId      String?
+  name            String
+  sku             String?
+  productGid      String?
+  variantGid      String?
+  costMethod      String   @default("recipe") // recipe, sourced_flat, sourced_tier
+  defaultSellPrice Float?
+  targetMarginPct Float    @default(40)
+  wastePct        Float    @default(0)
+  setupCost       Float    @default(0)
+  notes           String?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  category        ProductCategory? @relation(fields: [categoryId], references: [id])
+  materials       RecipeMaterial[]
+  sourcedTiers    SourcedCostTier[]
+
+  @@index([shop])
+  @@index([shop, sku])
+  @@index([shop, productGid])
+  @@index([shop, variantGid])
+  @@index([shop, active])
+}
+
+model RecipeMaterial {
+  id          String   @id @default(cuid())
+  shop        String
+  recipeId    String
+  materialId  String
+  quantity    Float    @default(1)
+  usageType   String   @default("per_unit") // per_unit or per_job
+  includeWaste Boolean @default(true)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  recipe      ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  material    Material      @relation(fields: [materialId], references: [id])
+
+  @@index([shop])
+  @@index([recipeId])
+  @@index([materialId])
+}
+
+model SourcedCostTier {
+  id          String   @id @default(cuid())
+  shop        String
+  recipeId    String
+  minQty      Int
+  unitCost    Float
+  vendor      String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  recipe      ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([recipeId])
+  @@index([minQty])
+}
