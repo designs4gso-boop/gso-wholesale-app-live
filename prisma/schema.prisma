@@ -412,6 +412,10 @@ model MachineInkChannel {
 
   costPerMl     Float    @default(0)
 
+  cartridgeCost Float @default(0)
+  cartridgeMl   Float @default(0)
+  mlPerSqft1Pct Float @default(0)
+
   // ML used per sqft at 100% coverage for this ink/channel
   mlPerSqft100  Float    @default(0)
 
