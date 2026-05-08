@@ -42,6 +42,24 @@ const units = [
   { label: "Box", value: "box" },
 ];
 
+const purchaseUnits = [
+  { label: "Each", value: "each" },
+  { label: "Roll", value: "roll" },
+  { label: "Cartridge", value: "cartridge" },
+  { label: "Gallon", value: "gallon" },
+  { label: "Case", value: "case" },
+  { label: "Box", value: "box" },
+  { label: "Hour", value: "hour" },
+];
+
+const baseUnits = [
+  { label: "Each", value: "each" },
+  { label: "Sq Ft", value: "sqft" },
+  { label: "Sq In", value: "sqin" },
+  { label: "ML", value: "ml" },
+  { label: "Hour", value: "hour" },
+];
+
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
 
@@ -67,8 +85,10 @@ export async function action({ request }: { request: Request }) {
 
   if (payload.intent === "saveMaterial") {
     const oldMaterial = payload.id
-      ? await db.material.findFirst({ where: { id: payload.id, shop } })
-      : null;
+  ? await db.material.findFirst({ where: { id: payload.id, shop } })
+  : null;
+
+const calculatedUnitCost = calculateMaterialUnitCost(payload);
 
     let material;
 
@@ -78,8 +98,6 @@ export async function action({ request }: { request: Request }) {
         data: {
           name: payload.name,
           materialType: payload.materialType,
-          unit: payload.unit,
-          costPerUnit: Number(payload.costPerUnit) || 0,
           vendor: payload.vendor || null,
           sku: payload.sku || null,
           stockOnHand: payload.stockOnHand ? Number(payload.stockOnHand) : null,
@@ -87,6 +105,16 @@ export async function action({ request }: { request: Request }) {
           leadTimeDays: payload.leadTimeDays ? Number(payload.leadTimeDays) : null,
           notes: payload.notes || null,
           active: payload.active !== false,
+          purchaseUnit: payload.purchaseUnit || "each",
+          purchaseCost: Number(payload.purchaseCost) || 0,
+          baseUnit: payload.baseUnit || "each",
+          rollWidthIn: payload.rollWidthIn ? Number(payload.rollWidthIn) : null,
+          rollLengthFt: payload.rollLengthFt ? Number(payload.rollLengthFt) : null,
+          volumeMl: payload.volumeMl ? Number(payload.volumeMl) : null,
+          caseQuantity: payload.caseQuantity ? Number(payload.caseQuantity) : null,
+          calculatedUnitCost,
+          costPerUnit: calculatedUnitCost,
+          unit: payload.baseUnit || "each",
         },
       });
 
@@ -112,8 +140,6 @@ export async function action({ request }: { request: Request }) {
           shop,
           name: payload.name,
           materialType: payload.materialType,
-          unit: payload.unit,
-          costPerUnit: Number(payload.costPerUnit) || 0,
           vendor: payload.vendor || null,
           sku: payload.sku || null,
           stockOnHand: payload.stockOnHand ? Number(payload.stockOnHand) : null,
@@ -121,6 +147,16 @@ export async function action({ request }: { request: Request }) {
           leadTimeDays: payload.leadTimeDays ? Number(payload.leadTimeDays) : null,
           notes: payload.notes || null,
           active: true,
+          purchaseUnit: payload.purchaseUnit || "each",
+          purchaseCost: Number(payload.purchaseCost) || 0,
+          baseUnit: payload.baseUnit || "each",
+          rollWidthIn: payload.rollWidthIn ? Number(payload.rollWidthIn) : null,
+          rollLengthFt: payload.rollLengthFt ? Number(payload.rollLengthFt) : null,
+          volumeMl: payload.volumeMl ? Number(payload.volumeMl) : null,
+          caseQuantity: payload.caseQuantity ? Number(payload.caseQuantity) : null,
+          calculatedUnitCost,
+          costPerUnit: calculatedUnitCost,
+          unit: payload.baseUnit || "each",
         },
       });
 
@@ -220,6 +256,40 @@ export async function action({ request }: { request: Request }) {
   return Response.json({ ok: false, materials });
 }
 
+function calculateMaterialUnitCost(payload: any) {
+  const purchaseCost = Number(payload.purchaseCost) || 0;
+
+  if (payload.purchaseUnit === "roll") {
+    const widthIn = Number(payload.rollWidthIn) || 0;
+    const lengthFt = Number(payload.rollLengthFt) || 0;
+    const totalSqIn = widthIn * lengthFt * 12;
+    const totalSqFt = totalSqIn / 144;
+
+    if (payload.baseUnit === "sqin") {
+      return totalSqIn > 0 ? purchaseCost / totalSqIn : 0;
+    }
+
+    return totalSqFt > 0 ? purchaseCost / totalSqFt : 0;
+  }
+
+  if (payload.purchaseUnit === "cartridge") {
+    const volumeMl = Number(payload.volumeMl) || 0;
+    return volumeMl > 0 ? purchaseCost / volumeMl : 0;
+  }
+
+  if (payload.purchaseUnit === "gallon") {
+    const volumeMl = 3785.41;
+    return purchaseCost / volumeMl;
+  }
+
+  if (payload.purchaseUnit === "case" || payload.purchaseUnit === "box") {
+    const caseQty = Number(payload.caseQuantity) || 0;
+    return caseQty > 0 ? purchaseCost / caseQty : 0;
+  }
+
+  return purchaseCost;
+}
+
 export default function MaterialsPage() {
   const navigate = useNavigate();
   const loaderData = useLoaderData<typeof loader>() as any;
@@ -239,9 +309,14 @@ export default function MaterialsPage() {
   const [leadTimeDays, setLeadTimeDays] = useState("");
   const [reason, setReason] = useState("");
   const [notes, setNotes] = useState("");
-
+  const [purchaseUnit, setPurchaseUnit] = useState("each");
+  const [purchaseCost, setPurchaseCost] = useState("");
+  const [baseUnit, setBaseUnit] = useState("each");
+  const [rollWidthIn, setRollWidthIn] = useState("");
+  const [rollLengthFt, setRollLengthFt] = useState("");
+  const [volumeMl, setVolumeMl] = useState("");
+  const [caseQuantity, setCaseQuantity] = useState("");
   const [filter, setFilter] = useState("all");
-
   const [vendorMaterialId, setVendorMaterialId] = useState("");
   const [vendorName, setVendorName] = useState("");
   const [vendorSku, setVendorSku] = useState("");
@@ -284,6 +359,13 @@ export default function MaterialsPage() {
         leadTimeDays,
         reason,
         notes,
+        purchaseUnit,
+        purchaseCost,
+        baseUnit,
+        rollWidthIn,
+        rollLengthFt,
+        volumeMl,
+        caseQuantity,
       },
       { method: "post", encType: "application/json" }
     );
@@ -356,41 +438,154 @@ export default function MaterialsPage() {
                 {editingId ? "Edit Material" : "Add Material"}
               </Text>
 
-              <InlineStack gap="300">
-                <TextField label="Material Name" value={name} onChange={setName} autoComplete="off" />
-                <Select label="Material Type" value={materialType} onChange={setMaterialType} options={materialTypes} />
-                <Select label="Unit" value={unit} onChange={setUnit} options={units} />
-              </InlineStack>
+               <InlineStack gap="300">
+                <TextField
+                    label="Material Name"
+                    value={name}
+                    onChange={setName}
+                    autoComplete="off"
+                />
 
-              <InlineStack gap="300">
-                <TextField label="Cost Per Unit" prefix="$" value={costPerUnit} onChange={setCostPerUnit} autoComplete="off" />
-                <TextField label="Vendor" value={vendor} onChange={setVendor} autoComplete="off" />
-                <TextField label="Vendor / Material SKU" value={sku} onChange={setSku} autoComplete="off" />
-              </InlineStack>
+                <Select
+                    label="Material Type"
+                    value={materialType}
+                    onChange={setMaterialType}
+                    options={materialTypes}
+                />
+                </InlineStack>
 
-              <InlineStack gap="300">
-                <TextField label="Stock On Hand" value={stockOnHand} onChange={setStockOnHand} autoComplete="off" />
-                <TextField label="Reorder Point" value={reorderPoint} onChange={setReorderPoint} autoComplete="off" />
-                <TextField label="Lead Time Days" value={leadTimeDays} onChange={setLeadTimeDays} autoComplete="off" />
-              </InlineStack>
+                <InlineStack gap="300">
+                <Select
+                    label="Purchase Unit"
+                    value={purchaseUnit}
+                    onChange={setPurchaseUnit}
+                    options={purchaseUnits}
+                />
 
-              <TextField label="Reason For Cost Change" value={reason} onChange={setReason} autoComplete="off" />
-              <TextField label="Notes" value={notes} onChange={setNotes} multiline={3} autoComplete="off" />
+                <TextField
+                    label="Purchase Cost"
+                    prefix="$"
+                    value={purchaseCost}
+                    onChange={setPurchaseCost}
+                    autoComplete="off"
+                />
 
-              <InlineStack gap="300">
+                <Select
+                    label="Recipe Base Unit"
+                    value={baseUnit}
+                    onChange={setBaseUnit}
+                    options={baseUnits}
+                />
+                </InlineStack>
+
+                {purchaseUnit === "roll" && (
+                <InlineStack gap="300">
+                    <TextField
+                    label="Roll Width Inches"
+                    value={rollWidthIn}
+                    onChange={setRollWidthIn}
+                    autoComplete="off"
+                    />
+
+                    <TextField
+                    label="Roll Length Feet"
+                    value={rollLengthFt}
+                    onChange={setRollLengthFt}
+                    autoComplete="off"
+                    />
+                </InlineStack>
+                )}
+
+                {purchaseUnit === "cartridge" && (
+                <TextField
+                    label="Volume ML"
+                    value={volumeMl}
+                    onChange={setVolumeMl}
+                    autoComplete="off"
+                />
+                )}
+
+                {(purchaseUnit === "case" || purchaseUnit === "box") && (
+                <TextField
+                    label="Quantity In Case/Box"
+                    value={caseQuantity}
+                    onChange={setCaseQuantity}
+                    autoComplete="off"
+                />
+                )}
+
+                <InlineStack gap="300">
+                <TextField
+                    label="Vendor"
+                    value={vendor}
+                    onChange={setVendor}
+                    autoComplete="off"
+                />
+
+                <TextField
+                    label="Vendor / Material SKU"
+                    value={sku}
+                    onChange={setSku}
+                    autoComplete="off"
+                />
+                </InlineStack>
+
+                <InlineStack gap="300">
+                <TextField
+                    label="Stock On Hand"
+                    value={stockOnHand}
+                    onChange={setStockOnHand}
+                    autoComplete="off"
+                />
+
+                <TextField
+                    label="Reorder Point"
+                    value={reorderPoint}
+                    onChange={setReorderPoint}
+                    autoComplete="off"
+                />
+
+                <TextField
+                    label="Lead Time Days"
+                    value={leadTimeDays}
+                    onChange={setLeadTimeDays}
+                    autoComplete="off"
+                />
+                </InlineStack>
+
+                <TextField
+                label="Reason For Cost Change"
+                value={reason}
+                onChange={setReason}
+                autoComplete="off"
+                />
+
+                <TextField
+                label="Notes"
+                value={notes}
+                onChange={setNotes}
+                multiline={3}
+                autoComplete="off"
+                />
+
+                <InlineStack gap="300">
                 <Button variant="primary" onClick={saveMaterial}>
-                  {editingId ? "Update Material" : "Save Material"}
+                    {editingId ? "Update Material" : "Save Material"}
                 </Button>
-                <Button onClick={resetForm}>Clear</Button>
-              </InlineStack>
+
+                <Button onClick={resetForm}>
+                    Clear
+                </Button>
+            </InlineStack>
             </BlockStack>
           </Card>
         </Layout.Section>
-
-        <Layout.Section>
+                <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Vendor Comparison</Text>
+              <Text as="h2" variant="headingMd">
+                Vendor Comparison
+              </Text>
 
               <Select
                 label="Material"
@@ -398,99 +593,152 @@ export default function MaterialsPage() {
                 onChange={setVendorMaterialId}
                 options={[
                   { label: "Select material", value: "" },
-                  ...materials.map((m) => ({ label: m.name, value: m.id })),
+                  ...materials.map((m) => ({
+                    label: m.name,
+                    value: m.id,
+                  })),
                 ]}
               />
 
               <InlineStack gap="300">
-                <TextField label="Vendor Name" value={vendorName} onChange={setVendorName} autoComplete="off" />
-                <TextField label="Vendor SKU" value={vendorSku} onChange={setVendorSku} autoComplete="off" />
-                <TextField label="Unit Cost" prefix="$" value={vendorUnitCost} onChange={setVendorUnitCost} autoComplete="off" />
+                <TextField
+                  label="Vendor Name"
+                  value={vendorName}
+                  onChange={setVendorName}
+                  autoComplete="off"
+                />
+
+                <TextField
+                  label="Vendor SKU"
+                  value={vendorSku}
+                  onChange={setVendorSku}
+                  autoComplete="off"
+                />
+
+                <TextField
+                  label="Unit Cost"
+                  prefix="$"
+                  value={vendorUnitCost}
+                  onChange={setVendorUnitCost}
+                  autoComplete="off"
+                />
               </InlineStack>
 
               <InlineStack gap="300">
-                <TextField label="MOQ" value={vendorMoq} onChange={setVendorMoq} autoComplete="off" />
-                <TextField label="Lead Time Days" value={vendorLeadTimeDays} onChange={setVendorLeadTimeDays} autoComplete="off" />
+                <TextField
+                  label="MOQ"
+                  value={vendorMoq}
+                  onChange={setVendorMoq}
+                  autoComplete="off"
+                />
+
+                <TextField
+                  label="Lead Time Days"
+                  value={vendorLeadTimeDays}
+                  onChange={setVendorLeadTimeDays}
+                  autoComplete="off"
+                />
               </InlineStack>
 
-              <Button onClick={addVendor}>Add Vendor Option</Button>
+              <Button onClick={addVendor}>
+                Add Vendor Option
+              </Button>
             </BlockStack>
           </Card>
         </Layout.Section>
-
-        <Layout.Section>
+                <Layout.Section>
           <Card>
             <BlockStack gap="300">
               <InlineStack align="space-between">
-                <Text as="h2" variant="headingMd">Materials</Text>
+                <Text as="h2" variant="headingMd">
+                  Materials
+                </Text>
+
                 <Select
                   label="Filter"
                   labelHidden
                   value={filter}
                   onChange={setFilter}
-                  options={[{ label: "All", value: "all" }, ...materialTypes]}
+                  options={[
+                    { label: "All", value: "all" },
+                    ...materialTypes,
+                  ]}
                 />
               </InlineStack>
 
               <Divider />
 
               {filteredMaterials.length === 0 ? (
-                <Text as="p" tone="subdued">No materials yet.</Text>
+                <Text as="p" tone="subdued">
+                  No materials yet.
+                </Text>
               ) : (
                 filteredMaterials.map((material) => {
                   const lowStock =
                     material.stockOnHand !== null &&
                     material.reorderPoint !== null &&
-                    Number(material.stockOnHand) <= Number(material.reorderPoint);
+                    Number(material.stockOnHand) <=
+                      Number(material.reorderPoint);
 
                   return (
                     <Card key={material.id}>
                       <BlockStack gap="200">
                         <InlineStack align="space-between">
-                          <Text as="p" fontWeight="bold">{material.name}</Text>
+                          <Text as="p" fontWeight="bold">
+                            {material.name}
+                          </Text>
+
                           <InlineStack gap="200">
-                            <Badge>{material.materialType}</Badge>
-                            {lowStock && <Badge tone="critical">LOW STOCK</Badge>}
-                            {!material.active && <Badge tone="warning">Inactive</Badge>}
+                            <Badge>
+                              {material.materialType}
+                            </Badge>
+
+                            {lowStock && (
+                              <Badge tone="critical">
+                                LOW STOCK
+                              </Badge>
+                            )}
                           </InlineStack>
                         </InlineStack>
 
-                        <Text as="p">Cost: ${Number(material.costPerUnit || 0).toFixed(4)} / {material.unit}</Text>
-                        <Text as="p">Vendor: {material.vendor || "N/A"}</Text>
-                        <Text as="p">Stock: {material.stockOnHand ?? "N/A"} | Reorder: {material.reorderPoint ?? "N/A"}</Text>
+                        <Text as="p">
+                          Cost: $
+                          {Number(
+                            material.calculatedUnitCost ||
+                              material.costPerUnit ||
+                              0
+                          ).toFixed(6)}{" "}
+                          / {material.baseUnit || material.unit}
+                        </Text>
 
-                        {material.vendors?.length > 0 && (
-                          <BlockStack gap="100">
-                            <Text as="p" fontWeight="bold">Vendor Options</Text>
-                            {material.vendors.map((v: any) => (
-                              <Text as="p" key={v.id}>
-                                {v.vendorName}: ${Number(v.unitCost || 0).toFixed(4)} / {v.unit}
-                                {v.moq ? ` | MOQ: ${v.moq}` : ""}
-                                {v.leadTimeDays ? ` | Lead: ${v.leadTimeDays} days` : ""}
-                              </Text>
-                            ))}
-                          </BlockStack>
-                        )}
-
-                        {material.costHistory?.length > 0 && (
-                          <BlockStack gap="100">
-                            <Text as="p" fontWeight="bold">Recent Cost History</Text>
-                            {material.costHistory.map((h: any) => (
-                              <Text as="p" tone="subdued" key={h.id}>
-                                ${Number(h.oldCost).toFixed(4)} → ${Number(h.newCost).toFixed(4)} | {new Date(h.createdAt).toLocaleString()} | {h.reason || "No reason"}
-                              </Text>
-                            ))}
-                          </BlockStack>
-                        )}
+                        <Text as="p">
+                          Vendor: {material.vendor || "N/A"}
+                        </Text>
 
                         <InlineStack gap="200">
-                          <Button onClick={() => editMaterial(material)}>Edit</Button>
-                          {material.active && (
-                            <Button tone="critical" onClick={() => deleteMaterial(material.id)}>
-                              Deactivate
-                            </Button>
-                          )}
+                          <Button
+                            onClick={() => editMaterial(material)}
+                          >
+                            Edit
+                          </Button>
+
+                          <Button
+                            tone="critical"
+                            onClick={() =>
+                              deleteMaterial(material.id)
+                            }
+                          >
+                            Deactivate
+                          </Button>
                         </InlineStack>
+                      </BlockStack>
+                    </Card>
+                  );
+                })
+              )}
+            </BlockStack>
+          </Card>
+        </Layout.Section>
                       </BlockStack>
                     </Card>
                   );
