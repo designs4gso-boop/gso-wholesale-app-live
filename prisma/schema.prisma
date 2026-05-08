@@ -377,3 +377,52 @@ model MaterialVendor {
   @@index([materialId])
   @@index([shop, active])
 }
+
+model Machine {
+  id            String   @id @default(cuid())
+  shop          String
+
+  name          String
+  machineType   String   @default("printer") // printer, cutter, laminator, press
+  maxWidthIn    Float?
+  costPerHour   Float    @default(0)
+  sqftPerHour   Float    @default(0)
+  setupWastePct Float    @default(0)
+
+  allowOverflow Boolean  @default(false)
+  active        Boolean  @default(true)
+
+  inkChannels   MachineInkChannel[]
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([shop])
+  @@index([shop, active])
+}
+
+model MachineInkChannel {
+  id            String   @id @default(cuid())
+  shop          String
+  machineId     String
+
+  slotNumber    Int
+  inkName       String   // Cyan, Magenta, Yellow, Black, White, Gloss, Orange, Red, Green, etc.
+  inkType       String   // cmyk, white, gloss, orange, red, green, primer, metallic, other
+
+  costPerMl     Float    @default(0)
+
+  // ML used per sqft at 100% coverage for this ink/channel
+  mlPerSqft100  Float    @default(0)
+
+  enabled       Boolean  @default(true)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  machine       Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([machineId])
+  @@index([inkType])
+}

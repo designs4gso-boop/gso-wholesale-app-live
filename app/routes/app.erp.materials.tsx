@@ -120,8 +120,9 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
 
       if (
         oldMaterial &&
-        Number(oldMaterial.costPerUnit) !== Number(payload.costPerUnit)
-      ) {
+        Number(oldMaterial.costPerUnit) !== Number(calculatedUnitCost)
+    )
+       {
         await db.materialCostHistory.create({
           data: {
             shop,
