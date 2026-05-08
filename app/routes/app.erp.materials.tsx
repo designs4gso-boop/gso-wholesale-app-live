@@ -329,8 +329,6 @@ export default function MaterialsPage() {
     setEditingId(null);
     setName("");
     setMaterialType("label");
-    setUnit("each");
-    setCostPerUnit("");
     setVendor("");
     setSku("");
     setStockOnHand("");
@@ -372,8 +370,6 @@ export default function MaterialsPage() {
     setEditingId(material.id);
     setName(material.name || "");
     setMaterialType(material.materialType || "label");
-    setUnit(material.unit || "each");
-    setCostPerUnit(String(material.costPerUnit || ""));
     setVendor(material.vendor || "");
     setSku(material.sku || "");
     setStockOnHand(material.stockOnHand ? String(material.stockOnHand) : "");
