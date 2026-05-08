@@ -105,6 +105,23 @@ export async function action({ request }: { request: Request }) {
     });
   }
 
+  if (payload.intent === "restoreMachine") {
+  await db.machine.update({
+    where: { id: payload.id },
+    data: { active: true },
+  });
+}
+
+if (payload.intent === "permanentDeleteMachine") {
+  await db.machineInkChannel.deleteMany({
+    where: { machineId: payload.id },
+  });
+
+  await db.machine.delete({
+    where: { id: payload.id },
+  });
+}
+
   if (payload.intent === "updateSlot") {
     const cartridgeCost = Number(payload.cartridgeCost || 0);
     const cartridgeMl = Number(payload.cartridgeMl || 0);
@@ -217,6 +234,22 @@ export default function MachinesPage() {
     );
   }
 
+  function restoreMachine(id: string) {
+  fetcher.submit(
+    { intent: "restoreMachine", id },
+    { method: "post", encType: "application/json" }
+  );
+}
+
+function permanentDeleteMachine(id: string) {
+  if (!confirm("Permanently delete this machine and all ink slots?")) return;
+
+  fetcher.submit(
+    { intent: "permanentDeleteMachine", id },
+    { method: "post", encType: "application/json" }
+  );
+}
+
   function getSlotValue(ink: any, field: string) {
     return slotEdits[ink.id]?.[field] ?? String(ink[field] || "");
   }
@@ -326,12 +359,21 @@ export default function MachinesPage() {
 
                       <InlineStack gap="200">
                         <Button onClick={() => editMachine(machine)}>Edit Machine</Button>
-                        {machine.active && (
-                          <Button tone="critical" onClick={() => deleteMachine(machine.id)}>
-                            Deactivate Machine
-                          </Button>
+
+                        {machine.active ? (
+                            <Button tone="critical" onClick={() => deleteMachine(machine.id)}>
+                            Archive Machine
+                            </Button>
+                        ) : (
+                            <Button onClick={() => restoreMachine(machine.id)}>
+                            Restore Machine
+                            </Button>
                         )}
-                      </InlineStack>
+
+                        <Button tone="critical" onClick={() => permanentDeleteMachine(machine.id)}>
+                            Permanent Delete
+                        </Button>
+                        </InlineStack>
 
                       <Divider />
 
