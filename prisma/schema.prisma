@@ -250,6 +250,8 @@ model Material {
 
   category        ProductCategory? @relation(fields: [categoryId], references: [id])
   recipeMaterials RecipeMaterial[]
+  costHistory MaterialCostHistory[]
+  vendors     MaterialVendor[]
 
   @@index([shop])
   @@index([shop, materialType])
@@ -321,4 +323,44 @@ model SourcedCostTier {
   @@index([shop])
   @@index([recipeId])
   @@index([minQty])
+}
+
+model MaterialCostHistory {
+  id          String   @id @default(cuid())
+  shop        String
+  materialId  String
+  oldCost     Float
+  newCost     Float
+  vendor      String?
+  reason      String?
+  changedBy   String?
+  createdAt   DateTime @default(now())
+
+  material    Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([materialId])
+}
+
+model MaterialVendor {
+  id          String   @id @default(cuid())
+  shop        String
+  materialId  String
+  vendorName  String
+  vendorSku   String?
+  unitCost    Float    @default(0)
+  unit         String   @default("each")
+  moq          Float?
+  leadTimeDays Int?
+  notes       String?
+  preferred   Boolean  @default(false)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  material    Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([materialId])
+  @@index([shop, active])
 }
