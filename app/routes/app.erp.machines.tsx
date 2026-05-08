@@ -42,11 +42,7 @@ export async function loader({ request }: { request: Request }) {
   const machines = await db.machine.findMany({
     where: { shop: session.shop },
     orderBy: { updatedAt: "desc" },
-    include: {
-      inkChannels: {
-        orderBy: { slotNumber: "asc" },
-      },
-    },
+    include: { inkChannels: { orderBy: { slotNumber: "asc" } } },
   });
 
   return Response.json({ machines });
@@ -69,11 +65,11 @@ export async function action({ request }: { request: Request }) {
           sqftPerHour: Number(payload.sqftPerHour) || 0,
           setupWastePct: Number(payload.setupWastePct) || 0,
           allowOverflow: Boolean(payload.allowOverflow),
-          active: payload.active !== false,
+          active: true,
         },
       });
     } else {
-      await db.machine.create({
+      const machine = await db.machine.create({
         data: {
           shop,
           name: payload.name,
@@ -86,6 +82,19 @@ export async function action({ request }: { request: Request }) {
           active: true,
         },
       });
+
+      for (let i = 1; i <= 8; i++) {
+        await db.machineInkChannel.create({
+          data: {
+            shop,
+            machineId: machine.id,
+            slotNumber: i,
+            inkName: "",
+            inkType: "cmyk",
+            enabled: true,
+          },
+        });
+      }
     }
   }
 
@@ -96,50 +105,44 @@ export async function action({ request }: { request: Request }) {
     });
   }
 
-  if (payload.intent === "saveInkChannel") {
-    if (payload.id) {
-      await db.machineInkChannel.update({
-        where: { id: payload.id },
-        data: {
-          slotNumber: Number(payload.slotNumber) || 1,
-          inkName: payload.inkName,
-          inkType: payload.inkType,
-          costPerMl: Number(payload.costPerMl) || 0,
-          mlPerSqft100: Number(payload.mlPerSqft100) || 0,
-          enabled: payload.enabled !== false,
-        },
-      });
-    } else {
-      await db.machineInkChannel.create({
-        data: {
-          shop,
-          machineId: payload.machineId,
-          slotNumber: Number(payload.slotNumber) || 1,
-          inkName: payload.inkName,
-          inkType: payload.inkType,
-          costPerMl: Number(payload.costPerMl) || 0,
-          mlPerSqft100: Number(payload.mlPerSqft100) || 0,
-          enabled: true,
-        },
-      });
-    }
-  }
+  if (payload.intent === "updateSlot") {
+    const cartridgeCost = Number(payload.cartridgeCost || 0);
+    const cartridgeMl = Number(payload.cartridgeMl || 0);
+    const costPerMl = cartridgeMl > 0 ? cartridgeCost / cartridgeMl : 0;
 
-  if (payload.intent === "deleteInkChannel") {
     await db.machineInkChannel.update({
       where: { id: payload.id },
-      data: { enabled: false },
+      data: {
+        inkName: payload.inkName || "",
+        inkType: payload.inkType || "cmyk",
+        cartridgeCost,
+        cartridgeMl,
+        costPerMl,
+        mlPerSqft1Pct: Number(payload.mlPerSqft1Pct || 0),
+        enabled: true,
+      },
+    });
+  }
+
+  if (payload.intent === "clearSlot") {
+    await db.machineInkChannel.update({
+      where: { id: payload.id },
+      data: {
+        inkName: "",
+        inkType: "cmyk",
+        cartridgeCost: 0,
+        cartridgeMl: 0,
+        costPerMl: 0,
+        mlPerSqft1Pct: 0,
+        enabled: true,
+      },
     });
   }
 
   const machines = await db.machine.findMany({
     where: { shop },
     orderBy: { updatedAt: "desc" },
-    include: {
-      inkChannels: {
-        orderBy: { slotNumber: "asc" },
-      },
-    },
+    include: { inkChannels: { orderBy: { slotNumber: "asc" } } },
   });
 
   return Response.json({ ok: true, machines });
@@ -151,6 +154,7 @@ export default function MachinesPage() {
   const fetcher = useFetcher<any>();
 
   const [machines, setMachines] = useState<any[]>(loaderData.machines || []);
+  const [slotEdits, setSlotEdits] = useState<any>({});
 
   const [editingMachineId, setEditingMachineId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -160,14 +164,6 @@ export default function MachinesPage() {
   const [sqftPerHour, setSqftPerHour] = useState("");
   const [setupWastePct, setSetupWastePct] = useState("");
   const [allowOverflow, setAllowOverflow] = useState("false");
-
-  const [editingInkId, setEditingInkId] = useState<string | null>(null);
-  const [machineId, setMachineId] = useState("");
-  const [slotNumber, setSlotNumber] = useState("1");
-  const [inkName, setInkName] = useState("");
-  const [inkType, setInkType] = useState("cmyk");
-  const [costPerMl, setCostPerMl] = useState("");
-  const [mlPerSqft100, setMlPerSqft100] = useState("");
 
   useEffect(() => {
     if (fetcher.data?.machines) setMachines(fetcher.data.machines);
@@ -182,16 +178,6 @@ export default function MachinesPage() {
     setSqftPerHour("");
     setSetupWastePct("");
     setAllowOverflow("false");
-  }
-
-  function resetInkForm() {
-    setEditingInkId(null);
-    setMachineId("");
-    setSlotNumber("1");
-    setInkName("");
-    setInkType("cmyk");
-    setCostPerMl("");
-    setMlPerSqft100("");
   }
 
   function saveMachine() {
@@ -231,37 +217,35 @@ export default function MachinesPage() {
     );
   }
 
-  function saveInkChannel() {
+  function getSlotValue(ink: any, field: string) {
+    return slotEdits[ink.id]?.[field] ?? String(ink[field] || "");
+  }
+
+  function updateSlotEdit(id: string, field: string, value: string) {
+    setSlotEdits((prev: any) => ({
+      ...prev,
+      [id]: { ...prev[id], [field]: value },
+    }));
+  }
+
+  function saveSlot(ink: any) {
     fetcher.submit(
       {
-        intent: "saveInkChannel",
-        id: editingInkId,
-        machineId,
-        slotNumber,
-        inkName,
-        inkType,
-        costPerMl,
-        mlPerSqft100,
+        intent: "updateSlot",
+        id: ink.id,
+        inkName: slotEdits[ink.id]?.inkName ?? ink.inkName,
+        inkType: slotEdits[ink.id]?.inkType ?? ink.inkType,
+        cartridgeCost: slotEdits[ink.id]?.cartridgeCost ?? ink.cartridgeCost,
+        cartridgeMl: slotEdits[ink.id]?.cartridgeMl ?? ink.cartridgeMl,
+        mlPerSqft1Pct: slotEdits[ink.id]?.mlPerSqft1Pct ?? ink.mlPerSqft1Pct,
       },
       { method: "post", encType: "application/json" }
     );
-
-    resetInkForm();
   }
 
-  function editInkChannel(machine: any, ink: any) {
-    setEditingInkId(ink.id);
-    setMachineId(machine.id);
-    setSlotNumber(String(ink.slotNumber || 1));
-    setInkName(ink.inkName || "");
-    setInkType(ink.inkType || "cmyk");
-    setCostPerMl(String(ink.costPerMl || ""));
-    setMlPerSqft100(String(ink.mlPerSqft100 || ""));
-  }
-
-  function deleteInkChannel(id: string) {
+  function clearSlot(ink: any) {
     fetcher.submit(
-      { intent: "deleteInkChannel", id },
+      { intent: "clearSlot", id: ink.id },
       { method: "post", encType: "application/json" }
     );
   }
@@ -269,7 +253,7 @@ export default function MachinesPage() {
   return (
     <Page
       title="Machine Center"
-      subtitle="Printers, ink slots, cost per ML, coverage rates, and overflow routing."
+      subtitle="Printers, 8 ink slots, cartridge costs, cost per ML, coverage rates, and overflow routing."
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
       primaryAction={{ content: "New Machine", onAction: resetMachineForm }}
     >
@@ -282,52 +266,15 @@ export default function MachinesPage() {
               </Text>
 
               <InlineStack gap="300">
-                <TextField
-                  label="Machine Name"
-                  value={name}
-                  onChange={setName}
-                  autoComplete="off"
-                  placeholder="Mimaki UCJV300-54"
-                />
-
-                <Select
-                  label="Machine Type"
-                  value={machineType}
-                  onChange={setMachineType}
-                  options={machineTypes}
-                />
-
-                <TextField
-                  label="Max Width Inches"
-                  value={maxWidthIn}
-                  onChange={setMaxWidthIn}
-                  autoComplete="off"
-                />
+                <TextField label="Machine Name" value={name} onChange={setName} autoComplete="off" />
+                <Select label="Machine Type" value={machineType} onChange={setMachineType} options={machineTypes} />
+                <TextField label="Max Width Inches" value={maxWidthIn} onChange={setMaxWidthIn} autoComplete="off" />
               </InlineStack>
 
               <InlineStack gap="300">
-                <TextField
-                  label="Machine Cost Per Hour"
-                  prefix="$"
-                  value={costPerHour}
-                  onChange={setCostPerHour}
-                  autoComplete="off"
-                />
-
-                <TextField
-                  label="Sq Ft Per Hour"
-                  value={sqftPerHour}
-                  onChange={setSqftPerHour}
-                  autoComplete="off"
-                />
-
-                <TextField
-                  label="Setup Waste %"
-                  suffix="%"
-                  value={setupWastePct}
-                  onChange={setSetupWastePct}
-                  autoComplete="off"
-                />
+                <TextField label="Machine Cost Per Hour" prefix="$" value={costPerHour} onChange={setCostPerHour} autoComplete="off" />
+                <TextField label="Sq Ft Per Hour" value={sqftPerHour} onChange={setSqftPerHour} autoComplete="off" />
+                <TextField label="Setup Waste %" suffix="%" value={setupWastePct} onChange={setSetupWastePct} autoComplete="off" />
               </InlineStack>
 
               <Select
@@ -352,170 +299,111 @@ export default function MachinesPage() {
 
         <Layout.Section>
           <Card>
-            <BlockStack gap="400">
-              <Text as="h2" variant="headingMd">
-                {editingInkId ? "Edit Ink Slot" : "Add Ink Slot"}
-              </Text>
-
-              <Select
-                label="Machine"
-                value={machineId}
-                onChange={setMachineId}
-                options={[
-                  { label: "Select machine", value: "" },
-                  ...machines
-                    .filter((m) => m.active)
-                    .map((m) => ({ label: m.name, value: m.id })),
-                ]}
-              />
-
-              <InlineStack gap="300">
-                <TextField
-                  label="Slot Number"
-                  value={slotNumber}
-                  onChange={setSlotNumber}
-                  autoComplete="off"
-                />
-
-                <TextField
-                  label="Ink Name"
-                  value={inkName}
-                  onChange={setInkName}
-                  autoComplete="off"
-                  placeholder="Cyan, White, Gloss, Orange"
-                />
-
-                <Select
-                  label="Ink Type"
-                  value={inkType}
-                  onChange={setInkType}
-                  options={inkTypes}
-                />
-              </InlineStack>
-
-              <InlineStack gap="300">
-                <TextField
-                  label="Cost Per ML"
-                  prefix="$"
-                  value={costPerMl}
-                  onChange={setCostPerMl}
-                  autoComplete="off"
-                />
-
-                <TextField
-                  label="ML Per Sq Ft At 100% Coverage"
-                  value={mlPerSqft100}
-                  onChange={setMlPerSqft100}
-                  autoComplete="off"
-                />
-              </InlineStack>
-
-              <InlineStack gap="300">
-                <Button variant="primary" onClick={saveInkChannel}>
-                  {editingInkId ? "Update Ink Slot" : "Save Ink Slot"}
-                </Button>
-                <Button onClick={resetInkForm}>Clear</Button>
-              </InlineStack>
-
-              <Text as="p" tone="subdued">
-                Formula later: total sqft × coverage % × ML/sqft × cost/ml.
-              </Text>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-
-        <Layout.Section>
-          <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Machines
-              </Text>
-
+              <Text as="h2" variant="headingMd">Machines</Text>
               <Divider />
 
               {machines.length === 0 ? (
-                <Text as="p" tone="subdued">
-                  No machines yet.
-                </Text>
+                <Text as="p" tone="subdued">No machines yet.</Text>
               ) : (
                 machines.map((machine) => (
                   <Card key={machine.id}>
-                    <BlockStack gap="200">
+                    <BlockStack gap="300">
                       <InlineStack align="space-between">
-                        <Text as="p" fontWeight="bold">
-                          {machine.name}
-                        </Text>
-
+                        <Text as="p" fontWeight="bold">{machine.name}</Text>
                         <InlineStack gap="200">
                           <Badge>{machine.machineType}</Badge>
-                          {machine.allowOverflow && (
-                            <Badge tone="success">Overflow Allowed</Badge>
-                          )}
-                          {!machine.active && (
-                            <Badge tone="warning">Inactive</Badge>
-                          )}
+                          {machine.allowOverflow && <Badge tone="success">Overflow Allowed</Badge>}
+                          {!machine.active && <Badge tone="warning">Inactive</Badge>}
                         </InlineStack>
                       </InlineStack>
 
                       <Text as="p">
-                        Max Width: {machine.maxWidthIn || "N/A"} in | Cost/hr:
-                        ${Number(machine.costPerHour || 0).toFixed(2)} | Sqft/hr:
-                        {Number(machine.sqftPerHour || 0).toFixed(2)}
+                        Max Width: {machine.maxWidthIn || "N/A"} in | Cost/hr: ${Number(machine.costPerHour || 0).toFixed(2)} | Sqft/hr: {Number(machine.sqftPerHour || 0).toFixed(2)}
                       </Text>
 
-                      <Text as="p">
-                        Setup Waste: {Number(machine.setupWastePct || 0).toFixed(2)}%
-                      </Text>
-
-                      <Divider />
-
-                      <Text as="p" fontWeight="bold">
-                        Ink Slots
-                      </Text>
-
-                      {machine.inkChannels?.length ? (
-                        machine.inkChannels.map((ink: any) => (
-                          <InlineStack key={ink.id} align="space-between">
-                            <Text as="p">
-                              Slot {ink.slotNumber}: {ink.inkName} ({ink.inkType}) —
-                              ${Number(ink.costPerMl || 0).toFixed(4)}/ml —
-                              {Number(ink.mlPerSqft100 || 0).toFixed(4)} ml/sqft @ 100%
-                            </Text>
-
-                            <InlineStack gap="200">
-                              <Button onClick={() => editInkChannel(machine, ink)}>
-                                Edit
-                              </Button>
-
-                              {ink.enabled && (
-                                <Button
-                                  tone="critical"
-                                  onClick={() => deleteInkChannel(ink.id)}
-                                >
-                                  Disable
-                                </Button>
-                              )}
-                            </InlineStack>
-                          </InlineStack>
-                        ))
-                      ) : (
-                        <Text as="p" tone="subdued">
-                          No ink slots configured.
-                        </Text>
-                      )}
+                      <Text as="p">Setup Waste: {Number(machine.setupWastePct || 0).toFixed(2)}%</Text>
 
                       <InlineStack gap="200">
                         <Button onClick={() => editMachine(machine)}>Edit Machine</Button>
-
                         {machine.active && (
-                          <Button
-                            tone="critical"
-                            onClick={() => deleteMachine(machine.id)}
-                          >
+                          <Button tone="critical" onClick={() => deleteMachine(machine.id)}>
                             Deactivate Machine
                           </Button>
                         )}
                       </InlineStack>
+
+                      <Divider />
+
+                      <Text as="p" fontWeight="bold">Ink Slots</Text>
+
+                      <BlockStack gap="300">
+                        {machine.inkChannels?.map((ink: any) => {
+                          const cartridgeCost = Number(getSlotValue(ink, "cartridgeCost")) || 0;
+                          const cartridgeMl = Number(getSlotValue(ink, "cartridgeMl")) || 0;
+                          const liveCostPerMl = cartridgeMl > 0 ? cartridgeCost / cartridgeMl : 0;
+
+                          return (
+                            <Card key={ink.id}>
+                              <BlockStack gap="300">
+                                <InlineStack align="space-between">
+                                  <Text as="p" fontWeight="bold">Slot {ink.slotNumber}</Text>
+                                  <Badge>{slotEdits[ink.id]?.inkType ?? ink.inkType}</Badge>
+                                </InlineStack>
+
+                                <InlineStack gap="300">
+                                  <TextField
+                                    label="Ink Name"
+                                    autoComplete="off"
+                                    value={slotEdits[ink.id]?.inkName ?? ink.inkName ?? ""}
+                                    onChange={(value) => updateSlotEdit(ink.id, "inkName", value)}
+                                  />
+
+                                  <Select
+                                    label="Ink Type"
+                                    options={inkTypes}
+                                    value={slotEdits[ink.id]?.inkType ?? ink.inkType}
+                                    onChange={(value) => updateSlotEdit(ink.id, "inkType", value)}
+                                  />
+                                </InlineStack>
+
+                                <InlineStack gap="300">
+                                  <TextField
+                                    label="Bottle/Cartridge Cost"
+                                    prefix="$"
+                                    autoComplete="off"
+                                    value={getSlotValue(ink, "cartridgeCost")}
+                                    onChange={(value) => updateSlotEdit(ink.id, "cartridgeCost", value)}
+                                  />
+
+                                  <TextField
+                                    label="Bottle/Cartridge ML"
+                                    autoComplete="off"
+                                    value={getSlotValue(ink, "cartridgeMl")}
+                                    onChange={(value) => updateSlotEdit(ink.id, "cartridgeMl", value)}
+                                  />
+
+                                  <TextField
+                                    label="ML Per SqFt @ 1% Coverage"
+                                    autoComplete="off"
+                                    value={getSlotValue(ink, "mlPerSqft1Pct")}
+                                    onChange={(value) => updateSlotEdit(ink.id, "mlPerSqft1Pct", value)}
+                                  />
+                                </InlineStack>
+
+                                <Text as="p">
+                                  Live Cost Per ML: ${liveCostPerMl.toFixed(4)}
+                                </Text>
+
+                                <InlineStack gap="200">
+                                  <Button onClick={() => saveSlot(ink)}>Save Slot</Button>
+                                  <Button tone="critical" onClick={() => clearSlot(ink)}>Clear Slot</Button>
+                                </InlineStack>
+                              </BlockStack>
+                            </Card>
+                          );
+                        })}
+                      </BlockStack>
                     </BlockStack>
                   </Card>
                 ))
