@@ -10,7 +10,6 @@ import {
   Select,
   Badge,
   Divider,
-  Checkbox,
 } from "@shopify/polaris";
 import { useEffect, useMemo, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
@@ -218,103 +217,6 @@ function calcLabelRecipe(input: any) {
   };
 }
 
-
-const SHOPIFY_METAFIELD_NAMESPACE = "gso_erp";
-
-function normalizeShopifyGid(value?: string, ownerType: "Product" | "ProductVariant" = "Product") {
-  const trimmed = String(value || "").trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith("gid://shopify/")) return trimmed;
-  if (/^\d+$/.test(trimmed)) return `gid://shopify/${ownerType}/${trimmed}`;
-  return trimmed;
-}
-
-const METAFIELDS_SET_MUTATION = `#graphql
-  mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-    metafieldsSet(metafields: $metafields) {
-      metafields {
-        id
-        namespace
-        key
-        owner {
-          __typename
-        }
-      }
-      userErrors {
-        field
-        message
-        code
-      }
-    }
-  }
-`;
-
-async function pushRecipeQuantityRulesToShopify({
-  admin,
-  recipe,
-  tierBreakpoints,
-}: {
-  admin: any;
-  recipe: any;
-  tierBreakpoints: number[];
-}) {
-  const productOwnerId = normalizeShopifyGid(recipe.shopifyProductId, "Product");
-  const variantOwnerId = normalizeShopifyGid(recipe.shopifyVariantId, "ProductVariant");
-  const ownerIds = [productOwnerId, variantOwnerId].filter(Boolean) as string[];
-
-  if (ownerIds.length === 0) {
-    throw new Error("Add a Shopify Product ID or Variant ID before syncing quantity rules.");
-  }
-
-  const metafields = ownerIds.flatMap((ownerId) => [
-    {
-      ownerId,
-      namespace: SHOPIFY_METAFIELD_NAMESPACE,
-      key: "min_quantity",
-      type: "number_integer",
-      value: String(recipe.minQuantity || 1),
-    },
-    {
-      ownerId,
-      namespace: SHOPIFY_METAFIELD_NAMESPACE,
-      key: "default_quantity",
-      type: "number_integer",
-      value: String(recipe.defaultQuantity || recipe.minQuantity || 1),
-    },
-    {
-      ownerId,
-      namespace: SHOPIFY_METAFIELD_NAMESPACE,
-      key: "quantity_tiers",
-      type: "json",
-      value: JSON.stringify(tierBreakpoints),
-    },
-    {
-      ownerId,
-      namespace: SHOPIFY_METAFIELD_NAMESPACE,
-      key: "recipe_id",
-      type: "single_line_text_field",
-      value: recipe.id,
-    },
-  ]);
-
-  const response = await admin.graphql(METAFIELDS_SET_MUTATION, {
-    variables: { metafields },
-  });
-  const result = await response.json();
-  const graphqlErrors = result.errors || [];
-  const userErrors = result.data?.metafieldsSet?.userErrors || [];
-
-  if (graphqlErrors.length || userErrors.length) {
-    const messages = [
-      ...graphqlErrors.map((error: any) => error.message),
-      ...userErrors.map((error: any) => error.message),
-    ].filter(Boolean);
-    throw new Error(messages.join("; ") || "Shopify metafield sync failed.");
-  }
-
-  return result.data?.metafieldsSet?.metafields || [];
-}
-
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
@@ -345,7 +247,7 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const payload = await request.json();
 
@@ -361,9 +263,6 @@ export async function action({ request }: { request: Request }) {
       name: payload.name || "Untitled recipe",
       sku: payload.sku || null,
       productType,
-      shopifyProductId: normalizeShopifyGid(payload.shopifyProductId, "Product"),
-      shopifyVariantId: normalizeShopifyGid(payload.shopifyVariantId, "ProductVariant"),
-      shopifySyncEnabled: Boolean(payload.shopifySyncEnabled),
       widthIn: nullableNumber(payload.widthIn),
       heightIn: nullableNumber(payload.heightIn),
       minQuantity,
@@ -468,38 +367,7 @@ export async function action({ request }: { request: Request }) {
       return savedRecipe;
     });
 
-    let shopifySyncError = null;
-
-    if (data.shopifySyncEnabled) {
-      try {
-        await pushRecipeQuantityRulesToShopify({
-          admin,
-          recipe,
-          tierBreakpoints,
-        });
-
-        await db.productRecipe.update({
-          where: { id: recipe.id },
-          data: {
-            lastShopifySyncAt: new Date(),
-            shopifySyncError: null,
-          },
-        });
-      } catch (error: any) {
-        shopifySyncError = error?.message || "Shopify metafield sync failed.";
-        await db.productRecipe.update({
-          where: { id: recipe.id },
-          data: { shopifySyncError },
-        });
-      }
-    } else {
-      await db.productRecipe.update({
-        where: { id: recipe.id },
-        data: { shopifySyncError: null },
-      });
-    }
-
-    return Response.json({ ok: true, recipe, shopifySyncError });
+    return Response.json({ ok: true, recipe });
   }
 
   if (payload.intent === "archiveRecipe") {
@@ -537,9 +405,6 @@ export default function RecipesPage() {
   const [activeFilter, setActiveFilter] = useState("active");
   const [name, setName] = useState("");
   const [sku, setSku] = useState("");
-  const [shopifyProductId, setShopifyProductId] = useState("");
-  const [shopifyVariantId, setShopifyVariantId] = useState("");
-  const [shopifySyncEnabled, setShopifySyncEnabled] = useState(false);
   const [productType, setProductType] = useState("label");
   const [widthIn, setWidthIn] = useState("");
   const [heightIn, setHeightIn] = useState("");
@@ -647,9 +512,6 @@ export default function RecipesPage() {
     setEditingId(null);
     setName("");
     setSku("");
-    setShopifyProductId("");
-    setShopifyVariantId("");
-    setShopifySyncEnabled(false);
     setProductType("label");
     setWidthIn("");
     setHeightIn("");
@@ -677,9 +539,6 @@ export default function RecipesPage() {
         id: editingId,
         name,
         sku,
-        shopifyProductId,
-        shopifyVariantId,
-        shopifySyncEnabled,
         productType,
         widthIn,
         heightIn,
@@ -714,9 +573,6 @@ export default function RecipesPage() {
     setEditingId(recipe.id);
     setName(recipe.name || "");
     setSku(recipe.sku || "");
-    setShopifyProductId(recipe.shopifyProductId || "");
-    setShopifyVariantId(recipe.shopifyVariantId || "");
-    setShopifySyncEnabled(Boolean(recipe.shopifySyncEnabled));
     setProductType(recipe.productType || "label");
     setWidthIn(recipe.widthIn !== null && recipe.widthIn !== undefined ? String(recipe.widthIn) : "");
     setHeightIn(recipe.heightIn !== null && recipe.heightIn !== undefined ? String(recipe.heightIn) : "");
@@ -779,51 +635,6 @@ export default function RecipesPage() {
                 </div>
               </InlineStack>
 
-              <Card background="bg-surface-secondary">
-                <BlockStack gap="300">
-                  <InlineStack align="space-between">
-                    <BlockStack gap="100">
-                      <Text as="h3" variant="headingSm">
-                        Shopify quantity sync
-                      </Text>
-                      <Text as="p" tone="subdued">
-                        The ERP recipe stays the source of truth. When enabled, saving this recipe pushes the minimum quantity, default quantity, and tier breakpoints to Shopify metafields.
-                      </Text>
-                    </BlockStack>
-                    <Checkbox
-                      label="Sync to Shopify"
-                      checked={shopifySyncEnabled}
-                      onChange={setShopifySyncEnabled}
-                    />
-                  </InlineStack>
-
-                  <InlineStack gap="300" wrap={false}>
-                    <div style={{ flex: 1 }}>
-                      <TextField
-                        label="Shopify Product ID / GID"
-                        value={shopifyProductId}
-                        onChange={setShopifyProductId}
-                        helpText="Use a Shopify Product GID if available, or paste the numeric product ID."
-                        autoComplete="off"
-                      />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <TextField
-                        label="Shopify Variant ID / GID Optional"
-                        value={shopifyVariantId}
-                        onChange={setShopifyVariantId}
-                        helpText="Optional. If entered, the same quantity rules are also pushed to the variant."
-                        autoComplete="off"
-                      />
-                    </div>
-                  </InlineStack>
-
-                  <Text as="p" tone="subdued">
-                    Shopify metafields: gso_erp.min_quantity, gso_erp.default_quantity, gso_erp.quantity_tiers, and gso_erp.recipe_id.
-                  </Text>
-                </BlockStack>
-              </Card>
-
               <InlineStack gap="300" wrap={false}>
                 <div style={{ flex: 1 }}>
                   <TextField label="Minimum Quantity" value={minQuantity} onChange={setMinQuantity} type="number" autoComplete="off" />
@@ -841,14 +652,6 @@ export default function RecipesPage() {
                   />
                 </div>
               </InlineStack>
-
-              {fetcher.data?.shopifySyncError && (
-                <Card>
-                  <Text as="p" tone="critical">
-                    Recipe saved, but Shopify sync failed: {fetcher.data.shopifySyncError}
-                  </Text>
-                </Card>
-              )}
 
               <Card background="bg-surface-secondary">
                 <BlockStack gap="200">
@@ -983,18 +786,11 @@ export default function RecipesPage() {
                           </BlockStack>
                           <InlineStack gap="100">
                             <Badge>{productTypeDefaults[recipe.productType]?.label || recipe.productType || "recipe"}</Badge>
-                            {recipe.shopifySyncEnabled && !recipe.shopifySyncError && recipe.lastShopifySyncAt && <Badge tone="success">SHOPIFY SYNCED</Badge>}
-                            {recipe.shopifySyncEnabled && recipe.shopifySyncError && <Badge tone="critical">SYNC ERROR</Badge>}
-                            {recipe.shopifySyncEnabled && !recipe.lastShopifySyncAt && !recipe.shopifySyncError && <Badge tone="warning">SYNC PENDING</Badge>}
                             {recipe.active === false && <Badge tone="warning">ARCHIVED</Badge>}
                           </InlineStack>
                         </InlineStack>
                         <Text as="p">Size: {recipe.widthIn || 0} in x {recipe.heightIn || 0} in</Text>
                         <Text as="p">Tiers: {recipeTiers}</Text>
-                        {recipe.shopifyProductId && <Text as="p">Shopify Product: {recipe.shopifyProductId}</Text>}
-                        {recipe.shopifyVariantId && <Text as="p">Shopify Variant: {recipe.shopifyVariantId}</Text>}
-                        {recipe.lastShopifySyncAt && <Text as="p">Last Shopify Sync: {new Date(recipe.lastShopifySyncAt).toLocaleString()}</Text>}
-                        {recipe.shopifySyncError && <Text as="p" tone="critical">Shopify Sync Error: {recipe.shopifySyncError}</Text>}
                         <Text as="p">Media: {media?.name || "Not selected"}</Text>
                         <Text as="p">Machine: {machine?.name || "Not selected"}</Text>
                         <Text as="p">Waste: {recipe.wastePct || 0}% • Target Margin: {recipe.targetMarginPct || 0}%</Text>
