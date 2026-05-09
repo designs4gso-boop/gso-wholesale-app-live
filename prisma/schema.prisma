@@ -290,6 +290,15 @@ model ProductRecipe {
   minQuantity      Int      @default(1)
   defaultQuantity  Int      @default(1000)
 
+  // Label estimating defaults. These keep the employee UI simple while the calculator
+  // prices white/gloss/emboss options and slower production time in the background.
+  baseCmykCoveragePct      Float @default(40)
+  inkAllowancePct          Float @default(15)
+  maintenanceCostPerSqft   Float @default(0.08)
+  machineRecoveryCostPerSqft Float @default(0.05)
+  overheadCostPerSqft      Float @default(0)
+  operatorLaborPct         Float @default(25)
+
   defaultSellPrice Float?
   targetMarginPct  Float    @default(40)
   wastePct         Float    @default(0)

@@ -83,6 +83,91 @@ const statusOptions = [
 
 const emptyOption = { label: "None", value: "" };
 
+type LabelFinishPreset = {
+  key: string;
+  label: string;
+  whiteLayers: number;
+  glossLayers: number;
+  sqftPerHour: number;
+  preferredMachine: string;
+  description: string;
+};
+
+const labelFinishPresets: LabelFinishPreset[] = [
+  {
+    key: "base",
+    label: "Base Print",
+    whiteLayers: 0,
+    glossLayers: 0,
+    sqftPerHour: 150,
+    preferredMachine: "Mimaki or Roland",
+    description: "CMYK only.",
+  },
+  {
+    key: "white",
+    label: "White",
+    whiteLayers: 1,
+    glossLayers: 0,
+    sqftPerHour: 70,
+    preferredMachine: "Mimaki or Roland",
+    description: "CMYK plus 1 white layer.",
+  },
+  {
+    key: "gloss",
+    label: "Gloss",
+    whiteLayers: 0,
+    glossLayers: 1,
+    sqftPerHour: 60,
+    preferredMachine: "Roland LG-540",
+    description: "CMYK plus 1 gloss layer.",
+  },
+  {
+    key: "white_gloss",
+    label: "White + Gloss",
+    whiteLayers: 1,
+    glossLayers: 1,
+    sqftPerHour: 45,
+    preferredMachine: "Roland LG-540",
+    description: "CMYK, 1 white layer, and 1 gloss layer.",
+  },
+  {
+    key: "emboss",
+    label: "Emboss",
+    whiteLayers: 0,
+    glossLayers: 2,
+    sqftPerHour: 35,
+    preferredMachine: "Roland LG-540",
+    description: "CMYK plus 2 stacked gloss layers for raised feel.",
+  },
+  {
+    key: "white_emboss",
+    label: "White + Emboss",
+    whiteLayers: 1,
+    glossLayers: 2,
+    sqftPerHour: 30,
+    preferredMachine: "Roland LG-540",
+    description: "CMYK, 1 white layer, and 2 stacked gloss layers.",
+  },
+  {
+    key: "emboss_3x",
+    label: "3x Emboss",
+    whiteLayers: 0,
+    glossLayers: 3,
+    sqftPerHour: 25,
+    preferredMachine: "Roland LG-540",
+    description: "CMYK plus 3 stacked gloss layers for braille-style raised feel.",
+  },
+  {
+    key: "white_emboss_3x",
+    label: "White + 3x Emboss",
+    whiteLayers: 1,
+    glossLayers: 3,
+    sqftPerHour: 20,
+    preferredMachine: "Roland LG-540",
+    description: "CMYK, 1 white layer, and 3 stacked gloss layers.",
+  },
+];
+
 function defaultForProductType(productType: string) {
   return productTypeDefaults[productType] || productTypeDefaults.general;
 }
@@ -127,6 +212,11 @@ function money(value: number) {
   return `$${value.toFixed(4)}`;
 }
 
+function dollars(value: number) {
+  if (!Number.isFinite(value)) return "$0.00";
+  return `$${value.toFixed(2)}`;
+}
+
 function percent(value: number) {
   if (!Number.isFinite(value)) return "0.00%";
   return `${value.toFixed(2)}%`;
@@ -136,30 +226,54 @@ function materialUnitCost(material: any) {
   return numberOrZero(material?.calculatedUnitCost || material?.costPerUnit);
 }
 
-function machineInkCost(machine: any, inkType: string, totalSqft: number, coveragePercent: number) {
+function normalizedInkType(value: any) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function machineInkCost(
+  machine: any,
+  inkType: string,
+  totalSqft: number,
+  coveragePercent: number,
+  inkAllowancePct: number,
+) {
   if (!machine || !coveragePercent || coveragePercent <= 0) return 0;
 
+  const targetInkType = normalizedInkType(inkType);
   const channels = (machine.inkChannels || []).filter(
-    (channel: any) => channel.enabled !== false && channel.inkType === inkType,
+    (channel: any) => channel.enabled !== false && normalizedInkType(channel.inkType) === targetInkType,
   );
 
-  return channels.reduce((sum: number, channel: any) => {
+  const rawInkCost = channels.reduce((sum: number, channel: any) => {
     const costPerMl = numberOrZero(channel.costPerMl);
     const mlPerSqft1Pct = numberOrZero(channel.mlPerSqft1Pct || channel.mlPerSqft100 / 100);
     return sum + totalSqft * coveragePercent * mlPerSqft1Pct * costPerMl;
   }, 0);
+
+  return rawInkCost * (1 + numberOrZero(inkAllowancePct) / 100);
 }
 
-function calcLabelRecipe(input: any) {
+function machineSpeedForFinish(machine: any, finish: LabelFinishPreset) {
+  const machineDefaultSpeed = numberOrZero(machine?.sqftPerHour);
+  if (finish.key === "base" && machineDefaultSpeed > 0) return machineDefaultSpeed;
+  return finish.sqftPerHour;
+}
+
+function calcLabelFinish(input: any, finish: LabelFinishPreset, quantityOverride?: number) {
   const widthIn = numberOrZero(input.widthIn);
   const heightIn = numberOrZero(input.heightIn);
   const minQuantity = positiveInt(input.minQuantity, 1);
-  const quantity = Math.max(minQuantity, positiveInt(input.quantity, minQuantity));
+  const quantity = Math.max(minQuantity, positiveInt(quantityOverride ?? input.quantity, minQuantity));
   const wastePct = numberOrZero(input.wastePct);
   const targetMarginPct = numberOrZero(input.targetMarginPct);
   const setupCost = numberOrZero(input.setupCost);
-  const laborMinutes = numberOrZero(input.laborMinutes);
+  const fixedLaborMinutes = numberOrZero(input.laborMinutes);
   const laborRate = numberOrZero(input.laborRate || 25);
+  const operatorLaborPct = numberOrZero(input.operatorLaborPct || 25);
+  const inkAllowancePct = numberOrZero(input.inkAllowancePct || 15);
+  const maintenanceCostPerSqft = numberOrZero(input.maintenanceCostPerSqft || 0.08);
+  const machineRecoveryCostPerSqft = numberOrZero(input.machineRecoveryCostPerSqft || 0.05);
+  const overheadCostPerSqft = numberOrZero(input.overheadCostPerSqft || 0);
   const media = input.mediaMaterial;
   const laminate = input.laminateMaterial;
   const machine = input.machine;
@@ -173,18 +287,33 @@ function calcLabelRecipe(input: any) {
   const mediaCost = totalSqft * materialUnitCost(media);
   const laminateCost = laminate ? totalSqft * materialUnitCost(laminate) : 0;
 
-  const cmykInkCost = machineInkCost(machine, "cmyk", totalSqft, numberOrZero(input.cmykCoveragePct));
-  const whiteInkCost = machineInkCost(machine, "white", totalSqft, numberOrZero(input.whiteCoveragePct));
-  const glossInkCost = machineInkCost(machine, "gloss", totalSqft, numberOrZero(input.glossCoveragePct));
+  const cmykInkCost = machineInkCost(machine, "cmyk", totalSqft, numberOrZero(input.cmykCoveragePct), inkAllowancePct);
+  const whiteInkCost = finish.whiteLayers > 0 ? machineInkCost(machine, "white", totalSqft, 100 * finish.whiteLayers, inkAllowancePct) : 0;
+  const glossInkCost = finish.glossLayers > 0 ? machineInkCost(machine, "gloss", totalSqft, 100 * finish.glossLayers, inkAllowancePct) : 0;
   const inkCost = cmykInkCost + whiteInkCost + glossInkCost;
 
-  const sqftPerHour = numberOrZero(machine?.sqftPerHour);
+  const sqftPerHour = machineSpeedForFinish(machine, finish);
   const machineCostPerHour = numberOrZero(machine?.costPerHour);
   const machineHours = sqftPerHour > 0 ? totalSqft / sqftPerHour : 0;
-  const machineCost = machineHours * machineCostPerHour;
+  const machineHourlyCost = machineHours * machineCostPerHour;
+  const machineRecoveryCost = totalSqft * machineRecoveryCostPerSqft;
+  const maintenanceCost = totalSqft * maintenanceCostPerSqft;
+  const overheadCost = totalSqft * overheadCostPerSqft;
 
-  const laborCost = (laborMinutes / 60) * laborRate;
-  const totalCost = mediaCost + laminateCost + inkCost + machineCost + laborCost + setupCost;
+  const fixedLaborCost = (fixedLaborMinutes / 60) * laborRate;
+  const runLaborCost = machineHours * laborRate * (operatorLaborPct / 100);
+  const laborCost = fixedLaborCost + runLaborCost;
+
+  const totalCost =
+    mediaCost +
+    laminateCost +
+    inkCost +
+    machineHourlyCost +
+    machineRecoveryCost +
+    maintenanceCost +
+    overheadCost +
+    laborCost +
+    setupCost;
   const unitCost = quantity > 0 ? totalCost / quantity : 0;
   const marginDecimal = Math.min(0.95, Math.max(0, targetMarginPct / 100));
   const recommendedUnitPrice = marginDecimal >= 0.95 ? unitCost : unitCost / (1 - marginDecimal);
@@ -193,6 +322,7 @@ function calcLabelRecipe(input: any) {
   const actualMarginPct = totalSellPrice > 0 ? (grossProfit / totalSellPrice) * 100 : 0;
 
   return {
+    finish,
     quantity,
     sqinPerLabel,
     sqftPerLabel,
@@ -204,8 +334,14 @@ function calcLabelRecipe(input: any) {
     whiteInkCost,
     glossInkCost,
     inkCost,
+    sqftPerHour,
     machineHours,
-    machineCost,
+    machineHourlyCost,
+    machineRecoveryCost,
+    maintenanceCost,
+    overheadCost,
+    fixedLaborCost,
+    runLaborCost,
     laborCost,
     setupCost,
     totalCost,
@@ -257,6 +393,7 @@ export async function action({ request }: { request: Request }) {
     const minQuantity = positiveInt(payload.minQuantity, productDefault.minQuantity);
     const defaultQuantity = Math.max(minQuantity, positiveInt(payload.defaultQuantity, productDefault.defaultQuantity));
     const tierBreakpoints = normalizeTierBreakpoints(payload.tierBreakpoints, minQuantity);
+    const baseCmykCoveragePct = numberOrZero(payload.cmykCoveragePct || payload.baseCmykCoveragePct || 40);
 
     const data = {
       shop,
@@ -267,6 +404,12 @@ export async function action({ request }: { request: Request }) {
       heightIn: nullableNumber(payload.heightIn),
       minQuantity,
       defaultQuantity,
+      baseCmykCoveragePct,
+      inkAllowancePct: numberOrZero(payload.inkAllowancePct || 15),
+      maintenanceCostPerSqft: numberOrZero(payload.maintenanceCostPerSqft || 0.08),
+      machineRecoveryCostPerSqft: numberOrZero(payload.machineRecoveryCostPerSqft || 0.05),
+      overheadCostPerSqft: numberOrZero(payload.overheadCostPerSqft || 0),
+      operatorLaborPct: numberOrZero(payload.operatorLaborPct || 25),
       targetMarginPct: numberOrZero(payload.targetMarginPct || productDefault.targetMarginPct),
       wastePct: numberOrZero(payload.wastePct),
       setupCost: numberOrZero(payload.setupCost),
@@ -321,9 +464,9 @@ export async function action({ request }: { request: Request }) {
       }
 
       const inkRequirements = [
-        { inkType: "cmyk", coveragePercent: numberOrZero(payload.cmykCoveragePct), required: numberOrZero(payload.cmykCoveragePct) > 0 },
-        { inkType: "white", coveragePercent: numberOrZero(payload.whiteCoveragePct), required: numberOrZero(payload.whiteCoveragePct) > 0 },
-        { inkType: "gloss", coveragePercent: numberOrZero(payload.glossCoveragePct), required: numberOrZero(payload.glossCoveragePct) > 0 },
+        { inkType: "cmyk", coveragePercent: baseCmykCoveragePct, required: baseCmykCoveragePct > 0, notes: "Base CMYK estimate" },
+        { inkType: "white", coveragePercent: 100, required: false, notes: "Optional 1-layer white finish" },
+        { inkType: "gloss", coveragePercent: 100, required: false, notes: "Optional gloss/emboss layer. Emboss uses stacked gloss passes." },
       ];
 
       for (const ink of inkRequirements) {
@@ -337,18 +480,14 @@ export async function action({ request }: { request: Request }) {
       }
 
       if (payload.machineId) {
-        const requiredInkTypes = inkRequirements
-          .filter((ink) => ink.required)
-          .map((ink) => ink.inkType)
-          .join(",");
-
         await tx.recipeMachineRule.create({
           data: {
             shop,
             recipeId: savedRecipe.id,
             preferredMachineId: payload.machineId,
-            requiredInkTypes,
+            requiredInkTypes: "cmyk",
             allowOverflow: Boolean(payload.allowOverflow),
+            notes: "Finish table handles optional white, gloss, emboss, and 3x emboss. Roland is preferred for any gloss/emboss option.",
           },
         });
       }
@@ -415,8 +554,11 @@ export default function RecipesPage() {
   const [laminateMaterialId, setLaminateMaterialId] = useState("");
   const [machineId, setMachineId] = useState("");
   const [cmykCoveragePct, setCmykCoveragePct] = useState("40");
-  const [whiteCoveragePct, setWhiteCoveragePct] = useState("0");
-  const [glossCoveragePct, setGlossCoveragePct] = useState("0");
+  const [inkAllowancePct, setInkAllowancePct] = useState("15");
+  const [maintenanceCostPerSqft, setMaintenanceCostPerSqft] = useState("0.08");
+  const [machineRecoveryCostPerSqft, setMachineRecoveryCostPerSqft] = useState("0.05");
+  const [overheadCostPerSqft, setOverheadCostPerSqft] = useState("0");
+  const [operatorLaborPct, setOperatorLaborPct] = useState("25");
   const [wastePct, setWastePct] = useState("10");
   const [setupCost, setSetupCost] = useState("0");
   const [laborMinutes, setLaborMinutes] = useState("0");
@@ -454,25 +596,33 @@ export default function RecipesPage() {
   );
   const normalizedTiers = normalizeTierBreakpoints(tierBreakpoints, normalizedMinQuantity);
 
-  const calculation = useMemo(
+  const finishResults = useMemo(
     () =>
-      calcLabelRecipe({
-        widthIn,
-        heightIn,
-        minQuantity: normalizedMinQuantity,
-        quantity: normalizedDefaultQuantity,
-        wastePct,
-        targetMarginPct,
-        setupCost,
-        laborMinutes,
-        laborRate,
-        mediaMaterial,
-        laminateMaterial,
-        machine: selectedMachine,
-        cmykCoveragePct,
-        whiteCoveragePct,
-        glossCoveragePct,
-      }),
+      labelFinishPresets.map((finish) =>
+        calcLabelFinish(
+          {
+            widthIn,
+            heightIn,
+            minQuantity: normalizedMinQuantity,
+            quantity: normalizedDefaultQuantity,
+            wastePct,
+            targetMarginPct,
+            setupCost,
+            laborMinutes,
+            laborRate,
+            operatorLaborPct,
+            inkAllowancePct,
+            maintenanceCostPerSqft,
+            machineRecoveryCostPerSqft,
+            overheadCostPerSqft,
+            mediaMaterial,
+            laminateMaterial,
+            machine: selectedMachine,
+            cmykCoveragePct,
+          },
+          finish,
+        ),
+      ),
     [
       widthIn,
       heightIn,
@@ -483,14 +633,72 @@ export default function RecipesPage() {
       setupCost,
       laborMinutes,
       laborRate,
+      operatorLaborPct,
+      inkAllowancePct,
+      maintenanceCostPerSqft,
+      machineRecoveryCostPerSqft,
+      overheadCostPerSqft,
       mediaMaterial,
       laminateMaterial,
       selectedMachine,
       cmykCoveragePct,
-      whiteCoveragePct,
-      glossCoveragePct,
     ],
   );
+
+  const tierFinishResults = useMemo(
+    () =>
+      normalizedTiers.map((tierQty) => ({
+        quantity: tierQty,
+        finishes: labelFinishPresets.map((finish) =>
+          calcLabelFinish(
+            {
+              widthIn,
+              heightIn,
+              minQuantity: normalizedMinQuantity,
+              quantity: tierQty,
+              wastePct,
+              targetMarginPct,
+              setupCost,
+              laborMinutes,
+              laborRate,
+              operatorLaborPct,
+              inkAllowancePct,
+              maintenanceCostPerSqft,
+              machineRecoveryCostPerSqft,
+              overheadCostPerSqft,
+              mediaMaterial,
+              laminateMaterial,
+              machine: selectedMachine,
+              cmykCoveragePct,
+            },
+            finish,
+            tierQty,
+          ),
+        ),
+      })),
+    [
+      normalizedTiers,
+      widthIn,
+      heightIn,
+      normalizedMinQuantity,
+      wastePct,
+      targetMarginPct,
+      setupCost,
+      laborMinutes,
+      laborRate,
+      operatorLaborPct,
+      inkAllowancePct,
+      maintenanceCostPerSqft,
+      machineRecoveryCostPerSqft,
+      overheadCostPerSqft,
+      mediaMaterial,
+      laminateMaterial,
+      selectedMachine,
+      cmykCoveragePct,
+    ],
+  );
+
+  const baseCalculation = finishResults[0] || calcLabelFinish({}, labelFinishPresets[0]);
 
   const filteredRecipes = recipes.filter((recipe: any) => {
     if (activeFilter === "all") return true;
@@ -522,8 +730,11 @@ export default function RecipesPage() {
     setLaminateMaterialId("");
     setMachineId("");
     setCmykCoveragePct("40");
-    setWhiteCoveragePct("0");
-    setGlossCoveragePct("0");
+    setInkAllowancePct("15");
+    setMaintenanceCostPerSqft("0.08");
+    setMachineRecoveryCostPerSqft("0.05");
+    setOverheadCostPerSqft("0");
+    setOperatorLaborPct("25");
     setWastePct("10");
     setSetupCost("0");
     setLaborMinutes("0");
@@ -549,8 +760,11 @@ export default function RecipesPage() {
         laminateMaterialId,
         machineId,
         cmykCoveragePct,
-        whiteCoveragePct,
-        glossCoveragePct,
+        inkAllowancePct,
+        maintenanceCostPerSqft,
+        machineRecoveryCostPerSqft,
+        overheadCostPerSqft,
+        operatorLaborPct,
         wastePct,
         setupCost,
         laborMinutes,
@@ -566,8 +780,6 @@ export default function RecipesPage() {
     const laminate = recipe.materials?.find((item: any) => item.usageType === "laminate");
     const machineRule = recipe.machineRules?.[0];
     const cmyk = recipe.inkRequirements?.find((item: any) => item.inkType === "cmyk");
-    const white = recipe.inkRequirements?.find((item: any) => item.inkType === "white");
-    const gloss = recipe.inkRequirements?.find((item: any) => item.inkType === "gloss");
     const defaults = defaultForProductType(recipe.productType || "label");
 
     setEditingId(recipe.id);
@@ -582,9 +794,26 @@ export default function RecipesPage() {
     setMediaMaterialId(media?.materialId || "");
     setLaminateMaterialId(laminate?.materialId || "");
     setMachineId(machineRule?.preferredMachineId || "");
-    setCmykCoveragePct(cmyk ? String(cmyk.coveragePercent) : "0");
-    setWhiteCoveragePct(white ? String(white.coveragePercent) : "0");
-    setGlossCoveragePct(gloss ? String(gloss.coveragePercent) : "0");
+    setCmykCoveragePct(
+      recipe.baseCmykCoveragePct !== null && recipe.baseCmykCoveragePct !== undefined
+        ? String(recipe.baseCmykCoveragePct)
+        : cmyk
+          ? String(cmyk.coveragePercent)
+          : "40",
+    );
+    setInkAllowancePct(recipe.inkAllowancePct !== null && recipe.inkAllowancePct !== undefined ? String(recipe.inkAllowancePct) : "15");
+    setMaintenanceCostPerSqft(
+      recipe.maintenanceCostPerSqft !== null && recipe.maintenanceCostPerSqft !== undefined
+        ? String(recipe.maintenanceCostPerSqft)
+        : "0.08",
+    );
+    setMachineRecoveryCostPerSqft(
+      recipe.machineRecoveryCostPerSqft !== null && recipe.machineRecoveryCostPerSqft !== undefined
+        ? String(recipe.machineRecoveryCostPerSqft)
+        : "0.05",
+    );
+    setOverheadCostPerSqft(recipe.overheadCostPerSqft !== null && recipe.overheadCostPerSqft !== undefined ? String(recipe.overheadCostPerSqft) : "0");
+    setOperatorLaborPct(recipe.operatorLaborPct !== null && recipe.operatorLaborPct !== undefined ? String(recipe.operatorLaborPct) : "25");
     setWastePct(recipe.wastePct !== null && recipe.wastePct !== undefined ? String(recipe.wastePct) : "0");
     setSetupCost(recipe.setupCost !== null && recipe.setupCost !== undefined ? String(recipe.setupCost) : "0");
     setLaborMinutes(recipe.laborMinutes !== null && recipe.laborMinutes !== undefined ? String(recipe.laborMinutes) : "0");
@@ -617,7 +846,7 @@ export default function RecipesPage() {
                     Recipe Calculator
                   </Text>
                   <Text as="p" tone="subdued">
-                    Pick a product type to auto-load the right minimum quantity and tier breakpoints. Label recipes also calculate area, media, laminate, ink, machine time, labor, waste, and margin.
+                    Pick a product type to auto-load minimum quantities and tier breakpoints. Label recipes now calculate normal print, white, gloss, emboss, and 3x emboss with production speed/time built in.
                   </Text>
                 </BlockStack>
                 {editingId ? <Badge tone="info">Editing</Badge> : <Badge>New recipe</Badge>}
@@ -673,6 +902,9 @@ export default function RecipesPage() {
                 <div style={{ flex: 1 }}>
                   <TextField label="Label Height In" value={heightIn} onChange={setHeightIn} type="number" autoComplete="off" />
                 </div>
+                <div style={{ flex: 1 }}>
+                  <TextField label="Base CMYK Coverage %" value={cmykCoveragePct} onChange={setCmykCoveragePct} type="number" autoComplete="off" helpText="Normal labels usually start around 40%. Heavy/full-color jobs can be higher." />
+                </div>
               </InlineStack>
 
               <InlineStack gap="300" wrap={false}>
@@ -684,67 +916,170 @@ export default function RecipesPage() {
                 </div>
               </InlineStack>
 
-              <Select label="Preferred Machine" options={machineOptions} value={machineId} onChange={setMachineId} />
+              <Select label="Preferred Machine" options={machineOptions} value={machineId} onChange={setMachineId} helpText="Any gloss, emboss, or 3x emboss option should be quoted for the Roland LG-540." />
 
-              <InlineStack gap="300" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField label="CMYK Coverage %" value={cmykCoveragePct} onChange={setCmykCoveragePct} type="number" autoComplete="off" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField label="White Coverage %" value={whiteCoveragePct} onChange={setWhiteCoveragePct} type="number" autoComplete="off" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField label="Gloss Coverage %" value={glossCoveragePct} onChange={setGlossCoveragePct} type="number" autoComplete="off" />
-                </div>
-              </InlineStack>
-
-              <InlineStack gap="300" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField label="Waste %" value={wastePct} onChange={setWastePct} type="number" autoComplete="off" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField label="Setup Cost" value={setupCost} onChange={setSetupCost} type="number" prefix="$" autoComplete="off" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField label="Labor Minutes" value={laborMinutes} onChange={setLaborMinutes} type="number" autoComplete="off" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField label="Labor Rate / Hr" value={laborRate} onChange={setLaborRate} type="number" prefix="$" autoComplete="off" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField label="Target Margin %" value={targetMarginPct} onChange={setTargetMarginPct} type="number" autoComplete="off" />
-                </div>
-              </InlineStack>
+              <Card background="bg-surface-secondary">
+                <BlockStack gap="300">
+                  <Text as="h3" variant="headingSm">
+                    Production estimating defaults
+                  </Text>
+                  <InlineStack gap="300" wrap={false}>
+                    <div style={{ flex: 1 }}>
+                      <TextField label="Waste %" value={wastePct} onChange={setWastePct} type="number" autoComplete="off" />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <TextField label="Ink Allowance %" value={inkAllowancePct} onChange={setInkAllowancePct} type="number" autoComplete="off" helpText="Use 10-15% for maintenance/purge allowance." />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <TextField label="Maintenance $/SqFt" value={maintenanceCostPerSqft} onChange={setMaintenanceCostPerSqft} type="number" prefix="$" autoComplete="off" />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <TextField label="Machine Recovery $/SqFt" value={machineRecoveryCostPerSqft} onChange={setMachineRecoveryCostPerSqft} type="number" prefix="$" autoComplete="off" />
+                    </div>
+                  </InlineStack>
+                  <InlineStack gap="300" wrap={false}>
+                    <div style={{ flex: 1 }}>
+                      <TextField label="Setup Cost" value={setupCost} onChange={setSetupCost} type="number" prefix="$" autoComplete="off" />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <TextField label="Fixed Labor Minutes" value={laborMinutes} onChange={setLaborMinutes} type="number" autoComplete="off" />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <TextField label="Labor Rate / Hr" value={laborRate} onChange={setLaborRate} type="number" prefix="$" autoComplete="off" />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <TextField label="Operator Run Labor %" value={operatorLaborPct} onChange={setOperatorLaborPct} type="number" autoComplete="off" helpText="Percent of print run time charged as labor." />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <TextField label="Target Margin %" value={targetMarginPct} onChange={setTargetMarginPct} type="number" autoComplete="off" />
+                    </div>
+                  </InlineStack>
+                  <TextField label="Overhead $/SqFt Optional" value={overheadCostPerSqft} onChange={setOverheadCostPerSqft} type="number" prefix="$" autoComplete="off" />
+                </BlockStack>
+              </Card>
 
               <TextField label="Notes" value={notes} onChange={setNotes} multiline={3} autoComplete="off" />
 
               <Card background="bg-surface-secondary">
                 <BlockStack gap="200">
                   <Text as="h3" variant="headingSm">
-                    Live Cost Preview
+                    Label Area Preview
                   </Text>
                   <InlineStack gap="500">
-                    <Text as="p">Qty used: {calculation.quantity}</Text>
-                    <Text as="p">Sq In / Label: {calculation.sqinPerLabel.toFixed(4)}</Text>
-                    <Text as="p">Sq Ft / Label: {calculation.sqftPerLabel.toFixed(6)}</Text>
-                    <Text as="p">Total Sq Ft w/ Waste: {calculation.totalSqft.toFixed(4)}</Text>
+                    <Text as="p">Qty used: {baseCalculation.quantity}</Text>
+                    <Text as="p">Sq In / Label: {baseCalculation.sqinPerLabel.toFixed(4)}</Text>
+                    <Text as="p">Sq Ft / Label: {baseCalculation.sqftPerLabel.toFixed(6)}</Text>
+                    <Text as="p">Total Sq Ft w/ Waste: {baseCalculation.totalSqft.toFixed(4)}</Text>
+                  </InlineStack>
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="300">
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">
+                      Finish Price Table at Default Quantity
+                    </Text>
+                    <Text as="p" tone="subdued">
+                      White is one layer. Gloss is one gloss layer. Emboss is two stacked gloss layers. 3x Emboss is three stacked gloss layers for a stronger raised/braille-style feel.
+                    </Text>
+                  </BlockStack>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: "left", padding: "8px" }}>Finish</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>Cost Each</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>Suggested Each</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>Total Price</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>Est. Time</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>Speed</th>
+                          <th style={{ textAlign: "left", padding: "8px" }}>Machine</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {finishResults.map((result) => (
+                          <tr key={result.finish.key} style={{ borderTop: "1px solid #ddd" }}>
+                            <td style={{ padding: "8px" }}>
+                              <BlockStack gap="050">
+                                <Text as="span" fontWeight="bold">{result.finish.label}</Text>
+                                <Text as="span" tone="subdued">{result.finish.description}</Text>
+                              </BlockStack>
+                            </td>
+                            <td style={{ textAlign: "right", padding: "8px" }}>{money(result.unitCost)}</td>
+                            <td style={{ textAlign: "right", padding: "8px" }}>{money(result.recommendedUnitPrice)}</td>
+                            <td style={{ textAlign: "right", padding: "8px" }}>{dollars(result.totalSellPrice)}</td>
+                            <td style={{ textAlign: "right", padding: "8px" }}>{result.machineHours.toFixed(2)} hr</td>
+                            <td style={{ textAlign: "right", padding: "8px" }}>{result.sqftPerHour} sqft/hr</td>
+                            <td style={{ padding: "8px" }}>{result.finish.preferredMachine}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="300">
+                  <Text as="h3" variant="headingSm">
+                    Cost Breakdown: {finishResults[0]?.finish.label || "Base Print"}
+                  </Text>
+                  <InlineStack gap="500">
+                    <Text as="p">Media: {money(baseCalculation.mediaCost)}</Text>
+                    <Text as="p">Laminate: {money(baseCalculation.laminateCost)}</Text>
+                    <Text as="p">CMYK Ink: {money(baseCalculation.cmykInkCost)}</Text>
+                    <Text as="p">Machine/hr: {money(baseCalculation.machineHourlyCost)}</Text>
+                    <Text as="p">Machine Recovery: {money(baseCalculation.machineRecoveryCost)}</Text>
+                    <Text as="p">Maintenance: {money(baseCalculation.maintenanceCost)}</Text>
+                    <Text as="p">Labor: {money(baseCalculation.laborCost)}</Text>
+                    <Text as="p">Setup: {money(baseCalculation.setupCost)}</Text>
                   </InlineStack>
                   <Divider />
                   <InlineStack gap="500">
-                    <Text as="p">Media: {money(calculation.mediaCost)}</Text>
-                    <Text as="p">Laminate: {money(calculation.laminateCost)}</Text>
-                    <Text as="p">Ink: {money(calculation.inkCost)}</Text>
-                    <Text as="p">Machine: {money(calculation.machineCost)}</Text>
-                    <Text as="p">Labor: {money(calculation.laborCost)}</Text>
-                    <Text as="p">Setup: {money(calculation.setupCost)}</Text>
+                    <Text as="p" fontWeight="bold">Total Cost: {money(baseCalculation.totalCost)}</Text>
+                    <Text as="p" fontWeight="bold">Unit Cost: {money(baseCalculation.unitCost)}</Text>
+                    <Text as="p" fontWeight="bold">Recommended Unit Price: {money(baseCalculation.recommendedUnitPrice)}</Text>
+                    <Text as="p" fontWeight="bold">Margin: {percent(baseCalculation.actualMarginPct)}</Text>
                   </InlineStack>
-                  <Divider />
-                  <InlineStack gap="500">
-                    <Text as="p" fontWeight="bold">Total Cost: {money(calculation.totalCost)}</Text>
-                    <Text as="p" fontWeight="bold">Unit Cost: {money(calculation.unitCost)}</Text>
-                    <Text as="p" fontWeight="bold">Recommended Unit Price: {money(calculation.recommendedUnitPrice)}</Text>
-                    <Text as="p" fontWeight="bold">Margin: {percent(calculation.actualMarginPct)}</Text>
-                  </InlineStack>
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="300">
+                  <Text as="h3" variant="headingSm">
+                    Tier Pricing Snapshot
+                  </Text>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: "left", padding: "8px" }}>Qty</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>Base Each</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>White Each</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>Gloss Each</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>Emboss Each</th>
+                          <th style={{ textAlign: "right", padding: "8px" }}>3x Emboss Each</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tierFinishResults.map((tier) => {
+                          const byKey: Record<string, any> = {};
+                          for (const item of tier.finishes) byKey[item.finish.key] = item;
+                          return (
+                            <tr key={tier.quantity} style={{ borderTop: "1px solid #ddd" }}>
+                              <td style={{ padding: "8px" }}>{tier.quantity}</td>
+                              <td style={{ textAlign: "right", padding: "8px" }}>{money(byKey.base?.recommendedUnitPrice || 0)}</td>
+                              <td style={{ textAlign: "right", padding: "8px" }}>{money(byKey.white?.recommendedUnitPrice || 0)}</td>
+                              <td style={{ textAlign: "right", padding: "8px" }}>{money(byKey.gloss?.recommendedUnitPrice || 0)}</td>
+                              <td style={{ textAlign: "right", padding: "8px" }}>{money(byKey.emboss?.recommendedUnitPrice || 0)}</td>
+                              <td style={{ textAlign: "right", padding: "8px" }}>{money(byKey.emboss_3x?.recommendedUnitPrice || 0)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </BlockStack>
               </Card>
 
@@ -793,7 +1128,7 @@ export default function RecipesPage() {
                         <Text as="p">Tiers: {recipeTiers}</Text>
                         <Text as="p">Media: {media?.name || "Not selected"}</Text>
                         <Text as="p">Machine: {machine?.name || "Not selected"}</Text>
-                        <Text as="p">Waste: {recipe.wastePct || 0}% • Target Margin: {recipe.targetMarginPct || 0}%</Text>
+                        <Text as="p">CMYK: {recipe.baseCmykCoveragePct ?? 40}% • Waste: {recipe.wastePct || 0}% • Target Margin: {recipe.targetMarginPct || 0}%</Text>
                         <InlineStack gap="200">
                           <Button onClick={() => editRecipe(recipe)}>Edit</Button>
                           {recipe.active === false ? (
