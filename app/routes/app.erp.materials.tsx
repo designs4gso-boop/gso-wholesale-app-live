@@ -303,10 +303,75 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: true, materials });
   }
 
-  if (payload.intent === "deleteMaterial") {
+  if (payload.intent === "archiveMaterial") {
     await db.material.update({
       where: { id: payload.id },
       data: { active: false },
+    });
+
+    const materials = await db.material.findMany({
+      where: { shop },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        vendors: true,
+        costHistory: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        },
+      },
+    });
+
+    return Response.json({ ok: true, materials });
+  }
+
+  if (payload.intent === "restoreMaterial") {
+    await db.material.update({
+      where: { id: payload.id },
+      data: { active: true },
+    });
+
+    const materials = await db.material.findMany({
+      where: { shop },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        vendors: true,
+        costHistory: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        },
+      },
+    });
+
+    return Response.json({ ok: true, materials });
+  }
+
+  if (payload.intent === "permanentlyDeleteMaterial") {
+    const recipeUsageCount = await db.recipeMaterial.count({
+      where: { materialId: payload.id, shop },
+    });
+
+    if (recipeUsageCount > 0) {
+      const materials = await db.material.findMany({
+        where: { shop },
+        orderBy: { updatedAt: "desc" },
+        include: {
+          vendors: true,
+          costHistory: {
+            orderBy: { createdAt: "desc" },
+            take: 5,
+          },
+        },
+      });
+
+      return Response.json({
+        ok: false,
+        error: "This material is used by one or more recipes, so it can only be archived.",
+        materials,
+      });
+    }
+
+    await db.material.delete({
+      where: { id: payload.id },
     });
 
     const materials = await db.material.findMany({
@@ -378,6 +443,7 @@ export default function MaterialsPage() {
 
   const [materials, setMaterials] = useState<any[]>(loaderData.materials || []);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState("");
 
   const [name, setName] = useState("");
   const [materialType, setMaterialType] = useState("roll_media");
@@ -396,6 +462,7 @@ export default function MaterialsPage() {
   const [volumeMl, setVolumeMl] = useState("");
   const [caseQuantity, setCaseQuantity] = useState("");
   const [filter, setFilter] = useState("all");
+  const [activeFilter, setActiveFilter] = useState("active");
   const [vendorMaterialId, setVendorMaterialId] = useState("");
   const [vendorName, setVendorName] = useState("");
   const [vendorSku, setVendorSku] = useState("");
@@ -405,6 +472,8 @@ export default function MaterialsPage() {
 
   useEffect(() => {
     if (fetcher.data?.materials) setMaterials(fetcher.data.materials);
+    if (fetcher.data?.error) setActionError(fetcher.data.error);
+    if (fetcher.data?.ok) setActionError("");
   }, [fetcher.data]);
 
   useEffect(() => {
@@ -533,9 +602,29 @@ export default function MaterialsPage() {
     );
   }
 
-  function deleteMaterial(id: string) {
+  function archiveMaterial(id: string) {
     fetcher.submit(
-      { intent: "deleteMaterial", id },
+      { intent: "archiveMaterial", id },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
+  function restoreMaterial(id: string) {
+    fetcher.submit(
+      { intent: "restoreMaterial", id },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
+  function permanentlyDeleteMaterial(id: string) {
+    const confirmed = window.confirm(
+      "Permanently delete this material? This cannot be undone. Archive is safer if the material has ever been used."
+    );
+
+    if (!confirmed) return;
+
+    fetcher.submit(
+      { intent: "permanentlyDeleteMaterial", id },
       { method: "post", encType: "application/json" }
     );
   }
@@ -562,10 +651,17 @@ export default function MaterialsPage() {
     setVendorLeadTimeDays("");
   }
 
-  const filteredMaterials =
-    filter === "all"
-      ? materials
-      : materials.filter((m) => normalizeMaterialType(m.materialType) === filter);
+  const filteredMaterials = materials.filter((material) => {
+    const categoryMatches =
+      filter === "all" || normalizeMaterialType(material.materialType) === filter;
+
+    const activeMatches =
+      activeFilter === "all" ||
+      (activeFilter === "active" && material.active !== false) ||
+      (activeFilter === "archived" && material.active === false);
+
+    return categoryMatches && activeMatches;
+  });
 
   return (
     <Page
@@ -578,6 +674,12 @@ export default function MaterialsPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
+              {actionError && (
+                <Text as="p" tone="critical">
+                  {actionError}
+                </Text>
+              )}
+
               <Text as="h2" variant="headingMd">
                 {editingId ? "Edit Material" : "Add Material"}
               </Text>
@@ -761,10 +863,12 @@ export default function MaterialsPage() {
                 onChange={setVendorMaterialId}
                 options={[
                   { label: "Select material", value: "" },
-                  ...materials.map((m) => ({
-                    label: m.name,
-                    value: m.id,
-                  })),
+                  ...materials
+                    .filter((m) => m.active !== false)
+                    .map((m) => ({
+                      label: m.name,
+                      value: m.id,
+                    })),
                 ]}
               />
 
@@ -821,20 +925,34 @@ export default function MaterialsPage() {
                   Materials
                 </Text>
 
-                <Select
-                  label="Filter"
-                  labelHidden
-                  value={filter}
-                  onChange={setFilter}
-                  options={[{ label: "All", value: "all" }, ...materialTypes]}
-                />
+                <InlineStack gap="200">
+                  <Select
+                    label="Status"
+                    labelHidden
+                    value={activeFilter}
+                    onChange={setActiveFilter}
+                    options={[
+                      { label: "Active", value: "active" },
+                      { label: "Archived", value: "archived" },
+                      { label: "All", value: "all" },
+                    ]}
+                  />
+
+                  <Select
+                    label="Category"
+                    labelHidden
+                    value={filter}
+                    onChange={setFilter}
+                    options={[{ label: "All Categories", value: "all" }, ...materialTypes]}
+                  />
+                </InlineStack>
               </InlineStack>
 
               <Divider />
 
               {filteredMaterials.length === 0 ? (
                 <Text as="p" tone="subdued">
-                  No materials yet.
+                  No materials match this filter.
                 </Text>
               ) : (
                 filteredMaterials.map((material) => {
@@ -855,7 +973,9 @@ export default function MaterialsPage() {
                           <InlineStack gap="200">
                             <Badge>{getMaterialTypeLabel(material.materialType)}</Badge>
 
-                            {lowStock && <Badge tone="critical">LOW STOCK</Badge>}
+                            {material.active === false && <Badge tone="warning">ARCHIVED</Badge>}
+
+                            {lowStock && material.active !== false && <Badge tone="critical">LOW STOCK</Badge>}
                           </InlineStack>
                         </InlineStack>
 
@@ -874,14 +994,31 @@ export default function MaterialsPage() {
                         <Text as="p">Vendor: {material.vendor || "N/A"}</Text>
 
                         <InlineStack gap="200">
-                          <Button onClick={() => editMaterial(material)}>Edit</Button>
+                          {material.active !== false ? (
+                            <>
+                              <Button onClick={() => editMaterial(material)}>Edit</Button>
 
-                          <Button
-                            tone="critical"
-                            onClick={() => deleteMaterial(material.id)}
-                          >
-                            Deactivate
-                          </Button>
+                              <Button
+                                tone="critical"
+                                onClick={() => archiveMaterial(material.id)}
+                              >
+                                Archive
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button onClick={() => restoreMaterial(material.id)}>
+                                Restore
+                              </Button>
+
+                              <Button
+                                tone="critical"
+                                onClick={() => permanentlyDeleteMaterial(material.id)}
+                              >
+                                Delete Forever
+                              </Button>
+                            </>
+                          )}
                         </InlineStack>
                       </BlockStack>
                     </Card>
