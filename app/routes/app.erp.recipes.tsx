@@ -406,15 +406,39 @@ function calcLabelFinish(input: any, finish: LabelFinishPreset, quantityOverride
   };
 }
 
+function vendorUnitCostAtQuantity(vendorProduct: any, quantity: number) {
+  const tiers = [...(vendorProduct?.tiers || [])].sort((a: any, b: any) => Number(a.minQty) - Number(b.minQty));
+  let selectedTier = null;
+  for (const tier of tiers) {
+    if (quantity >= Number(tier.minQty || 0)) selectedTier = tier;
+  }
+  return selectedTier ? numberOrZero(selectedTier.unitCost) : numberOrZero(vendorProduct?.defaultUnitCost);
+}
+
+function vendorAddOns(vendorProduct: any) {
+  return (vendorProduct?.addOns || [])
+    .filter((item: any) => item.enabled !== false)
+    .map((item: any) => ({
+      name: item.name || "Add-on",
+      pricingType: item.pricingType || "per_unit",
+      amount: numberOrZero(item.amount),
+      enabled: item.enabled !== false,
+      notes: item.notes || null,
+    }));
+}
+
 function calcSourcedRecipe(input: any, quantityOverride?: number) {
-  const minQuantity = positiveInt(input.minQuantity, 1);
+  const vendorProduct = input.vendorProduct;
+  const minQuantity = Math.max(
+    positiveInt(input.minQuantity, 1),
+    positiveInt(vendorProduct?.moq, 1),
+  );
   const quantity = Math.max(minQuantity, positiveInt(quantityOverride ?? input.quantity, minQuantity));
   const targetMarginPct = numberOrZero(input.targetMarginPct);
-  const baseMaterial = input.mediaMaterial;
-  const unitCost = materialUnitCost(baseMaterial);
+  const unitCost = vendorProduct ? vendorUnitCostAtQuantity(vendorProduct, quantity) : 0;
   const baseCost = unitCost * quantity;
   const setupCost = numberOrZero(input.setupCost);
-  const addOns = parseAddOns(input.addOns);
+  const addOns = [...vendorAddOns(vendorProduct), ...parseAddOns(input.addOns)];
 
   const addOnResults = addOns.map((addOn) => {
     const pricingType = ["per_unit", "flat_fee", "percent", "included"].includes(addOn.pricingType)
@@ -457,11 +481,17 @@ export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const [recipes, materials, machines] = await Promise.all([
+  const [recipes, materials, machines, vendorProducts] = await Promise.all([
     db.productRecipe.findMany({
       where: { shop },
       orderBy: { updatedAt: "desc" },
       include: {
+        vendorProduct: {
+          include: {
+            tiers: { orderBy: { minQty: "asc" } },
+            addOns: { orderBy: { createdAt: "asc" } },
+          },
+        },
         materials: { include: { material: true } },
         inkRequirements: true,
         machineRules: { include: { preferredMachine: { include: { inkChannels: true } } } },
@@ -478,9 +508,17 @@ export async function loader({ request }: { request: Request }) {
       orderBy: { name: "asc" },
       include: { inkChannels: { orderBy: { slotNumber: "asc" } } },
     }),
+    db.vendorProduct.findMany({
+      where: { shop, active: true },
+      orderBy: { name: "asc" },
+      include: {
+        tiers: { orderBy: { minQty: "asc" } },
+        addOns: { orderBy: { createdAt: "asc" } },
+      },
+    }),
   ]);
 
-  return Response.json({ recipes, materials, machines });
+  return Response.json({ recipes, materials, machines, vendorProducts });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -502,6 +540,7 @@ export async function action({ request }: { request: Request }) {
       sku: payload.sku || null,
       productType,
       productionMode: payload.productionMode || "in_house",
+      vendorProductId: payload.vendorProductId || null,
       widthIn: nullableNumber(payload.widthIn),
       heightIn: nullableNumber(payload.heightIn),
       minQuantity,
@@ -538,7 +577,7 @@ export async function action({ request }: { request: Request }) {
         savedRecipe = await tx.productRecipe.create({ data });
       }
 
-      if (payload.mediaMaterialId) {
+      if (payload.productionMode !== "outsourced" && payload.mediaMaterialId) {
         await tx.recipeMaterial.create({
           data: {
             shop,
@@ -552,7 +591,7 @@ export async function action({ request }: { request: Request }) {
         });
       }
 
-      if (payload.laminateMaterialId) {
+      if (payload.productionMode !== "outsourced" && payload.laminateMaterialId) {
         await tx.recipeMaterial.create({
           data: {
             shop,
@@ -651,7 +690,7 @@ export async function action({ request }: { request: Request }) {
 }
 
 export default function RecipesPage() {
-  const { recipes, materials, machines } = useLoaderData<any>();
+  const { recipes, materials, machines, vendorProducts } = useLoaderData<any>();
   const fetcher = useFetcher<any>();
   const navigate = useNavigate();
 
@@ -670,6 +709,7 @@ export default function RecipesPage() {
   const [tierBreakpoints, setTierBreakpoints] = useState(labelDefaults.tiers.join(", "));
   const [mediaMaterialId, setMediaMaterialId] = useState("");
   const [laminateMaterialId, setLaminateMaterialId] = useState("");
+  const [vendorProductId, setVendorProductId] = useState("");
   const [machineId, setMachineId] = useState("");
   const [cmykCoveragePct, setCmykCoveragePct] = useState("40");
   const [inkAllowancePct, setInkAllowancePct] = useState("15");
@@ -700,6 +740,14 @@ export default function RecipesPage() {
     })),
   ];
 
+  const vendorProductOptions = [
+    emptyOption,
+    ...vendorProducts.map((item: any) => ({
+      label: `${item.name} - ${item.vendor || "Vendor"} - MOQ ${item.moq || 1}`,
+      value: item.id,
+    })),
+  ];
+
   const machineOptions = [
     emptyOption,
     ...machines.map((machine: any) => ({ label: machine.name, value: machine.id })),
@@ -707,6 +755,7 @@ export default function RecipesPage() {
 
   const mediaMaterial = materials.find((material: any) => material.id === mediaMaterialId);
   const laminateMaterial = materials.find((material: any) => material.id === laminateMaterialId);
+  const selectedVendorProduct = vendorProducts.find((item: any) => item.id === vendorProductId);
   const selectedMachine = machines.find((machine: any) => machine.id === machineId);
   const normalizedMinQuantity = positiveInt(minQuantity, defaultForProductType(productType).minQuantity);
   const normalizedDefaultQuantity = Math.max(
@@ -771,10 +820,10 @@ export default function RecipesPage() {
         quantity: normalizedDefaultQuantity,
         targetMarginPct,
         setupCost,
-        mediaMaterial,
+        vendorProduct: selectedVendorProduct,
         addOns: addOnsText,
       }),
-    [normalizedMinQuantity, normalizedDefaultQuantity, targetMarginPct, setupCost, mediaMaterial, addOnsText],
+    [normalizedMinQuantity, normalizedDefaultQuantity, targetMarginPct, setupCost, selectedVendorProduct, addOnsText],
   );
 
   const tierSourcedResults = useMemo(
@@ -786,13 +835,13 @@ export default function RecipesPage() {
             quantity: tierQty,
             targetMarginPct,
             setupCost,
-            mediaMaterial,
+            vendorProduct: selectedVendorProduct,
             addOns: addOnsText,
           },
           tierQty,
         ),
       ),
-    [normalizedTiers, normalizedMinQuantity, targetMarginPct, setupCost, mediaMaterial, addOnsText],
+    [normalizedTiers, normalizedMinQuantity, targetMarginPct, setupCost, selectedVendorProduct, addOnsText],
   );
 
   const tierFinishResults = useMemo(
@@ -879,6 +928,7 @@ export default function RecipesPage() {
     setTierBreakpoints(defaults.tiers.join(", "));
     setMediaMaterialId("");
     setLaminateMaterialId("");
+    setVendorProductId("");
     setMachineId("");
     setCmykCoveragePct("40");
     setInkAllowancePct("15");
@@ -911,6 +961,7 @@ export default function RecipesPage() {
         tierBreakpoints: normalizedTiers.join(","),
         mediaMaterialId,
         laminateMaterialId,
+        vendorProductId,
         machineId,
         cmykCoveragePct,
         inkAllowancePct,
@@ -948,6 +999,7 @@ export default function RecipesPage() {
     setTierBreakpoints(recipe.tiers?.length ? recipe.tiers.map((tier: any) => tier.minQty).join(", ") : defaults.tiers.join(", "));
     setMediaMaterialId(media?.materialId || "");
     setLaminateMaterialId(laminate?.materialId || "");
+    setVendorProductId(recipe.vendorProductId || recipe.vendorProduct?.id || "");
     setMachineId(machineRule?.preferredMachineId || "");
     setCmykCoveragePct(
       recipe.baseCmykCoveragePct !== null && recipe.baseCmykCoveragePct !== undefined
@@ -1066,16 +1118,44 @@ export default function RecipesPage() {
                 </div>
               </InlineStack>
 
-              <InlineStack gap="300" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <Select label="Media Material" options={materialOptions} value={mediaMaterialId} onChange={setMediaMaterialId} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <Select label="Laminate Optional" options={materialOptions} value={laminateMaterialId} onChange={setLaminateMaterialId} />
-                </div>
-              </InlineStack>
+              {productionMode === "outsourced" ? (
+                <Card background="bg-surface-secondary">
+                  <BlockStack gap="300">
+                    <InlineStack align="space-between">
+                      <BlockStack gap="100">
+                        <Text as="h3" variant="headingSm">Vendor Product</Text>
+                        <Text as="p" tone="subdued">
+                          Outsourced recipes use a vendor product with cost tiers and flat add-ons. No media material or machine is required.
+                        </Text>
+                      </BlockStack>
+                      <Button url="/app/erp/vendor-products">Manage Vendor Products</Button>
+                    </InlineStack>
+                    <Select label="Select Vendor Product" options={vendorProductOptions} value={vendorProductId} onChange={setVendorProductId} />
+                    {selectedVendorProduct ? (
+                      <InlineStack gap="500">
+                        <Text as="p">Vendor: {selectedVendorProduct.vendor || "Not set"}</Text>
+                        <Text as="p">MOQ: {selectedVendorProduct.moq || 1}</Text>
+                        <Text as="p">Lead time: {selectedVendorProduct.leadTimeDays || 0} days</Text>
+                      </InlineStack>
+                    ) : (
+                      <Text as="p" tone="subdued">Create/select a vendor product to get accurate outsourced pricing.</Text>
+                    )}
+                  </BlockStack>
+                </Card>
+              ) : (
+                <>
+                  <InlineStack gap="300" wrap={false}>
+                    <div style={{ flex: 1 }}>
+                      <Select label="Media Material" options={materialOptions} value={mediaMaterialId} onChange={setMediaMaterialId} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <Select label="Laminate Optional" options={materialOptions} value={laminateMaterialId} onChange={setLaminateMaterialId} />
+                    </div>
+                  </InlineStack>
 
-              <Select label="Preferred Machine" options={machineOptions} value={machineId} onChange={setMachineId} helpText="Any gloss, emboss, or 3x emboss option should be quoted for the Roland LG-540." />
+                  <Select label="Preferred Machine" options={machineOptions} value={machineId} onChange={setMachineId} helpText="Any gloss, emboss, or 3x emboss option should be quoted for the Roland LG-540." />
+                </>
+              )}
 
               <Card background="bg-surface-secondary">
                 <BlockStack gap="300">
@@ -1126,7 +1206,7 @@ export default function RecipesPage() {
                       Outsourced / Vendor Add-ons
                     </Text>
                     <Text as="p" tone="subdued">
-                      Use this for boxes, sourced bags, vendor gloss, plate fees, freight, or any flat vendor charge. One add-on per line: name | per_unit, flat_fee, percent, or included | amount.
+                      Vendor product add-ons are pulled in automatically. Use this box only for recipe-specific overrides or one-off extra charges. One add-on per line: name | per_unit, flat_fee, percent, or included | amount.
                     </Text>
                     <TextField
                       label="Add-ons"
@@ -1147,7 +1227,7 @@ export default function RecipesPage() {
                       Sourced Product Estimate
                     </Text>
                     <Text as="p" tone="subdued">
-                      This uses the selected base material/vendor cost as the unit cost, then adds per-unit, flat, or percent add-ons.
+                      This uses the selected vendor product cost tier, then adds vendor product add-ons plus any recipe-specific add-ons.
                     </Text>
                     <InlineStack gap="500">
                       <Text as="p">Base vendor cost: {money(sourcedCalculation.baseCost)}</Text>
@@ -1340,7 +1420,7 @@ export default function RecipesPage() {
               </Card>
 
               <InlineStack gap="200">
-                <Button variant="primary" onClick={saveRecipe} disabled={!name || !mediaMaterialId}>
+                <Button variant="primary" onClick={saveRecipe} disabled={!name || (productionMode === "outsourced" ? !vendorProductId : !mediaMaterialId)}>
                   {editingId ? "Update Recipe" : "Save Recipe"}
                 </Button>
                 <Button onClick={resetForm}>Clear</Button>
@@ -1362,6 +1442,7 @@ export default function RecipesPage() {
               ) : (
                 filteredRecipes.map((recipe: any) => {
                   const media = recipe.materials?.find((item: any) => item.usageType === "media")?.material;
+                  const vendorProduct = recipe.vendorProduct;
                   const machine = recipe.machineRules?.[0]?.preferredMachine;
                   const recipeTiers = recipe.tiers?.map((tier: any) => tier.minQty).join(", ") || "No tiers";
 
@@ -1382,7 +1463,11 @@ export default function RecipesPage() {
                         </InlineStack>
                         <Text as="p">Size: {recipe.widthIn || 0} in x {recipe.heightIn || 0} in</Text>
                         <Text as="p">Tiers: {recipeTiers}</Text>
-                        <Text as="p">Base material/vendor cost: {media?.name || "Not selected"}</Text>
+                        <Text as="p">
+                          {recipe.productionMode === "outsourced"
+                            ? `Vendor product: ${vendorProduct?.name || "Not selected"}`
+                            : `Media material: ${media?.name || "Not selected"}`}
+                        </Text>
                         <Text as="p">Machine: {recipe.productionMode === "outsourced" ? "Not needed for outsourced recipes" : machine?.name || "Not selected"}</Text>
                         {recipe.addOns?.length ? <Text as="p">Add-ons: {recipe.addOns.map((item: any) => `${item.name} (${addOnTypeLabel(item.pricingType)} ${item.pricingType === "percent" ? `${item.amount}%` : money(item.amount)})`).join(", ")}</Text> : null}
                         <Text as="p">CMYK: {recipe.baseCmykCoveragePct ?? 40}% • Waste: {recipe.wastePct || 0}% • Target Margin: {recipe.targetMarginPct || 0}%</Text>

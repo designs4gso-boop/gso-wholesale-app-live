@@ -284,6 +284,7 @@ model ProductRecipe {
   shopifyVariantId String?
   costMethod       String   @default("recipe") // recipe, sourced_flat, sourced_tier
   productionMode   String   @default("in_house") // in_house, outsourced, hybrid
+  vendorProductId  String?
 
   widthIn          Float?
   heightIn         Float?
@@ -311,6 +312,7 @@ model ProductRecipe {
   updatedAt        DateTime @updatedAt
 
   category         ProductCategory? @relation(fields: [categoryId], references: [id])
+  vendorProduct    VendorProduct? @relation(fields: [vendorProductId], references: [id])
   materials        RecipeMaterial[]
   inkRequirements  RecipeInkRequirement[]
   machineRules     RecipeMachineRule[]
@@ -325,6 +327,69 @@ model ProductRecipe {
   @@index([shop, productGid])
   @@index([shop, variantGid])
   @@index([shop, active])
+  @@index([vendorProductId])
+}
+
+
+model VendorProduct {
+  id              String   @id @default(cuid())
+  shop            String
+  name            String
+  productType     String   @default("sourced_product") // box, dtp_bag, die_cut_bag, sourced_product, general
+  vendor          String?
+  vendorSku       String?
+  moq             Int      @default(1)
+  defaultUnitCost Float    @default(0)
+  leadTimeDays    Int?
+  notes           String?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  recipes         ProductRecipe[]
+  tiers           VendorProductTier[]
+  addOns          VendorProductAddOn[]
+
+  @@index([shop])
+  @@index([shop, active])
+  @@index([productType])
+  @@index([vendor])
+}
+
+model VendorProductTier {
+  id              String   @id @default(cuid())
+  shop            String
+  vendorProductId String
+  minQty          Int
+  unitCost        Float
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  vendorProduct   VendorProduct @relation(fields: [vendorProductId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([vendorProductId])
+  @@index([minQty])
+}
+
+model VendorProductAddOn {
+  id              String   @id @default(cuid())
+  shop            String
+  vendorProductId String
+  name            String
+  pricingType     String   @default("per_unit") // per_unit, flat_fee, percent, included
+  amount          Float    @default(0)
+  enabled         Boolean  @default(true)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  vendorProduct   VendorProduct @relation(fields: [vendorProductId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([vendorProductId])
+  @@index([pricingType])
 }
 
 model RecipeMaterial {

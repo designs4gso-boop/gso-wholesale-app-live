@@ -17,6 +17,7 @@ export default [
     route("create-order", "routes/app.create-order.tsx"),
     route("erp/materials", "routes/app.erp.materials.tsx"),
     route("erp/machines", "routes/app.erp.machines.tsx"),
+    route("erp/vendor-products", "routes/app.erp.vendor-products.tsx"),
     route("erp/recipes", "routes/app.erp.recipes.tsx"),
   ]),
 
