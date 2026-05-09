@@ -272,28 +272,42 @@ calculatedUnitCost Float    @default(0)
 }
 
 model ProductRecipe {
-  id              String   @id @default(cuid())
-  shop            String
-  categoryId      String?
-  name            String
-  sku             String?
-  productGid      String?
-  variantGid      String?
-  costMethod      String   @default("recipe") // recipe, sourced_flat, sourced_tier
-  defaultSellPrice Float?
-  targetMarginPct Float    @default(40)
-  wastePct        Float    @default(0)
-  setupCost       Float    @default(0)
-  notes           String?
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id               String   @id @default(cuid())
+  shop             String
+  categoryId       String?
+  name             String
+  sku              String?
+  productType      String   @default("label") // label, dtp_bag, box, sourced_product, die_cut_bag, general
+  productGid       String?
+  variantGid       String?
+  shopifyProductId String?
+  shopifyVariantId String?
+  costMethod       String   @default("recipe") // recipe, sourced_flat, sourced_tier
 
-  category        ProductCategory? @relation(fields: [categoryId], references: [id])
-  materials       RecipeMaterial[]
-  sourcedTiers    SourcedCostTier[]
+  widthIn          Float?
+  heightIn         Float?
+  depthIn          Float?
+  defaultQuantity  Int      @default(1000)
+
+  defaultSellPrice Float?
+  targetMarginPct  Float    @default(40)
+  wastePct         Float    @default(0)
+  setupCost        Float    @default(0)
+  laborMinutes     Float    @default(0)
+  notes            String?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  category         ProductCategory? @relation(fields: [categoryId], references: [id])
+  materials        RecipeMaterial[]
+  inkRequirements  RecipeInkRequirement[]
+  machineRules     RecipeMachineRule[]
+  tiers            RecipeTier[]
+  sourcedTiers     SourcedCostTier[]
 
   @@index([shop])
+  @@index([shop, productType])
   @@index([shop, sku])
   @@index([shop, productGid])
   @@index([shop, variantGid])
@@ -301,23 +315,82 @@ model ProductRecipe {
 }
 
 model RecipeMaterial {
-  id          String   @id @default(cuid())
-  shop        String
-  recipeId    String
-  materialId  String
-  quantity    Float    @default(1)
-  usageType   String   @default("per_unit") // per_unit or per_job
-  includeWaste Boolean @default(true)
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  shop         String
+  recipeId     String
+  materialId   String
+  usageType    String   @default("media") // media, laminate, blank, packaging, sourced, other
+  quantity     Float    @default(1)
+  unit         String   @default("sqft") // sqft, sqin, each, ml, hour
+  wastePct     Float    @default(0)
+  includeWaste Boolean  @default(true)
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  recipe      ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
-  material    Material      @relation(fields: [materialId], references: [id])
+  recipe       ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  material     Material      @relation(fields: [materialId], references: [id])
 
   @@index([shop])
   @@index([recipeId])
   @@index([materialId])
+  @@index([usageType])
+}
+
+model RecipeInkRequirement {
+  id              String   @id @default(cuid())
+  shop            String
+  recipeId        String
+  inkType         String   // cmyk, white, gloss, orange, red, green, primer, metallic, other
+  coveragePercent Float    @default(0)
+  required        Boolean  @default(false)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  recipe          ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([recipeId])
+  @@index([inkType])
+}
+
+model RecipeMachineRule {
+  id                 String   @id @default(cuid())
+  shop               String
+  recipeId           String
+  preferredMachineId String?
+  requiredInkTypes   String?  // comma-separated list for simple routing: cmyk,white,gloss
+  allowOverflow      Boolean  @default(false)
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  recipe             ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  preferredMachine   Machine?      @relation(fields: [preferredMachineId], references: [id])
+
+  @@index([shop])
+  @@index([recipeId])
+  @@index([preferredMachineId])
+}
+
+model RecipeTier {
+  id         String   @id @default(cuid())
+  shop       String
+  recipeId   String
+  minQty     Int
+  maxQty     Int?
+  marginPct  Float?
+  fixedPrice Float?
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  recipe     ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([recipeId])
+  @@index([minQty])
 }
 
 model SourcedCostTier {
@@ -393,6 +466,7 @@ model Machine {
   active        Boolean  @default(true)
 
   inkChannels   MachineInkChannel[]
+  recipeRules   RecipeMachineRule[]
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
