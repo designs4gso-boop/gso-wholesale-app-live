@@ -282,6 +282,9 @@ model ProductRecipe {
   variantGid       String?
   shopifyProductId String?
   shopifyVariantId String?
+  shopifySyncEnabled Boolean @default(false)
+  lastShopifySyncAt DateTime?
+  shopifySyncError String?
   costMethod       String   @default("recipe") // recipe, sourced_flat, sourced_tier
 
   widthIn          Float?
