@@ -287,6 +287,7 @@ model ProductRecipe {
   widthIn          Float?
   heightIn         Float?
   depthIn          Float?
+  minQuantity      Int      @default(1)
   defaultQuantity  Int      @default(1000)
 
   defaultSellPrice Float?

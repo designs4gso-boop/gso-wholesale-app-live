@@ -16,7 +16,64 @@ import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const productTypes = [{ label: "Labels", value: "label" }];
+const productTypeDefaults: Record<
+  string,
+  {
+    label: string;
+    minQuantity: number;
+    defaultQuantity: number;
+    tiers: number[];
+    targetMarginPct: number;
+  }
+> = {
+  label: {
+    label: "Labels",
+    minQuantity: 64,
+    defaultQuantity: 64,
+    tiers: [64, 100, 250, 500, 1000, 2500, 5000],
+    targetMarginPct: 50,
+  },
+  box: {
+    label: "Boxes",
+    minQuantity: 5,
+    defaultQuantity: 5,
+    tiers: [5, 10, 25, 50, 100, 250, 500],
+    targetMarginPct: 50,
+  },
+  dtp_bag: {
+    label: "DTP Bags",
+    minQuantity: 100,
+    defaultQuantity: 100,
+    tiers: [100, 250, 500, 1000, 2000, 5000, 10000],
+    targetMarginPct: 45,
+  },
+  die_cut_bag: {
+    label: "Die Cut Bags",
+    minQuantity: 500,
+    defaultQuantity: 500,
+    tiers: [500, 1000, 2500, 5000, 10000],
+    targetMarginPct: 45,
+  },
+  sourced_product: {
+    label: "Sourced Products",
+    minQuantity: 1,
+    defaultQuantity: 1,
+    tiers: [1, 10, 25, 50, 100, 250, 500],
+    targetMarginPct: 40,
+  },
+  general: {
+    label: "General",
+    minQuantity: 1,
+    defaultQuantity: 1,
+    tiers: [1, 10, 25, 50, 100],
+    targetMarginPct: 40,
+  },
+};
+
+const productTypes = Object.entries(productTypeDefaults).map(([value, config]) => ({
+  label: config.label,
+  value,
+}));
 
 const statusOptions = [
   { label: "Active", value: "active" },
@@ -25,6 +82,10 @@ const statusOptions = [
 ];
 
 const emptyOption = { label: "None", value: "" };
+
+function defaultForProductType(productType: string) {
+  return productTypeDefaults[productType] || productTypeDefaults.general;
+}
 
 function numberOrZero(value: any) {
   const numberValue = Number(value);
@@ -35,6 +96,30 @@ function nullableNumber(value: any) {
   if (value === null || value === undefined || value === "") return null;
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function positiveInt(value: any, fallback: number) {
+  const numberValue = Math.round(Number(value));
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
+}
+
+function parseTierBreakpoints(value: any) {
+  if (Array.isArray(value)) {
+    return value.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0);
+  }
+
+  return String(value || "")
+    .split(/[\n,]+/)
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isFinite(item) && item > 0);
+}
+
+function normalizeTierBreakpoints(value: any, minQuantity: number) {
+  const unique = new Set<number>([minQuantity]);
+  for (const qty of parseTierBreakpoints(value)) {
+    if (qty >= minQuantity) unique.add(Math.round(qty));
+  }
+  return Array.from(unique).sort((a, b) => a - b);
 }
 
 function money(value: number) {
@@ -68,7 +153,8 @@ function machineInkCost(machine: any, inkType: string, totalSqft: number, covera
 function calcLabelRecipe(input: any) {
   const widthIn = numberOrZero(input.widthIn);
   const heightIn = numberOrZero(input.heightIn);
-  const quantity = Math.max(1, Math.round(numberOrZero(input.quantity) || 1));
+  const minQuantity = positiveInt(input.minQuantity, 1);
+  const quantity = Math.max(minQuantity, positiveInt(input.quantity, minQuantity));
   const wastePct = numberOrZero(input.wastePct);
   const targetMarginPct = numberOrZero(input.targetMarginPct);
   const setupCost = numberOrZero(input.setupCost);
@@ -99,7 +185,7 @@ function calcLabelRecipe(input: any) {
 
   const laborCost = (laborMinutes / 60) * laborRate;
   const totalCost = mediaCost + laminateCost + inkCost + machineCost + laborCost + setupCost;
-  const unitCost = totalCost / quantity;
+  const unitCost = quantity > 0 ? totalCost / quantity : 0;
   const marginDecimal = Math.min(0.95, Math.max(0, targetMarginPct / 100));
   const recommendedUnitPrice = marginDecimal >= 0.95 ? unitCost : unitCost / (1 - marginDecimal);
   const totalSellPrice = recommendedUnitPrice * quantity;
@@ -107,6 +193,7 @@ function calcLabelRecipe(input: any) {
   const actualMarginPct = totalSellPrice > 0 ? (grossProfit / totalSellPrice) * 100 : 0;
 
   return {
+    quantity,
     sqinPerLabel,
     sqftPerLabel,
     totalSqftBeforeWaste,
@@ -165,15 +252,22 @@ export async function action({ request }: { request: Request }) {
   const payload = await request.json();
 
   if (payload.intent === "saveRecipe") {
+    const productType = payload.productType || "label";
+    const productDefault = defaultForProductType(productType);
+    const minQuantity = positiveInt(payload.minQuantity, productDefault.minQuantity);
+    const defaultQuantity = Math.max(minQuantity, positiveInt(payload.defaultQuantity, productDefault.defaultQuantity));
+    const tierBreakpoints = normalizeTierBreakpoints(payload.tierBreakpoints, minQuantity);
+
     const data = {
       shop,
-      name: payload.name || "Untitled label recipe",
+      name: payload.name || "Untitled recipe",
       sku: payload.sku || null,
-      productType: payload.productType || "label",
+      productType,
       widthIn: nullableNumber(payload.widthIn),
       heightIn: nullableNumber(payload.heightIn),
-      defaultQuantity: Math.max(1, Math.round(Number(payload.defaultQuantity) || 1000)),
-      targetMarginPct: numberOrZero(payload.targetMarginPct || 40),
+      minQuantity,
+      defaultQuantity,
+      targetMarginPct: numberOrZero(payload.targetMarginPct || productDefault.targetMarginPct),
       wastePct: numberOrZero(payload.wastePct),
       setupCost: numberOrZero(payload.setupCost),
       laborMinutes: numberOrZero(payload.laborMinutes),
@@ -259,14 +353,16 @@ export async function action({ request }: { request: Request }) {
         });
       }
 
-      await tx.recipeTier.create({
-        data: {
-          shop,
-          recipeId: savedRecipe.id,
-          minQty: Math.max(1, Math.round(Number(payload.defaultQuantity) || 1000)),
-          marginPct: numberOrZero(payload.targetMarginPct || 40),
-        },
-      });
+      for (const minQty of tierBreakpoints) {
+        await tx.recipeTier.create({
+          data: {
+            shop,
+            recipeId: savedRecipe.id,
+            minQty,
+            marginPct: numberOrZero(payload.targetMarginPct || productDefault.targetMarginPct),
+          },
+        });
+      }
 
       return savedRecipe;
     });
@@ -303,6 +399,8 @@ export default function RecipesPage() {
   const fetcher = useFetcher<any>();
   const navigate = useNavigate();
 
+  const labelDefaults = defaultForProductType("label");
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState("active");
   const [name, setName] = useState("");
@@ -310,7 +408,9 @@ export default function RecipesPage() {
   const [productType, setProductType] = useState("label");
   const [widthIn, setWidthIn] = useState("");
   const [heightIn, setHeightIn] = useState("");
-  const [defaultQuantity, setDefaultQuantity] = useState("1000");
+  const [minQuantity, setMinQuantity] = useState(String(labelDefaults.minQuantity));
+  const [defaultQuantity, setDefaultQuantity] = useState(String(labelDefaults.defaultQuantity));
+  const [tierBreakpoints, setTierBreakpoints] = useState(labelDefaults.tiers.join(", "));
   const [mediaMaterialId, setMediaMaterialId] = useState("");
   const [laminateMaterialId, setLaminateMaterialId] = useState("");
   const [machineId, setMachineId] = useState("");
@@ -321,7 +421,7 @@ export default function RecipesPage() {
   const [setupCost, setSetupCost] = useState("0");
   const [laborMinutes, setLaborMinutes] = useState("0");
   const [laborRate, setLaborRate] = useState("25");
-  const [targetMarginPct, setTargetMarginPct] = useState("50");
+  const [targetMarginPct, setTargetMarginPct] = useState(String(labelDefaults.targetMarginPct));
   const [notes, setNotes] = useState("");
 
   useEffect(() => {
@@ -347,13 +447,20 @@ export default function RecipesPage() {
   const mediaMaterial = materials.find((material: any) => material.id === mediaMaterialId);
   const laminateMaterial = materials.find((material: any) => material.id === laminateMaterialId);
   const selectedMachine = machines.find((machine: any) => machine.id === machineId);
+  const normalizedMinQuantity = positiveInt(minQuantity, defaultForProductType(productType).minQuantity);
+  const normalizedDefaultQuantity = Math.max(
+    normalizedMinQuantity,
+    positiveInt(defaultQuantity, defaultForProductType(productType).defaultQuantity),
+  );
+  const normalizedTiers = normalizeTierBreakpoints(tierBreakpoints, normalizedMinQuantity);
 
   const calculation = useMemo(
     () =>
       calcLabelRecipe({
         widthIn,
         heightIn,
-        quantity: defaultQuantity,
+        minQuantity: normalizedMinQuantity,
+        quantity: normalizedDefaultQuantity,
         wastePct,
         targetMarginPct,
         setupCost,
@@ -369,7 +476,8 @@ export default function RecipesPage() {
     [
       widthIn,
       heightIn,
-      defaultQuantity,
+      normalizedMinQuantity,
+      normalizedDefaultQuantity,
       wastePct,
       targetMarginPct,
       setupCost,
@@ -390,14 +498,26 @@ export default function RecipesPage() {
     return recipe.active !== false;
   });
 
+  function applyProductTypeDefaults(value: string) {
+    const defaults = defaultForProductType(value);
+    setProductType(value);
+    setMinQuantity(String(defaults.minQuantity));
+    setDefaultQuantity(String(defaults.defaultQuantity));
+    setTierBreakpoints(defaults.tiers.join(", "));
+    setTargetMarginPct(String(defaults.targetMarginPct));
+  }
+
   function resetForm() {
+    const defaults = defaultForProductType("label");
     setEditingId(null);
     setName("");
     setSku("");
     setProductType("label");
     setWidthIn("");
     setHeightIn("");
-    setDefaultQuantity("1000");
+    setMinQuantity(String(defaults.minQuantity));
+    setDefaultQuantity(String(defaults.defaultQuantity));
+    setTierBreakpoints(defaults.tiers.join(", "));
     setMediaMaterialId("");
     setLaminateMaterialId("");
     setMachineId("");
@@ -408,7 +528,7 @@ export default function RecipesPage() {
     setSetupCost("0");
     setLaborMinutes("0");
     setLaborRate("25");
-    setTargetMarginPct("50");
+    setTargetMarginPct(String(defaults.targetMarginPct));
     setNotes("");
   }
 
@@ -422,7 +542,9 @@ export default function RecipesPage() {
         productType,
         widthIn,
         heightIn,
-        defaultQuantity,
+        minQuantity: normalizedMinQuantity,
+        defaultQuantity: normalizedDefaultQuantity,
+        tierBreakpoints: normalizedTiers.join(","),
         mediaMaterialId,
         laminateMaterialId,
         machineId,
@@ -446,6 +568,7 @@ export default function RecipesPage() {
     const cmyk = recipe.inkRequirements?.find((item: any) => item.inkType === "cmyk");
     const white = recipe.inkRequirements?.find((item: any) => item.inkType === "white");
     const gloss = recipe.inkRequirements?.find((item: any) => item.inkType === "gloss");
+    const defaults = defaultForProductType(recipe.productType || "label");
 
     setEditingId(recipe.id);
     setName(recipe.name || "");
@@ -453,7 +576,9 @@ export default function RecipesPage() {
     setProductType(recipe.productType || "label");
     setWidthIn(recipe.widthIn !== null && recipe.widthIn !== undefined ? String(recipe.widthIn) : "");
     setHeightIn(recipe.heightIn !== null && recipe.heightIn !== undefined ? String(recipe.heightIn) : "");
-    setDefaultQuantity(recipe.defaultQuantity ? String(recipe.defaultQuantity) : "1000");
+    setMinQuantity(recipe.minQuantity ? String(recipe.minQuantity) : String(defaults.minQuantity));
+    setDefaultQuantity(recipe.defaultQuantity ? String(recipe.defaultQuantity) : String(defaults.defaultQuantity));
+    setTierBreakpoints(recipe.tiers?.length ? recipe.tiers.map((tier: any) => tier.minQty).join(", ") : defaults.tiers.join(", "));
     setMediaMaterialId(media?.materialId || "");
     setLaminateMaterialId(laminate?.materialId || "");
     setMachineId(machineRule?.preferredMachineId || "");
@@ -463,7 +588,7 @@ export default function RecipesPage() {
     setWastePct(recipe.wastePct !== null && recipe.wastePct !== undefined ? String(recipe.wastePct) : "0");
     setSetupCost(recipe.setupCost !== null && recipe.setupCost !== undefined ? String(recipe.setupCost) : "0");
     setLaborMinutes(recipe.laborMinutes !== null && recipe.laborMinutes !== undefined ? String(recipe.laborMinutes) : "0");
-    setTargetMarginPct(recipe.targetMarginPct !== null && recipe.targetMarginPct !== undefined ? String(recipe.targetMarginPct) : "50");
+    setTargetMarginPct(recipe.targetMarginPct !== null && recipe.targetMarginPct !== undefined ? String(recipe.targetMarginPct) : String(defaults.targetMarginPct));
     setNotes(recipe.notes || "");
   }
 
@@ -489,10 +614,10 @@ export default function RecipesPage() {
               <InlineStack align="space-between">
                 <BlockStack gap="100">
                   <Text as="h2" variant="headingMd">
-                    Label Recipe Calculator
+                    Recipe Calculator
                   </Text>
                   <Text as="p" tone="subdued">
-                    Build the true cost for labels from area, media, laminate, ink, machine time, labor, waste, and margin.
+                    Pick a product type to auto-load the right minimum quantity and tier breakpoints. Label recipes also calculate area, media, laminate, ink, machine time, labor, waste, and margin.
                   </Text>
                 </BlockStack>
                 {editingId ? <Badge tone="info">Editing</Badge> : <Badge>New recipe</Badge>}
@@ -506,9 +631,40 @@ export default function RecipesPage() {
                   <TextField label="SKU" value={sku} onChange={setSku} autoComplete="off" />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <Select label="Product Type" options={productTypes} value={productType} onChange={setProductType} />
+                  <Select label="Product Type" options={productTypes} value={productType} onChange={applyProductTypeDefaults} />
                 </div>
               </InlineStack>
+
+              <InlineStack gap="300" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField label="Minimum Quantity" value={minQuantity} onChange={setMinQuantity} type="number" autoComplete="off" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField label="Default Quote Quantity" value={defaultQuantity} onChange={setDefaultQuantity} type="number" autoComplete="off" />
+                </div>
+                <div style={{ flex: 2 }}>
+                  <TextField
+                    label="Pricing Tiers / Breakpoints"
+                    value={tierBreakpoints}
+                    onChange={setTierBreakpoints}
+                    helpText="Comma-separated. The minimum quantity is always included automatically."
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+
+              <Card background="bg-surface-secondary">
+                <BlockStack gap="200">
+                  <Text as="h3" variant="headingSm">
+                    Product quantity rules
+                  </Text>
+                  <InlineStack gap="400">
+                    <Text as="p">Minimum: {normalizedMinQuantity}</Text>
+                    <Text as="p">Default quote qty: {normalizedDefaultQuantity}</Text>
+                    <Text as="p">Tiers: {normalizedTiers.join(", ")}</Text>
+                  </InlineStack>
+                </BlockStack>
+              </Card>
 
               <InlineStack gap="300" wrap={false}>
                 <div style={{ flex: 1 }}>
@@ -516,9 +672,6 @@ export default function RecipesPage() {
                 </div>
                 <div style={{ flex: 1 }}>
                   <TextField label="Label Height In" value={heightIn} onChange={setHeightIn} type="number" autoComplete="off" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField label="Quantity" value={defaultQuantity} onChange={setDefaultQuantity} type="number" autoComplete="off" />
                 </div>
               </InlineStack>
 
@@ -571,6 +724,7 @@ export default function RecipesPage() {
                     Live Cost Preview
                   </Text>
                   <InlineStack gap="500">
+                    <Text as="p">Qty used: {calculation.quantity}</Text>
                     <Text as="p">Sq In / Label: {calculation.sqinPerLabel.toFixed(4)}</Text>
                     <Text as="p">Sq Ft / Label: {calculation.sqftPerLabel.toFixed(6)}</Text>
                     <Text as="p">Total Sq Ft w/ Waste: {calculation.totalSqft.toFixed(4)}</Text>
@@ -595,7 +749,7 @@ export default function RecipesPage() {
               </Card>
 
               <InlineStack gap="200">
-                <Button variant="primary" onClick={saveRecipe} disabled={!name || !widthIn || !heightIn || !mediaMaterialId}>
+                <Button variant="primary" onClick={saveRecipe} disabled={!name || !mediaMaterialId}>
                   {editingId ? "Update Recipe" : "Save Recipe"}
                 </Button>
                 <Button onClick={resetForm}>Clear</Button>
@@ -618,6 +772,7 @@ export default function RecipesPage() {
                 filteredRecipes.map((recipe: any) => {
                   const media = recipe.materials?.find((item: any) => item.usageType === "media")?.material;
                   const machine = recipe.machineRules?.[0]?.preferredMachine;
+                  const recipeTiers = recipe.tiers?.map((tier: any) => tier.minQty).join(", ") || "No tiers";
 
                   return (
                     <Card key={recipe.id} background="bg-surface-secondary">
@@ -626,14 +781,16 @@ export default function RecipesPage() {
                           <BlockStack gap="100">
                             <Text as="h3" variant="headingSm">{recipe.name}</Text>
                             <Text as="p" tone="subdued">
-                              {recipe.widthIn || 0} in x {recipe.heightIn || 0} in • Qty {recipe.defaultQuantity || 1000}
+                              {productTypeDefaults[recipe.productType]?.label || recipe.productType || "Recipe"} • Min {recipe.minQuantity || 1} • Default Qty {recipe.defaultQuantity || 1}
                             </Text>
                           </BlockStack>
                           <InlineStack gap="100">
-                            <Badge>{recipe.productType || "label"}</Badge>
+                            <Badge>{productTypeDefaults[recipe.productType]?.label || recipe.productType || "recipe"}</Badge>
                             {recipe.active === false && <Badge tone="warning">ARCHIVED</Badge>}
                           </InlineStack>
                         </InlineStack>
+                        <Text as="p">Size: {recipe.widthIn || 0} in x {recipe.heightIn || 0} in</Text>
+                        <Text as="p">Tiers: {recipeTiers}</Text>
                         <Text as="p">Media: {media?.name || "Not selected"}</Text>
                         <Text as="p">Machine: {machine?.name || "Not selected"}</Text>
                         <Text as="p">Waste: {recipe.wastePct || 0}% • Target Margin: {recipe.targetMarginPct || 0}%</Text>
