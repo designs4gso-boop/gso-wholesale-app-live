@@ -47,6 +47,13 @@ const productTypeDefaults: Record<
     tiers: [100, 250, 500, 1000, 2000, 5000, 10000],
     targetMarginPct: 45,
   },
+  stock_bag: {
+    label: "Stock Bags",
+    minQuantity: 100,
+    defaultQuantity: 100,
+    tiers: [100, 250, 500, 1000, 2500, 5000, 10000],
+    targetMarginPct: 50,
+  },
   die_cut_bag: {
     label: "Die Cut Bags",
     minQuantity: 500,
@@ -183,6 +190,59 @@ const labelFinishPresets: LabelFinishPreset[] = [
 
 function defaultForProductType(productType: string) {
   return productTypeDefaults[productType] || productTypeDefaults.general;
+}
+
+
+function profileToDefaults(profile: any) {
+  if (!profile) return null;
+  const minQuantity = positiveInt(profile.minQuantity, 1);
+  return {
+    label: profile.name || profile.key,
+    minQuantity,
+    defaultQuantity: Math.max(minQuantity, positiveInt(profile.defaultQuantity, minQuantity)),
+    tiers: normalizeTierBreakpoints(profile.tierBreakpoints || String(minQuantity), minQuantity),
+    targetMarginPct: numberOrZero(profile.defaultMarginPct || 40),
+    productionMode: profile.productionMode || "in_house",
+    pricingMethod: profile.pricingMethod || "auto_margin",
+    defaultTags: profile.defaultTags || "",
+    id: profile.id,
+  };
+}
+
+function defaultForProductTypeWithProfiles(productType: string, profiles: any[] = []) {
+  const profileDefaults = profileToDefaults(profiles.find((profile) => profile.key === productType));
+  return profileDefaults || defaultForProductType(productType);
+}
+
+function defaultProductTypeProfiles(shop: string) {
+  const rows = Object.entries(productTypeDefaults).map(([key, config]) => ({
+    shop,
+    key,
+    name: config.label,
+    productionMode:
+      key === "box" || key === "stock_bag" || key === "sourced_product"
+        ? "outsourced"
+        : "in_house",
+    minQuantity: config.minQuantity,
+    defaultQuantity: config.defaultQuantity,
+    tierBreakpoints: config.tiers.join(", "),
+    defaultMarginPct: config.targetMarginPct,
+    pricingMethod: "auto_margin",
+    defaultTags: [
+      `gso:${key.replace(/_/g, "-")}`,
+      key === "box" || key === "stock_bag" || key === "sourced_product" ? "gso:outsourced" : "gso:in-house",
+      "gso:wholesale",
+    ].join(", "),
+  }));
+
+  return rows;
+}
+
+async function ensureProductTypeProfiles(shop: string) {
+  const count = await db.productTypeProfile.count({ where: { shop } });
+  if (count === 0) {
+    await db.productTypeProfile.createMany({ data: defaultProductTypeProfiles(shop) });
+  }
 }
 
 function numberOrZero(value: any) {
@@ -481,7 +541,9 @@ export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const [recipes, materials, machines, vendorProducts] = await Promise.all([
+  await ensureProductTypeProfiles(shop);
+
+  const [recipes, materials, machines, vendorProducts, productTypeProfiles] = await Promise.all([
     db.productRecipe.findMany({
       where: { shop },
       orderBy: { updatedAt: "desc" },
@@ -492,6 +554,7 @@ export async function loader({ request }: { request: Request }) {
             addOns: { orderBy: { createdAt: "asc" } },
           },
         },
+        productTypeProfile: true,
         materials: { include: { material: true } },
         inkRequirements: true,
         machineRules: { include: { preferredMachine: { include: { inkChannels: true } } } },
@@ -516,9 +579,13 @@ export async function loader({ request }: { request: Request }) {
         addOns: { orderBy: { createdAt: "asc" } },
       },
     }),
+    db.productTypeProfile.findMany({
+      where: { shop, active: true },
+      orderBy: { name: "asc" },
+    }),
   ]);
 
-  return Response.json({ recipes, materials, machines, vendorProducts });
+  return Response.json({ recipes, materials, machines, vendorProducts, productTypeProfiles });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -528,7 +595,9 @@ export async function action({ request }: { request: Request }) {
 
   if (payload.intent === "saveRecipe") {
     const productType = payload.productType || "label";
-    const productDefault = defaultForProductType(productType);
+    await ensureProductTypeProfiles(shop);
+    const productTypeProfile = await db.productTypeProfile.findUnique({ where: { shop_key: { shop, key: productType } } });
+    const productDefault = profileToDefaults(productTypeProfile) || defaultForProductType(productType);
     const minQuantity = positiveInt(payload.minQuantity, productDefault.minQuantity);
     const defaultQuantity = Math.max(minQuantity, positiveInt(payload.defaultQuantity, productDefault.defaultQuantity));
     const tierBreakpoints = normalizeTierBreakpoints(payload.tierBreakpoints, minQuantity);
@@ -539,7 +608,8 @@ export async function action({ request }: { request: Request }) {
       name: payload.name || "Untitled recipe",
       sku: payload.sku || null,
       productType,
-      productionMode: payload.productionMode || "in_house",
+      productTypeProfileId: productTypeProfile?.id || null,
+      productionMode: payload.productionMode || (productDefault as any).productionMode || "in_house",
       vendorProductId: payload.vendorProductId || null,
       widthIn: nullableNumber(payload.widthIn),
       heightIn: nullableNumber(payload.heightIn),
@@ -690,7 +760,7 @@ export async function action({ request }: { request: Request }) {
 }
 
 export default function RecipesPage() {
-  const { recipes, materials, machines, vendorProducts } = useLoaderData<any>();
+  const { recipes, materials, machines, vendorProducts, productTypeProfiles = [] } = useLoaderData<any>();
   const fetcher = useFetcher<any>();
   const navigate = useNavigate();
 
@@ -753,14 +823,20 @@ export default function RecipesPage() {
     ...machines.map((machine: any) => ({ label: machine.name, value: machine.id })),
   ];
 
+
+  const productTypeOptions = productTypeProfiles.length
+    ? productTypeProfiles.map((profile: any) => ({ label: profile.name, value: profile.key }))
+    : productTypes;
+
   const mediaMaterial = materials.find((material: any) => material.id === mediaMaterialId);
   const laminateMaterial = materials.find((material: any) => material.id === laminateMaterialId);
   const selectedVendorProduct = vendorProducts.find((item: any) => item.id === vendorProductId);
   const selectedMachine = machines.find((machine: any) => machine.id === machineId);
-  const normalizedMinQuantity = positiveInt(minQuantity, defaultForProductType(productType).minQuantity);
+  const activeProductDefaults = defaultForProductTypeWithProfiles(productType, productTypeProfiles);
+  const normalizedMinQuantity = positiveInt(minQuantity, activeProductDefaults.minQuantity);
   const normalizedDefaultQuantity = Math.max(
     normalizedMinQuantity,
-    positiveInt(defaultQuantity, defaultForProductType(productType).defaultQuantity),
+    positiveInt(defaultQuantity, activeProductDefaults.defaultQuantity),
   );
   const normalizedTiers = normalizeTierBreakpoints(tierBreakpoints, normalizedMinQuantity);
 
@@ -906,8 +982,9 @@ export default function RecipesPage() {
   });
 
   function applyProductTypeDefaults(value: string) {
-    const defaults = defaultForProductType(value);
+    const defaults = defaultForProductTypeWithProfiles(value, productTypeProfiles);
     setProductType(value);
+    setProductionMode((defaults as any).productionMode || "in_house");
     setMinQuantity(String(defaults.minQuantity));
     setDefaultQuantity(String(defaults.defaultQuantity));
     setTierBreakpoints(defaults.tiers.join(", "));
@@ -915,7 +992,7 @@ export default function RecipesPage() {
   }
 
   function resetForm() {
-    const defaults = defaultForProductType("label");
+    const defaults = defaultForProductTypeWithProfiles("label", productTypeProfiles);
     setEditingId(null);
     setName("");
     setSku("");
@@ -985,7 +1062,7 @@ export default function RecipesPage() {
     const laminate = recipe.materials?.find((item: any) => item.usageType === "laminate");
     const machineRule = recipe.machineRules?.[0];
     const cmyk = recipe.inkRequirements?.find((item: any) => item.inkType === "cmyk");
-    const defaults = defaultForProductType(recipe.productType || "label");
+    const defaults = defaultForProductTypeWithProfiles(recipe.productType || "label", productTypeProfiles);
 
     setEditingId(recipe.id);
     setName(recipe.name || "");
@@ -1068,7 +1145,7 @@ export default function RecipesPage() {
                   <TextField label="SKU" value={sku} onChange={setSku} autoComplete="off" />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <Select label="Product Type" options={productTypes} value={productType} onChange={applyProductTypeDefaults} />
+                  <Select label="Product Type" options={productTypeOptions} value={productType} onChange={applyProductTypeDefaults} />
                 </div>
                 <div style={{ flex: 1 }}>
                   <Select label="Production Mode" options={productionModeOptions} value={productionMode} onChange={setProductionMode} />
@@ -1453,11 +1530,11 @@ export default function RecipesPage() {
                           <BlockStack gap="100">
                             <Text as="h3" variant="headingSm">{recipe.name}</Text>
                             <Text as="p" tone="subdued">
-                              {productTypeDefaults[recipe.productType]?.label || recipe.productType || "Recipe"} • {productionModeOptions.find((option) => option.value === recipe.productionMode)?.label || "In-house production"} • Min {recipe.minQuantity || 1} • Default Qty {recipe.defaultQuantity || 1}
+                              {defaultForProductTypeWithProfiles(recipe.productType || "general", productTypeProfiles).label || recipe.productType || "Recipe"} • {productionModeOptions.find((option) => option.value === recipe.productionMode)?.label || "In-house production"} • Min {recipe.minQuantity || 1} • Default Qty {recipe.defaultQuantity || 1}
                             </Text>
                           </BlockStack>
                           <InlineStack gap="100">
-                            <Badge>{productTypeDefaults[recipe.productType]?.label || recipe.productType || "recipe"}</Badge>
+                            <Badge>{defaultForProductTypeWithProfiles(recipe.productType || "general", productTypeProfiles).label || recipe.productType || "recipe"}</Badge>
                             {recipe.active === false && <Badge tone="warning">ARCHIVED</Badge>}
                           </InlineStack>
                         </InlineStack>

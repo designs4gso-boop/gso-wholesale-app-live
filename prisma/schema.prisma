@@ -271,10 +271,37 @@ calculatedUnitCost Float    @default(0)
   @@index([shop, active])
 }
 
+
+model ProductTypeProfile {
+  id                String   @id @default(cuid())
+  shop              String
+  key               String
+  name              String
+  productionMode    String   @default("in_house") // in_house, outsourced, hybrid
+  minQuantity       Int      @default(1)
+  defaultQuantity   Int      @default(1)
+  tierBreakpoints   String   @default("1") // comma-separated quantity tiers
+  defaultMarginPct  Float    @default(40)
+  pricingMethod     String   @default("auto_margin") // auto_margin, fixed_price, discount_from_first, markup_over_cost
+  defaultTags       String?  // comma-separated Shopify tags to apply later
+  notes             String?
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  recipes           ProductRecipe[]
+
+  @@unique([shop, key])
+  @@index([shop])
+  @@index([shop, active])
+  @@index([key])
+}
+
 model ProductRecipe {
   id               String   @id @default(cuid())
   shop             String
   categoryId       String?
+  productTypeProfileId String?
   name             String
   sku              String?
   productType      String   @default("label") // label, dtp_bag, box, sourced_product, die_cut_bag, general
@@ -312,6 +339,7 @@ model ProductRecipe {
   updatedAt        DateTime @updatedAt
 
   category         ProductCategory? @relation(fields: [categoryId], references: [id])
+  productTypeProfile ProductTypeProfile? @relation(fields: [productTypeProfileId], references: [id])
   vendorProduct    VendorProduct? @relation(fields: [vendorProductId], references: [id])
   materials        RecipeMaterial[]
   inkRequirements  RecipeInkRequirement[]
@@ -322,6 +350,7 @@ model ProductRecipe {
 
   @@index([shop])
   @@index([shop, productType])
+  @@index([productTypeProfileId])
   @@index([shop, productionMode])
   @@index([shop, sku])
   @@index([shop, productGid])
