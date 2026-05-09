@@ -283,6 +283,7 @@ model ProductRecipe {
   shopifyProductId String?
   shopifyVariantId String?
   costMethod       String   @default("recipe") // recipe, sourced_flat, sourced_tier
+  productionMode   String   @default("in_house") // in_house, outsourced, hybrid
 
   widthIn          Float?
   heightIn         Float?
@@ -315,9 +316,11 @@ model ProductRecipe {
   machineRules     RecipeMachineRule[]
   tiers            RecipeTier[]
   sourcedTiers     SourcedCostTier[]
+  addOns           RecipeAddOn[]
 
   @@index([shop])
   @@index([shop, productType])
+  @@index([shop, productionMode])
   @@index([shop, sku])
   @@index([shop, productGid])
   @@index([shop, variantGid])
@@ -401,6 +404,25 @@ model RecipeTier {
   @@index([shop])
   @@index([recipeId])
   @@index([minQty])
+}
+
+model RecipeAddOn {
+  id          String   @id @default(cuid())
+  shop        String
+  recipeId    String
+  name        String
+  pricingType String   @default("per_unit") // per_unit, flat_fee, percent, included
+  amount      Float    @default(0)
+  enabled     Boolean  @default(true)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  recipe      ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([recipeId])
+  @@index([pricingType])
 }
 
 model SourcedCostTier {
