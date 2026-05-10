@@ -1290,6 +1290,38 @@ export default function QuotesPage() {
     return recipes.find((recipe: any) => recipe.id === recipeId);
   }
 
+  function getItemPricingMode(item: QuoteItemInput) {
+    return item.recipeId || (item.pricingSource && item.pricingSource !== "manual") ? "erp" : "manual";
+  }
+
+  function setItemPricingMode(itemId: string | undefined, mode: "erp" | "manual") {
+    setItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== itemId) return item;
+
+        if (mode === "manual") {
+          return {
+            ...item,
+            recipeId: "",
+            recipeName: "",
+            selectedFinish: "base",
+            selectedAddOnIds: [],
+            pricingSource: "manual",
+            tierLabel: "",
+            minQuantity: "",
+            costSnapshot: "",
+            priceSnapshot: "",
+          };
+        }
+
+        return {
+          ...item,
+          pricingSource: item.recipeId ? "recipe_pending" : "recipe_pending",
+        };
+      })
+    );
+  }
+
   function recipeAddOns(recipe: any) {
     const vendorAddOns = recipe?.vendorProduct?.addOns || [];
     const directAddOns = recipe?.addOns || [];
@@ -1649,112 +1681,182 @@ export default function QuotesPage() {
                 const selectedAddOns = item.selectedAddOnIds || [];
                 const addOns = recipeAddOns(selectedRecipe);
                 const belowMinimum = Number(item.minQuantity || 0) > 0 && Number(item.quantity || 0) < Number(item.minQuantity || 0);
+                const pricingMode = getItemPricingMode(item);
+                const isErpMode = pricingMode === "erp";
+                const lineRevenue = Number(item.quantity || 0) * Number(item.unitPrice || 0);
+                const lineCost = Number(item.quantity || 0) * Number(item.unitCost || 0);
+                const lineProfit = lineRevenue - lineCost;
 
                 return (
                   <Card key={item.id || index}>
-                    <BlockStack gap="300">
+                    <BlockStack gap="400">
                       <InlineStack align="space-between" blockAlign="center">
-                        <Text as="h3" variant="headingSm">Item {index + 1}</Text>
+                        <BlockStack gap="100">
+                          <Text as="h3" variant="headingMd">Item {index + 1}</Text>
+                          <Text as="p" tone="subdued">
+                            Start with ERP pricing whenever this product has been set up. Manual is only for one-off items.
+                          </Text>
+                        </BlockStack>
                         <InlineStack gap="200">
-                          {item.pricingSource && item.pricingSource !== "manual" ? <Badge tone="success">ERP priced</Badge> : <Badge>Manual</Badge>}
+                          {isErpMode ? <Badge tone="success">ERP mode</Badge> : <Badge>Manual mode</Badge>}
+                          {item.pricingSource && item.pricingSource !== "manual" && item.pricingSource !== "recipe_pending" ? <Badge tone="success">ERP priced</Badge> : null}
                           {item.tierLabel ? <Badge>{item.tierLabel}</Badge> : null}
                           {belowMinimum ? <Badge tone="critical">Below minimum</Badge> : null}
                         </InlineStack>
                       </InlineStack>
 
-                      <Select
-                        label="Product Setup / Recipe"
-                        value={item.recipeId || ""}
-                        onChange={(recipeId) => selectRecipe(item.id, recipeId)}
-                        options={recipeSelectOptions}
-                      />
-
-                      {selectedRecipe ? (
-                        <BlockStack gap="200">
-                          <InlineStack gap="300">
-                            <Text as="p" tone="subdued">Type: {selectedRecipe.productTypeProfile?.name || selectedRecipe.productType}</Text>
-                            <Text as="p" tone="subdued">Mode: {selectedRecipe.productionMode}</Text>
-                            <Text as="p" tone="subdued">Min: {selectedRecipe.minQuantity || 1}</Text>
+                      <Card>
+                        <BlockStack gap="300">
+                          <InlineStack align="space-between" blockAlign="center">
+                            <BlockStack gap="100">
+                              <Text as="h3" variant="headingSm">Pricing Source</Text>
+                              <Text as="p" tone="subdued">
+                                Use Product Setup to pull saved costs, margins, tiers, finishes, and vendor add-ons automatically.
+                              </Text>
+                            </BlockStack>
+                            <InlineStack gap="200">
+                              <Button pressed={isErpMode} variant={isErpMode ? "primary" : "secondary"} onClick={() => setItemPricingMode(item.id, "erp")}>
+                                ERP Recipe
+                              </Button>
+                              <Button pressed={!isErpMode} onClick={() => setItemPricingMode(item.id, "manual")}>
+                                Manual Item
+                              </Button>
+                            </InlineStack>
                           </InlineStack>
 
-                          {selectedRecipe.productionMode === "outsourced" ? (
-                            addOns.length ? (
-                              <BlockStack gap="150">
-                                <Text as="p" fontWeight="bold">Vendor add-ons for this quote</Text>
-                                {addOns.map((addOn: any) => (
-                                  <Checkbox
-                                    key={addOn.id}
-                                    label={`${addOn.name} (${addOn.pricingType}: $${money(addOn.amount)})`}
-                                    checked={selectedAddOns.includes(addOn.id)}
-                                    onChange={(checked) => toggleAddOn(item, addOn.id, checked)}
-                                  />
-                                ))}
-                              </BlockStack>
-                            ) : (
-                              <Text as="p" tone="subdued">No vendor add-ons attached to this setup.</Text>
-                            )
+                          {isErpMode ? (
+                            <BlockStack gap="300">
+                              <Select
+                                label="Product Setup / ERP Recipe"
+                                value={item.recipeId || ""}
+                                onChange={(recipeId) => selectRecipe(item.id, recipeId)}
+                                options={recipeSelectOptions}
+                              />
+
+                              {selectedRecipe ? (
+                                <BlockStack gap="300">
+                                  <InlineStack gap="300">
+                                    <Badge>{selectedRecipe.productTypeProfile?.name || selectedRecipe.productType}</Badge>
+                                    <Badge>{selectedRecipe.productionMode}</Badge>
+                                    <Badge>Min {selectedRecipe.minQuantity || 1}</Badge>
+                                  </InlineStack>
+
+                                  <InlineStack gap="300" blockAlign="end">
+                                    <TextField
+                                      label="Quantity"
+                                      value={item.quantity}
+                                      onChange={(value) => updateItem(item.id, "quantity", value)}
+                                      autoComplete="off"
+                                    />
+                                    <Button onClick={() => priceRecipeForItem(item)} variant="primary">
+                                      Calculate from ERP
+                                    </Button>
+                                    {belowMinimum ? (
+                                      <Button onClick={() => updateItem(item.id, "quantity", item.minQuantity || "1")}>
+                                        Use minimum quantity
+                                      </Button>
+                                    ) : null}
+                                  </InlineStack>
+
+                                  {selectedRecipe.productionMode === "outsourced" ? (
+                                    addOns.length ? (
+                                      <BlockStack gap="150">
+                                        <Text as="p" fontWeight="bold">Vendor add-ons for this quote</Text>
+                                        {addOns.map((addOn: any) => (
+                                          <Checkbox
+                                            key={addOn.id}
+                                            label={`${addOn.name} (${addOn.pricingType}: $${money(addOn.amount)})`}
+                                            checked={selectedAddOns.includes(addOn.id)}
+                                            onChange={(checked) => toggleAddOn(item, addOn.id, checked)}
+                                          />
+                                        ))}
+                                      </BlockStack>
+                                    ) : (
+                                      <Text as="p" tone="subdued">No vendor add-ons are attached to this product setup.</Text>
+                                    )
+                                  ) : (
+                                    <Select
+                                      label="Label finish / production option"
+                                      value={item.selectedFinish || "base"}
+                                      onChange={(value) => updateItem(item.id, "selectedFinish", value)}
+                                      options={finishOptions}
+                                    />
+                                  )}
+                                </BlockStack>
+                              ) : (
+                                <Text as="p" tone="subdued">
+                                  Choose a Product Setup / ERP Recipe, enter a quantity, then click Calculate from ERP.
+                                </Text>
+                              )}
+                            </BlockStack>
                           ) : (
-                            <Select
-                              label="Label finish / production option"
-                              value={item.selectedFinish || "base"}
-                              onChange={(value) => updateItem(item.id, "selectedFinish", value)}
-                              options={finishOptions}
-                            />
+                            <BlockStack gap="300">
+                              <Select
+                                label="Optional Shopify product / variant"
+                                value=""
+                                onChange={(variantId) => selectProductVariant(item.id, variantId)}
+                                options={productSelectOptions}
+                              />
+                              <InlineStack gap="300">
+                                <TextField label="Product / Service" value={item.productName} onChange={(value) => updateItem(item.id, "productName", value)} autoComplete="off" />
+                                <TextField label="Variant / Options" value={item.variant} onChange={(value) => updateItem(item.id, "variant", value)} autoComplete="off" />
+                                <TextField label="SKU" value={item.sku} onChange={(value) => updateItem(item.id, "sku", value)} autoComplete="off" />
+                              </InlineStack>
+                              <InlineStack gap="300">
+                                <TextField
+                                  label="Quantity"
+                                  value={item.quantity}
+                                  onChange={(value) => updateItem(item.id, "quantity", value)}
+                                  autoComplete="off"
+                                />
+                                <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
+                                <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off" />
+                              </InlineStack>
+                            </BlockStack>
                           )}
                         </BlockStack>
-                      ) : (
-                        <Select
-                          label="Manual Shopify product / variant"
-                          value=""
-                          onChange={(variantId) => selectProductVariant(item.id, variantId)}
-                          options={productSelectOptions}
-                        />
-                      )}
+                      </Card>
 
-                      <InlineStack gap="300">
-                        <TextField
-                          label="Qty"
-                          value={item.quantity}
-                          onChange={(value) => updateItem(item.id, "quantity", value)}
-                          autoComplete="off"
-                        />
-                        {selectedRecipe ? (
-                          <Button onClick={() => priceRecipeForItem(item)} variant="primary">
-                            Calculate from ERP
-                          </Button>
-                        ) : null}
-                      </InlineStack>
-
-                      <InlineStack gap="300">
-                        <TextField label="Product / Service" value={item.productName} onChange={(value) => updateItem(item.id, "productName", value)} autoComplete="off" />
-                        <TextField label="Variant / Options" value={item.variant} onChange={(value) => updateItem(item.id, "variant", value)} autoComplete="off" />
-                        <TextField label="SKU" value={item.sku} onChange={(value) => updateItem(item.id, "sku", value)} autoComplete="off" />
-                      </InlineStack>
-
-                      <InlineStack gap="300">
-                        <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
-                        <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off" />
-                        <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" />
-                      </InlineStack>
-
-                      <InlineStack gap="300">
-                        <Text as="p">Line Revenue: ${(Number(item.quantity || 0) * Number(item.unitPrice || 0)).toFixed(2)}</Text>
-                        <Text as="p">Line Cost: ${(Number(item.quantity || 0) * Number(item.unitCost || 0)).toFixed(2)}</Text>
-                        <Text as="p">Line Profit: ${(Number(item.quantity || 0) * (Number(item.unitPrice || 0) - Number(item.unitCost || 0))).toFixed(2)}</Text>
-                      </InlineStack>
+                      <Card>
+                        <BlockStack gap="300">
+                          <InlineStack align="space-between" blockAlign="center">
+                            <Text as="h3" variant="headingSm">Pricing Output</Text>
+                            {isErpMode ? (
+                              <Text as="p" tone="subdued">ERP values fill after Calculate from ERP. Override only when needed.</Text>
+                            ) : (
+                              <Text as="p" tone="subdued">Manual item values are controlled by the user.</Text>
+                            )}
+                          </InlineStack>
+                          {isErpMode ? (
+                            <InlineStack gap="300">
+                              <TextField label="Product / Service" value={item.productName} onChange={(value) => updateItem(item.id, "productName", value)} autoComplete="off" />
+                              <TextField label="Variant / Options" value={item.variant} onChange={(value) => updateItem(item.id, "variant", value)} autoComplete="off" />
+                              <TextField label="SKU" value={item.sku} onChange={(value) => updateItem(item.id, "sku", value)} autoComplete="off" />
+                            </InlineStack>
+                          ) : null}
+                          <InlineStack gap="300">
+                            <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off" />
+                            <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
+                            <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" />
+                          </InlineStack>
+                          <InlineStack gap="300">
+                            <Text as="p">Line Revenue: ${lineRevenue.toFixed(2)}</Text>
+                            <Text as="p">Line Cost: ${lineCost.toFixed(2)}</Text>
+                            <Text as="p">Line Profit: ${lineProfit.toFixed(2)}</Text>
+                          </InlineStack>
+                        </BlockStack>
+                      </Card>
 
                       <TextField label="Item Notes" value={item.notes} onChange={(value) => updateItem(item.id, "notes", value)} autoComplete="off" multiline={2} />
 
                       <InlineStack gap="300">
-                        {belowMinimum ? (
-                          <Button onClick={() => updateItem(item.id, "quantity", item.minQuantity || "1")}>Use minimum quantity</Button>
-                        ) : null}
                         <Button tone="critical" onClick={() => deleteItem(item.id)}>Delete Item</Button>
                       </InlineStack>
                     </BlockStack>
                   </Card>
                 );
               })}
+
             </BlockStack>
           </Card>
         </Layout.Section>
