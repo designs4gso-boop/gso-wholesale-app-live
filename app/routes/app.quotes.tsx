@@ -182,6 +182,154 @@ function serializeIdList(value: any) {
   return parseIdList(value).join(",");
 }
 
+function parseJsonSafe(value: any) {
+  if (!value) return null;
+  try {
+    return typeof value === "string" ? JSON.parse(value) : value;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function quoteItemSnapshotValue(item: any, key: string) {
+  return item?.[key] || parseJsonSafe(item?.costSnapshot)?.[key] || parseJsonSafe(item?.priceSnapshot)?.[key] || "";
+}
+
+function firstProductionImageFromQuoteItem(item: any) {
+  return (
+    item?.productImageUrl ||
+    quoteItemSnapshotValue(item, "productImageUrl") ||
+    quoteItemSnapshotValue(item, "imageUrl") ||
+    ""
+  );
+}
+
+const productionChecklistDefaults = [
+  { section: "prepress", label: "Artwork received / linked", sortOrder: 10 },
+  { section: "prepress", label: "Dieline / size confirmed", sortOrder: 20 },
+  { section: "prepress", label: "Proof sent if required", sortOrder: 30 },
+  { section: "prepress", label: "Proof approved", sortOrder: 40 },
+  { section: "production", label: "Material pulled", sortOrder: 50 },
+  { section: "production", label: "Machine assigned", sortOrder: 60 },
+  { section: "production", label: "Print complete", sortOrder: 70 },
+  { section: "production", label: "Cut / laminate / finish complete", sortOrder: 80 },
+  { section: "qc", label: "QC passed", sortOrder: 90 },
+  { section: "packing", label: "Packed and labeled", sortOrder: 100 },
+];
+
+async function sendProductionJobAlert(job: any) {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL || process.env.PRODUCTION_SLACK_WEBHOOK_URL;
+  if (!webhookUrl) return { sent: false, reason: "No Slack webhook configured." };
+
+  try {
+    const text = [
+      "🚨 New GSO Production Job",
+      `Customer: ${job.company || job.customerName || "Unknown"}`,
+      `Job: ${job.id}`,
+      `Quote: ${job.quoteId || "N/A"}`,
+      `Priority: ${job.priority || "normal"}`,
+    ].join("\n");
+
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+
+    return { sent: response.ok, reason: response.ok ? "Slack alert sent." : `Slack returned ${response.status}` };
+  } catch (error: any) {
+    return { sent: false, reason: error?.message || "Slack alert failed." };
+  }
+}
+
+async function createProductionJobFromQuoteInQuotes(shop: string, quoteId: string) {
+  const existingJob = await db.productionJob.findFirst({ where: { shop, quoteId } });
+  if (existingJob) return { job: existingJob, created: false };
+
+  const quote = await db.quote.findFirst({
+    where: { shop, id: quoteId },
+    include: { items: true },
+  });
+
+  if (!quote) throw new Error("Quote not found.");
+  if (!quote.items.length) throw new Error("Quote has no quote items to send to production.");
+
+  const job = await db.productionJob.create({
+    data: {
+      shop,
+      quoteId: quote.id,
+      quoteNumber: quote.id,
+      customerName: quote.customerName || null,
+      company: quote.company || null,
+      email: quote.email || null,
+      phone: quote.phone || null,
+      status: "new",
+      priority: "normal",
+      customerNotes: quote.notes || null,
+      internalNotes: "Created directly from Quote Builder.",
+      productImageUrl: firstProductionImageFromQuoteItem(quote.items[0]) || null,
+      items: {
+        create: quote.items.map((item: any, index: number) => ({
+          shop,
+          quoteItemId: item.id,
+          productTitle: item.productName || "Custom item",
+          variantTitle: item.variant || null,
+          sku: item.sku || null,
+          quantity: Number(item.quantity) || 1,
+          unitPrice: Number(item.unitPrice) || 0,
+          unitCost: Number(item.unitCost) || 0,
+          productImageUrl: firstProductionImageFromQuoteItem(item) || null,
+          shopifyProductGid: quoteItemSnapshotValue(item, "shopifyProductGid") || quoteItemSnapshotValue(item, "shopifyProductId") || null,
+          shopifyVariantGid: quoteItemSnapshotValue(item, "shopifyVariantGid") || quoteItemSnapshotValue(item, "shopifyVariantId") || null,
+          recipeId: item.recipeId || quoteItemSnapshotValue(item, "recipeId") || null,
+          recipeName: item.recipeName || quoteItemSnapshotValue(item, "recipeName") || null,
+          selectedFinish: item.selectedFinish || quoteItemSnapshotValue(item, "selectedFinish") || null,
+          selectedAddOns: item.selectedAddOnIds || quoteItemSnapshotValue(item, "selectedAddOns") || null,
+          costSnapshot: item.costSnapshot || null,
+          priceSnapshot: item.priceSnapshot || null,
+          productionNotes: item.notes || null,
+          sortOrder: index + 1,
+        })),
+      },
+      checklistItems: {
+        create: productionChecklistDefaults.map((check) => ({ shop, ...check })),
+      },
+      events: {
+        create: [
+          {
+            shop,
+            eventType: "created_from_quote_builder",
+            message: `Production job created directly from quote ${quote.id}.`,
+          },
+        ],
+      },
+    },
+    include: { items: true },
+  });
+
+  const alertResult = await sendProductionJobAlert(job);
+  await db.productionJobEvent.create({
+    data: {
+      shop,
+      jobId: job.id,
+      eventType: alertResult.sent ? "alert_sent" : "alert_skipped",
+      message: alertResult.reason || "Production alert processed.",
+    },
+  });
+
+  await db.productionJob.update({
+    where: { id: job.id },
+    data: { alertSentAt: alertResult.sent ? new Date() : null },
+  });
+
+  await db.quote.updateMany({
+    where: { shop, id: quote.id, status: { not: "paid" } },
+    data: { status: "production" },
+  });
+
+  return { job, created: true };
+}
+
 function getBestRange(rows: any[], quantity: number) {
   const sorted = [...(rows || [])].sort(
     (a, b) => safeNumber(a.minQty) - safeNumber(b.minQty)
@@ -721,12 +869,19 @@ export async function loader({ request }: { request: Request }) {
     orderBy: [{ priority: "asc" }, { minQty: "desc" }],
   });
 
+  const productionJobs = await db.productionJob.findMany({
+    where: { shop: session.shop, active: true },
+    select: { id: true, quoteId: true, status: true, updatedAt: true },
+    orderBy: { updatedAt: "desc" },
+  });
+
   return Response.json({
     quotes,
     recipes,
     productOptions: [],
     productCosts,
     pricingRules,
+    productionJobs,
   });
 }
 
@@ -743,6 +898,34 @@ export async function action({ request }: { request: Request }) {
   if (payload.intent === "priceRecipe") {
     const result = await priceRecipeLine(shop, payload);
     return Response.json({ intent: "priceRecipe", itemId: payload.itemId, ...result });
+  }
+
+  if (payload.intent === "createProductionJobFromQuote") {
+    try {
+      const result = await createProductionJobFromQuoteInQuotes(shop, payload.quoteId);
+      const quotes = await getQuotes(shop);
+      const productionJobs = await db.productionJob.findMany({
+        where: { shop, active: true },
+        select: { id: true, quoteId: true, status: true, updatedAt: true },
+        orderBy: { updatedAt: "desc" },
+      });
+
+      return Response.json({
+        intent: "createProductionJobFromQuote",
+        ok: true,
+        quotes,
+        productionJobs,
+        jobId: result.job.id,
+        created: result.created,
+        message: result.created ? "Production job created." : "Production job already exists.",
+      });
+    } catch (error: any) {
+      return Response.json({
+        intent: "createProductionJobFromQuote",
+        ok: false,
+        error: error?.message || "Could not create production job.",
+      });
+    }
   }
 
   if (payload.intent === "delete") {
@@ -1180,6 +1363,7 @@ export default function QuotesPage() {
   const [productOptions, setProductOptions] = useState<ShopifyVariantOption[]>(loaderData.productOptions || []);
   const [productCosts, setProductCosts] = useState<any[]>(loaderData.productCosts || []);
   const [pricingRules, setPricingRules] = useState<any[]>(loaderData.pricingRules || []);
+  const [productionJobs, setProductionJobs] = useState<any[]>(loaderData.productionJobs || []);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [company, setCompany] = useState("");
@@ -1197,6 +1381,16 @@ export default function QuotesPage() {
     if (fetcher.data?.productOptions) setProductOptions(fetcher.data.productOptions);
     if (fetcher.data?.productCosts) setProductCosts(fetcher.data.productCosts);
     if (fetcher.data?.pricingRules) setPricingRules(fetcher.data.pricingRules);
+    if (fetcher.data?.productionJobs) setProductionJobs(fetcher.data.productionJobs);
+
+    if (fetcher.data?.intent === "createProductionJobFromQuote") {
+      if (!fetcher.data.ok) {
+        setLastMessage(fetcher.data.error || "Production job could not be created.");
+        return;
+      }
+      setLastMessage(fetcher.data.message || "Production job ready.");
+      return;
+    }
 
     if (fetcher.data?.intent === "priceRecipe") {
       if (!fetcher.data.ok) {
@@ -1601,6 +1795,25 @@ export default function QuotesPage() {
     );
   }
 
+  function productionJobForQuote(quoteId: string) {
+    return productionJobs.find((job: any) => job.quoteId === quoteId);
+  }
+
+  function createProductionJob(quoteId: string) {
+    fetcher.submit(
+      { intent: "createProductionJobFromQuote", quoteId },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
+  function openProductionJob(jobId?: string) {
+    if (jobId) {
+      navigate(`/app/erp/production?job=${jobId}`);
+    } else {
+      navigate("/app/erp/production");
+    }
+  }
+
   let tone: "success" | "warning" | "critical" = "success";
   if (totals.margin < 25) tone = "critical";
   else if (totals.margin < 40) tone = "warning";
@@ -1920,15 +2133,23 @@ export default function QuotesPage() {
                           stageQuotes.map((quote) => {
                             const isPaid = quote.status === "paid";
                             const quoteRevenue = (quote.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
+                            const productionJob = productionJobForQuote(quote.id);
+                            const canCreateProductionJob = ["approved", "paid", "production"].includes(quote.status);
                             return (
                               <Card key={quote.id}>
                                 <BlockStack gap="200">
                                   <Text as="p" fontWeight="bold">{quote.company || quote.customerName || "Unnamed Quote"}</Text>
                                   {isPaid ? <Badge tone="success">PAID - Quote locked</Badge> : null}
+                                  {productionJob ? <Badge tone="success">Production: {productionJob.status}</Badge> : null}
                                   <Text as="p" tone="subdued">${quoteRevenue.toFixed(2)} | {new Date(quote.updatedAt || quote.createdAt).toLocaleString()}</Text>
                                   <Select label="Move" value={quote.status} disabled={isPaid} onChange={(value) => updateQuoteStatus(quote.id, value)} options={statuses} />
                                   <InlineStack gap="200">
                                     <Button onClick={() => loadQuote(quote)}>Open</Button>
+                                    {productionJob ? (
+                                      <Button variant="primary" onClick={() => openProductionJob(productionJob.id)}>Open Production Job</Button>
+                                    ) : canCreateProductionJob ? (
+                                      <Button variant="primary" onClick={() => createProductionJob(quote.id)}>Create Production Job</Button>
+                                    ) : null}
                                     {!isPaid && !quote.depositCreated && !quote.fullOrderCreated ? (
                                       <Button variant="primary" onClick={() => approveAndCreateOrder(quote.id)}>Approve & Create Order</Button>
                                     ) : null}
