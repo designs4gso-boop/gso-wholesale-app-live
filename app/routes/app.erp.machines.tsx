@@ -36,11 +36,170 @@ const inkTypes = [
   { label: "Other", value: "other" },
 ];
 
+
+type DefaultInkSlot = {
+  slotNumber: number;
+  inkName: string;
+  inkType: string;
+  cartridgeCost: number;
+  cartridgeMl: number;
+  mlPerSqft1Pct: number;
+  enabled?: boolean;
+};
+
+type DefaultMachinePreset = {
+  name: string;
+  machineType: string;
+  maxWidthIn: number;
+  costPerHour: number;
+  sqftPerHour: number;
+  setupWastePct: number;
+  allowOverflow: boolean;
+  notes: string;
+  inkSlots: DefaultInkSlot[];
+};
+
+const ROLAND_POUCH_COST = 156.99;
+const ROLAND_POUCH_ML = 750;
+const MIMAKI_BOTTLE_COST_ESTIMATE = 190;
+const MIMAKI_BOTTLE_ML = 1000;
+const DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL = 0.0075;
+const DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL = 0.0075;
+
+const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
+  {
+    name: "Roland TrueVIS LG-540",
+    machineType: "printer",
+    maxWidthIn: 52.9,
+    costPerHour: 5,
+    sqftPerHour: 150,
+    setupWastePct: 10,
+    allowOverflow: true,
+    notes:
+      "GSO default for white/gloss/emboss label work. Official usable width is about 52.9 in. Uses 750 ml ECO-UV pouches. Defaults should be tuned with VersaWorks / DG Connect actual job logs.",
+    inkSlots: [
+      { slotNumber: 1, inkName: "Cyan", inkType: "cmyk", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 2, inkName: "Magenta", inkType: "cmyk", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 3, inkName: "Yellow", inkType: "cmyk", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 4, inkName: "Black", inkType: "cmyk", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 5, inkName: "White", inkType: "white", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 6, inkName: "White", inkType: "white", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 7, inkName: "Gloss", inkType: "gloss", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 8, inkName: "Gloss", inkType: "gloss", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL },
+    ],
+  },
+  {
+    name: "Mimaki UCJV300-130",
+    machineType: "printer",
+    maxWidthIn: 53.6,
+    costPerHour: 5,
+    sqftPerHour: 150,
+    setupWastePct: 10,
+    allowOverflow: false,
+    notes:
+      "GSO default for standard CMYK and white-only work. Official max print/cut width is about 53.6 in. Mimaki LUS-170 bottles are 1 liter; cost defaults are estimates and should be replaced with invoice costs.",
+    inkSlots: [
+      { slotNumber: 1, inkName: "Cyan", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 2, inkName: "Magenta", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 3, inkName: "Yellow", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 4, inkName: "Black", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 5, inkName: "White", inkType: "white", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 6, inkName: "White", inkType: "white", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      { slotNumber: 7, inkName: "Unused - gloss routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
+      { slotNumber: 8, inkName: "Unused - gloss routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
+    ],
+  },
+];
+
+function costPerMl(slot: DefaultInkSlot) {
+  return slot.cartridgeMl > 0 ? slot.cartridgeCost / slot.cartridgeMl : 0;
+}
+
+async function installDefaultMachinePreset(shop: string, preset: DefaultMachinePreset, overwriteExisting = false) {
+  let machine = await db.machine.findFirst({
+    where: { shop, name: preset.name },
+    include: { inkChannels: true },
+  });
+
+  if (!machine) {
+    machine = await db.machine.create({
+      data: {
+        shop,
+        name: preset.name,
+        machineType: preset.machineType,
+        maxWidthIn: preset.maxWidthIn,
+        costPerHour: preset.costPerHour,
+        sqftPerHour: preset.sqftPerHour,
+        setupWastePct: preset.setupWastePct,
+        allowOverflow: preset.allowOverflow,
+        active: true,
+      },
+      include: { inkChannels: true },
+    });
+  } else if (overwriteExisting) {
+    machine = await db.machine.update({
+      where: { id: machine.id },
+      data: {
+        machineType: preset.machineType,
+        maxWidthIn: preset.maxWidthIn,
+        costPerHour: preset.costPerHour,
+        sqftPerHour: preset.sqftPerHour,
+        setupWastePct: preset.setupWastePct,
+        allowOverflow: preset.allowOverflow,
+        active: true,
+      },
+      include: { inkChannels: true },
+    });
+  }
+
+  const existingSlots = machine.inkChannels || [];
+
+  for (const slot of preset.inkSlots) {
+    const existingSlot = existingSlots.find((ink: any) => ink.slotNumber === slot.slotNumber);
+    const shouldFillExisting =
+      overwriteExisting ||
+      !existingSlot?.inkName ||
+      Number(existingSlot?.cartridgeCost || 0) === 0 ||
+      Number(existingSlot?.cartridgeMl || 0) === 0;
+
+    const slotData = {
+      shop,
+      machineId: machine.id,
+      slotNumber: slot.slotNumber,
+      inkName: slot.inkName,
+      inkType: slot.inkType,
+      cartridgeCost: slot.cartridgeCost,
+      cartridgeMl: slot.cartridgeMl,
+      costPerMl: costPerMl(slot),
+      mlPerSqft1Pct: slot.mlPerSqft1Pct,
+      enabled: slot.enabled !== false,
+    };
+
+    if (!existingSlot) {
+      await db.machineInkChannel.create({ data: slotData });
+    } else if (shouldFillExisting) {
+      await db.machineInkChannel.update({ where: { id: existingSlot.id }, data: slotData });
+    }
+  }
+}
+
+async function installGsoDefaultMachines(shop: string, overwriteExisting = false) {
+  for (const preset of gsoDefaultMachinePresets) {
+    await installDefaultMachinePreset(shop, preset, overwriteExisting);
+  }
+}
+
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+
+  const machineCount = await db.machine.count({ where: { shop } });
+  if (machineCount === 0) {
+    await installGsoDefaultMachines(shop, false);
+  }
 
   const machines = await db.machine.findMany({
-    where: { shop: session.shop },
+    where: { shop },
     orderBy: { updatedAt: "desc" },
     include: { inkChannels: { orderBy: { slotNumber: "asc" } } },
   });
@@ -154,6 +313,10 @@ if (payload.intent === "permanentDeleteMachine") {
         enabled: true,
       },
     });
+  }
+
+  if (payload.intent === "installGsoDefaults") {
+    await installGsoDefaultMachines(shop, Boolean(payload.overwriteExisting));
   }
 
   const machines = await db.machine.findMany({
@@ -283,6 +446,20 @@ function permanentDeleteMachine(id: string) {
     );
   }
 
+  function installGsoDefaults(overwriteExisting = false) {
+    if (
+      overwriteExisting &&
+      !confirm("Refresh Roland and Mimaki default values? This can overwrite default printer slots you already edited.")
+    ) {
+      return;
+    }
+
+    fetcher.submit(
+      { intent: "installGsoDefaults", overwriteExisting },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
   return (
     <Page
       title="Machine Center"
@@ -291,6 +468,28 @@ function permanentDeleteMachine(id: string) {
       primaryAction={{ content: "New Machine", onAction: resetMachineForm }}
     >
       <Layout>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <InlineStack align="space-between">
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingMd">GSO Default Printer Profiles</Text>
+                  <Text as="p" tone="subdued">
+                    Install the Roland LG-540 and Mimaki UCJV300-130 with researched starting widths, speeds, ink slots, cartridge sizes, and coverage defaults. Tune these values with your real invoices and print logs.
+                  </Text>
+                </BlockStack>
+                <InlineStack gap="200">
+                  <Button onClick={() => installGsoDefaults(false)}>Install Missing Defaults</Button>
+                  <Button tone="critical" onClick={() => installGsoDefaults(true)}>Refresh Defaults</Button>
+                </InlineStack>
+              </InlineStack>
+              <Text as="p" tone="subdued">
+                Roland is set up for CMYK + white + gloss/emboss. Mimaki is set up for CMYK + white, with gloss routed to Roland by default.
+              </Text>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
@@ -357,6 +556,12 @@ function permanentDeleteMachine(id: string) {
 
                       <Text as="p">Setup Waste: {Number(machine.setupWastePct || 0).toFixed(2)}%</Text>
 
+                      {gsoDefaultMachinePresets.find((preset) => preset.name === machine.name)?.notes && (
+                        <Text as="p" tone="subdued">
+                          {gsoDefaultMachinePresets.find((preset) => preset.name === machine.name)?.notes}
+                        </Text>
+                      )}
+
                       <InlineStack gap="200">
                         <Button onClick={() => editMachine(machine)}>Edit Machine</Button>
 
@@ -390,7 +595,10 @@ function permanentDeleteMachine(id: string) {
                               <BlockStack gap="300">
                                 <InlineStack align="space-between">
                                   <Text as="p" fontWeight="bold">Slot {ink.slotNumber}</Text>
-                                  <Badge>{slotEdits[ink.id]?.inkType ?? ink.inkType}</Badge>
+                                  <InlineStack gap="200">
+                                    <Badge>{slotEdits[ink.id]?.inkType ?? ink.inkType}</Badge>
+                                    {ink.enabled === false && <Badge tone="warning">Disabled</Badge>}
+                                  </InlineStack>
                                 </InlineStack>
 
                                 <InlineStack gap="300">
