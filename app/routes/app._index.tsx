@@ -69,6 +69,7 @@ export default function AppHome() {
               <Divider />
 
               <InlineStack gap="300" wrap>
+                <Button onClick={() => navigate("/app/erp/setup")}>0. Setup Center</Button>
                 <Button variant="primary" onClick={() => navigate("/app/erp/product-setup")}>1. Product Setup</Button>
                 <Button onClick={() => navigate("/app/quotes")}>2. Quotes / CRM</Button>
                 <Button onClick={() => navigate("/app/erp/recipes")}>3. Recipes</Button>
@@ -85,6 +86,7 @@ export default function AppHome() {
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">Admin setup pages</Text>
+              <Button onClick={() => navigate("/app/erp/setup")}>Setup Center</Button>
               <Button onClick={() => navigate("/app/erp/product-types")}>Product Type Profiles</Button>
               <Button onClick={() => navigate("/app/erp/materials")}>Materials</Button>
               <Button onClick={() => navigate("/app/erp/machines")}>Machines</Button>
