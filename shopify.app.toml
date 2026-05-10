@@ -26,7 +26,7 @@ uri = "/webhooks/orders_paid"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,read_orders,read_products,write_discounts,read_draft_orders,write_draft_orders"
+scopes = "read_customers,read_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
