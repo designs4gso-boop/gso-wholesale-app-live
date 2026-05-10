@@ -181,9 +181,24 @@ model QuoteItem {
   unitCost    Float
   notes       String?
 
+  // ERP recipe snapshot fields. These make quote items pull from Product Setup / Recipes
+  // while preserving the exact cost, price, finish, tier, and margin used at quote time.
+  recipeId        String?
+  recipeName      String?
+  selectedFinish  String?
+  selectedAddOnIds String?
+  pricingSource   String?
+  tierLabel       String?
+  minQuantity     Int?
+  marginPct       Float?
+  costSnapshot    String?
+  priceSnapshot   String?
+
   quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@index([quoteId])
+  @@index([recipeId])
+  @@index([sku])
 }
 
 
@@ -280,7 +295,8 @@ model ProductTypeProfile {
   productionMode    String   @default("in_house") // in_house, outsourced, hybrid
   minQuantity       Int      @default(1)
   defaultQuantity   Int      @default(1)
-  tierBreakpoints   String   @default("1") // comma-separated quantity tiers
+  tierBreakpoints   String   @default("1") // comma-separated tier start quantities
+  tierTemplate      String?  // JSON range rows with margin/fixed price defaults
   defaultMarginPct  Float    @default(40)
   pricingMethod     String   @default("auto_margin") // auto_margin, fixed_price, discount_from_first, markup_over_cost
   defaultTags       String?  // comma-separated Shopify tags to apply later
@@ -393,6 +409,7 @@ model VendorProductTier {
   shop            String
   vendorProductId String
   minQty          Int
+  maxQty          Int?
   unitCost        Float
   notes           String?
   createdAt       DateTime @default(now())
