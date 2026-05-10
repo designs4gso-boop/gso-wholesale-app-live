@@ -650,3 +650,141 @@ model MachineInkChannel {
   @@index([machineId])
   @@index([inkType])
 }
+
+model ProductionJob {
+  id              String   @id @default(cuid())
+  shop            String
+  quoteId         String?
+  quoteNumber     String?
+  customerName    String?
+  company         String?
+  email           String?
+  phone           String?
+
+  status          String   @default("new")
+  priority        String   @default("normal")
+  dueDate         DateTime?
+  assignedTo      String?
+
+  customerNotes   String?
+  internalNotes   String?
+  artworkUrl      String?
+  proofUrl        String?
+  printFileUrl    String?
+  productImageUrl String?
+
+  alertSentAt     DateTime?
+  printedAt       DateTime?
+  completedAt     DateTime?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  items           ProductionJobItem[]
+  files           ProductionJobFile[]
+  events          ProductionJobEvent[]
+  checklistItems  ProductionChecklistItem[]
+
+  @@index([shop])
+  @@index([shop, status])
+  @@index([shop, priority])
+  @@index([quoteId])
+  @@index([dueDate])
+}
+
+model ProductionJobItem {
+  id                  String   @id @default(cuid())
+  shop                String
+  jobId               String
+  quoteItemId          String?
+
+  productTitle         String
+  variantTitle         String?
+  sku                  String?
+  quantity             Int      @default(1)
+  unitPrice            Float    @default(0)
+  unitCost             Float    @default(0)
+
+  shopifyProductGid    String?
+  shopifyVariantGid    String?
+  productImageUrl      String?
+  recipeId             String?
+  recipeName           String?
+  selectedFinish       String?
+  selectedAddOns       String?
+  materialSummary      String?
+  machineSummary       String?
+  costSnapshot         String?
+  priceSnapshot        String?
+  productionNotes      String?
+  sortOrder            Int      @default(0)
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  job                  ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([jobId])
+  @@index([quoteItemId])
+  @@index([sku])
+  @@index([recipeId])
+}
+
+model ProductionJobFile {
+  id          String   @id @default(cuid())
+  shop        String
+  jobId       String
+  fileName    String
+  fileType    String   @default("artwork") // artwork, proof, dieline, customer_pdf, print_file, image, other
+  fileUrl     String
+  notes       String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  job         ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([jobId])
+  @@index([fileType])
+}
+
+model ProductionJobEvent {
+  id          String   @id @default(cuid())
+  shop        String
+  jobId       String
+  eventType   String
+  message     String
+  oldValue    String?
+  newValue    String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  job         ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([jobId])
+  @@index([eventType])
+  @@index([createdAt])
+}
+
+model ProductionChecklistItem {
+  id          String   @id @default(cuid())
+  shop        String
+  jobId       String
+  label       String
+  section     String   @default("production") // prepress, production, qc, packing
+  completed   Boolean  @default(false)
+  completedAt DateTime?
+  completedBy String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  job         ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([jobId])
+  @@index([section])
+  @@index([completed])
+}

@@ -19,16 +19,13 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
-        <s-link href="/app">Home</s-link>
-        <s-link href="/app/erp/setup">Setup Center</s-link>
-        <s-link href="/app/erp/product-setup">Product Setup</s-link>
+        <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/quotes">Quotes / CRM</s-link>
-        <s-link href="/app/erp/recipes">Recipes</s-link>
-        <s-link href="/app/erp/product-types">Product Types</s-link>
-        <s-link href="/app/erp/materials">Materials</s-link>
-        <s-link href="/app/erp/machines">Machines</s-link>
-        <s-link href="/app/erp/vendor-products">Vendor Products</s-link>
-        <s-link href="/app/wholesale/rules">Wholesale Rules</s-link>
+        <s-link href="/app/erp/production">Production</s-link>
+        <s-link href="/app/product-costs">Product Costs</s-link>
+        <s-link href="/app/wholesale/calculator">Cost Calculator</s-link>
+        <s-link href="/app/wholesale/rules">Pricing Rules</s-link>
+        <s-link href="/app/wholesale">Wholesale Settings</s-link>
         <s-link href="/app/wholesale/customers">Customers</s-link>
       </s-app-nav>
 

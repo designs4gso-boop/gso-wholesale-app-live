@@ -17,11 +17,8 @@ export default [
     route("create-order", "routes/app.create-order.tsx"),
     route("erp/materials", "routes/app.erp.materials.tsx"),
     route("erp/machines", "routes/app.erp.machines.tsx"),
-    route("erp/setup", "routes/app.erp.setup.tsx"),
-    route("erp/product-setup", "routes/app.erp.product-setup.tsx"),
-    route("erp/product-types", "routes/app.erp.product-types.tsx"),
-    route("erp/vendor-products", "routes/app.erp.vendor-products.tsx"),
-    route("erp/recipes", "routes/app.erp.recipes.tsx"),
+    route("erp/production", "routes/app.erp.production.tsx"),
+    route("erp/production/:id/print", "routes/app.erp.production.$id.print.tsx"),
   ]),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
