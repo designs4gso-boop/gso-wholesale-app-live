@@ -309,6 +309,8 @@ model ProductRecipe {
   variantGid       String?
   shopifyProductId String?
   shopifyVariantId String?
+  shopifyTargetMode String   @default("product_all_variants")
+  shopifyVariantIds String?
   costMethod       String   @default("recipe") // recipe, sourced_flat, sourced_tier
   productionMode   String   @default("in_house") // in_house, outsourced, hybrid
   vendorProductId  String?
@@ -355,6 +357,7 @@ model ProductRecipe {
   @@index([shop, sku])
   @@index([shop, productGid])
   @@index([shop, variantGid])
+  @@index([shop, shopifyTargetMode])
   @@index([shop, active])
   @@index([vendorProductId])
 }

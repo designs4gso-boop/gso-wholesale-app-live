@@ -28,16 +28,20 @@ type ProductTypeDefault = {
   defaultTags: string[];
 };
 
-type ShopifyProductOption = {
-  label: string;
-  value: string;
-  productId: string;
-  productTitle: string;
-  variantId: string;
-  variantTitle: string;
+type ShopifyVariantOption = {
+  id: string;
+  title: string;
   sku: string;
   price: string;
+};
+
+type ShopifyProductOption = {
+  productId: string;
+  productTitle: string;
+  handle: string;
+  status: string;
   tags: string[];
+  variants: ShopifyVariantOption[];
 };
 
 const productTypeDefaults: Record<string, ProductTypeDefault> = {
@@ -158,6 +162,71 @@ function parseNumberLines(value: any, fallback: number[] = [1]) {
   return parsed.length ? Array.from(new Set(parsed)).sort((a, b) => a - b) : fallback;
 }
 
+type TierSetupRow = {
+  minQty: string;
+  marginPct: string;
+  fixedPrice: string;
+};
+
+function makeTierRows(quantities: number[], marginPct: number): TierSetupRow[] {
+  const rows = quantities.length ? quantities : [1];
+  return rows.map((qty) => ({
+    minQty: String(qty),
+    marginPct: String(marginPct),
+    fixedPrice: "",
+  }));
+}
+
+function cleanTierRows(rows: any[], fallbackQuantities: number[], fallbackMarginPct: number) {
+  const source = Array.isArray(rows) && rows.length
+    ? rows
+    : makeTierRows(fallbackQuantities, fallbackMarginPct);
+
+  const cleaned = source
+    .map((row) => ({
+      minQty: positiveInt(row?.minQty, 0),
+      marginPct: nullableNumber(row?.marginPct),
+      fixedPrice: nullableNumber(row?.fixedPrice),
+    }))
+    .filter((row) => row.minQty > 0)
+    .sort((a, b) => a.minQty - b.minQty);
+
+  const deduped: typeof cleaned = [];
+  for (const row of cleaned) {
+    const existingIndex = deduped.findIndex((item) => item.minQty === row.minQty);
+    if (existingIndex >= 0) {
+      deduped[existingIndex] = row;
+    } else {
+      deduped.push(row);
+    }
+  }
+
+  return deduped.length
+    ? deduped
+    : [{ minQty: positiveInt(fallbackQuantities[0], 1), marginPct: fallbackMarginPct, fixedPrice: null }];
+}
+
+function parseTierRows(value: any, fallbackQuantities: number[], fallbackMarginPct: number) {
+  if (Array.isArray(value)) return cleanTierRows(value, fallbackQuantities, fallbackMarginPct);
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return cleanTierRows(parsed, fallbackQuantities, fallbackMarginPct);
+    } catch (_error) {
+      // Fall back to old comma/newline tier breakpoint input.
+    }
+
+    return cleanTierRows(
+      parseNumberLines(value, fallbackQuantities).map((qty) => ({ minQty: String(qty), marginPct: String(fallbackMarginPct), fixedPrice: "" })),
+      fallbackQuantities,
+      fallbackMarginPct,
+    );
+  }
+
+  return cleanTierRows([], fallbackQuantities, fallbackMarginPct);
+}
+
 function parseTags(value: any) {
   return String(value || "")
     .split(/[\n,]+/)
@@ -240,16 +309,70 @@ async function ensureProductTypeProfiles(shop: string) {
   }
 }
 
-async function searchShopifyProducts(admin: any, search: string) {
+function escapeShopifySearchTerm(term: string) {
+  return term.replace(/[\\:()]/g, "\\$&").replace(/["']/g, "").trim();
+}
+
+function searchTokens(search: string) {
+  return String(search || "")
+    .replace(/([0-9])x([0-9])/gi, "$1 $2 $1x$2")
+    .split(/\s+/)
+    .map((token) => escapeShopifySearchTerm(token))
+    .filter((token) => token.length >= 2);
+}
+
+function buildTitleSearchQuery(search: string) {
+  const tokens = searchTokens(search).slice(0, 5);
+  return tokens.map((token) => `title:${token}*`).join(" ");
+}
+
+function buildDefaultSearchQuery(search: string) {
+  const cleaned = String(search || "").trim().replace(/["']/g, "");
+  return cleaned.length >= 2 ? cleaned : "";
+}
+
+function normalizeForRanking(value: string) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function productSearchScore(product: ShopifyProductOption, search: string) {
+  const title = normalizeForRanking(product.productTitle);
+  const raw = normalizeForRanking(search);
+  const tokens = raw.split(/\s+/).filter(Boolean);
+  let score = 0;
+
+  if (title === raw) score += 1000;
+  if (title.includes(raw)) score += 500;
+  for (const token of tokens) {
+    if (title.split(" ").some((part) => part === token)) score += 75;
+    else if (title.includes(token)) score += 35;
+  }
+
+  for (const variant of product.variants || []) {
+    const sku = normalizeForRanking(variant.sku);
+    if (sku && sku.includes(raw)) score += 250;
+    for (const token of tokens) {
+      if (sku && sku.includes(token)) score += 50;
+    }
+  }
+
+  return score;
+}
+
+async function runProductSearch(admin: any, query: string) {
+  if (!query) return [];
+
   const response = await admin.graphql(
     `#graphql
       query SearchProducts($query: String!) {
-        products(first: 20, query: $query) {
+        products(first: 20, query: $query, sortKey: TITLE) {
           nodes {
             id
             title
+            handle
+            status
             tags
-            variants(first: 50) {
+            variants(first: 100) {
               nodes {
                 id
                 title
@@ -261,44 +384,48 @@ async function searchShopifyProducts(admin: any, search: string) {
         }
       }
     `,
-    { variables: { query: String(search || "").trim() } },
+    { variables: { query } },
   );
 
   const json = await response.json();
-  const options: ShopifyProductOption[] = [];
+  if (json.errors) return [];
 
-  for (const product of json.data?.products?.nodes || []) {
-    const variants = product.variants?.nodes || [];
-    if (!variants.length) {
-      options.push({
-        label: product.title,
-        value: product.id,
-        productId: product.id,
-        productTitle: product.title,
-        variantId: "",
-        variantTitle: "Default",
-        sku: "",
-        price: "0",
-        tags: product.tags || [],
-      });
-    }
+  return (json.data?.products?.nodes || []).map((product: any) => ({
+    productId: product.id,
+    productTitle: product.title,
+    handle: product.handle || "",
+    status: product.status || "",
+    tags: product.tags || [],
+    variants: (product.variants?.nodes || []).map((variant: any) => ({
+      id: variant.id,
+      title: variant.title || "Default Title",
+      sku: variant.sku || "",
+      price: String(variant.price || "0"),
+    })),
+  })) as ShopifyProductOption[];
+}
 
-    for (const variant of variants) {
-      options.push({
-        label: `${product.title} — ${variant.title}${variant.sku ? ` — ${variant.sku}` : ""}`,
-        value: variant.id,
-        productId: product.id,
-        productTitle: product.title,
-        variantId: variant.id,
-        variantTitle: variant.title,
-        sku: variant.sku || "",
-        price: String(variant.price || "0"),
-        tags: product.tags || [],
-      });
+async function searchShopifyProducts(admin: any, search: string) {
+  const cleanedSearch = String(search || "").trim();
+  if (cleanedSearch.length < 2) return [];
+
+  const seen = new Set<string>();
+  const results: ShopifyProductOption[] = [];
+  const queries = [buildTitleSearchQuery(cleanedSearch), buildDefaultSearchQuery(cleanedSearch)].filter(Boolean);
+
+  for (const query of queries) {
+    const matches = await runProductSearch(admin, query);
+    for (const product of matches) {
+      if (!seen.has(product.productId)) {
+        seen.add(product.productId);
+        results.push(product);
+      }
     }
   }
 
-  return options;
+  return results
+    .sort((a, b) => productSearchScore(b, cleanedSearch) - productSearchScore(a, cleanedSearch))
+    .slice(0, 12);
 }
 
 async function applyShopifyTags(admin: any, productId: string, currentTags: string[], tagsToAdd: string[]) {
@@ -357,7 +484,7 @@ export async function loader({ request }: { request: Request }) {
       take: 8,
       include: { productTypeProfile: true, vendorProduct: true, tiers: { orderBy: { minQty: "asc" } } },
     }),
-    searchShopifyProducts(admin, ""),
+    Promise.resolve([]),
   ]);
 
   return Response.json({ profiles, materials, machines, vendorProducts, recentRecipes, shopifyProducts });
@@ -388,16 +515,37 @@ export async function action({ request }: { request: Request }) {
   }
 
   const selectedShopifyProduct = payload.selectedShopifyProduct || null;
+  const shopifyTargetMode = payload.skipShopifyLink
+    ? "internal_only"
+    : payload.shopifyTargetMode || selectedShopifyProduct?.targetMode || "product_all_variants";
+  const selectedVariantIds = Array.isArray(payload.selectedVariantIds)
+    ? payload.selectedVariantIds.filter(Boolean)
+    : Array.isArray(selectedShopifyProduct?.variantIds)
+      ? selectedShopifyProduct.variantIds.filter(Boolean)
+      : [];
+  const selectedVariantLabels = Array.isArray(selectedShopifyProduct?.variants)
+    ? selectedShopifyProduct.variants.map((variant: any) => [variant.title, variant.sku].filter(Boolean).join(" / ")).filter(Boolean)
+    : [];
   const productGid = payload.skipShopifyLink ? null : selectedShopifyProduct?.productId || null;
-  const variantGid = payload.skipShopifyLink ? null : selectedShopifyProduct?.variantId || null;
+  const variantGid = payload.skipShopifyLink
+    ? null
+    : shopifyTargetMode === "selected_variants" && selectedVariantIds.length === 1
+      ? selectedVariantIds[0]
+      : null;
+  const shopifyVariantIds = payload.skipShopifyLink || shopifyTargetMode !== "selected_variants"
+    ? null
+    : JSON.stringify(selectedVariantIds);
   const defaultTags = parseTags(profile.defaultTags);
   const shouldApplyTags = Boolean(payload.applyShopifyTags && productGid && !payload.skipShopifyLink);
 
   const productionMode = payload.productionMode || profile.productionMode || "in_house";
   const minQuantity = positiveInt(payload.minQuantity, profile.minQuantity || 1);
   const defaultQuantity = Math.max(minQuantity, positiveInt(payload.defaultQuantity, profile.defaultQuantity || minQuantity));
-  const tiers = parseNumberLines(payload.tierBreakpoints, [minQuantity]).filter((qty) => qty >= minQuantity);
   const marginPct = numberOrZero(payload.targetMarginPct || profile.defaultMarginPct || 40);
+  const fallbackTiers = parseNumberLines(profile.tierBreakpoints, [minQuantity]).filter((qty) => qty >= minQuantity);
+  const tierRows = parseTierRows(payload.tierRows || payload.tierBreakpoints, fallbackTiers, marginPct)
+    .filter((row) => row.minQty >= minQuantity);
+  const tiers = tierRows.map((row) => row.minQty);
   const pricingMethod = payload.pricingMethod || profile.pricingMethod || "auto_margin";
 
   let vendorProductId = payload.vendorProductId || null;
@@ -405,7 +553,12 @@ export async function action({ request }: { request: Request }) {
     ? await db.productRecipe.findFirst({
         where: {
           shop,
-          OR: [{ productGid }, { shopifyProductId: productGid }, variantGid ? { variantGid } : undefined].filter(Boolean) as any,
+          OR: [
+            variantGid ? { variantGid } : undefined,
+            variantGid ? { shopifyVariantId: variantGid } : undefined,
+            { productGid, shopifyTargetMode },
+            { shopifyProductId: productGid, shopifyTargetMode },
+          ].filter(Boolean) as any,
         },
       })
     : null;
@@ -475,6 +628,8 @@ export async function action({ request }: { request: Request }) {
       variantGid,
       shopifyProductId: productGid,
       shopifyVariantId: variantGid,
+      shopifyTargetMode,
+      shopifyVariantIds,
       widthIn: nullableNumber(payload.widthIn),
       heightIn: nullableNumber(payload.heightIn),
       depthIn: nullableNumber(payload.depthIn),
@@ -490,6 +645,8 @@ export async function action({ request }: { request: Request }) {
       notes: [
         payload.notes || "",
         selectedShopifyProduct?.productTitle ? `Shopify product: ${selectedShopifyProduct.productTitle}` : "",
+        productGid && !payload.skipShopifyLink ? `Shopify target: ${shopifyTargetMode === "selected_variants" ? "Selected variant(s)" : "All variants"}` : "",
+        selectedVariantLabels.length ? `Selected variants: ${selectedVariantLabels.join(", ")}` : "",
         profile.defaultTags ? `Default Shopify tags: ${profile.defaultTags}` : "",
         `Pricing method: ${pricingMethod}`,
         `Created/updated from Product Setup Wizard`,
@@ -509,7 +666,15 @@ export async function action({ request }: { request: Request }) {
       recipeId = recipe.id;
     }
 
-    await tx.recipeTier.createMany({ data: tiers.map((qty) => ({ shop, recipeId, minQty: qty, marginPct })) });
+    await tx.recipeTier.createMany({
+      data: tierRows.map((row) => ({
+        shop,
+        recipeId,
+        minQty: row.minQty,
+        marginPct: row.marginPct ?? marginPct,
+        fixedPrice: row.fixedPrice,
+      })),
+    });
 
     if (productionMode === "in_house" || productionMode === "hybrid") {
       const materialRows = [] as any[];
@@ -608,7 +773,10 @@ export default function ProductSetupPage() {
 
   const [shopifyProducts, setShopifyProducts] = useState<ShopifyProductOption[]>(initialShopifyProducts || []);
   const [shopifySearch, setShopifySearch] = useState("");
-  const [selectedShopifyValue, setSelectedShopifyValue] = useState("");
+  const [hasSearchedShopify, setHasSearchedShopify] = useState(false);
+  const [selectedShopifyProductId, setSelectedShopifyProductId] = useState("");
+  const [shopifyTargetMode, setShopifyTargetMode] = useState("product_all_variants");
+  const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>([]);
   const [skipShopifyLink, setSkipShopifyLink] = useState(false);
   const [applyShopifyTags, setApplyShopifyTags] = useState(true);
 
@@ -621,7 +789,7 @@ export default function ProductSetupPage() {
   const [productionMode, setProductionMode] = useState(defaults.productionMode);
   const [minQuantity, setMinQuantity] = useState(String(defaults.minQuantity));
   const [defaultQuantity, setDefaultQuantity] = useState(String(defaults.defaultQuantity));
-  const [tierBreakpoints, setTierBreakpoints] = useState(defaults.tiers.join(", "));
+  const [tierRows, setTierRows] = useState<TierSetupRow[]>(() => makeTierRows(defaults.tiers, defaults.margin));
   const [targetMarginPct, setTargetMarginPct] = useState(String(defaults.margin));
   const [pricingMethod, setPricingMethod] = useState(defaults.pricingMethod);
 
@@ -643,13 +811,14 @@ export default function ProductSetupPage() {
   const [leadTimeDays, setLeadTimeDays] = useState("");
   const [notes, setNotes] = useState("");
 
-  const selectedShopifyProduct = shopifyProducts.find((product) => product.value === selectedShopifyValue) || null;
+  const selectedShopifyProduct = shopifyProducts.find((product) => product.productId === selectedShopifyProductId) || null;
+  const selectedVariants = selectedShopifyProduct?.variants?.filter((variant) => selectedVariantIds.includes(variant.id)) || [];
 
   useEffect(() => {
     setProductionMode(defaults.productionMode);
     setMinQuantity(String(defaults.minQuantity));
     setDefaultQuantity(String(defaults.defaultQuantity));
-    setTierBreakpoints(defaults.tiers.join(", "));
+    setTierRows(makeTierRows(defaults.tiers, defaults.margin));
     setTargetMarginPct(String(defaults.margin));
     setPricingMethod(defaults.pricingMethod);
   }, [profileId]);
@@ -657,12 +826,18 @@ export default function ProductSetupPage() {
   useEffect(() => {
     if (selectedShopifyProduct && !skipShopifyLink) {
       setProductName((current) => current || selectedShopifyProduct.productTitle);
-      setSku((current) => current || selectedShopifyProduct.sku);
+      if (selectedVariants.length === 1) {
+        setSku((current) => current || selectedVariants[0].sku);
+      }
     }
-  }, [selectedShopifyValue]);
+  }, [selectedShopifyProductId, selectedVariantIds.join("|")]);
 
   useEffect(() => {
-    if (fetcher.data?.shopifyProducts) setShopifyProducts(fetcher.data.shopifyProducts);
+    if (fetcher.data?.shopifyProducts) {
+      setShopifyProducts(fetcher.data.shopifyProducts);
+      setSelectedShopifyProductId("");
+      setSelectedVariantIds([]);
+    }
     if (fetcher.data?.ok && fetcher.data?.recipeId) {
       setProductName("");
       setSku("");
@@ -676,7 +851,8 @@ export default function ProductSetupPage() {
   }, [fetcher.data]);
 
   const quantity = positiveInt(defaultQuantity, defaults.defaultQuantity);
-  const tierList = parseNumberLines(tierBreakpoints, defaults.tiers);
+  const cleanRows = cleanTierRows(tierRows, defaults.tiers, numberOrZero(targetMarginPct || defaults.margin));
+  const tierList = cleanRows.map((row) => row.minQty);
   const selectedVendorProduct = vendorProducts.find((item: any) => item.id === vendorProductId);
   const bestVendorTier = getBestVendorTier(selectedVendorProduct, quantity);
   const vendorPreviewCost = selectedVendorProduct
@@ -688,26 +864,70 @@ export default function ProductSetupPage() {
   const materialOptions = selectOptions(materials);
   const machineOptions = selectOptions(machines);
   const vendorOptions = selectOptions(vendorProducts);
-  const shopifyOptions = [
-    { label: "Choose Shopify product / variant", value: "" },
-    ...shopifyProducts.map((product) => ({ label: product.label, value: product.value })),
-  ];
+  const shopifySearchInProgress = fetcher.state !== "idle" && fetcher.json?.intent === "searchShopifyProducts";
+  const hasValidShopifyTarget = skipShopifyLink || Boolean(
+    selectedShopifyProduct &&
+      (shopifyTargetMode === "product_all_variants" || selectedVariantIds.length > 0),
+  );
+  const selectedShopifyPayload = selectedShopifyProduct
+    ? {
+        productId: selectedShopifyProduct.productId,
+        productTitle: selectedShopifyProduct.productTitle,
+        tags: selectedShopifyProduct.tags,
+        targetMode: shopifyTargetMode,
+        variantIds: shopifyTargetMode === "selected_variants" ? selectedVariantIds : [],
+        variants: selectedVariants,
+      }
+    : null;
   const isOutsourced = productionMode === "outsourced";
   const isInHouse = productionMode === "in_house";
   const isHybrid = productionMode === "hybrid";
 
   function searchProducts() {
+    setHasSearchedShopify(true);
+    setShopifyProducts([]);
+    setSelectedShopifyProductId("");
+    setSelectedVariantIds([]);
     fetcher.submit(
       { intent: "searchShopifyProducts", search: shopifySearch },
       { method: "post", encType: "application/json" },
     );
   }
 
+  function chooseShopifyProduct(product: ShopifyProductOption) {
+    setSelectedShopifyProductId(product.productId);
+    setShopifyTargetMode("product_all_variants");
+    setSelectedVariantIds([]);
+    setProductName((current) => current || product.productTitle);
+  }
+
+  function toggleVariant(variantId: string, checked: boolean) {
+    setSelectedVariantIds((current) => {
+      if (checked) return Array.from(new Set([...current, variantId]));
+      return current.filter((id) => id !== variantId);
+    });
+  }
+
+  function updateTierRow(index: number, field: keyof TierSetupRow, value: string) {
+    setTierRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row));
+  }
+
+  function addTierRow() {
+    const lastQty = tierList.length ? tierList[tierList.length - 1] : positiveInt(minQuantity, 1);
+    setTierRows((current) => [...current, { minQty: String(lastQty * 2), marginPct: targetMarginPct, fixedPrice: "" }]);
+  }
+
+  function removeTierRow(index: number) {
+    setTierRows((current) => current.length <= 1 ? current : current.filter((_row, rowIndex) => rowIndex !== index));
+  }
+
   function submit() {
     fetcher.submit(
       {
         intent: "quickCreateProduct",
-        selectedShopifyProduct,
+        selectedShopifyProduct: selectedShopifyPayload,
+        shopifyTargetMode,
+        selectedVariantIds,
         skipShopifyLink,
         applyShopifyTags,
         productName,
@@ -716,7 +936,7 @@ export default function ProductSetupPage() {
         productionMode,
         minQuantity,
         defaultQuantity,
-        tierBreakpoints,
+        tierRows: cleanRows,
         targetMarginPct,
         pricingMethod,
         widthIn,
@@ -742,7 +962,7 @@ export default function ProductSetupPage() {
 
   const tagPreview = parseTags(defaults.tags);
   const modeLabel = productionModeOptions.find((item) => item.value === productionMode)?.label || productionMode;
-  const productSetupComplete = Boolean(productName && profileId && (skipShopifyLink || selectedShopifyProduct));
+  const productSetupComplete = Boolean(productName && profileId && hasValidShopifyTarget);
 
   return (
     <Page
@@ -773,20 +993,76 @@ export default function ProductSetupPage() {
                 <BlockStack gap="300">
                   <InlineStack gap="300" blockAlign="end" wrap>
                     <div style={{ minWidth: 260, flex: 1 }}>
-                      <TextField label="Search Shopify products" value={shopifySearch} onChange={setShopifySearch} autoComplete="off" placeholder="Example: 3x4 label, stock bag, box" />
+                      <TextField
+                        label="Search Shopify products"
+                        value={shopifySearch}
+                        onChange={setShopifySearch}
+                        autoComplete="off"
+                        placeholder="Example: 4x5 Custom Pouch"
+                        helpText="Search by product title or SKU. Results stay empty until you search so random products do not get selected by mistake."
+                      />
                     </div>
-                    <Button onClick={searchProducts} loading={fetcher.state !== "idle" && fetcher.formData?.get?.("intent") === "searchShopifyProducts"}>Search</Button>
+                    <Button onClick={searchProducts} loading={shopifySearchInProgress}>Search</Button>
                   </InlineStack>
-                  <Select label="Selected Shopify product" options={shopifyOptions} value={selectedShopifyValue} onChange={setSelectedShopifyValue} />
-                  {selectedShopifyProduct ? (
-                    <Card>
-                      <BlockStack gap="100">
-                        <Text as="p" fontWeight="bold">{selectedShopifyProduct.productTitle}</Text>
-                        <Text as="p" tone="subdued">Variant: {selectedShopifyProduct.variantTitle || "Default"} · SKU: {selectedShopifyProduct.sku || "None"}</Text>
-                        <Text as="p" tone="subdued">Current tags: {(selectedShopifyProduct.tags || []).join(", ") || "No tags yet"}</Text>
-                      </BlockStack>
-                    </Card>
+
+                  {hasSearchedShopify && !shopifySearchInProgress && !shopifyProducts.length ? (
+                    <Text as="p" tone="critical">No matching Shopify products found. Try fewer words, the SKU, or check “new product / not in Shopify yet.”</Text>
                   ) : null}
+
+                  {shopifyProducts.length ? (
+                    <BlockStack gap="300">
+                      {shopifyProducts.map((product) => {
+                        const isSelected = product.productId === selectedShopifyProductId;
+                        return (
+                          <Card key={product.productId}>
+                            <BlockStack gap="300">
+                              <InlineStack align="space-between" blockAlign="start" wrap>
+                                <BlockStack gap="100">
+                                  <Text as="p" fontWeight="bold">{product.productTitle}</Text>
+                                  <Text as="p" tone="subdued">{product.variants.length} variant{product.variants.length === 1 ? "" : "s"} · Tags: {(product.tags || []).join(", ") || "No tags yet"}</Text>
+                                </BlockStack>
+                                <Button variant={isSelected ? "primary" : undefined} onClick={() => chooseShopifyProduct(product)}>
+                                  {isSelected ? "Selected" : "Use this product"}
+                                </Button>
+                              </InlineStack>
+
+                              {isSelected ? (
+                                <BlockStack gap="300">
+                                  <Select
+                                    label="Apply this setup to"
+                                    options={[
+                                      { label: "All variants on this product", value: "product_all_variants" },
+                                      { label: "Only selected variant(s)", value: "selected_variants" },
+                                    ]}
+                                    value={shopifyTargetMode}
+                                    onChange={(value) => {
+                                      setShopifyTargetMode(value);
+                                      if (value === "product_all_variants") setSelectedVariantIds([]);
+                                    }}
+                                  />
+
+                                  {shopifyTargetMode === "selected_variants" ? (
+                                    <BlockStack gap="200">
+                                      {product.variants.map((variant) => (
+                                        <Checkbox
+                                          key={variant.id}
+                                          label={`${variant.title || "Default"}${variant.sku ? ` · SKU ${variant.sku}` : ""}${variant.price ? ` · $${variant.price}` : ""}`}
+                                          checked={selectedVariantIds.includes(variant.id)}
+                                          onChange={(checked) => toggleVariant(variant.id, checked)}
+                                        />
+                                      ))}
+                                      {!selectedVariantIds.length ? <Text as="p" tone="critical">Choose at least one variant or switch back to all variants.</Text> : null}
+                                    </BlockStack>
+                                  ) : null}
+                                </BlockStack>
+                              ) : null}
+                            </BlockStack>
+                          </Card>
+                        );
+                      })}
+                    </BlockStack>
+                  ) : null}
+
                   <Checkbox label="Apply GSO product type tags to Shopify on save" checked={applyShopifyTags} onChange={setApplyShopifyTags} />
                 </BlockStack>
               ) : null}
@@ -842,17 +1118,32 @@ export default function ProductSetupPage() {
                   <TextField label="Target margin %" type="number" value={targetMarginPct} onChange={setTargetMarginPct} autoComplete="off" />
                 </div>
               </InlineStack>
-              <TextField
-                label="Tier breakpoints"
-                value={tierBreakpoints}
-                onChange={setTierBreakpoints}
-                autoComplete="off"
-                helpText="Comma-separated. The first/lowest tier is the highest/max unit price. Larger tiers can be refined later."
-              />
-              <Select label="Pricing method" options={pricingMethodOptions} value={pricingMethod} onChange={setPricingMethod} />
-              <InlineStack gap="200" wrap>
-                {tierList.slice(0, 10).map((qty) => <Badge key={qty}>{qty}</Badge>)}
-              </InlineStack>
+              <Select label="Default pricing method" options={pricingMethodOptions} value={pricingMethod} onChange={setPricingMethod} />
+              <BlockStack gap="250">
+                <Text as="p" tone="subdued">Stacked tiers are easier to review. The first/lowest quantity is the highest unit price. Use margin for auto pricing or fixed price to override a tier.</Text>
+                {tierRows.map((row, index) => (
+                  <Card key={`${index}-${row.minQty}`}>
+                    <InlineStack gap="300" blockAlign="end" wrap>
+                      <div style={{ minWidth: 120, flex: 1 }}>
+                        <TextField label="Qty" type="number" value={row.minQty} onChange={(value) => updateTierRow(index, "minQty", value)} autoComplete="off" />
+                      </div>
+                      <div style={{ minWidth: 140, flex: 1 }}>
+                        <TextField label="Margin %" type="number" value={row.marginPct} onChange={(value) => updateTierRow(index, "marginPct", value)} autoComplete="off" />
+                      </div>
+                      <div style={{ minWidth: 160, flex: 1 }}>
+                        <TextField label="Fixed price optional" type="number" value={row.fixedPrice} onChange={(value) => updateTierRow(index, "fixedPrice", value)} autoComplete="off" prefix="$" />
+                      </div>
+                      <Button disabled={tierRows.length <= 1} onClick={() => removeTierRow(index)}>Remove</Button>
+                    </InlineStack>
+                  </Card>
+                ))}
+                <InlineStack gap="300">
+                  <Button onClick={addTierRow}>Add tier</Button>
+                  <InlineStack gap="200" wrap>
+                    {tierList.slice(0, 10).map((qty) => <Badge key={qty}>{qty}</Badge>)}
+                  </InlineStack>
+                </InlineStack>
+              </BlockStack>
             </BlockStack>
           </Card>
 
