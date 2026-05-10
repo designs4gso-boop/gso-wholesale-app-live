@@ -33,6 +33,8 @@ type ShopifyVariantOption = {
   title: string;
   sku: string;
   price: string;
+  minQuantityHint?: number | null;
+  minQuantitySource?: string | null;
 };
 
 type ShopifyProductOption = {
@@ -41,6 +43,8 @@ type ShopifyProductOption = {
   handle: string;
   status: string;
   tags: string[];
+  minQuantityHint?: number | null;
+  minQuantitySource?: string | null;
   variants: ShopifyVariantOption[];
 };
 
@@ -68,9 +72,9 @@ const productTypeDefaults: Record<string, ProductTypeDefault> = {
   stock_bag: {
     name: "Stock Bags",
     productionMode: "outsourced",
-    minQuantity: 100,
-    defaultQuantity: 100,
-    tiers: [100, 250, 500, 1000, 2500, 5000, 10000],
+    minQuantity: 64,
+    defaultQuantity: 64,
+    tiers: [64, 200, 500, 750, 1000, 2000],
     defaultMarginPct: 50,
     pricingMethod: "auto_margin",
     defaultTags: ["gso:stock-bags", "gso:outsourced", "gso:wholesale"],
@@ -78,9 +82,9 @@ const productTypeDefaults: Record<string, ProductTypeDefault> = {
   box: {
     name: "Boxes",
     productionMode: "outsourced",
-    minQuantity: 5,
-    defaultQuantity: 5,
-    tiers: [5, 10, 25, 50, 100, 250, 500],
+    minQuantity: 500,
+    defaultQuantity: 500,
+    tiers: [500, 1000, 2000, 2500, 5000, 7500, 10000],
     defaultMarginPct: 50,
     pricingMethod: "auto_margin",
     defaultTags: ["gso:boxes", "gso:outsourced", "gso:wholesale"],
@@ -98,9 +102,9 @@ const productTypeDefaults: Record<string, ProductTypeDefault> = {
   sourced_product: {
     name: "Sourced Products",
     productionMode: "outsourced",
-    minQuantity: 1,
-    defaultQuantity: 1,
-    tiers: [1, 10, 25, 50, 100, 250, 500],
+    minQuantity: 64,
+    defaultQuantity: 64,
+    tiers: [64, 200, 500, 750, 1000, 2000],
     defaultMarginPct: 40,
     pricingMethod: "auto_margin",
     defaultTags: ["gso:sourced-products", "gso:outsourced", "gso:wholesale"],
@@ -108,9 +112,9 @@ const productTypeDefaults: Record<string, ProductTypeDefault> = {
   general: {
     name: "General",
     productionMode: "in_house",
-    minQuantity: 1,
-    defaultQuantity: 1,
-    tiers: [1, 10, 25, 50, 100],
+    minQuantity: 64,
+    defaultQuantity: 64,
+    tiers: [64, 200, 500, 750, 1000, 2000],
     defaultMarginPct: 40,
     pricingMethod: "auto_margin",
     defaultTags: ["gso:general", "gso:wholesale"],
@@ -164,17 +168,79 @@ function parseNumberLines(value: any, fallback: number[] = [1]) {
 
 type TierSetupRow = {
   minQty: string;
+  maxQty: string;
   marginPct: string;
   fixedPrice: string;
 };
 
+type VendorTierSetupRow = {
+  minQty: string;
+  maxQty: string;
+  unitCost: string;
+  notes: string;
+};
+
+function nullableIntValue(value: any) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Math.round(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function tierRangeLabel(row: { minQty: any; maxQty?: any }) {
+  const min = positiveInt(row.minQty, 1);
+  const max = nullableIntValue(row.maxQty);
+  return max ? `${min}-${max}` : `${min}+`;
+}
+
+function makeRangeRows(starts: number[], marginPct: number): TierSetupRow[] {
+  const uniqueStarts = Array.from(new Set(starts.map((qty) => positiveInt(qty, 0)).filter((qty) => qty > 0))).sort((a, b) => a - b);
+  const rows = uniqueStarts.length ? uniqueStarts : [1];
+  return rows.map((qty, index) => {
+    const next = rows[index + 1];
+    return {
+      minQty: String(qty),
+      maxQty: next ? String(Math.max(qty, next - 1)) : "",
+      marginPct: String(marginPct),
+      fixedPrice: "",
+    };
+  });
+}
+
+function suggestedTierStarts(minQuantity: number) {
+  const min = positiveInt(minQuantity, 1);
+  let anchors: number[];
+
+  if (min < 10) {
+    anchors = [min, 10, 25, 50, 100, 250, 500];
+  } else if (min < 50) {
+    anchors = [min, 50, 100, 250, 500, 750, 1000, 2000];
+  } else if (min < 100) {
+    anchors = [min, 200, 500, 750, 1000, 2000];
+  } else if (min < 500) {
+    anchors = [min, 250, 500, 750, 1000, 2000, 5000];
+  } else if (min < 1000) {
+    anchors = [min, 1000, 2000, 2500, 5000, 7500, 10000];
+  } else {
+    anchors = [min, 2000, 2500, 5000, 7500, 10000];
+  }
+
+  return Array.from(new Set(anchors.filter((qty) => qty >= min))).sort((a, b) => a - b);
+}
+
+function suggestedTierRowsFromMin(minQuantity: number, marginPct: number, templateRows: TierSetupRow[] = []) {
+  const starts = suggestedTierStarts(minQuantity);
+  return makeRangeRows(starts, marginPct).map((row, index) => {
+    const template = templateRows[index] || templateRows[templateRows.length - 1];
+    return {
+      ...row,
+      marginPct: template?.marginPct || String(marginPct),
+      fixedPrice: template?.fixedPrice || "",
+    };
+  });
+}
+
 function makeTierRows(quantities: number[], marginPct: number): TierSetupRow[] {
-  const rows = quantities.length ? quantities : [1];
-  return rows.map((qty) => ({
-    minQty: String(qty),
-    marginPct: String(marginPct),
-    fixedPrice: "",
-  }));
+  return makeRangeRows(quantities.length ? quantities : [1], marginPct);
 }
 
 function cleanTierRows(rows: any[], fallbackQuantities: number[], fallbackMarginPct: number) {
@@ -185,6 +251,7 @@ function cleanTierRows(rows: any[], fallbackQuantities: number[], fallbackMargin
   const cleaned = source
     .map((row) => ({
       minQty: positiveInt(row?.minQty, 0),
+      maxQty: nullableIntValue(row?.maxQty),
       marginPct: nullableNumber(row?.marginPct),
       fixedPrice: nullableNumber(row?.fixedPrice),
     }))
@@ -201,9 +268,27 @@ function cleanTierRows(rows: any[], fallbackQuantities: number[], fallbackMargin
     }
   }
 
-  return deduped.length
-    ? deduped
-    : [{ minQty: positiveInt(fallbackQuantities[0], 1), marginPct: fallbackMarginPct, fixedPrice: null }];
+  return deduped.map((row, index) => {
+    const next = deduped[index + 1];
+    const computedMax = next ? Math.max(row.minQty, next.minQty - 1) : null;
+    return {
+      minQty: row.minQty,
+      maxQty: row.maxQty ?? computedMax,
+      marginPct: row.marginPct ?? fallbackMarginPct,
+      fixedPrice: row.fixedPrice,
+    };
+  }).length
+    ? deduped.map((row, index) => {
+        const next = deduped[index + 1];
+        const computedMax = next ? Math.max(row.minQty, next.minQty - 1) : null;
+        return {
+          minQty: row.minQty,
+          maxQty: row.maxQty ?? computedMax,
+          marginPct: row.marginPct ?? fallbackMarginPct,
+          fixedPrice: row.fixedPrice,
+        };
+      })
+    : [{ minQty: positiveInt(fallbackQuantities[0], 1), maxQty: null, marginPct: fallbackMarginPct, fixedPrice: null }];
 }
 
 function parseTierRows(value: any, fallbackQuantities: number[], fallbackMarginPct: number) {
@@ -218,13 +303,23 @@ function parseTierRows(value: any, fallbackQuantities: number[], fallbackMarginP
     }
 
     return cleanTierRows(
-      parseNumberLines(value, fallbackQuantities).map((qty) => ({ minQty: String(qty), marginPct: String(fallbackMarginPct), fixedPrice: "" })),
+      parseNumberLines(value, fallbackQuantities).map((qty) => ({ minQty: String(qty), maxQty: "", marginPct: String(fallbackMarginPct), fixedPrice: "" })),
       fallbackQuantities,
       fallbackMarginPct,
     );
   }
 
   return cleanTierRows([], fallbackQuantities, fallbackMarginPct);
+}
+
+function parseTierTemplate(value: any, fallbackQuantities: number[], fallbackMarginPct: number): TierSetupRow[] {
+  const parsed = parseTierRows(value, fallbackQuantities, fallbackMarginPct);
+  return parsed.map((row) => ({
+    minQty: String(row.minQty),
+    maxQty: row.maxQty ? String(row.maxQty) : "",
+    marginPct: row.marginPct !== null && row.marginPct !== undefined ? String(row.marginPct) : String(fallbackMarginPct),
+    fixedPrice: row.fixedPrice !== null && row.fixedPrice !== undefined ? String(row.fixedPrice) : "",
+  }));
 }
 
 function parseTags(value: any) {
@@ -234,7 +329,52 @@ function parseTags(value: any) {
     .filter(Boolean);
 }
 
-function parseVendorCostTiers(value: any, fallbackQty: number, fallbackCost: number) {
+function cleanVendorTierRows(rows: any[], fallbackRows: TierSetupRow[], fallbackCost: number): VendorTierSetupRow[] {
+  const source = Array.isArray(rows) && rows.length
+    ? rows
+    : fallbackRows.map((row) => ({ minQty: row.minQty, maxQty: row.maxQty, unitCost: String(fallbackCost || ""), notes: "" }));
+
+  const cleaned = source
+    .map((row) => ({
+      minQty: positiveInt(row?.minQty, 0),
+      maxQty: nullableIntValue(row?.maxQty),
+      unitCost: numberOrZero(row?.unitCost),
+      notes: String(row?.notes || "").trim(),
+    }))
+    .filter((row) => row.minQty > 0)
+    .sort((a, b) => a.minQty - b.minQty);
+
+  const deduped: typeof cleaned = [];
+  for (const row of cleaned) {
+    const existingIndex = deduped.findIndex((item) => item.minQty === row.minQty);
+    if (existingIndex >= 0) deduped[existingIndex] = row;
+    else deduped.push(row);
+  }
+
+  const withRanges = deduped.map((row, index) => {
+    const next = deduped[index + 1];
+    return {
+      minQty: String(row.minQty),
+      maxQty: row.maxQty ? String(row.maxQty) : next ? String(Math.max(row.minQty, next.minQty - 1)) : "",
+      unitCost: row.unitCost ? String(row.unitCost) : "",
+      notes: row.notes,
+    };
+  });
+
+  return withRanges.length ? withRanges : [{ minQty: "1", maxQty: "", unitCost: String(fallbackCost || ""), notes: "" }];
+}
+
+function parseVendorCostTiers(value: any, fallbackRows: TierSetupRow[], fallbackCost: number) {
+  if (Array.isArray(value)) {
+    return cleanVendorTierRows(value, fallbackRows, fallbackCost)
+      .map((row) => ({
+        minQty: positiveInt(row.minQty, 1),
+        maxQty: nullableIntValue(row.maxQty),
+        unitCost: numberOrZero(row.unitCost),
+        notes: row.notes || null,
+      }));
+  }
+
   const parsed = String(value || "")
     .split(/\n+/)
     .map((line) => line.trim())
@@ -242,16 +382,22 @@ function parseVendorCostTiers(value: any, fallbackQty: number, fallbackCost: num
     .map((line) => {
       const parts = line.split(/[|,]/).map((part) => part.trim());
       return {
-        minQty: positiveInt(parts[0], fallbackQty),
-        unitCost: numberOrZero(parts[1]),
-        notes: parts.slice(2).join(" | ") || null,
+        minQty: positiveInt(parts[0], positiveInt(fallbackRows[0]?.minQty, 1)),
+        maxQty: nullableIntValue(parts[1]),
+        unitCost: numberOrZero(parts[2] ?? parts[1]),
+        notes: parts.slice(3).join(" | ") || null,
       };
     })
     .filter((item) => item.minQty > 0)
     .sort((a, b) => a.minQty - b.minQty);
 
   if (parsed.length) return parsed;
-  return [{ minQty: fallbackQty, unitCost: numberOrZero(fallbackCost), notes: null }];
+  return cleanVendorTierRows([], fallbackRows, fallbackCost).map((row) => ({
+    minQty: positiveInt(row.minQty, 1),
+    maxQty: nullableIntValue(row.maxQty),
+    unitCost: numberOrZero(row.unitCost),
+    notes: row.notes || null,
+  }));
 }
 
 function parseAddOns(value: any) {
@@ -296,6 +442,7 @@ function defaultRows(shop: string) {
     minQuantity: defaults.minQuantity,
     defaultQuantity: defaults.defaultQuantity,
     tierBreakpoints: defaults.tiers.join(", "),
+    tierTemplate: JSON.stringify(makeRangeRows(defaults.tiers, defaults.defaultMarginPct)),
     defaultMarginPct: defaults.defaultMarginPct,
     pricingMethod: defaults.pricingMethod,
     defaultTags: defaults.defaultTags.join(", "),
@@ -335,6 +482,57 @@ function normalizeForRanking(value: string) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function firstPositiveIntFromValues(values: any[]) {
+  for (const value of values) {
+    const parsed = positiveInt(value, 0);
+    if (parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function inferMinQuantityFromTags(tags: string[] = []) {
+  for (const tag of tags || []) {
+    const normalized = String(tag || "").toLowerCase();
+    const match = normalized.match(/(?:min|moq|minimum|gso:min|gso:moq)[^0-9]*([0-9]+)/);
+    if (match) {
+      const parsed = positiveInt(match[1], 0);
+      if (parsed > 0) return { value: parsed, source: `tag:${tag}` };
+    }
+  }
+  return { value: null, source: null };
+}
+
+function inferMinQuantityFromMetafields(owner: any, tags: string[] = []) {
+  const direct = firstPositiveIntFromValues([
+    owner?.gsoMinQuantity?.value,
+    owner?.customMinQuantity?.value,
+    owner?.customMinimumQuantity?.value,
+    owner?.customMoq?.value,
+  ]);
+  if (direct) return { value: direct, source: "Shopify metafield" };
+  return inferMinQuantityFromTags(tags);
+}
+
+function inferMinQuantityFromSelectedProduct(product: ShopifyProductOption | null, variantIds: string[] = [], targetMode = "product_all_variants") {
+  if (!product) return { value: null, source: null };
+  const selectedVariants = targetMode === "selected_variants"
+    ? product.variants.filter((variant) => variantIds.includes(variant.id))
+    : product.variants;
+  const variantMinimums = selectedVariants
+    .map((variant) => variant.minQuantityHint)
+    .filter((value): value is number => Boolean(value && value > 0));
+
+  if (variantMinimums.length) {
+    return { value: Math.max(...variantMinimums), source: "selected Shopify variant" };
+  }
+
+  if (product.minQuantityHint) {
+    return { value: product.minQuantityHint, source: product.minQuantitySource || "Shopify product" };
+  }
+
+  return { value: null, source: null };
+}
+
 function productSearchScore(product: ShopifyProductOption, search: string) {
   const title = normalizeForRanking(product.productTitle);
   const raw = normalizeForRanking(search);
@@ -372,12 +570,20 @@ async function runProductSearch(admin: any, query: string) {
             handle
             status
             tags
+            gsoMinQuantity: metafield(namespace: "gso_erp", key: "min_quantity") { value }
+            customMinQuantity: metafield(namespace: "custom", key: "min_quantity") { value }
+            customMinimumQuantity: metafield(namespace: "custom", key: "minimum_quantity") { value }
+            customMoq: metafield(namespace: "custom", key: "moq") { value }
             variants(first: 100) {
               nodes {
                 id
                 title
                 sku
                 price
+                gsoMinQuantity: metafield(namespace: "gso_erp", key: "min_quantity") { value }
+                customMinQuantity: metafield(namespace: "custom", key: "min_quantity") { value }
+                customMinimumQuantity: metafield(namespace: "custom", key: "minimum_quantity") { value }
+                customMoq: metafield(namespace: "custom", key: "moq") { value }
               }
             }
           }
@@ -390,19 +596,29 @@ async function runProductSearch(admin: any, query: string) {
   const json = await response.json();
   if (json.errors) return [];
 
-  return (json.data?.products?.nodes || []).map((product: any) => ({
-    productId: product.id,
-    productTitle: product.title,
-    handle: product.handle || "",
-    status: product.status || "",
-    tags: product.tags || [],
-    variants: (product.variants?.nodes || []).map((variant: any) => ({
-      id: variant.id,
-      title: variant.title || "Default Title",
-      sku: variant.sku || "",
-      price: String(variant.price || "0"),
-    })),
-  })) as ShopifyProductOption[];
+  return (json.data?.products?.nodes || []).map((product: any) => {
+    const productMin = inferMinQuantityFromMetafields(product, product.tags || []);
+    return {
+      productId: product.id,
+      productTitle: product.title,
+      handle: product.handle || "",
+      status: product.status || "",
+      tags: product.tags || [],
+      minQuantityHint: productMin.value,
+      minQuantitySource: productMin.source,
+      variants: (product.variants?.nodes || []).map((variant: any) => {
+        const variantMin = inferMinQuantityFromMetafields(variant, product.tags || []);
+        return {
+          id: variant.id,
+          title: variant.title || "Default Title",
+          sku: variant.sku || "",
+          price: String(variant.price || "0"),
+          minQuantityHint: variantMin.value,
+          minQuantitySource: variantMin.source,
+        };
+      }),
+    };
+  }) as ShopifyProductOption[];
 }
 
 async function searchShopifyProducts(admin: any, search: string) {
@@ -543,7 +759,8 @@ export async function action({ request }: { request: Request }) {
   const defaultQuantity = Math.max(minQuantity, positiveInt(payload.defaultQuantity, profile.defaultQuantity || minQuantity));
   const marginPct = numberOrZero(payload.targetMarginPct || profile.defaultMarginPct || 40);
   const fallbackTiers = parseNumberLines(profile.tierBreakpoints, [minQuantity]).filter((qty) => qty >= minQuantity);
-  const tierRows = parseTierRows(payload.tierRows || payload.tierBreakpoints, fallbackTiers, marginPct)
+  const profileTemplateRows = parseTierTemplate(profile.tierTemplate, fallbackTiers, marginPct);
+  const tierRows = parseTierRows(payload.tierRows || payload.tierBreakpoints || profile.tierTemplate, fallbackTiers, marginPct)
     .filter((row) => row.minQty >= minQuantity);
   const tiers = tierRows.map((row) => row.minQty);
   const pricingMethod = payload.pricingMethod || profile.pricingMethod || "auto_margin";
@@ -570,7 +787,7 @@ export async function action({ request }: { request: Request }) {
       const vendorName = String(payload.vendorName || "").trim();
       const vendorProductName = String(payload.vendorProductName || productName).trim();
       const fallbackUnitCost = numberOrZero(payload.vendorFallbackUnitCost);
-      const vendorTiers = parseVendorCostTiers(payload.vendorCostTiers, minQuantity, fallbackUnitCost);
+      const vendorTiers = parseVendorCostTiers(payload.vendorTierRows || payload.vendorCostTiers, tierRows.map((row) => ({ ...row, minQty: String(row.minQty), maxQty: row.maxQty ? String(row.maxQty) : "" })), fallbackUnitCost);
       const addOns = parseAddOns(payload.vendorAddOns);
 
       if (!vendorProductId && existingRecipe?.vendorProductId) {
@@ -671,6 +888,7 @@ export async function action({ request }: { request: Request }) {
         shop,
         recipeId,
         minQty: row.minQty,
+        maxQty: row.maxQty,
         marginPct: row.marginPct ?? marginPct,
         fixedPrice: row.fixedPrice,
       })),
@@ -732,12 +950,19 @@ export async function action({ request }: { request: Request }) {
 function profileDefaults(profile: any) {
   const fallback = productTypeDefaults[profile?.key] || productTypeDefaults.general;
   const minQuantity = positiveInt(profile?.minQuantity, fallback.minQuantity);
+  const margin = numberOrZero(profile?.defaultMarginPct || fallback.defaultMarginPct);
+  const fallbackBreakpoints = parseNumberLines(profile?.tierBreakpoints, fallback.tiers).filter((qty) => qty >= minQuantity);
+  const profileTierRows = parseTierTemplate(profile?.tierTemplate, fallbackBreakpoints, margin);
+  const generatedTierRows = suggestedTierRowsFromMin(minQuantity, margin, profileTierRows);
+
   return {
     productionMode: profile?.productionMode || fallback.productionMode,
     minQuantity,
     defaultQuantity: Math.max(minQuantity, positiveInt(profile?.defaultQuantity, fallback.defaultQuantity)),
-    tiers: parseNumberLines(profile?.tierBreakpoints, fallback.tiers).filter((qty) => qty >= minQuantity),
-    margin: numberOrZero(profile?.defaultMarginPct || fallback.defaultMarginPct),
+    tiers: generatedTierRows.map((row) => positiveInt(row.minQty, minQuantity)),
+    tierRows: generatedTierRows,
+    profileTierRows,
+    margin,
     pricingMethod: profile?.pricingMethod || fallback.pricingMethod,
     tags: profile?.defaultTags || fallback.defaultTags.join(", "),
   };
@@ -766,6 +991,23 @@ function getAddOnUnitCost(vendorProduct: any, quantity: number) {
   return addOnCost;
 }
 
+function getBestVendorTierRow(rows: VendorTierSetupRow[], quantity: number) {
+  const sorted = cleanVendorTierRows(rows, [], 0)
+    .map((row) => ({
+      minQty: positiveInt(row.minQty, 1),
+      maxQty: nullableIntValue(row.maxQty),
+      unitCost: numberOrZero(row.unitCost),
+    }))
+    .sort((a, b) => a.minQty - b.minQty);
+
+  let best = sorted[0];
+  for (const row of sorted) {
+    if (quantity >= row.minQty && (!row.maxQty || quantity <= row.maxQty)) return row;
+    if (quantity >= row.minQty) best = row;
+  }
+  return best || { minQty: quantity, maxQty: null, unitCost: 0 };
+}
+
 export default function ProductSetupPage() {
   const { profiles, materials, machines, vendorProducts, recentRecipes, shopifyProducts: initialShopifyProducts } = useLoaderData<any>();
   const fetcher = useFetcher<any>();
@@ -789,7 +1031,9 @@ export default function ProductSetupPage() {
   const [productionMode, setProductionMode] = useState(defaults.productionMode);
   const [minQuantity, setMinQuantity] = useState(String(defaults.minQuantity));
   const [defaultQuantity, setDefaultQuantity] = useState(String(defaults.defaultQuantity));
-  const [tierRows, setTierRows] = useState<TierSetupRow[]>(() => makeTierRows(defaults.tiers, defaults.margin));
+  const [minimumSource, setMinimumSource] = useState("Product type profile");
+  const [tierRows, setTierRows] = useState<TierSetupRow[]>(() => defaults.tierRows);
+  const [useProfileMargins, setUseProfileMargins] = useState(true);
   const [targetMarginPct, setTargetMarginPct] = useState(String(defaults.margin));
   const [pricingMethod, setPricingMethod] = useState(defaults.pricingMethod);
 
@@ -806,7 +1050,7 @@ export default function ProductSetupPage() {
   const [vendorName, setVendorName] = useState("");
   const [vendorSku, setVendorSku] = useState("");
   const [vendorFallbackUnitCost, setVendorFallbackUnitCost] = useState("");
-  const [vendorCostTiers, setVendorCostTiers] = useState("");
+  const [vendorTierRows, setVendorTierRows] = useState<VendorTierSetupRow[]>(() => cleanVendorTierRows([], defaults.tierRows, 0));
   const [vendorAddOns, setVendorAddOns] = useState("Gloss finish | per_unit | 0.08\nSetup fee | flat_fee | 75\nFreight | flat_fee | 120");
   const [leadTimeDays, setLeadTimeDays] = useState("");
   const [notes, setNotes] = useState("");
@@ -818,9 +1062,12 @@ export default function ProductSetupPage() {
     setProductionMode(defaults.productionMode);
     setMinQuantity(String(defaults.minQuantity));
     setDefaultQuantity(String(defaults.defaultQuantity));
-    setTierRows(makeTierRows(defaults.tiers, defaults.margin));
+    setMinimumSource("Product type profile");
+    setTierRows(defaults.tierRows);
+    setUseProfileMargins(true);
     setTargetMarginPct(String(defaults.margin));
     setPricingMethod(defaults.pricingMethod);
+    setVendorTierRows(cleanVendorTierRows([], defaults.tierRows, numberOrZero(vendorFallbackUnitCost)));
   }, [profileId]);
 
   useEffect(() => {
@@ -831,6 +1078,13 @@ export default function ProductSetupPage() {
       }
     }
   }, [selectedShopifyProductId, selectedVariantIds.join("|")]);
+
+  useEffect(() => {
+    if (!selectedShopifyProduct || skipShopifyLink) return;
+    const inferred = inferMinQuantityFromSelectedProduct(selectedShopifyProduct, selectedVariantIds, shopifyTargetMode);
+    if (!inferred.value) return;
+    applyMinimumAndSuggestedTiers(inferred.value, inferred.source || "Shopify product");
+  }, [selectedShopifyProductId, shopifyTargetMode, selectedVariantIds.join("|")]);
 
   useEffect(() => {
     if (fetcher.data?.shopifyProducts) {
@@ -845,7 +1099,7 @@ export default function ProductSetupPage() {
       setVendorName("");
       setVendorSku("");
       setVendorFallbackUnitCost("");
-      setVendorCostTiers("");
+      setVendorTierRows(cleanVendorTierRows([], defaults.tierRows, numberOrZero(vendorFallbackUnitCost)));
       setNotes("");
     }
   }, [fetcher.data]);
@@ -855,9 +1109,16 @@ export default function ProductSetupPage() {
   const tierList = cleanRows.map((row) => row.minQty);
   const selectedVendorProduct = vendorProducts.find((item: any) => item.id === vendorProductId);
   const bestVendorTier = getBestVendorTier(selectedVendorProduct, quantity);
+  const cleanVendorRows = cleanVendorTierRows(vendorTierRows, cleanRows.map((row) => ({
+    minQty: String(row.minQty),
+    maxQty: row.maxQty ? String(row.maxQty) : "",
+    marginPct: String(row.marginPct ?? targetMarginPct),
+    fixedPrice: row.fixedPrice ? String(row.fixedPrice) : "",
+  })), numberOrZero(vendorFallbackUnitCost));
+  const bestVendorRow = getBestVendorTierRow(cleanVendorRows, quantity);
   const vendorPreviewCost = selectedVendorProduct
     ? numberOrZero(bestVendorTier.unitCost) + getAddOnUnitCost(selectedVendorProduct, quantity)
-    : numberOrZero(vendorFallbackUnitCost);
+    : numberOrZero(bestVendorRow.unitCost || vendorFallbackUnitCost);
   const estimatedPrice = marginPrice(vendorPreviewCost, numberOrZero(targetMarginPct));
 
   const profileOptions = profiles.map((profile: any) => ({ label: profile.name, value: profile.id }));
@@ -882,6 +1143,35 @@ export default function ProductSetupPage() {
   const isOutsourced = productionMode === "outsourced";
   const isInHouse = productionMode === "in_house";
   const isHybrid = productionMode === "hybrid";
+
+  function buildSuggestedRows(minQty: number) {
+    return suggestedTierRowsFromMin(minQty, numberOrZero(targetMarginPct || defaults.margin), defaults.profileTierRows || defaults.tierRows);
+  }
+
+  function applyMinimumAndSuggestedTiers(value: any, source = "Product type profile") {
+    const requestedMin = positiveInt(value, defaults.minQuantity || 64);
+    const profileFloor = positiveInt(defaults.minQuantity, 64);
+    const min = Math.max(requestedMin, profileFloor);
+    const suggestedRows = buildSuggestedRows(min);
+    setMinimumSource(min > requestedMin ? `${source}; raised to ${min} by product type minimum` : source);
+    setMinQuantity(String(min));
+    setDefaultQuantity(String(Math.max(min, positiveInt(defaultQuantity, min))));
+    setTierRows(suggestedRows);
+    setVendorTierRows(cleanVendorTierRows([], suggestedRows, numberOrZero(vendorFallbackUnitCost)));
+  }
+
+  function regenerateTiersFromCurrentMinimum() {
+    applyMinimumAndSuggestedTiers(minQuantity, "Manual regenerate from current minimum");
+  }
+
+  function syncVendorRowsFromPricingRows() {
+    setVendorTierRows((current) => cleanVendorTierRows(current, cleanRows.map((row) => ({
+      minQty: String(row.minQty),
+      maxQty: row.maxQty ? String(row.maxQty) : "",
+      marginPct: String(row.marginPct ?? targetMarginPct),
+      fixedPrice: row.fixedPrice ? String(row.fixedPrice) : "",
+    })), numberOrZero(vendorFallbackUnitCost)));
+  }
 
   function searchProducts() {
     setHasSearchedShopify(true);
@@ -914,11 +1204,27 @@ export default function ProductSetupPage() {
 
   function addTierRow() {
     const lastQty = tierList.length ? tierList[tierList.length - 1] : positiveInt(minQuantity, 1);
-    setTierRows((current) => [...current, { minQty: String(lastQty * 2), marginPct: targetMarginPct, fixedPrice: "" }]);
+    const newQty = lastQty >= 1000 ? lastQty + 1000 : lastQty >= 100 ? lastQty + 250 : lastQty * 2;
+    setTierRows((current) => [...current, { minQty: String(newQty), maxQty: "", marginPct: targetMarginPct, fixedPrice: "" }]);
   }
 
   function removeTierRow(index: number) {
     setTierRows((current) => current.length <= 1 ? current : current.filter((_row, rowIndex) => rowIndex !== index));
+  }
+
+  function updateVendorTierRow(index: number, field: keyof VendorTierSetupRow, value: string) {
+    setVendorTierRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row));
+  }
+
+  function addVendorTierRow() {
+    const lastRow = cleanVendorRows[cleanVendorRows.length - 1];
+    const lastQty = positiveInt(lastRow?.minQty, positiveInt(minQuantity, 1));
+    const newQty = lastQty >= 1000 ? lastQty + 1000 : lastQty >= 100 ? lastQty + 250 : lastQty * 2;
+    setVendorTierRows((current) => [...current, { minQty: String(newQty), maxQty: "", unitCost: "", notes: "" }]);
+  }
+
+  function removeVendorTierRow(index: number) {
+    setVendorTierRows((current) => current.length <= 1 ? current : current.filter((_row, rowIndex) => rowIndex !== index));
   }
 
   function submit() {
@@ -951,7 +1257,7 @@ export default function ProductSetupPage() {
         vendorName,
         vendorSku,
         vendorFallbackUnitCost,
-        vendorCostTiers,
+        vendorTierRows: cleanVendorRows,
         vendorAddOns,
         leadTimeDays,
         notes,
@@ -1019,7 +1325,7 @@ export default function ProductSetupPage() {
                               <InlineStack align="space-between" blockAlign="start" wrap>
                                 <BlockStack gap="100">
                                   <Text as="p" fontWeight="bold">{product.productTitle}</Text>
-                                  <Text as="p" tone="subdued">{product.variants.length} variant{product.variants.length === 1 ? "" : "s"} · Tags: {(product.tags || []).join(", ") || "No tags yet"}</Text>
+                                  <Text as="p" tone="subdued">{product.variants.length} variant{product.variants.length === 1 ? "" : "s"}{product.minQuantityHint ? ` · Shopify min ${product.minQuantityHint}` : ""} · Tags: {(product.tags || []).join(", ") || "No tags yet"}</Text>
                                 </BlockStack>
                                 <Button variant={isSelected ? "primary" : undefined} onClick={() => chooseShopifyProduct(product)}>
                                   {isSelected ? "Selected" : "Use this product"}
@@ -1046,7 +1352,7 @@ export default function ProductSetupPage() {
                                       {product.variants.map((variant) => (
                                         <Checkbox
                                           key={variant.id}
-                                          label={`${variant.title || "Default"}${variant.sku ? ` · SKU ${variant.sku}` : ""}${variant.price ? ` · $${variant.price}` : ""}`}
+                                          label={`${variant.title || "Default"}${variant.sku ? ` · SKU ${variant.sku}` : ""}${variant.price ? ` · $${variant.price}` : ""}${variant.minQuantityHint ? ` · Min ${variant.minQuantityHint}` : ""}`}
                                           checked={selectedVariantIds.includes(variant.id)}
                                           onChange={(checked) => toggleVariant(variant.id, checked)}
                                         />
@@ -1106,41 +1412,62 @@ export default function ProductSetupPage() {
 
           <Card>
             <BlockStack gap="400">
-              <Text as="h2" variant="headingMd">3. Quantity tiers and pricing rules</Text>
+              <InlineStack align="space-between" blockAlign="start" wrap>
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingMd">3. Quantity tiers and pricing rules</Text>
+                  <Text as="p" tone="subdued">Tiers are now ranges. The minimum quantity drives the suggested ranges, and margins come from the product type profile unless you choose to override them.</Text>
+                </BlockStack>
+                <Badge>{minimumSource}</Badge>
+              </InlineStack>
+
               <InlineStack gap="300" wrap>
                 <div style={{ minWidth: 160, flex: 1 }}>
-                  <TextField label="Minimum quantity" type="number" value={minQuantity} onChange={setMinQuantity} autoComplete="off" />
+                  <TextField label="Minimum quantity" type="number" value={minQuantity} onChange={setMinQuantity} autoComplete="off" helpText="If Shopify has a GSO/custom min quantity metafield or MOQ tag, the app pulls it in automatically." />
                 </div>
                 <div style={{ minWidth: 160, flex: 1 }}>
                   <TextField label="Default quote quantity" type="number" value={defaultQuantity} onChange={setDefaultQuantity} autoComplete="off" />
                 </div>
                 <div style={{ minWidth: 160, flex: 1 }}>
-                  <TextField label="Target margin %" type="number" value={targetMarginPct} onChange={setTargetMarginPct} autoComplete="off" />
+                  <TextField label="Fallback margin %" type="number" value={targetMarginPct} onChange={setTargetMarginPct} autoComplete="off" helpText="Used only when a tier has no profile margin." />
                 </div>
               </InlineStack>
+
+              <InlineStack gap="300" wrap>
+                <Button onClick={regenerateTiersFromCurrentMinimum}>Generate tier ranges from minimum</Button>
+                <Checkbox label="Use product type profile margins" checked={useProfileMargins} onChange={setUseProfileMargins} />
+              </InlineStack>
+
               <Select label="Default pricing method" options={pricingMethodOptions} value={pricingMethod} onChange={setPricingMethod} />
               <BlockStack gap="250">
-                <Text as="p" tone="subdued">Stacked tiers are easier to review. The first/lowest quantity is the highest unit price. Use margin for auto pricing or fixed price to override a tier.</Text>
+                <Text as="p" tone="subdued">Example: stock bags/stickers start at 64 and become 64-199, 200-499, 500-749, 750-999, 1000-1999, 2000+. Boxes start at 500 and become 500-999, 1000-1999, 2000-2499, 2500-4999, 5000-7499, 7500-9999, 10000+. If a Shopify product has a higher minimum, the app uses the higher number.</Text>
                 {tierRows.map((row, index) => (
-                  <Card key={`${index}-${row.minQty}`}>
-                    <InlineStack gap="300" blockAlign="end" wrap>
-                      <div style={{ minWidth: 120, flex: 1 }}>
-                        <TextField label="Qty" type="number" value={row.minQty} onChange={(value) => updateTierRow(index, "minQty", value)} autoComplete="off" />
-                      </div>
-                      <div style={{ minWidth: 140, flex: 1 }}>
-                        <TextField label="Margin %" type="number" value={row.marginPct} onChange={(value) => updateTierRow(index, "marginPct", value)} autoComplete="off" />
-                      </div>
-                      <div style={{ minWidth: 160, flex: 1 }}>
-                        <TextField label="Fixed price optional" type="number" value={row.fixedPrice} onChange={(value) => updateTierRow(index, "fixedPrice", value)} autoComplete="off" prefix="$" />
-                      </div>
-                      <Button disabled={tierRows.length <= 1} onClick={() => removeTierRow(index)}>Remove</Button>
-                    </InlineStack>
+                  <Card key={`${index}-${row.minQty}-${row.maxQty}`}>
+                    <BlockStack gap="200">
+                      <InlineStack align="space-between" blockAlign="center">
+                        <Text as="p" fontWeight="semibold">Tier {index + 1}: {tierRangeLabel(row)}</Text>
+                        <Button disabled={tierRows.length <= 1} onClick={() => removeTierRow(index)}>Remove</Button>
+                      </InlineStack>
+                      <InlineStack gap="300" blockAlign="end" wrap>
+                        <div style={{ minWidth: 120, flex: 1 }}>
+                          <TextField label="From qty" type="number" value={row.minQty} onChange={(value) => updateTierRow(index, "minQty", value)} autoComplete="off" />
+                        </div>
+                        <div style={{ minWidth: 120, flex: 1 }}>
+                          <TextField label="To qty" type="number" value={row.maxQty} onChange={(value) => updateTierRow(index, "maxQty", value)} autoComplete="off" placeholder="No max" />
+                        </div>
+                        <div style={{ minWidth: 140, flex: 1 }}>
+                          <TextField label="Margin %" type="number" value={row.marginPct} onChange={(value) => updateTierRow(index, "marginPct", value)} autoComplete="off" disabled={useProfileMargins} />
+                        </div>
+                        <div style={{ minWidth: 160, flex: 1 }}>
+                          <TextField label="Fixed price optional" type="number" value={row.fixedPrice} onChange={(value) => updateTierRow(index, "fixedPrice", value)} autoComplete="off" prefix="$" disabled={useProfileMargins} />
+                        </div>
+                      </InlineStack>
+                    </BlockStack>
                   </Card>
                 ))}
-                <InlineStack gap="300">
+                <InlineStack gap="300" blockAlign="center" wrap>
                   <Button onClick={addTierRow}>Add tier</Button>
                   <InlineStack gap="200" wrap>
-                    {tierList.slice(0, 10).map((qty) => <Badge key={qty}>{qty}</Badge>)}
+                    {cleanRows.slice(0, 10).map((row) => <Badge key={`${row.minQty}-${row.maxQty}`}>{tierRangeLabel(row)}</Badge>)}
                   </InlineStack>
                 </InlineStack>
               </BlockStack>
@@ -1202,14 +1529,40 @@ export default function ProductSetupPage() {
                         <TextField label="Lead time days" type="number" value={leadTimeDays} onChange={setLeadTimeDays} autoComplete="off" />
                       </div>
                     </InlineStack>
-                    <TextField
-                      label="Vendor cost tiers"
-                      value={vendorCostTiers}
-                      onChange={setVendorCostTiers}
-                      multiline={5}
-                      autoComplete="off"
-                      helpText="One per line: quantity | unit cost. Example: 100 | 0.42"
-                    />
+                    <BlockStack gap="250">
+                      <InlineStack align="space-between" blockAlign="center" wrap>
+                        <BlockStack gap="100">
+                          <Text as="h3" variant="headingSm">Vendor cost tiers</Text>
+                          <Text as="p" tone="subdued">Use the same ranges as customer tiers. Enter the vendor cost each for every range you need.</Text>
+                        </BlockStack>
+                        <Button onClick={syncVendorRowsFromPricingRows}>Match pricing tier ranges</Button>
+                      </InlineStack>
+                      {vendorTierRows.map((row, index) => (
+                        <Card key={`${index}-${row.minQty}-${row.maxQty}`}>
+                          <BlockStack gap="200">
+                            <InlineStack align="space-between" blockAlign="center">
+                              <Text as="p" fontWeight="semibold">Vendor tier {index + 1}: {tierRangeLabel(row)}</Text>
+                              <Button disabled={vendorTierRows.length <= 1} onClick={() => removeVendorTierRow(index)}>Remove</Button>
+                            </InlineStack>
+                            <InlineStack gap="300" blockAlign="end" wrap>
+                              <div style={{ minWidth: 110, flex: 1 }}>
+                                <TextField label="From qty" type="number" value={row.minQty} onChange={(value) => updateVendorTierRow(index, "minQty", value)} autoComplete="off" />
+                              </div>
+                              <div style={{ minWidth: 110, flex: 1 }}>
+                                <TextField label="To qty" type="number" value={row.maxQty} onChange={(value) => updateVendorTierRow(index, "maxQty", value)} autoComplete="off" placeholder="No max" />
+                              </div>
+                              <div style={{ minWidth: 130, flex: 1 }}>
+                                <TextField label="Vendor cost each" type="number" value={row.unitCost} onChange={(value) => updateVendorTierRow(index, "unitCost", value)} autoComplete="off" prefix="$" />
+                              </div>
+                              <div style={{ minWidth: 180, flex: 2 }}>
+                                <TextField label="Notes optional" value={row.notes} onChange={(value) => updateVendorTierRow(index, "notes", value)} autoComplete="off" />
+                              </div>
+                            </InlineStack>
+                          </BlockStack>
+                        </Card>
+                      ))}
+                      <Button onClick={addVendorTierRow}>Add vendor tier</Button>
+                    </BlockStack>
                     <TextField
                       label="Vendor add-ons"
                       value={vendorAddOns}

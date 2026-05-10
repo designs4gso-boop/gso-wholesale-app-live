@@ -52,9 +52,9 @@ const productTypeDefaults: Record<
   stock_bag: {
     name: "Stock Bags",
     productionMode: "outsourced",
-    minQuantity: 100,
-    defaultQuantity: 100,
-    tiers: [100, 250, 500, 1000, 2500, 5000, 10000],
+    minQuantity: 64,
+    defaultQuantity: 64,
+    tiers: [64, 200, 500, 750, 1000, 2000],
     defaultMarginPct: 50,
     pricingMethod: "auto_margin",
     defaultTags: ["gso:stock-bags", "gso:outsourced", "gso:wholesale"],
@@ -62,9 +62,9 @@ const productTypeDefaults: Record<
   box: {
     name: "Boxes",
     productionMode: "outsourced",
-    minQuantity: 5,
-    defaultQuantity: 5,
-    tiers: [5, 10, 25, 50, 100, 250, 500],
+    minQuantity: 500,
+    defaultQuantity: 500,
+    tiers: [500, 1000, 2000, 2500, 5000, 7500, 10000],
     defaultMarginPct: 50,
     pricingMethod: "auto_margin",
     defaultTags: ["gso:boxes", "gso:outsourced", "gso:wholesale"],
@@ -82,9 +82,9 @@ const productTypeDefaults: Record<
   sourced_product: {
     name: "Sourced Products",
     productionMode: "outsourced",
-    minQuantity: 1,
-    defaultQuantity: 1,
-    tiers: [1, 10, 25, 50, 100, 250, 500],
+    minQuantity: 64,
+    defaultQuantity: 64,
+    tiers: [64, 200, 500, 750, 1000, 2000],
     defaultMarginPct: 40,
     pricingMethod: "auto_margin",
     defaultTags: ["gso:sourced-products", "gso:outsourced", "gso:wholesale"],
@@ -92,9 +92,9 @@ const productTypeDefaults: Record<
   general: {
     name: "General",
     productionMode: "in_house",
-    minQuantity: 1,
-    defaultQuantity: 1,
-    tiers: [1, 10, 25, 50, 100],
+    minQuantity: 64,
+    defaultQuantity: 64,
+    tiers: [64, 200, 500, 750, 1000, 2000],
     defaultMarginPct: 40,
     pricingMethod: "auto_margin",
     defaultTags: ["gso:general", "gso:wholesale"],
@@ -146,6 +146,99 @@ function normalizeBreakpoints(value: any, minQuantity: number) {
   return Array.from(unique).sort((a, b) => a - b);
 }
 
+type TierTemplateRow = {
+  minQty: string;
+  maxQty: string;
+  marginPct: string;
+  fixedPrice: string;
+};
+
+function nullableNumber(value: any) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nullableIntValue(value: any) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Math.round(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function tierRangeLabel(row: { minQty: any; maxQty?: any }) {
+  const min = positiveInt(row.minQty, 1);
+  const max = nullableIntValue(row.maxQty);
+  return max ? `${min}-${max}` : `${min}+`;
+}
+
+function makeRangeRows(starts: number[], marginPct: number): TierTemplateRow[] {
+  const uniqueStarts = Array.from(new Set(starts.map((qty) => positiveInt(qty, 0)).filter((qty) => qty > 0))).sort((a, b) => a - b);
+  const rows = uniqueStarts.length ? uniqueStarts : [1];
+  return rows.map((qty, index) => {
+    const next = rows[index + 1];
+    return {
+      minQty: String(qty),
+      maxQty: next ? String(Math.max(qty, next - 1)) : "",
+      marginPct: String(marginPct),
+      fixedPrice: "",
+    };
+  });
+}
+
+function suggestedTierStarts(minQuantity: number) {
+  const min = positiveInt(minQuantity, 1);
+  if (min < 10) return [min, 10, 25, 50, 100, 250, 500];
+  if (min < 50) return [min, 50, 100, 250, 500, 750, 1000, 2000];
+  if (min < 100) return [min, 200, 500, 750, 1000, 2000];
+  if (min < 500) return [min, 250, 500, 750, 1000, 2000, 5000];
+  if (min < 1000) return [min, 1000, 2000, 2500, 5000, 7500, 10000];
+  return [min, 2000, 2500, 5000, 7500, 10000];
+}
+
+function cleanTierTemplateRows(rows: any[], fallbackStarts: number[], fallbackMarginPct: number) {
+  const source = Array.isArray(rows) && rows.length ? rows : makeRangeRows(fallbackStarts, fallbackMarginPct);
+  const cleaned = source
+    .map((row) => ({
+      minQty: positiveInt(row?.minQty, 0),
+      maxQty: nullableIntValue(row?.maxQty),
+      marginPct: nullableNumber(row?.marginPct),
+      fixedPrice: nullableNumber(row?.fixedPrice),
+    }))
+    .filter((row) => row.minQty > 0)
+    .sort((a, b) => a.minQty - b.minQty);
+
+  const deduped: typeof cleaned = [];
+  for (const row of cleaned) {
+    const existingIndex = deduped.findIndex((item) => item.minQty === row.minQty);
+    if (existingIndex >= 0) deduped[existingIndex] = row;
+    else deduped.push(row);
+  }
+
+  const result = deduped.map((row, index) => {
+    const next = deduped[index + 1];
+    return {
+      minQty: String(row.minQty),
+      maxQty: row.maxQty ? String(row.maxQty) : next ? String(Math.max(row.minQty, next.minQty - 1)) : "",
+      marginPct: row.marginPct !== null && row.marginPct !== undefined ? String(row.marginPct) : String(fallbackMarginPct),
+      fixedPrice: row.fixedPrice !== null && row.fixedPrice !== undefined ? String(row.fixedPrice) : "",
+    };
+  });
+
+  return result.length ? result : makeRangeRows(fallbackStarts.length ? fallbackStarts : [1], fallbackMarginPct);
+}
+
+function parseTierTemplate(value: any, fallbackStarts: number[], fallbackMarginPct: number) {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return cleanTierTemplateRows(parsed, fallbackStarts, fallbackMarginPct);
+    } catch (_error) {
+      // Fall back to breakpoints below.
+    }
+  }
+  return cleanTierTemplateRows([], fallbackStarts, fallbackMarginPct);
+}
+
 function defaultRows(shop: string) {
   return Object.entries(productTypeDefaults).map(([key, defaults]) => ({
     shop,
@@ -155,6 +248,7 @@ function defaultRows(shop: string) {
     minQuantity: defaults.minQuantity,
     defaultQuantity: defaults.defaultQuantity,
     tierBreakpoints: defaults.tiers.join(", "),
+    tierTemplate: JSON.stringify(makeRangeRows(defaults.tiers, defaults.defaultMarginPct)),
     defaultMarginPct: defaults.defaultMarginPct,
     pricingMethod: defaults.pricingMethod,
     defaultTags: defaults.defaultTags.join(", "),
@@ -198,7 +292,10 @@ export async function action({ request }: { request: Request }) {
 
     const minQuantity = positiveInt(payload.minQuantity, 1);
     const defaultQuantity = Math.max(minQuantity, positiveInt(payload.defaultQuantity, minQuantity));
-    const tierBreakpoints = normalizeBreakpoints(payload.tierBreakpoints, minQuantity).join(", ");
+    const defaultMarginPct = numberOrZero(payload.defaultMarginPct || 40);
+    const fallbackStarts = normalizeBreakpoints(payload.tierBreakpoints || minQuantity, minQuantity);
+    const tierTemplateRows = cleanTierTemplateRows(payload.tierTemplateRows, fallbackStarts, defaultMarginPct);
+    const tierBreakpoints = tierTemplateRows.map((row) => positiveInt(row.minQty, minQuantity)).join(", ");
 
     const data = {
       shop,
@@ -208,7 +305,8 @@ export async function action({ request }: { request: Request }) {
       minQuantity,
       defaultQuantity,
       tierBreakpoints,
-      defaultMarginPct: numberOrZero(payload.defaultMarginPct || 40),
+      tierTemplate: JSON.stringify(tierTemplateRows),
+      defaultMarginPct,
       pricingMethod: payload.pricingMethod || "auto_margin",
       defaultTags: payload.defaultTags || null,
       notes: payload.notes || null,
@@ -248,8 +346,13 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "resetDefaults") {
-    await db.productTypeProfile.deleteMany({ where: { shop } });
-    await db.productTypeProfile.createMany({ data: defaultRows(shop) });
+    for (const row of defaultRows(shop)) {
+      await db.productTypeProfile.upsert({
+        where: { shop_key: { shop, key: row.key } },
+        update: row,
+        create: row,
+      });
+    }
     return Response.json({ ok: true });
   }
 
@@ -266,9 +369,10 @@ export default function ProductTypesPage() {
   const [key, setKey] = useState("stock_bag");
   const [name, setName] = useState("Stock Bags");
   const [productionMode, setProductionMode] = useState("outsourced");
-  const [minQuantity, setMinQuantity] = useState("100");
-  const [defaultQuantity, setDefaultQuantity] = useState("100");
-  const [tierBreakpoints, setTierBreakpoints] = useState("100, 250, 500, 1000, 2500, 5000, 10000");
+  const [minQuantity, setMinQuantity] = useState("64");
+  const [defaultQuantity, setDefaultQuantity] = useState("64");
+  const [tierBreakpoints, setTierBreakpoints] = useState("64, 200, 500, 750, 1000, 2000");
+  const [tierTemplateRows, setTierTemplateRows] = useState<TierTemplateRow[]>(() => makeRangeRows([64, 200, 500, 750, 1000, 2000], 50));
   const [defaultMarginPct, setDefaultMarginPct] = useState("50");
   const [pricingMethod, setPricingMethod] = useState("auto_margin");
   const [defaultTags, setDefaultTags] = useState("gso:stock-bags, gso:outsourced, gso:wholesale");
@@ -292,9 +396,10 @@ export default function ProductTypesPage() {
     setKey("stock_bag");
     setName("Stock Bags");
     setProductionMode("outsourced");
-    setMinQuantity("100");
-    setDefaultQuantity("100");
-    setTierBreakpoints("100, 250, 500, 1000, 2500, 5000, 10000");
+    setMinQuantity("64");
+    setDefaultQuantity("64");
+    setTierBreakpoints("64, 200, 500, 750, 1000, 2000");
+    setTierTemplateRows(makeRangeRows([64, 200, 500, 750, 1000, 2000], 50));
     setDefaultMarginPct("50");
     setPricingMethod("auto_margin");
     setDefaultTags("gso:stock-bags, gso:outsourced, gso:wholesale");
@@ -309,6 +414,7 @@ export default function ProductTypesPage() {
     setMinQuantity(String(profile.minQuantity || 1));
     setDefaultQuantity(String(profile.defaultQuantity || profile.minQuantity || 1));
     setTierBreakpoints(profile.tierBreakpoints || String(profile.minQuantity || 1));
+    setTierTemplateRows(parseTierTemplate(profile.tierTemplate, normalizeBreakpoints(profile.tierBreakpoints || String(profile.minQuantity || 1), positiveInt(profile.minQuantity, 1)), numberOrZero(profile.defaultMarginPct ?? 40)));
     setDefaultMarginPct(String(profile.defaultMarginPct ?? 40));
     setPricingMethod(profile.pricingMethod || "auto_margin");
     setDefaultTags(profile.defaultTags || "");
@@ -326,6 +432,7 @@ export default function ProductTypesPage() {
         minQuantity,
         defaultQuantity,
         tierBreakpoints,
+        tierTemplateRows,
         defaultMarginPct,
         pricingMethod,
         defaultTags,
@@ -349,8 +456,31 @@ export default function ProductTypesPage() {
   }
 
   function resetDefaults() {
-    if (!window.confirm("Reset product type profiles to GSO defaults? This replaces current profile rows.")) return;
+    if (!window.confirm("Reset product type profiles to GSO defaults? This updates the default profile rows without deleting recipes.")) return;
     fetcher.submit({ intent: "resetDefaults" }, { method: "post", encType: "application/json" });
+  }
+
+  function regenerateTierTemplateFromMinimum() {
+    const min = positiveInt(minQuantity, 1);
+    const starts = suggestedTierStarts(min);
+    setTierBreakpoints(starts.join(", "));
+    setTierTemplateRows(makeRangeRows(starts, numberOrZero(defaultMarginPct || 40)));
+  }
+
+  function updateTierTemplateRow(index: number, field: keyof TierTemplateRow, value: string) {
+    setTierTemplateRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row));
+  }
+
+  function addTierTemplateRow() {
+    const cleaned = cleanTierTemplateRows(tierTemplateRows, normalizeBreakpoints(tierBreakpoints, positiveInt(minQuantity, 1)), numberOrZero(defaultMarginPct || 40));
+    const last = cleaned[cleaned.length - 1];
+    const lastQty = positiveInt(last?.minQty, positiveInt(minQuantity, 1));
+    const newQty = lastQty >= 1000 ? lastQty + 1000 : lastQty >= 100 ? lastQty + 250 : lastQty * 2;
+    setTierTemplateRows((current) => [...current, { minQty: String(newQty), maxQty: "", marginPct: defaultMarginPct, fixedPrice: "" }]);
+  }
+
+  function removeTierTemplateRow(index: number) {
+    setTierTemplateRows((current) => current.length <= 1 ? current : current.filter((_row, rowIndex) => rowIndex !== index));
   }
 
   return (
@@ -401,13 +531,40 @@ export default function ProductTypesPage() {
                 </div>
               </InlineStack>
 
-              <TextField
-                label="Tier Breakpoints"
-                value={tierBreakpoints}
-                onChange={setTierBreakpoints}
-                autoComplete="off"
-                helpText="Comma-separated. The lowest tier is the starting/max unit price tier. Larger tiers can be priced lower later."
-              />
+              <BlockStack gap="250">
+                <InlineStack align="space-between" blockAlign="center" wrap>
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">Default tier ranges and margins</Text>
+                    <Text as="p" tone="subdued">These backend defaults control margin by tier for new products. Product Setup uses these margins unless an employee intentionally overrides them.</Text>
+                  </BlockStack>
+                  <Button onClick={regenerateTierTemplateFromMinimum}>Generate ranges from minimum</Button>
+                </InlineStack>
+                {tierTemplateRows.map((row, index) => (
+                  <Card key={`${index}-${row.minQty}-${row.maxQty}`}>
+                    <BlockStack gap="200">
+                      <InlineStack align="space-between" blockAlign="center">
+                        <Text as="p" fontWeight="semibold">Tier {index + 1}: {tierRangeLabel(row)}</Text>
+                        <Button disabled={tierTemplateRows.length <= 1} onClick={() => removeTierTemplateRow(index)}>Remove</Button>
+                      </InlineStack>
+                      <InlineStack gap="300" blockAlign="end" wrap>
+                        <div style={{ minWidth: 110, flex: 1 }}>
+                          <TextField label="From qty" type="number" value={row.minQty} onChange={(value) => updateTierTemplateRow(index, "minQty", value)} autoComplete="off" />
+                        </div>
+                        <div style={{ minWidth: 110, flex: 1 }}>
+                          <TextField label="To qty" type="number" value={row.maxQty} onChange={(value) => updateTierTemplateRow(index, "maxQty", value)} autoComplete="off" placeholder="No max" />
+                        </div>
+                        <div style={{ minWidth: 130, flex: 1 }}>
+                          <TextField label="Margin %" type="number" value={row.marginPct} onChange={(value) => updateTierTemplateRow(index, "marginPct", value)} autoComplete="off" />
+                        </div>
+                        <div style={{ minWidth: 160, flex: 1 }}>
+                          <TextField label="Fixed price optional" type="number" prefix="$" value={row.fixedPrice} onChange={(value) => updateTierTemplateRow(index, "fixedPrice", value)} autoComplete="off" />
+                        </div>
+                      </InlineStack>
+                    </BlockStack>
+                  </Card>
+                ))}
+                <Button onClick={addTierTemplateRow}>Add tier</Button>
+              </BlockStack>
 
               <TextField
                 label="Default Shopify Tags to Apply Later"
@@ -474,7 +631,11 @@ export default function ProductTypesPage() {
                       <InlineStack gap="400">
                         <BlockStack gap="100">
                           <Text as="p" tone="subdued">Tiers</Text>
-                          <Text as="p">{profile.tierBreakpoints}</Text>
+                          <InlineStack gap="100" wrap>
+                            {parseTierTemplate(profile.tierTemplate, normalizeBreakpoints(profile.tierBreakpoints, profile.minQuantity), profile.defaultMarginPct).map((row) => (
+                              <Badge key={`${row.minQty}-${row.maxQty}`}>{tierRangeLabel(row)} · {row.marginPct}%</Badge>
+                            ))}
+                          </InlineStack>
                         </BlockStack>
                         <BlockStack gap="100">
                           <Text as="p" tone="subdued">Default Tags</Text>
