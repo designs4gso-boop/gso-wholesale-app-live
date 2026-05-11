@@ -263,6 +263,7 @@ model Material {
   unit            String   @default("each") // each, sqft, linear_ft, ml, hour, roll, sheet
   costPerUnit     Float    @default(0)
   vendor          String?
+  primaryVendorId String?
   sku             String?
   stockOnHand     Float?
   reorderPoint    Float?
@@ -285,6 +286,7 @@ caseQuantity       Float?
 
 calculatedUnitCost Float    @default(0)
 
+  primaryVendor   Vendor? @relation("MaterialPrimaryVendor", fields: [primaryVendorId], references: [id], onDelete: SetNull)
   category        ProductCategory? @relation(fields: [categoryId], references: [id])
   recipeMaterials RecipeMaterial[]
   costHistory MaterialCostHistory[]
@@ -295,6 +297,7 @@ calculatedUnitCost Float    @default(0)
   @@index([shop])
   @@index([shop, materialType])
   @@index([shop, active])
+  @@index([primaryVendorId])
 }
 
 
@@ -396,6 +399,7 @@ model VendorProduct {
   name            String
   productType     String   @default("sourced_product") // box, dtp_bag, die_cut_bag, sourced_product, general
   vendor          String?
+  vendorId        String?
   vendorSku       String?
   moq             Int      @default(1)
   defaultUnitCost Float    @default(0)
@@ -405,6 +409,7 @@ model VendorProduct {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  vendorRecord    Vendor? @relation("VendorProductVendor", fields: [vendorId], references: [id], onDelete: SetNull)
   recipes         ProductRecipe[]
   tiers           VendorProductTier[]
   addOns          VendorProductAddOn[]
@@ -413,6 +418,7 @@ model VendorProduct {
   @@index([shop, active])
   @@index([productType])
   @@index([vendor])
+  @@index([vendorId])
 }
 
 model VendorProductTier {
@@ -978,6 +984,7 @@ model PurchaseRequest {
   unit            String   @default("each")
   sku             String?
   vendor          String?
+  vendorId        String?
   vendorSku       String?
   moq             Float?
   leadTimeDays    Int?
@@ -998,15 +1005,16 @@ model PurchaseRequest {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  vendorRecord    Vendor?  @relation("PurchaseRequestVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+
   @@index([shop])
   @@index([shop, status])
   @@index([materialId])
   @@index([vendor])
+  @@index([vendorId])
   @@index([neededBy])
   @@index([createdAt])
 }
-
-
 model Vendor {
   id                 String   @id @default(cuid())
   shop               String
@@ -1035,6 +1043,9 @@ model Vendor {
   updatedAt          DateTime @updatedAt
 
   contacts           VendorContact[]
+  primaryMaterials   Material[]       @relation("MaterialPrimaryVendor")
+  vendorProducts     VendorProduct[]  @relation("VendorProductVendor")
+  purchaseRequests   PurchaseRequest[] @relation("PurchaseRequestVendor")
 
   @@unique([shop, name])
   @@index([shop])

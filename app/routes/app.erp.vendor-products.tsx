@@ -168,17 +168,21 @@ export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const vendorProducts = await db.vendorProduct.findMany({
+  const [vendorProducts, vendors] = await Promise.all([
+    db.vendorProduct.findMany({
     where: { shop },
     orderBy: { updatedAt: "desc" },
     include: {
+      vendorRecord: true,
       tiers: { orderBy: { minQty: "asc" } },
       addOns: { orderBy: { createdAt: "asc" } },
       recipes: { select: { id: true, name: true, active: true } },
     },
-  });
+  }),
+    db.vendor.findMany({ where: { shop, active: true }, orderBy: [{ status: "asc" }, { name: "asc" }] }),
+  ]);
 
-  return Response.json({ vendorProducts });
+  return Response.json({ vendorProducts, vendors });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -187,6 +191,9 @@ export async function action({ request }: { request: Request }) {
   const payload = await request.json();
 
   if (payload.intent === "saveVendorProduct") {
+    const vendorRecord = payload.vendorId
+      ? await db.vendor.findFirst({ where: { shop, id: payload.vendorId, active: true } })
+      : null;
     const moq = positiveInt(payload.moq, 1);
     const defaultUnitCost = numberOrZero(payload.defaultUnitCost);
     const tiers = parseTiers(payload.tiers, defaultUnitCost);
@@ -196,11 +203,12 @@ export async function action({ request }: { request: Request }) {
       shop,
       name: payload.name || "Untitled vendor product",
       productType: payload.productType || "sourced_product",
-      vendor: payload.vendor || null,
+      vendor: vendorRecord?.name || payload.vendor || null,
+      vendorId: vendorRecord?.id || null,
       vendorSku: payload.vendorSku || null,
       moq,
       defaultUnitCost,
-      leadTimeDays: nullableInt(payload.leadTimeDays),
+      leadTimeDays: nullableInt(payload.leadTimeDays) ?? vendorRecord?.leadTimeDays ?? null,
       notes: payload.notes || null,
       active: true,
     };
@@ -287,7 +295,7 @@ export async function action({ request }: { request: Request }) {
 }
 
 export default function VendorProductsPage() {
-  const { vendorProducts } = useLoaderData<any>();
+  const { vendorProducts, vendors } = useLoaderData<any>();
   const fetcher = useFetcher<any>();
   const navigate = useNavigate();
 
@@ -296,6 +304,7 @@ export default function VendorProductsPage() {
   const [name, setName] = useState("");
   const [productType, setProductType] = useState("box");
   const [vendor, setVendor] = useState("");
+  const [vendorId, setVendorId] = useState("");
   const [vendorSku, setVendorSku] = useState("");
   const [moq, setMoq] = useState("5");
   const [defaultUnitCost, setDefaultUnitCost] = useState("");
@@ -310,6 +319,20 @@ export default function VendorProductsPage() {
       navigate(".");
     }
   }, [fetcher.data, navigate]);
+
+  const vendorOptions = [
+    { label: "Manual / no Vendor Center link", value: "" },
+    ...(vendors || []).map((vendor: any) => ({ label: `${vendor.name}${vendor.status ? ` (${vendor.status})` : ""}`, value: vendor.id })),
+  ];
+
+  function chooseVendor(value: string) {
+    setVendorId(value);
+    const selectedVendor = (vendors || []).find((v: any) => v.id === value);
+    if (selectedVendor) {
+      setVendor(selectedVendor.name);
+      if (!leadTimeDays && selectedVendor.leadTimeDays) setLeadTimeDays(String(selectedVendor.leadTimeDays));
+    }
+  }
 
   const filteredVendorProducts = vendorProducts.filter((item: any) => {
     if (activeFilter === "all") return true;
@@ -336,6 +359,7 @@ export default function VendorProductsPage() {
     setName("");
     setProductType("box");
     setVendor("");
+    setVendorId("");
     setVendorSku("");
     setMoq("5");
     setDefaultUnitCost("");
@@ -353,6 +377,7 @@ export default function VendorProductsPage() {
         name,
         productType,
         vendor,
+        vendorId,
         vendorSku,
         moq,
         defaultUnitCost,
@@ -369,7 +394,8 @@ export default function VendorProductsPage() {
     setEditingId(item.id);
     setName(item.name || "");
     setProductType(item.productType || "sourced_product");
-    setVendor(item.vendor || "");
+    setVendor(item.vendorRecord?.name || item.vendor || "");
+    setVendorId(item.vendorId || item.vendorRecord?.id || "");
     setVendorSku(item.vendorSku || "");
     setMoq(item.moq ? String(item.moq) : "1");
     setDefaultUnitCost(item.defaultUnitCost !== null && item.defaultUnitCost !== undefined ? String(item.defaultUnitCost) : "");
@@ -423,7 +449,8 @@ export default function VendorProductsPage() {
 
               <InlineStack gap="300" wrap={false}>
                 <div style={{ flex: 1 }}>
-                  <TextField label="Vendor / Supplier" value={vendor} onChange={setVendor} autoComplete="off" />
+                  <Select label="Vendor Center Vendor" value={vendorId} onChange={chooseVendor} options={vendorOptions} />
+                  <TextField label="Vendor / Supplier Fallback" value={vendor} onChange={setVendor} autoComplete="off" />
                 </div>
                 <div style={{ flex: 1 }}>
                   <TextField label="Vendor SKU" value={vendorSku} onChange={setVendorSku} autoComplete="off" />
@@ -511,7 +538,7 @@ export default function VendorProductsPage() {
                           <BlockStack gap="100">
                             <Text as="h3" variant="headingSm">{item.name}</Text>
                             <Text as="p" tone="subdued">
-                              {productTypeLabel(item.productType)} • {item.vendor || "No vendor"} • MOQ {item.moq || 1} • Lead time {item.leadTimeDays || 0} days
+                              {productTypeLabel(item.productType)} • {item.vendorRecord?.name || item.vendor || "No vendor"} • MOQ {item.moq || 1} • Lead time {item.leadTimeDays || 0} days
                             </Text>
                           </BlockStack>
                           <InlineStack gap="100">
