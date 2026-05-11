@@ -870,3 +870,23 @@ model PrintLogEntry {
   @@index([sourceJobName])
   @@index([createdAt])
 }
+
+model PrintLogAutoImportSetting {
+  id                    String   @id @default(cuid())
+  shop                  String   @unique
+  enabled               Boolean  @default(true)
+  uploadToken           String   @unique
+  incomingFolder        String?
+  versaworksFolder      String?
+  rasterlinkFolder      String?
+  processedFolder       String?
+  errorFolder           String?
+  expectedTicketPattern String   @default("GSO-{date}-{jobNumber}-{sku}-{qty}")
+  lastAutoImportAt      DateTime?
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([enabled])
+  @@index([lastAutoImportAt])
+}

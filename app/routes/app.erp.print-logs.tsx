@@ -396,6 +396,7 @@ export default function PrintLogImportPage() {
       title="Print Log Import"
       subtitle="Import VersaWorks, RasterLink, or CSV job logs and match actual ink, sqft, and print time back to GSO job tickets."
       primaryAction={{ content: "Production Board", onAction: () => navigate("/app/erp/production") }}
+      secondaryActions={[{ content: "Auto Import Settings", onAction: () => navigate("/app/erp/print-log-settings") }]}
     >
       <Layout>
         <Layout.Section>
@@ -406,7 +407,10 @@ export default function PrintLogImportPage() {
                   <Text as="h2" variant="headingMd">Import print log</Text>
                   <Text as="p" tone="subdued">Export or copy job history from VersaWorks/RasterLink, then paste it here. The app matches rows by GSO job ticket.</Text>
                 </BlockStack>
-                <Badge tone="success">Job ticket matching</Badge>
+                <InlineStack gap="200">
+                  <Button onClick={() => navigate("/app/erp/print-log-settings")}>Auto Import Settings</Button>
+                  <Badge tone="success">Job ticket matching</Badge>
+                </InlineStack>
               </InlineStack>
 
               {actionData?.message ? <Text as="p" tone={actionData.ok ? "success" : "critical"}>{actionData.message}</Text> : null}

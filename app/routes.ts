@@ -19,9 +19,12 @@ export default [
     route("erp/machines", "routes/app.erp.machines.tsx"),
     route("erp/production", "routes/app.erp.production.tsx"),
     route("erp/print-logs", "routes/app.erp.print-logs.tsx"),
+    route("erp/print-log-settings", "routes/app.erp.print-log-settings.tsx"),
     route("erp/production/:id/print", "routes/app.erp.production.$id.print.tsx"),
     route("erp/production/:id/proof", "routes/app.erp.production.$id.proof.tsx"),
   ]),
+
+  route("api/print-logs/upload", "routes/api.print-logs.upload.tsx"),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
   route("apps/wholesale-lite/pricing", "routes/apps.wholesale-lite.pricing.ts"),
