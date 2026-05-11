@@ -7,7 +7,6 @@ import {
   BlockStack,
   InlineStack,
   Badge,
-  TextField,
   Divider,
 } from "@shopify/polaris";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
@@ -488,6 +487,50 @@ function NativeSelect({ name, defaultValue, options, label }: { name: string; de
   );
 }
 
+function NativeInput({
+  label,
+  name,
+  defaultValue = "",
+  type = "text",
+  prefix,
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string;
+  type?: string;
+  prefix?: string;
+}) {
+  return (
+    <label style={{ display: "block", minWidth: 180, flex: "1 1 180px" }}>
+      <span style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>{label}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {prefix ? <span>{prefix}</span> : null}
+        <input
+          name={name}
+          type={type}
+          defaultValue={defaultValue || ""}
+          autoComplete="off"
+          style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}
+        />
+      </span>
+    </label>
+  );
+}
+
+function NativeTextarea({ label, name, defaultValue = "" }: { label: string; name: string; defaultValue?: string }) {
+  return (
+    <label style={{ display: "block", width: "100%" }}>
+      <span style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>{label}</span>
+      <textarea
+        name={name}
+        defaultValue={defaultValue || ""}
+        rows={3}
+        style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}
+      />
+    </label>
+  );
+}
+
 function statusBadge(status: string) {
   if (status === "received") return <Badge tone="success">Received</Badge>;
   if (status === "ordered" || status === "partially_received") return <Badge tone="attention">{status.replaceAll("_", " ")}</Badge>;
@@ -555,18 +598,18 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
               <NativeSelect label="Status" name="status" defaultValue={request.status} options={statusOptions} />
               <NativeSelect label="Priority" name="priority" defaultValue={request.priority} options={priorityOptions} />
               <NativeSelect label="Vendor Center Vendor" name="vendorId" defaultValue={request.vendorId || request.vendorRecord?.id || ""} options={vendorOptions} />
-              <TextField label="Vendor fallback" name="vendor" defaultValue={request.vendor || ""} autoComplete="off" />
-              <TextField label="Vendor SKU" name="vendorSku" defaultValue={request.vendorSku || ""} autoComplete="off" />
+              <NativeInput label="Vendor fallback" name="vendor" defaultValue={request.vendor || ""} />
+              <NativeInput label="Vendor SKU" name="vendorSku" defaultValue={request.vendorSku || ""} />
               <NativeSelect label="Cost Book Override" name="costBookItemId" options={costBookOptions} />
             </InlineStack>
             <InlineStack gap="200" wrap>
-              <TextField label="Lead time days" name="leadTimeDays" defaultValue={request.leadTimeDays ? String(request.leadTimeDays) : ""} autoComplete="off" />
-              <TextField label="Requested qty" name="requestedQty" defaultValue={String(request.requestedQty || 0)} autoComplete="off" />
-              <TextField label="Ordered qty" name="orderedQty" defaultValue={String(request.orderedQty || request.requestedQty || 0)} autoComplete="off" />
-              <TextField label="Unit cost" name="unitCost" prefix="$" defaultValue={String(request.unitCost || 0)} autoComplete="off" />
-              <TextField label="Needed by" name="neededBy" type="date" defaultValue={safeDateInput(request.neededBy)} autoComplete="off" />
+              <NativeInput label="Lead time days" name="leadTimeDays" defaultValue={request.leadTimeDays ? String(request.leadTimeDays) : ""} />
+              <NativeInput label="Requested qty" name="requestedQty" defaultValue={String(request.requestedQty || 0)} />
+              <NativeInput label="Ordered qty" name="orderedQty" defaultValue={String(request.orderedQty || request.requestedQty || 0)} />
+              <NativeInput label="Unit cost" name="unitCost" prefix="$" defaultValue={String(request.unitCost || 0)} />
+              <NativeInput label="Needed by" name="neededBy" type="date" defaultValue={safeDateInput(request.neededBy)} />
             </InlineStack>
-            <TextField label="Notes" name="notes" defaultValue={request.notes || ""} autoComplete="off" multiline={2} />
+            <NativeTextarea label="Notes" name="notes" defaultValue={request.notes || ""} />
             <Button submit loading={busy}>Save request</Button>
           </BlockStack>
         </Form>
@@ -581,7 +624,7 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
             <input type="hidden" name="intent" value="receiveRequest" />
             <input type="hidden" name="id" value={request.id} />
             <InlineStack gap="200" blockAlign="end">
-              <TextField label="Receive qty" name="receiveQty" autoComplete="off" />
+              <NativeInput label="Receive qty" name="receiveQty" />
               <Button submit>Receive</Button>
             </InlineStack>
           </Form>
@@ -623,7 +666,7 @@ function LowStockMaterialCard({ material, costBookItems }: { material: any; cost
           <input type="hidden" name="materialId" value={material.id} />
           {bestCost ? <input type="hidden" name="costBookItemId" value={bestCost.id} /> : null}
           <InlineStack gap="200" blockAlign="end">
-            <TextField label="Request qty" name="requestedQty" defaultValue={String(qty(suggestedQty || material.reorderPoint || 1))} autoComplete="off" />
+            <NativeInput label="Request qty" name="requestedQty" defaultValue={String(qty(suggestedQty || material.reorderPoint || 1))} />
             <Button submit>Create PO request</Button>
           </InlineStack>
         </Form>
@@ -681,25 +724,25 @@ export default function PurchaseRequestsPage() {
                 <BlockStack gap="250">
                   <NativeSelect label="Material" name="materialId" options={materialOptions} />
                   <InlineStack gap="200" wrap>
-                    <TextField label="Material / item name" name="materialName" autoComplete="off" />
-                    <TextField label="Unit" name="unit" defaultValue="each" autoComplete="off" />
+                    <NativeInput label="Material / item name" name="materialName" />
+                    <NativeInput label="Unit" name="unit" defaultValue="each" />
                     <NativeSelect label="Status" name="status" defaultValue="requested" options={statusOptions} />
                     <NativeSelect label="Priority" name="priority" defaultValue="normal" options={priorityOptions} />
                   </InlineStack>
                   <InlineStack gap="200" wrap>
                     <NativeSelect label="Vendor Center Vendor" name="vendorId" options={vendorOptions} />
                     <NativeSelect label="Cost Book Item" name="costBookItemId" options={costBookOptions} />
-                    <TextField label="Vendor fallback" name="vendor" autoComplete="off" />
-                    <TextField label="Vendor SKU" name="vendorSku" autoComplete="off" />
-                    <TextField label="SKU" name="sku" autoComplete="off" />
-                    <TextField label="Lead time days" name="leadTimeDays" autoComplete="off" />
+                    <NativeInput label="Vendor fallback" name="vendor" />
+                    <NativeInput label="Vendor SKU" name="vendorSku" />
+                    <NativeInput label="SKU" name="sku" />
+                    <NativeInput label="Lead time days" name="leadTimeDays" />
                   </InlineStack>
                   <InlineStack gap="200" wrap>
-                    <TextField label="Requested qty" name="requestedQty" autoComplete="off" />
-                    <TextField label="Unit cost" name="unitCost" prefix="$" autoComplete="off" />
-                    <TextField label="Needed by" name="neededBy" type="date" autoComplete="off" />
+                    <NativeInput label="Requested qty" name="requestedQty" />
+                    <NativeInput label="Unit cost" name="unitCost" prefix="$" />
+                    <NativeInput label="Needed by" name="neededBy" type="date" />
                   </InlineStack>
-                  <TextField label="Notes" name="notes" autoComplete="off" multiline={2} />
+                  <NativeTextarea label="Notes" name="notes" />
                   <Button submit variant="primary" loading={busy}>Create purchase request</Button>
                 </BlockStack>
               </Form>
