@@ -964,3 +964,44 @@ model PrintLogAutoImportSetting {
   @@index([enabled])
   @@index([lastAutoImportAt])
 }
+
+model PurchaseRequest {
+  id              String   @id @default(cuid())
+  shop            String
+  requestNumber   String
+  status          String   @default("draft") // draft, requested, ordered, partially_received, received, cancelled
+  priority        String   @default("normal") // low, normal, rush, critical
+
+  materialId      String?
+  materialName    String
+  materialType    String?
+  unit            String   @default("each")
+  sku             String?
+  vendor          String?
+  vendorSku       String?
+  moq             Float?
+  leadTimeDays    Int?
+
+  requestedQty    Float    @default(0)
+  orderedQty      Float    @default(0)
+  receivedQty     Float    @default(0)
+  unitCost        Float    @default(0)
+  estimatedCost   Float    @default(0)
+
+  neededBy        DateTime?
+  orderedAt       DateTime?
+  receivedAt      DateTime?
+  cancelledAt     DateTime?
+  notes           String?
+  source          String   @default("manual") // manual, reorder_report, low_stock, production
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([shop])
+  @@index([shop, status])
+  @@index([materialId])
+  @@index([vendor])
+  @@index([neededBy])
+  @@index([createdAt])
+}
