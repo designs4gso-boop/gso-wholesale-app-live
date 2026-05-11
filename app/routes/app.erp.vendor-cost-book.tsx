@@ -8,7 +8,6 @@ import {
   BlockStack,
   InlineStack,
   Divider,
-  TextField,
 } from "@shopify/polaris";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import type React from "react";
@@ -372,6 +371,25 @@ function NativeLabel({ children }: { children: React.ReactNode }) {
   return <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>{children}</label>;
 }
 
+
+function NativeInput({ label, name, defaultValue = "", type = "text", step, placeholder }: { label: string; name: string; defaultValue?: string; type?: string; step?: string; placeholder?: string }) {
+  return (
+    <label style={{ display: "block", fontWeight: 600, fontSize: 13 }}>
+      {label}
+      <input name={name} type={type} step={step} defaultValue={defaultValue} placeholder={placeholder} style={{ width: "100%", padding: 8, border: "1px solid #bbb", borderRadius: 8, marginTop: 4, fontWeight: 400 }} />
+    </label>
+  );
+}
+
+function NativeTextarea({ label, name, defaultValue = "", placeholder }: { label: string; name: string; defaultValue?: string; placeholder?: string }) {
+  return (
+    <label style={{ display: "block", fontWeight: 600, fontSize: 13 }}>
+      {label}
+      <textarea name={name} defaultValue={defaultValue} placeholder={placeholder} rows={3} style={{ width: "100%", padding: 8, border: "1px solid #bbb", borderRadius: 8, marginTop: 4, fontWeight: 400 }} />
+    </label>
+  );
+}
+
 function VendorOptions({ vendors }: { vendors: any[] }) {
   return (
     <>
@@ -414,20 +432,20 @@ function CostItemCard({ item, vendors }: { item: any; vendors: any[] }) {
           <BlockStack gap="200">
             <InlineStack gap="200" wrap>
               <div style={{ minWidth: 220, flex: 1 }}><NativeLabel>Vendor Center Vendor</NativeLabel><SelectBox name="vendorId" defaultValue={item.vendorId || ""}><VendorOptions vendors={vendors} /></SelectBox></div>
-              <div style={{ minWidth: 200, flex: 1 }}><TextField label="Vendor fallback" name="vendorName" defaultValue={item.vendorName || ""} autoComplete="off" /></div>
-              <div style={{ minWidth: 160 }}><TextField label="Vendor SKU" name="vendorSku" defaultValue={item.vendorSku || ""} autoComplete="off" /></div>
-              <div style={{ minWidth: 100 }}><TextField label="Unit" name="unit" defaultValue={item.unit || "each"} autoComplete="off" /></div>
-              <div style={{ minWidth: 120 }}><TextField label="Unit cost" name="unitCost" type="number" step="0.0001" defaultValue={String(item.unitCost || 0)} autoComplete="off" /></div>
+              <div style={{ minWidth: 200, flex: 1 }}><NativeInput label="Vendor fallback" name="vendorName" defaultValue={item.vendorName || ""} /></div>
+              <div style={{ minWidth: 160 }}><NativeInput label="Vendor SKU" name="vendorSku" defaultValue={item.vendorSku || ""} /></div>
+              <div style={{ minWidth: 100 }}><NativeInput label="Unit" name="unit" defaultValue={item.unit || "each"} /></div>
+              <div style={{ minWidth: 120 }}><NativeInput label="Unit cost" name="unitCost" type="number" step="0.0001" defaultValue={String(item.unitCost || 0)} /></div>
             </InlineStack>
             <InlineStack gap="200" wrap>
-              <div style={{ minWidth: 120 }}><TextField label="MOQ" name="moq" type="number" step="1" defaultValue={item.moq ? String(item.moq) : ""} autoComplete="off" /></div>
-              <div style={{ minWidth: 140 }}><TextField label="Lead time days" name="leadTimeDays" type="number" defaultValue={item.leadTimeDays ? String(item.leadTimeDays) : ""} autoComplete="off" /></div>
-              <div style={{ minWidth: 150 }}><TextField label="Effective date" name="effectiveDate" type="date" defaultValue={item.effectiveDate ? new Date(item.effectiveDate).toISOString().slice(0, 10) : ""} autoComplete="off" /></div>
-              <div style={{ minWidth: 150 }}><TextField label="Expires" name="expiresAt" type="date" defaultValue={item.expiresAt ? new Date(item.expiresAt).toISOString().slice(0, 10) : ""} autoComplete="off" /></div>
+              <div style={{ minWidth: 120 }}><NativeInput label="MOQ" name="moq" type="number" step="1" defaultValue={item.moq ? String(item.moq) : ""} /></div>
+              <div style={{ minWidth: 140 }}><NativeInput label="Lead time days" name="leadTimeDays" type="number" defaultValue={item.leadTimeDays ? String(item.leadTimeDays) : ""} /></div>
+              <div style={{ minWidth: 150 }}><NativeInput label="Effective date" name="effectiveDate" type="date" defaultValue={item.effectiveDate ? new Date(item.effectiveDate).toISOString().slice(0, 10) : ""} /></div>
+              <div style={{ minWidth: 150 }}><NativeInput label="Expires" name="expiresAt" type="date" defaultValue={item.expiresAt ? new Date(item.expiresAt).toISOString().slice(0, 10) : ""} /></div>
               <div style={{ minWidth: 140 }}><NativeLabel>Status</NativeLabel><SelectBox name="status" defaultValue={item.status || "active"}><option value="active">Active</option><option value="draft">Draft</option><option value="expired">Expired</option><option value="inactive">Inactive</option></SelectBox></div>
               <div style={{ minWidth: 140 }}><NativeLabel>Preferred</NativeLabel><SelectBox name="preferred" defaultValue={item.preferred ? "true" : "false"}><option value="false">No</option><option value="true">Yes</option></SelectBox></div>
             </InlineStack>
-            <TextField label="Notes" name="notes" defaultValue={item.notes || ""} autoComplete="off" />
+            <NativeTextarea label="Notes" name="notes" defaultValue={item.notes || ""} />
             <Button submit>Save cost item</Button>
           </BlockStack>
         </Form>
@@ -447,10 +465,10 @@ function CostItemCard({ item, vendors }: { item: any; vendors: any[] }) {
             <input type="hidden" name="intent" value="addTier" />
             <input type="hidden" name="costBookItemId" value={item.id} />
             <InlineStack gap="200" blockAlign="end" wrap>
-              <div style={{ minWidth: 100 }}><TextField label="Min qty" name="minQty" type="number" defaultValue="1" autoComplete="off" /></div>
-              <div style={{ minWidth: 100 }}><TextField label="Max qty" name="maxQty" type="number" autoComplete="off" /></div>
-              <div style={{ minWidth: 120 }}><TextField label="Tier cost" name="tierUnitCost" type="number" step="0.0001" autoComplete="off" /></div>
-              <div style={{ minWidth: 240, flex: 1 }}><TextField label="Tier notes" name="tierNotes" autoComplete="off" /></div>
+              <div style={{ minWidth: 100 }}><NativeInput label="Min qty" name="minQty" type="number" defaultValue="1" /></div>
+              <div style={{ minWidth: 100 }}><NativeInput label="Max qty" name="maxQty" type="number" /></div>
+              <div style={{ minWidth: 120 }}><NativeInput label="Tier cost" name="tierUnitCost" type="number" step="0.0001" /></div>
+              <div style={{ minWidth: 240, flex: 1 }}><NativeInput label="Tier notes" name="tierNotes" /></div>
               <Button submit>Add price break</Button>
             </InlineStack>
           </Form>
@@ -510,7 +528,7 @@ export default function VendorCostBook() {
                 <BlockStack gap="250">
                   <InlineStack gap="200" wrap>
                     <div style={{ minWidth: 220, flex: 1 }}><NativeLabel>Vendor Center Vendor</NativeLabel><SelectBox name="vendorId"><VendorOptions vendors={vendorOptions} /></SelectBox></div>
-                    <div style={{ minWidth: 220, flex: 1 }}><TextField label="Vendor fallback" name="vendorName" autoComplete="off" /></div>
+                    <div style={{ minWidth: 220, flex: 1 }}><NativeInput label="Vendor fallback" name="vendorName" /></div>
                     <div style={{ minWidth: 160 }}><NativeLabel>Item type</NativeLabel><SelectBox name="itemType" defaultValue="material"><option value="material">Material</option><option value="vendor_product">Vendor Product</option><option value="sourced_product">Sourced Product</option><option value="service">Service</option><option value="other">Other</option></SelectBox></div>
                   </InlineStack>
 
@@ -520,21 +538,21 @@ export default function VendorCostBook() {
                   </InlineStack>
 
                   <InlineStack gap="200" wrap>
-                    <div style={{ minWidth: 260, flex: 2 }}><TextField label="Item name" name="itemName" autoComplete="off" /></div>
-                    <div style={{ minWidth: 160 }}><TextField label="Vendor SKU" name="vendorSku" autoComplete="off" /></div>
-                    <div style={{ minWidth: 100 }}><TextField label="Unit" name="unit" defaultValue="each" autoComplete="off" /></div>
-                    <div style={{ minWidth: 120 }}><TextField label="Unit cost" name="unitCost" type="number" step="0.0001" autoComplete="off" /></div>
+                    <div style={{ minWidth: 260, flex: 2 }}><NativeInput label="Item name" name="itemName" /></div>
+                    <div style={{ minWidth: 160 }}><NativeInput label="Vendor SKU" name="vendorSku" /></div>
+                    <div style={{ minWidth: 100 }}><NativeInput label="Unit" name="unit" defaultValue="each" /></div>
+                    <div style={{ minWidth: 120 }}><NativeInput label="Unit cost" name="unitCost" type="number" step="0.0001" /></div>
                   </InlineStack>
 
                   <InlineStack gap="200" wrap>
-                    <div style={{ minWidth: 120 }}><TextField label="MOQ" name="moq" type="number" autoComplete="off" /></div>
-                    <div style={{ minWidth: 140 }}><TextField label="Lead time days" name="leadTimeDays" type="number" autoComplete="off" /></div>
-                    <div style={{ minWidth: 150 }}><TextField label="Effective date" name="effectiveDate" type="date" defaultValue={todayInput()} autoComplete="off" /></div>
-                    <div style={{ minWidth: 150 }}><TextField label="Expires" name="expiresAt" type="date" autoComplete="off" /></div>
+                    <div style={{ minWidth: 120 }}><NativeInput label="MOQ" name="moq" type="number" /></div>
+                    <div style={{ minWidth: 140 }}><NativeInput label="Lead time days" name="leadTimeDays" type="number" /></div>
+                    <div style={{ minWidth: 150 }}><NativeInput label="Effective date" name="effectiveDate" type="date" defaultValue={todayInput()} /></div>
+                    <div style={{ minWidth: 150 }}><NativeInput label="Expires" name="expiresAt" type="date" /></div>
                     <div style={{ minWidth: 140 }}><NativeLabel>Preferred</NativeLabel><SelectBox name="preferred" defaultValue="false"><option value="false">No</option><option value="true">Yes</option></SelectBox></div>
                   </InlineStack>
 
-                  <TextField label="Notes" name="notes" autoComplete="off" />
+                  <NativeTextarea label="Notes" name="notes" />
                   <Button submit variant="primary" loading={busy}>Create cost item</Button>
                 </BlockStack>
               </Form>
