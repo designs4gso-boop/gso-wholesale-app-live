@@ -8,7 +8,6 @@ import {
   InlineStack,
   Badge,
   Divider,
-  TextField,
 } from "@shopify/polaris";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -421,7 +420,12 @@ export default function PrintLogImportPage() {
                       <SourceSelect name="source" />
                     </div>
                     <div style={{ minWidth: 260, flex: 1 }}>
-                      <TextField label="File name / batch name" name="fileName" autoComplete="off" />
+                      <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>File name / batch name</label>
+                      <input
+                        name="fileName"
+                        style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #aaa" }}
+                        placeholder="Example: VersaWorks export May 10"
+                      />
                     </div>
                   </InlineStack>
 
@@ -430,14 +434,24 @@ export default function PrintLogImportPage() {
                     <input type="file" name="logFile" accept=".csv,.txt,.tsv,.xml" />
                   </div>
 
-                  <TextField
-                    label="Or paste CSV / TSV / XML log text"
-                    name="logText"
-                    multiline={10}
-                    autoComplete="off"
-                    placeholder={'Job Name,Sqft,Total Ink ML,Print Time\nGSO-20260510-0042-STK-BAG-4X5-250,32.4,38,00:14:22'}
-                  />
-                  <TextField label="Import notes" name="notes" autoComplete="off" />
+                  <div>
+                    <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Or paste CSV / TSV / XML log text</label>
+                    <textarea
+                      name="logText"
+                      rows={10}
+                      style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #aaa", fontFamily: "monospace" }}
+                      placeholder={'Job Name,Sqft,Total Ink ML,Print Time\nGSO-20260510-0042-STK-BAG-4X5-250,32.4,38,00:14:22'}
+                    />
+                    <Text as="p" tone="subdued">Paste copied job history here. This field is a native textarea so Chrome/Shopify will not lock it like Polaris controlled inputs sometimes do inside multipart forms.</Text>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Import notes</label>
+                    <input
+                      name="notes"
+                      style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #aaa" }}
+                      placeholder="Optional note about this import"
+                    />
+                  </div>
                   <Button submit variant="primary" loading={busy}>Import and match logs</Button>
                 </BlockStack>
               </Form>
