@@ -706,6 +706,22 @@ model ProductionJob {
   proofCustomerEmail String?
   proofCustomerComment String?
 
+  actualLaborMinutes     Float    @default(0)
+  actualLaborRate        Float    @default(25)
+  actualLaborCost        Float    @default(0)
+  actualPackingCost      Float    @default(0)
+  actualShippingCost     Float    @default(0)
+  actualOutsourceCost    Float    @default(0)
+  actualOtherCost        Float    @default(0)
+  actualReprintCost      Float    @default(0)
+  actualTotalCost        Float    @default(0)
+  actualFinalProfit      Float    @default(0)
+  actualFinalMargin      Float    @default(0)
+  actualCostNotes        String?
+  actualCostFinalized    Boolean  @default(false)
+  actualCostFinalizedAt  DateTime?
+  actualCostFinalizedBy  String?
+
   alertSentAt     DateTime?
   printedAt       DateTime?
   completedAt     DateTime?

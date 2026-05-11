@@ -41,9 +41,26 @@ function summarizeMaterialUsage(usages: any[]) {
   const usedQty = usages.reduce((sum, usage) => sum + Number(usage.usedQty || 0), 0);
   const wasteQty = usages.reduce((sum, usage) => sum + Number(usage.wasteQty || 0), 0);
   const reprintQty = usages.reduce((sum, usage) => sum + Number(usage.reprintQty || 0), 0);
-  const deductedQty = usages.reduce((sum, usage) => sum + Number(usage.stockDeductedQty || 0), 0);
-  const wastePct = usedQty > 0 ? (wasteQty / usedQty) * 100 : 0;
-  return { materialCost, pulledQty, usedQty, wasteQty, reprintQty, deductedQty, wastePct };
+  return { materialCost, pulledQty, usedQty, wasteQty, reprintQty };
+}
+
+function summarizeFinalActualCosts(job: any) {
+  const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
+  const estimatedCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
+  const materialSummary = summarizeMaterialUsage(job.materialUsages || []);
+  const printCost = Number(job.actuals?.roughActualPrintCost || 0);
+  const materialCost = Number(materialSummary.materialCost || 0);
+  const laborCost = Number(job.actualLaborCost || 0);
+  const packingCost = Number(job.actualPackingCost || 0);
+  const shippingCost = Number(job.actualShippingCost || 0);
+  const outsourceCost = Number(job.actualOutsourceCost || 0);
+  const otherCost = Number(job.actualOtherCost || 0);
+  const reprintCost = Number(job.actualReprintCost || 0);
+  const liveActualTotal = printCost + materialCost + laborCost + packingCost + shippingCost + outsourceCost + otherCost + reprintCost;
+  const finalTotal = Number(job.actualTotalCost || 0) || liveActualTotal;
+  const finalProfit = revenue - finalTotal;
+  const finalMargin = revenue > 0 ? (finalProfit / revenue) * 100 : 0;
+  return { revenue, estimatedCost, printCost, materialCost, laborCost, packingCost, shippingCost, outsourceCost, otherCost, reprintCost, finalTotal, finalProfit, finalMargin, variance: finalTotal - estimatedCost, materialSummary };
 }
 
 function safeDate(value: any) {
@@ -68,8 +85,8 @@ export async function loader({ request, params }: { request: Request; params: an
       items: { orderBy: { sortOrder: "asc" } },
       files: { orderBy: { createdAt: "desc" } },
       checklistItems: { orderBy: [{ section: "asc" }, { sortOrder: "asc" }] },
-      materialUsages: { orderBy: { createdAt: "desc" } },
       events: { orderBy: { createdAt: "desc" }, take: 15 },
+      materialUsages: { orderBy: { createdAt: "desc" } },
     },
   });
 
@@ -88,7 +105,7 @@ export default function PrintProductionJob() {
   const productImage = job.productImageUrl || job.items?.find((item: any) => item.productImageUrl)?.productImageUrl;
   const totalRevenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const totalCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
-  const materialSummary = summarizeMaterialUsage(job.materialUsages || []);
+  const finalCosts = summarizeFinalActualCosts(job);
 
   return (
     <div>
@@ -200,51 +217,22 @@ export default function PrintProductionJob() {
             <div><strong>Actual ink:</strong> {Number(job.actuals?.actualInkMl || 0).toFixed(2)} ml</div>
             <div><strong>Actual print time:</strong> {Number(job.actuals?.actualPrintMinutes || 0).toFixed(2)} min</div>
             <div><strong>Rough print cost:</strong> ${money(job.actuals?.roughActualPrintCost)}</div>
-            <div><strong>Actual material cost:</strong> ${money(materialSummary.materialCost)}</div>
-            <div><strong>Profit after logged print + material cost:</strong> ${money(Number(job.actuals?.conservativeProfitAfterLoggedPrintCost || 0) - materialSummary.materialCost)}</div>
+            <div><strong>Conservative profit after logged print cost:</strong> ${money(job.actuals?.conservativeProfitAfterLoggedPrintCost)}</div>
+            <hr />
+            <h3>Final Job Cost</h3>
+            <div><strong>Status:</strong> {job.actualCostFinalized ? "Finalized" : "Open"}</div>
+            <div><strong>Actual material:</strong> ${money(finalCosts.materialCost)}</div>
+            <div><strong>Labor:</strong> ${money(finalCosts.laborCost)}</div>
+            <div><strong>Packing:</strong> ${money(finalCosts.packingCost)}</div>
+            <div><strong>Shipping:</strong> ${money(finalCosts.shippingCost)}</div>
+            <div><strong>Outsource:</strong> ${money(finalCosts.outsourceCost)}</div>
+            <div><strong>Reprint / other:</strong> ${money(finalCosts.reprintCost + finalCosts.otherCost)}</div>
+            <div><strong>Final actual cost:</strong> ${money(finalCosts.finalTotal)}</div>
+            <div><strong>Final profit:</strong> ${money(finalCosts.finalProfit)}</div>
+            <div><strong>Final margin:</strong> {Number(finalCosts.finalMargin || 0).toFixed(1)}%</div>
+            {job.actualCostFinalizedAt ? <div><strong>Finalized:</strong> {new Date(job.actualCostFinalizedAt).toLocaleString()}</div> : null}
+            {job.actualCostNotes ? <div><strong>Cost notes:</strong> {job.actualCostNotes}</div> : null}
           </div>
-        </div>
-
-        <div className="card" style={{ marginTop: 18 }}>
-          <h2>Material Usage + Waste</h2>
-          <div><strong>Total material cost:</strong> ${money(materialSummary.materialCost)}</div>
-          <div><strong>Pulled:</strong> {Number(materialSummary.pulledQty || 0).toFixed(2)} | <strong>Used:</strong> {Number(materialSummary.usedQty || 0).toFixed(2)} | <strong>Waste:</strong> {Number(materialSummary.wasteQty || 0).toFixed(2)} | <strong>Reprint:</strong> {Number(materialSummary.reprintQty || 0).toFixed(2)} | <strong>Deducted:</strong> {Number(materialSummary.deductedQty || 0).toFixed(2)} | <strong>Waste %:</strong> {Number(materialSummary.wastePct || 0).toFixed(1)}%</div>
-          {(job.materialUsages || []).length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>Material</th>
-                  <th>Type</th>
-                  <th>Unit</th>
-                  <th>Est</th>
-                  <th>Pulled</th>
-                  <th>Used</th>
-                  <th>Waste</th>
-                  <th>Reprint</th>
-                  <th>Deducted</th>
-                  <th>Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(job.materialUsages || []).map((usage: any) => (
-                  <tr key={usage.id}>
-                    <td>{usage.materialName}</td>
-                    <td>{usage.materialType || ""}</td>
-                    <td>{usage.unit}</td>
-                    <td>{Number(usage.estimatedQty || 0).toFixed(2)}</td>
-                    <td>{Number(usage.pulledQty || 0).toFixed(2)}</td>
-                    <td>{Number(usage.usedQty || 0).toFixed(2)}</td>
-                    <td>{Number(usage.wasteQty || 0).toFixed(2)}</td>
-                    <td>{Number(usage.reprintQty || 0).toFixed(2)}</td>
-                    <td>{Number(usage.stockDeductedQty || 0).toFixed(2)}</td>
-                    <td>${money(usage.totalCost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div>No material usage logged yet.</div>
-          )}
         </div>
 
         <div className="grid">

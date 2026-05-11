@@ -140,6 +140,25 @@ function summarizeMaterialUsage(usages: any[]) {
   return { materialCost, pulledQty, usedQty, wasteQty, reprintQty, deductedQty, wastePct };
 }
 
+function summarizeFinalActualCosts(job: any, actuals: any, materialSummary: any) {
+  const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
+  const estimatedCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
+  const printCost = Number(actuals?.roughActualPrintCost || 0);
+  const materialCost = Number(materialSummary?.materialCost || 0);
+  const laborCost = Number(job.actualLaborCost || 0);
+  const packingCost = Number(job.actualPackingCost || 0);
+  const shippingCost = Number(job.actualShippingCost || 0);
+  const outsourceCost = Number(job.actualOutsourceCost || 0);
+  const otherCost = Number(job.actualOtherCost || 0);
+  const reprintCost = Number(job.actualReprintCost || 0);
+  const liveActualTotal = printCost + materialCost + laborCost + packingCost + shippingCost + outsourceCost + otherCost + reprintCost;
+  const finalTotal = Number(job.actualTotalCost || 0) || liveActualTotal;
+  const finalProfit = revenue - finalTotal;
+  const finalMargin = revenue > 0 ? (finalProfit / revenue) * 100 : 0;
+  const estimateVariance = finalTotal - estimatedCost;
+  return { revenue, estimatedCost, printCost, materialCost, laborCost, packingCost, shippingCost, outsourceCost, otherCost, reprintCost, liveActualTotal, finalTotal, finalProfit, finalMargin, estimateVariance };
+}
+
 function materialStockTone(material: any) {
   if (material?.stockOnHand == null || material?.reorderPoint == null) return undefined;
   return Number(material.stockOnHand) <= Number(material.reorderPoint) ? "critical" : "success";
@@ -905,6 +924,63 @@ Source ref: ${sourceRef}` : ""}`,
     return Response.json({ ok: true, message: "Proof marked sent.", token });
   }
 
+  if (intent === "saveFinalCosts") {
+    const jobId = String(formData.get("jobId") || "");
+    const job = await db.productionJob.findFirst({
+      where: { shop, id: jobId },
+      include: { items: true, materialUsages: true },
+    });
+    if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
+
+    const printLogEntries = await db.printLogEntry.findMany({
+      where: { shop, productionJobId: jobId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const actualLaborMinutes = Number(formData.get("actualLaborMinutes") || 0);
+    const actualLaborRate = Number(formData.get("actualLaborRate") || 25);
+    const typedLaborCost = Number(formData.get("actualLaborCost") || 0);
+    const actualLaborCost = typedLaborCost || ((actualLaborMinutes / 60) * actualLaborRate);
+    const actualPackingCost = Number(formData.get("actualPackingCost") || 0);
+    const actualShippingCost = Number(formData.get("actualShippingCost") || 0);
+    const actualOutsourceCost = Number(formData.get("actualOutsourceCost") || 0);
+    const actualOtherCost = Number(formData.get("actualOtherCost") || 0);
+    const actualReprintCost = Number(formData.get("actualReprintCost") || 0);
+    const actualCostNotes = String(formData.get("actualCostNotes") || "") || null;
+    const actualCostFinalized = String(formData.get("actualCostFinalized") || "false") === "true";
+
+    const actuals = summarizeActualPrintLogs(job, printLogEntries);
+    const materialSummary = summarizeMaterialUsage(job.materialUsages || []);
+    const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
+    const actualTotalCost = Number(actuals.roughActualPrintCost || 0) + Number(materialSummary.materialCost || 0) + actualLaborCost + actualPackingCost + actualShippingCost + actualOutsourceCost + actualOtherCost + actualReprintCost;
+    const actualFinalProfit = revenue - actualTotalCost;
+    const actualFinalMargin = revenue > 0 ? (actualFinalProfit / revenue) * 100 : 0;
+
+    await db.productionJob.update({
+      where: { id: jobId },
+      data: {
+        actualLaborMinutes,
+        actualLaborRate,
+        actualLaborCost,
+        actualPackingCost,
+        actualShippingCost,
+        actualOutsourceCost,
+        actualOtherCost,
+        actualReprintCost,
+        actualTotalCost,
+        actualFinalProfit,
+        actualFinalMargin,
+        actualCostNotes,
+        actualCostFinalized,
+        actualCostFinalizedAt: actualCostFinalized ? new Date() : null,
+        actualCostFinalizedBy: actualCostFinalized ? "GSO ERP" : null,
+      },
+    });
+
+    await createEvent(shop, jobId, actualCostFinalized ? "actual_cost_finalized" : "actual_cost_updated", `Actual job cost ${actualCostFinalized ? "finalized" : "updated"}. Total cost: $${actualTotalCost.toFixed(2)}. Profit: $${actualFinalProfit.toFixed(2)}. Margin: ${actualFinalMargin.toFixed(1)}%.`);
+    return Response.json({ ok: true, message: actualCostFinalized ? "Actual cost finalized." : "Actual cost updated." });
+  }
+
   if (intent === "markPrinted") {
     const jobId = String(formData.get("jobId") || "");
     await db.productionJob.updateMany({ where: { shop, id: jobId }, data: { printedAt: new Date() } });
@@ -1027,6 +1103,41 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
             ) : (
               <Text as="p" tone="subdued">Import a VersaWorks/RasterLink log using the job or item ticket to fill actual sqft, ink, time, and rough print cost.</Text>
             )}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="250">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="h4" variant="headingSm">Final Actual Cost</Text>
+              {job.actualCostFinalized ? <Badge tone="success">Finalized</Badge> : <Badge tone="warning">Open</Badge>}
+            </InlineStack>
+            <InlineStack gap="300" wrap>
+              <Text as="p">Revenue: ${money(summarizeFinalActualCosts(job, job.actuals, materialSummary).revenue)}</Text>
+              <Text as="p">Final cost: ${money(summarizeFinalActualCosts(job, job.actuals, materialSummary).finalTotal)}</Text>
+              <Text as="p">Final profit: ${money(summarizeFinalActualCosts(job, job.actuals, materialSummary).finalProfit)}</Text>
+              <Text as="p">Final margin: {Number(summarizeFinalActualCosts(job, job.actuals, materialSummary).finalMargin || 0).toFixed(1)}%</Text>
+              <Text as="p">Variance vs estimate: ${money(summarizeFinalActualCosts(job, job.actuals, materialSummary).estimateVariance)}</Text>
+            </InlineStack>
+            <Text as="p" tone="subdued">Use this to close the job after production. Print/material costs come from logs and material usage; add labor, packing, shipping, outsource invoices, reprints, and other costs here.</Text>
+            <Form method="post">
+              <input type="hidden" name="intent" value="saveFinalCosts" />
+              <input type="hidden" name="jobId" value={job.id} />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(160px, 1fr))", gap: 12 }}>
+                <label>Labor minutes<input name="actualLaborMinutes" type="number" step="0.01" defaultValue={job.actualLaborMinutes || ""} style={{ width: "100%", padding: 8 }} /></label>
+                <label>Labor rate/hr<input name="actualLaborRate" type="number" step="0.01" defaultValue={job.actualLaborRate || 25} style={{ width: "100%", padding: 8 }} /></label>
+                <label>Labor cost override<input name="actualLaborCost" type="number" step="0.01" defaultValue={job.actualLaborCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                <label>Packing cost<input name="actualPackingCost" type="number" step="0.01" defaultValue={job.actualPackingCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                <label>Shipping cost<input name="actualShippingCost" type="number" step="0.01" defaultValue={job.actualShippingCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                <label>Outsource invoice cost<input name="actualOutsourceCost" type="number" step="0.01" defaultValue={job.actualOutsourceCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                <label>Reprint cost<input name="actualReprintCost" type="number" step="0.01" defaultValue={job.actualReprintCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                <label>Other cost<input name="actualOtherCost" type="number" step="0.01" defaultValue={job.actualOtherCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                <label>Finalize job cost<select name="actualCostFinalized" defaultValue={job.actualCostFinalized ? "true" : "false"} style={{ width: "100%", padding: 8 }}><option value="false">No</option><option value="true">Yes - lock final cost</option></select></label>
+              </div>
+              <label style={{ display: "block", marginTop: 12 }}>Final cost notes<textarea name="actualCostNotes" defaultValue={job.actualCostNotes || ""} rows={3} style={{ width: "100%", padding: 8 }} /></label>
+              <Button submit>{job.actualCostFinalized ? "Update finalized cost" : "Save final cost"}</Button>
+            </Form>
+            {job.actualCostFinalizedAt ? <Text as="p" tone="success">Finalized: {new Date(job.actualCostFinalizedAt).toLocaleString()}</Text> : null}
           </BlockStack>
         </Card>
 
