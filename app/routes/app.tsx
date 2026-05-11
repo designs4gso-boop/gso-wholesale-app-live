@@ -22,6 +22,7 @@ export default function App() {
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/quotes">Quotes / CRM</s-link>
         <s-link href="/app/erp/production">Production</s-link>
+        <s-link href="/app/erp/production-calendar">Production Calendar</s-link>
         <s-link href="/app/erp/print-logs">Print Logs</s-link>
         <s-link href="/app/erp/print-log-settings">Print Log Settings</s-link>
         <s-link href="/app/erp/reorder-report">Reorder Report</s-link>
