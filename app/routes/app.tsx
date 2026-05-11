@@ -22,6 +22,7 @@ export default function App() {
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/quotes">Quotes / CRM</s-link>
         <s-link href="/app/erp/production">Production</s-link>
+        <s-link href="/app/erp/print-logs">Print Logs</s-link>
         <s-link href="/app/product-costs">Product Costs</s-link>
         <s-link href="/app/wholesale/calculator">Cost Calculator</s-link>
         <s-link href="/app/wholesale/rules">Pricing Rules</s-link>

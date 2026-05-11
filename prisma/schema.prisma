@@ -814,3 +814,59 @@ model ProductionChecklistItem {
   @@index([section])
   @@index([completed])
 }
+
+model PrintLogImport {
+  id                 String   @id @default(cuid())
+  shop               String
+  source             String   @default("manual") // versaworks, rasterlink, manual_csv, other
+  fileName           String?
+  importedBy         String?
+  rawText            String?
+  rowCount           Int      @default(0)
+  matchedCount       Int      @default(0)
+  unmatchedCount     Int      @default(0)
+  totalSqft          Float    @default(0)
+  totalInkMl         Float    @default(0)
+  totalPrintMinutes  Float    @default(0)
+  status             String   @default("processed")
+  notes              String?
+  createdAt          DateTime @default(now())
+
+  entries            PrintLogEntry[]
+
+  @@index([shop])
+  @@index([source])
+  @@index([createdAt])
+}
+
+model PrintLogEntry {
+  id                 String   @id @default(cuid())
+  shop               String
+  importId           String
+  productionJobId    String?
+  jobTicket          String?
+  sourceJobName      String?
+  printerSoftware    String?
+  machineName        String?
+  mediaName          String?
+  status             String?
+  sqft               Float    @default(0)
+  inkMl              Float    @default(0)
+  cmykInkMl          Float    @default(0)
+  whiteInkMl         Float    @default(0)
+  glossInkMl         Float    @default(0)
+  printMinutes       Float    @default(0)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  rawRow             String?
+  createdAt          DateTime @default(now())
+
+  import             PrintLogImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([importId])
+  @@index([productionJobId])
+  @@index([jobTicket])
+  @@index([sourceJobName])
+  @@index([createdAt])
+}

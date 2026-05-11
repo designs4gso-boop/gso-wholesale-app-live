@@ -18,6 +18,7 @@ export default [
     route("erp/materials", "routes/app.erp.materials.tsx"),
     route("erp/machines", "routes/app.erp.machines.tsx"),
     route("erp/production", "routes/app.erp.production.tsx"),
+    route("erp/print-logs", "routes/app.erp.print-logs.tsx"),
     route("erp/production/:id/print", "routes/app.erp.production.$id.print.tsx"),
     route("erp/production/:id/proof", "routes/app.erp.production.$id.proof.tsx"),
   ]),
