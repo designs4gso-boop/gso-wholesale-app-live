@@ -127,6 +127,40 @@ function summarizeActualPrintLogs(job: any, entries: any[]) {
   };
 }
 
+
+function summarizeMaterialUsage(usages: any[]) {
+  const materialCost = usages.reduce((sum, usage) => sum + Number(usage.totalCost || 0), 0);
+  const pulledQty = usages.reduce((sum, usage) => sum + Number(usage.pulledQty || 0), 0);
+  const usedQty = usages.reduce((sum, usage) => sum + Number(usage.usedQty || 0), 0);
+  const wasteQty = usages.reduce((sum, usage) => sum + Number(usage.wasteQty || 0), 0);
+  const reprintQty = usages.reduce((sum, usage) => sum + Number(usage.reprintQty || 0), 0);
+  const wastePct = usedQty > 0 ? (wasteQty / usedQty) * 100 : 0;
+  return { materialCost, pulledQty, usedQty, wasteQty, reprintQty, wastePct };
+}
+
+function materialTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    roll_media: "Roll media",
+    laminate: "Laminate",
+    ink: "Ink",
+    packaging: "Packaging",
+    labor: "Labor",
+    outsourced: "Outsourced",
+    other: "Other",
+  };
+  return labels[value] || value || "Material";
+}
+
+function materialOptions(materials: any[]) {
+  return [
+    { label: "Manual material / not in database", value: "" },
+    ...materials.map((material) => ({
+      label: `${material.name} (${material.unit || material.baseUnit || "unit"}) - $${money(material.calculatedUnitCost || material.costPerUnit || 0)}`,
+      value: material.id,
+    })),
+  ];
+}
+
 function safeDateInput(value: any) {
   if (!value) return "";
   const date = new Date(value);
@@ -433,6 +467,7 @@ export async function loader({ request }: { request: Request }) {
         files: { orderBy: { createdAt: "desc" } },
         events: { orderBy: { createdAt: "desc" }, take: 20 },
         checklistItems: { orderBy: [{ section: "asc" }, { sortOrder: "asc" }] },
+        materialUsages: { orderBy: { createdAt: "desc" } },
       },
     }),
     db.quote.findMany({
@@ -462,7 +497,13 @@ export async function loader({ request }: { request: Request }) {
     actuals: summarizeActualPrintLogs(job, entriesByJob[job.id] || []),
   }));
 
-  return Response.json({ jobs: jobsWithActuals, quotes });
+
+  const materials = await db.material.findMany({
+    where: { shop, active: true },
+    orderBy: [{ materialType: "asc" }, { name: "asc" }],
+  });
+
+  return Response.json({ jobs: jobsWithActuals, quotes, materials });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -649,6 +690,57 @@ Source ref: ${sourceRef}` : ""}`,
     return Response.json({ ok: true, message: "Checklist updated." });
   }
 
+
+  if (intent === "addMaterialUsage") {
+    const jobId = String(formData.get("jobId") || "");
+    const materialId = String(formData.get("materialId") || "");
+    const material = materialId ? await db.material.findFirst({ where: { shop, id: materialId } }) : null;
+    const materialName = String(formData.get("materialName") || "").trim() || material?.name || "Manual material";
+    const materialType = String(formData.get("materialType") || "") || material?.materialType || "other";
+    const unit = String(formData.get("unit") || "") || material?.baseUnit || material?.unit || "sqft";
+    const pulledQty = Number(formData.get("pulledQty") || 0);
+    const usedQty = Number(formData.get("usedQty") || 0);
+    const wasteQty = Number(formData.get("wasteQty") || 0);
+    const reprintQty = Number(formData.get("reprintQty") || 0);
+    const estimatedQty = Number(formData.get("estimatedQty") || 0);
+    const costPerUnit = Number(formData.get("costPerUnit") || material?.calculatedUnitCost || material?.costPerUnit || 0);
+    const billableQty = usedQty || pulledQty || estimatedQty || 0;
+    const totalCost = Number(formData.get("totalCost") || 0) || (billableQty + wasteQty + reprintQty) * costPerUnit;
+
+    await db.productionMaterialUsage.create({
+      data: {
+        shop,
+        jobId,
+        materialId: material?.id || null,
+        materialName,
+        materialType,
+        unit,
+        estimatedQty,
+        pulledQty,
+        usedQty,
+        wasteQty,
+        reprintQty,
+        costPerUnit,
+        totalCost,
+        source: String(formData.get("source") || "manual"),
+        notes: String(formData.get("materialNotes") || "") || null,
+      },
+    });
+    await createEvent(shop, jobId, "material_usage_added", `${materialName} added. Used ${usedQty || pulledQty || estimatedQty} ${unit}. Cost $${money(totalCost)}.`);
+    return Response.json({ ok: true, message: "Material usage added." });
+  }
+
+  if (intent === "deleteMaterialUsage") {
+    const jobId = String(formData.get("jobId") || "");
+    const usageId = String(formData.get("usageId") || "");
+    const usage = await db.productionMaterialUsage.findFirst({ where: { shop, id: usageId, jobId } });
+    if (usage) {
+      await db.productionMaterialUsage.delete({ where: { id: usage.id } });
+      await createEvent(shop, jobId, "material_usage_deleted", `${usage.materialName} material usage removed.`);
+    }
+    return Response.json({ ok: true, message: "Material usage removed." });
+  }
+
   if (intent === "addNote") {
     const jobId = String(formData.get("jobId") || "");
     const note = String(formData.get("note") || "").trim();
@@ -667,11 +759,12 @@ Source ref: ${sourceRef}` : ""}`,
   return Response.json({ ok: false, message: "Unknown production action." }, { status: 400 });
 }
 
-function JobCard({ job }: { job: any }) {
+function JobCard({ job, materials }: { job: any; materials: any[] }) {
   const navigate = useNavigate();
   const firstImage = job.productImageUrl || job.items?.find((item: any) => item.productImageUrl)?.productImageUrl;
   const totalRevenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const totalCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
+  const materialSummary = summarizeMaterialUsage(job.materialUsages || []);
 
   return (
     <Card>
@@ -733,18 +826,114 @@ function JobCard({ job }: { job: any }) {
                   <Text as="p">Ink: {Number(job.actuals.actualInkMl || 0).toFixed(2)} ml</Text>
                   <Text as="p">Print time: {Number(job.actuals.actualPrintMinutes || 0).toFixed(2)} min</Text>
                   <Text as="p">Rough print cost: ${money(job.actuals.roughActualPrintCost)}</Text>
+                  <Text as="p">Actual material cost: ${money(materialSummary.materialCost)}</Text>
                 </InlineStack>
                 <InlineStack gap="300" wrap>
                   <Text as="p">CMYK: {Number(job.actuals.cmykInkMl || 0).toFixed(2)} ml</Text>
                   <Text as="p">White: {Number(job.actuals.whiteInkMl || 0).toFixed(2)} ml</Text>
                   <Text as="p">Gloss: {Number(job.actuals.glossInkMl || 0).toFixed(2)} ml</Text>
-                  <Text as="p">Conservative profit after logged print cost: ${money(job.actuals.conservativeProfitAfterLoggedPrintCost)}</Text>
+                  <Text as="p">Profit after logged print + material cost: ${money(job.actuals.conservativeProfitAfterLoggedPrintCost - materialSummary.materialCost)}</Text>
                 </InlineStack>
                 <Text as="p" tone="subdued">Rough print cost uses current default ink and machine recovery estimates. It is for variance tracking and will become more accurate as real machine/material costs are dialed in.</Text>
               </BlockStack>
             ) : (
               <Text as="p" tone="subdued">Import a VersaWorks/RasterLink log using the job or item ticket to fill actual sqft, ink, time, and rough print cost.</Text>
             )}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="250">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="h4" variant="headingSm">Material Usage + Waste</Text>
+              {(job.materialUsages || []).length ? <Badge tone="success">{job.materialUsages.length} material row(s)</Badge> : <Badge tone="warning">No material logged</Badge>}
+            </InlineStack>
+            <InlineStack gap="300" wrap>
+              <Text as="p">Material cost: ${money(materialSummary.materialCost)}</Text>
+              <Text as="p">Pulled: {Number(materialSummary.pulledQty || 0).toFixed(2)}</Text>
+              <Text as="p">Used: {Number(materialSummary.usedQty || 0).toFixed(2)}</Text>
+              <Text as="p">Waste: {Number(materialSummary.wasteQty || 0).toFixed(2)}</Text>
+              <Text as="p">Reprint: {Number(materialSummary.reprintQty || 0).toFixed(2)}</Text>
+              <Text as="p">Waste %: {Number(materialSummary.wastePct || 0).toFixed(1)}%</Text>
+            </InlineStack>
+
+            {(job.materialUsages || []).length ? (
+              <BlockStack gap="150">
+                {(job.materialUsages || []).map((usage: any) => (
+                  <Card key={usage.id}>
+                    <InlineStack align="space-between" blockAlign="center" gap="200">
+                      <BlockStack gap="050">
+                        <Text as="p" fontWeight="bold">{usage.materialName}</Text>
+                        <Text as="p" tone="subdued">
+                          {materialTypeLabel(usage.materialType)} | Used {Number(usage.usedQty || usage.pulledQty || usage.estimatedQty || 0).toFixed(2)} {usage.unit} | Waste {Number(usage.wasteQty || 0).toFixed(2)} | Cost ${money(usage.totalCost)}
+                        </Text>
+                        {usage.notes ? <Text as="p" tone="subdued">{usage.notes}</Text> : null}
+                      </BlockStack>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="deleteMaterialUsage" />
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <input type="hidden" name="usageId" value={usage.id} />
+                        <Button submit tone="critical">Remove</Button>
+                      </Form>
+                    </InlineStack>
+                  </Card>
+                ))}
+              </BlockStack>
+            ) : (
+              <Text as="p" tone="subdued">Track roll media, laminate, packaging, reprints, and waste here. This moves the job from estimated cost toward true production cost.</Text>
+            )}
+
+            <Form method="post">
+              <input type="hidden" name="intent" value="addMaterialUsage" />
+              <input type="hidden" name="jobId" value={job.id} />
+              <BlockStack gap="200">
+                <InlineStack gap="200" wrap>
+                  <div style={{ minWidth: 260, flex: 1 }}>
+                    <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Material from database</label>
+                    <select name="materialId" defaultValue="" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
+                      {materialOptions(materials).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </div>
+                  <TextField label="Manual material name" name="materialName" autoComplete="off" placeholder="Only needed if not choosing database material" />
+                  <div style={{ minWidth: 160 }}>
+                    <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Type</label>
+                    <select name="materialType" defaultValue="roll_media" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
+                      <option value="roll_media">Roll media</option>
+                      <option value="laminate">Laminate</option>
+                      <option value="packaging">Packaging</option>
+                      <option value="ink">Ink</option>
+                      <option value="labor">Labor</option>
+                      <option value="outsourced">Outsourced</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <TextField label="Unit" name="unit" defaultValue="sqft" autoComplete="off" />
+                </InlineStack>
+                <InlineStack gap="200" wrap>
+                  <TextField label="Estimated qty" name="estimatedQty" type="number" autoComplete="off" />
+                  <TextField label="Pulled qty" name="pulledQty" type="number" autoComplete="off" />
+                  <TextField label="Used qty" name="usedQty" type="number" autoComplete="off" />
+                  <TextField label="Waste qty" name="wasteQty" type="number" autoComplete="off" />
+                  <TextField label="Reprint qty" name="reprintQty" type="number" autoComplete="off" />
+                  <TextField label="Cost / unit" name="costPerUnit" type="number" autoComplete="off" />
+                  <TextField label="Override total cost" name="totalCost" type="number" autoComplete="off" />
+                </InlineStack>
+                <InlineStack gap="200" wrap>
+                  <div style={{ minWidth: 180 }}>
+                    <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Source</label>
+                    <select name="source" defaultValue="manual" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
+                      <option value="manual">Manual</option>
+                      <option value="recipe">Recipe estimate</option>
+                      <option value="print_log">Print log</option>
+                      <option value="inventory">Inventory pull</option>
+                      <option value="vendor_invoice">Vendor invoice</option>
+                    </select>
+                  </div>
+                  <TextField label="Notes" name="materialNotes" autoComplete="off" />
+                </InlineStack>
+                <Button submit>Add material usage</Button>
+              </BlockStack>
+            </Form>
           </BlockStack>
         </Card>
 
@@ -961,7 +1150,7 @@ function JobCard({ job }: { job: any }) {
 }
 
 export default function ProductionBoard() {
-  const { jobs, quotes } = useLoaderData<any>();
+  const { jobs, quotes, materials } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -1022,7 +1211,7 @@ export default function ProductionBoard() {
                 <Text as="h2" variant="headingMd">{group.label}</Text>
                 <Badge>{group.jobs.length}</Badge>
               </InlineStack>
-              {group.jobs.length ? group.jobs.map((job: any) => <JobCard key={job.id} job={job} />) : <Card><Text as="p" tone="subdued">No jobs in this stage.</Text></Card>}
+              {group.jobs.length ? group.jobs.map((job: any) => <JobCard key={job.id} job={job} materials={materials || []} />) : <Card><Text as="p" tone="subdued">No jobs in this stage.</Text></Card>}
             </BlockStack>
           </Layout.Section>
         ))}

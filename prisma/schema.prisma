@@ -289,6 +289,7 @@ calculatedUnitCost Float    @default(0)
   recipeMaterials RecipeMaterial[]
   costHistory MaterialCostHistory[]
   vendors     MaterialVendor[]
+  productionUsages ProductionMaterialUsage[]
 
   @@index([shop])
   @@index([shop, materialType])
@@ -698,6 +699,7 @@ model ProductionJob {
   files           ProductionJobFile[]
   events          ProductionJobEvent[]
   checklistItems  ProductionChecklistItem[]
+  materialUsages  ProductionMaterialUsage[]
 
   @@index([shop])
   @@index([shop, status])
@@ -818,6 +820,37 @@ model ProductionChecklistItem {
   @@index([jobId])
   @@index([section])
   @@index([completed])
+}
+
+
+model ProductionMaterialUsage {
+  id              String   @id @default(cuid())
+  shop            String
+  jobId           String
+  materialId      String?
+  materialName    String
+  materialType    String?  // roll_media, laminate, ink, packaging, labor, outsourced, other
+  unit            String   @default("sqft") // sqft, linear_ft, sqin, each, ml, hour, roll, sheet
+  estimatedQty    Float    @default(0)
+  pulledQty       Float    @default(0)
+  usedQty         Float    @default(0)
+  wasteQty        Float    @default(0)
+  reprintQty      Float    @default(0)
+  costPerUnit     Float    @default(0)
+  totalCost       Float    @default(0)
+  source          String   @default("manual") // manual, recipe, print_log, inventory, vendor_invoice
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  job             ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  material        Material? @relation(fields: [materialId], references: [id])
+
+  @@index([shop])
+  @@index([jobId])
+  @@index([materialId])
+  @@index([materialType])
+  @@index([source])
 }
 
 model PrintLogImport {

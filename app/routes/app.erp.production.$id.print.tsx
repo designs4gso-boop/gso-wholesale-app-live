@@ -35,6 +35,16 @@ function summarizeActualPrintLogs(job: any, entries: any[]) {
   };
 }
 
+function summarizeMaterialUsage(usages: any[]) {
+  const materialCost = usages.reduce((sum, usage) => sum + Number(usage.totalCost || 0), 0);
+  const pulledQty = usages.reduce((sum, usage) => sum + Number(usage.pulledQty || 0), 0);
+  const usedQty = usages.reduce((sum, usage) => sum + Number(usage.usedQty || 0), 0);
+  const wasteQty = usages.reduce((sum, usage) => sum + Number(usage.wasteQty || 0), 0);
+  const reprintQty = usages.reduce((sum, usage) => sum + Number(usage.reprintQty || 0), 0);
+  const wastePct = usedQty > 0 ? (wasteQty / usedQty) * 100 : 0;
+  return { materialCost, pulledQty, usedQty, wasteQty, reprintQty, wastePct };
+}
+
 function safeDate(value: any) {
   if (!value) return "Not set";
   const date = new Date(value);
@@ -57,6 +67,7 @@ export async function loader({ request, params }: { request: Request; params: an
       items: { orderBy: { sortOrder: "asc" } },
       files: { orderBy: { createdAt: "desc" } },
       checklistItems: { orderBy: [{ section: "asc" }, { sortOrder: "asc" }] },
+      materialUsages: { orderBy: { createdAt: "desc" } },
       events: { orderBy: { createdAt: "desc" }, take: 15 },
     },
   });
@@ -76,6 +87,7 @@ export default function PrintProductionJob() {
   const productImage = job.productImageUrl || job.items?.find((item: any) => item.productImageUrl)?.productImageUrl;
   const totalRevenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const totalCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
+  const materialSummary = summarizeMaterialUsage(job.materialUsages || []);
 
   return (
     <div>
@@ -187,8 +199,49 @@ export default function PrintProductionJob() {
             <div><strong>Actual ink:</strong> {Number(job.actuals?.actualInkMl || 0).toFixed(2)} ml</div>
             <div><strong>Actual print time:</strong> {Number(job.actuals?.actualPrintMinutes || 0).toFixed(2)} min</div>
             <div><strong>Rough print cost:</strong> ${money(job.actuals?.roughActualPrintCost)}</div>
-            <div><strong>Conservative profit after logged print cost:</strong> ${money(job.actuals?.conservativeProfitAfterLoggedPrintCost)}</div>
+            <div><strong>Actual material cost:</strong> ${money(materialSummary.materialCost)}</div>
+            <div><strong>Profit after logged print + material cost:</strong> ${money(Number(job.actuals?.conservativeProfitAfterLoggedPrintCost || 0) - materialSummary.materialCost)}</div>
           </div>
+        </div>
+
+        <div className="card" style={{ marginTop: 18 }}>
+          <h2>Material Usage + Waste</h2>
+          <div><strong>Total material cost:</strong> ${money(materialSummary.materialCost)}</div>
+          <div><strong>Pulled:</strong> {Number(materialSummary.pulledQty || 0).toFixed(2)} | <strong>Used:</strong> {Number(materialSummary.usedQty || 0).toFixed(2)} | <strong>Waste:</strong> {Number(materialSummary.wasteQty || 0).toFixed(2)} | <strong>Reprint:</strong> {Number(materialSummary.reprintQty || 0).toFixed(2)} | <strong>Waste %:</strong> {Number(materialSummary.wastePct || 0).toFixed(1)}%</div>
+          {(job.materialUsages || []).length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>Material</th>
+                  <th>Type</th>
+                  <th>Unit</th>
+                  <th>Est</th>
+                  <th>Pulled</th>
+                  <th>Used</th>
+                  <th>Waste</th>
+                  <th>Reprint</th>
+                  <th>Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(job.materialUsages || []).map((usage: any) => (
+                  <tr key={usage.id}>
+                    <td>{usage.materialName}</td>
+                    <td>{usage.materialType || ""}</td>
+                    <td>{usage.unit}</td>
+                    <td>{Number(usage.estimatedQty || 0).toFixed(2)}</td>
+                    <td>{Number(usage.pulledQty || 0).toFixed(2)}</td>
+                    <td>{Number(usage.usedQty || 0).toFixed(2)}</td>
+                    <td>{Number(usage.wasteQty || 0).toFixed(2)}</td>
+                    <td>{Number(usage.reprintQty || 0).toFixed(2)}</td>
+                    <td>${money(usage.totalCost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div>No material usage logged yet.</div>
+          )}
         </div>
 
         <div className="grid">
