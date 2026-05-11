@@ -547,6 +547,7 @@ function vendorOptionList(vendors: any[]) {
 
 function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any; vendors: any[]; costBookItems: any[] }) {
   const busy = useNavigation().state !== "idle";
+  const navigate = useNavigate();
   const vendorOptions = vendorOptionList(vendors);
   const costBookOptions = costBookOptionList(costBookItems || []);
   const bestCost = bestCostBookForRequest(request, costBookItems || []);
@@ -615,6 +616,8 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
         </Form>
 
         <InlineStack gap="200" wrap>
+          <Button onClick={() => navigate(`/app/erp/purchase-export?id=${request.id}`)}>Print / Email PO</Button>
+          <Button url={`/app/erp/purchase-export?id=${request.id}&format=csv`}>Download CSV</Button>
           <Form method="post">
             <input type="hidden" name="intent" value="markOrdered" />
             <input type="hidden" name="id" value={request.id} />
@@ -693,7 +696,7 @@ export default function PurchaseRequestsPage() {
       title="Purchase Requests"
       subtitle="Turn low-stock materials into vendor-linked purchase requests and receive inventory into stock."
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
-      secondaryActions={[{ content: "Vendor Center", onAction: () => navigate("/app/erp/vendors") }, { content: "Reorder Report", onAction: () => navigate("/app/erp/reorder-report") }]}
+      secondaryActions={[{ content: "Vendor Center", onAction: () => navigate("/app/erp/vendors") }, { content: "Reorder Report", onAction: () => navigate("/app/erp/reorder-report") }, { content: "Purchase Export", onAction: () => navigate("/app/erp/purchase-export") }]}
     >
       <Layout>
         <Layout.Section>
