@@ -85,6 +85,48 @@ function money(value: any) {
   return (Number(value) || 0).toFixed(2);
 }
 
+const ROLAND_INK_COST_PER_ML = 156.99 / 750;
+const MIMAKI_INK_COST_PER_ML = 190 / 1000;
+const DEFAULT_MACHINE_RECOVERY_PER_HOUR = 5;
+
+function inkCostRateForEntry(entry: any) {
+  const text = `${entry?.printerSoftware || ""} ${entry?.machineName || ""}`.toLowerCase();
+  if (text.includes("mimaki") || text.includes("raster")) return MIMAKI_INK_COST_PER_ML;
+  return ROLAND_INK_COST_PER_ML;
+}
+
+function summarizeActualPrintLogs(job: any, entries: any[]) {
+  const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
+  const estimatedCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
+  const actualSqft = entries.reduce((sum, entry) => sum + Number(entry.sqft || 0), 0);
+  const actualInkMl = entries.reduce((sum, entry) => sum + Number(entry.inkMl || 0), 0);
+  const cmykInkMl = entries.reduce((sum, entry) => sum + Number(entry.cmykInkMl || 0), 0);
+  const whiteInkMl = entries.reduce((sum, entry) => sum + Number(entry.whiteInkMl || 0), 0);
+  const glossInkMl = entries.reduce((sum, entry) => sum + Number(entry.glossInkMl || 0), 0);
+  const actualPrintMinutes = entries.reduce((sum, entry) => sum + Number(entry.printMinutes || 0), 0);
+  const actualInkCost = entries.reduce((sum, entry) => sum + Number(entry.inkMl || 0) * inkCostRateForEntry(entry), 0);
+  const actualMachineCost = (actualPrintMinutes / 60) * DEFAULT_MACHINE_RECOVERY_PER_HOUR;
+  const roughActualPrintCost = actualInkCost + actualMachineCost;
+  const estimatedProfit = revenue - estimatedCost;
+  return {
+    entryCount: entries.length,
+    actualSqft,
+    actualInkMl,
+    cmykInkMl,
+    whiteInkMl,
+    glossInkMl,
+    actualPrintMinutes,
+    actualInkCost,
+    actualMachineCost,
+    roughActualPrintCost,
+    revenue,
+    estimatedCost,
+    estimatedProfit,
+    conservativeProfitAfterLoggedPrintCost: revenue - estimatedCost - roughActualPrintCost,
+    lastLogAt: entries[0]?.createdAt || null,
+  };
+}
+
 function safeDateInput(value: any) {
   if (!value) return "";
   const date = new Date(value);
@@ -400,7 +442,27 @@ export async function loader({ request }: { request: Request }) {
     }),
   ]);
 
-  return Response.json({ jobs, quotes });
+  const jobIds = jobs.map((job: any) => job.id);
+  const printLogEntries = jobIds.length
+    ? await db.printLogEntry.findMany({
+        where: { shop, productionJobId: { in: jobIds } },
+        orderBy: { createdAt: "desc" },
+      })
+    : [];
+
+  const entriesByJob = printLogEntries.reduce((map: Record<string, any[]>, entry: any) => {
+    if (!entry.productionJobId) return map;
+    map[entry.productionJobId] = map[entry.productionJobId] || [];
+    map[entry.productionJobId].push(entry);
+    return map;
+  }, {});
+
+  const jobsWithActuals = jobs.map((job: any) => ({
+    ...job,
+    actuals: summarizeActualPrintLogs(job, entriesByJob[job.id] || []),
+  }));
+
+  return Response.json({ jobs: jobsWithActuals, quotes });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -657,6 +719,34 @@ function JobCard({ job }: { job: any }) {
           <Text as="p">Profit: ${money(totalRevenue - totalCost)}</Text>
           <Text as="p">Assigned: {job.assignedTo || "Unassigned"}</Text>
         </InlineStack>
+
+        <Card>
+          <BlockStack gap="200">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="h4" variant="headingSm">Actual Cost Summary</Text>
+              {Number(job.actuals?.entryCount || 0) > 0 ? <Badge tone="success">{job.actuals.entryCount} print log(s)</Badge> : <Badge tone="warning">No print logs matched</Badge>}
+            </InlineStack>
+            {Number(job.actuals?.entryCount || 0) > 0 ? (
+              <BlockStack gap="150">
+                <InlineStack gap="300" wrap>
+                  <Text as="p">Actual sqft: {Number(job.actuals.actualSqft || 0).toFixed(2)}</Text>
+                  <Text as="p">Ink: {Number(job.actuals.actualInkMl || 0).toFixed(2)} ml</Text>
+                  <Text as="p">Print time: {Number(job.actuals.actualPrintMinutes || 0).toFixed(2)} min</Text>
+                  <Text as="p">Rough print cost: ${money(job.actuals.roughActualPrintCost)}</Text>
+                </InlineStack>
+                <InlineStack gap="300" wrap>
+                  <Text as="p">CMYK: {Number(job.actuals.cmykInkMl || 0).toFixed(2)} ml</Text>
+                  <Text as="p">White: {Number(job.actuals.whiteInkMl || 0).toFixed(2)} ml</Text>
+                  <Text as="p">Gloss: {Number(job.actuals.glossInkMl || 0).toFixed(2)} ml</Text>
+                  <Text as="p">Conservative profit after logged print cost: ${money(job.actuals.conservativeProfitAfterLoggedPrintCost)}</Text>
+                </InlineStack>
+                <Text as="p" tone="subdued">Rough print cost uses current default ink and machine recovery estimates. It is for variance tracking and will become more accurate as real machine/material costs are dialed in.</Text>
+              </BlockStack>
+            ) : (
+              <Text as="p" tone="subdued">Import a VersaWorks/RasterLink log using the job or item ticket to fill actual sqft, ink, time, and rough print cost.</Text>
+            )}
+          </BlockStack>
+        </Card>
 
         <Divider />
 
