@@ -22,6 +22,7 @@ export default [
     route("erp/print-log-settings", "routes/app.erp.print-log-settings.tsx"),
     route("erp/reorder-report", "routes/app.erp.reorder-report.tsx"),
     route("erp/purchase-requests", "routes/app.erp.purchase-requests.tsx"),
+    route("erp/vendors", "routes/app.erp.vendors.tsx"),
     route("erp/production/:id/print", "routes/app.erp.production.$id.print.tsx"),
     route("erp/production/:id/proof", "routes/app.erp.production.$id.proof.tsx"),
   ]),

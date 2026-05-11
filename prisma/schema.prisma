@@ -1005,3 +1005,62 @@ model PurchaseRequest {
   @@index([neededBy])
   @@index([createdAt])
 }
+
+
+model Vendor {
+  id                 String   @id @default(cuid())
+  shop               String
+  name               String
+  vendorType         String   @default("supplier") // supplier, print_vendor, packaging_vendor, service, other
+  status             String   @default("active") // active, preferred, backup, inactive
+  contactName        String?
+  email              String?
+  phone              String?
+  website            String?
+  address1           String?
+  address2           String?
+  city               String?
+  state              String?
+  zip                String?
+  country            String?  @default("USA")
+  paymentTerms       String?
+  leadTimeDays       Int?
+  moqNotes           String?
+  shippingNotes      String?
+  qualityNotes       String?
+  notes              String?
+  defaultCurrency    String   @default("USD")
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  contacts           VendorContact[]
+
+  @@unique([shop, name])
+  @@index([shop])
+  @@index([shop, active])
+  @@index([vendorType])
+  @@index([status])
+}
+
+model VendorContact {
+  id          String   @id @default(cuid())
+  shop        String
+  vendorId    String
+  name        String
+  role        String?
+  email       String?
+  phone       String?
+  notes       String?
+  primary     Boolean  @default(false)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  vendor      Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([vendorId])
+  @@index([primary])
+  @@index([active])
+}

@@ -26,6 +26,7 @@ export default function App() {
         <s-link href="/app/erp/print-log-settings">Print Log Settings</s-link>
         <s-link href="/app/erp/reorder-report">Reorder Report</s-link>
         <s-link href="/app/erp/purchase-requests">PO Requests</s-link>
+        <s-link href="/app/erp/vendors">Vendor Center</s-link>
         <s-link href="/app/product-costs">Product Costs</s-link>
         <s-link href="/app/wholesale/calculator">Cost Calculator</s-link>
         <s-link href="/app/wholesale/rules">Pricing Rules</s-link>
