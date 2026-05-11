@@ -80,6 +80,40 @@ function safeDateInput(value: any) {
   return date.toISOString().slice(0, 10);
 }
 
+function isImageUrl(url: any) {
+  const value = String(url || "").split("?")[0].toLowerCase();
+  return /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(value);
+}
+
+function isPdfUrl(url: any) {
+  const value = String(url || "").split("?")[0].toLowerCase();
+  return value.endsWith(".pdf");
+}
+
+function assetRoleLabel(role: string) {
+  if (role === "productImage") return "Product image";
+  if (role === "artwork") return "Main artwork";
+  if (role === "proof") return "Current proof";
+  if (role === "printFile") return "Print file";
+  return "Reference file";
+}
+
+function jobAssetUpdateForRole(role: string, fileUrl: string) {
+  if (role === "productImage") return { productImageUrl: fileUrl };
+  if (role === "artwork") return { artworkUrl: fileUrl };
+  if (role === "proof") return { proofUrl: fileUrl };
+  if (role === "printFile") return { printFileUrl: fileUrl };
+  return {};
+}
+
+function roleFromFileType(fileType: string) {
+  if (fileType === "image") return "productImage";
+  if (fileType === "artwork" || fileType === "customer_pdf") return "artwork";
+  if (fileType === "proof") return "proof";
+  if (fileType === "print_file") return "printFile";
+  return "reference";
+}
+
 function parseJson(value: any) {
   if (!value) return null;
   try {
@@ -333,6 +367,8 @@ export async function action({ request }: { request: Request }) {
     if (!fileUrl) return Response.json({ ok: false, message: "File URL is required." }, { status: 400 });
     const fileName = String(formData.get("fileName") || "") || fileUrl.split("/").pop() || "Production file";
     const fileType = String(formData.get("fileType") || "artwork");
+    const assetRole = String(formData.get("assetRole") || roleFromFileType(fileType));
+    const fileNotes = String(formData.get("fileNotes") || "") || null;
 
     await db.productionJobFile.create({
       data: {
@@ -341,11 +377,44 @@ export async function action({ request }: { request: Request }) {
         fileName,
         fileType,
         fileUrl,
-        notes: String(formData.get("fileNotes") || "") || null,
+        notes: fileNotes ? `${fileNotes}
+Asset role: ${assetRole}` : `Asset role: ${assetRole}`,
       },
     });
+
+    const roleUpdate = jobAssetUpdateForRole(assetRole, fileUrl);
+    if (Object.keys(roleUpdate).length) {
+      await db.productionJob.updateMany({ where: { shop, id: jobId }, data: roleUpdate });
+      await createEvent(shop, jobId, "asset_role_set", `${fileName} set as ${assetRoleLabel(assetRole)}.`);
+    }
+
     await createEvent(shop, jobId, "file_added", `${fileType} file added: ${fileName}.`);
     return Response.json({ ok: true, message: "File added." });
+  }
+
+  if (intent === "setFileRole") {
+    const jobId = String(formData.get("jobId") || "");
+    const fileId = String(formData.get("fileId") || "");
+    const assetRole = String(formData.get("assetRole") || "reference");
+    const file = await db.productionJobFile.findFirst({ where: { shop, id: fileId, jobId } });
+    if (!file) return Response.json({ ok: false, message: "File not found." }, { status: 404 });
+
+    const roleUpdate = jobAssetUpdateForRole(assetRole, file.fileUrl);
+    if (Object.keys(roleUpdate).length) {
+      await db.productionJob.updateMany({ where: { shop, id: jobId }, data: roleUpdate });
+      await createEvent(shop, jobId, "asset_role_set", `${file.fileName} set as ${assetRoleLabel(assetRole)}.`);
+    }
+    return Response.json({ ok: true, message: `${file.fileName} set as ${assetRoleLabel(assetRole)}.` });
+  }
+
+  if (intent === "deleteFile") {
+    const jobId = String(formData.get("jobId") || "");
+    const fileId = String(formData.get("fileId") || "");
+    const file = await db.productionJobFile.findFirst({ where: { shop, id: fileId, jobId } });
+    if (!file) return Response.json({ ok: false, message: "File not found." }, { status: 404 });
+    await db.productionJobFile.delete({ where: { id: file.id } });
+    await createEvent(shop, jobId, "file_deleted", `${file.fileType} file removed: ${file.fileName}.`);
+    return Response.json({ ok: true, message: "File removed." });
   }
 
   if (intent === "toggleChecklist") {
@@ -504,27 +573,89 @@ function JobCard({ job }: { job: any }) {
             </Card>
           </div>
 
-          <div style={{ minWidth: 320, flex: 1 }}>
+          <div style={{ minWidth: 360, flex: 1 }}>
             <Card>
-              <BlockStack gap="200">
-                <Text as="h4" variant="headingSm">Files / attachments</Text>
+              <BlockStack gap="300">
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="h4" variant="headingSm">Asset Manager</Text>
+                  <Badge>{(job.files || []).length} file(s)</Badge>
+                </InlineStack>
+
+                <BlockStack gap="100">
+                  <Text as="p" tone="subdued">Main product image: {job.productImageUrl ? "Linked" : "Not linked"}</Text>
+                  <Text as="p" tone="subdued">Main artwork: {job.artworkUrl ? "Linked" : "Not linked"}</Text>
+                  <Text as="p" tone="subdued">Current proof: {job.proofUrl ? "Linked" : "Not linked"}</Text>
+                  <Text as="p" tone="subdued">Print file: {job.printFileUrl ? "Linked" : "Not linked"}</Text>
+                </BlockStack>
+
                 {(job.files || []).length ? (job.files || []).map((file: any) => (
-                  <Text as="p" key={file.id}><a href={file.fileUrl} target="_blank" rel="noreferrer">{file.fileName}</a> ({file.fileType})</Text>
-                )) : <Text as="p" tone="subdued">No file links yet.</Text>}
+                  <Card key={file.id}>
+                    <BlockStack gap="200">
+                      <InlineStack align="space-between" blockAlign="start">
+                        <BlockStack gap="050">
+                          <Text as="p" fontWeight="bold"><a href={file.fileUrl} target="_blank" rel="noreferrer">{file.fileName}</a></Text>
+                          <Text as="p" tone="subdued">{file.fileType} | {new Date(file.createdAt).toLocaleString()}</Text>
+                        </BlockStack>
+                        <Badge>{file.fileType}</Badge>
+                      </InlineStack>
+
+                      {isImageUrl(file.fileUrl) ? (
+                        <img src={file.fileUrl} alt={file.fileName} style={{ width: "100%", maxHeight: 180, objectFit: "contain", border: "1px solid #ddd", borderRadius: 10, background: "#fafafa" }} />
+                      ) : isPdfUrl(file.fileUrl) ? (
+                        <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10, background: "#fafafa" }}>
+                          <Text as="p">PDF attached. Open the link to view or print.</Text>
+                        </div>
+                      ) : null}
+
+                      {file.notes ? <Text as="p" tone="subdued">{file.notes}</Text> : null}
+
+                      <InlineStack gap="150" wrap>
+                        {["productImage", "artwork", "proof", "printFile"].map((role) => (
+                          <Form method="post" key={`${file.id}-${role}`}>
+                            <input type="hidden" name="intent" value="setFileRole" />
+                            <input type="hidden" name="jobId" value={job.id} />
+                            <input type="hidden" name="fileId" value={file.id} />
+                            <input type="hidden" name="assetRole" value={role} />
+                            <Button submit>{assetRoleLabel(role)}</Button>
+                          </Form>
+                        ))}
+                        <Form method="post">
+                          <input type="hidden" name="intent" value="deleteFile" />
+                          <input type="hidden" name="jobId" value={job.id} />
+                          <input type="hidden" name="fileId" value={file.id} />
+                          <Button submit tone="critical">Remove</Button>
+                        </Form>
+                      </InlineStack>
+                    </BlockStack>
+                  </Card>
+                )) : <Text as="p" tone="subdued">No assets linked yet. Add artwork, PDF, proof, image, dieline, or print file URLs below.</Text>}
+
                 <Form method="post">
                   <input type="hidden" name="intent" value="addFile" />
                   <input type="hidden" name="jobId" value={job.id} />
                   <BlockStack gap="150">
                     <TextField label="File name" name="fileName" autoComplete="off" />
-                    <div>
-                      <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>File type</label>
-                      <select name="fileType" defaultValue="artwork" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
-                        {fileTypeOptions.map((fileType) => <option key={fileType.value} value={fileType.value}>{fileType.label}</option>)}
-                      </select>
-                    </div>
-                    <TextField label="File URL / PDF / artwork link" name="fileUrl" autoComplete="off" />
+                    <InlineStack gap="200">
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>File type</label>
+                        <select name="fileType" defaultValue="artwork" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
+                          {fileTypeOptions.map((fileType) => <option key={fileType.value} value={fileType.value}>{fileType.label}</option>)}
+                        </select>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Use as</label>
+                        <select name="assetRole" defaultValue="artwork" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
+                          <option value="reference">Reference only</option>
+                          <option value="productImage">Product image</option>
+                          <option value="artwork">Main artwork</option>
+                          <option value="proof">Current proof</option>
+                          <option value="printFile">Print file</option>
+                        </select>
+                      </div>
+                    </InlineStack>
+                    <TextField label="File URL / PDF / artwork link" name="fileUrl" autoComplete="off" helpText="Paste a Shopify Files, Google Drive, Dropbox, Cloudinary, S3, or public artwork link." />
                     <TextField label="Notes" name="fileNotes" autoComplete="off" />
-                    <Button submit>Add file link</Button>
+                    <Button submit variant="primary">Add asset link</Button>
                   </BlockStack>
                 </Form>
               </BlockStack>
