@@ -68,6 +68,93 @@ function preferredMaterialVendor(material: any) {
   return material.primaryVendor || material.vendors?.find((vendor: any) => vendor.preferred) || material.vendors?.[0] || null;
 }
 
+function activeCostBookItems(costBookItems: any[]) {
+  const now = new Date();
+  return (costBookItems || []).filter((item: any) => {
+    if (item.status !== "active") return false;
+    if (item.effectiveDate && new Date(item.effectiveDate) > now) return false;
+    if (item.expiresAt && new Date(item.expiresAt) < now) return false;
+    return true;
+  });
+}
+
+function priceFromCostBook(item: any, quantity: number) {
+  if (!item) return 0;
+  const qtyValue = num(quantity) || 1;
+  const matchingTier = (item.tiers || [])
+    .filter((tier: any) => qtyValue >= num(tier.minQty) && (!tier.maxQty || qtyValue <= num(tier.maxQty)))
+    .sort((a: any, b: any) => num(b.minQty) - num(a.minQty))[0];
+  return num(matchingTier?.unitCost) || num(item.unitCost);
+}
+
+function bestCostBookForMaterial(material: any, costBookItems: any[], quantity: number) {
+  const candidates = activeCostBookItems(costBookItems)
+    .filter((item: any) => item.itemType === "material" && item.materialId === material?.id)
+    .filter((item: any) => !item.moq || num(quantity) >= num(item.moq))
+    .sort((a: any, b: any) => {
+      if (Boolean(b.preferred) !== Boolean(a.preferred)) return Number(Boolean(b.preferred)) - Number(Boolean(a.preferred));
+      return priceFromCostBook(a, quantity) - priceFromCostBook(b, quantity);
+    });
+  return candidates[0] || null;
+}
+
+function bestCostBookForRequest(request: any, costBookItems: any[]) {
+  const quantity = num(request.orderedQty) || num(request.requestedQty) || 1;
+  const candidates = activeCostBookItems(costBookItems)
+    .filter((item: any) => {
+      if (request.materialId && item.materialId === request.materialId) return true;
+      if (request.vendorId && item.vendorId === request.vendorId && item.itemName?.toLowerCase() === request.materialName?.toLowerCase()) return true;
+      return false;
+    })
+    .filter((item: any) => !item.moq || quantity >= num(item.moq))
+    .sort((a: any, b: any) => {
+      if (Boolean(b.preferred) !== Boolean(a.preferred)) return Number(Boolean(b.preferred)) - Number(Boolean(a.preferred));
+      return priceFromCostBook(a, quantity) - priceFromCostBook(b, quantity);
+    });
+  return candidates[0] || null;
+}
+
+function costBookOptionList(costBookItems: any[]) {
+  return [
+    { label: "No cost book override", value: "" },
+    ...activeCostBookItems(costBookItems).map((item: any) => ({
+      label: `${item.vendorName || "Vendor"} | ${item.itemName} | $${money(item.unitCost)} / ${item.unit || "unit"}${item.moq ? ` | MOQ ${qty(item.moq)}` : ""}`,
+      value: item.id,
+    })),
+  ];
+}
+
+async function getCostBookItem(shop: string, id: string | null | undefined) {
+  if (!id) return null;
+  return db.vendorCostBookItem.findFirst({
+    where: { shop, id, status: "active" },
+    include: { tiers: { orderBy: { minQty: "asc" } } },
+  });
+}
+
+async function findBestCostBookItem(shop: string, materialId: string | null | undefined, quantity: number, vendorId?: string | null) {
+  if (!materialId) return null;
+  const now = new Date();
+  const candidates = await db.vendorCostBookItem.findMany({
+    where: {
+      shop,
+      status: "active",
+      itemType: "material",
+      materialId,
+      OR: [{ effectiveDate: null }, { effectiveDate: { lte: now } }],
+      AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gte: now } }] }],
+      ...(vendorId ? { vendorId } : {}),
+    },
+    include: { tiers: { orderBy: { minQty: "asc" } } },
+  });
+  return candidates
+    .filter((item: any) => !item.moq || num(quantity) >= num(item.moq))
+    .sort((a: any, b: any) => {
+      if (Boolean(b.preferred) !== Boolean(a.preferred)) return Number(Boolean(b.preferred)) - Number(Boolean(a.preferred));
+      return priceFromCostBook(a, quantity) - priceFromCostBook(b, quantity);
+    })[0] || null;
+}
+
 function suggestedReorderQty(material: any) {
   const stock = num(material.stockOnHand);
   const reorderPoint = num(material.reorderPoint);
@@ -136,7 +223,7 @@ export async function loader({ request }: { request: Request }) {
   const shop = session.shop;
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  const [purchaseRequests, materials, vendors] = await Promise.all([
+  const [purchaseRequests, materials, vendors, costBookItems] = await Promise.all([
     db.purchaseRequest.findMany({
       where: { shop },
       orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
@@ -164,6 +251,11 @@ export async function loader({ request }: { request: Request }) {
       orderBy: [{ status: "asc" }, { name: "asc" }],
       include: { contacts: { where: { active: true }, orderBy: [{ primary: "desc" }, { name: "asc" }] } },
     }),
+    db.vendorCostBookItem.findMany({
+      where: { shop, status: "active" },
+      orderBy: [{ preferred: "desc" }, { vendorName: "asc" }, { itemName: "asc" }],
+      include: { tiers: { orderBy: { minQty: "asc" } } },
+    }),
   ]);
 
   const lowStockMaterials = materials.filter((material: any) => ["out_of_stock", "low_stock"].includes(materialStatus(material)));
@@ -171,7 +263,7 @@ export async function loader({ request }: { request: Request }) {
   const orderedRequests = purchaseRequests.filter((req: any) => ["ordered", "partially_received"].includes(req.status));
   const receivedRequests = purchaseRequests.filter((req: any) => req.status === "received");
 
-  return Response.json({ purchaseRequests, materials, vendors, lowStockMaterials, openRequests, orderedRequests, receivedRequests });
+  return Response.json({ purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -192,10 +284,12 @@ export async function action({ request }: { request: Request }) {
     if (!material) return Response.json({ ok: false, message: "Material not found." }, { status: 404 });
 
     const materialVendor = material.vendors?.[0];
-    const vendorRecord = material.primaryVendor || (await getVendor(shop, String(formData.get("vendorId") || "")));
     const requestedQty = num(formData.get("requestedQty")) || suggestedReorderQty(material) || num(material.reorderPoint) || 1;
-    const unitCost = materialVendor?.unitCost || material.calculatedUnitCost || material.costPerUnit || 0;
-    const leadTimeDays = vendorRecord?.leadTimeDays || materialVendor?.leadTimeDays || material.leadTimeDays || null;
+    const selectedCostBook = await getCostBookItem(shop, String(formData.get("costBookItemId") || ""));
+    const bestCostBook = selectedCostBook || await findBestCostBookItem(shop, material.id, requestedQty, material.primaryVendorId || undefined);
+    const vendorRecord = bestCostBook?.vendorId ? await getVendor(shop, bestCostBook.vendorId) : (material.primaryVendor || (await getVendor(shop, String(formData.get("vendorId") || ""))));
+    const unitCost = bestCostBook ? priceFromCostBook(bestCostBook, requestedQty) : (materialVendor?.unitCost || material.calculatedUnitCost || material.costPerUnit || 0);
+    const leadTimeDays = bestCostBook?.leadTimeDays || vendorRecord?.leadTimeDays || materialVendor?.leadTimeDays || material.leadTimeDays || null;
     const neededBy = leadTimeDays ? addDays(Number(leadTimeDays)) : null;
 
     const existingOpen = await db.purchaseRequest.findFirst({
@@ -219,10 +313,10 @@ export async function action({ request }: { request: Request }) {
         materialType: material.materialType,
         unit: material.unit || material.baseUnit || "each",
         sku: material.sku || null,
-        vendorId: vendorRecord?.id || null,
-        vendor: vendorRecord?.name || materialVendor?.vendorName || material.vendor || null,
-        vendorSku: materialVendor?.vendorSku || material.sku || null,
-        moq: materialVendor?.moq || null,
+        vendorId: vendorRecord?.id || bestCostBook?.vendorId || null,
+        vendor: vendorRecord?.name || bestCostBook?.vendorName || materialVendor?.vendorName || material.vendor || null,
+        vendorSku: bestCostBook?.vendorSku || materialVendor?.vendorSku || material.sku || null,
+        moq: bestCostBook?.moq || materialVendor?.moq || null,
         leadTimeDays,
         requestedQty,
         orderedQty: requestedQty,
@@ -230,7 +324,7 @@ export async function action({ request }: { request: Request }) {
         estimatedCost: requestedQty * unitCost,
         neededBy,
         source: "reorder_report",
-        notes: String(formData.get("notes") || "Created from low-stock material."),
+        notes: String(formData.get("notes") || (bestCostBook ? `Created from low-stock material using Vendor Cost Book: ${bestCostBook.vendorName || "vendor"}.` : "Created from low-stock material.")),
       },
     });
 
@@ -240,12 +334,15 @@ export async function action({ request }: { request: Request }) {
   if (intent === "createManual") {
     const requestNumber = await nextRequestNumber(shop);
     const requestedQty = num(formData.get("requestedQty"));
-    const unitCost = num(formData.get("unitCost"));
+    const typedUnitCost = num(formData.get("unitCost"));
     const materialId = String(formData.get("materialId") || "");
     const material = materialId ? await db.material.findFirst({ where: { shop, id: materialId }, include: { primaryVendor: true } }) : null;
-    const selectedVendor = await getVendor(shop, String(formData.get("vendorId") || "") || material?.primaryVendorId || "");
+    const selectedCostBook = await getCostBookItem(shop, String(formData.get("costBookItemId") || ""));
+    const bestCostBook = selectedCostBook || await findBestCostBookItem(shop, material?.id, requestedQty, String(formData.get("vendorId") || "") || material?.primaryVendorId || undefined);
+    const selectedVendor = bestCostBook?.vendorId ? await getVendor(shop, bestCostBook.vendorId) : await getVendor(shop, String(formData.get("vendorId") || "") || material?.primaryVendorId || "");
+    const unitCost = bestCostBook ? priceFromCostBook(bestCostBook, requestedQty) : typedUnitCost;
     const neededByRaw = String(formData.get("neededBy") || "");
-    const leadTimeDays = Math.round(num(formData.get("leadTimeDays"))) || selectedVendor?.leadTimeDays || material?.leadTimeDays || null;
+    const leadTimeDays = bestCostBook?.leadTimeDays || Math.round(num(formData.get("leadTimeDays"))) || selectedVendor?.leadTimeDays || material?.leadTimeDays || null;
 
     await db.purchaseRequest.create({
       data: {
@@ -258,17 +355,18 @@ export async function action({ request }: { request: Request }) {
         materialType: material?.materialType || null,
         unit: String(formData.get("unit") || material?.unit || material?.baseUnit || "each"),
         sku: String(formData.get("sku") || material?.sku || "") || null,
-        vendorId: selectedVendor?.id || null,
-        vendor: selectedVendor?.name || String(formData.get("vendor") || material?.vendor || "") || null,
-        vendorSku: String(formData.get("vendorSku") || material?.sku || "") || null,
+        vendorId: selectedVendor?.id || bestCostBook?.vendorId || null,
+        vendor: selectedVendor?.name || bestCostBook?.vendorName || String(formData.get("vendor") || material?.vendor || "") || null,
+        vendorSku: bestCostBook?.vendorSku || String(formData.get("vendorSku") || material?.sku || "") || null,
+        moq: bestCostBook?.moq || null,
         leadTimeDays,
         requestedQty,
         orderedQty: requestedQty,
         unitCost,
         estimatedCost: requestedQty * unitCost,
         neededBy: neededByRaw ? new Date(`${neededByRaw}T12:00:00`) : null,
-        source: "manual",
-        notes: String(formData.get("notes") || "") || null,
+        source: bestCostBook ? "vendor_cost_book" : "manual",
+        notes: String(formData.get("notes") || (bestCostBook ? `Cost pulled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"}.` : "")) || null,
       },
     });
 
@@ -285,21 +383,25 @@ export async function action({ request }: { request: Request }) {
     const unitCost = num(formData.get("unitCost"));
     const status = String(formData.get("status") || purchaseRequest.status);
     const neededByRaw = String(formData.get("neededBy") || "");
-    const selectedVendor = await getVendor(shop, String(formData.get("vendorId") || ""));
+    const selectedCostBook = await getCostBookItem(shop, String(formData.get("costBookItemId") || ""));
+    const selectedVendor = selectedCostBook?.vendorId ? await getVendor(shop, selectedCostBook.vendorId) : await getVendor(shop, String(formData.get("vendorId") || ""));
+    const appliedUnitCost = selectedCostBook ? priceFromCostBook(selectedCostBook, orderedQty || requestedQty) : unitCost;
+    const appliedLeadTimeDays = selectedCostBook?.leadTimeDays || Math.round(num(formData.get("leadTimeDays"))) || selectedVendor?.leadTimeDays || null;
 
     await db.purchaseRequest.update({
       where: { id },
       data: {
         status,
         priority: String(formData.get("priority") || purchaseRequest.priority),
-        vendorId: selectedVendor?.id || null,
-        vendor: selectedVendor?.name || String(formData.get("vendor") || "") || null,
-        vendorSku: String(formData.get("vendorSku") || "") || null,
-        leadTimeDays: Math.round(num(formData.get("leadTimeDays"))) || selectedVendor?.leadTimeDays || null,
+        vendorId: selectedVendor?.id || selectedCostBook?.vendorId || null,
+        vendor: selectedVendor?.name || selectedCostBook?.vendorName || String(formData.get("vendor") || "") || null,
+        vendorSku: selectedCostBook?.vendorSku || String(formData.get("vendorSku") || "") || null,
+        moq: selectedCostBook?.moq || purchaseRequest.moq || null,
+        leadTimeDays: appliedLeadTimeDays,
         requestedQty,
         orderedQty,
-        unitCost,
-        estimatedCost: orderedQty * unitCost,
+        unitCost: appliedUnitCost,
+        estimatedCost: orderedQty * appliedUnitCost,
         neededBy: neededByRaw ? new Date(`${neededByRaw}T12:00:00`) : null,
         orderedAt: status === "ordered" && !purchaseRequest.orderedAt ? new Date() : purchaseRequest.orderedAt,
         cancelledAt: status === "cancelled" ? new Date() : purchaseRequest.cancelledAt,
@@ -308,6 +410,35 @@ export async function action({ request }: { request: Request }) {
     });
 
     return Response.json({ ok: true, message: "Purchase request updated." });
+  }
+
+  if (intent === "applyBestCost") {
+    const id = String(formData.get("id") || "");
+    const purchaseRequest = await db.purchaseRequest.findFirst({ where: { shop, id } });
+    if (!purchaseRequest) return Response.json({ ok: false, message: "Purchase request not found." }, { status: 404 });
+    const quantity = num(purchaseRequest.orderedQty) || num(purchaseRequest.requestedQty) || 1;
+    const selectedCostBook = await getCostBookItem(shop, String(formData.get("costBookItemId") || ""));
+    const bestCostBook = selectedCostBook || await findBestCostBookItem(shop, purchaseRequest.materialId, quantity, purchaseRequest.vendorId);
+    if (!bestCostBook) return Response.json({ ok: false, message: "No active Vendor Cost Book match found for this request." }, { status: 404 });
+    const vendorRecord = bestCostBook.vendorId ? await getVendor(shop, bestCostBook.vendorId) : null;
+    const unitCost = priceFromCostBook(bestCostBook, quantity);
+    await db.purchaseRequest.update({
+      where: { id: purchaseRequest.id },
+      data: {
+        vendorId: vendorRecord?.id || bestCostBook.vendorId || purchaseRequest.vendorId,
+        vendor: vendorRecord?.name || bestCostBook.vendorName || purchaseRequest.vendor,
+        vendorSku: bestCostBook.vendorSku || purchaseRequest.vendorSku,
+        unit: bestCostBook.unit || purchaseRequest.unit,
+        moq: bestCostBook.moq || purchaseRequest.moq,
+        leadTimeDays: bestCostBook.leadTimeDays || vendorRecord?.leadTimeDays || purchaseRequest.leadTimeDays,
+        unitCost,
+        estimatedCost: quantity * unitCost,
+        source: "vendor_cost_book",
+        notes: `${purchaseRequest.notes || ""}
+Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} / ${bestCostBook.itemName}.`.trim(),
+      },
+    });
+    return Response.json({ ok: true, message: "Best vendor cost applied to purchase request." });
   }
 
   if (intent === "markOrdered") {
@@ -371,9 +502,13 @@ function vendorOptionList(vendors: any[]) {
   ];
 }
 
-function PurchaseRequestCard({ request, vendors }: { request: any; vendors: any[] }) {
+function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any; vendors: any[]; costBookItems: any[] }) {
   const busy = useNavigation().state !== "idle";
   const vendorOptions = vendorOptionList(vendors);
+  const costBookOptions = costBookOptionList(costBookItems || []);
+  const bestCost = bestCostBookForRequest(request, costBookItems || []);
+  const bestCostQty = num(request.orderedQty) || num(request.requestedQty) || 1;
+  const bestCostUnit = bestCost ? priceFromCostBook(bestCost, bestCostQty) : 0;
   return (
     <Card>
       <BlockStack gap="300">
@@ -393,6 +528,25 @@ function PurchaseRequestCard({ request, vendors }: { request: any; vendors: any[
           <Text as="p">Est. cost: <strong>${money(request.estimatedCost)}</strong></Text>
         </InlineStack>
 
+        {bestCost ? (
+          <Card>
+            <BlockStack gap="150">
+              <InlineStack align="space-between" blockAlign="center">
+                <BlockStack gap="050">
+                  <Text as="h4" variant="headingSm">Vendor Cost Suggestion</Text>
+                  <Text as="p">{bestCost.vendorName || "Vendor"} - ${money(bestCostUnit)} / {bestCost.unit || request.unit || "unit"}{bestCost.moq ? ` | MOQ ${qty(bestCost.moq)}` : ""}</Text>
+                </BlockStack>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="applyBestCost" />
+                  <input type="hidden" name="id" value={request.id} />
+                  <input type="hidden" name="costBookItemId" value={bestCost.id} />
+                  <Button submit>Apply best cost</Button>
+                </Form>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        ) : null}
+
         <Form method="post">
           <input type="hidden" name="intent" value="updateRequest" />
           <input type="hidden" name="id" value={request.id} />
@@ -403,6 +557,7 @@ function PurchaseRequestCard({ request, vendors }: { request: any; vendors: any[
               <NativeSelect label="Vendor Center Vendor" name="vendorId" defaultValue={request.vendorId || request.vendorRecord?.id || ""} options={vendorOptions} />
               <TextField label="Vendor fallback" name="vendor" defaultValue={request.vendor || ""} autoComplete="off" />
               <TextField label="Vendor SKU" name="vendorSku" defaultValue={request.vendorSku || ""} autoComplete="off" />
+              <NativeSelect label="Cost Book Override" name="costBookItemId" options={costBookOptions} />
             </InlineStack>
             <InlineStack gap="200" wrap>
               <TextField label="Lead time days" name="leadTimeDays" defaultValue={request.leadTimeDays ? String(request.leadTimeDays) : ""} autoComplete="off" />
@@ -441,10 +596,11 @@ function PurchaseRequestCard({ request, vendors }: { request: any; vendors: any[
   );
 }
 
-function LowStockMaterialCard({ material }: { material: any }) {
+function LowStockMaterialCard({ material, costBookItems }: { material: any; costBookItems: any[] }) {
   const vendor = preferredMaterialVendor(material);
   const suggestedQty = suggestedReorderQty(material);
-  const unitCost = material.vendors?.[0]?.unitCost || material.calculatedUnitCost || material.costPerUnit || 0;
+  const bestCost = bestCostBookForMaterial(material, costBookItems || [], suggestedQty || material.reorderPoint || 1);
+  const unitCost = bestCost ? priceFromCostBook(bestCost, suggestedQty || material.reorderPoint || 1) : (material.vendors?.[0]?.unitCost || material.calculatedUnitCost || material.costPerUnit || 0);
   const status = materialStatus(material);
   return (
     <Card>
@@ -453,7 +609,8 @@ function LowStockMaterialCard({ material }: { material: any }) {
           <BlockStack gap="050">
             <Text as="h3" variant="headingMd">{material.name}</Text>
             <Text as="p" tone="subdued">Stock: {qty(material.stockOnHand)} | Reorder point: {qty(material.reorderPoint)} | Unit: {material.unit || material.baseUnit || "each"}</Text>
-            <Text as="p" tone="subdued">Vendor: {vendor?.name || vendor?.vendorName || material.vendor || "Not set"} | Vendor SKU: {material.vendors?.[0]?.vendorSku || material.sku || "Not set"}</Text>
+            <Text as="p" tone="subdued">Vendor: {bestCost?.vendorName || vendor?.name || vendor?.vendorName || material.vendor || "Not set"} | Vendor SKU: {bestCost?.vendorSku || material.vendors?.[0]?.vendorSku || material.sku || "Not set"}</Text>
+            {bestCost ? <Text as="p" tone="success">Best cost: ${money(unitCost)} / {bestCost.unit || material.unit || material.baseUnit || "unit"}{bestCost.moq ? ` | MOQ ${qty(bestCost.moq)}` : ""}</Text> : null}
           </BlockStack>
           <Badge tone={status === "out_of_stock" ? "critical" : "warning"}>{status.replaceAll("_", " ")}</Badge>
         </InlineStack>
@@ -464,6 +621,7 @@ function LowStockMaterialCard({ material }: { material: any }) {
         <Form method="post">
           <input type="hidden" name="intent" value="createFromMaterial" />
           <input type="hidden" name="materialId" value={material.id} />
+          {bestCost ? <input type="hidden" name="costBookItemId" value={bestCost.id} /> : null}
           <InlineStack gap="200" blockAlign="end">
             <TextField label="Request qty" name="requestedQty" defaultValue={String(qty(suggestedQty || material.reorderPoint || 1))} autoComplete="off" />
             <Button submit>Create PO request</Button>
@@ -475,7 +633,7 @@ function LowStockMaterialCard({ material }: { material: any }) {
 }
 
 export default function PurchaseRequestsPage() {
-  const { purchaseRequests, materials, vendors, lowStockMaterials, openRequests, orderedRequests, receivedRequests } = useLoaderData<any>();
+  const { purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const navigate = useNavigate();
   const busy = useNavigation().state !== "idle";
@@ -485,6 +643,7 @@ export default function PurchaseRequestsPage() {
     ...materials.map((material: any) => ({ label: `${material.name} (${material.unit || material.baseUnit || "each"})`, value: material.id })),
   ];
   const vendorOptions = vendorOptionList(vendors || []);
+  const costBookOptions = costBookOptionList(costBookItems || []);
 
   return (
     <Page
@@ -529,6 +688,7 @@ export default function PurchaseRequestsPage() {
                   </InlineStack>
                   <InlineStack gap="200" wrap>
                     <NativeSelect label="Vendor Center Vendor" name="vendorId" options={vendorOptions} />
+                    <NativeSelect label="Cost Book Item" name="costBookItemId" options={costBookOptions} />
                     <TextField label="Vendor fallback" name="vendor" autoComplete="off" />
                     <TextField label="Vendor SKU" name="vendorSku" autoComplete="off" />
                     <TextField label="SKU" name="sku" autoComplete="off" />
@@ -550,14 +710,14 @@ export default function PurchaseRequestsPage() {
         <Layout.Section>
           <BlockStack gap="300">
             <Text as="h2" variant="headingMd">Buy / reorder now</Text>
-            {lowStockMaterials.length ? lowStockMaterials.map((material: any) => <LowStockMaterialCard key={material.id} material={material} />) : <Card><Text as="p" tone="subdued">No low-stock materials right now.</Text></Card>}
+            {lowStockMaterials.length ? lowStockMaterials.map((material: any) => <LowStockMaterialCard key={material.id} material={material} costBookItems={costBookItems || []} />) : <Card><Text as="p" tone="subdued">No low-stock materials right now.</Text></Card>}
           </BlockStack>
         </Layout.Section>
 
         <Layout.Section>
           <BlockStack gap="300">
             <Text as="h2" variant="headingMd">Open Requests</Text>
-            {openRequests.length ? openRequests.map((request: any) => <PurchaseRequestCard key={request.id} request={request} vendors={vendors || []} />) : <Card><Text as="p" tone="subdued">No open purchase requests.</Text></Card>}
+            {openRequests.length ? openRequests.map((request: any) => <PurchaseRequestCard key={request.id} request={request} vendors={vendors || []} costBookItems={costBookItems || []} />) : <Card><Text as="p" tone="subdued">No open purchase requests.</Text></Card>}
           </BlockStack>
         </Layout.Section>
 
