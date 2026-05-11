@@ -14,6 +14,7 @@ import {
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import crypto from "node:crypto";
 
 const productionStatuses = [
   { label: "New", value: "new" },
@@ -325,6 +326,30 @@ async function createEvent(shop: string, jobId: string, eventType: string, messa
   });
 }
 
+function publicBaseUrl(request: Request) {
+  const envUrl = process.env.SHOPIFY_APP_URL || process.env.APP_URL || process.env.HOST || "";
+  if (envUrl.startsWith("http://") || envUrl.startsWith("https://")) return envUrl.replace(/\/$/, "");
+  if (envUrl) return `https://${envUrl.replace(/\/$/, "")}`;
+  return new URL(request.url).origin;
+}
+
+async function ensureProofApprovalToken(shop: string, jobId: string) {
+  const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
+  if (!job) throw new Error("Production job not found.");
+  if (job.proofApprovalToken) return job.proofApprovalToken;
+  const token = `gso_${crypto.randomBytes(24).toString("hex")}`;
+  await db.productionJob.update({
+    where: { id: job.id },
+    data: {
+      proofApprovalToken: token,
+      proofStatus: job.proofStatus === "approved" ? job.proofStatus : "sent",
+      proofSentAt: job.proofSentAt || new Date(),
+    },
+  });
+  await createEvent(shop, job.id, "proof_portal_created", "Customer proof approval link created.");
+  return token;
+}
+
 async function sendProductionAlert(job: any) {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL || process.env.PRODUCTION_SLACK_WEBHOOK_URL;
   if (!webhookUrl) return { sent: false, reason: "No Slack webhook configured." };
@@ -470,6 +495,7 @@ async function createProductionJobFromQuote(shop: string, quoteId: string) {
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+  const baseUrl = publicBaseUrl(request);
 
   const [jobs, quotes] = await Promise.all([
     db.productionJob.findMany({
@@ -509,6 +535,7 @@ export async function loader({ request }: { request: Request }) {
   const jobsWithActuals = jobs.map((job: any) => ({
     ...job,
     actuals: summarizeActualPrintLogs(job, entriesByJob[job.id] || []),
+    customerProofUrl: job.proofApprovalToken ? `${baseUrl}/proof/${job.proofApprovalToken}` : "",
   }));
 
 
@@ -861,6 +888,23 @@ Source ref: ${sourceRef}` : ""}`,
     return Response.json({ ok: true, message: "Note added." });
   }
 
+  if (intent === "createProofPortal") {
+    const jobId = String(formData.get("jobId") || "");
+    const token = await ensureProofApprovalToken(shop, jobId);
+    return Response.json({ ok: true, message: "Customer proof link created.", token });
+  }
+
+  if (intent === "markProofSent") {
+    const jobId = String(formData.get("jobId") || "");
+    const token = await ensureProofApprovalToken(shop, jobId);
+    await db.productionJob.updateMany({
+      where: { shop, id: jobId },
+      data: { proofStatus: "sent", proofSentAt: new Date(), status: "proof_sent" },
+    });
+    await createEvent(shop, jobId, "proof_sent", "Customer proof link marked sent.");
+    return Response.json({ ok: true, message: "Proof marked sent.", token });
+  }
+
   if (intent === "markPrinted") {
     const jobId = String(formData.get("jobId") || "");
     await db.productionJob.updateMany({ where: { shop, id: jobId }, data: { printedAt: new Date() } });
@@ -905,6 +949,38 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
                 <Button onClick={() => copyText(folderNameForJob(job))}>Copy Folder Name</Button>
                 <Button onClick={() => copyText(job.items?.[0]?.ripJobName || job.jobTicket || job.id)}>Copy RIP Name</Button>
               </InlineStack>
+              <Card>
+                <BlockStack gap="150">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h4" variant="headingSm">Customer Proof Approval</Text>
+                    <Badge tone={job.proofStatus === "approved" ? "success" : job.proofStatus === "changes_requested" ? "critical" : job.proofApprovalToken ? "attention" : "warning"}>
+                      {job.proofStatus ? labelForStatus(job.proofStatus) : job.proofApprovalToken ? "Link Ready" : "No Link"}
+                    </Badge>
+                  </InlineStack>
+                  {job.customerProofUrl ? (
+                    <BlockStack gap="100">
+                      <Text as="p" tone="subdued">Customer link: {job.customerProofUrl}</Text>
+                      <InlineStack gap="150" wrap>
+                        <Button onClick={() => copyText(job.customerProofUrl)}>Copy Customer Proof Link</Button>
+                        <Button onClick={() => window.open(job.customerProofUrl, "_blank")}>Open Customer Proof</Button>
+                        <Form method="post">
+                          <input type="hidden" name="intent" value="markProofSent" />
+                          <input type="hidden" name="jobId" value={job.id} />
+                          <Button submit>Mark Sent</Button>
+                        </Form>
+                      </InlineStack>
+                    </BlockStack>
+                  ) : (
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="createProofPortal" />
+                      <input type="hidden" name="jobId" value={job.id} />
+                      <Button submit>Create Customer Proof Link</Button>
+                    </Form>
+                  )}
+                  {job.proofApprovedAt ? <Text as="p" tone="success">Approved: {new Date(job.proofApprovedAt).toLocaleString()}</Text> : null}
+                  {job.proofCustomerComment ? <Text as="p" tone="subdued">Customer comment: {job.proofCustomerComment}</Text> : null}
+                </BlockStack>
+              </Card>
             </BlockStack>
           </InlineStack>
           <InlineStack gap="200">

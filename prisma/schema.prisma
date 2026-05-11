@@ -695,6 +695,17 @@ model ProductionJob {
   printFileUrl    String?
   productImageUrl String?
 
+  // Customer-facing proof approval portal fields.
+  proofApprovalToken String?  @unique
+  proofStatus        String   @default("draft") // draft, sent, viewed, approved, changes_requested
+  proofSentAt        DateTime?
+  proofViewedAt      DateTime?
+  proofApprovedAt    DateTime?
+  proofRejectedAt    DateTime?
+  proofCustomerName  String?
+  proofCustomerEmail String?
+  proofCustomerComment String?
+
   alertSentAt     DateTime?
   printedAt       DateTime?
   completedAt     DateTime?
@@ -714,6 +725,8 @@ model ProductionJob {
   @@index([shop, priority])
   @@index([quoteId])
   @@index([jobTicket])
+  @@index([proofApprovalToken])
+  @@index([proofStatus])
   @@index([assetInboxKey])
   @@index([dueDate])
 }

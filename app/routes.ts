@@ -29,6 +29,8 @@ export default [
     route("erp/production/:id/proof", "routes/app.erp.production.$id.proof.tsx"),
   ]),
 
+  route("proof/:token", "routes/proof.$token.tsx"),
+
   route("api/print-logs/upload", "routes/api.print-logs.upload.tsx"),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
