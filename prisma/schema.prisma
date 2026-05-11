@@ -713,6 +713,9 @@ model ProductionJobItem {
   shop                String
   jobId               String
   quoteItemId          String?
+  itemTicket           String?
+  ripJobName           String?
+  suggestedFileName    String?
 
   productTitle         String
   variantTitle         String?
@@ -743,6 +746,8 @@ model ProductionJobItem {
   @@index([shop])
   @@index([jobId])
   @@index([quoteItemId])
+  @@index([itemTicket])
+  @@index([ripJobName])
   @@index([sku])
   @@index([recipeId])
 }
@@ -844,6 +849,7 @@ model PrintLogEntry {
   shop               String
   importId           String
   productionJobId    String?
+  productionJobItemId String?
   jobTicket          String?
   sourceJobName      String?
   printerSoftware    String?
@@ -866,6 +872,7 @@ model PrintLogEntry {
   @@index([shop])
   @@index([importId])
   @@index([productionJobId])
+  @@index([productionJobItemId])
   @@index([jobTicket])
   @@index([sourceJobName])
   @@index([createdAt])

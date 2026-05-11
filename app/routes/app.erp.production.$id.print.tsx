@@ -104,6 +104,7 @@ export default function PrintProductionJob() {
           <table>
             <thead>
               <tr>
+                <th>Ticket / RIP Name</th>
                 <th>Product</th>
                 <th>Variant / SKU</th>
                 <th>Qty</th>
@@ -115,7 +116,8 @@ export default function PrintProductionJob() {
             <tbody>
               {(job.items || []).map((item: any) => (
                 <tr key={item.id}>
-                  <td>{item.productTitle}</td>
+                  <td>{item.itemTicket || "Not assigned"}<br />{item.ripJobName || item.itemTicket || ""}</td>
+                  <td>{item.productTitle}<br /><small>{item.suggestedFileName || ""}</small></td>
                   <td>{item.variantTitle || ""}<br />{item.sku || ""}</td>
                   <td>{item.quantity}</td>
                   <td>{item.selectedFinish || item.selectedAddOns || ""}</td>

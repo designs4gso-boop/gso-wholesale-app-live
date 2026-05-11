@@ -140,6 +140,11 @@ export function extractJobTicket(text: string) {
   return match ? match[0].toUpperCase() : "";
 }
 
+export function extractItemTicket(text: string) {
+  const match = String(text || "").match(/GSO-\d{8}-\d{4}-\d{2}/i);
+  return match ? match[0].toUpperCase() : "";
+}
+
 export function parsePrintLogText(text: string) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return [];
@@ -149,7 +154,8 @@ export function parsePrintLogText(text: string) {
   return rawRows.map((row, index) => {
     const rowText = JSON.stringify(row);
     const sourceJobName = findField(row, "jobName") || rowText.slice(0, 140);
-    const jobTicket = extractJobTicket(sourceJobName) || extractJobTicket(rowText);
+    const itemTicket = extractItemTicket(sourceJobName) || extractItemTicket(rowText);
+    const jobTicket = itemTicket || extractJobTicket(sourceJobName) || extractJobTicket(rowText);
     const inkMl = numberFromPrintLog(findField(row, "inkMl"));
     const cmykInkMl = numberFromPrintLog(findField(row, "cmykInkMl"));
     const whiteInkMl = numberFromPrintLog(findField(row, "whiteInkMl"));
@@ -157,6 +163,7 @@ export function parsePrintLogText(text: string) {
 
     return {
       rowNumber: index + 1,
+      itemTicket,
       jobTicket,
       sourceJobName,
       machineName: findField(row, "machineName"),
@@ -177,27 +184,56 @@ export function parsePrintLogText(text: string) {
 
 export async function findMatchingProductionJob(shop: string, row: any) {
   const ticket = row.jobTicket;
+  const itemTicket = row.itemTicket || ticket;
   const sourceJobName = row.sourceJobName || "";
+
+  if (itemTicket) {
+    const exactItem = await db.productionJobItem.findFirst({
+      where: { shop, OR: [{ itemTicket }, { ripJobName: itemTicket }] },
+      include: { job: true },
+    });
+    if (exactItem?.job) return { job: exactItem.job, item: exactItem };
+  }
 
   if (ticket) {
     const exact = await db.productionJob.findFirst({ where: { shop, jobTicket: ticket } });
-    if (exact) return exact;
+    if (exact) return { job: exact, item: null };
+
+    const itemContains = await db.productionJobItem.findFirst({
+      where: {
+        shop,
+        OR: [
+          { itemTicket: { contains: ticket } },
+          { ripJobName: { contains: ticket } },
+        ],
+      },
+      include: { job: true },
+    });
+    if (itemContains?.job) return { job: itemContains.job, item: itemContains };
 
     const contains = await db.productionJob.findFirst({ where: { shop, jobTicket: { contains: ticket } } });
-    if (contains) return contains;
+    if (contains) return { job: contains, item: null };
   }
 
   const jobs = await db.productionJob.findMany({
     where: { shop, active: true },
     orderBy: { updatedAt: "desc" },
     take: 100,
+    include: { items: true },
   });
 
-  return jobs.find((job: any) => {
-    if (job.jobTicket && sourceJobName.includes(job.jobTicket)) return true;
-    if (job.id && sourceJobName.includes(job.id)) return true;
-    return false;
-  }) || null;
+  for (const job of jobs as any[]) {
+    const matchedItem = (job.items || []).find((item: any) => {
+      if (item.itemTicket && sourceJobName.includes(item.itemTicket)) return true;
+      if (item.ripJobName && sourceJobName.includes(item.ripJobName)) return true;
+      return false;
+    });
+    if (matchedItem) return { job, item: matchedItem };
+    if (job.jobTicket && sourceJobName.includes(job.jobTicket)) return { job, item: null };
+    if (job.id && sourceJobName.includes(job.id)) return { job, item: null };
+  }
+
+  return { job: null, item: null };
 }
 
 export async function createProductionEvent(shop: string, jobId: string, eventType: string, message: string, data?: { oldValue?: string; newValue?: string }) {
@@ -251,7 +287,10 @@ export async function importPrintLogText({
 
   for (const row of rows) {
     const match = await findMatchingProductionJob(shop, row);
-    const matchedJobId = match?.id || null;
+    const matchedJob = match.job;
+    const matchedItem = match.item;
+    const matchedJobId = matchedJob?.id || null;
+    const matchedItemId = matchedItem?.id || null;
     if (matchedJobId) matchedCount += 1;
     else unmatchedCount += 1;
 
@@ -264,7 +303,8 @@ export async function importPrintLogText({
         shop,
         importId: createdImport.id,
         productionJobId: matchedJobId,
-        jobTicket: row.jobTicket || null,
+        productionJobItemId: matchedItemId,
+        jobTicket: row.jobTicket || row.itemTicket || null,
         sourceJobName: row.sourceJobName || null,
         printerSoftware: source,
         machineName: row.machineName || null,
@@ -287,7 +327,7 @@ export async function importPrintLogText({
         shop,
         matchedJobId,
         importedBy === "auto_import_endpoint" ? "print_log_auto_imported" : "print_log_imported",
-        `${source} print log matched. Job: ${row.jobTicket || row.sourceJobName}. Sqft: ${row.sqft || 0}. Ink: ${row.inkMl || 0} ml. Print time: ${(row.printMinutes || 0).toFixed(2)} min.`
+        `${source} print log matched. Ticket: ${row.itemTicket || row.jobTicket || row.sourceJobName}. ${matchedItem ? `Item: ${matchedItem.productTitle}. ` : ""}Sqft: ${row.sqft || 0}. Ink: ${row.inkMl || 0} ml. Print time: ${(row.printMinutes || 0).toFixed(2)} min.`
       );
     }
   }
