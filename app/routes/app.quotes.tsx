@@ -788,7 +788,88 @@ function calculateOutsourcedRecipe(recipe: any, quantity: number, selectedAddOnI
   };
 }
 
-async function priceRecipeLine(shop: string, payload: any) {
+async function resolveShopifyImageByIds(admin: any, productGid?: string | null, variantGid?: string | null) {
+  let productImageUrl = "";
+  let variantImageUrl = "";
+  let resolvedProductGid = productGid || "";
+  let resolvedVariantGid = variantGid || "";
+
+  if (variantGid) {
+    const response = await admin.graphql(
+      `#graphql
+        query VariantImage($id: ID!) {
+          node(id: $id) {
+            ... on ProductVariant {
+              id
+              title
+              image {
+                url
+              }
+              product {
+                id
+                featuredImage {
+                  url
+                }
+                images(first: 1) {
+                  nodes {
+                    url
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      { variables: { id: variantGid } },
+    );
+    const json = await response.json();
+    const variant = json.data?.node;
+    if (variant) {
+      resolvedVariantGid = variant.id || resolvedVariantGid;
+      resolvedProductGid = variant.product?.id || resolvedProductGid;
+      variantImageUrl = variant.image?.url || "";
+      productImageUrl = variant.product?.featuredImage?.url || variant.product?.images?.nodes?.[0]?.url || "";
+    }
+  }
+
+  if (!productImageUrl && productGid) {
+    const response = await admin.graphql(
+      `#graphql
+        query ProductImage($id: ID!) {
+          node(id: $id) {
+            ... on Product {
+              id
+              title
+              featuredImage {
+                url
+              }
+              images(first: 1) {
+                nodes {
+                  url
+                }
+              }
+            }
+          }
+        }
+      `,
+      { variables: { id: productGid } },
+    );
+    const json = await response.json();
+    const product = json.data?.node;
+    if (product) {
+      resolvedProductGid = product.id || resolvedProductGid;
+      productImageUrl = product.featuredImage?.url || product.images?.nodes?.[0]?.url || "";
+    }
+  }
+
+  return {
+    productImageUrl: variantImageUrl || productImageUrl || "",
+    shopifyProductGid: resolvedProductGid || null,
+    shopifyVariantGid: resolvedVariantGid || null,
+  };
+}
+
+async function priceRecipeLine(shop: string, payload: any, admin?: any) {
   const quantity = Math.max(1, Math.floor(safeNumber(payload.quantity, 1)));
   const recipe = await db.productRecipe.findFirst({
     where: { id: payload.recipeId, shop, active: true },
@@ -815,6 +896,12 @@ async function priceRecipeLine(shop: string, payload: any) {
   if (!recipe) {
     return { ok: false, error: "Recipe not found." };
   }
+
+  const recipeShopifyProductGid = recipe.productGid || recipe.shopifyProductId || null;
+  const recipeShopifyVariantGid = recipe.variantGid || recipe.shopifyVariantId || null;
+  const shopifyImage = admin
+    ? await resolveShopifyImageByIds(admin, recipeShopifyProductGid, recipeShopifyVariantGid)
+    : { productImageUrl: "", shopifyProductGid: recipeShopifyProductGid, shopifyVariantGid: recipeShopifyVariantGid };
 
   const selectedAddOnIds = parseIdList(payload.selectedAddOnIds);
   const productionMode = String(recipe.productionMode || "in_house");
@@ -843,6 +930,9 @@ async function priceRecipeLine(shop: string, payload: any) {
     recipeName: recipe.name,
     productionMode: recipe.productionMode,
     quantity,
+    productImageUrl: shopifyImage.productImageUrl,
+    shopifyProductGid: shopifyImage.shopifyProductGid,
+    shopifyVariantGid: shopifyImage.shopifyVariantGid,
     estimate,
     warnings,
   };
@@ -876,6 +966,9 @@ async function priceRecipeLine(shop: string, payload: any) {
       notes: warnings.length ? `Warnings: ${warnings.join(" ")}` : "Priced from Product Setup recipe.",
       selectedFinish: payload.selectedFinish || "base",
       selectedAddOnIds,
+      productImageUrl: shopifyImage.productImageUrl,
+      shopifyProductGid: shopifyImage.shopifyProductGid || "",
+      shopifyVariantGid: shopifyImage.shopifyVariantGid || "",
       pricingSource: estimate.pricingSource,
       tierLabel: rangeLabel(recipeTier),
       minQuantity: String(minQuantity),
@@ -959,7 +1052,7 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "priceRecipe") {
-    const result = await priceRecipeLine(shop, payload);
+    const result = await priceRecipeLine(shop, payload, admin);
     return Response.json({ intent: "priceRecipe", itemId: payload.itemId, ...result });
   }
 
