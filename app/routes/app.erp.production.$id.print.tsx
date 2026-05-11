@@ -41,8 +41,9 @@ function summarizeMaterialUsage(usages: any[]) {
   const usedQty = usages.reduce((sum, usage) => sum + Number(usage.usedQty || 0), 0);
   const wasteQty = usages.reduce((sum, usage) => sum + Number(usage.wasteQty || 0), 0);
   const reprintQty = usages.reduce((sum, usage) => sum + Number(usage.reprintQty || 0), 0);
+  const deductedQty = usages.reduce((sum, usage) => sum + Number(usage.stockDeductedQty || 0), 0);
   const wastePct = usedQty > 0 ? (wasteQty / usedQty) * 100 : 0;
-  return { materialCost, pulledQty, usedQty, wasteQty, reprintQty, wastePct };
+  return { materialCost, pulledQty, usedQty, wasteQty, reprintQty, deductedQty, wastePct };
 }
 
 function safeDate(value: any) {
@@ -207,7 +208,7 @@ export default function PrintProductionJob() {
         <div className="card" style={{ marginTop: 18 }}>
           <h2>Material Usage + Waste</h2>
           <div><strong>Total material cost:</strong> ${money(materialSummary.materialCost)}</div>
-          <div><strong>Pulled:</strong> {Number(materialSummary.pulledQty || 0).toFixed(2)} | <strong>Used:</strong> {Number(materialSummary.usedQty || 0).toFixed(2)} | <strong>Waste:</strong> {Number(materialSummary.wasteQty || 0).toFixed(2)} | <strong>Reprint:</strong> {Number(materialSummary.reprintQty || 0).toFixed(2)} | <strong>Waste %:</strong> {Number(materialSummary.wastePct || 0).toFixed(1)}%</div>
+          <div><strong>Pulled:</strong> {Number(materialSummary.pulledQty || 0).toFixed(2)} | <strong>Used:</strong> {Number(materialSummary.usedQty || 0).toFixed(2)} | <strong>Waste:</strong> {Number(materialSummary.wasteQty || 0).toFixed(2)} | <strong>Reprint:</strong> {Number(materialSummary.reprintQty || 0).toFixed(2)} | <strong>Deducted:</strong> {Number(materialSummary.deductedQty || 0).toFixed(2)} | <strong>Waste %:</strong> {Number(materialSummary.wastePct || 0).toFixed(1)}%</div>
           {(job.materialUsages || []).length ? (
             <table>
               <thead>
@@ -220,6 +221,7 @@ export default function PrintProductionJob() {
                   <th>Used</th>
                   <th>Waste</th>
                   <th>Reprint</th>
+                  <th>Deducted</th>
                   <th>Cost</th>
                 </tr>
               </thead>
@@ -234,6 +236,7 @@ export default function PrintProductionJob() {
                     <td>{Number(usage.usedQty || 0).toFixed(2)}</td>
                     <td>{Number(usage.wasteQty || 0).toFixed(2)}</td>
                     <td>{Number(usage.reprintQty || 0).toFixed(2)}</td>
+                    <td>{Number(usage.stockDeductedQty || 0).toFixed(2)}</td>
                     <td>${money(usage.totalCost)}</td>
                   </tr>
                 ))}

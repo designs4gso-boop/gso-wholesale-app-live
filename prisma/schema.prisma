@@ -290,6 +290,7 @@ calculatedUnitCost Float    @default(0)
   costHistory MaterialCostHistory[]
   vendors     MaterialVendor[]
   productionUsages ProductionMaterialUsage[]
+  inventoryMovements MaterialInventoryMovement[]
 
   @@index([shop])
   @@index([shop, materialType])
@@ -700,6 +701,7 @@ model ProductionJob {
   events          ProductionJobEvent[]
   checklistItems  ProductionChecklistItem[]
   materialUsages  ProductionMaterialUsage[]
+  inventoryMovements MaterialInventoryMovement[]
 
   @@index([shop])
   @@index([shop, status])
@@ -839,6 +841,8 @@ model ProductionMaterialUsage {
   costPerUnit     Float    @default(0)
   totalCost       Float    @default(0)
   source          String   @default("manual") // manual, recipe, print_log, inventory, vendor_invoice
+  stockDeductedQty Float   @default(0)
+  stockDeductedAt  DateTime?
   notes           String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -851,6 +855,36 @@ model ProductionMaterialUsage {
   @@index([materialId])
   @@index([materialType])
   @@index([source])
+}
+
+model MaterialInventoryMovement {
+  id              String   @id @default(cuid())
+  shop            String
+  materialId      String
+  jobId           String?
+  materialUsageId String?
+  movementType    String   @default("adjustment") // production_deduction, reversal, purchase, adjustment, waste
+  quantity        Float    @default(0) // negative = stock out, positive = stock in
+  unit            String   @default("each")
+  beforeQty       Float?
+  afterQty        Float?
+  costPerUnit     Float    @default(0)
+  costImpact      Float    @default(0)
+  source          String   @default("production")
+  reference       String?
+  notes           String?
+  createdBy       String?
+  createdAt       DateTime @default(now())
+
+  material        Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  job             ProductionJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([shop])
+  @@index([materialId])
+  @@index([jobId])
+  @@index([materialUsageId])
+  @@index([movementType])
+  @@index([createdAt])
 }
 
 model PrintLogImport {

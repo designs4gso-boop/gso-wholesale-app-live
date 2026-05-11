@@ -134,8 +134,21 @@ function summarizeMaterialUsage(usages: any[]) {
   const usedQty = usages.reduce((sum, usage) => sum + Number(usage.usedQty || 0), 0);
   const wasteQty = usages.reduce((sum, usage) => sum + Number(usage.wasteQty || 0), 0);
   const reprintQty = usages.reduce((sum, usage) => sum + Number(usage.reprintQty || 0), 0);
+  const deductedQty = usages.reduce((sum, usage) => sum + Number(usage.stockDeductedQty || 0), 0);
   const wastePct = usedQty > 0 ? (wasteQty / usedQty) * 100 : 0;
-  return { materialCost, pulledQty, usedQty, wasteQty, reprintQty, wastePct };
+  return { materialCost, pulledQty, usedQty, wasteQty, reprintQty, deductedQty, wastePct };
+}
+
+function materialStockTone(material: any) {
+  if (material?.stockOnHand == null || material?.reorderPoint == null) return undefined;
+  return Number(material.stockOnHand) <= Number(material.reorderPoint) ? "critical" : "success";
+}
+
+function materialStockLabel(material: any) {
+  if (!material) return "No database material";
+  const stock = material.stockOnHand == null ? "not set" : `${Number(material.stockOnHand).toFixed(2)} ${material.baseUnit || material.unit || "units"}`;
+  const reorder = material.reorderPoint == null ? "not set" : `${Number(material.reorderPoint).toFixed(2)}`;
+  return `Stock: ${stock} | Reorder point: ${reorder}`;
 }
 
 function materialTypeLabel(value: string) {
@@ -468,6 +481,7 @@ export async function loader({ request }: { request: Request }) {
         events: { orderBy: { createdAt: "desc" }, take: 20 },
         checklistItems: { orderBy: [{ section: "asc" }, { sortOrder: "asc" }] },
         materialUsages: { orderBy: { createdAt: "desc" } },
+        inventoryMovements: { orderBy: { createdAt: "desc" }, take: 20 },
       },
     }),
     db.quote.findMany({
@@ -707,7 +721,7 @@ Source ref: ${sourceRef}` : ""}`,
     const billableQty = usedQty || pulledQty || estimatedQty || 0;
     const totalCost = Number(formData.get("totalCost") || 0) || (billableQty + wasteQty + reprintQty) * costPerUnit;
 
-    await db.productionMaterialUsage.create({
+    const usage = await db.productionMaterialUsage.create({
       data: {
         shop,
         jobId,
@@ -726,8 +740,44 @@ Source ref: ${sourceRef}` : ""}`,
         notes: String(formData.get("materialNotes") || "") || null,
       },
     });
+
+    const shouldDeductInventory = String(formData.get("deductInventory") || "") === "on";
+    const deductionQty = Number(formData.get("deductQty") || 0) || pulledQty || (usedQty + wasteQty + reprintQty) || usedQty || 0;
+
+    if (material && shouldDeductInventory && deductionQty > 0) {
+      const beforeQty = Number(material.stockOnHand || 0);
+      const afterQty = beforeQty - deductionQty;
+      await db.material.update({
+        where: { id: material.id },
+        data: { stockOnHand: afterQty },
+      });
+      await db.materialInventoryMovement.create({
+        data: {
+          shop,
+          materialId: material.id,
+          jobId,
+          materialUsageId: usage.id,
+          movementType: "production_deduction",
+          quantity: -deductionQty,
+          unit,
+          beforeQty,
+          afterQty,
+          costPerUnit,
+          costImpact: deductionQty * costPerUnit,
+          source: "production",
+          reference: `Job ${jobId}`,
+          notes: `Deducted from stock when material usage was logged for ${materialName}.`,
+        },
+      });
+      await db.productionMaterialUsage.update({
+        where: { id: usage.id },
+        data: { stockDeductedQty: deductionQty, stockDeductedAt: new Date() },
+      });
+      await createEvent(shop, jobId, "inventory_deducted", `${deductionQty} ${unit} deducted from ${materialName}. Stock ${beforeQty.toFixed(2)} → ${afterQty.toFixed(2)}.`);
+    }
+
     await createEvent(shop, jobId, "material_usage_added", `${materialName} added. Used ${usedQty || pulledQty || estimatedQty} ${unit}. Cost $${money(totalCost)}.`);
-    return Response.json({ ok: true, message: "Material usage added." });
+    return Response.json({ ok: true, message: shouldDeductInventory ? "Material usage added and inventory deducted." : "Material usage added." });
   }
 
   if (intent === "deleteMaterialUsage") {
@@ -735,10 +785,72 @@ Source ref: ${sourceRef}` : ""}`,
     const usageId = String(formData.get("usageId") || "");
     const usage = await db.productionMaterialUsage.findFirst({ where: { shop, id: usageId, jobId } });
     if (usage) {
+      const movements = await db.materialInventoryMovement.findMany({ where: { shop, materialUsageId: usage.id } });
+      for (const movement of movements) {
+        const material = await db.material.findFirst({ where: { shop, id: movement.materialId } });
+        if (material && Number(movement.quantity || 0) < 0) {
+          const beforeQty = Number(material.stockOnHand || 0);
+          const restoreQty = Math.abs(Number(movement.quantity || 0));
+          const afterQty = beforeQty + restoreQty;
+          await db.material.update({ where: { id: material.id }, data: { stockOnHand: afterQty } });
+          await db.materialInventoryMovement.create({
+            data: {
+              shop,
+              materialId: material.id,
+              jobId,
+              materialUsageId: usage.id,
+              movementType: "reversal",
+              quantity: restoreQty,
+              unit: movement.unit,
+              beforeQty,
+              afterQty,
+              costPerUnit: movement.costPerUnit,
+              costImpact: -Number(movement.costImpact || 0),
+              source: "production",
+              reference: `Reversal for ${movement.id}`,
+              notes: `Restored stock because material usage was removed.`,
+            },
+          });
+          await createEvent(shop, jobId, "inventory_restored", `${restoreQty} ${movement.unit} restored to ${usage.materialName}. Stock ${beforeQty.toFixed(2)} → ${afterQty.toFixed(2)}.`);
+        }
+      }
       await db.productionMaterialUsage.delete({ where: { id: usage.id } });
       await createEvent(shop, jobId, "material_usage_deleted", `${usage.materialName} material usage removed.`);
     }
     return Response.json({ ok: true, message: "Material usage removed." });
+  }
+
+  if (intent === "adjustInventory") {
+    const materialId = String(formData.get("materialId") || "");
+    const jobId = String(formData.get("jobId") || "");
+    const quantity = Number(formData.get("adjustQty") || 0);
+    const notes = String(formData.get("adjustNotes") || "") || null;
+    const material = await db.material.findFirst({ where: { shop, id: materialId } });
+    if (!material || !quantity) return Response.json({ ok: false, message: "Choose a material and enter adjustment qty." }, { status: 400 });
+    const beforeQty = Number(material.stockOnHand || 0);
+    const afterQty = beforeQty + quantity;
+    const unit = material.baseUnit || material.unit || "each";
+    const costPerUnit = Number(material.calculatedUnitCost || material.costPerUnit || 0);
+    await db.material.update({ where: { id: material.id }, data: { stockOnHand: afterQty } });
+    await db.materialInventoryMovement.create({
+      data: {
+        shop,
+        materialId: material.id,
+        jobId: jobId || null,
+        movementType: "adjustment",
+        quantity,
+        unit,
+        beforeQty,
+        afterQty,
+        costPerUnit,
+        costImpact: Math.abs(quantity) * costPerUnit,
+        source: "manual",
+        reference: jobId || null,
+        notes,
+      },
+    });
+    if (jobId) await createEvent(shop, jobId, "inventory_adjusted", `${material.name} adjusted by ${quantity} ${unit}. Stock ${beforeQty.toFixed(2)} → ${afterQty.toFixed(2)}.`);
+    return Response.json({ ok: true, message: "Inventory adjusted." });
   }
 
   if (intent === "addNote") {
@@ -854,6 +966,7 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
               <Text as="p">Used: {Number(materialSummary.usedQty || 0).toFixed(2)}</Text>
               <Text as="p">Waste: {Number(materialSummary.wasteQty || 0).toFixed(2)}</Text>
               <Text as="p">Reprint: {Number(materialSummary.reprintQty || 0).toFixed(2)}</Text>
+              <Text as="p">Deducted from stock: {Number(materialSummary.deductedQty || 0).toFixed(2)}</Text>
               <Text as="p">Waste %: {Number(materialSummary.wastePct || 0).toFixed(1)}%</Text>
             </InlineStack>
 
@@ -865,7 +978,7 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
                       <BlockStack gap="050">
                         <Text as="p" fontWeight="bold">{usage.materialName}</Text>
                         <Text as="p" tone="subdued">
-                          {materialTypeLabel(usage.materialType)} | Used {Number(usage.usedQty || usage.pulledQty || usage.estimatedQty || 0).toFixed(2)} {usage.unit} | Waste {Number(usage.wasteQty || 0).toFixed(2)} | Cost ${money(usage.totalCost)}
+                          {materialTypeLabel(usage.materialType)} | Used {Number(usage.usedQty || usage.pulledQty || usage.estimatedQty || 0).toFixed(2)} {usage.unit} | Waste {Number(usage.wasteQty || 0).toFixed(2)} | Deducted {Number(usage.stockDeductedQty || 0).toFixed(2)} | Cost ${money(usage.totalCost)}
                         </Text>
                         {usage.notes ? <Text as="p" tone="subdued">{usage.notes}</Text> : null}
                       </BlockStack>
@@ -929,10 +1042,46 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
                       <option value="vendor_invoice">Vendor invoice</option>
                     </select>
                   </div>
+                  <TextField label="Deduct qty override" name="deductQty" type="number" autoComplete="off" placeholder="Optional" />
+                  <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 22 }}>
+                    <input type="checkbox" name="deductInventory" />
+                    Deduct from material stock
+                  </label>
                   <TextField label="Notes" name="materialNotes" autoComplete="off" />
                 </InlineStack>
+                <Text as="p" tone="subdued">Inventory deduction only works when a database material is selected. Deducted qty uses pulled qty first, then used + waste + reprint.</Text>
                 <Button submit>Add material usage</Button>
               </BlockStack>
+            </Form>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="250">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="h4" variant="headingSm">Inventory Snapshot</Text>
+              <Badge>{materials.length} active material(s)</Badge>
+            </InlineStack>
+            <Text as="p" tone="subdued">Use this to make quick stock adjustments while checking production jobs. Positive qty adds stock, negative qty removes stock.</Text>
+            <InlineStack gap="200" wrap>
+              {materials.slice(0, 8).map((material: any) => (
+                <Badge key={material.id} tone={materialStockTone(material) as any}>{material.name}: {material.stockOnHand == null ? "stock not set" : Number(material.stockOnHand).toFixed(2)} {material.baseUnit || material.unit}</Badge>
+              ))}
+            </InlineStack>
+            <Form method="post">
+              <input type="hidden" name="intent" value="adjustInventory" />
+              <input type="hidden" name="jobId" value={job.id} />
+              <InlineStack gap="200" wrap>
+                <div style={{ minWidth: 260, flex: 1 }}>
+                  <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Material</label>
+                  <select name="materialId" defaultValue="" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
+                    {materialOptions(materials).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
+                <TextField label="Adjustment qty" name="adjustQty" type="number" autoComplete="off" placeholder="ex: 100 or -10" />
+                <TextField label="Adjustment notes" name="adjustNotes" autoComplete="off" />
+                <Button submit>Adjust stock</Button>
+              </InlineStack>
             </Form>
           </BlockStack>
         </Card>
