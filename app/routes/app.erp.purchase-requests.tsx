@@ -55,6 +55,22 @@ function safeDateInput(value: any) {
   return date.toISOString().slice(0, 10);
 }
 
+function safeDate(value: any) {
+  if (!value) return "Not set";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not set";
+  return date.toLocaleDateString();
+}
+
+function isPastDate(value: any) {
+  if (!value) return false;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return date < today;
+}
+
 function materialStatus(material: any) {
   const stock = num(material.stockOnHand);
   const reorderPoint = num(material.reorderPoint);
@@ -261,8 +277,11 @@ export async function loader({ request }: { request: Request }) {
   const openRequests = purchaseRequests.filter((req: any) => !["received", "cancelled"].includes(req.status));
   const orderedRequests = purchaseRequests.filter((req: any) => ["ordered", "partially_received"].includes(req.status));
   const receivedRequests = purchaseRequests.filter((req: any) => req.status === "received");
+  const sentRequests = purchaseRequests.filter((req: any) => Boolean(req.sentAt));
+  const followUpRequests = purchaseRequests.filter((req: any) => Boolean(req.followUpNeeded) || (req.followUpDate && isPastDate(req.followUpDate)));
+  const lateRequests = purchaseRequests.filter((req: any) => !["received", "cancelled"].includes(req.status) && req.expectedArrivalDate && isPastDate(req.expectedArrivalDate));
 
-  return Response.json({ purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests });
+  return Response.json({ purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests, sentRequests, followUpRequests, lateRequests });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -404,6 +423,11 @@ export async function action({ request }: { request: Request }) {
         neededBy: neededByRaw ? new Date(`${neededByRaw}T12:00:00`) : null,
         orderedAt: status === "ordered" && !purchaseRequest.orderedAt ? new Date() : purchaseRequest.orderedAt,
         cancelledAt: status === "cancelled" ? new Date() : purchaseRequest.cancelledAt,
+        vendorConfirmationNumber: String(formData.get("vendorConfirmationNumber") || "") || null,
+        expectedArrivalDate: String(formData.get("expectedArrivalDate") || "") ? new Date(`${String(formData.get("expectedArrivalDate"))}T12:00:00`) : null,
+        vendorReplyNotes: String(formData.get("vendorReplyNotes") || "") || null,
+        followUpNeeded: String(formData.get("followUpNeeded") || "") === "on",
+        followUpDate: String(formData.get("followUpDate") || "") ? new Date(`${String(formData.get("followUpDate"))}T12:00:00`) : null,
         notes: String(formData.get("notes") || "") || null,
       },
     });
@@ -442,8 +466,40 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
 
   if (intent === "markOrdered") {
     const id = String(formData.get("id") || "");
-    await db.purchaseRequest.updateMany({ where: { shop, id }, data: { status: "ordered", orderedAt: new Date() } });
+    const purchaseRequest = await db.purchaseRequest.findFirst({ where: { shop, id } });
+    if (!purchaseRequest) return Response.json({ ok: false, message: "Purchase request not found." }, { status: 404 });
+    const expectedArrivalDate = purchaseRequest.expectedArrivalDate || (purchaseRequest.leadTimeDays ? addDays(Number(purchaseRequest.leadTimeDays)) : null);
+    await db.purchaseRequest.updateMany({ where: { shop, id }, data: { status: "ordered", orderedAt: new Date(), expectedArrivalDate } });
     return Response.json({ ok: true, message: "Purchase request marked ordered." });
+  }
+
+  if (intent === "markSent") {
+    const id = String(formData.get("id") || "");
+    const expectedArrivalRaw = String(formData.get("expectedArrivalDate") || "");
+    const followUpRaw = String(formData.get("followUpDate") || "");
+    await db.purchaseRequest.updateMany({
+      where: { shop, id },
+      data: {
+        sentAt: new Date(),
+        sentBy: String(formData.get("sentBy") || "GSO") || null,
+        status: "ordered",
+        orderedAt: new Date(),
+        vendorConfirmationNumber: String(formData.get("vendorConfirmationNumber") || "") || null,
+        expectedArrivalDate: expectedArrivalRaw ? new Date(`${expectedArrivalRaw}T12:00:00`) : null,
+        followUpNeeded: true,
+        followUpDate: followUpRaw ? new Date(`${followUpRaw}T12:00:00`) : addDays(2),
+      },
+    });
+    return Response.json({ ok: true, message: "PO marked sent and follow-up tracking started." });
+  }
+
+  if (intent === "markFollowedUp") {
+    const id = String(formData.get("id") || "");
+    await db.purchaseRequest.updateMany({
+      where: { shop, id },
+      data: { lastFollowUpAt: new Date(), followUpNeeded: false, followUpDate: null },
+    });
+    return Response.json({ ok: true, message: "Follow-up marked complete." });
   }
 
   if (intent === "receiveRequest") {
@@ -570,7 +626,25 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
           <Text as="p">Ordered: <strong>{qty(request.orderedQty)} {request.unit}</strong></Text>
           <Text as="p">Received: <strong>{qty(request.receivedQty)} {request.unit}</strong></Text>
           <Text as="p">Est. cost: <strong>${money(request.estimatedCost)}</strong></Text>
+          <Text as="p">Sent: <strong>{request.sentAt ? safeDate(request.sentAt) : "Not sent"}</strong></Text>
+          <Text as="p">Expected: <strong>{safeDate(request.expectedArrivalDate)}</strong></Text>
         </InlineStack>
+
+        {(request.followUpNeeded || (request.followUpDate && isPastDate(request.followUpDate)) || (request.expectedArrivalDate && isPastDate(request.expectedArrivalDate) && !["received", "cancelled"].includes(request.status))) ? (
+          <Card>
+            <InlineStack align="space-between" blockAlign="center" wrap>
+              <BlockStack gap="050">
+                <Text as="h4" variant="headingSm">Vendor follow-up</Text>
+                <Text as="p" tone="subdued">Follow up: {safeDate(request.followUpDate)} | Expected arrival: {safeDate(request.expectedArrivalDate)} | Confirmation: {request.vendorConfirmationNumber || "Not set"}</Text>
+              </BlockStack>
+              <Form method="post">
+                <input type="hidden" name="intent" value="markFollowedUp" />
+                <input type="hidden" name="id" value={request.id} />
+                <Button submit>Mark followed up</Button>
+              </Form>
+            </InlineStack>
+          </Card>
+        ) : null}
 
         {bestCost ? (
           <Card>
@@ -610,6 +684,15 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
               <NativeInput label="Unit cost" name="unitCost" prefix="$" defaultValue={String(request.unitCost || 0)} />
               <NativeInput label="Needed by" name="neededBy" type="date" defaultValue={safeDateInput(request.neededBy)} />
             </InlineStack>
+            <InlineStack gap="200" wrap>
+              <NativeInput label="Vendor confirmation #" name="vendorConfirmationNumber" defaultValue={request.vendorConfirmationNumber || ""} />
+              <NativeInput label="Expected arrival" name="expectedArrivalDate" type="date" defaultValue={safeDateInput(request.expectedArrivalDate)} />
+              <NativeInput label="Follow-up date" name="followUpDate" type="date" defaultValue={safeDateInput(request.followUpDate)} />
+              <label style={{ display: "block", minWidth: 180, paddingTop: 24 }}>
+                <input type="checkbox" name="followUpNeeded" defaultChecked={Boolean(request.followUpNeeded)} /> Follow-up needed
+              </label>
+            </InlineStack>
+            <NativeTextarea label="Vendor reply notes" name="vendorReplyNotes" defaultValue={request.vendorReplyNotes || ""} />
             <NativeTextarea label="Notes" name="notes" defaultValue={request.notes || ""} />
             <Button submit loading={busy}>Save request</Button>
           </BlockStack>
@@ -618,6 +701,12 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
         <InlineStack gap="200" wrap>
           <Button onClick={() => navigate(`/app/erp/purchase-export?id=${request.id}`)}>Print / Email PO</Button>
           <Button url={`/app/erp/purchase-export?id=${request.id}&format=csv`}>Download CSV</Button>
+          <Form method="post">
+            <input type="hidden" name="intent" value="markSent" />
+            <input type="hidden" name="id" value={request.id} />
+            <input type="hidden" name="sentBy" value="GSO" />
+            <Button submit>Mark PO sent</Button>
+          </Form>
           <Form method="post">
             <input type="hidden" name="intent" value="markOrdered" />
             <input type="hidden" name="id" value={request.id} />
@@ -711,6 +800,9 @@ export default function PurchaseRequestsPage() {
                   <Badge tone="warning">{openRequests.length} open</Badge>
                   <Badge tone="attention">{orderedRequests.length} ordered</Badge>
                   <Badge tone="success">{receivedRequests.length} received</Badge>
+                  <Badge>{sentRequests?.length || 0} sent</Badge>
+                  <Badge tone={(followUpRequests?.length || 0) ? "warning" : undefined}>{followUpRequests?.length || 0} follow-up</Badge>
+                  <Badge tone={(lateRequests?.length || 0) ? "critical" : undefined}>{lateRequests?.length || 0} late</Badge>
                 </InlineStack>
               </InlineStack>
               {actionData?.message ? <Text as="p" tone={actionData.ok ? "success" : "critical"}>{actionData.message}</Text> : null}

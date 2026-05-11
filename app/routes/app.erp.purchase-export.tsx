@@ -69,6 +69,12 @@ function buildCsv(requests: any[]) {
     "Estimated Cost",
     "Needed By",
     "Lead Time Days",
+    "Sent At",
+    "Vendor Confirmation #",
+    "Expected Arrival",
+    "Follow Up Needed",
+    "Follow Up Date",
+    "Vendor Reply Notes",
     "Notes",
   ];
   const rows = requests.map((request) => [
@@ -88,6 +94,12 @@ function buildCsv(requests: any[]) {
     request.estimatedCost || requestTotal(request),
     request.neededBy ? new Date(request.neededBy).toISOString().slice(0, 10) : "",
     request.leadTimeDays || "",
+    request.sentAt ? new Date(request.sentAt).toISOString().slice(0, 10) : "",
+    request.vendorConfirmationNumber || "",
+    request.expectedArrivalDate ? new Date(request.expectedArrivalDate).toISOString().slice(0, 10) : "",
+    request.followUpNeeded ? "Yes" : "No",
+    request.followUpDate ? new Date(request.followUpDate).toISOString().slice(0, 10) : "",
+    request.vendorReplyNotes || "",
     request.notes || "",
   ]);
   return [headers, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
@@ -206,6 +218,19 @@ function PurchaseOrderDocument({ request, emailBody }: { request: any; emailBody
         </InlineStack>
 
         <Card>
+          <BlockStack gap="150">
+            <Text as="h3" variant="headingMd">Vendor Tracking</Text>
+            <InlineStack gap="300" wrap>
+              <Text as="p">Sent: <strong>{request.sentAt ? safeDate(request.sentAt) : "Not sent"}</strong></Text>
+              <Text as="p">Confirmation #: <strong>{request.vendorConfirmationNumber || "Not set"}</strong></Text>
+              <Text as="p">Expected arrival: <strong>{safeDate(request.expectedArrivalDate) || "Not set"}</strong></Text>
+              <Text as="p">Follow up: <strong>{request.followUpNeeded ? "Yes" : "No"}{request.followUpDate ? ` - ${safeDate(request.followUpDate)}` : ""}</strong></Text>
+            </InlineStack>
+            {request.vendorReplyNotes ? <Text as="p"><strong>Vendor reply:</strong> {request.vendorReplyNotes}</Text> : null}
+          </BlockStack>
+        </Card>
+
+        <Card>
           <BlockStack gap="250">
             <Text as="h3" variant="headingMd">Order Line</Text>
             <div style={{ overflowX: "auto" }}>
@@ -267,7 +292,7 @@ export default function PurchaseExportPage() {
   return (
     <Page
       title="Purchase Export"
-      subtitle="Print purchase orders, download CSVs, and copy vendor email drafts from PO requests."
+      subtitle="Print purchase orders, download CSVs, copy vendor email drafts, and review vendor confirmation tracking."
       primaryAction={{ content: "Open PO Requests", onAction: () => navigate("/app/erp/purchase-requests") }}
       secondaryActions={[{ content: "Download Open CSV", url: "/app/erp/purchase-export?format=csv" }]}
     >

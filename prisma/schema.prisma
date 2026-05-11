@@ -997,6 +997,14 @@ model PurchaseRequest {
 
   neededBy        DateTime?
   orderedAt       DateTime?
+  sentAt          DateTime?
+  sentBy          String?
+  vendorConfirmationNumber String?
+  expectedArrivalDate DateTime?
+  vendorReplyNotes String?
+  followUpNeeded Boolean  @default(false)
+  followUpDate   DateTime?
+  lastFollowUpAt DateTime?
   receivedAt      DateTime?
   cancelledAt     DateTime?
   notes           String?
@@ -1013,6 +1021,9 @@ model PurchaseRequest {
   @@index([vendor])
   @@index([vendorId])
   @@index([neededBy])
+  @@index([sentAt])
+  @@index([expectedArrivalDate])
+  @@index([followUpNeeded])
   @@index([createdAt])
 }
 model Vendor {
@@ -1075,7 +1086,6 @@ model VendorContact {
   @@index([primary])
   @@index([active])
 }
-
 
 model VendorCostBookItem {
   id              String   @id @default(cuid())
