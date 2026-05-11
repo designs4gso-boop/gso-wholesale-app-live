@@ -27,6 +27,11 @@ type QuoteItemInput = {
   unitPrice: string;
   unitCost: string;
   notes: string;
+  productImageUrl?: string;
+  artworkUrl?: string;
+  proofUrl?: string;
+  shopifyProductGid?: string;
+  shopifyVariantGid?: string;
   recipeId?: string;
   recipeName?: string;
   selectedFinish?: string;
@@ -47,6 +52,8 @@ type ShopifyVariantOption = {
   variantTitle: string;
   sku: string;
   price: string;
+  productImageUrl?: string;
+  variantImageUrl?: string;
 };
 
 type QuoteInput = {
@@ -268,6 +275,7 @@ async function createProductionJobFromQuoteInQuotes(shop: string, quoteId: strin
       customerNotes: quote.notes || null,
       internalNotes: "Created directly from Quote Builder.",
       productImageUrl: firstProductionImageFromQuoteItem(quote.items[0]) || null,
+      proofUrl: null,
       items: {
         create: quote.items.map((item: any, index: number) => ({
           shop,
@@ -305,6 +313,30 @@ async function createProductionJobFromQuoteInQuotes(shop: string, quoteId: strin
       },
     },
     include: { items: true },
+  });
+
+  const proofUrl = `/app/erp/production/${job.id}/proof`;
+  await db.productionJob.update({
+    where: { id: job.id },
+    data: { proofUrl },
+  });
+  await db.productionJobFile.create({
+    data: {
+      shop,
+      jobId: job.id,
+      fileName: "Standard GSO Proof Sheet",
+      fileType: "proof",
+      fileUrl: proofUrl,
+      notes: "Auto-created internal proof sheet. Open to edit images/artwork and print/export.",
+    },
+  });
+  await db.productionJobEvent.create({
+    data: {
+      shop,
+      jobId: job.id,
+      eventType: "proof_created",
+      message: "Standard GSO proof sheet auto-created.",
+    },
   });
 
   const alertResult = await sendProductionJobAlert(job);
@@ -368,6 +400,11 @@ function emptyItem(): QuoteItemInput {
     unitPrice: "",
     unitCost: "",
     notes: "",
+    productImageUrl: "",
+    artworkUrl: "",
+    proofUrl: "",
+    shopifyProductGid: "",
+    shopifyVariantGid: "",
     recipeId: "",
     recipeName: "",
     selectedFinish: "base",
@@ -399,6 +436,11 @@ function normalizeQuote(quote: any): QuoteInput {
       unitPrice: String(item.unitPrice || 0),
       unitCost: String(item.unitCost || 0),
       notes: item.notes || "",
+      productImageUrl: item.productImageUrl || "",
+      artworkUrl: item.artworkUrl || "",
+      proofUrl: item.proofUrl || "",
+      shopifyProductGid: item.shopifyProductGid || "",
+      shopifyVariantGid: item.shopifyVariantGid || "",
       recipeId: item.recipeId || "",
       recipeName: item.recipeName || "",
       selectedFinish: item.selectedFinish || "base",
@@ -456,12 +498,26 @@ async function searchShopifyProducts(admin: any, search: string) {
           nodes {
             id
             title
+            featuredImage {
+              url
+              altText
+            }
+            images(first: 1) {
+              nodes {
+                url
+                altText
+              }
+            }
             variants(first: 50) {
               nodes {
                 id
                 title
                 sku
                 price
+                image {
+                  url
+                  altText
+                }
               }
             }
           }
@@ -488,6 +544,8 @@ async function searchShopifyProducts(admin: any, search: string) {
         variantTitle: variant.title,
         sku: variant.sku || "",
         price: String(variant.price || "0"),
+        productImageUrl: product.featuredImage?.url || product.images?.nodes?.[0]?.url || "",
+        variantImageUrl: variant.image?.url || "",
       });
     }
   }
@@ -838,6 +896,11 @@ function quoteItemData(item: QuoteItemInput, quoteId?: string) {
     unitPrice: safeNumber(item.unitPrice),
     unitCost: safeNumber(item.unitCost),
     notes: item.notes || null,
+    productImageUrl: item.productImageUrl || null,
+    artworkUrl: item.artworkUrl || null,
+    proofUrl: item.proofUrl || null,
+    shopifyProductGid: item.shopifyProductGid || null,
+    shopifyVariantGid: item.shopifyVariantGid || null,
     recipeId: item.recipeId || null,
     recipeName: item.recipeName || null,
     selectedFinish: item.selectedFinish || null,
@@ -972,6 +1035,7 @@ export async function action({ request }: { request: Request }) {
           { key: "Recipe", value: item.recipeName || "" },
           { key: "Tier", value: item.tierLabel || "" },
           { key: "Pricing Source", value: item.pricingSource || "" },
+          { key: "Product Image", value: item.productImageUrl || "" },
           { key: "Notes", value: item.notes || "" },
         ],
       }));
@@ -1646,6 +1710,9 @@ export default function QuotesPage() {
               productName: selected.productTitle,
               variant: selected.variantTitle,
               sku: selected.sku,
+              productImageUrl: selected.variantImageUrl || selected.productImageUrl || item.productImageUrl || "",
+              shopifyProductGid: selected.productId,
+              shopifyVariantGid: selected.value,
               unitPrice:
                 pricingRule?.discountType === "percent_off"
                   ? (Number(selected.price) * (1 - Number(pricingRule.percentOff || 0) / 100)).toFixed(2)
@@ -2051,6 +2118,11 @@ export default function QuotesPage() {
                             <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off" />
                             <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
                             <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" />
+                          </InlineStack>
+                          <InlineStack gap="300" blockAlign="end">
+                            {item.productImageUrl ? <img src={item.productImageUrl} alt="Product" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 10, border: "1px solid #ddd" }} /> : null}
+                            <TextField label="Product image URL" value={item.productImageUrl || ""} onChange={(value) => updateItem(item.id, "productImageUrl", value)} autoComplete="off" />
+                            <TextField label="Artwork URL optional" value={item.artworkUrl || ""} onChange={(value) => updateItem(item.id, "artworkUrl", value)} autoComplete="off" />
                           </InlineStack>
                           <InlineStack gap="300">
                             <Text as="p">Line Revenue: ${lineRevenue.toFixed(2)}</Text>

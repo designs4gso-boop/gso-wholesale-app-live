@@ -181,6 +181,13 @@ model QuoteItem {
   unitCost    Float
   notes       String?
 
+  // Visual and Shopify source snapshots for production/proof workflow.
+  productImageUrl   String?
+  artworkUrl        String?
+  proofUrl          String?
+  shopifyProductGid String?
+  shopifyVariantGid String?
+
   // ERP recipe snapshot fields. These make quote items pull from Product Setup / Recipes
   // while preserving the exact cost, price, finish, tier, and margin used at quote time.
   recipeId        String?
@@ -199,6 +206,8 @@ model QuoteItem {
   @@index([quoteId])
   @@index([recipeId])
   @@index([sku])
+  @@index([shopifyProductGid])
+  @@index([shopifyVariantGid])
 }
 
 

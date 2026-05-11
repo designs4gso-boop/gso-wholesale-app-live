@@ -171,6 +171,7 @@ async function createProductionJobFromQuote(shop: string, quoteId: string) {
       customerNotes: quote.notes || null,
       internalNotes: "Created from quote.",
       productImageUrl: firstImageFromQuoteItem(quote.items[0]),
+      proofUrl: null,
       items: {
         create: quote.items.map((item: any, index: number) => ({
           shop,
@@ -214,6 +215,23 @@ async function createProductionJobFromQuote(shop: string, quoteId: string) {
     where: { shop, id: quote.id, status: { not: "paid" } },
     data: { status: "production" },
   });
+
+  const proofUrl = `/app/erp/production/${job.id}/proof`;
+  await db.productionJob.update({
+    where: { id: job.id },
+    data: { proofUrl },
+  });
+  await db.productionJobFile.create({
+    data: {
+      shop,
+      jobId: job.id,
+      fileName: "Standard GSO Proof Sheet",
+      fileType: "proof",
+      fileUrl: proofUrl,
+      notes: "Auto-created internal proof sheet. Open to edit images/artwork and print/export.",
+    },
+  });
+  await createEvent(shop, job.id, "proof_created", "Standard GSO proof sheet auto-created.");
 
   const alertResult = await sendProductionAlert(job);
   await createEvent(
@@ -389,6 +407,7 @@ function JobCard({ job }: { job: any }) {
             </BlockStack>
           </InlineStack>
           <InlineStack gap="200">
+            <Button onClick={() => navigate(`/app/erp/production/${job.id}/proof`)}>Edit Proof</Button>
             <Button onClick={() => navigate(`/app/erp/production/${job.id}/print`)}>Print Work Order</Button>
             <Form method="post">
               <input type="hidden" name="intent" value="markPrinted" />
