@@ -70,6 +70,7 @@ export default function PrintProductionJob() {
           <div>
             <div className="logo">GSO PACKAGING</div>
             <h1>Production Work Order</h1>
+            <div className="muted">Job Ticket: {job.jobTicket || job.id}</div>
             <div className="muted">Job ID: {job.id}</div>
             <div className="muted">Quote ID: {job.quoteId || "N/A"}</div>
           </div>
@@ -92,6 +93,8 @@ export default function PrintProductionJob() {
             <div><strong>Priority:</strong> {job.priority}</div>
             <div><strong>Due date:</strong> {safeDate(job.dueDate)}</div>
             <div><strong>Assigned:</strong> {job.assignedTo || "Unassigned"}</div>
+            <div><strong>Asset folder:</strong> {job.assetFolderUrl || "Not linked"}</div>
+            <div><strong>Source folder:</strong> {job.sourceFolderUrl || "Not linked"}</div>
             <div><strong>Printed:</strong> {new Date().toLocaleString()}</div>
           </div>
         </div>
@@ -127,6 +130,8 @@ export default function PrintProductionJob() {
         <div className="grid">
           <div className="card">
             <h2>Files</h2>
+            <div><strong>Job ticket:</strong> {job.jobTicket || job.id}</div>
+            <div><strong>Recommended folder:</strong> {job.jobTicket ? `${job.jobTicket} - ${job.company || job.customerName || "Customer"}` : "Not assigned"}</div>
             <div><strong>Artwork:</strong> {job.artworkUrl || "Not linked"}</div>
             <div><strong>Proof:</strong> {job.proofUrl || "Not linked"}</div>
             <div><strong>Print file:</strong> {job.printFileUrl || "Not linked"}</div>

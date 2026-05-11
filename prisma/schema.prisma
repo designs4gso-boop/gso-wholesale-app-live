@@ -665,6 +665,11 @@ model ProductionJob {
   shop            String
   quoteId         String?
   quoteNumber     String?
+  jobTicket       String?
+  assetInboxKey   String?
+  assetFolderUrl  String?
+  sourceFolderUrl String?
+  lastAssetSyncAt DateTime?
   customerName    String?
   company         String?
   email           String?
@@ -698,6 +703,8 @@ model ProductionJob {
   @@index([shop, status])
   @@index([shop, priority])
   @@index([quoteId])
+  @@index([jobTicket])
+  @@index([assetInboxKey])
   @@index([dueDate])
 }
 
@@ -747,6 +754,12 @@ model ProductionJobFile {
   fileName    String
   fileType    String   @default("artwork") // artwork, proof, dieline, customer_pdf, print_file, image, other
   fileUrl     String
+  assetRole   String   @default("reference") // productImage, artwork, proof, printFile, reference
+  assetSource String   @default("manual") // manual, google_drive, shopify, zakeke, email, nas, versaworks, rasterlink, generated
+  sourceRef   String?
+  matchedBy   String?
+  jobTicket   String?
+  originalFileName String?
   notes       String?
   createdBy   String?
   createdAt   DateTime @default(now())
@@ -756,6 +769,10 @@ model ProductionJobFile {
   @@index([shop])
   @@index([jobId])
   @@index([fileType])
+  @@index([assetRole])
+  @@index([assetSource])
+  @@index([jobTicket])
+  @@index([sourceRef])
 }
 
 model ProductionJobEvent {

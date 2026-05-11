@@ -78,6 +78,12 @@ export async function action({ request, params }: { request: Request; params: an
         fileName: `Standard GSO Proof Rev ${revision}`,
         fileType: "proof",
         fileUrl: proofUrl,
+        assetRole: "proof",
+        assetSource: "generated",
+        sourceRef: job.jobTicket || job.id,
+        matchedBy: "proof_builder",
+        jobTicket: job.jobTicket || null,
+        originalFileName: `Standard GSO Proof Rev ${revision}`,
         notes: proofNotes || "Saved standard GSO proof revision.",
       },
     });
@@ -160,6 +166,7 @@ export default function StandardGsoProofSheet() {
           <div>
             <div className="logo">GSO PACKAGING</div>
             <h1>Production Proof Sheet</h1>
+            <span className="pill">Ticket: {job.jobTicket || job.id}</span>
             <span className="pill">Job: {job.id}</span>
             <span className="pill">Quote: {job.quoteId || "N/A"}</span>
             <span className="pill">Status: {labelForStatus(job.status)}</span>
@@ -168,6 +175,7 @@ export default function StandardGsoProofSheet() {
             <h2>REV {revisionCount}</h2>
             <div>{safeDate(new Date())}</div>
             <div>{job.company || job.customerName || "Customer"}</div>
+            <div>{job.jobTicket || "No job ticket"}</div>
           </div>
         </div>
 
