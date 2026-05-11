@@ -1075,3 +1075,58 @@ model VendorContact {
   @@index([primary])
   @@index([active])
 }
+
+
+model VendorCostBookItem {
+  id              String   @id @default(cuid())
+  shop            String
+  vendorId        String?
+  vendorName      String?
+  itemType        String   @default("material") // material, vendor_product, sourced_product, service, other
+  materialId      String?
+  vendorProductId String?
+  itemName        String
+  vendorSku       String?
+  unit            String   @default("each")
+  unitCost        Float    @default(0)
+  moq             Float?
+  leadTimeDays    Int?
+  effectiveDate   DateTime?
+  expiresAt       DateTime?
+  status          String   @default("active") // active, expired, draft, inactive
+  preferred       Boolean  @default(false)
+  currency        String   @default("USD")
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tiers           VendorCostBookTier[]
+
+  @@index([shop])
+  @@index([vendorId])
+  @@index([vendorName])
+  @@index([itemType])
+  @@index([materialId])
+  @@index([vendorProductId])
+  @@index([status])
+  @@index([preferred])
+  @@index([effectiveDate])
+}
+
+model VendorCostBookTier {
+  id                   String   @id @default(cuid())
+  shop                 String
+  vendorCostBookItemId String
+  minQty               Float    @default(1)
+  maxQty               Float?
+  unitCost             Float    @default(0)
+  notes                String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  costBookItem         VendorCostBookItem @relation(fields: [vendorCostBookItemId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([vendorCostBookItemId])
+  @@index([minQty])
+}
