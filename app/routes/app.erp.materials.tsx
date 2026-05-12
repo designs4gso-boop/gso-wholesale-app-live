@@ -29,6 +29,37 @@ const materialTypes = [
   { label: "General", value: "general" },
 ];
 
+const canonicalMaterialTypes = [
+  { label: "All types", value: "all" },
+  ...materialTypes,
+  { label: "Roll Media", value: "roll_media" },
+  { label: "Ink / Coating", value: "ink_coating" },
+  { label: "Blanks / Bags", value: "blanks" },
+  { label: "Outsourced", value: "outsourced" },
+];
+
+function normalizeType(value: string | null | undefined) {
+  const type = String(value || "general").toLowerCase().trim().replace(/\s+/g, "_").replace(/-/g, "_");
+  if (["ink", "ink_coating", "coating", "gloss", "white_ink", "cmyk_ink"].includes(type)) return "ink";
+  if (["label", "labels", "roll_media", "roll", "media", "vinyl", "sticker", "stickers"].includes(type)) return "label";
+  if (["laminate", "lamination", "lam"].includes(type)) return "laminate";
+  if (["dtp", "bag", "bags", "blank", "blanks", "blank_bag", "blanks_bags", "pouch", "pouches", "stock_bag", "sticker_bag"].includes(type)) return "dtp";
+  if (["box", "boxes", "carton"].includes(type)) return "box";
+  if (["die_cut", "diecut", "die_cut_bag", "diecut_bag"].includes(type)) return "die_cut";
+  if (["labor", "service", "design", "prepress"].includes(type)) return "labor";
+  if (["machine", "equipment"].includes(type)) return "machine";
+  if (["shipping", "freight", "packing", "packaging_supplies"].includes(type)) return "shipping";
+  if (["outsourced", "sourced", "vendor", "vendor_product"].includes(type)) return "outsourced";
+  return type || "general";
+}
+
+function materialTypeLabel(value: string | null | undefined) {
+  const normalized = normalizeType(value);
+  const match = [...materialTypes, { label: "Outsourced", value: "outsourced" }].find((option) => option.value === normalized);
+  return match?.label || String(value || "General");
+}
+
+
 const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: string }[]; baseUnits: { label: string; value: string }[]; defaultPurchaseUnit: string; defaultBaseUnit: string; defaultVolumeMl?: string }> = {
   ink: {
     purchaseUnits: [
@@ -383,7 +414,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
     return Response.json({ ok: true, materials });
   }
 
-  if (payload.intent === "deleteMaterial") {
+  if (payload.intent === "deleteMaterial" || payload.intent === "archiveMaterial") {
     await db.material.update({
       where: { id: payload.id },
       data: { active: false },
@@ -402,7 +433,70 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
       },
     });
 
-    return Response.json({ ok: true, materials });
+    return Response.json({ ok: true, materials, message: "Material archived." });
+  }
+
+  if (payload.intent === "restoreMaterial") {
+    await db.material.update({
+      where: { id: payload.id },
+      data: { active: true },
+    });
+
+    const materials = await db.material.findMany({
+      where: { shop },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        primaryVendor: true,
+        vendors: true,
+        costHistory: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        },
+      },
+    });
+
+    return Response.json({ ok: true, materials, message: "Material restored." });
+  }
+
+  if (payload.intent === "permanentDeleteMaterial") {
+    const material = await db.material.findFirst({ where: { id: payload.id, shop } });
+    if (!material) return Response.json({ ok: false, error: "Material not found." }, { status: 404 });
+
+    const [recipeCount, productionUsageCount, movementCount, purchaseRequestCount, costBookCount] = await Promise.all([
+      db.recipeMaterial.count({ where: { materialId: payload.id, shop } }),
+      db.productionMaterialUsage.count({ where: { materialId: payload.id, shop } }),
+      db.materialInventoryMovement.count({ where: { materialId: payload.id, shop } }),
+      db.purchaseRequest.count({ where: { materialId: payload.id, shop } }),
+      db.vendorCostBookItem.count({ where: { materialId: payload.id, shop } }).catch(() => 0),
+    ]);
+
+    const usedCount = recipeCount + productionUsageCount + movementCount + purchaseRequestCount + costBookCount;
+    if (usedCount > 0) {
+      await db.material.update({ where: { id: payload.id }, data: { active: false } });
+      const materials = await db.material.findMany({
+        where: { shop },
+        orderBy: { updatedAt: "desc" },
+        include: { primaryVendor: true, vendors: true, costHistory: { orderBy: { createdAt: "desc" }, take: 5 } },
+      });
+      return Response.json({ ok: false, materials, error: "This material is used by recipes, production, inventory, purchase requests, or cost book records, so it was archived instead of permanently deleted." });
+    }
+
+    await db.material.delete({ where: { id: payload.id } });
+
+    const materials = await db.material.findMany({
+      where: { shop },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        primaryVendor: true,
+        vendors: true,
+        costHistory: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        },
+      },
+    });
+
+    return Response.json({ ok: true, materials, message: "Material permanently deleted." });
   }
 
   if (payload.intent === "addVendor") {
@@ -521,6 +615,8 @@ export default function MaterialsPage() {
   const [volumeMl, setVolumeMl] = useState("");
   const [caseQuantity, setCaseQuantity] = useState("");
   const [filter, setFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("active");
+  const [search, setSearch] = useState("");
   const [vendorMaterialId, setVendorMaterialId] = useState("");
   const [vendorCenterId, setVendorCenterId] = useState("");
   const [vendorName, setVendorName] = useState("");
@@ -618,9 +714,27 @@ export default function MaterialsPage() {
     setCaseQuantity(material.caseQuantity ? String(material.caseQuantity) : "");
   }
 
-  function deleteMaterial(id: string) {
+  function archiveMaterial(id: string) {
     fetcher.submit(
-      { intent: "deleteMaterial", id },
+      { intent: "archiveMaterial", id },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
+  function restoreMaterial(id: string) {
+    fetcher.submit(
+      { intent: "restoreMaterial", id },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
+  function permanentDeleteMaterial(material: any) {
+    const confirmed = window.confirm(
+      `Permanently delete ${material.name}? This is only allowed when the material has never been used. If it has usage history, the app will archive it instead.`
+    );
+    if (!confirmed) return;
+    fetcher.submit(
+      { intent: "permanentDeleteMaterial", id: material.id },
       { method: "post", encType: "application/json" }
     );
   }
@@ -649,10 +763,38 @@ export default function MaterialsPage() {
     setVendorLeadTimeDays("");
   }
 
-  const filteredMaterials =
-    filter === "all"
-      ? materials
-      : materials.filter((m) => m.materialType === filter);
+  const filteredMaterials = materials.filter((material) => {
+    const isActive = material.active !== false;
+    if (statusFilter === "active" && !isActive) return false;
+    if (statusFilter === "inactive" && isActive) return false;
+
+    if (filter !== "all" && normalizeType(material.materialType) !== normalizeType(filter)) return false;
+
+    const query = search.trim().toLowerCase();
+    if (query) {
+      const haystack = [
+        material.name,
+        material.materialType,
+        material.vendor,
+        material.primaryVendor?.name,
+        material.sku,
+        material.notes,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+
+    return true;
+  });
+
+  const materialCounts = {
+    total: materials.length,
+    active: materials.filter((material) => material.active !== false).length,
+    inactive: materials.filter((material) => material.active === false).length,
+    filtered: filteredMaterials.length,
+  };
 
   const currentUnitRule = getUnitRule(materialType);
   const currentPurchaseUnitOptions = currentUnitRule.purchaseUnits;
@@ -882,20 +1024,43 @@ export default function MaterialsPage() {
           <Card>
             <BlockStack gap="300">
               <InlineStack align="space-between">
-                <Text as="h2" variant="headingMd">
-                  Materials
-                </Text>
+                <BlockStack gap="050">
+                  <Text as="h2" variant="headingMd">
+                    Materials
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Showing {materialCounts.filtered} of {materialCounts.total}. Active: {materialCounts.active}. Inactive: {materialCounts.inactive}.
+                  </Text>
+                </BlockStack>
+              </InlineStack>
 
-                <Select
-                  label="Filter"
-                  labelHidden
-                  value={filter}
-                  onChange={setFilter}
+              <InlineStack gap="300" align="start">
+                <NativeInput label="Search materials" value={search} onChange={setSearch} helpText="Search name, vendor, SKU, notes." />
+                <NativeSelect
+                  label="Status"
+                  value={statusFilter}
+                  onChange={setStatusFilter}
                   options={[
-                    { label: "All", value: "all" },
-                    ...materialTypes,
+                    { label: "Active only", value: "active" },
+                    { label: "Inactive only", value: "inactive" },
+                    { label: "All active + inactive", value: "all" },
                   ]}
                 />
+                <NativeSelect
+                  label="Material type"
+                  value={filter}
+                  onChange={setFilter}
+                  options={canonicalMaterialTypes}
+                />
+              </InlineStack>
+
+              <InlineStack gap="200">
+                <Button onClick={() => { setSearch(""); setFilter("all"); setStatusFilter("active"); }}>
+                  Reset filters
+                </Button>
+                <Button onClick={() => setStatusFilter("inactive")}>
+                  Review inactive
+                </Button>
               </InlineStack>
 
               <Divider />
@@ -922,8 +1087,14 @@ export default function MaterialsPage() {
 
                           <InlineStack gap="200">
                             <Badge>
-                              {material.materialType}
+                              {materialTypeLabel(material.materialType)}
                             </Badge>
+
+                            {material.active === false && (
+                              <Badge tone="warning">
+                                INACTIVE
+                              </Badge>
+                            )}
 
                             {lowStock && (
                               <Badge tone="critical">
@@ -958,19 +1129,22 @@ export default function MaterialsPage() {
                         </Text>
 
                         <InlineStack gap="200">
-                          <Button
-                            onClick={() => editMaterial(material)}
-                          >
+                          <Button onClick={() => editMaterial(material)}>
                             Edit
                           </Button>
 
-                          <Button
-                            tone="critical"
-                            onClick={() =>
-                              deleteMaterial(material.id)
-                            }
-                          >
-                            Deactivate
+                          {material.active === false ? (
+                            <Button onClick={() => restoreMaterial(material.id)}>
+                              Restore
+                            </Button>
+                          ) : (
+                            <Button tone="critical" onClick={() => archiveMaterial(material.id)}>
+                              Archive
+                            </Button>
+                          )}
+
+                          <Button tone="critical" onClick={() => permanentDeleteMaterial(material)}>
+                            Delete Forever
                           </Button>
                         </InlineStack>
                       </BlockStack>
