@@ -16,52 +16,85 @@ import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const materialTypes = [
-  { label: "Label", value: "label" },
-  { label: "DTP", value: "dtp" },
-  { label: "Box", value: "box" },
-  { label: "Die Cut", value: "die_cut" },
-  { label: "Ink", value: "ink" },
-  { label: "Laminate", value: "laminate" },
-  { label: "Labor", value: "labor" },
-  { label: "Machine", value: "machine" },
-  { label: "Shipping", value: "shipping" },
+const defaultMaterialTypes = [
+  { label: "Ink / Coating", value: "ink_coating" },
+  { label: "Roll Media", value: "roll_media" },
+  { label: "Blank Bags", value: "blank_bags" },
+  { label: "Zipper", value: "zipper" },
+  { label: "Card Stock", value: "card_stock" },
+  { label: "Packaging Supplies", value: "packaging_supplies" },
+  { label: "Outsourced Cost", value: "outsourced_cost" },
   { label: "General", value: "general" },
 ];
 
-const canonicalMaterialTypes = [
-  { label: "All types", value: "all" },
-  ...materialTypes,
-  { label: "Roll Media", value: "roll_media" },
-  { label: "Ink / Coating", value: "ink_coating" },
-  { label: "Blanks / Bags", value: "blanks" },
-  { label: "Outsourced", value: "outsourced" },
+const defaultProductFamilies = [
+  { label: "Labels", value: "labels" },
+  { label: "Sticker Bags", value: "sticker_bags" },
+  { label: "DTP Bags", value: "dtp_bags" },
+  { label: "Boxes", value: "boxes" },
+  { label: "DTF / Apparel", value: "dtf_apparel" },
 ];
 
+function makeOption(labelOrValue: string) {
+  const raw = String(labelOrValue || "").trim();
+  const value = raw.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return { label: raw || "General", value: value || "general" };
+}
+
+function uniqueOptions(base: { label: string; value: string }[], extraValues: string[] = []) {
+  const map = new Map<string, { label: string; value: string }>();
+  for (const option of base) map.set(option.value, option);
+  for (const value of extraValues) {
+    if (!value) continue;
+    const option = makeOption(value);
+    if (!map.has(option.value)) map.set(option.value, option);
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    const ai = base.findIndex((option) => option.value === a.value);
+    const bi = base.findIndex((option) => option.value === b.value);
+    if (ai >= 0 && bi >= 0) return ai - bi;
+    if (ai >= 0) return -1;
+    if (bi >= 0) return 1;
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function parseFamilies(value: string | null | undefined) {
+  return String(value || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function familyLabel(value: string) {
+  const match = defaultProductFamilies.find((option) => option.value === value);
+  if (match) return match.label;
+  return String(value || "").replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function normalizeType(value: string | null | undefined) {
-  const type = String(value || "general").toLowerCase().trim().replace(/\s+/g, "_").replace(/-/g, "_");
-  if (["ink", "ink_coating", "coating", "gloss", "white_ink", "cmyk_ink"].includes(type)) return "ink";
-  if (["label", "labels", "roll_media", "roll", "media", "vinyl", "sticker", "stickers"].includes(type)) return "label";
+  const type = String(value || "general").toLowerCase().trim().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (["ink", "ink_coating", "coating", "gloss", "white_ink", "cmyk_ink", "uv_ink"].includes(type)) return "ink_coating";
+  if (["label", "labels", "roll_media", "roll", "media", "vinyl", "sticker", "stickers", "film"].includes(type)) return "roll_media";
+  if (["blank_bag", "blank_bags", "bag", "bags", "pouch", "pouches", "stock_bag", "sticker_bag", "dtp", "dtp_bag"].includes(type)) return "blank_bags";
+  if (["zip", "zipper", "zippers"].includes(type)) return "zipper";
+  if (["card", "cardstock", "card_stock", "paperboard", "paper_board"].includes(type)) return "card_stock";
+  if (["box", "boxes", "carton", "cartons"].includes(type)) return "boxes";
   if (["laminate", "lamination", "lam"].includes(type)) return "laminate";
-  if (["dtp", "bag", "bags", "blank", "blanks", "blank_bag", "blanks_bags", "pouch", "pouches", "stock_bag", "sticker_bag"].includes(type)) return "dtp";
-  if (["box", "boxes", "carton"].includes(type)) return "box";
-  if (["die_cut", "diecut", "die_cut_bag", "diecut_bag"].includes(type)) return "die_cut";
-  if (["labor", "service", "design", "prepress"].includes(type)) return "labor";
-  if (["machine", "equipment"].includes(type)) return "machine";
-  if (["shipping", "freight", "packing", "packaging_supplies"].includes(type)) return "shipping";
-  if (["outsourced", "sourced", "vendor", "vendor_product"].includes(type)) return "outsourced";
+  if (["shipping", "freight", "packing", "packaging", "packaging_supplies", "supplies"].includes(type)) return "packaging_supplies";
+  if (["outsourced", "outsourced_cost", "sourced", "vendor", "vendor_product"].includes(type)) return "outsourced_cost";
   return type || "general";
 }
 
 function materialTypeLabel(value: string | null | undefined) {
   const normalized = normalizeType(value);
-  const match = [...materialTypes, { label: "Outsourced", value: "outsourced" }].find((option) => option.value === normalized);
-  return match?.label || String(value || "General");
+  const match = defaultMaterialTypes.find((option) => option.value === normalized);
+  if (match) return match.label;
+  return String(value || "General").replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-
 const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: string }[]; baseUnits: { label: string; value: string }[]; defaultPurchaseUnit: string; defaultBaseUnit: string; defaultVolumeMl?: string }> = {
-  ink: {
+  ink_coating: {
     purchaseUnits: [
       { label: "Cartridge / pouch", value: "cartridge" },
       { label: "Bottle", value: "bottle" },
@@ -72,7 +105,7 @@ const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: st
     defaultBaseUnit: "ml",
     defaultVolumeMl: "750",
   },
-  label: {
+  roll_media: {
     purchaseUnits: [{ label: "Roll", value: "roll" }],
     baseUnits: [
       { label: "Sq Ft", value: "sqft" },
@@ -90,7 +123,7 @@ const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: st
     defaultPurchaseUnit: "roll",
     defaultBaseUnit: "sqft",
   },
-  dtp: {
+  blank_bags: {
     purchaseUnits: [
       { label: "Case", value: "case" },
       { label: "Box", value: "box" },
@@ -100,7 +133,7 @@ const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: st
     defaultPurchaseUnit: "case",
     defaultBaseUnit: "each",
   },
-  box: {
+  boxes: {
     purchaseUnits: [
       { label: "Case", value: "case" },
       { label: "Box", value: "box" },
@@ -149,11 +182,47 @@ const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: st
     defaultPurchaseUnit: "hour",
     defaultBaseUnit: "hour",
   },
-  shipping: {
+  packaging_supplies: {
     purchaseUnits: [
       { label: "Each", value: "each" },
       { label: "Box", value: "box" },
       { label: "Case", value: "case" },
+    ],
+    baseUnits: [{ label: "Each", value: "each" }],
+    defaultPurchaseUnit: "each",
+    defaultBaseUnit: "each",
+  },
+  zipper: {
+    purchaseUnits: [
+      { label: "Case", value: "case" },
+      { label: "Box", value: "box" },
+      { label: "Each", value: "each" },
+      { label: "Roll", value: "roll" },
+    ],
+    baseUnits: [{ label: "Each", value: "each" }],
+    defaultPurchaseUnit: "each",
+    defaultBaseUnit: "each",
+  },
+  card_stock: {
+    purchaseUnits: [
+      { label: "Case", value: "case" },
+      { label: "Box", value: "box" },
+      { label: "Each", value: "each" },
+      { label: "Roll", value: "roll" },
+    ],
+    baseUnits: [
+      { label: "Each", value: "each" },
+      { label: "Sq Ft", value: "sqft" },
+      { label: "Sq In", value: "sqin" },
+    ],
+    defaultPurchaseUnit: "each",
+    defaultBaseUnit: "each",
+  },
+  outsourced_cost: {
+    purchaseUnits: [
+      { label: "Each", value: "each" },
+      { label: "Case", value: "case" },
+      { label: "Box", value: "box" },
     ],
     baseUnits: [{ label: "Each", value: "each" }],
     defaultPurchaseUnit: "each",
@@ -180,7 +249,7 @@ const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: st
 };
 
 function getUnitRule(materialType: string) {
-  return smartUnitRules[materialType] || smartUnitRules.general;
+  return smartUnitRules[normalizeType(materialType)] || smartUnitRules.general;
 }
 
 function calculateAvailableUnits(material: any) {
@@ -289,7 +358,14 @@ export async function loader({ request }: { request: Request }) {
     }),
   ]);
 
-  return Response.json({ materials, vendors });
+  const customMaterialTypes = Array.from(new Set(materials.map((material: any) => normalizeType(material.materialType)).filter(Boolean)));
+  const customProductFamilies = Array.from(
+    new Set(
+      materials.flatMap((material: any) => parseFamilies(material.productFamilies)).filter(Boolean)
+    )
+  );
+
+  return Response.json({ materials, vendors, customMaterialTypes, customProductFamilies });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -320,7 +396,8 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
         where: { id: payload.id },
         data: {
           name: payload.name,
-          materialType: payload.materialType,
+          materialType: normalizeType(payload.materialType),
+          productFamilies: payload.productFamilies || "",
           vendor: vendorName,
           primaryVendorId: selectedVendor?.id || null,
           sku: payload.sku || null,
@@ -363,7 +440,8 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
         data: {
           shop,
           name: payload.name,
-          materialType: payload.materialType,
+          materialType: normalizeType(payload.materialType),
+          productFamilies: payload.productFamilies || "",
           vendor: vendorName,
           primaryVendorId: selectedVendor?.id || null,
           sku: payload.sku || null,
@@ -588,6 +666,8 @@ export default function MaterialsPage() {
 
   const [materials, setMaterials] = useState<any[]>(loaderData.materials || []);
   const vendors = loaderData.vendors || [];
+  const customMaterialTypes = loaderData.customMaterialTypes || [];
+  const customProductFamilies = loaderData.customProductFamilies || [];
   const vendorOptions = [
     { label: "Manual / no Vendor Center link", value: "" },
     ...vendors.map((vendor: any) => ({
@@ -598,7 +678,10 @@ export default function MaterialsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [name, setName] = useState("");
-  const [materialType, setMaterialType] = useState("label");
+  const [materialType, setMaterialType] = useState("ink_coating");
+  const [customMaterialType, setCustomMaterialType] = useState("");
+  const [selectedFamilies, setSelectedFamilies] = useState<string[]>([]);
+  const [customProductFamily, setCustomProductFamily] = useState("");
   const [vendor, setVendor] = useState("");
   const [primaryVendorId, setPrimaryVendorId] = useState("");
   const [sku, setSku] = useState("");
@@ -607,6 +690,10 @@ export default function MaterialsPage() {
   const [leadTimeDays, setLeadTimeDays] = useState("");
   const [reason, setReason] = useState("");
   const [notes, setNotes] = useState("");
+  const finalMaterialType = materialType === "custom" ? makeOption(customMaterialType).value : normalizeType(materialType);
+  const availableMaterialTypeOptions = uniqueOptions(defaultMaterialTypes, customMaterialTypes).concat([{ label: "+ Add custom type", value: "custom" }]);
+  const availableFamilyOptions = uniqueOptions(defaultProductFamilies, customProductFamilies).concat([{ label: "+ Add custom family", value: "custom" }]);
+
   const [purchaseUnit, setPurchaseUnit] = useState("each");
   const [purchaseCost, setPurchaseCost] = useState("");
   const [baseUnit, setBaseUnit] = useState("each");
@@ -615,6 +702,7 @@ export default function MaterialsPage() {
   const [volumeMl, setVolumeMl] = useState("");
   const [caseQuantity, setCaseQuantity] = useState("");
   const [filter, setFilter] = useState("all");
+  const [familyFilter, setFamilyFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("active");
   const [search, setSearch] = useState("");
   const [vendorMaterialId, setVendorMaterialId] = useState("");
@@ -630,22 +718,25 @@ export default function MaterialsPage() {
   }, [fetcher.data]);
 
   useEffect(() => {
-    const rule = getUnitRule(materialType);
+    const rule = getUnitRule(finalMaterialType);
     if (!rule.purchaseUnits.some((option) => option.value === purchaseUnit)) {
       setPurchaseUnit(rule.defaultPurchaseUnit);
     }
     if (!rule.baseUnits.some((option) => option.value === baseUnit)) {
       setBaseUnit(rule.defaultBaseUnit);
     }
-    if (materialType === "ink" && !volumeMl && rule.defaultVolumeMl) {
+    if (finalMaterialType === "ink_coating" && !volumeMl && rule.defaultVolumeMl) {
       setVolumeMl(rule.defaultVolumeMl);
     }
-  }, [materialType]);
+  }, [finalMaterialType]);
 
   function resetForm() {
     setEditingId(null);
     setName("");
-    setMaterialType("label");
+    setMaterialType("ink_coating");
+    setCustomMaterialType("");
+    setSelectedFamilies([]);
+    setCustomProductFamily("");
     setVendor("");
     setPrimaryVendorId("");
     setSku("");
@@ -670,7 +761,8 @@ export default function MaterialsPage() {
         intent: "saveMaterial",
         id: editingId,
         name,
-        materialType,
+        materialType: finalMaterialType,
+        productFamilies: selectedFamilies.join(","),
         vendor,
         primaryVendorId,
         sku,
@@ -696,7 +788,10 @@ export default function MaterialsPage() {
   function editMaterial(material: any) {
     setEditingId(material.id);
     setName(material.name || "");
-    setMaterialType(material.materialType || "label");
+    setMaterialType(normalizeType(material.materialType || "general"));
+    setCustomMaterialType("");
+    setSelectedFamilies(parseFamilies(material.productFamilies));
+    setCustomProductFamily("");
     setVendor(material.vendor || material.primaryVendor?.name || "");
     setPrimaryVendorId(material.primaryVendorId || material.primaryVendor?.id || "");
     setSku(material.sku || "");
@@ -769,12 +864,14 @@ export default function MaterialsPage() {
     if (statusFilter === "inactive" && isActive) return false;
 
     if (filter !== "all" && normalizeType(material.materialType) !== normalizeType(filter)) return false;
+    if (familyFilter !== "all" && !parseFamilies(material.productFamilies).includes(familyFilter)) return false;
 
     const query = search.trim().toLowerCase();
     if (query) {
       const haystack = [
         material.name,
         material.materialType,
+        material.productFamilies,
         material.vendor,
         material.primaryVendor?.name,
         material.sku,
@@ -796,7 +893,7 @@ export default function MaterialsPage() {
     filtered: filteredMaterials.length,
   };
 
-  const currentUnitRule = getUnitRule(materialType);
+  const currentUnitRule = getUnitRule(finalMaterialType);
   const currentPurchaseUnitOptions = currentUnitRule.purchaseUnits;
   const currentBaseUnitOptions = currentUnitRule.baseUnits;
   const calculatedPreview = calculateMaterialUnitCost({
@@ -839,7 +936,7 @@ export default function MaterialsPage() {
   return (
     <Page
       title="Material Center"
-      subtitle="Advanced material costs, inventory, vendors, and cost history."
+      subtitle="Materials use clean types, multi-family routing, smart units, inventory, vendors, and cost history."
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
       primaryAction={{ content: "New Material", onAction: resetForm }}
     >
@@ -853,7 +950,15 @@ export default function MaterialsPage() {
 
                <InlineStack gap="300">
                 <NativeInput label="Material Name" value={name} onChange={setName} />
-                <NativeSelect label="Material Type" value={materialType} onChange={setMaterialType} options={materialTypes} />
+                <NativeSelect label="Material Type" value={materialType} onChange={setMaterialType} options={availableMaterialTypeOptions} />
+                {materialType === "custom" && (
+                  <NativeInput
+                    label="Custom Material Type"
+                    value={customMaterialType}
+                    onChange={setCustomMaterialType}
+                    helpText="Example: Foil, Specialty Film, Hang Tag. It becomes reusable after saving."
+                  />
+                )}
                 </InlineStack>
 
                 <InlineStack gap="300">
@@ -862,8 +967,8 @@ export default function MaterialsPage() {
                     value={purchaseUnit}
                     onChange={(value: string) => {
                       setPurchaseUnit(value);
-                      if (materialType === "ink" && value === "bottle" && (!volumeMl || volumeMl === "750")) setVolumeMl("1000");
-                      if (materialType === "ink" && ["cartridge", "pouch"].includes(value) && (!volumeMl || volumeMl === "1000")) setVolumeMl("750");
+                      if (finalMaterialType === "ink_coating" && value === "bottle" && (!volumeMl || volumeMl === "750")) setVolumeMl("1000");
+                      if (finalMaterialType === "ink_coating" && ["cartridge", "pouch"].includes(value) && (!volumeMl || volumeMl === "1000")) setVolumeMl("750");
                     }}
                     options={currentPurchaseUnitOptions}
                     helpText="This is how you buy and count inventory."
@@ -925,6 +1030,52 @@ export default function MaterialsPage() {
                 <NativeInput label="Vendor Text / Fallback" value={vendor} onChange={setVendor} />
                 <NativeInput label="Vendor / Material SKU" value={sku} onChange={setSku} />
                 </InlineStack>
+
+                <Card>
+                  <BlockStack gap="200">
+                    <Text as="p" fontWeight="bold">Product Families</Text>
+                    <Text as="p" tone="subdued">Pick every product family this material should appear in during recipe/cost setup.</Text>
+                    <InlineStack gap="200" wrap>
+                      {availableFamilyOptions.filter((family) => family.value !== "custom").map((family) => (
+                        <label key={family.value} style={{ display: "flex", alignItems: "center", gap: 6, border: "1px solid #ddd", borderRadius: 8, padding: "8px 10px" }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedFamilies.includes(family.value)}
+                            onChange={(event) => {
+                              setSelectedFamilies((current) =>
+                                event.target.checked
+                                  ? Array.from(new Set([...current, family.value]))
+                                  : current.filter((value) => value !== family.value)
+                              );
+                            }}
+                          />
+                          <span>{family.label}</span>
+                        </label>
+                      ))}
+                    </InlineStack>
+
+                    <InlineStack gap="200" blockAlign="end">
+                      <NativeInput label="Add custom family" value={customProductFamily} onChange={setCustomProductFamily} helpText="Example: Jars, Die Cuts, THCA Packaging." />
+                      <Button
+                        onClick={() => {
+                          const option = makeOption(customProductFamily);
+                          if (option.value) {
+                            setSelectedFamilies((current) => Array.from(new Set([...current, option.value])));
+                            setCustomProductFamily("");
+                          }
+                        }}
+                      >
+                        Add family
+                      </Button>
+                    </InlineStack>
+
+                    {selectedFamilies.length ? (
+                      <Text as="p">Selected: {selectedFamilies.map(familyLabel).join(", ")}</Text>
+                    ) : (
+                      <Text as="p" tone="critical">Pick at least one family before using this material in recipes.</Text>
+                    )}
+                  </BlockStack>
+                </Card>
 
                 <InlineStack gap="300">
                 <NativeInput label={`Stock On Hand (${purchaseUnit})`} value={stockOnHand} onChange={setStockOnHand} />
@@ -1050,12 +1201,18 @@ export default function MaterialsPage() {
                   label="Material type"
                   value={filter}
                   onChange={setFilter}
-                  options={canonicalMaterialTypes}
+                  options={[{ label: "All types", value: "all" }, ...availableMaterialTypeOptions.filter((option) => option.value !== "custom")]}
+                />
+                <NativeSelect
+                  label="Product family"
+                  value={familyFilter}
+                  onChange={setFamilyFilter}
+                  options={[{ label: "All families", value: "all" }, ...availableFamilyOptions.filter((option) => option.value !== "custom")]}
                 />
               </InlineStack>
 
               <InlineStack gap="200">
-                <Button onClick={() => { setSearch(""); setFilter("all"); setStatusFilter("active"); }}>
+                <Button onClick={() => { setSearch(""); setFilter("all"); setFamilyFilter("all"); setStatusFilter("active"); }}>
                   Reset filters
                 </Button>
                 <Button onClick={() => setStatusFilter("inactive")}>
@@ -1089,6 +1246,10 @@ export default function MaterialsPage() {
                             <Badge>
                               {materialTypeLabel(material.materialType)}
                             </Badge>
+
+                            {parseFamilies(material.productFamilies).map((family: string) => (
+                              <Badge key={family}>{familyLabel(family)}</Badge>
+                            ))}
 
                             {material.active === false && (
                               <Badge tone="warning">

@@ -260,6 +260,7 @@ model Material {
   categoryId      String?
   name            String
   materialType    String   @default("general") // label, dtp, box, ink, laminate, labor, machine, general
+  productFamilies String   @default("") // comma-separated product families such as labels, sticker_bags, boxes
   unit            String   @default("each") // each, sqft, linear_ft, ml, hour, roll, sheet
   costPerUnit     Float    @default(0)
   vendor          String?
@@ -296,6 +297,7 @@ calculatedUnitCost Float    @default(0)
 
   @@index([shop])
   @@index([shop, materialType])
+  @@index([shop, productFamilies])
   @@index([shop, active])
   @@index([primaryVendorId])
 }
