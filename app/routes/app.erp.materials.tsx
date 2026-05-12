@@ -29,36 +29,211 @@ const materialTypes = [
   { label: "General", value: "general" },
 ];
 
-const units = [
-  { label: "Each", value: "each" },
-  { label: "Sq Ft", value: "sqft" },
-  { label: "Linear Ft", value: "linear_ft" },
-  { label: "Roll", value: "roll" },
-  { label: "Sheet", value: "sheet" },
-  { label: "ML", value: "ml" },
-  { label: "Hour", value: "hour" },
-  { label: "Minute", value: "minute" },
-  { label: "Case", value: "case" },
-  { label: "Box", value: "box" },
-];
+const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: string }[]; baseUnits: { label: string; value: string }[]; defaultPurchaseUnit: string; defaultBaseUnit: string; defaultVolumeMl?: string }> = {
+  ink: {
+    purchaseUnits: [
+      { label: "Cartridge / pouch", value: "cartridge" },
+      { label: "Bottle", value: "bottle" },
+      { label: "Pouch", value: "pouch" },
+    ],
+    baseUnits: [{ label: "ML", value: "ml" }],
+    defaultPurchaseUnit: "cartridge",
+    defaultBaseUnit: "ml",
+    defaultVolumeMl: "750",
+  },
+  label: {
+    purchaseUnits: [{ label: "Roll", value: "roll" }],
+    baseUnits: [
+      { label: "Sq Ft", value: "sqft" },
+      { label: "Sq In", value: "sqin" },
+    ],
+    defaultPurchaseUnit: "roll",
+    defaultBaseUnit: "sqft",
+  },
+  laminate: {
+    purchaseUnits: [{ label: "Roll", value: "roll" }],
+    baseUnits: [
+      { label: "Sq Ft", value: "sqft" },
+      { label: "Sq In", value: "sqin" },
+    ],
+    defaultPurchaseUnit: "roll",
+    defaultBaseUnit: "sqft",
+  },
+  dtp: {
+    purchaseUnits: [
+      { label: "Case", value: "case" },
+      { label: "Box", value: "box" },
+      { label: "Each", value: "each" },
+    ],
+    baseUnits: [{ label: "Each", value: "each" }],
+    defaultPurchaseUnit: "case",
+    defaultBaseUnit: "each",
+  },
+  box: {
+    purchaseUnits: [
+      { label: "Case", value: "case" },
+      { label: "Box", value: "box" },
+      { label: "Each", value: "each" },
+    ],
+    baseUnits: [{ label: "Each", value: "each" }],
+    defaultPurchaseUnit: "case",
+    defaultBaseUnit: "each",
+  },
+  die_cut: {
+    purchaseUnits: [
+      { label: "Case", value: "case" },
+      { label: "Box", value: "box" },
+      { label: "Each", value: "each" },
+      { label: "Roll", value: "roll" },
+    ],
+    baseUnits: [
+      { label: "Each", value: "each" },
+      { label: "Sq Ft", value: "sqft" },
+      { label: "Sq In", value: "sqin" },
+    ],
+    defaultPurchaseUnit: "case",
+    defaultBaseUnit: "each",
+  },
+  labor: {
+    purchaseUnits: [
+      { label: "Hour", value: "hour" },
+      { label: "Each", value: "each" },
+    ],
+    baseUnits: [
+      { label: "Hour", value: "hour" },
+      { label: "Each", value: "each" },
+    ],
+    defaultPurchaseUnit: "hour",
+    defaultBaseUnit: "hour",
+  },
+  machine: {
+    purchaseUnits: [
+      { label: "Hour", value: "hour" },
+      { label: "Each", value: "each" },
+    ],
+    baseUnits: [
+      { label: "Hour", value: "hour" },
+      { label: "Each", value: "each" },
+    ],
+    defaultPurchaseUnit: "hour",
+    defaultBaseUnit: "hour",
+  },
+  shipping: {
+    purchaseUnits: [
+      { label: "Each", value: "each" },
+      { label: "Box", value: "box" },
+      { label: "Case", value: "case" },
+    ],
+    baseUnits: [{ label: "Each", value: "each" }],
+    defaultPurchaseUnit: "each",
+    defaultBaseUnit: "each",
+  },
+  general: {
+    purchaseUnits: [
+      { label: "Each", value: "each" },
+      { label: "Case", value: "case" },
+      { label: "Box", value: "box" },
+      { label: "Roll", value: "roll" },
+      { label: "Hour", value: "hour" },
+    ],
+    baseUnits: [
+      { label: "Each", value: "each" },
+      { label: "Sq Ft", value: "sqft" },
+      { label: "Sq In", value: "sqin" },
+      { label: "ML", value: "ml" },
+      { label: "Hour", value: "hour" },
+    ],
+    defaultPurchaseUnit: "each",
+    defaultBaseUnit: "each",
+  },
+};
 
-const purchaseUnits = [
-  { label: "Each", value: "each" },
-  { label: "Roll", value: "roll" },
-  { label: "Cartridge", value: "cartridge" },
-  { label: "Gallon", value: "gallon" },
-  { label: "Case", value: "case" },
-  { label: "Box", value: "box" },
-  { label: "Hour", value: "hour" },
-];
+function getUnitRule(materialType: string) {
+  return smartUnitRules[materialType] || smartUnitRules.general;
+}
 
-const baseUnits = [
-  { label: "Each", value: "each" },
-  { label: "Sq Ft", value: "sqft" },
-  { label: "Sq In", value: "sqin" },
-  { label: "ML", value: "ml" },
-  { label: "Hour", value: "hour" },
-];
+function calculateAvailableUnits(material: any) {
+  const stock = Number(material.stockOnHand) || 0;
+  const purchaseUnit = material.purchaseUnit || "each";
+
+  if (purchaseUnit === "roll") {
+    const widthIn = Number(material.rollWidthIn) || 0;
+    const lengthFt = Number(material.rollLengthFt) || 0;
+    const totalSqFt = (widthIn * lengthFt * 12) / 144;
+    return stock * totalSqFt;
+  }
+
+  if (["cartridge", "bottle", "pouch"].includes(purchaseUnit)) {
+    return stock * (Number(material.volumeMl) || 0);
+  }
+
+  if (["case", "box"].includes(purchaseUnit)) {
+    return stock * (Number(material.caseQuantity) || 0);
+  }
+
+  return stock;
+}
+
+function formatBaseUnitLabel(unit: string) {
+  if (unit === "sqft") return "sqft";
+  if (unit === "sqin") return "sq in";
+  if (unit === "ml") return "ml";
+  return unit || "each";
+}
+
+function NativeInput({ label, value, onChange, type = "text", prefix, suffix, helpText }: any) {
+  return (
+    <label style={{ display: "block", flex: 1, minWidth: 180 }}>
+      <span style={{ display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{label}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {prefix ? <span>{prefix}</span> : null}
+        <input
+          type={type}
+          value={value}
+          onChange={(event) => onChange(event.currentTarget.value)}
+          style={{ width: "100%", padding: "7px 9px", border: "1px solid #8a8a8a", borderRadius: 6 }}
+        />
+        {suffix ? <span>{suffix}</span> : null}
+      </div>
+      {helpText ? <span style={{ display: "block", color: "#6d7175", fontSize: 11, marginTop: 4 }}>{helpText}</span> : null}
+    </label>
+  );
+}
+
+function NativeSelect({ label, value, onChange, options, helpText }: any) {
+  return (
+    <label style={{ display: "block", flex: 1, minWidth: 180 }}>
+      <span style={{ display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        style={{ width: "100%", padding: "7px 9px", border: "1px solid #8a8a8a", borderRadius: 6, background: "white" }}
+      >
+        {options.map((option: any) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {helpText ? <span style={{ display: "block", color: "#6d7175", fontSize: 11, marginTop: 4 }}>{helpText}</span> : null}
+    </label>
+  );
+}
+
+function NativeTextarea({ label, value, onChange, helpText }: any) {
+  return (
+    <label style={{ display: "block" }}>
+      <span style={{ display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{label}</span>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        rows={3}
+        style={{ width: "100%", padding: "7px 9px", border: "1px solid #8a8a8a", borderRadius: 6 }}
+      />
+      {helpText ? <span style={{ display: "block", color: "#6d7175", fontSize: 11, marginTop: 4 }}>{helpText}</span> : null}
+    </label>
+  );
+}
 
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
@@ -294,7 +469,7 @@ function calculateMaterialUnitCost(payload: any) {
     return totalSqFt > 0 ? purchaseCost / totalSqFt : 0;
   }
 
-  if (payload.purchaseUnit === "cartridge") {
+  if (["cartridge", "bottle", "pouch"].includes(payload.purchaseUnit)) {
     const volumeMl = Number(payload.volumeMl) || 0;
     return volumeMl > 0 ? purchaseCost / volumeMl : 0;
   }
@@ -358,6 +533,19 @@ export default function MaterialsPage() {
     if (fetcher.data?.materials) setMaterials(fetcher.data.materials);
   }, [fetcher.data]);
 
+  useEffect(() => {
+    const rule = getUnitRule(materialType);
+    if (!rule.purchaseUnits.some((option) => option.value === purchaseUnit)) {
+      setPurchaseUnit(rule.defaultPurchaseUnit);
+    }
+    if (!rule.baseUnits.some((option) => option.value === baseUnit)) {
+      setBaseUnit(rule.defaultBaseUnit);
+    }
+    if (materialType === "ink" && !volumeMl && rule.defaultVolumeMl) {
+      setVolumeMl(rule.defaultVolumeMl);
+    }
+  }, [materialType]);
+
   function resetForm() {
     setEditingId(null);
     setName("");
@@ -370,6 +558,14 @@ export default function MaterialsPage() {
     setLeadTimeDays("");
     setReason("");
     setNotes("");
+    const rule = getUnitRule("label");
+    setPurchaseUnit(rule.defaultPurchaseUnit);
+    setBaseUnit(rule.defaultBaseUnit);
+    setPurchaseCost("");
+    setRollWidthIn("");
+    setRollLengthFt("");
+    setVolumeMl("");
+    setCaseQuantity("");
   }
 
   function saveMaterial() {
@@ -413,6 +609,13 @@ export default function MaterialsPage() {
     setLeadTimeDays(material.leadTimeDays ? String(material.leadTimeDays) : "");
     setReason("");
     setNotes(material.notes || "");
+    setPurchaseUnit(material.purchaseUnit || getUnitRule(material.materialType || "label").defaultPurchaseUnit);
+    setPurchaseCost(material.purchaseCost ? String(material.purchaseCost) : "");
+    setBaseUnit(material.baseUnit || material.unit || getUnitRule(material.materialType || "label").defaultBaseUnit);
+    setRollWidthIn(material.rollWidthIn ? String(material.rollWidthIn) : "");
+    setRollLengthFt(material.rollLengthFt ? String(material.rollLengthFt) : "");
+    setVolumeMl(material.volumeMl ? String(material.volumeMl) : "");
+    setCaseQuantity(material.caseQuantity ? String(material.caseQuantity) : "");
   }
 
   function deleteMaterial(id: string) {
@@ -451,6 +654,28 @@ export default function MaterialsPage() {
       ? materials
       : materials.filter((m) => m.materialType === filter);
 
+  const currentUnitRule = getUnitRule(materialType);
+  const currentPurchaseUnitOptions = currentUnitRule.purchaseUnits;
+  const currentBaseUnitOptions = currentUnitRule.baseUnits;
+  const calculatedPreview = calculateMaterialUnitCost({
+    purchaseUnit,
+    purchaseCost,
+    baseUnit,
+    rollWidthIn,
+    rollLengthFt,
+    volumeMl,
+    caseQuantity,
+  });
+  const stockPreview = Number(stockOnHand) || 0;
+  const availablePreview =
+    purchaseUnit === "roll"
+      ? stockPreview * (((Number(rollWidthIn) || 0) * (Number(rollLengthFt) || 0) * 12) / 144)
+      : ["cartridge", "bottle", "pouch"].includes(purchaseUnit)
+        ? stockPreview * (Number(volumeMl) || 0)
+        : ["case", "box"].includes(purchaseUnit)
+          ? stockPreview * (Number(caseQuantity) || 0)
+          : stockPreview;
+
   function choosePrimaryVendor(vendorId: string) {
     setPrimaryVendorId(vendorId);
     const selectedVendor = vendors.find((v: any) => v.id === vendorId);
@@ -485,141 +710,88 @@ export default function MaterialsPage() {
               </Text>
 
                <InlineStack gap="300">
-                <TextField
-                    label="Material Name"
-                    value={name}
-                    onChange={setName}
-                    autoComplete="off"
-                />
-
-                <Select
-                    label="Material Type"
-                    value={materialType}
-                    onChange={setMaterialType}
-                    options={materialTypes}
-                />
+                <NativeInput label="Material Name" value={name} onChange={setName} />
+                <NativeSelect label="Material Type" value={materialType} onChange={setMaterialType} options={materialTypes} />
                 </InlineStack>
 
                 <InlineStack gap="300">
-                <Select
-                    label="Purchase Unit"
+                <NativeSelect
+                    label="Purchase / Inventory Unit"
                     value={purchaseUnit}
-                    onChange={setPurchaseUnit}
-                    options={purchaseUnits}
+                    onChange={(value: string) => {
+                      setPurchaseUnit(value);
+                      if (materialType === "ink" && value === "bottle" && (!volumeMl || volumeMl === "750")) setVolumeMl("1000");
+                      if (materialType === "ink" && ["cartridge", "pouch"].includes(value) && (!volumeMl || volumeMl === "1000")) setVolumeMl("750");
+                    }}
+                    options={currentPurchaseUnitOptions}
+                    helpText="This is how you buy and count inventory."
                 />
 
-                <TextField
-                    label="Purchase Cost"
+                <NativeInput
+                    label={`Purchase Cost / ${purchaseUnit}`}
                     prefix="$"
                     value={purchaseCost}
                     onChange={setPurchaseCost}
-                    autoComplete="off"
+                    helpText="Example: 156.99 per Roland cartridge/pouch."
                 />
 
-                <Select
-                    label="Recipe Base Unit"
+                <NativeSelect
+                    label="Recipe / Costing Unit"
                     value={baseUnit}
                     onChange={setBaseUnit}
-                    options={baseUnits}
+                    options={currentBaseUnitOptions}
+                    helpText="This is what recipes and print logs use."
                 />
                 </InlineStack>
 
                 {purchaseUnit === "roll" && (
                 <InlineStack gap="300">
-                    <TextField
-                    label="Roll Width Inches"
-                    value={rollWidthIn}
-                    onChange={setRollWidthIn}
-                    autoComplete="off"
-                    />
-
-                    <TextField
-                    label="Roll Length Feet"
-                    value={rollLengthFt}
-                    onChange={setRollLengthFt}
-                    autoComplete="off"
-                    />
+                    <NativeInput label="Roll Width Inches" value={rollWidthIn} onChange={setRollWidthIn} />
+                    <NativeInput label="Roll Length Feet" value={rollLengthFt} onChange={setRollLengthFt} />
                 </InlineStack>
                 )}
 
-                {purchaseUnit === "cartridge" && (
-                <TextField
-                    label="Volume ML"
+                {["cartridge", "bottle", "pouch"].includes(purchaseUnit) && (
+                <NativeInput
+                    label={`ML per ${purchaseUnit}`}
                     value={volumeMl}
                     onChange={setVolumeMl}
-                    autoComplete="off"
+                    suffix="ml"
+                    helpText="Roland = 750 ml. Mimaki = 1000 ml."
                 />
                 )}
 
-                {(purchaseUnit === "case" || purchaseUnit === "box") && (
-                <TextField
-                    label="Quantity In Case/Box"
+                {(["case", "box"].includes(purchaseUnit)) && (
+                <NativeInput
+                    label={`Quantity in ${purchaseUnit}`}
                     value={caseQuantity}
                     onChange={setCaseQuantity}
-                    autoComplete="off"
+                    helpText="Example: 1000 bags per case."
                 />
                 )}
 
+                <Card>
+                  <BlockStack gap="100">
+                    <Text as="p" fontWeight="bold">Calculated cost preview</Text>
+                    <Text as="p">${Number(calculatedPreview || 0).toFixed(6)} / {formatBaseUnitLabel(baseUnit)}</Text>
+                    <Text as="p" tone="subdued">Stock is counted in {purchaseUnit}. Available recipe units: {Number(availablePreview || 0).toFixed(2)} {formatBaseUnitLabel(baseUnit)}.</Text>
+                  </BlockStack>
+                </Card>
+
                 <InlineStack gap="300">
-                <Select
-                    label="Primary Vendor"
-                    value={primaryVendorId}
-                    onChange={choosePrimaryVendor}
-                    options={vendorOptions}
-                />
-
-                <TextField
-                    label="Vendor Text / Fallback"
-                    value={vendor}
-                    onChange={setVendor}
-                    autoComplete="off"
-                />
-
-                <TextField
-                    label="Vendor / Material SKU"
-                    value={sku}
-                    onChange={setSku}
-                    autoComplete="off"
-                />
+                <NativeSelect label="Primary Vendor" value={primaryVendorId} onChange={choosePrimaryVendor} options={vendorOptions} />
+                <NativeInput label="Vendor Text / Fallback" value={vendor} onChange={setVendor} />
+                <NativeInput label="Vendor / Material SKU" value={sku} onChange={setSku} />
                 </InlineStack>
 
                 <InlineStack gap="300">
-                <TextField
-                    label="Stock On Hand"
-                    value={stockOnHand}
-                    onChange={setStockOnHand}
-                    autoComplete="off"
-                />
-
-                <TextField
-                    label="Reorder Point"
-                    value={reorderPoint}
-                    onChange={setReorderPoint}
-                    autoComplete="off"
-                />
-
-                <TextField
-                    label="Lead Time Days"
-                    value={leadTimeDays}
-                    onChange={setLeadTimeDays}
-                    autoComplete="off"
-                />
+                <NativeInput label={`Stock On Hand (${purchaseUnit})`} value={stockOnHand} onChange={setStockOnHand} />
+                <NativeInput label={`Reorder Point (${purchaseUnit})`} value={reorderPoint} onChange={setReorderPoint} />
+                <NativeInput label="Lead Time Days" value={leadTimeDays} onChange={setLeadTimeDays} />
                 </InlineStack>
 
-                <TextField
-                label="Reason For Cost Change"
-                value={reason}
-                onChange={setReason}
-                autoComplete="off"
-                />
-
-                <TextField
-                label="Notes"
-                value={notes}
-                onChange={setNotes}
-                multiline={3}
-                autoComplete="off"
-                />
+                <NativeInput label="Reason For Cost Change" value={reason} onChange={setReason} />
+                <NativeTextarea label="Notes" value={notes} onChange={setNotes} />
 
                 <InlineStack gap="300">
                 <Button variant="primary" onClick={saveMaterial}>
@@ -769,6 +941,16 @@ export default function MaterialsPage() {
                               0
                           ).toFixed(6)}{" "}
                           / {material.baseUnit || material.unit}
+                        </Text>
+
+                        <Text as="p">
+                          Purchase: ${Number(material.purchaseCost || 0).toFixed(2)} / {material.purchaseUnit || "each"}
+                        </Text>
+
+                        <Text as="p">
+                          Stock: {Number(material.stockOnHand || 0).toFixed(2)} {material.purchaseUnit || "each"}
+                          {" | Available: "}
+                          {Number(calculateAvailableUnits(material) || 0).toFixed(2)} {formatBaseUnitLabel(material.baseUnit || material.unit)}
                         </Text>
 
                         <Text as="p">
