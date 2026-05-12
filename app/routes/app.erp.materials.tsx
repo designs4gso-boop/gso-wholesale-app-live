@@ -349,6 +349,7 @@ export async function loader({ request }: { request: Request }) {
         orderBy: { createdAt: "desc" },
         take: 5,
       },
+      variants: { orderBy: [{ active: "desc" }, { name: "asc" }] },
     },
   }),
     db.vendor.findMany({
@@ -398,6 +399,8 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
           name: payload.name,
           materialType: normalizeType(payload.materialType),
           productFamilies: payload.productFamilies || "",
+          costReviewNeeded: Boolean(payload.costReviewNeeded),
+          useInRecipes: payload.useInRecipes !== false,
           vendor: vendorName,
           primaryVendorId: selectedVendor?.id || null,
           sku: payload.sku || null,
@@ -442,6 +445,8 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
           name: payload.name,
           materialType: normalizeType(payload.materialType),
           productFamilies: payload.productFamilies || "",
+          costReviewNeeded: Boolean(payload.costReviewNeeded),
+          useInRecipes: payload.useInRecipes !== false,
           vendor: vendorName,
           primaryVendorId: selectedVendor?.id || null,
           sku: payload.sku || null,
@@ -486,10 +491,63 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
           orderBy: { createdAt: "desc" },
           take: 5,
         },
+        variants: { orderBy: [{ active: "desc" }, { name: "asc" }] },
       },
     });
 
     return Response.json({ ok: true, materials });
+  }
+
+  if (payload.intent === "addMaterialVariant") {
+    const material = await db.material.findFirst({ where: { shop, id: payload.materialId } });
+    if (!material) return Response.json({ ok: false, error: "Material not found." }, { status: 404 });
+
+    await db.materialVariant.create({
+      data: {
+        shop,
+        materialId: material.id,
+        name: payload.variantName || payload.color || "Variant",
+        color: payload.color || null,
+        sku: payload.variantSku || null,
+        stockOnHand: payload.variantStockOnHand ? Number(payload.variantStockOnHand) : null,
+        reorderPoint: payload.variantReorderPoint ? Number(payload.variantReorderPoint) : null,
+        notes: payload.variantNotes || null,
+        active: true,
+      },
+    });
+
+    const materials = await db.material.findMany({
+      where: { shop },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        primaryVendor: true,
+        vendors: true,
+        costHistory: { orderBy: { createdAt: "desc" }, take: 5 },
+        variants: { orderBy: [{ active: "desc" }, { name: "asc" }] },
+      },
+    });
+
+    return Response.json({ ok: true, materials, message: "Material variant added." });
+  }
+
+  if (payload.intent === "archiveMaterialVariant" || payload.intent === "restoreMaterialVariant") {
+    await db.materialVariant.updateMany({
+      where: { shop, id: payload.variantId },
+      data: { active: payload.intent === "restoreMaterialVariant" },
+    });
+
+    const materials = await db.material.findMany({
+      where: { shop },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        primaryVendor: true,
+        vendors: true,
+        costHistory: { orderBy: { createdAt: "desc" }, take: 5 },
+        variants: { orderBy: [{ active: "desc" }, { name: "asc" }] },
+      },
+    });
+
+    return Response.json({ ok: true, materials, message: payload.intent === "restoreMaterialVariant" ? "Variant restored." : "Variant archived." });
   }
 
   if (payload.intent === "deleteMaterial" || payload.intent === "archiveMaterial") {
@@ -508,6 +566,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
           orderBy: { createdAt: "desc" },
           take: 5,
         },
+        variants: { orderBy: [{ active: "desc" }, { name: "asc" }] },
       },
     });
 
@@ -530,6 +589,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
           orderBy: { createdAt: "desc" },
           take: 5,
         },
+        variants: { orderBy: [{ active: "desc" }, { name: "asc" }] },
       },
     });
 
@@ -571,6 +631,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
           orderBy: { createdAt: "desc" },
           take: 5,
         },
+        variants: { orderBy: [{ active: "desc" }, { name: "asc" }] },
       },
     });
 
@@ -604,6 +665,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
           orderBy: { createdAt: "desc" },
           take: 5,
         },
+        variants: { orderBy: [{ active: "desc" }, { name: "asc" }] },
       },
     });
 
@@ -619,6 +681,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
         orderBy: { createdAt: "desc" },
         take: 5,
       },
+      variants: { orderBy: [{ active: "desc" }, { name: "asc" }] },
     },
   });
 
@@ -690,6 +753,8 @@ export default function MaterialsPage() {
   const [leadTimeDays, setLeadTimeDays] = useState("");
   const [reason, setReason] = useState("");
   const [notes, setNotes] = useState("");
+  const [costReviewNeeded, setCostReviewNeeded] = useState(false);
+  const [useInRecipes, setUseInRecipes] = useState(true);
   const finalMaterialType = materialType === "custom" ? makeOption(customMaterialType).value : normalizeType(materialType);
   const availableMaterialTypeOptions = uniqueOptions(defaultMaterialTypes, customMaterialTypes).concat([{ label: "+ Add custom type", value: "custom" }]);
   const availableFamilyOptions = uniqueOptions(defaultProductFamilies, customProductFamilies).concat([{ label: "+ Add custom family", value: "custom" }]);
@@ -704,6 +769,8 @@ export default function MaterialsPage() {
   const [filter, setFilter] = useState("all");
   const [familyFilter, setFamilyFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("active");
+  const [reviewFilter, setReviewFilter] = useState("all");
+  const [recipeFilter, setRecipeFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [vendorMaterialId, setVendorMaterialId] = useState("");
   const [vendorCenterId, setVendorCenterId] = useState("");
@@ -712,6 +779,13 @@ export default function MaterialsPage() {
   const [vendorUnitCost, setVendorUnitCost] = useState("");
   const [vendorMoq, setVendorMoq] = useState("");
   const [vendorLeadTimeDays, setVendorLeadTimeDays] = useState("");
+  const [variantMaterialId, setVariantMaterialId] = useState("");
+  const [variantName, setVariantName] = useState("");
+  const [variantColor, setVariantColor] = useState("");
+  const [variantSku, setVariantSku] = useState("");
+  const [variantStockOnHand, setVariantStockOnHand] = useState("");
+  const [variantReorderPoint, setVariantReorderPoint] = useState("");
+  const [variantNotes, setVariantNotes] = useState("");
 
   useEffect(() => {
     if (fetcher.data?.materials) setMaterials(fetcher.data.materials);
@@ -745,6 +819,8 @@ export default function MaterialsPage() {
     setLeadTimeDays("");
     setReason("");
     setNotes("");
+    setCostReviewNeeded(false);
+    setUseInRecipes(true);
     const rule = getUnitRule("label");
     setPurchaseUnit(rule.defaultPurchaseUnit);
     setBaseUnit(rule.defaultBaseUnit);
@@ -771,6 +847,8 @@ export default function MaterialsPage() {
         leadTimeDays,
         reason,
         notes,
+        costReviewNeeded,
+        useInRecipes,
         purchaseUnit,
         purchaseCost,
         baseUnit,
@@ -800,6 +878,8 @@ export default function MaterialsPage() {
     setLeadTimeDays(material.leadTimeDays ? String(material.leadTimeDays) : "");
     setReason("");
     setNotes(material.notes || "");
+    setCostReviewNeeded(Boolean(material.costReviewNeeded));
+    setUseInRecipes(material.useInRecipes !== false);
     setPurchaseUnit(material.purchaseUnit || getUnitRule(material.materialType || "label").defaultPurchaseUnit);
     setPurchaseCost(material.purchaseCost ? String(material.purchaseCost) : "");
     setBaseUnit(material.baseUnit || material.unit || getUnitRule(material.materialType || "label").defaultBaseUnit);
@@ -858,6 +938,37 @@ export default function MaterialsPage() {
     setVendorLeadTimeDays("");
   }
 
+  function addMaterialVariant() {
+    if (!variantMaterialId || !variantName.trim()) return;
+    fetcher.submit(
+      {
+        intent: "addMaterialVariant",
+        materialId: variantMaterialId,
+        variantName,
+        color: variantColor,
+        variantSku,
+        variantStockOnHand,
+        variantReorderPoint,
+        variantNotes,
+      },
+      { method: "post", encType: "application/json" }
+    );
+    setVariantName("");
+    setVariantColor("");
+    setVariantSku("");
+    setVariantStockOnHand("");
+    setVariantReorderPoint("");
+    setVariantNotes("");
+  }
+
+  function archiveMaterialVariant(variantId: string) {
+    fetcher.submit({ intent: "archiveMaterialVariant", variantId }, { method: "post", encType: "application/json" });
+  }
+
+  function restoreMaterialVariant(variantId: string) {
+    fetcher.submit({ intent: "restoreMaterialVariant", variantId }, { method: "post", encType: "application/json" });
+  }
+
   const filteredMaterials = materials.filter((material) => {
     const isActive = material.active !== false;
     if (statusFilter === "active" && !isActive) return false;
@@ -865,6 +976,10 @@ export default function MaterialsPage() {
 
     if (filter !== "all" && normalizeType(material.materialType) !== normalizeType(filter)) return false;
     if (familyFilter !== "all" && !parseFamilies(material.productFamilies).includes(familyFilter)) return false;
+    if (reviewFilter === "needs_review" && !material.costReviewNeeded) return false;
+    if (reviewFilter === "reviewed" && material.costReviewNeeded) return false;
+    if (recipeFilter === "recipe_only" && material.useInRecipes === false) return false;
+    if (recipeFilter === "hidden_from_recipes" && material.useInRecipes !== false) return false;
 
     const query = search.trim().toLowerCase();
     if (query) {
@@ -876,6 +991,9 @@ export default function MaterialsPage() {
         material.primaryVendor?.name,
         material.sku,
         material.notes,
+        material.costReviewNeeded ? "cost review needed" : "",
+        material.useInRecipes === false ? "hidden from recipes" : "recipe usable",
+        ...(material.variants || []).map((variant: any) => `${variant.name} ${variant.color || ""} ${variant.sku || ""}`),
       ]
         .filter(Boolean)
         .join(" ")
@@ -891,6 +1009,8 @@ export default function MaterialsPage() {
     active: materials.filter((material) => material.active !== false).length,
     inactive: materials.filter((material) => material.active === false).length,
     filtered: filteredMaterials.length,
+    needsReview: materials.filter((material) => material.costReviewNeeded).length,
+    hiddenFromRecipes: materials.filter((material) => material.useInRecipes === false).length,
   };
 
   const currentUnitRule = getUnitRule(finalMaterialType);
@@ -936,7 +1056,7 @@ export default function MaterialsPage() {
   return (
     <Page
       title="Material Center"
-      subtitle="Materials use clean types, multi-family routing, smart units, inventory, vendors, and cost history."
+      subtitle="Materials use clean types, multi-family routing, smart units, review flags, color variants, inventory, vendors, and cost history."
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
       primaryAction={{ content: "New Material", onAction: resetForm }}
     >
@@ -1083,6 +1203,17 @@ export default function MaterialsPage() {
                 <NativeInput label="Lead Time Days" value={leadTimeDays} onChange={setLeadTimeDays} />
                 </InlineStack>
 
+                <InlineStack gap="300">
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid #ddd", borderRadius: 8, padding: "8px 10px" }}>
+                    <input type="checkbox" checked={costReviewNeeded} onChange={(event) => setCostReviewNeeded(event.currentTarget.checked)} />
+                    <span>Cost Review Needed</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid #ddd", borderRadius: 8, padding: "8px 10px" }}>
+                    <input type="checkbox" checked={useInRecipes} onChange={(event) => setUseInRecipes(event.currentTarget.checked)} />
+                    <span>Use in Recipes</span>
+                  </label>
+                </InlineStack>
+
                 <NativeInput label="Reason For Cost Change" value={reason} onChange={setReason} />
                 <NativeTextarea label="Notes" value={notes} onChange={setNotes} />
 
@@ -1174,13 +1305,39 @@ export default function MaterialsPage() {
                 <Layout.Section>
           <Card>
             <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">Material Aliases / Color Variants</Text>
+              <Text as="p" tone="subdued">Use variants for colors, aliases, or sub-stock under one material, like 4x5 blank bag colors. The parent material keeps the main cost calculation.</Text>
+              <NativeSelect
+                label="Parent Material"
+                value={variantMaterialId}
+                onChange={setVariantMaterialId}
+                options={[{ label: "Select material", value: "" }, ...materials.map((m) => ({ label: m.name, value: m.id }))]}
+              />
+              <InlineStack gap="300">
+                <NativeInput label="Variant / Alias Name" value={variantName} onChange={setVariantName} helpText="Example: Black, Clear, White, Gold, Mixed Colors." />
+                <NativeInput label="Color" value={variantColor} onChange={setVariantColor} />
+                <NativeInput label="Variant SKU" value={variantSku} onChange={setVariantSku} />
+              </InlineStack>
+              <InlineStack gap="300">
+                <NativeInput label="Variant Stock" value={variantStockOnHand} onChange={setVariantStockOnHand} helpText="Optional. Leave blank if you only track parent stock." />
+                <NativeInput label="Variant Reorder Point" value={variantReorderPoint} onChange={setVariantReorderPoint} />
+              </InlineStack>
+              <NativeTextarea label="Variant Notes" value={variantNotes} onChange={setVariantNotes} />
+              <Button onClick={addMaterialVariant}>Add Variant / Alias</Button>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
               <InlineStack align="space-between">
                 <BlockStack gap="050">
                   <Text as="h2" variant="headingMd">
                     Materials
                   </Text>
                   <Text as="p" tone="subdued">
-                    Showing {materialCounts.filtered} of {materialCounts.total}. Active: {materialCounts.active}. Inactive: {materialCounts.inactive}.
+                    Showing {materialCounts.filtered} of {materialCounts.total}. Active: {materialCounts.active}. Inactive: {materialCounts.inactive}. Needs review: {materialCounts.needsReview}. Hidden from recipes: {materialCounts.hiddenFromRecipes}.
                   </Text>
                 </BlockStack>
               </InlineStack>
@@ -1209,10 +1366,30 @@ export default function MaterialsPage() {
                   onChange={setFamilyFilter}
                   options={[{ label: "All families", value: "all" }, ...availableFamilyOptions.filter((option) => option.value !== "custom")]}
                 />
+                <NativeSelect
+                  label="Cost review"
+                  value={reviewFilter}
+                  onChange={setReviewFilter}
+                  options={[
+                    { label: "All review statuses", value: "all" },
+                    { label: "Needs cost review", value: "needs_review" },
+                    { label: "Reviewed", value: "reviewed" },
+                  ]}
+                />
+                <NativeSelect
+                  label="Recipe visibility"
+                  value={recipeFilter}
+                  onChange={setRecipeFilter}
+                  options={[
+                    { label: "All", value: "all" },
+                    { label: "Use in recipes", value: "recipe_only" },
+                    { label: "Hidden from recipes", value: "hidden_from_recipes" },
+                  ]}
+                />
               </InlineStack>
 
               <InlineStack gap="200">
-                <Button onClick={() => { setSearch(""); setFilter("all"); setFamilyFilter("all"); setStatusFilter("active"); }}>
+                <Button onClick={() => { setSearch(""); setFilter("all"); setFamilyFilter("all"); setStatusFilter("active"); setReviewFilter("all"); setRecipeFilter("all"); }}>
                   Reset filters
                 </Button>
                 <Button onClick={() => setStatusFilter("inactive")}>
@@ -1251,6 +1428,9 @@ export default function MaterialsPage() {
                               <Badge key={family}>{familyLabel(family)}</Badge>
                             ))}
 
+                            {material.costReviewNeeded && <Badge tone="warning">COST REVIEW</Badge>}
+                            {material.useInRecipes === false && <Badge tone="info">HIDDEN FROM RECIPES</Badge>}
+
                             {material.active === false && (
                               <Badge tone="warning">
                                 INACTIVE
@@ -1288,6 +1468,28 @@ export default function MaterialsPage() {
                         <Text as="p">
                           Vendor: {material.vendor || "N/A"}
                         </Text>
+
+                        {(material.variants || []).length ? (
+                          <Card>
+                            <BlockStack gap="150">
+                              <Text as="p" fontWeight="bold">Variants / aliases</Text>
+                              {(material.variants || []).map((variant: any) => (
+                                <InlineStack key={variant.id} align="space-between" blockAlign="center">
+                                  <Text as="p">
+                                    {variant.name}{variant.color ? ` · ${variant.color}` : ""}{variant.sku ? ` · ${variant.sku}` : ""}
+                                    {variant.stockOnHand !== null && variant.stockOnHand !== undefined ? ` · Stock ${variant.stockOnHand}` : ""}
+                                    {variant.active === false ? " · inactive" : ""}
+                                  </Text>
+                                  {variant.active === false ? (
+                                    <Button onClick={() => restoreMaterialVariant(variant.id)}>Restore variant</Button>
+                                  ) : (
+                                    <Button tone="critical" onClick={() => archiveMaterialVariant(variant.id)}>Archive variant</Button>
+                                  )}
+                                </InlineStack>
+                              ))}
+                            </BlockStack>
+                          </Card>
+                        ) : null}
 
                         <InlineStack gap="200">
                           <Button onClick={() => editMaterial(material)}>

@@ -97,9 +97,9 @@ model WholesaleApplication {
 }
 
 model PricingRule {
-  id          String   @id @default(cuid())
-  shop        String
-  title       String
+  id    String @id @default(cuid())
+  shop  String
+  title String
 
   customerTag String?
   productTag  String?
@@ -107,16 +107,16 @@ model PricingRule {
   variantGid  String?
   sku         String?
 
-  minQty       Int     @default(1)
-  discountType String  @default("fixed_price") // fixed_price or percent_off
+  minQty       Int    @default(1)
+  discountType String @default("fixed_price") // fixed_price or percent_off
   sellPrice    Float?
   percentOff   Float?
   unitCost     Float?
 
-  priority    Int      @default(100)
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  priority  Int      @default(100)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([shop, active])
   @@index([shop, customerTag])
@@ -141,16 +141,16 @@ model CostCalculator {
 }
 
 model Quote {
-  id           String   @id @default(cuid())
+  id           String      @id @default(cuid())
   shop         String
   customerName String?
   company      String?
   email        String?
   phone        String?
-  status       String   @default("draft")
+  status       String      @default("draft")
   notes        String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
   items        QuoteItem[]
 
   depositAmount       Float   @default(0)
@@ -161,7 +161,7 @@ model Quote {
   depositDraftOrderId String?
   balanceDraftOrderId String?
   fullDraftOrderId    String?
-  
+
   depositInvoiceUrl String?
   balanceInvoiceUrl String?
   fullInvoiceUrl    String?
@@ -171,7 +171,7 @@ model Quote {
 }
 
 model QuoteItem {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   quoteId     String
   productName String
   variant     String?
@@ -190,16 +190,16 @@ model QuoteItem {
 
   // ERP recipe snapshot fields. These make quote items pull from Product Setup / Recipes
   // while preserving the exact cost, price, finish, tier, and margin used at quote time.
-  recipeId        String?
-  recipeName      String?
-  selectedFinish  String?
+  recipeId         String?
+  recipeName       String?
+  selectedFinish   String?
   selectedAddOnIds String?
-  pricingSource   String?
-  tierLabel       String?
-  minQuantity     Int?
-  marginPct       Float?
-  costSnapshot    String?
-  priceSnapshot   String?
+  pricingSource    String?
+  tierLabel        String?
+  minQuantity      Int?
+  marginPct        Float?
+  costSnapshot     String?
+  priceSnapshot    String?
 
   quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
@@ -209,7 +209,6 @@ model QuoteItem {
   @@index([shopifyProductGid])
   @@index([shopifyVariantGid])
 }
-
 
 model ProductCost {
   id   String @id @default(cuid())
@@ -250,78 +249,103 @@ model ProductCategory {
   recipes   ProductRecipe[]
   materials Material[]
 
-  @@index([shop])
   @@unique([shop, slug])
+  @@index([shop])
 }
 
 model Material {
-  id              String   @id @default(cuid())
-  shop            String
-  categoryId      String?
-  name            String
-  materialType    String   @default("general") // label, dtp, box, ink, laminate, labor, machine, general
-  productFamilies String   @default("") // comma-separated product families such as labels, sticker_bags, boxes
-  unit            String   @default("each") // each, sqft, linear_ft, ml, hour, roll, sheet
-  costPerUnit     Float    @default(0)
-  vendor          String?
-  primaryVendorId String?
-  sku             String?
-  stockOnHand     Float?
-  reorderPoint    Float?
-  leadTimeDays    Int?
-  notes           String?
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  purchaseUnit       String   @default("each") // roll, cartridge, gallon, case, each, hour
-purchaseCost       Float    @default(0)
+  id               String   @id @default(cuid())
+  shop             String
+  categoryId       String?
+  name             String
+  materialType     String   @default("general") // label, dtp, box, ink, laminate, labor, machine, general
+  productFamilies  String   @default("") // comma-separated product families such as labels, sticker_bags, boxes
+  costReviewNeeded Boolean  @default(false)
+  useInRecipes     Boolean  @default(true)
+  unit             String   @default("each") // each, sqft, linear_ft, ml, hour, roll, sheet
+  costPerUnit      Float    @default(0)
+  vendor           String?
+  primaryVendorId  String?
+  sku              String?
+  stockOnHand      Float?
+  reorderPoint     Float?
+  leadTimeDays     Int?
+  notes            String?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  purchaseUnit     String   @default("each") // roll, cartridge, gallon, case, each, hour
+  purchaseCost     Float    @default(0)
 
-baseUnit           String   @default("each") // sqft, sqin, ml, each, hour
-yieldQuantity      Float?
-yieldUnit          String?
+  baseUnit      String  @default("each") // sqft, sqin, ml, each, hour
+  yieldQuantity Float?
+  yieldUnit     String?
 
-rollWidthIn        Float?
-rollLengthFt       Float?
-volumeMl           Float?
-caseQuantity       Float?
+  rollWidthIn  Float?
+  rollLengthFt Float?
+  volumeMl     Float?
+  caseQuantity Float?
 
-calculatedUnitCost Float    @default(0)
+  calculatedUnitCost Float @default(0)
 
-  primaryVendor   Vendor? @relation("MaterialPrimaryVendor", fields: [primaryVendorId], references: [id], onDelete: SetNull)
-  category        ProductCategory? @relation(fields: [categoryId], references: [id])
-  recipeMaterials RecipeMaterial[]
-  costHistory MaterialCostHistory[]
-  vendors     MaterialVendor[]
-  productionUsages ProductionMaterialUsage[]
+  primaryVendor      Vendor?                     @relation("MaterialPrimaryVendor", fields: [primaryVendorId], references: [id], onDelete: SetNull)
+  category           ProductCategory?            @relation(fields: [categoryId], references: [id])
+  recipeMaterials    RecipeMaterial[]
+  costHistory        MaterialCostHistory[]
+  vendors            MaterialVendor[]
+  productionUsages   ProductionMaterialUsage[]
   inventoryMovements MaterialInventoryMovement[]
+  variants           MaterialVariant[]
 
   @@index([shop])
   @@index([shop, materialType])
   @@index([shop, productFamilies])
   @@index([shop, active])
+  @@index([shop, costReviewNeeded])
+  @@index([shop, useInRecipes])
   @@index([primaryVendorId])
 }
 
+model MaterialVariant {
+  id           String   @id @default(cuid())
+  shop         String
+  materialId   String
+  name         String
+  color        String?
+  sku          String?
+  stockOnHand  Float?
+  reorderPoint Float?
+  notes        String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([materialId])
+  @@index([shop, active])
+}
 
 model ProductTypeProfile {
-  id                String   @id @default(cuid())
-  shop              String
-  key               String
-  name              String
-  productionMode    String   @default("in_house") // in_house, outsourced, hybrid
-  minQuantity       Int      @default(1)
-  defaultQuantity   Int      @default(1)
-  tierBreakpoints   String   @default("1") // comma-separated tier start quantities
-  tierTemplate      String?  // JSON range rows with margin/fixed price defaults
-  defaultMarginPct  Float    @default(40)
-  pricingMethod     String   @default("auto_margin") // auto_margin, fixed_price, discount_from_first, markup_over_cost
-  defaultTags       String?  // comma-separated Shopify tags to apply later
-  notes             String?
-  active            Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id               String   @id @default(cuid())
+  shop             String
+  key              String
+  name             String
+  productionMode   String   @default("in_house") // in_house, outsourced, hybrid
+  minQuantity      Int      @default(1)
+  defaultQuantity  Int      @default(1)
+  tierBreakpoints  String   @default("1") // comma-separated tier start quantities
+  tierTemplate     String? // JSON range rows with margin/fixed price defaults
+  defaultMarginPct Float    @default(40)
+  pricingMethod    String   @default("auto_margin") // auto_margin, fixed_price, discount_from_first, markup_over_cost
+  defaultTags      String? // comma-separated Shopify tags to apply later
+  notes            String?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  recipes           ProductRecipe[]
+  recipes ProductRecipe[]
 
   @@unique([shop, key])
   @@index([shop])
@@ -330,37 +354,37 @@ model ProductTypeProfile {
 }
 
 model ProductRecipe {
-  id               String   @id @default(cuid())
-  shop             String
-  categoryId       String?
+  id                   String  @id @default(cuid())
+  shop                 String
+  categoryId           String?
   productTypeProfileId String?
-  name             String
-  sku              String?
-  productType      String   @default("label") // label, dtp_bag, box, sourced_product, die_cut_bag, general
-  productGid       String?
-  variantGid       String?
-  shopifyProductId String?
-  shopifyVariantId String?
-  shopifyTargetMode String   @default("product_all_variants")
-  shopifyVariantIds String?
-  costMethod       String   @default("recipe") // recipe, sourced_flat, sourced_tier
-  productionMode   String   @default("in_house") // in_house, outsourced, hybrid
-  vendorProductId  String?
+  name                 String
+  sku                  String?
+  productType          String  @default("label") // label, dtp_bag, box, sourced_product, die_cut_bag, general
+  productGid           String?
+  variantGid           String?
+  shopifyProductId     String?
+  shopifyVariantId     String?
+  shopifyTargetMode    String  @default("product_all_variants")
+  shopifyVariantIds    String?
+  costMethod           String  @default("recipe") // recipe, sourced_flat, sourced_tier
+  productionMode       String  @default("in_house") // in_house, outsourced, hybrid
+  vendorProductId      String?
 
-  widthIn          Float?
-  heightIn         Float?
-  depthIn          Float?
-  minQuantity      Int      @default(1)
-  defaultQuantity  Int      @default(1000)
+  widthIn         Float?
+  heightIn        Float?
+  depthIn         Float?
+  minQuantity     Int    @default(1)
+  defaultQuantity Int    @default(1000)
 
   // Label estimating defaults. These keep the employee UI simple while the calculator
   // prices white/gloss/emboss options and slower production time in the background.
-  baseCmykCoveragePct      Float @default(40)
-  inkAllowancePct          Float @default(15)
-  maintenanceCostPerSqft   Float @default(0.08)
+  baseCmykCoveragePct        Float @default(40)
+  inkAllowancePct            Float @default(15)
+  maintenanceCostPerSqft     Float @default(0.08)
   machineRecoveryCostPerSqft Float @default(0.05)
-  overheadCostPerSqft      Float @default(0)
-  operatorLaborPct         Float @default(25)
+  overheadCostPerSqft        Float @default(0)
+  operatorLaborPct           Float @default(25)
 
   defaultSellPrice Float?
   targetMarginPct  Float    @default(40)
@@ -372,15 +396,15 @@ model ProductRecipe {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  category         ProductCategory? @relation(fields: [categoryId], references: [id])
-  productTypeProfile ProductTypeProfile? @relation(fields: [productTypeProfileId], references: [id])
-  vendorProduct    VendorProduct? @relation(fields: [vendorProductId], references: [id])
-  materials        RecipeMaterial[]
-  inkRequirements  RecipeInkRequirement[]
-  machineRules     RecipeMachineRule[]
-  tiers            RecipeTier[]
-  sourcedTiers     SourcedCostTier[]
-  addOns           RecipeAddOn[]
+  category           ProductCategory?       @relation(fields: [categoryId], references: [id])
+  productTypeProfile ProductTypeProfile?    @relation(fields: [productTypeProfileId], references: [id])
+  vendorProduct      VendorProduct?         @relation(fields: [vendorProductId], references: [id])
+  materials          RecipeMaterial[]
+  inkRequirements    RecipeInkRequirement[]
+  machineRules       RecipeMachineRule[]
+  tiers              RecipeTier[]
+  sourcedTiers       SourcedCostTier[]
+  addOns             RecipeAddOn[]
 
   @@index([shop])
   @@index([shop, productType])
@@ -393,7 +417,6 @@ model ProductRecipe {
   @@index([shop, active])
   @@index([vendorProductId])
 }
-
 
 model VendorProduct {
   id              String   @id @default(cuid())
@@ -411,10 +434,10 @@ model VendorProduct {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  vendorRecord    Vendor? @relation("VendorProductVendor", fields: [vendorId], references: [id], onDelete: SetNull)
-  recipes         ProductRecipe[]
-  tiers           VendorProductTier[]
-  addOns          VendorProductAddOn[]
+  vendorRecord Vendor?              @relation("VendorProductVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+  recipes      ProductRecipe[]
+  tiers        VendorProductTier[]
+  addOns       VendorProductAddOn[]
 
   @@index([shop])
   @@index([shop, active])
@@ -434,7 +457,7 @@ model VendorProductTier {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  vendorProduct   VendorProduct @relation(fields: [vendorProductId], references: [id], onDelete: Cascade)
+  vendorProduct VendorProduct @relation(fields: [vendorProductId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([vendorProductId])
@@ -453,7 +476,7 @@ model VendorProductAddOn {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  vendorProduct   VendorProduct @relation(fields: [vendorProductId], references: [id], onDelete: Cascade)
+  vendorProduct VendorProduct @relation(fields: [vendorProductId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([vendorProductId])
@@ -474,8 +497,8 @@ model RecipeMaterial {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  recipe       ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
-  material     Material      @relation(fields: [materialId], references: [id])
+  recipe   ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  material Material      @relation(fields: [materialId], references: [id])
 
   @@index([shop])
   @@index([recipeId])
@@ -487,14 +510,14 @@ model RecipeInkRequirement {
   id              String   @id @default(cuid())
   shop            String
   recipeId        String
-  inkType         String   // cmyk, white, gloss, orange, red, green, primer, metallic, other
+  inkType         String // cmyk, white, gloss, orange, red, green, primer, metallic, other
   coveragePercent Float    @default(0)
   required        Boolean  @default(false)
   notes           String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  recipe          ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  recipe ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([recipeId])
@@ -506,14 +529,14 @@ model RecipeMachineRule {
   shop               String
   recipeId           String
   preferredMachineId String?
-  requiredInkTypes   String?  // comma-separated list for simple routing: cmyk,white,gloss
+  requiredInkTypes   String? // comma-separated list for simple routing: cmyk,white,gloss
   allowOverflow      Boolean  @default(false)
   notes              String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  recipe             ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
-  preferredMachine   Machine?      @relation(fields: [preferredMachineId], references: [id])
+  recipe           ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  preferredMachine Machine?      @relation(fields: [preferredMachineId], references: [id])
 
   @@index([shop])
   @@index([recipeId])
@@ -532,7 +555,7 @@ model RecipeTier {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  recipe     ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  recipe ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([recipeId])
@@ -551,7 +574,7 @@ model RecipeAddOn {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  recipe      ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  recipe ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([recipeId])
@@ -559,17 +582,17 @@ model RecipeAddOn {
 }
 
 model SourcedCostTier {
-  id          String   @id @default(cuid())
-  shop        String
-  recipeId    String
-  minQty      Int
-  unitCost    Float
-  vendor      String?
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  shop      String
+  recipeId  String
+  minQty    Int
+  unitCost  Float
+  vendor    String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  recipe      ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  recipe ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([recipeId])
@@ -577,39 +600,39 @@ model SourcedCostTier {
 }
 
 model MaterialCostHistory {
-  id          String   @id @default(cuid())
-  shop        String
-  materialId  String
-  oldCost     Float
-  newCost     Float
-  vendor      String?
-  reason      String?
-  changedBy   String?
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  shop       String
+  materialId String
+  oldCost    Float
+  newCost    Float
+  vendor     String?
+  reason     String?
+  changedBy  String?
+  createdAt  DateTime @default(now())
 
-  material    Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([materialId])
 }
 
 model MaterialVendor {
-  id          String   @id @default(cuid())
-  shop        String
-  materialId  String
-  vendorName  String
-  vendorSku   String?
-  unitCost    Float    @default(0)
+  id           String   @id @default(cuid())
+  shop         String
+  materialId   String
+  vendorName   String
+  vendorSku    String?
+  unitCost     Float    @default(0)
   unit         String   @default("each")
   moq          Float?
   leadTimeDays Int?
-  notes       String?
-  preferred   Boolean  @default(false)
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  notes        String?
+  preferred    Boolean  @default(false)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  material    Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([materialId])
@@ -617,53 +640,53 @@ model MaterialVendor {
 }
 
 model Machine {
-  id            String   @id @default(cuid())
-  shop          String
+  id   String @id @default(cuid())
+  shop String
 
   name          String
-  machineType   String   @default("printer") // printer, cutter, laminator, press
+  machineType   String @default("printer") // printer, cutter, laminator, press
   maxWidthIn    Float?
-  costPerHour   Float    @default(0)
-  sqftPerHour   Float    @default(0)
-  setupWastePct Float    @default(0)
+  costPerHour   Float  @default(0)
+  sqftPerHour   Float  @default(0)
+  setupWastePct Float  @default(0)
 
-  allowOverflow Boolean  @default(false)
-  active        Boolean  @default(true)
+  allowOverflow Boolean @default(false)
+  active        Boolean @default(true)
 
-  inkChannels   MachineInkChannel[]
-  recipeRules   RecipeMachineRule[]
+  inkChannels MachineInkChannel[]
+  recipeRules RecipeMachineRule[]
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([shop])
   @@index([shop, active])
 }
 
 model MachineInkChannel {
-  id            String   @id @default(cuid())
-  shop          String
-  machineId     String
+  id        String @id @default(cuid())
+  shop      String
+  machineId String
 
-  slotNumber    Int
-  inkName       String   // Cyan, Magenta, Yellow, Black, White, Gloss, Orange, Red, Green, etc.
-  inkType       String   // cmyk, white, gloss, orange, red, green, primer, metallic, other
+  slotNumber Int
+  inkName    String // Cyan, Magenta, Yellow, Black, White, Gloss, Orange, Red, Green, etc.
+  inkType    String // cmyk, white, gloss, orange, red, green, primer, metallic, other
 
-  costPerMl     Float    @default(0)
+  costPerMl Float @default(0)
 
   cartridgeCost Float @default(0)
   cartridgeMl   Float @default(0)
   mlPerSqft1Pct Float @default(0)
 
   // ML used per sqft at 100% coverage for this ink/channel
-  mlPerSqft100  Float    @default(0)
+  mlPerSqft100 Float @default(0)
 
-  enabled       Boolean  @default(true)
+  enabled Boolean @default(true)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  machine       Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([machineId])
@@ -671,7 +694,7 @@ model MachineInkChannel {
 }
 
 model ProductionJob {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   shop            String
   quoteId         String?
   quoteNumber     String?
@@ -685,10 +708,10 @@ model ProductionJob {
   email           String?
   phone           String?
 
-  status          String   @default("new")
-  priority        String   @default("normal")
-  dueDate         DateTime?
-  assignedTo      String?
+  status     String    @default("new")
+  priority   String    @default("normal")
+  dueDate    DateTime?
+  assignedTo String?
 
   customerNotes   String?
   internalNotes   String?
@@ -698,44 +721,44 @@ model ProductionJob {
   productImageUrl String?
 
   // Customer-facing proof approval portal fields.
-  proofApprovalToken String?  @unique
-  proofStatus        String   @default("draft") // draft, sent, viewed, approved, changes_requested
-  proofSentAt        DateTime?
-  proofViewedAt      DateTime?
-  proofApprovedAt    DateTime?
-  proofRejectedAt    DateTime?
-  proofCustomerName  String?
-  proofCustomerEmail String?
+  proofApprovalToken   String?   @unique
+  proofStatus          String    @default("draft") // draft, sent, viewed, approved, changes_requested
+  proofSentAt          DateTime?
+  proofViewedAt        DateTime?
+  proofApprovedAt      DateTime?
+  proofRejectedAt      DateTime?
+  proofCustomerName    String?
+  proofCustomerEmail   String?
   proofCustomerComment String?
 
-  actualLaborMinutes     Float    @default(0)
-  actualLaborRate        Float    @default(25)
-  actualLaborCost        Float    @default(0)
-  actualPackingCost      Float    @default(0)
-  actualShippingCost     Float    @default(0)
-  actualOutsourceCost    Float    @default(0)
-  actualOtherCost        Float    @default(0)
-  actualReprintCost      Float    @default(0)
-  actualTotalCost        Float    @default(0)
-  actualFinalProfit      Float    @default(0)
-  actualFinalMargin      Float    @default(0)
-  actualCostNotes        String?
-  actualCostFinalized    Boolean  @default(false)
-  actualCostFinalizedAt  DateTime?
-  actualCostFinalizedBy  String?
+  actualLaborMinutes    Float     @default(0)
+  actualLaborRate       Float     @default(25)
+  actualLaborCost       Float     @default(0)
+  actualPackingCost     Float     @default(0)
+  actualShippingCost    Float     @default(0)
+  actualOutsourceCost   Float     @default(0)
+  actualOtherCost       Float     @default(0)
+  actualReprintCost     Float     @default(0)
+  actualTotalCost       Float     @default(0)
+  actualFinalProfit     Float     @default(0)
+  actualFinalMargin     Float     @default(0)
+  actualCostNotes       String?
+  actualCostFinalized   Boolean   @default(false)
+  actualCostFinalizedAt DateTime?
+  actualCostFinalizedBy String?
 
-  alertSentAt     DateTime?
-  printedAt       DateTime?
-  completedAt     DateTime?
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  alertSentAt DateTime?
+  printedAt   DateTime?
+  completedAt DateTime?
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  items           ProductionJobItem[]
-  files           ProductionJobFile[]
-  events          ProductionJobEvent[]
-  checklistItems  ProductionChecklistItem[]
-  materialUsages  ProductionMaterialUsage[]
+  items              ProductionJobItem[]
+  files              ProductionJobFile[]
+  events             ProductionJobEvent[]
+  checklistItems     ProductionChecklistItem[]
+  materialUsages     ProductionMaterialUsage[]
   inventoryMovements MaterialInventoryMovement[]
 
   @@index([shop])
@@ -750,39 +773,39 @@ model ProductionJob {
 }
 
 model ProductionJobItem {
-  id                  String   @id @default(cuid())
-  shop                String
-  jobId               String
-  quoteItemId          String?
-  itemTicket           String?
-  ripJobName           String?
-  suggestedFileName    String?
+  id                String  @id @default(cuid())
+  shop              String
+  jobId             String
+  quoteItemId       String?
+  itemTicket        String?
+  ripJobName        String?
+  suggestedFileName String?
 
-  productTitle         String
-  variantTitle         String?
-  sku                  String?
-  quantity             Int      @default(1)
-  unitPrice            Float    @default(0)
-  unitCost             Float    @default(0)
+  productTitle String
+  variantTitle String?
+  sku          String?
+  quantity     Int     @default(1)
+  unitPrice    Float   @default(0)
+  unitCost     Float   @default(0)
 
-  shopifyProductGid    String?
-  shopifyVariantGid    String?
-  productImageUrl      String?
-  recipeId             String?
-  recipeName           String?
-  selectedFinish       String?
-  selectedAddOns       String?
-  materialSummary      String?
-  machineSummary       String?
-  costSnapshot         String?
-  priceSnapshot        String?
-  productionNotes      String?
-  sortOrder            Int      @default(0)
+  shopifyProductGid String?
+  shopifyVariantGid String?
+  productImageUrl   String?
+  recipeId          String?
+  recipeName        String?
+  selectedFinish    String?
+  selectedAddOns    String?
+  materialSummary   String?
+  machineSummary    String?
+  costSnapshot      String?
+  priceSnapshot     String?
+  productionNotes   String?
+  sortOrder         Int     @default(0)
 
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  job                  ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([jobId])
@@ -794,23 +817,23 @@ model ProductionJobItem {
 }
 
 model ProductionJobFile {
-  id          String   @id @default(cuid())
-  shop        String
-  jobId       String
-  fileName    String
-  fileType    String   @default("artwork") // artwork, proof, dieline, customer_pdf, print_file, image, other
-  fileUrl     String
-  assetRole   String   @default("reference") // productImage, artwork, proof, printFile, reference
-  assetSource String   @default("manual") // manual, google_drive, shopify, zakeke, email, nas, versaworks, rasterlink, generated
-  sourceRef   String?
-  matchedBy   String?
-  jobTicket   String?
+  id               String   @id @default(cuid())
+  shop             String
+  jobId            String
+  fileName         String
+  fileType         String   @default("artwork") // artwork, proof, dieline, customer_pdf, print_file, image, other
+  fileUrl          String
+  assetRole        String   @default("reference") // productImage, artwork, proof, printFile, reference
+  assetSource      String   @default("manual") // manual, google_drive, shopify, zakeke, email, nas, versaworks, rasterlink, generated
+  sourceRef        String?
+  matchedBy        String?
+  jobTicket        String?
   originalFileName String?
-  notes       String?
-  createdBy   String?
-  createdAt   DateTime @default(now())
+  notes            String?
+  createdBy        String?
+  createdAt        DateTime @default(now())
 
-  job         ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([jobId])
@@ -822,17 +845,17 @@ model ProductionJobFile {
 }
 
 model ProductionJobEvent {
-  id          String   @id @default(cuid())
-  shop        String
-  jobId       String
-  eventType   String
-  message     String
-  oldValue    String?
-  newValue    String?
-  createdBy   String?
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  shop      String
+  jobId     String
+  eventType String
+  message   String
+  oldValue  String?
+  newValue  String?
+  createdBy String?
+  createdAt DateTime @default(now())
 
-  job         ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([jobId])
@@ -841,19 +864,19 @@ model ProductionJobEvent {
 }
 
 model ProductionChecklistItem {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   shop        String
   jobId       String
   label       String
-  section     String   @default("production") // prepress, production, qc, packing
-  completed   Boolean  @default(false)
+  section     String    @default("production") // prepress, production, qc, packing
+  completed   Boolean   @default(false)
   completedAt DateTime?
   completedBy String?
-  sortOrder   Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  job         ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([jobId])
@@ -861,31 +884,30 @@ model ProductionChecklistItem {
   @@index([completed])
 }
 
-
 model ProductionMaterialUsage {
-  id              String   @id @default(cuid())
-  shop            String
-  jobId           String
-  materialId      String?
-  materialName    String
-  materialType    String?  // roll_media, laminate, ink, packaging, labor, outsourced, other
-  unit            String   @default("sqft") // sqft, linear_ft, sqin, each, ml, hour, roll, sheet
-  estimatedQty    Float    @default(0)
-  pulledQty       Float    @default(0)
-  usedQty         Float    @default(0)
-  wasteQty        Float    @default(0)
-  reprintQty      Float    @default(0)
-  costPerUnit     Float    @default(0)
-  totalCost       Float    @default(0)
-  source          String   @default("manual") // manual, recipe, print_log, inventory, vendor_invoice
-  stockDeductedQty Float   @default(0)
+  id               String    @id @default(cuid())
+  shop             String
+  jobId            String
+  materialId       String?
+  materialName     String
+  materialType     String? // roll_media, laminate, ink, packaging, labor, outsourced, other
+  unit             String    @default("sqft") // sqft, linear_ft, sqin, each, ml, hour, roll, sheet
+  estimatedQty     Float     @default(0)
+  pulledQty        Float     @default(0)
+  usedQty          Float     @default(0)
+  wasteQty         Float     @default(0)
+  reprintQty       Float     @default(0)
+  costPerUnit      Float     @default(0)
+  totalCost        Float     @default(0)
+  source           String    @default("manual") // manual, recipe, print_log, inventory, vendor_invoice
+  stockDeductedQty Float     @default(0)
   stockDeductedAt  DateTime?
-  notes           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  job             ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  material        Material? @relation(fields: [materialId], references: [id])
+  job      ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  material Material?     @relation(fields: [materialId], references: [id])
 
   @@index([shop])
   @@index([jobId])
@@ -913,8 +935,8 @@ model MaterialInventoryMovement {
   createdBy       String?
   createdAt       DateTime @default(now())
 
-  material        Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
-  job             ProductionJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  material Material       @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  job      ProductionJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
 
   @@index([shop])
   @@index([materialId])
@@ -925,23 +947,23 @@ model MaterialInventoryMovement {
 }
 
 model PrintLogImport {
-  id                 String   @id @default(cuid())
-  shop               String
-  source             String   @default("manual") // versaworks, rasterlink, manual_csv, other
-  fileName           String?
-  importedBy         String?
-  rawText            String?
-  rowCount           Int      @default(0)
-  matchedCount       Int      @default(0)
-  unmatchedCount     Int      @default(0)
-  totalSqft          Float    @default(0)
-  totalInkMl         Float    @default(0)
-  totalPrintMinutes  Float    @default(0)
-  status             String   @default("processed")
-  notes              String?
-  createdAt          DateTime @default(now())
+  id                String   @id @default(cuid())
+  shop              String
+  source            String   @default("manual") // versaworks, rasterlink, manual_csv, other
+  fileName          String?
+  importedBy        String?
+  rawText           String?
+  rowCount          Int      @default(0)
+  matchedCount      Int      @default(0)
+  unmatchedCount    Int      @default(0)
+  totalSqft         Float    @default(0)
+  totalInkMl        Float    @default(0)
+  totalPrintMinutes Float    @default(0)
+  status            String   @default("processed")
+  notes             String?
+  createdAt         DateTime @default(now())
 
-  entries            PrintLogEntry[]
+  entries PrintLogEntry[]
 
   @@index([shop])
   @@index([source])
@@ -949,29 +971,29 @@ model PrintLogImport {
 }
 
 model PrintLogEntry {
-  id                 String   @id @default(cuid())
-  shop               String
-  importId           String
-  productionJobId    String?
+  id                  String    @id @default(cuid())
+  shop                String
+  importId            String
+  productionJobId     String?
   productionJobItemId String?
-  jobTicket          String?
-  sourceJobName      String?
-  printerSoftware    String?
-  machineName        String?
-  mediaName          String?
-  status             String?
-  sqft               Float    @default(0)
-  inkMl              Float    @default(0)
-  cmykInkMl          Float    @default(0)
-  whiteInkMl         Float    @default(0)
-  glossInkMl         Float    @default(0)
-  printMinutes       Float    @default(0)
-  startedAt          DateTime?
-  completedAt        DateTime?
-  rawRow             String?
-  createdAt          DateTime @default(now())
+  jobTicket           String?
+  sourceJobName       String?
+  printerSoftware     String?
+  machineName         String?
+  mediaName           String?
+  status              String?
+  sqft                Float     @default(0)
+  inkMl               Float     @default(0)
+  cmykInkMl           Float     @default(0)
+  whiteInkMl          Float     @default(0)
+  glossInkMl          Float     @default(0)
+  printMinutes        Float     @default(0)
+  startedAt           DateTime?
+  completedAt         DateTime?
+  rawRow              String?
+  createdAt           DateTime  @default(now())
 
-  import             PrintLogImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  import PrintLogImport @relation(fields: [importId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([importId])
@@ -983,68 +1005,68 @@ model PrintLogEntry {
 }
 
 model PrintLogAutoImportSetting {
-  id                    String   @id @default(cuid())
-  shop                  String   @unique
-  enabled               Boolean  @default(true)
-  uploadToken           String   @unique
+  id                    String    @id @default(cuid())
+  shop                  String    @unique
+  enabled               Boolean   @default(true)
+  uploadToken           String    @unique
   incomingFolder        String?
   versaworksFolder      String?
   rasterlinkFolder      String?
   processedFolder       String?
   errorFolder           String?
-  expectedTicketPattern String   @default("GSO-{date}-{jobNumber}-{sku}-{qty}")
+  expectedTicketPattern String    @default("GSO-{date}-{jobNumber}-{sku}-{qty}")
   lastAutoImportAt      DateTime?
   notes                 String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   @@index([enabled])
   @@index([lastAutoImportAt])
 }
 
 model PurchaseRequest {
-  id              String   @id @default(cuid())
-  shop            String
-  requestNumber   String
-  status          String   @default("draft") // draft, requested, ordered, partially_received, received, cancelled
-  priority        String   @default("normal") // low, normal, rush, critical
+  id            String @id @default(cuid())
+  shop          String
+  requestNumber String
+  status        String @default("draft") // draft, requested, ordered, partially_received, received, cancelled
+  priority      String @default("normal") // low, normal, rush, critical
 
-  materialId      String?
-  materialName    String
-  materialType    String?
-  unit            String   @default("each")
-  sku             String?
-  vendor          String?
-  vendorId        String?
-  vendorSku       String?
-  moq             Float?
-  leadTimeDays    Int?
+  materialId   String?
+  materialName String
+  materialType String?
+  unit         String  @default("each")
+  sku          String?
+  vendor       String?
+  vendorId     String?
+  vendorSku    String?
+  moq          Float?
+  leadTimeDays Int?
 
-  requestedQty    Float    @default(0)
-  orderedQty      Float    @default(0)
-  receivedQty     Float    @default(0)
-  unitCost        Float    @default(0)
-  estimatedCost   Float    @default(0)
+  requestedQty  Float @default(0)
+  orderedQty    Float @default(0)
+  receivedQty   Float @default(0)
+  unitCost      Float @default(0)
+  estimatedCost Float @default(0)
 
-  neededBy        DateTime?
-  orderedAt       DateTime?
-  sentAt          DateTime?
-  sentBy          String?
+  neededBy                 DateTime?
+  orderedAt                DateTime?
+  sentAt                   DateTime?
+  sentBy                   String?
   vendorConfirmationNumber String?
-  expectedArrivalDate DateTime?
-  vendorReplyNotes String?
-  followUpNeeded Boolean  @default(false)
-  followUpDate   DateTime?
-  lastFollowUpAt DateTime?
-  receivedAt      DateTime?
-  cancelledAt     DateTime?
-  notes           String?
-  source          String   @default("manual") // manual, reorder_report, low_stock, production
-  createdBy       String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  expectedArrivalDate      DateTime?
+  vendorReplyNotes         String?
+  followUpNeeded           Boolean   @default(false)
+  followUpDate             DateTime?
+  lastFollowUpAt           DateTime?
+  receivedAt               DateTime?
+  cancelledAt              DateTime?
+  notes                    String?
+  source                   String    @default("manual") // manual, reorder_report, low_stock, production
+  createdBy                String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
-  vendorRecord    Vendor?  @relation("PurchaseRequestVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorRecord Vendor? @relation("PurchaseRequestVendor", fields: [vendorId], references: [id], onDelete: SetNull)
 
   @@index([shop])
   @@index([shop, status])
@@ -1057,37 +1079,38 @@ model PurchaseRequest {
   @@index([followUpNeeded])
   @@index([createdAt])
 }
-model Vendor {
-  id                 String   @id @default(cuid())
-  shop               String
-  name               String
-  vendorType         String   @default("supplier") // supplier, print_vendor, packaging_vendor, service, other
-  status             String   @default("active") // active, preferred, backup, inactive
-  contactName        String?
-  email              String?
-  phone              String?
-  website            String?
-  address1           String?
-  address2           String?
-  city               String?
-  state              String?
-  zip                String?
-  country            String?  @default("USA")
-  paymentTerms       String?
-  leadTimeDays       Int?
-  moqNotes           String?
-  shippingNotes      String?
-  qualityNotes       String?
-  notes              String?
-  defaultCurrency    String   @default("USD")
-  active             Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
 
-  contacts           VendorContact[]
-  primaryMaterials   Material[]       @relation("MaterialPrimaryVendor")
-  vendorProducts     VendorProduct[]  @relation("VendorProductVendor")
-  purchaseRequests   PurchaseRequest[] @relation("PurchaseRequestVendor")
+model Vendor {
+  id              String   @id @default(cuid())
+  shop            String
+  name            String
+  vendorType      String   @default("supplier") // supplier, print_vendor, packaging_vendor, service, other
+  status          String   @default("active") // active, preferred, backup, inactive
+  contactName     String?
+  email           String?
+  phone           String?
+  website         String?
+  address1        String?
+  address2        String?
+  city            String?
+  state           String?
+  zip             String?
+  country         String?  @default("USA")
+  paymentTerms    String?
+  leadTimeDays    Int?
+  moqNotes        String?
+  shippingNotes   String?
+  qualityNotes    String?
+  notes           String?
+  defaultCurrency String   @default("USD")
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contacts         VendorContact[]
+  primaryMaterials Material[]        @relation("MaterialPrimaryVendor")
+  vendorProducts   VendorProduct[]   @relation("VendorProductVendor")
+  purchaseRequests PurchaseRequest[] @relation("PurchaseRequestVendor")
 
   @@unique([shop, name])
   @@index([shop])
@@ -1097,20 +1120,20 @@ model Vendor {
 }
 
 model VendorContact {
-  id          String   @id @default(cuid())
-  shop        String
-  vendorId    String
-  name        String
-  role        String?
-  email       String?
-  phone       String?
-  notes       String?
-  primary     Boolean  @default(false)
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  shop      String
+  vendorId  String
+  name      String
+  role      String?
+  email     String?
+  phone     String?
+  notes     String?
+  primary   Boolean  @default(false)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  vendor      Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([vendorId])
@@ -1119,29 +1142,29 @@ model VendorContact {
 }
 
 model VendorCostBookItem {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   shop            String
   vendorId        String?
   vendorName      String?
-  itemType        String   @default("material") // material, vendor_product, sourced_product, service, other
+  itemType        String    @default("material") // material, vendor_product, sourced_product, service, other
   materialId      String?
   vendorProductId String?
   itemName        String
   vendorSku       String?
-  unit            String   @default("each")
-  unitCost        Float    @default(0)
+  unit            String    @default("each")
+  unitCost        Float     @default(0)
   moq             Float?
   leadTimeDays    Int?
   effectiveDate   DateTime?
   expiresAt       DateTime?
-  status          String   @default("active") // active, expired, draft, inactive
-  preferred       Boolean  @default(false)
-  currency        String   @default("USD")
+  status          String    @default("active") // active, expired, draft, inactive
+  preferred       Boolean   @default(false)
+  currency        String    @default("USD")
   notes           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  tiers           VendorCostBookTier[]
+  tiers VendorCostBookTier[]
 
   @@index([shop])
   @@index([vendorId])
@@ -1165,13 +1188,12 @@ model VendorCostBookTier {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  costBookItem         VendorCostBookItem @relation(fields: [vendorCostBookItemId], references: [id], onDelete: Cascade)
+  costBookItem VendorCostBookItem @relation(fields: [vendorCostBookItemId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([vendorCostBookItemId])
   @@index([minQty])
 }
-
 
 model ErpAdminSetting {
   id          String   @id @default(cuid())
