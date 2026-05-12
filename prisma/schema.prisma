@@ -1169,3 +1169,23 @@ model VendorCostBookTier {
   @@index([vendorCostBookItemId])
   @@index([minQty])
 }
+
+
+model ErpAdminSetting {
+  id          String   @id @default(cuid())
+  shop        String
+  category    String
+  key         String
+  label       String
+  value       String   @default("")
+  valueType   String   @default("text") // text, number, percent, money, boolean, textarea, select
+  unit        String?
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, key])
+  @@index([shop])
+  @@index([category])
+  @@index([key])
+}

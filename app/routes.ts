@@ -27,6 +27,7 @@ export default [
     route("erp/vendors", "routes/app.erp.vendors.tsx"),
     route("erp/vendor-cost-book", "routes/app.erp.vendor-cost-book.tsx"),
     route("erp/reports-dashboard", "routes/app.erp.reports-dashboard.tsx"),
+    route("erp/admin-settings", "routes/app.erp.admin-settings.tsx"),
     route("erp/production/:id/print", "routes/app.erp.production.$id.print.tsx"),
     route("erp/production/:id/proof", "routes/app.erp.production.$id.proof.tsx"),
   ]),
