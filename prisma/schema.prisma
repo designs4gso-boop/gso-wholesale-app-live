@@ -354,22 +354,29 @@ model ProductTypeProfile {
 }
 
 model ProductRecipe {
-  id                   String  @id @default(cuid())
-  shop                 String
-  categoryId           String?
-  productTypeProfileId String?
-  name                 String
-  sku                  String?
-  productType          String  @default("label") // label, dtp_bag, box, sourced_product, die_cut_bag, general
-  productGid           String?
-  variantGid           String?
-  shopifyProductId     String?
-  shopifyVariantId     String?
-  shopifyTargetMode    String  @default("product_all_variants")
-  shopifyVariantIds    String?
-  costMethod           String  @default("recipe") // recipe, sourced_flat, sourced_tier
-  productionMode       String  @default("in_house") // in_house, outsourced, hybrid
-  vendorProductId      String?
+  id                             String  @id @default(cuid())
+  shop                           String
+  categoryId                     String?
+  productTypeProfileId           String?
+  name                           String
+  sku                            String?
+  productType                    String  @default("label") // label, dtp_bag, box, sourced_product, die_cut_bag, general
+  productFamily                  String  @default("Labels") // Labels, Sticker Bags, DTP Bags, Boxes, DTF / Apparel, custom
+  pricingTemplateMode            String  @default("template") // template, custom
+  costReviewNeeded               Boolean @default(false)
+  useInQuotes                    Boolean @default(true)
+  applicationLaborSecondsPerUnit Float   @default(0)
+  packingLaborSecondsPerUnit     Float   @default(0)
+  prepressMinutes                Float   @default(0)
+  productGid                     String?
+  variantGid                     String?
+  shopifyProductId               String?
+  shopifyVariantId               String?
+  shopifyTargetMode              String  @default("product_all_variants")
+  shopifyVariantIds              String?
+  costMethod                     String  @default("recipe") // recipe, sourced_flat, sourced_tier
+  productionMode                 String  @default("in_house") // in_house, outsourced, hybrid
+  vendorProductId                String?
 
   widthIn         Float?
   heightIn        Float?
