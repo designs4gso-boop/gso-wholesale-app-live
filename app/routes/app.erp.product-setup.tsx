@@ -118,6 +118,56 @@ function templateForFamily(family: string) {
   ];
 }
 
+const APPROVED_TEMPLATE_KEYS = PRODUCT_FAMILIES.map((family) => slugify(family));
+const UNAPPROVED_TEMPLATE_HINTS = [
+  "stock_bags",
+  "stock_bag",
+  "sourced_products",
+  "sourced_product",
+  "die_cut_bags",
+  "die_cut",
+  "general",
+  "bag_box_combo",
+  "combo",
+];
+
+function approvedTemplateName(family: string) {
+  return `${family} Pricing Template`;
+}
+
+async function archiveDuplicateAndUnapprovedTemplates(shop: string) {
+  const allTemplates = await db.productTypeProfile.findMany({ where: { shop }, orderBy: { createdAt: "asc" } });
+  const approvedKeys = new Set(APPROVED_TEMPLATE_KEYS);
+  const canonicalByKey = new Map<string, string>();
+
+  for (const family of PRODUCT_FAMILIES) {
+    const key = slugify(family);
+    const existing = allTemplates.find((template: any) => template.key === key);
+    if (existing) canonicalByKey.set(key, existing.id);
+  }
+
+  for (const template of allTemplates as any[]) {
+    const key = String(template.key || "");
+    const nameKey = slugify(template.name || "");
+    const isApprovedCanonical = approvedKeys.has(key) && canonicalByKey.get(key) === template.id;
+    const isUnapproved = !approvedKeys.has(key) || UNAPPROVED_TEMPLATE_HINTS.some((hint) => key.includes(hint) || nameKey.includes(hint));
+    const isDuplicateApprovedName = PRODUCT_FAMILIES.some((family) => {
+      const familyKey = slugify(family);
+      return nameKey.includes(familyKey) && key !== familyKey;
+    });
+
+    if (!isApprovedCanonical && (isUnapproved || isDuplicateApprovedName)) {
+      await db.productTypeProfile.update({
+        where: { id: template.id },
+        data: {
+          active: false,
+          notes: `${template.notes || ""}\nArchived by template cleanup. Approved families: ${PRODUCT_FAMILIES.join(", ")}.`.trim(),
+        },
+      });
+    }
+  }
+}
+
 async function createDefaultTemplates(shop: string) {
   for (const family of PRODUCT_FAMILIES) {
     const tiers = templateForFamily(family);
@@ -135,14 +185,23 @@ async function createDefaultTemplates(shop: string) {
         tierTemplate: JSON.stringify(tiers),
         defaultMarginPct: Number(tiers[0]?.marginPct || 50),
         pricingMethod: "auto_margin",
-        notes: "Default GSO pricing template. Edit tier margins as real cost data improves.",
+        notes: "Approved default GSO pricing template. Edit tier margins as real cost data improves.",
         active: true,
       },
       update: {
+        name: approvedTemplateName(family),
+        productionMode: family === "Boxes" || family === "DTP Bags" ? "outsourced" : "in_house",
+        minQuantity: tiers[0]?.minQty || 1,
+        defaultQuantity: family === "Labels" || family === "Sticker Bags" ? 250 : 1000,
+        tierBreakpoints: tiers.map((tier) => tier.minQty).join(","),
+        tierTemplate: JSON.stringify(tiers),
+        defaultMarginPct: Number(tiers[0]?.marginPct || 50),
+        pricingMethod: "auto_margin",
         active: true,
       },
     });
   }
+  await archiveDuplicateAndUnapprovedTemplates(shop);
 }
 
 function unitCost(material: any) {
@@ -194,7 +253,8 @@ export async function loader({ request }: { request: Request }) {
     db.machine.findMany({ where: { shop, active: true }, orderBy: { name: "asc" } }),
   ]);
 
-  return Response.json({ templates, recipes, materials, machines });
+  const activeTemplates = templates.filter((template: any) => template.active);
+  return Response.json({ templates, activeTemplates, recipes, materials, machines });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -205,14 +265,19 @@ export async function action({ request }: { request: Request }) {
 
   if (intent === "seedTemplates") {
     await createDefaultTemplates(shop);
-    return Response.json({ ok: true, message: "Default pricing templates created/updated." });
+    return Response.json({ ok: true, message: "Approved pricing templates created/refreshed and old duplicates archived." });
+  }
+
+  if (intent === "cleanupTemplates") {
+    await archiveDuplicateAndUnapprovedTemplates(shop);
+    return Response.json({ ok: true, message: "Duplicate and unapproved pricing templates archived." });
   }
 
   if (intent === "createTemplate") {
     const name = String(formData.get("name") || "New Pricing Template").trim();
     const family = String(formData.get("family") || "Labels");
     const tiers = parseTierText(String(formData.get("tiers") || ""), numberValue(formData.get("defaultMarginPct"), 50));
-    const key = `${slugify(family)}_${slugify(name)}`.slice(0, 60);
+    const key = `custom_${slugify(family)}_${slugify(name)}_${Date.now()}`.slice(0, 80);
     await db.productTypeProfile.create({
       data: {
         shop,
@@ -254,6 +319,22 @@ export async function action({ request }: { request: Request }) {
   if (intent === "archiveTemplate") {
     await db.productTypeProfile.updateMany({ where: { shop, id: String(formData.get("templateId") || "") }, data: { active: false } });
     return Response.json({ ok: true, message: "Pricing template archived." });
+  }
+
+  if (intent === "restoreTemplate") {
+    await db.productTypeProfile.updateMany({ where: { shop, id: String(formData.get("templateId") || "") }, data: { active: true } });
+    return Response.json({ ok: true, message: "Pricing template restored." });
+  }
+
+  if (intent === "deleteTemplate") {
+    const templateId = String(formData.get("templateId") || "");
+    const usedCount = await db.productRecipe.count({ where: { shop, productTypeProfileId: templateId } });
+    if (usedCount > 0) {
+      await db.productTypeProfile.updateMany({ where: { shop, id: templateId }, data: { active: false } });
+      return Response.json({ ok: true, message: "Template is used by recipes, so it was archived instead of deleted." });
+    }
+    await db.productTypeProfile.deleteMany({ where: { shop, id: templateId } });
+    return Response.json({ ok: true, message: "Unused pricing template deleted." });
   }
 
   if (intent === "createRecipe") {
@@ -454,11 +535,12 @@ function PageStyles() {
 }
 
 export default function ProductSetupRecipeBuilder() {
-  const { templates, recipes, materials, machines } = useLoaderData<any>();
+  const { templates, activeTemplates, recipes, materials, machines } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const materialOptions = materials || [];
   const machineOptions = machines || [];
   const templateOptions = templates || [];
+  const activeTemplateOptions = activeTemplates || templateOptions.filter((template: any) => template.active);
 
   return (
     <div className="erp-page">
@@ -470,19 +552,36 @@ export default function ProductSetupRecipeBuilder() {
 
       {actionData?.message ? <div className="card"><span className={actionData.ok ? "badge green" : "badge red"}>{actionData.message}</span></div> : null}
 
+      <div className="card">
+        <h2>Clean pricing workflow</h2>
+        <p className="muted">Use category templates for normal tier pricing. Use custom product tiers only when a specific item truly needs special pricing. Material cost changes will be handled later in Margin Review / Price Audit.</p>
+        <div>
+          <span className="badge green">Templates = pricing rules</span>
+          <span className="badge">Recipes = how product is made</span>
+          <span className="badge yellow">Margin Review = update Shopify prices later</span>
+        </div>
+      </div>
+
       <div className="grid">
         <div className="card">
           <h2>Pricing Templates</h2>
           <p className="muted">Use templates for category-level tiered pricing. Most products should use a template instead of custom tiers.</p>
-          <Form method="post" className="button-row">
-            <input type="hidden" name="intent" value="seedTemplates" />
-            <button type="submit">Create default templates</button>
-          </Form>
+          <div className="button-row">
+            <Form method="post">
+              <input type="hidden" name="intent" value="seedTemplates" />
+              <button type="submit">Create / refresh approved templates</button>
+            </Form>
+            <Form method="post">
+              <input type="hidden" name="intent" value="cleanupTemplates" />
+              <button type="submit" className="secondary">Archive duplicates / old categories</button>
+            </Form>
+          </div>
+          <p className="muted">Approved templates: Labels, Sticker Bags, DTP Bags, Boxes, and DTF / Apparel. Stock Bags should use Sticker Bags; sourced work is handled by Production Mode, not a family.</p>
           <details open>
             <summary>Add pricing template</summary>
             <Form method="post" className="form-grid">
               <input type="hidden" name="intent" value="createTemplate" />
-              <NativeInput label="Template name" name="name" placeholder="Stock Bags Pricing Template" />
+              <NativeInput label="Template name" name="name" placeholder="Sticker Bags Pricing Template" />
               <NativeSelect label="Product family" name="family" defaultValue="Sticker Bags">
                 {PRODUCT_FAMILIES.map((family) => <option key={family} value={family}>{family}</option>)}
               </NativeSelect>
@@ -511,7 +610,7 @@ export default function ProductSetupRecipeBuilder() {
             </NativeSelect>
             <NativeSelect label="Pricing template" name="templateId">
               <option value="">No template / custom</option>
-              {templateOptions.map((template: any) => <option key={template.id} value={template.id}>{template.name}</option>)}
+              {activeTemplateOptions.map((template: any) => <option key={template.id} value={template.id}>{template.name}</option>)}
             </NativeSelect>
             <NativeSelect label="Pricing mode" name="pricingTemplateMode" defaultValue="template">
               <option value="template">Use category template</option>
@@ -566,11 +665,22 @@ export default function ProductSetupRecipeBuilder() {
                   <button type="submit">Save template</button>
                 </div>
               </Form>
-              <Form method="post" className="button-row">
-                <input type="hidden" name="intent" value="archiveTemplate" />
-                <input type="hidden" name="templateId" value={template.id} />
-                <button type="submit" className="danger">Archive template</button>
-              </Form>
+              <div className="button-row">
+                {template.active ? <Form method="post">
+                  <input type="hidden" name="intent" value="archiveTemplate" />
+                  <input type="hidden" name="templateId" value={template.id} />
+                  <button type="submit" className="danger">Archive template</button>
+                </Form> : <Form method="post">
+                  <input type="hidden" name="intent" value="restoreTemplate" />
+                  <input type="hidden" name="templateId" value={template.id} />
+                  <button type="submit" className="secondary">Restore template</button>
+                </Form>}
+                <Form method="post">
+                  <input type="hidden" name="intent" value="deleteTemplate" />
+                  <input type="hidden" name="templateId" value={template.id} />
+                  <button type="submit" className="danger">Delete Forever if unused</button>
+                </Form>
+              </div>
             </details>
           );
         }) : <p className="muted">No pricing templates yet. Click Create default templates.</p>}
@@ -605,7 +715,7 @@ export default function ProductSetupRecipeBuilder() {
                     </NativeSelect>
                     <NativeSelect label="Pricing template" name="templateId" defaultValue={recipe.productTypeProfileId || ""}>
                       <option value="">No template / custom</option>
-                      {templateOptions.map((template: any) => <option key={template.id} value={template.id}>{template.name}</option>)}
+                      {activeTemplateOptions.map((template: any) => <option key={template.id} value={template.id}>{template.name}</option>)}
                     </NativeSelect>
                     <NativeSelect label="Pricing mode" name="pricingTemplateMode" defaultValue={recipe.pricingTemplateMode || "template"}>
                       <option value="template">Use category template</option>
