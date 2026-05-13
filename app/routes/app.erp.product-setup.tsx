@@ -1,5 +1,15 @@
-// ERP Product Setup alias route
-// Keeps /app/erp/product-setup working by loading the existing Product Costs / Recipe backend page.
+import { redirect } from "react-router";
 
-export * from "./app.product-costs";
-export { default } from "./app.product-costs";
+export async function loader() {
+  return redirect("/app/product-costs");
+}
+
+export default function ProductSetupAlias() {
+  return (
+    <main style={{ padding: 24 }}>
+      <h1>Product Setup</h1>
+      <p>Redirecting to the product backend page...</p>
+      <a href="/app/product-costs">Open Product Costs</a>
+    </main>
+  );
+}

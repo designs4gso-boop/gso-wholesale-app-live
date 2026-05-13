@@ -1,5 +1,15 @@
-// ERP Cost Calculator alias route
-// Keeps /app/erp/cost-calculator working by loading the existing wholesale calculator page.
+import { redirect } from "react-router";
 
-export * from "./app.wholesale.calculator";
-export { default } from "./app.wholesale.calculator";
+export async function loader() {
+  return redirect("/app/product-costs");
+}
+
+export default function CostCalculatorAlias() {
+  return (
+    <main style={{ padding: 24 }}>
+      <h1>Cost Calculator</h1>
+      <p>Redirecting to the product backend page...</p>
+      <a href="/app/product-costs">Open Product Costs</a>
+    </main>
+  );
+}
