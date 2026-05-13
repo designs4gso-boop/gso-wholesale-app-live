@@ -1,4 +1,4 @@
-import { Form, useActionData, useLoaderData } from "react-router";
+import { Form, redirect, useActionData, useLoaderData, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -388,7 +388,7 @@ export async function action({ request }: { request: Request }) {
       }
     }
 
-    return Response.json({ ok: true, message: "Product recipe created." });
+    return redirect("/app/erp/product-setup?created=recipe");
   }
 
   if (intent === "updateRecipe") {
@@ -537,6 +537,7 @@ function PageStyles() {
 export default function ProductSetupRecipeBuilder() {
   const { templates, activeTemplates, recipes, materials, machines } = useLoaderData<any>();
   const actionData = useActionData<any>();
+  const [searchParams] = useSearchParams();
   const materialOptions = materials || [];
   const machineOptions = machines || [];
   const templateOptions = templates || [];
@@ -550,6 +551,7 @@ export default function ProductSetupRecipeBuilder() {
         <p>Build reusable product recipes, assign category pricing templates, preview tier profitability, and keep quotes simple.</p>
       </div>
 
+      {searchParams.get("created") === "recipe" ? <div className="card"><span className="badge green">Product recipe created. Scroll to Product Recipes to add materials.</span></div> : null}
       {actionData?.message ? <div className="card"><span className={actionData.ok ? "badge green" : "badge red"}>{actionData.message}</span></div> : null}
 
       <div className="card">
@@ -637,7 +639,7 @@ export default function ProductSetupRecipeBuilder() {
             <label className="field"><span>Use in quotes</span><input type="checkbox" name="useInQuotes" defaultChecked /></label>
             <label className="field"><span>Cost review needed</span><input type="checkbox" name="costReviewNeeded" /></label>
             <NativeTextarea label="Notes" name="notes" />
-            <div className="button-row wide"><button type="submit">Create recipe</button></div>
+            <div className="button-row wide"><button type="submit" name="intent" value="createRecipe">Create recipe</button></div>
           </Form>
         </div>
       </div>
