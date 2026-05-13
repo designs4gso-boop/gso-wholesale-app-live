@@ -1,1 +1,1 @@
-export { loader, action, default } from "./app.product-costs";
+export { default, loader, action } from "./app.product-costs";
