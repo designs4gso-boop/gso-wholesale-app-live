@@ -252,7 +252,8 @@ function estimateRecipe(recipe: any, laborRate = 25) {
   }, 0);
   const labelApplicationSecondsPerUnit = zones.reduce((sum: number, zone: any) => sum + (Number(zone.applicationSecondsPerLabel || 0) * Number(zone.qtyPerUnit || 1)), 0);
   const materialCostPerUnit = materialRowCostPerUnit + labelMediaCostPerUnit;
-  const perUnitLaborSeconds = Number(recipe.applicationLaborSecondsPerUnit || 0) + Number(recipe.packingLaborSecondsPerUnit || 0) + labelApplicationSecondsPerUnit;
+  const fallbackApplicationSecondsPerUnit = activeZones.length ? 0 : Number(recipe.applicationLaborSecondsPerUnit || 0);
+  const perUnitLaborSeconds = fallbackApplicationSecondsPerUnit + Number(recipe.packingLaborSecondsPerUnit || 0) + labelApplicationSecondsPerUnit;
   const perUnitLaborCost = (perUnitLaborSeconds / 3600) * laborRate;
   const perJobLaborCost = ((Number(recipe.laborMinutes || 0) + Number(recipe.prepressMinutes || 0)) / 60) * laborRate / qty;
   const setupCostPerUnit = Number(recipe.setupCost || 0) / qty;
@@ -1367,8 +1368,9 @@ export default function ProductSetupRecipeBuilder() {
             <NativeInput label="Setup cost / job" name="setupCost" type="number" step="0.01" defaultValue="0" />
             <NativeInput label="Setup labor min / job" name="laborMinutes" type="number" step="0.01" defaultValue="0" />
             <NativeInput label="Prepress min / job" name="prepressMinutes" type="number" step="0.01" defaultValue="0" />
-            <NativeInput label="Application sec / unit" name="applicationLaborSecondsPerUnit" type="number" step="0.01" defaultValue="0" />
+            <input type="hidden" name="applicationLaborSecondsPerUnit" value="0" />
             <NativeInput label="Packing sec / unit" name="packingLaborSecondsPerUnit" type="number" step="0.01" defaultValue="0" />
+            <p className="muted wide">Application labor is entered on label/application zones. This prevents double-counting front/back/lid labels.</p>
             <label className="field"><span>Use in quotes</span><input type="checkbox" name="useInQuotes" defaultChecked /></label>
             <label className="field"><span>Cost review needed</span><input type="checkbox" name="costReviewNeeded" /></label>
             <NativeTextarea label="Notes" name="notes" />
@@ -1494,8 +1496,9 @@ export default function ProductSetupRecipeBuilder() {
                     <NativeInput label="Setup cost / job" name="setupCost" type="number" step="0.01" defaultValue={recipe.setupCost} />
                     <NativeInput label="Setup labor min / job" name="laborMinutes" type="number" step="0.01" defaultValue={recipe.laborMinutes} />
                     <NativeInput label="Prepress min / job" name="prepressMinutes" type="number" step="0.01" defaultValue={recipe.prepressMinutes} />
-                    <NativeInput label="Application sec / unit" name="applicationLaborSecondsPerUnit" type="number" step="0.01" defaultValue={recipe.applicationLaborSecondsPerUnit} />
+                    <input type="hidden" name="applicationLaborSecondsPerUnit" value="0" />
                     <NativeInput label="Packing sec / unit" name="packingLaborSecondsPerUnit" type="number" step="0.01" defaultValue={recipe.packingLaborSecondsPerUnit} />
+                    <p className="muted wide">Application labor comes from active label/application zones. Recipe-level application seconds are hidden and ignored when zones exist.</p>
                     <label className="field"><span>Use in quotes</span><input type="checkbox" name="useInQuotes" defaultChecked={recipe.useInQuotes} /></label>
                     <label className="field"><span>Cost review needed</span><input type="checkbox" name="costReviewNeeded" defaultChecked={recipe.costReviewNeeded} /></label>
                     <NativeTextarea label="Notes" name="notes" defaultValue={recipe.notes || ""} />
@@ -1982,13 +1985,14 @@ export default function ProductSetupRecipeBuilder() {
 
                 <details>
                   <summary>Add material to recipe</summary>
+                  {activeZonesForRecipe.length ? <p className="muted">This recipe already calculates label media from zones. Add only fixed/base materials here, like blank bags, jars, boxes, packaging, or sourced base items. Do not add Matte/Gloss/Holographic media here unless it is an extra fixed material.</p> : null}
                   <Form method="post" className="form-grid">
                     <input type="hidden" name="intent" value="addMaterial" />
                     <input type="hidden" name="recipeId" value={recipe.id} />
                     <NativeSelect label="Material" name="materialId">
                       {materialOptions.map((material: any) => <option key={material.id} value={material.id}>{material.name} | {material.materialType} | {material.productFamilies}</option>)}
                     </NativeSelect>
-                    <NativeSelect label="Usage type" name="usageType" defaultValue="media">
+                    <NativeSelect label="Usage type" name="usageType" defaultValue="blank">
                       <option value="media">Media</option>
                       <option value="ink">Ink / coating</option>
                       <option value="blank">Blank / base item</option>
@@ -2002,7 +2006,7 @@ export default function ProductSetupRecipeBuilder() {
                       {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
                     </NativeSelect>
                     <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue="0" />
-                    <label className="field"><span>Include waste</span><input type="checkbox" name="includeWaste" defaultChecked /></label>
+                    <label className="field"><span>Include waste</span><input type="checkbox" name="includeWaste" /></label>
                     <NativeTextarea label="Notes" name="notes" />
                     <div className="button-row wide"><button type="submit">Add material</button></div>
                   </Form>
