@@ -235,13 +235,15 @@ function mediaLabelForZone(zone: any, allZones: any[] = []) {
 
 function estimateRecipe(recipe: any, laborRate = 25) {
   const qty = Math.max(1, Number(recipe.defaultQuantity || recipe.minQuantity || 1));
-  const materialRowCostPerUnit = (recipe.materials || []).reduce((sum: number, row: any) => {
+  const activeMaterialRows = (recipe.materials || []).filter((row: any) => row.active !== false);
+  const activeZones = (recipe.labelZones || []).filter((zone: any) => zone.active !== false);
+  const materialRowCostPerUnit = activeMaterialRows.reduce((sum: number, row: any) => {
     const base = unitCost(row.material);
     const quantity = Number(row.quantity || 0);
     const wasteMultiplier = row.includeWaste ? 1 + (Number(row.wastePct || 0) / 100) : 1;
     return sum + base * quantity * wasteMultiplier;
   }, 0);
-  const zones = recipe.labelZones || [];
+  const zones = activeZones;
   const labelSqftPerUnit = zones.reduce((sum: number, zone: any) => sum + zoneSqft(zone), 0);
   const labelMediaCostPerUnit = zones.reduce((sum: number, zone: any) => {
     const base = unitCost(materialForZone(zone, zones));
@@ -483,9 +485,50 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: true, message: "Material added to recipe." });
   }
 
-  if (intent === "removeMaterial") {
+  if (intent === "updateMaterialRow") {
+    await db.recipeMaterial.updateMany({
+      where: { shop, id: String(formData.get("recipeMaterialId") || "") },
+      data: {
+        materialId: String(formData.get("materialId") || ""),
+        usageType: String(formData.get("usageType") || "media"),
+        quantity: numberValue(formData.get("quantity"), 1),
+        unit: String(formData.get("unit") || "each"),
+        wastePct: numberValue(formData.get("wastePct"), 0),
+        includeWaste: String(formData.get("includeWaste") || "") === "on",
+        active: String(formData.get("active") || "") === "on",
+        notes: String(formData.get("notes") || "") || null,
+      },
+    });
+    return Response.json({ ok: true, message: "Recipe material updated." });
+  }
+
+  if (intent === "archiveMaterialRow") {
+    await db.recipeMaterial.updateMany({ where: { shop, id: String(formData.get("recipeMaterialId") || "") }, data: { active: false } });
+    return Response.json({ ok: true, message: "Recipe material hidden." });
+  }
+
+  if (intent === "restoreMaterialRow") {
+    await db.recipeMaterial.updateMany({ where: { shop, id: String(formData.get("recipeMaterialId") || "") }, data: { active: true } });
+    return Response.json({ ok: true, message: "Recipe material restored." });
+  }
+
+  if (intent === "removeMaterial" || intent === "deleteMaterialRow") {
     await db.recipeMaterial.deleteMany({ where: { shop, id: String(formData.get("recipeMaterialId") || "") } });
-    return Response.json({ ok: true, message: "Material removed from recipe." });
+    return Response.json({ ok: true, message: "Recipe material permanently deleted." });
+  }
+
+  if (intent === "cleanupDuplicateMaterials") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const rows = await db.recipeMaterial.findMany({ where: { shop, recipeId }, orderBy: { createdAt: "asc" } });
+    const seen = new Set<string>();
+    const duplicateIds: string[] = [];
+    for (const row of rows as any[]) {
+      const key = `${row.materialId}|${row.usageType}|${row.unit}`;
+      if (seen.has(key)) duplicateIds.push(row.id);
+      else seen.add(key);
+    }
+    if (duplicateIds.length) await db.recipeMaterial.deleteMany({ where: { shop, id: { in: duplicateIds } } });
+    return Response.json({ ok: true, message: `${duplicateIds.length} duplicate material row(s) deleted.` });
   }
 
   if (intent === "addMediaOption") {
@@ -510,6 +553,25 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: true, message: "Media option added." });
   }
 
+  if (intent === "updateMediaOption") {
+    const id = String(formData.get("mediaOptionId") || "");
+    const recipeId = String(formData.get("recipeId") || "");
+    const makeDefault = String(formData.get("defaultOption") || "") === "on";
+    if (makeDefault) await db.recipeMediaOption.updateMany({ where: { shop, recipeId }, data: { defaultOption: false } });
+    await db.recipeMediaOption.updateMany({
+      where: { shop, id },
+      data: {
+        name: String(formData.get("name") || "Media option"),
+        materialId: String(formData.get("materialId") || ""),
+        defaultOption: makeDefault,
+        premiumOption: String(formData.get("premiumOption") || "") === "on",
+        active: String(formData.get("active") || "") === "on",
+        notes: String(formData.get("notes") || "") || null,
+      },
+    });
+    return Response.json({ ok: true, message: "Media option updated." });
+  }
+
   if (intent === "archiveMediaOption") {
     await db.recipeMediaOption.updateMany({ where: { shop, id: String(formData.get("mediaOptionId") || "") }, data: { active: false } });
     return Response.json({ ok: true, message: "Media option archived." });
@@ -529,6 +591,13 @@ export async function action({ request }: { request: Request }) {
     }
     await db.recipeMediaOption.deleteMany({ where: { shop, id } });
     return Response.json({ ok: true, message: "Unused media option deleted." });
+  }
+
+  if (intent === "deleteMediaOptionForever") {
+    const id = String(formData.get("mediaOptionId") || "");
+    await db.recipeLabelZone.updateMany({ where: { shop, mediaOptionId: id }, data: { mediaOptionId: null, mediaMode: "fixed" } });
+    await db.recipeMediaOption.deleteMany({ where: { shop, id } });
+    return Response.json({ ok: true, message: "Media option permanently deleted and removed from zones." });
   }
 
   if (intent === "addLabelZone") {
@@ -554,6 +623,38 @@ export async function action({ request }: { request: Request }) {
       },
     });
     return Response.json({ ok: true, message: "Label/application zone added." });
+  }
+
+  if (intent === "updateLabelZone") {
+    await db.recipeLabelZone.updateMany({
+      where: { shop, id: String(formData.get("zoneId") || "") },
+      data: {
+        materialId: String(formData.get("materialId") || "") || null,
+        mediaMode: String(formData.get("mediaMode") || "fixed"),
+        mediaOptionId: String(formData.get("mediaOptionId") || "") || null,
+        sameAsZoneId: String(formData.get("sameAsZoneId") || "") || null,
+        name: String(formData.get("name") || "Label zone"),
+        position: String(formData.get("position") || "Front"),
+        widthIn: numberValue(formData.get("widthIn"), 0),
+        heightIn: numberValue(formData.get("heightIn"), 0),
+        qtyPerUnit: numberValue(formData.get("qtyPerUnit"), 1),
+        applicationSecondsPerLabel: numberValue(formData.get("applicationSecondsPerLabel"), 0),
+        required: String(formData.get("required") || "") === "on",
+        active: String(formData.get("active") || "") === "on",
+        notes: String(formData.get("notes") || "") || null,
+      },
+    });
+    return Response.json({ ok: true, message: "Label/application zone updated." });
+  }
+
+  if (intent === "archiveLabelZone") {
+    await db.recipeLabelZone.updateMany({ where: { shop, id: String(formData.get("zoneId") || "") }, data: { active: false } });
+    return Response.json({ ok: true, message: "Label/application zone hidden." });
+  }
+
+  if (intent === "restoreLabelZone") {
+    await db.recipeLabelZone.updateMany({ where: { shop, id: String(formData.get("zoneId") || "") }, data: { active: true } });
+    return Response.json({ ok: true, message: "Label/application zone restored." });
   }
 
   if (intent === "duplicateLabelZone") {
@@ -582,9 +683,9 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: true, message: "Label zone duplicated." });
   }
 
-  if (intent === "removeLabelZone") {
+  if (intent === "removeLabelZone" || intent === "deleteLabelZone") {
     await db.recipeLabelZone.deleteMany({ where: { shop, id: String(formData.get("zoneId") || "") } });
-    return Response.json({ ok: true, message: "Label/application zone removed." });
+    return Response.json({ ok: true, message: "Label/application zone permanently deleted." });
   }
 
   if (intent === "syncTiersFromTemplate") {
@@ -944,6 +1045,23 @@ export default function ProductSetupRecipeBuilder() {
                       <td>{option.premiumOption ? <span className="badge yellow">Premium</span> : <span className="muted">Standard</span>}</td>
                       <td><span className={option.active ? "badge green" : "badge yellow"}>{option.active ? "Active" : "Archived"}</span></td>
                       <td>
+                        <details>
+                          <summary>Edit</summary>
+                          <Form method="post" className="form-grid">
+                            <input type="hidden" name="intent" value="updateMediaOption" />
+                            <input type="hidden" name="recipeId" value={recipe.id} />
+                            <input type="hidden" name="mediaOptionId" value={option.id} />
+                            <NativeInput label="Option name" name="name" defaultValue={option.name} />
+                            <NativeSelect label="Material" name="materialId" defaultValue={option.materialId}>
+                              {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
+                            </NativeSelect>
+                            <label className="field"><span>Default option</span><input type="checkbox" name="defaultOption" defaultChecked={option.defaultOption} /></label>
+                            <label className="field"><span>Premium badge</span><input type="checkbox" name="premiumOption" defaultChecked={option.premiumOption} /></label>
+                            <label className="field"><span>Active</span><input type="checkbox" name="active" defaultChecked={option.active} /></label>
+                            <NativeTextarea label="Notes" name="notes" defaultValue={option.notes || ""} />
+                            <div className="button-row wide"><button type="submit">Save media option</button></div>
+                          </Form>
+                        </details>
                         <div className="button-row">
                           <Form method="post">
                             <input type="hidden" name="intent" value={option.active ? "archiveMediaOption" : "restoreMediaOption"} />
@@ -953,7 +1071,12 @@ export default function ProductSetupRecipeBuilder() {
                           <Form method="post">
                             <input type="hidden" name="intent" value="deleteMediaOption" />
                             <input type="hidden" name="mediaOptionId" value={option.id} />
-                            <button type="submit" className="danger">Delete</button>
+                            <button type="submit" className="danger">Delete if unused</button>
+                          </Form>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="deleteMediaOptionForever" />
+                            <input type="hidden" name="mediaOptionId" value={option.id} />
+                            <button type="submit" className="danger">Delete forever</button>
                           </Form>
                         </div>
                       </td>
@@ -985,13 +1108,54 @@ export default function ProductSetupRecipeBuilder() {
                   <thead><tr><th>Zone</th><th>Size</th><th>Qty</th><th>Material</th><th>Area/unit</th><th>Apply time</th><th></th></tr></thead>
                   <tbody>
                     {recipe.labelZones.map((zone: any) => <tr key={zone.id}>
-                      <td><strong>{zone.name}</strong><br /><span className="muted">{zone.position} {zone.required ? "| required" : "| optional"}</span></td>
+                      <td><strong>{zone.name}</strong><br /><span className="muted">{zone.position} {zone.required ? "| required" : "| optional"} {zone.active === false ? "| hidden" : ""}</span></td>
                       <td>{zone.widthIn} in x {zone.heightIn} in</td>
                       <td>{zone.qtyPerUnit}</td>
                       <td>{mediaLabelForZone(zone, recipe.labelZones || [])}<br /><span className="muted">{materialForZone(zone, recipe.labelZones || [])?.name || ""}</span></td>
                       <td>{zoneSqft(zone).toFixed(4)} sqft</td>
                       <td>{(Number(zone.applicationSecondsPerLabel || 0) * Number(zone.qtyPerUnit || 1)).toFixed(1)} sec/unit</td>
                       <td>
+                        <details>
+                          <summary>Edit zone</summary>
+                          <Form method="post" className="form-grid">
+                            <input type="hidden" name="intent" value="updateLabelZone" />
+                            <input type="hidden" name="zoneId" value={zone.id} />
+                            <NativeInput label="Zone name" name="name" defaultValue={zone.name} />
+                            <NativeSelect label="Position" name="position" defaultValue={zone.position || "Front"}>
+                              <option value="Front">Front</option>
+                              <option value="Back">Back</option>
+                              <option value="Lid">Lid</option>
+                              <option value="Side">Side</option>
+                              <option value="Bottom">Bottom</option>
+                              <option value="Custom">Custom</option>
+                            </NativeSelect>
+                            <NativeInput label="Width inches" name="widthIn" type="number" step="0.0001" defaultValue={zone.widthIn} />
+                            <NativeInput label="Height inches" name="heightIn" type="number" step="0.0001" defaultValue={zone.heightIn} />
+                            <NativeInput label="Qty per finished item" name="qtyPerUnit" type="number" step="0.0001" defaultValue={zone.qtyPerUnit} />
+                            <NativeInput label="Application sec per label" name="applicationSecondsPerLabel" type="number" step="0.01" defaultValue={zone.applicationSecondsPerLabel} />
+                            <NativeSelect label="Media mode" name="mediaMode" defaultValue={zone.mediaMode || "fixed"}>
+                              <option value="fixed">Fixed material</option>
+                              <option value="media_option">Selectable media option</option>
+                              <option value="same_as_zone">Same as another zone</option>
+                            </NativeSelect>
+                            <NativeSelect label="Fixed material" name="materialId" defaultValue={zone.materialId || ""}>
+                              <option value="">No fixed material</option>
+                              {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
+                            </NativeSelect>
+                            <NativeSelect label="Media option" name="mediaOptionId" defaultValue={zone.mediaOptionId || ""}>
+                              <option value="">No media option</option>
+                              {(recipe.mediaOptions || []).filter((option: any) => option.active || option.id === zone.mediaOptionId).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
+                            </NativeSelect>
+                            <NativeSelect label="Same as zone" name="sameAsZoneId" defaultValue={zone.sameAsZoneId || ""}>
+                              <option value="">Auto / front zone</option>
+                              {(recipe.labelZones || []).filter((candidate: any) => candidate.id !== zone.id).map((candidate: any) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+                            </NativeSelect>
+                            <label className="field"><span>Required</span><input type="checkbox" name="required" defaultChecked={zone.required} /></label>
+                            <label className="field"><span>Active</span><input type="checkbox" name="active" defaultChecked={zone.active !== false} /></label>
+                            <NativeTextarea label="Notes" name="notes" defaultValue={zone.notes || ""} />
+                            <div className="button-row wide"><button type="submit">Save zone</button></div>
+                          </Form>
+                        </details>
                         <div className="button-row">
                           <Form method="post">
                             <input type="hidden" name="intent" value="duplicateLabelZone" />
@@ -999,9 +1163,14 @@ export default function ProductSetupRecipeBuilder() {
                             <button type="submit" className="secondary">Duplicate</button>
                           </Form>
                           <Form method="post">
-                            <input type="hidden" name="intent" value="removeLabelZone" />
+                            <input type="hidden" name="intent" value={zone.active === false ? "restoreLabelZone" : "archiveLabelZone"} />
                             <input type="hidden" name="zoneId" value={zone.id} />
-                            <button type="submit" className="danger">Remove</button>
+                            <button type="submit" className="secondary">{zone.active === false ? "Restore" : "Hide"}</button>
+                          </Form>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="deleteLabelZone" />
+                            <input type="hidden" name="zoneId" value={zone.id} />
+                            <button type="submit" className="danger">Delete forever</button>
                           </Form>
                         </div>
                       </td>
@@ -1054,24 +1223,66 @@ export default function ProductSetupRecipeBuilder() {
               <div className="card" style={{ marginTop: 12 }}>
                 <h3>Recipe Materials</h3>
                 {recipe.materials?.length ? <table>
-                  <thead><tr><th>Material</th><th>Type</th><th>Qty / unit</th><th>Waste</th><th>Cost/unit</th><th></th></tr></thead>
+                  <thead><tr><th>Material</th><th>Type</th><th>Qty / unit</th><th>Waste</th><th>Status</th><th>Cost/unit</th><th></th></tr></thead>
                   <tbody>
                     {recipe.materials.map((row: any) => <tr key={row.id}>
                       <td>{row.material?.name}</td>
                       <td>{row.usageType}</td>
                       <td>{row.quantity} {row.unit}</td>
                       <td>{row.includeWaste ? `${row.wastePct || 0}%` : "No waste"}</td>
-                      <td>{money(unitCost(row.material) * Number(row.quantity || 0) * (row.includeWaste ? 1 + Number(row.wastePct || 0) / 100 : 1))}</td>
+                      <td><span className={row.active === false ? "badge yellow" : "badge green"}>{row.active === false ? "Hidden" : "Active"}</span></td>
+                      <td>{row.active === false ? <span className="muted">Not counted</span> : money(unitCost(row.material) * Number(row.quantity || 0) * (row.includeWaste ? 1 + Number(row.wastePct || 0) / 100 : 1))}</td>
                       <td>
-                        <Form method="post">
-                          <input type="hidden" name="intent" value="removeMaterial" />
-                          <input type="hidden" name="recipeMaterialId" value={row.id} />
-                          <button type="submit" className="danger">Remove</button>
-                        </Form>
+                        <details>
+                          <summary>Edit row</summary>
+                          <Form method="post" className="form-grid">
+                            <input type="hidden" name="intent" value="updateMaterialRow" />
+                            <input type="hidden" name="recipeMaterialId" value={row.id} />
+                            <NativeSelect label="Material" name="materialId" defaultValue={row.materialId}>
+                              {materialOptions.map((material: any) => <option key={material.id} value={material.id}>{material.name} | {material.materialType} | {material.productFamilies}</option>)}
+                            </NativeSelect>
+                            <NativeSelect label="Usage type" name="usageType" defaultValue={row.usageType}>
+                              <option value="media">Media</option>
+                              <option value="ink">Ink / coating</option>
+                              <option value="blank">Blank / base item</option>
+                              <option value="laminate">Laminate</option>
+                              <option value="packaging">Packaging</option>
+                              <option value="sourced">Sourced</option>
+                              <option value="other">Other</option>
+                            </NativeSelect>
+                            <NativeInput label="Qty used per unit" name="quantity" type="number" step="0.0001" defaultValue={row.quantity} />
+                            <NativeSelect label="Unit" name="unit" defaultValue={row.unit}>
+                              {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                            </NativeSelect>
+                            <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue={row.wastePct} />
+                            <label className="field"><span>Include waste</span><input type="checkbox" name="includeWaste" defaultChecked={row.includeWaste} /></label>
+                            <label className="field"><span>Active / counted in cost</span><input type="checkbox" name="active" defaultChecked={row.active !== false} /></label>
+                            <NativeTextarea label="Notes" name="notes" defaultValue={row.notes || ""} />
+                            <div className="button-row wide"><button type="submit">Save material row</button></div>
+                          </Form>
+                        </details>
+                        <div className="button-row">
+                          <Form method="post">
+                            <input type="hidden" name="intent" value={row.active === false ? "restoreMaterialRow" : "archiveMaterialRow"} />
+                            <input type="hidden" name="recipeMaterialId" value={row.id} />
+                            <button type="submit" className="secondary">{row.active === false ? "Restore" : "Hide"}</button>
+                          </Form>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="deleteMaterialRow" />
+                            <input type="hidden" name="recipeMaterialId" value={row.id} />
+                            <button type="submit" className="danger">Delete forever</button>
+                          </Form>
+                        </div>
                       </td>
                     </tr>)}
                   </tbody>
                 </table> : <p className="muted">No materials added yet.</p>}
+
+                <Form method="post" className="button-row">
+                  <input type="hidden" name="intent" value="cleanupDuplicateMaterials" />
+                  <input type="hidden" name="recipeId" value={recipe.id} />
+                  <button type="submit" className="secondary">Delete duplicate material rows</button>
+                </Form>
 
                 <details>
                   <summary>Add material to recipe</summary>

@@ -560,6 +560,7 @@ model RecipeMaterial {
   unit         String   @default("sqft") // sqft, sqin, each, ml, hour
   wastePct     Float    @default(0)
   includeWaste Boolean  @default(true)
+  active       Boolean  @default(true)
   notes        String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -571,6 +572,7 @@ model RecipeMaterial {
   @@index([recipeId])
   @@index([materialId])
   @@index([usageType])
+  @@index([shop, active])
 }
 
 model RecipeInkRequirement {
