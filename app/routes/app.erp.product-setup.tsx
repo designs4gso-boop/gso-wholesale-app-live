@@ -455,6 +455,67 @@ async function fetchShopifyProductVariants(admin: any, productGid: string) {
   };
 }
 
+async function searchShopifyProducts(admin: any, query: string) {
+  const safeQuery = String(query || "").trim();
+  if (!safeQuery) return [];
+
+  const response = await admin.graphql(
+    `#graphql
+      query ProductRecipeProductSearch($query: String!) {
+        products(first: 10, query: $query) {
+          edges {
+            node {
+              id
+              title
+              handle
+              status
+              totalVariants
+              featuredImage {
+                url
+                altText
+              }
+              variants(first: 5) {
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    price
+                    selectedOptions {
+                      name
+                      value
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    { variables: { query: `title:*${safeQuery}* OR sku:*${safeQuery}*` } }
+  );
+
+  const payload = await response.json();
+  if (payload?.errors?.length) {
+    throw new Error(payload.errors.map((error: any) => error.message).join(", "));
+  }
+
+  return (payload?.data?.products?.edges || []).map((edge: any) => {
+    const product = edge.node;
+    return {
+      id: product.id,
+      title: product.title,
+      handle: product.handle,
+      status: product.status,
+      totalVariants: product.totalVariants || 0,
+      imageUrl: product.featuredImage?.url || null,
+      variants: (product.variants?.edges || []).map((variantEdge: any) => variantEdge.node),
+    };
+  });
+}
+
+
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
@@ -691,6 +752,38 @@ export async function action({ request }: { request: Request }) {
   }
 
 
+
+  if (intent === "searchShopifyProductsForRecipe") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const query = String(formData.get("productSearch") || "").trim();
+    if (!recipeId) return Response.json({ ok: false, message: "Missing recipe." }, { status: 400 });
+    if (!query) return Response.json({ ok: false, message: "Enter a Shopify product name or SKU to search." }, { status: 400 });
+
+    const results = await searchShopifyProducts(admin, query);
+    return Response.json({
+      ok: true,
+      message: results.length ? `Found ${results.length} Shopify product(s). Pick one to sync variants.` : "No Shopify products found. Try a different product name or SKU.",
+      productSearchRecipeId: recipeId,
+      productSearchQuery: query,
+      productSearchResults: results,
+    });
+  }
+
+  if (intent === "linkShopifyProductToRecipe") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const productGid = String(formData.get("shopifyProductGid") || "").trim();
+    const productTitle = String(formData.get("shopifyProductTitle") || "").trim();
+    if (!recipeId || !productGid) return Response.json({ ok: false, message: "Missing recipe or Shopify product." }, { status: 400 });
+
+    await db.productRecipe.updateMany({
+      where: { shop, id: recipeId },
+      data: {
+        productGid,
+        notes: productTitle ? `Linked Shopify product: ${productTitle}` : undefined,
+      },
+    });
+    return Response.json({ ok: true, message: `Linked Shopify product${productTitle ? `: ${productTitle}` : ""}. Now sync variants.` });
+  }
 
   if (intent === "syncShopifyVariants") {
     const recipeId = String(formData.get("recipeId") || "");
@@ -1784,18 +1877,61 @@ export default function ProductSetupRecipeBuilder() {
                 <p className="muted">Sync existing Shopify variants and let the app auto-map side count, bag color, and media from option names. Quantity is not parsed from variants; pricing tiers stay controlled by the selected pricing template.</p>
 
                 <details open>
-                  <summary>Sync / auto-map Shopify variants</summary>
+                  <summary>Search product, sync variants, and auto-map</summary>
+                  <div className="muted wide" style={{ marginBottom: 10 }}>
+                    Search Shopify products by title or SKU, pick the matching product, then sync. The app reads each Shopify variant and auto-maps side count, media, and bag color. Quantity tiers remain controlled by Pricing Templates, not variants.
+                  </div>
+
                   <Form method="post" className="form-grid">
-                    <input type="hidden" name="intent" value="syncShopifyVariants" />
+                    <input type="hidden" name="intent" value="searchShopifyProductsForRecipe" />
                     <input type="hidden" name="recipeId" value={recipe.id} />
-                    <NativeInput label="Shopify Product GID" name="shopifyProductGid" defaultValue={recipe.productGid || ""} placeholder="gid://shopify/Product/..." />
-                    <div className="wide muted">
-                      Paste or save the Shopify Product GID from the linked product. The sync reads every Shopify variant, then auto-matches:
-                      Single/Double sided, Matte/Gloss/Holographic, and Bag Color. Quantity tiers are applied from Pricing Templates, not variants.
-                    </div>
-                    <div className="button-row wide"><button type="submit">Sync Shopify variants + auto-map</button></div>
+                    <NativeInput label="Search Shopify product" name="productSearch" defaultValue={recipe.name || ""} placeholder="Example: 4x5 Sticker Bag" />
+                    <div className="button-row wide"><button type="submit">Search Shopify products</button></div>
                   </Form>
-                  <Form method="post" className="button-row">
+
+                  {actionData?.productSearchRecipeId === recipe.id && actionData?.productSearchResults?.length ? (
+                    <div className="card wide" style={{ marginTop: 12 }}>
+                      <h4>Search results</h4>
+                      <table>
+                        <thead><tr><th>Product</th><th>Sample variants</th><th>Action</th></tr></thead>
+                        <tbody>
+                          {actionData.productSearchResults.map((product: any) => (
+                            <tr key={product.id}>
+                              <td>
+                                <strong>{product.title}</strong><br />
+                                <span className="muted">{product.handle} • {product.totalVariants} variant(s) • {product.status}</span>
+                              </td>
+                              <td>
+                                {(product.variants || []).slice(0, 3).map((variant: any) => (
+                                  <div key={variant.id} className="muted">{variant.title}{variant.sku ? ` • SKU: ${variant.sku}` : ""}</div>
+                                ))}
+                              </td>
+                              <td>
+                                <Form method="post" className="button-row">
+                                  <input type="hidden" name="intent" value="syncShopifyVariants" />
+                                  <input type="hidden" name="recipeId" value={recipe.id} />
+                                  <input type="hidden" name="shopifyProductGid" value={product.id} />
+                                  <button type="submit">Use this product + sync variants</button>
+                                </Form>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+
+                  <details style={{ marginTop: 12 }}>
+                    <summary>Advanced: paste Shopify Product GID manually</summary>
+                    <Form method="post" className="form-grid">
+                      <input type="hidden" name="intent" value="syncShopifyVariants" />
+                      <input type="hidden" name="recipeId" value={recipe.id} />
+                      <NativeInput label="Shopify Product GID" name="shopifyProductGid" defaultValue={recipe.productGid || ""} placeholder="gid://shopify/Product/..." />
+                      <div className="button-row wide"><button type="submit">Sync Shopify variants + auto-map</button></div>
+                    </Form>
+                  </details>
+
+                  <Form method="post" className="button-row" style={{ marginTop: 10 }}>
                     <input type="hidden" name="intent" value="autoMapExistingVariantRules" />
                     <input type="hidden" name="recipeId" value={recipe.id} />
                     <button type="submit" className="secondary">Auto-map existing saved mappings</button>
@@ -1985,7 +2121,7 @@ export default function ProductSetupRecipeBuilder() {
 
                 <details>
                   <summary>Add material to recipe</summary>
-                  {((recipe.labelZones ?? []).filter((zone: any) => zone.active !== false && !zone.archivedAt)).length ? <p className="muted">This recipe already calculates label media from zones. Add only fixed/base materials here, like blank bags, jars, boxes, packaging, or sourced base items. Do not add Matte/Gloss/Holographic media here unless it is an extra fixed material.</p> : null}
+                  {activeZonesForRecipe.length ? <p className="muted">This recipe already calculates label media from zones. Add only fixed/base materials here, like blank bags, jars, boxes, packaging, or sourced base items. Do not add Matte/Gloss/Holographic media here unless it is an extra fixed material.</p> : null}
                   <Form method="post" className="form-grid">
                     <input type="hidden" name="intent" value="addMaterial" />
                     <input type="hidden" name="recipeId" value={recipe.id} />
@@ -2019,4 +2155,3 @@ export default function ProductSetupRecipeBuilder() {
     </div>
   );
 }
-
