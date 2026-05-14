@@ -416,6 +416,7 @@ model ProductRecipe {
   tiers              RecipeTier[]
   sourcedTiers       SourcedCostTier[]
   addOns             RecipeAddOn[]
+  variantRules       RecipeVariantRule[]
 
   @@index([shop])
   @@index([shop, productType])
@@ -492,6 +493,37 @@ model VendorProductAddOn {
   @@index([shop])
   @@index([vendorProductId])
   @@index([pricingType])
+}
+
+model RecipeVariantRule {
+  id                  String   @id @default(cuid())
+  shop                String
+  recipeId            String
+  name                String
+  shopifyProductGid   String?
+  shopifyVariantGid   String?
+  shopifyVariantTitle String?
+  sku                 String?
+  sideMode            String   @default("single") // single, double_same, double_mixed, custom
+  bagColor            String?
+  frontMediaOptionId  String?
+  backMediaMode       String   @default("same_as_front") // same_as_front, specific, none
+  backMediaOptionId   String?
+  useFrontZone        Boolean  @default(true)
+  useBackZone         Boolean  @default(false)
+  active              Boolean  @default(true)
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  recipe ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([recipeId])
+  @@index([shop, active])
+  @@index([shop, shopifyProductGid])
+  @@index([shop, shopifyVariantGid])
+  @@index([sku])
 }
 
 model RecipeMediaOption {

@@ -267,6 +267,43 @@ function priceFromMargin(cost: number, marginPct: number) {
   return cost / (1 - marginPct / 100);
 }
 
+
+function findOption(options: any[], id?: string | null) {
+  return (options || []).find((option: any) => option.id === id);
+}
+
+function mediaOptionLabel(options: any[], id?: string | null) {
+  const option = findOption(options, id);
+  return option ? `${option.name} (${option.material?.name || "material"})` : "Default / not selected";
+}
+
+function estimateVariantFromRule(recipe: any, rule: any) {
+  const baseEstimate = estimateRecipe(recipe);
+  const zones = (recipe.labelZones || []).filter((zone: any) => zone.active !== false);
+  const frontZone = zones.find((zone: any) => String(zone.position || zone.name || "").toLowerCase().includes("front")) || zones[0];
+  const backZone = zones.find((zone: any) => String(zone.position || zone.name || "").toLowerCase().includes("back")) || zones[1];
+  const useFront = rule.useFrontZone !== false && frontZone;
+  const useBack = rule.useBackZone === true && backZone;
+  const selectedZones = [useFront ? frontZone : null, useBack ? backZone : null].filter(Boolean);
+  const area = selectedZones.reduce((sum: number, zone: any) => sum + zoneAreaSqft(zone), 0);
+  const applySeconds = selectedZones.reduce((sum: number, zone: any) => sum + (Number(zone.applicationSecondsPerLabel || 0) * Number(zone.qtyPerUnit || 1)), 0);
+  const mediaOptions = recipe.mediaOptions || [];
+  const frontOption = findOption(mediaOptions, rule.frontMediaOptionId) || mediaOptions.find((option: any) => option.defaultOption && option.active !== false) || mediaOptions.find((option: any) => option.active !== false);
+  const backOption = rule.backMediaMode === "specific" ? findOption(mediaOptions, rule.backMediaOptionId) : frontOption;
+  const mediaCost = selectedZones.reduce((sum: number, zone: any) => {
+    const option = zone === backZone ? backOption : frontOption;
+    const material = option?.material || zone?.mediaOption?.material || zone?.material;
+    return sum + zoneAreaSqft(zone) * unitCost(material);
+  }, 0) * (1 + Number(recipe.wastePct || 0) / 100);
+  const originalZoneCost = Number(baseEstimate.labelMediaCostPerUnit || 0);
+  const originalApplySeconds = Number(baseEstimate.labelApplicationSecondsPerUnit || 0);
+  const laborRatePerHour = 20;
+  const applyLaborDelta = ((applySeconds - originalApplySeconds) / 3600) * laborRatePerHour;
+  const unitCost = Number(baseEstimate.unitCostTotal || 0) - originalZoneCost + mediaCost + applyLaborDelta;
+  const price = priceFromMargin(unitCost, Number(recipe.targetMarginPct || 60));
+  return { area, applySeconds, mediaCost, unitCost, price };
+}
+
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
@@ -297,6 +334,7 @@ export async function loader({ request }: { request: Request }) {
         mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
         tiers: { orderBy: { minQty: "asc" } },
         machineRules: { include: { preferredMachine: true } },
+        variantRules: { orderBy: [{ active: "desc" }, { name: "asc" }] },
       },
     }),
     db.material.findMany({ where: { shop, active: true, useInRecipes: true }, orderBy: { name: "asc" } }),
@@ -499,6 +537,83 @@ export async function action({ request }: { request: Request }) {
     await db.sourcedCostTier.deleteMany({ where: { shop, recipeId } });
     await db.productRecipe.deleteMany({ where: { shop, id: recipeId } });
     return Response.json({ ok: true, message: "Product recipe permanently deleted." });
+  }
+
+
+  if (intent === "addVariantRule") {
+    await db.recipeVariantRule.create({
+      data: {
+        shop,
+        recipeId: String(formData.get("recipeId") || ""),
+        name: String(formData.get("name") || "New variant rule"),
+        shopifyProductGid: String(formData.get("shopifyProductGid") || "") || null,
+        shopifyVariantGid: String(formData.get("shopifyVariantGid") || "") || null,
+        shopifyVariantTitle: String(formData.get("shopifyVariantTitle") || "") || null,
+        sku: String(formData.get("sku") || "") || null,
+        sideMode: String(formData.get("sideMode") || "single"),
+        bagColor: String(formData.get("bagColor") || "") || null,
+        frontMediaOptionId: String(formData.get("frontMediaOptionId") || "") || null,
+        backMediaMode: String(formData.get("backMediaMode") || "same_as_front"),
+        backMediaOptionId: String(formData.get("backMediaOptionId") || "") || null,
+        useFrontZone: String(formData.get("useFrontZone") || "") === "on",
+        useBackZone: String(formData.get("useBackZone") || "") === "on",
+        notes: String(formData.get("notes") || "") || null,
+        active: true,
+      },
+    });
+    return Response.json({ ok: true, message: "Variant pricing rule added." });
+  }
+
+  if (intent === "updateVariantRule") {
+    await db.recipeVariantRule.updateMany({
+      where: { shop, id: String(formData.get("variantRuleId") || "") },
+      data: {
+        name: String(formData.get("name") || "Variant rule"),
+        shopifyProductGid: String(formData.get("shopifyProductGid") || "") || null,
+        shopifyVariantGid: String(formData.get("shopifyVariantGid") || "") || null,
+        shopifyVariantTitle: String(formData.get("shopifyVariantTitle") || "") || null,
+        sku: String(formData.get("sku") || "") || null,
+        sideMode: String(formData.get("sideMode") || "single"),
+        bagColor: String(formData.get("bagColor") || "") || null,
+        frontMediaOptionId: String(formData.get("frontMediaOptionId") || "") || null,
+        backMediaMode: String(formData.get("backMediaMode") || "same_as_front"),
+        backMediaOptionId: String(formData.get("backMediaOptionId") || "") || null,
+        useFrontZone: String(formData.get("useFrontZone") || "") === "on",
+        useBackZone: String(formData.get("useBackZone") || "") === "on",
+        active: String(formData.get("active") || "") === "on",
+        notes: String(formData.get("notes") || "") || null,
+      },
+    });
+    return Response.json({ ok: true, message: "Variant pricing rule updated." });
+  }
+
+  if (intent === "archiveVariantRule") {
+    await db.recipeVariantRule.updateMany({ where: { shop, id: String(formData.get("variantRuleId") || "") }, data: { active: false } });
+    return Response.json({ ok: true, message: "Variant pricing rule hidden." });
+  }
+
+  if (intent === "restoreVariantRule") {
+    await db.recipeVariantRule.updateMany({ where: { shop, id: String(formData.get("variantRuleId") || "") }, data: { active: true } });
+    return Response.json({ ok: true, message: "Variant pricing rule restored." });
+  }
+
+  if (intent === "deleteVariantRule") {
+    await db.recipeVariantRule.deleteMany({ where: { shop, id: String(formData.get("variantRuleId") || "") } });
+    return Response.json({ ok: true, message: "Variant pricing rule permanently deleted." });
+  }
+
+  if (intent === "cleanupDuplicateVariantRules") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const rows = await db.recipeVariantRule.findMany({ where: { shop, recipeId }, orderBy: { createdAt: "asc" } });
+    const seen = new Set<string>();
+    const duplicateIds: string[] = [];
+    for (const row of rows as any[]) {
+      const key = `${row.shopifyVariantGid || row.name}|${row.sideMode}|${row.bagColor || ""}|${row.frontMediaOptionId || ""}|${row.backMediaMode || ""}|${row.backMediaOptionId || ""}`.toLowerCase();
+      if (seen.has(key)) duplicateIds.push(row.id);
+      else seen.add(key);
+    }
+    if (duplicateIds.length) await db.recipeVariantRule.deleteMany({ where: { shop, id: { in: duplicateIds } } });
+    return Response.json({ ok: true, message: `${duplicateIds.length} duplicate variant rule(s) deleted.` });
   }
 
   if (intent === "addMaterial") {
@@ -1399,6 +1514,127 @@ export default function ProductSetupRecipeBuilder() {
                     <label className="field"><span>Required</span><input type="checkbox" name="required" defaultChecked /></label>
                     <NativeTextarea label="Notes" name="notes" placeholder="Example: 4x5 front sticker, Miron jar lid label, back compliance label" />
                     <div className="button-row wide"><button type="submit">Add label zone</button></div>
+                  </Form>
+                </details>
+              </div>
+
+
+              <div className="card" style={{ marginTop: 12 }}>
+                <h3>Shopify Variant Mapping</h3>
+                <p className="muted">Map existing Shopify variants or product options to this recipe. Use this to account for single-sided vs double-sided, bag color, matte/gloss/holographic media, and future tier pricing review.</p>
+                {(() => {
+                  const visibleRules = (recipe.variantRules || []).filter((rule: any) => itemStatus === "all" ? true : itemStatus === "hidden" ? rule.active === false : rule.active !== false);
+                  return visibleRules.length ? <table>
+                    <thead><tr><th>Variant rule</th><th>Shopify / SKU</th><th>Cost drivers</th><th>Preview</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                      {visibleRules.map((rule: any) => {
+                        const variantEstimate = estimateVariantFromRule(recipe, rule);
+                        return <tr key={rule.id}>
+                          <td><strong>{rule.name}</strong><br/><span className="muted">{rule.shopifyVariantTitle || "Manual mapping"}</span></td>
+                          <td>{rule.shopifyVariantGid ? <span className="muted">{rule.shopifyVariantGid}</span> : "No Shopify variant GID"}<br/>{rule.sku ? <span>SKU: {rule.sku}</span> : null}</td>
+                          <td>
+                            Side: {rule.sideMode}<br/>
+                            Bag color: {rule.bagColor || "Any"}<br/>
+                            Front: {mediaOptionLabel(recipe.mediaOptions || [], rule.frontMediaOptionId)}<br/>
+                            Back: {rule.backMediaMode === "specific" ? mediaOptionLabel(recipe.mediaOptions || [], rule.backMediaOptionId) : "Same as front"}
+                          </td>
+                          <td>
+                            Area: {variantEstimate.area.toFixed(4)} sqft<br/>
+                            Apply: {variantEstimate.applySeconds.toFixed(1)} sec<br/>
+                            Est cost: {money(variantEstimate.unitCost)}<br/>
+                            Target price: {money(variantEstimate.price)}
+                          </td>
+                          <td><span className={rule.active === false ? "badge yellow" : "badge green"}>{rule.active === false ? "Hidden" : "Active"}</span></td>
+                          <td>
+                            <details>
+                              <summary>Edit mapping</summary>
+                              <Form method="post" className="form-grid">
+                                <input type="hidden" name="intent" value="updateVariantRule" />
+                                <input type="hidden" name="variantRuleId" value={rule.id} />
+                                <input type="hidden" name="recipeId" value={recipe.id} />
+                                <NativeInput label="Rule name" name="name" defaultValue={rule.name} />
+                                <NativeInput label="Shopify variant title" name="shopifyVariantTitle" defaultValue={rule.shopifyVariantTitle || ""} placeholder="Single Sided / Black / Matte" />
+                                <NativeInput label="Shopify Variant GID" name="shopifyVariantGid" defaultValue={rule.shopifyVariantGid || ""} />
+                                <NativeInput label="Shopify Product GID" name="shopifyProductGid" defaultValue={rule.shopifyProductGid || recipe.productGid || ""} />
+                                <NativeInput label="SKU" name="sku" defaultValue={rule.sku || ""} />
+                                <NativeSelect label="Side rule" name="sideMode" defaultValue={rule.sideMode || "single"}>
+                                  <option value="single">Single sided / front only</option>
+                                  <option value="double_same">Double sided / same media</option>
+                                  <option value="double_mixed">Double sided / mixed media</option>
+                                  <option value="custom">Custom</option>
+                                </NativeSelect>
+                                <NativeInput label="Bag color / option" name="bagColor" defaultValue={rule.bagColor || ""} placeholder="Black, White, Clear, Any" />
+                                <NativeSelect label="Front media" name="frontMediaOptionId" defaultValue={rule.frontMediaOptionId || ""}>
+                                  <option value="">Default media</option>
+                                  {(recipe.mediaOptions || []).filter((option: any) => option.active !== false).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
+                                </NativeSelect>
+                                <NativeSelect label="Back media mode" name="backMediaMode" defaultValue={rule.backMediaMode || "same_as_front"}>
+                                  <option value="same_as_front">Same as front</option>
+                                  <option value="specific">Specific back media</option>
+                                  <option value="none">No back label</option>
+                                </NativeSelect>
+                                <NativeSelect label="Specific back media" name="backMediaOptionId" defaultValue={rule.backMediaOptionId || ""}>
+                                  <option value="">Default / same as front</option>
+                                  {(recipe.mediaOptions || []).filter((option: any) => option.active !== false).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
+                                </NativeSelect>
+                                <label className="field"><span>Use front zone</span><input type="checkbox" name="useFrontZone" defaultChecked={rule.useFrontZone !== false} /></label>
+                                <label className="field"><span>Use back zone</span><input type="checkbox" name="useBackZone" defaultChecked={rule.useBackZone === true} /></label>
+                                <label className="field"><span>Active</span><input type="checkbox" name="active" defaultChecked={rule.active !== false} /></label>
+                                <NativeTextarea label="Notes" name="notes" defaultValue={rule.notes || ""} />
+                                <div className="button-row wide"><button type="submit">Save variant mapping</button></div>
+                              </Form>
+                            </details>
+                            <div className="button-row">
+                              <Form method="post"><input type="hidden" name="intent" value={rule.active === false ? "restoreVariantRule" : "archiveVariantRule"} /><input type="hidden" name="variantRuleId" value={rule.id} /><button type="submit" className="secondary">{rule.active === false ? "Restore" : "Hide"}</button></Form>
+                              <Form method="post"><input type="hidden" name="intent" value="deleteVariantRule" /><input type="hidden" name="variantRuleId" value={rule.id} /><button type="submit" className="danger">Delete forever</button></Form>
+                            </div>
+                          </td>
+                        </tr>;
+                      })}
+                    </tbody>
+                  </table> : <p className="muted">No variant mappings match this item filter. Add mappings for existing Shopify variants like Single Sided / Matte / Black or Double Sided / Holographic.</p>;
+                })()}
+
+                <Form method="post" className="button-row">
+                  <input type="hidden" name="intent" value="cleanupDuplicateVariantRules" />
+                  <input type="hidden" name="recipeId" value={recipe.id} />
+                  <button type="submit" className="secondary">Delete duplicate variant mappings</button>
+                </Form>
+
+                <details>
+                  <summary>Add Shopify variant / option mapping</summary>
+                  <Form method="post" className="form-grid">
+                    <input type="hidden" name="intent" value="addVariantRule" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <NativeInput label="Rule name" name="name" placeholder="Single Sided - Matte - Black" />
+                    <NativeInput label="Shopify variant title" name="shopifyVariantTitle" placeholder="Single Sided / Black / Matte" />
+                    <NativeInput label="Shopify Variant GID" name="shopifyVariantGid" placeholder="optional for now" />
+                    <NativeInput label="Shopify Product GID" name="shopifyProductGid" defaultValue={recipe.productGid || ""} placeholder="optional for now" />
+                    <NativeInput label="SKU" name="sku" />
+                    <NativeSelect label="Side rule" name="sideMode" defaultValue="single">
+                      <option value="single">Single sided / front only</option>
+                      <option value="double_same">Double sided / same media</option>
+                      <option value="double_mixed">Double sided / mixed media</option>
+                      <option value="custom">Custom</option>
+                    </NativeSelect>
+                    <NativeInput label="Bag color / option" name="bagColor" placeholder="Black, White, Clear, Any" />
+                    <NativeSelect label="Front media" name="frontMediaOptionId">
+                      <option value="">Default media</option>
+                      {(recipe.mediaOptions || []).filter((option: any) => option.active !== false).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
+                    </NativeSelect>
+                    <NativeSelect label="Back media mode" name="backMediaMode" defaultValue="same_as_front">
+                      <option value="same_as_front">Same as front</option>
+                      <option value="specific">Specific back media</option>
+                      <option value="none">No back label</option>
+                    </NativeSelect>
+                    <NativeSelect label="Specific back media" name="backMediaOptionId">
+                      <option value="">Default / same as front</option>
+                      {(recipe.mediaOptions || []).filter((option: any) => option.active !== false).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
+                    </NativeSelect>
+                    <label className="field"><span>Use front zone</span><input type="checkbox" name="useFrontZone" defaultChecked /></label>
+                    <label className="field"><span>Use back zone</span><input type="checkbox" name="useBackZone" /></label>
+                    <NativeTextarea label="Notes" name="notes" placeholder="Use this for Shopify variants and pricing review later." />
+                    <div className="button-row wide"><button type="submit">Add variant mapping</button></div>
                   </Form>
                 </details>
               </div>
