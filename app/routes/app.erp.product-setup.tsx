@@ -934,14 +934,14 @@ export default function ProductSetupRecipeBuilder() {
 
               <div className="card" style={{ marginTop: 12 }}>
                 <h3>Media Options</h3>
-                <p className="muted">Use media options when a recipe can be quoted with different label media like matte, gloss, or holographic. Label zones can use a fixed material, a media option, or the same media as another zone.</p>
+                <p className="muted">Use media options when a recipe can be quoted with different label media like matte, gloss, or holographic. Pricing comes automatically from the selected material cost per sqft; Premium is a badge only.</p>
                 {recipe.mediaOptions?.length ? <table>
-                  <thead><tr><th>Option</th><th>Material</th><th>Adjustments</th><th>Status</th><th></th></tr></thead>
+                  <thead><tr><th>Option</th><th>Material</th><th>Badges</th><th>Status</th><th></th></tr></thead>
                   <tbody>
                     {recipe.mediaOptions.map((option: any) => <tr key={option.id}>
                       <td><strong>{option.name}</strong><br /><span className="muted">{option.defaultOption ? "Default" : ""} {option.premiumOption ? "Premium" : ""}</span></td>
                       <td>{option.material?.name}<br /><span className="muted">{money(unitCost(option.material))}/{option.material?.recipeBaseUnit || option.material?.baseUnit || "unit"}</span></td>
-                      <td>{option.priceAdjustPct ? `${option.priceAdjustPct}%` : ""} {option.priceAdjustFlat ? money(option.priceAdjustFlat) : ""}</td>
+                      <td>{option.premiumOption ? <span className="badge yellow">Premium</span> : <span className="muted">Standard</span>}</td>
                       <td><span className={option.active ? "badge green" : "badge yellow"}>{option.active ? "Active" : "Archived"}</span></td>
                       <td>
                         <div className="button-row">
@@ -970,11 +970,9 @@ export default function ProductSetupRecipeBuilder() {
                     <NativeSelect label="Material" name="materialId">
                       {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
                     </NativeSelect>
-                    <NativeInput label="Price adjust % optional" name="priceAdjustPct" type="number" step="0.01" defaultValue="0" />
-                    <NativeInput label="Price adjust flat optional" name="priceAdjustFlat" type="number" step="0.01" defaultValue="0" />
                     <label className="field"><span>Default option</span><input type="checkbox" name="defaultOption" /></label>
                     <label className="field"><span>Premium option</span><input type="checkbox" name="premiumOption" /></label>
-                    <NativeTextarea label="Notes" name="notes" placeholder="Example: default matte media, premium holographic media" />
+                    <NativeTextarea label="Notes" name="notes" placeholder="Example: standard matte media, premium holographic media, check stock before quoting" />
                     <div className="button-row wide"><button type="submit">Add media option</button></div>
                   </Form>
                 </details>
