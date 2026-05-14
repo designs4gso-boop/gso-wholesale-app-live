@@ -270,11 +270,24 @@ function priceFromMargin(cost: number, marginPct: number) {
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+  const url = new URL(request.url);
+  const recipeStatus = url.searchParams.get("recipeStatus") || "active";
+  const recipeSearch = (url.searchParams.get("recipeSearch") || "").trim();
+  const recipeWhere: any = { shop };
+  if (recipeStatus === "active") recipeWhere.active = true;
+  if (recipeStatus === "archived") recipeWhere.active = false;
+  if (recipeSearch) {
+    recipeWhere.OR = [
+      { name: { contains: recipeSearch, mode: "insensitive" } },
+      { sku: { contains: recipeSearch, mode: "insensitive" } },
+      { productFamily: { contains: recipeSearch, mode: "insensitive" } },
+    ];
+  }
 
   const [templates, recipes, materials, machines] = await Promise.all([
     db.productTypeProfile.findMany({ where: { shop }, orderBy: [{ active: "desc" }, { name: "asc" }] }),
     db.productRecipe.findMany({
-      where: { shop },
+      where: recipeWhere,
       orderBy: [{ active: "desc" }, { updatedAt: "desc" }],
       include: {
         productTypeProfile: true,
@@ -290,7 +303,7 @@ export async function loader({ request }: { request: Request }) {
   ]);
 
   const activeTemplates = templates.filter((template: any) => template.active);
-  return Response.json({ templates, activeTemplates, recipes, materials, machines });
+  return Response.json({ templates, activeTemplates, recipes, materials, machines, recipeStatus, recipeSearch });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -466,6 +479,25 @@ export async function action({ request }: { request: Request }) {
   if (intent === "archiveRecipe") {
     await db.productRecipe.updateMany({ where: { shop, id: String(formData.get("recipeId") || "") }, data: { active: false, useInQuotes: false } });
     return Response.json({ ok: true, message: "Product recipe archived." });
+  }
+
+  if (intent === "restoreRecipe") {
+    await db.productRecipe.updateMany({ where: { shop, id: String(formData.get("recipeId") || "") }, data: { active: true } });
+    return Response.json({ ok: true, message: "Product recipe restored." });
+  }
+
+  if (intent === "deleteRecipeForever") {
+    const recipeId = String(formData.get("recipeId") || "");
+    await db.recipeMaterial.deleteMany({ where: { shop, recipeId } });
+    await db.recipeLabelZone.deleteMany({ where: { shop, recipeId } });
+    await db.recipeMediaOption.deleteMany({ where: { shop, recipeId } });
+    await db.recipeInkRequirement.deleteMany({ where: { shop, recipeId } });
+    await db.recipeMachineRule.deleteMany({ where: { shop, recipeId } });
+    await db.recipeTier.deleteMany({ where: { shop, recipeId } });
+    await db.recipeAddOn.deleteMany({ where: { shop, recipeId } });
+    await db.sourcedCostTier.deleteMany({ where: { shop, recipeId } });
+    await db.productRecipe.deleteMany({ where: { shop, id: recipeId } });
+    return Response.json({ ok: true, message: "Product recipe permanently deleted." });
   }
 
   if (intent === "addMaterial") {
@@ -769,7 +801,7 @@ function PageStyles() {
 }
 
 export default function ProductSetupRecipeBuilder() {
-  const { templates, activeTemplates, recipes, materials, machines } = useLoaderData<any>();
+  const { templates, activeTemplates, recipes, materials, machines, recipeStatus = "active", recipeSearch = "" } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const materialOptions = materials || [];
   const machineOptions = machines || [];
@@ -923,6 +955,19 @@ export default function ProductSetupRecipeBuilder() {
       <div className="card">
         <h2>Product Recipes</h2>
         <p className="muted">Recipe cost preview is a working estimate. It uses material unit costs, waste, labor assumptions, setup cost, and target margins.</p>
+        <Form method="get" className="form-grid" style={{ marginTop: 10, marginBottom: 12 }}>
+          <NativeSelect label="Recipe status" name="recipeStatus" defaultValue={recipeStatus}>
+            <option value="active">Active recipes only</option>
+            <option value="archived">Archived recipes only</option>
+            <option value="all">All recipes</option>
+          </NativeSelect>
+          <NativeInput label="Search recipes" name="recipeSearch" defaultValue={recipeSearch} placeholder="4x5, label, jar, SKU" />
+          <div className="button-row" style={{ alignItems: "end" }}>
+            <button type="submit" className="secondary">Apply filter</button>
+            <a className="secondary" href="/app/erp/product-setup">Reset</a>
+          </div>
+        </Form>
+        <p className="muted">Archived recipes are hidden by default. Use the status filter to restore or permanently delete old test/duplicate recipes.</p>
         {recipes.length ? recipes.map((recipe: any) => {
           const estimate = estimateRecipe(recipe);
           const templateTiers = recipe.pricingTemplateMode === "template" ? parseTiers(recipe.productTypeProfile?.tierTemplate) : [];
@@ -932,6 +977,7 @@ export default function ProductSetupRecipeBuilder() {
             <details key={recipe.id} open={false}>
               <summary>
                 {recipe.name} <span className="badge">{recipe.productFamily || recipe.productType}</span>
+                {recipe.active ? <span className="badge green">Active</span> : <span className="badge red">Archived</span>}
                 {recipe.useInQuotes ? <span className="badge green">Use in Quotes</span> : <span className="badge yellow">Hidden</span>}
                 {recipe.costReviewNeeded ? <span className="badge red">Cost Review</span> : null}
               </summary>
@@ -979,11 +1025,22 @@ export default function ProductSetupRecipeBuilder() {
                     <div className="button-row wide"><button type="submit">Save recipe</button></div>
                   </Form>
 
-                  <Form method="post" className="button-row">
-                    <input type="hidden" name="intent" value="archiveRecipe" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <button type="submit" className="danger">Archive recipe</button>
-                  </Form>
+                  <div className="button-row">
+                    {recipe.active ? <Form method="post">
+                      <input type="hidden" name="intent" value="archiveRecipe" />
+                      <input type="hidden" name="recipeId" value={recipe.id} />
+                      <button type="submit" className="danger">Archive recipe</button>
+                    </Form> : <Form method="post">
+                      <input type="hidden" name="intent" value="restoreRecipe" />
+                      <input type="hidden" name="recipeId" value={recipe.id} />
+                      <button type="submit" className="secondary">Restore recipe</button>
+                    </Form>}
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="deleteRecipeForever" />
+                      <input type="hidden" name="recipeId" value={recipe.id} />
+                      <button type="submit" className="danger">Delete forever</button>
+                    </Form>
+                  </div>
                 </div>
 
                 <div>
@@ -1314,7 +1371,7 @@ export default function ProductSetupRecipeBuilder() {
               </div>
             </details>
           );
-        }) : <p className="muted">No recipes yet. Create your first product recipe above.</p>}
+        }) : <p className="muted">No recipes match this filter. Create a recipe above or switch the status filter to Archived/All.</p>}
       </div>
     </div>
   );
