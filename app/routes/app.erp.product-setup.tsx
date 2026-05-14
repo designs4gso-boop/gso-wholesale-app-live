@@ -1,4 +1,4 @@
-import { Form, redirect, useActionData, useLoaderData, useSearchParams } from "react-router";
+import { Form, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -208,24 +208,38 @@ function unitCost(material: any) {
   return Number(material?.calculatedUnitCost || material?.costPerUnit || material?.purchaseCost || 0);
 }
 
+function zoneSqft(zone: any) {
+  const width = Number(zone.widthIn || 0);
+  const height = Number(zone.heightIn || 0);
+  const count = Number(zone.qtyPerUnit || 1);
+  return (width * height * count) / 144;
+}
+
 function estimateRecipe(recipe: any, laborRate = 25) {
   const qty = Math.max(1, Number(recipe.defaultQuantity || recipe.minQuantity || 1));
-  const materialCostPerUnit = (recipe.materials || []).reduce((sum: number, row: any) => {
+  const materialRowCostPerUnit = (recipe.materials || []).reduce((sum: number, row: any) => {
     const base = unitCost(row.material);
     const quantity = Number(row.quantity || 0);
     const wasteMultiplier = row.includeWaste ? 1 + (Number(row.wastePct || 0) / 100) : 1;
     return sum + base * quantity * wasteMultiplier;
   }, 0);
-  const perUnitLaborSeconds = Number(recipe.applicationLaborSecondsPerUnit || 0) + Number(recipe.packingLaborSecondsPerUnit || 0);
+  const zones = recipe.labelZones || [];
+  const labelSqftPerUnit = zones.reduce((sum: number, zone: any) => sum + zoneSqft(zone), 0);
+  const labelMediaCostPerUnit = zones.reduce((sum: number, zone: any) => {
+    const base = unitCost(zone.material);
+    const wasteMultiplier = 1 + (Number(recipe.wastePct || 0) / 100);
+    return sum + base * zoneSqft(zone) * wasteMultiplier;
+  }, 0);
+  const labelApplicationSecondsPerUnit = zones.reduce((sum: number, zone: any) => sum + (Number(zone.applicationSecondsPerLabel || 0) * Number(zone.qtyPerUnit || 1)), 0);
+  const materialCostPerUnit = materialRowCostPerUnit + labelMediaCostPerUnit;
+  const perUnitLaborSeconds = Number(recipe.applicationLaborSecondsPerUnit || 0) + Number(recipe.packingLaborSecondsPerUnit || 0) + labelApplicationSecondsPerUnit;
   const perUnitLaborCost = (perUnitLaborSeconds / 3600) * laborRate;
   const perJobLaborCost = ((Number(recipe.laborMinutes || 0) + Number(recipe.prepressMinutes || 0)) / 60) * laborRate / qty;
   const setupCostPerUnit = Number(recipe.setupCost || 0) / qty;
-  const wasteMultiplier = 1 + (Number(recipe.wastePct || 0) / 100);
-  const unitCostBeforeWaste = materialCostPerUnit + perUnitLaborCost + perJobLaborCost + setupCostPerUnit;
-  const unitCostTotal = unitCostBeforeWaste * wasteMultiplier;
+  const unitCostTotal = materialCostPerUnit + perUnitLaborCost + perJobLaborCost + setupCostPerUnit;
   const margin = Number(recipe.targetMarginPct || 50);
   const suggestedPrice = margin >= 99 ? unitCostTotal : unitCostTotal / (1 - margin / 100);
-  return { qty, materialCostPerUnit, perUnitLaborCost, perJobLaborCost, setupCostPerUnit, unitCostTotal, suggestedPrice };
+  return { qty, materialCostPerUnit, materialRowCostPerUnit, labelMediaCostPerUnit, labelSqftPerUnit, labelApplicationSecondsPerUnit, perUnitLaborCost, perJobLaborCost, setupCostPerUnit, unitCostTotal, suggestedPrice };
 }
 
 function priceFromMargin(cost: number, marginPct: number) {
@@ -245,6 +259,7 @@ export async function loader({ request }: { request: Request }) {
       include: {
         productTypeProfile: true,
         materials: { include: { material: true }, orderBy: { createdAt: "asc" } },
+        labelZones: { include: { material: true }, orderBy: { createdAt: "asc" } },
         tiers: { orderBy: { minQty: "asc" } },
         machineRules: { include: { preferredMachine: true } },
       },
@@ -388,7 +403,7 @@ export async function action({ request }: { request: Request }) {
       }
     }
 
-    return redirect("/app/erp/product-setup?created=recipe");
+    return Response.json({ ok: true, message: "Product recipe created." });
   }
 
   if (intent === "updateRecipe") {
@@ -452,6 +467,56 @@ export async function action({ request }: { request: Request }) {
   if (intent === "removeMaterial") {
     await db.recipeMaterial.deleteMany({ where: { shop, id: String(formData.get("recipeMaterialId") || "") } });
     return Response.json({ ok: true, message: "Material removed from recipe." });
+  }
+
+  if (intent === "addLabelZone") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const materialId = String(formData.get("materialId") || "") || null;
+    await db.recipeLabelZone.create({
+      data: {
+        shop,
+        recipeId,
+        materialId,
+        name: String(formData.get("name") || "Label zone"),
+        position: String(formData.get("position") || "Front"),
+        widthIn: numberValue(formData.get("widthIn"), 0),
+        heightIn: numberValue(formData.get("heightIn"), 0),
+        qtyPerUnit: numberValue(formData.get("qtyPerUnit"), 1),
+        applicationSecondsPerLabel: numberValue(formData.get("applicationSecondsPerLabel"), 0),
+        required: String(formData.get("required") || "") === "on",
+        notes: String(formData.get("notes") || "") || null,
+        active: true,
+      },
+    });
+    return Response.json({ ok: true, message: "Label/application zone added." });
+  }
+
+  if (intent === "duplicateLabelZone") {
+    const zoneId = String(formData.get("zoneId") || "");
+    const zone = await db.recipeLabelZone.findFirst({ where: { shop, id: zoneId } });
+    if (!zone) return Response.json({ ok: false, message: "Label zone not found." }, { status: 404 });
+    await db.recipeLabelZone.create({
+      data: {
+        shop,
+        recipeId: zone.recipeId,
+        materialId: zone.materialId,
+        name: `${zone.name || "Label zone"} copy`,
+        position: zone.position === "Front" ? "Back" : zone.position,
+        widthIn: zone.widthIn,
+        heightIn: zone.heightIn,
+        qtyPerUnit: zone.qtyPerUnit,
+        applicationSecondsPerLabel: zone.applicationSecondsPerLabel,
+        required: zone.required,
+        notes: zone.notes,
+        active: true,
+      },
+    });
+    return Response.json({ ok: true, message: "Label zone duplicated." });
+  }
+
+  if (intent === "removeLabelZone") {
+    await db.recipeLabelZone.deleteMany({ where: { shop, id: String(formData.get("zoneId") || "") } });
+    return Response.json({ ok: true, message: "Label/application zone removed." });
   }
 
   if (intent === "syncTiersFromTemplate") {
@@ -537,7 +602,6 @@ function PageStyles() {
 export default function ProductSetupRecipeBuilder() {
   const { templates, activeTemplates, recipes, materials, machines } = useLoaderData<any>();
   const actionData = useActionData<any>();
-  const [searchParams] = useSearchParams();
   const materialOptions = materials || [];
   const machineOptions = machines || [];
   const templateOptions = templates || [];
@@ -551,7 +615,6 @@ export default function ProductSetupRecipeBuilder() {
         <p>Build reusable product recipes, assign category pricing templates, preview tier profitability, and keep quotes simple.</p>
       </div>
 
-      {searchParams.get("created") === "recipe" ? <div className="card"><span className="badge green">Product recipe created. Scroll to Product Recipes to add materials.</span></div> : null}
       {actionData?.message ? <div className="card"><span className={actionData.ok ? "badge green" : "badge red"}>{actionData.message}</span></div> : null}
 
       <div className="card">
@@ -639,7 +702,7 @@ export default function ProductSetupRecipeBuilder() {
             <label className="field"><span>Use in quotes</span><input type="checkbox" name="useInQuotes" defaultChecked /></label>
             <label className="field"><span>Cost review needed</span><input type="checkbox" name="costReviewNeeded" /></label>
             <NativeTextarea label="Notes" name="notes" />
-            <div className="button-row wide"><button type="submit" name="intent" value="createRecipe">Create recipe</button></div>
+            <div className="button-row wide"><button type="submit">Create recipe</button></div>
           </Form>
         </div>
       </div>
@@ -758,6 +821,9 @@ export default function ProductSetupRecipeBuilder() {
                   <h3>Cost + Tier Preview</h3>
                   <p><strong>Default quantity:</strong> {estimate.qty}</p>
                   <p><strong>Material cost/unit:</strong> {money(estimate.materialCostPerUnit)}</p>
+                  <p><strong>Manual material rows:</strong> {money(estimate.materialRowCostPerUnit || 0)}</p>
+                  <p><strong>Label zone media:</strong> {money(estimate.labelMediaCostPerUnit || 0)} | {(estimate.labelSqftPerUnit || 0).toFixed(4)} sqft/unit</p>
+                  <p><strong>Label application time:</strong> {(estimate.labelApplicationSecondsPerUnit || 0).toFixed(1)} sec/unit</p>
                   <p><strong>Labor cost/unit:</strong> {money(estimate.perUnitLaborCost + estimate.perJobLaborCost)}</p>
                   <p><strong>Setup cost/unit:</strong> {money(estimate.setupCostPerUnit)}</p>
                   <p><strong>Estimated total cost/unit:</strong> {money(estimate.unitCostTotal)}</p>
@@ -796,6 +862,66 @@ export default function ProductSetupRecipeBuilder() {
                     </Form>
                   </details>
                 </div>
+              </div>
+
+              <div className="card" style={{ marginTop: 12 }}>
+                <h3>Application / Label Zones</h3>
+                <p className="muted">Use zones for sticker bags, jars, boxes, and any product with one or more applied labels. Each zone auto-calculates sqft and application labor.</p>
+                {recipe.labelZones?.length ? <table>
+                  <thead><tr><th>Zone</th><th>Size</th><th>Qty</th><th>Material</th><th>Area/unit</th><th>Apply time</th><th></th></tr></thead>
+                  <tbody>
+                    {recipe.labelZones.map((zone: any) => <tr key={zone.id}>
+                      <td><strong>{zone.name}</strong><br /><span className="muted">{zone.position} {zone.required ? "| required" : "| optional"}</span></td>
+                      <td>{zone.widthIn} in x {zone.heightIn} in</td>
+                      <td>{zone.qtyPerUnit}</td>
+                      <td>{zone.material?.name || "No material selected"}</td>
+                      <td>{zoneSqft(zone).toFixed(4)} sqft</td>
+                      <td>{(Number(zone.applicationSecondsPerLabel || 0) * Number(zone.qtyPerUnit || 1)).toFixed(1)} sec/unit</td>
+                      <td>
+                        <div className="button-row">
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="duplicateLabelZone" />
+                            <input type="hidden" name="zoneId" value={zone.id} />
+                            <button type="submit" className="secondary">Duplicate</button>
+                          </Form>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="removeLabelZone" />
+                            <input type="hidden" name="zoneId" value={zone.id} />
+                            <button type="submit" className="danger">Remove</button>
+                          </Form>
+                        </div>
+                      </td>
+                    </tr>)}
+                  </tbody>
+                </table> : <p className="muted">No label/application zones yet. Add one zone for a single-sided sticker bag, two zones for a double-sided bag, or multiple zones for jars.</p>}
+
+                <details>
+                  <summary>Add label/application zone</summary>
+                  <Form method="post" className="form-grid">
+                    <input type="hidden" name="intent" value="addLabelZone" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <NativeInput label="Zone name" name="name" placeholder="Front label" />
+                    <NativeSelect label="Position" name="position" defaultValue="Front">
+                      <option value="Front">Front</option>
+                      <option value="Back">Back</option>
+                      <option value="Lid">Lid</option>
+                      <option value="Side">Side</option>
+                      <option value="Bottom">Bottom</option>
+                      <option value="Custom">Custom</option>
+                    </NativeSelect>
+                    <NativeInput label="Width inches" name="widthIn" type="number" step="0.0001" defaultValue="4" />
+                    <NativeInput label="Height inches" name="heightIn" type="number" step="0.0001" defaultValue="5" />
+                    <NativeInput label="Qty per finished item" name="qtyPerUnit" type="number" step="0.0001" defaultValue="1" />
+                    <NativeInput label="Application sec per label" name="applicationSecondsPerLabel" type="number" step="0.01" defaultValue="6" />
+                    <NativeSelect label="Label media material" name="materialId">
+                      <option value="">No material selected</option>
+                      {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
+                    </NativeSelect>
+                    <label className="field"><span>Required</span><input type="checkbox" name="required" defaultChecked /></label>
+                    <NativeTextarea label="Notes" name="notes" placeholder="Example: 4x5 front sticker, Miron jar lid label, back compliance label" />
+                    <div className="button-row wide"><button type="submit">Add label zone</button></div>
+                  </Form>
+                </details>
               </div>
 
               <div className="card" style={{ marginTop: 12 }}>

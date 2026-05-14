@@ -296,6 +296,7 @@ model Material {
   productionUsages   ProductionMaterialUsage[]
   inventoryMovements MaterialInventoryMovement[]
   variants           MaterialVariant[]
+  recipeLabelZones   RecipeLabelZone[]
 
   @@index([shop])
   @@index([shop, materialType])
@@ -407,6 +408,7 @@ model ProductRecipe {
   productTypeProfile ProductTypeProfile?    @relation(fields: [productTypeProfileId], references: [id])
   vendorProduct      VendorProduct?         @relation(fields: [vendorProductId], references: [id])
   materials          RecipeMaterial[]
+  labelZones         RecipeLabelZone[]
   inkRequirements    RecipeInkRequirement[]
   machineRules       RecipeMachineRule[]
   tiers              RecipeTier[]
@@ -488,6 +490,32 @@ model VendorProductAddOn {
   @@index([shop])
   @@index([vendorProductId])
   @@index([pricingType])
+}
+
+model RecipeLabelZone {
+  id                         String   @id @default(cuid())
+  shop                       String
+  recipeId                   String
+  materialId                 String?
+  name                       String
+  position                   String? // Front, Back, Lid, Side, Bottom, Custom
+  widthIn                    Float    @default(0)
+  heightIn                   Float    @default(0)
+  qtyPerUnit                 Float    @default(1)
+  applicationSecondsPerLabel Float    @default(0)
+  required                   Boolean  @default(true)
+  active                     Boolean  @default(true)
+  notes                      String?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  recipe   ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  material Material?     @relation(fields: [materialId], references: [id], onDelete: SetNull)
+
+  @@index([shop])
+  @@index([recipeId])
+  @@index([materialId])
+  @@index([shop, active])
 }
 
 model RecipeMaterial {
