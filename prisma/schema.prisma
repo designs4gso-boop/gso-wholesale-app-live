@@ -296,6 +296,7 @@ model Material {
   productionUsages   ProductionMaterialUsage[]
   inventoryMovements MaterialInventoryMovement[]
   variants           MaterialVariant[]
+  recipeMediaOptions RecipeMediaOption[]
   recipeLabelZones   RecipeLabelZone[]
 
   @@index([shop])
@@ -409,6 +410,7 @@ model ProductRecipe {
   vendorProduct      VendorProduct?         @relation(fields: [vendorProductId], references: [id])
   materials          RecipeMaterial[]
   labelZones         RecipeLabelZone[]
+  mediaOptions       RecipeMediaOption[]
   inkRequirements    RecipeInkRequirement[]
   machineRules       RecipeMachineRule[]
   tiers              RecipeTier[]
@@ -492,11 +494,39 @@ model VendorProductAddOn {
   @@index([pricingType])
 }
 
+model RecipeMediaOption {
+  id              String   @id @default(cuid())
+  shop            String
+  recipeId        String
+  name            String
+  materialId      String
+  defaultOption   Boolean  @default(false)
+  premiumOption   Boolean  @default(false)
+  priceAdjustPct  Float    @default(0)
+  priceAdjustFlat Float    @default(0)
+  active          Boolean  @default(true)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  recipe     ProductRecipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  material   Material          @relation(fields: [materialId], references: [id])
+  labelZones RecipeLabelZone[]
+
+  @@index([shop])
+  @@index([recipeId])
+  @@index([materialId])
+  @@index([shop, active])
+}
+
 model RecipeLabelZone {
   id                         String   @id @default(cuid())
   shop                       String
   recipeId                   String
   materialId                 String?
+  mediaMode                  String   @default("fixed") // fixed, media_option, same_as_zone
+  mediaOptionId              String?
+  sameAsZoneId               String?
   name                       String
   position                   String? // Front, Back, Lid, Side, Bottom, Custom
   widthIn                    Float    @default(0)
@@ -509,12 +539,14 @@ model RecipeLabelZone {
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 
-  recipe   ProductRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
-  material Material?     @relation(fields: [materialId], references: [id], onDelete: SetNull)
+  recipe      ProductRecipe      @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  material    Material?          @relation(fields: [materialId], references: [id], onDelete: SetNull)
+  mediaOption RecipeMediaOption? @relation(fields: [mediaOptionId], references: [id], onDelete: SetNull)
 
   @@index([shop])
   @@index([recipeId])
   @@index([materialId])
+  @@index([mediaOptionId])
   @@index([shop, active])
 }
 

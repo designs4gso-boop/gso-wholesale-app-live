@@ -215,6 +215,24 @@ function zoneSqft(zone: any) {
   return (width * height * count) / 144;
 }
 
+function materialForZone(zone: any, allZones: any[] = []) {
+  if (zone.mediaMode === "media_option" && zone.mediaOption?.material) return zone.mediaOption.material;
+  if (zone.mediaMode === "same_as_zone") {
+    const source = allZones.find((candidate: any) => candidate.id === zone.sameAsZoneId) || allZones.find((candidate: any) => candidate.position === "Front") || allZones.find((candidate: any) => candidate.id !== zone.id);
+    if (source) return materialForZone(source, allZones);
+  }
+  return zone.material;
+}
+
+function mediaLabelForZone(zone: any, allZones: any[] = []) {
+  if (zone.mediaMode === "same_as_zone") {
+    const source = allZones.find((candidate: any) => candidate.id === zone.sameAsZoneId) || allZones.find((candidate: any) => candidate.position === "Front");
+    return source ? `Same as ${source.name}` : "Same as front";
+  }
+  if (zone.mediaMode === "media_option") return zone.mediaOption?.name || "Media option";
+  return materialForZone(zone, allZones)?.name || "No material selected";
+}
+
 function estimateRecipe(recipe: any, laborRate = 25) {
   const qty = Math.max(1, Number(recipe.defaultQuantity || recipe.minQuantity || 1));
   const materialRowCostPerUnit = (recipe.materials || []).reduce((sum: number, row: any) => {
@@ -226,7 +244,7 @@ function estimateRecipe(recipe: any, laborRate = 25) {
   const zones = recipe.labelZones || [];
   const labelSqftPerUnit = zones.reduce((sum: number, zone: any) => sum + zoneSqft(zone), 0);
   const labelMediaCostPerUnit = zones.reduce((sum: number, zone: any) => {
-    const base = unitCost(zone.material);
+    const base = unitCost(materialForZone(zone, zones));
     const wasteMultiplier = 1 + (Number(recipe.wastePct || 0) / 100);
     return sum + base * zoneSqft(zone) * wasteMultiplier;
   }, 0);
@@ -259,7 +277,8 @@ export async function loader({ request }: { request: Request }) {
       include: {
         productTypeProfile: true,
         materials: { include: { material: true }, orderBy: { createdAt: "asc" } },
-        labelZones: { include: { material: true }, orderBy: { createdAt: "asc" } },
+        labelZones: { include: { material: true, mediaOption: { include: { material: true } } }, orderBy: { createdAt: "asc" } },
+        mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
         tiers: { orderBy: { minQty: "asc" } },
         machineRules: { include: { preferredMachine: true } },
       },
@@ -469,6 +488,49 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: true, message: "Material removed from recipe." });
   }
 
+  if (intent === "addMediaOption") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const materialId = String(formData.get("materialId") || "");
+    const makeDefault = String(formData.get("defaultOption") || "") === "on";
+    if (makeDefault) await db.recipeMediaOption.updateMany({ where: { shop, recipeId }, data: { defaultOption: false } });
+    await db.recipeMediaOption.create({
+      data: {
+        shop,
+        recipeId,
+        materialId,
+        name: String(formData.get("name") || "Media option"),
+        defaultOption: makeDefault,
+        premiumOption: String(formData.get("premiumOption") || "") === "on",
+        priceAdjustPct: numberValue(formData.get("priceAdjustPct"), 0),
+        priceAdjustFlat: numberValue(formData.get("priceAdjustFlat"), 0),
+        notes: String(formData.get("notes") || "") || null,
+        active: true,
+      },
+    });
+    return Response.json({ ok: true, message: "Media option added." });
+  }
+
+  if (intent === "archiveMediaOption") {
+    await db.recipeMediaOption.updateMany({ where: { shop, id: String(formData.get("mediaOptionId") || "") }, data: { active: false } });
+    return Response.json({ ok: true, message: "Media option archived." });
+  }
+
+  if (intent === "restoreMediaOption") {
+    await db.recipeMediaOption.updateMany({ where: { shop, id: String(formData.get("mediaOptionId") || "") }, data: { active: true } });
+    return Response.json({ ok: true, message: "Media option restored." });
+  }
+
+  if (intent === "deleteMediaOption") {
+    const id = String(formData.get("mediaOptionId") || "");
+    const usedCount = await db.recipeLabelZone.count({ where: { shop, mediaOptionId: id } });
+    if (usedCount > 0) {
+      await db.recipeMediaOption.updateMany({ where: { shop, id }, data: { active: false } });
+      return Response.json({ ok: true, message: "Media option is used by zones, so it was archived instead of deleted." });
+    }
+    await db.recipeMediaOption.deleteMany({ where: { shop, id } });
+    return Response.json({ ok: true, message: "Unused media option deleted." });
+  }
+
   if (intent === "addLabelZone") {
     const recipeId = String(formData.get("recipeId") || "");
     const materialId = String(formData.get("materialId") || "") || null;
@@ -477,6 +539,9 @@ export async function action({ request }: { request: Request }) {
         shop,
         recipeId,
         materialId,
+        mediaMode: String(formData.get("mediaMode") || "fixed"),
+        mediaOptionId: String(formData.get("mediaOptionId") || "") || null,
+        sameAsZoneId: String(formData.get("sameAsZoneId") || "") || null,
         name: String(formData.get("name") || "Label zone"),
         position: String(formData.get("position") || "Front"),
         widthIn: numberValue(formData.get("widthIn"), 0),
@@ -500,6 +565,9 @@ export async function action({ request }: { request: Request }) {
         shop,
         recipeId: zone.recipeId,
         materialId: zone.materialId,
+        mediaMode: zone.mediaMode || "fixed",
+        mediaOptionId: zone.mediaOptionId,
+        sameAsZoneId: zone.sameAsZoneId,
         name: `${zone.name || "Label zone"} copy`,
         position: zone.position === "Front" ? "Back" : zone.position,
         widthIn: zone.widthIn,
@@ -865,6 +933,54 @@ export default function ProductSetupRecipeBuilder() {
               </div>
 
               <div className="card" style={{ marginTop: 12 }}>
+                <h3>Media Options</h3>
+                <p className="muted">Use media options when a recipe can be quoted with different label media like matte, gloss, or holographic. Label zones can use a fixed material, a media option, or the same media as another zone.</p>
+                {recipe.mediaOptions?.length ? <table>
+                  <thead><tr><th>Option</th><th>Material</th><th>Adjustments</th><th>Status</th><th></th></tr></thead>
+                  <tbody>
+                    {recipe.mediaOptions.map((option: any) => <tr key={option.id}>
+                      <td><strong>{option.name}</strong><br /><span className="muted">{option.defaultOption ? "Default" : ""} {option.premiumOption ? "Premium" : ""}</span></td>
+                      <td>{option.material?.name}<br /><span className="muted">{money(unitCost(option.material))}/{option.material?.recipeBaseUnit || option.material?.baseUnit || "unit"}</span></td>
+                      <td>{option.priceAdjustPct ? `${option.priceAdjustPct}%` : ""} {option.priceAdjustFlat ? money(option.priceAdjustFlat) : ""}</td>
+                      <td><span className={option.active ? "badge green" : "badge yellow"}>{option.active ? "Active" : "Archived"}</span></td>
+                      <td>
+                        <div className="button-row">
+                          <Form method="post">
+                            <input type="hidden" name="intent" value={option.active ? "archiveMediaOption" : "restoreMediaOption"} />
+                            <input type="hidden" name="mediaOptionId" value={option.id} />
+                            <button type="submit" className="secondary">{option.active ? "Archive" : "Restore"}</button>
+                          </Form>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="deleteMediaOption" />
+                            <input type="hidden" name="mediaOptionId" value={option.id} />
+                            <button type="submit" className="danger">Delete</button>
+                          </Form>
+                        </div>
+                      </td>
+                    </tr>)}
+                  </tbody>
+                </table> : <p className="muted">No media options yet. Add Matte, Gloss, Holographic, or any other selectable media for this recipe.</p>}
+
+                <details>
+                  <summary>Add media option</summary>
+                  <Form method="post" className="form-grid">
+                    <input type="hidden" name="intent" value="addMediaOption" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <NativeInput label="Option name" name="name" placeholder="Matte" />
+                    <NativeSelect label="Material" name="materialId">
+                      {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
+                    </NativeSelect>
+                    <NativeInput label="Price adjust % optional" name="priceAdjustPct" type="number" step="0.01" defaultValue="0" />
+                    <NativeInput label="Price adjust flat optional" name="priceAdjustFlat" type="number" step="0.01" defaultValue="0" />
+                    <label className="field"><span>Default option</span><input type="checkbox" name="defaultOption" /></label>
+                    <label className="field"><span>Premium option</span><input type="checkbox" name="premiumOption" /></label>
+                    <NativeTextarea label="Notes" name="notes" placeholder="Example: default matte media, premium holographic media" />
+                    <div className="button-row wide"><button type="submit">Add media option</button></div>
+                  </Form>
+                </details>
+              </div>
+
+              <div className="card" style={{ marginTop: 12 }}>
                 <h3>Application / Label Zones</h3>
                 <p className="muted">Use zones for sticker bags, jars, boxes, and any product with one or more applied labels. Each zone auto-calculates sqft and application labor.</p>
                 {recipe.labelZones?.length ? <table>
@@ -874,7 +990,7 @@ export default function ProductSetupRecipeBuilder() {
                       <td><strong>{zone.name}</strong><br /><span className="muted">{zone.position} {zone.required ? "| required" : "| optional"}</span></td>
                       <td>{zone.widthIn} in x {zone.heightIn} in</td>
                       <td>{zone.qtyPerUnit}</td>
-                      <td>{zone.material?.name || "No material selected"}</td>
+                      <td>{mediaLabelForZone(zone, recipe.labelZones || [])}<br /><span className="muted">{materialForZone(zone, recipe.labelZones || [])?.name || ""}</span></td>
                       <td>{zoneSqft(zone).toFixed(4)} sqft</td>
                       <td>{(Number(zone.applicationSecondsPerLabel || 0) * Number(zone.qtyPerUnit || 1)).toFixed(1)} sec/unit</td>
                       <td>
@@ -913,9 +1029,22 @@ export default function ProductSetupRecipeBuilder() {
                     <NativeInput label="Height inches" name="heightIn" type="number" step="0.0001" defaultValue="5" />
                     <NativeInput label="Qty per finished item" name="qtyPerUnit" type="number" step="0.0001" defaultValue="1" />
                     <NativeInput label="Application sec per label" name="applicationSecondsPerLabel" type="number" step="0.01" defaultValue="6" />
-                    <NativeSelect label="Label media material" name="materialId">
-                      <option value="">No material selected</option>
+                    <NativeSelect label="Media mode" name="mediaMode" defaultValue="fixed">
+                      <option value="fixed">Fixed material</option>
+                      <option value="media_option">Selectable media option</option>
+                      <option value="same_as_zone">Same as another zone</option>
+                    </NativeSelect>
+                    <NativeSelect label="Fixed material" name="materialId">
+                      <option value="">No fixed material</option>
                       {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
+                    </NativeSelect>
+                    <NativeSelect label="Media option" name="mediaOptionId">
+                      <option value="">No media option</option>
+                      {(recipe.mediaOptions || []).filter((option: any) => option.active).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
+                    </NativeSelect>
+                    <NativeSelect label="Same as zone" name="sameAsZoneId">
+                      <option value="">Auto / front zone</option>
+                      {(recipe.labelZones || []).map((zone: any) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}
                     </NativeSelect>
                     <label className="field"><span>Required</span><input type="checkbox" name="required" defaultChecked /></label>
                     <NativeTextarea label="Notes" name="notes" placeholder="Example: 4x5 front sticker, Miron jar lid label, back compliance label" />
