@@ -1364,6 +1364,7 @@ function PageStyles() {
 }
 
 export default function ProductSetupRecipeBuilder() {
+  const productSearchResults: any[] = [];
   const { templates, activeTemplates, recipes, materials, machines, recipeStatus = "active", recipeSearch = "", itemStatus = "active" } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const materialOptions = materials || [];
@@ -2155,3 +2156,4 @@ export default function ProductSetupRecipeBuilder() {
     </div>
   );
 }
+
