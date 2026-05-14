@@ -286,7 +286,7 @@ function estimateVariantFromRule(recipe: any, rule: any) {
   const useFront = rule.useFrontZone !== false && frontZone;
   const useBack = rule.useBackZone === true && backZone;
   const selectedZones = [useFront ? frontZone : null, useBack ? backZone : null].filter(Boolean);
-  const area = selectedZones.reduce((sum: number, zone: any) => sum + zoneAreaSqft(zone), 0);
+  const area = selectedZones.reduce((sum: number, zone: any) => sum + (((Number(zone.widthIn || 0) * Number(zone.heightIn || 0)) / 144) * Number(zone.quantityPerUnit || 1))(zone), 0);
   const applySeconds = selectedZones.reduce((sum: number, zone: any) => sum + (Number(zone.applicationSecondsPerLabel || 0) * Number(zone.qtyPerUnit || 1)), 0);
   const mediaOptions = recipe.mediaOptions || [];
   const frontOption = findOption(mediaOptions, rule.frontMediaOptionId) || mediaOptions.find((option: any) => option.defaultOption && option.active !== false) || mediaOptions.find((option: any) => option.active !== false);
@@ -294,7 +294,7 @@ function estimateVariantFromRule(recipe: any, rule: any) {
   const mediaCost = selectedZones.reduce((sum: number, zone: any) => {
     const option = zone === backZone ? backOption : frontOption;
     const material = option?.material || zone?.mediaOption?.material || zone?.material;
-    return sum + zoneAreaSqft(zone) * unitCost(material);
+    return sum + (((Number(zone.widthIn || 0) * Number(zone.heightIn || 0)) / 144) * Number(zone.quantityPerUnit || 1))(zone) * unitCost(material);
   }, 0) * (1 + Number(recipe.wastePct || 0) / 100);
   const originalZoneCost = Number(baseEstimate.labelMediaCostPerUnit || 0);
   const originalApplySeconds = Number(baseEstimate.labelApplicationSecondsPerUnit || 0);
@@ -2156,5 +2156,6 @@ export default function ProductSetupRecipeBuilder() {
     </div>
   );
 }
+
 
 
