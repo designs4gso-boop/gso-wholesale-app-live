@@ -2122,7 +2122,7 @@ export default function ProductSetupRecipeBuilder() {
 
                 <details>
                   <summary>Add material to recipe</summary>
-                  {activeZonesForRecipe.length ? <p className="muted">This recipe already calculates label media from zones. Add only fixed/base materials here, like blank bags, jars, boxes, packaging, or sourced base items. Do not add Matte/Gloss/Holographic media here unless it is an extra fixed material.</p> : null}
+                  {((recipe.labelZones ?? []).filter((zone: any) => zone.active !== false && !zone.archivedAt)).length ? <p className="muted">This recipe already calculates label media from zones. Add only fixed/base materials here, like blank bags, jars, boxes, packaging, or sourced base items. Do not add Matte/Gloss/Holographic media here unless it is an extra fixed material.</p> : null}
                   <Form method="post" className="form-grid">
                     <input type="hidden" name="intent" value="addMaterial" />
                     <input type="hidden" name="recipeId" value={recipe.id} />
@@ -2156,4 +2156,5 @@ export default function ProductSetupRecipeBuilder() {
     </div>
   );
 }
+
 
