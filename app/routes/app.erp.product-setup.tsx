@@ -273,6 +273,7 @@ export async function loader({ request }: { request: Request }) {
   const url = new URL(request.url);
   const recipeStatus = url.searchParams.get("recipeStatus") || "active";
   const recipeSearch = (url.searchParams.get("recipeSearch") || "").trim();
+  const itemStatus = url.searchParams.get("itemStatus") || "active";
   const recipeWhere: any = { shop };
   if (recipeStatus === "active") recipeWhere.active = true;
   if (recipeStatus === "archived") recipeWhere.active = false;
@@ -303,7 +304,7 @@ export async function loader({ request }: { request: Request }) {
   ]);
 
   const activeTemplates = templates.filter((template: any) => template.active);
-  return Response.json({ templates, activeTemplates, recipes, materials, machines, recipeStatus, recipeSearch });
+  return Response.json({ templates, activeTemplates, recipes, materials, machines, recipeStatus, recipeSearch, itemStatus });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -720,6 +721,102 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: true, message: "Label/application zone permanently deleted." });
   }
 
+
+  if (intent === "cleanupDuplicateMediaOptions") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const options = await db.recipeMediaOption.findMany({ where: { shop, recipeId }, orderBy: { createdAt: "asc" } });
+    const seen = new Map<string, any>();
+    let removed = 0;
+    for (const option of options as any[]) {
+      const key = `${String(option.name || "").trim().toLowerCase()}|${option.materialId || ""}`;
+      const keeper = seen.get(key);
+      if (!keeper) {
+        seen.set(key, option);
+        continue;
+      }
+      await db.recipeLabelZone.updateMany({ where: { shop, mediaOptionId: option.id }, data: { mediaOptionId: keeper.id } });
+      if (option.defaultOption && !keeper.defaultOption) {
+        await db.recipeMediaOption.updateMany({ where: { shop, id: keeper.id }, data: { defaultOption: true } });
+      }
+      await db.recipeMediaOption.deleteMany({ where: { shop, id: option.id } });
+      removed += 1;
+    }
+    return Response.json({ ok: true, message: `${removed} duplicate media option(s) merged/deleted.` });
+  }
+
+  if (intent === "cleanupDuplicateLabelZones") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const zones = await db.recipeLabelZone.findMany({ where: { shop, recipeId }, orderBy: { createdAt: "asc" } });
+    const seen = new Map<string, any>();
+    let removed = 0;
+    for (const zone of zones as any[]) {
+      const key = [
+        String(zone.name || "").trim().toLowerCase(),
+        String(zone.position || ""),
+        Number(zone.widthIn || 0).toFixed(4),
+        Number(zone.heightIn || 0).toFixed(4),
+        Number(zone.qtyPerUnit || 0).toFixed(4),
+        String(zone.mediaMode || "fixed"),
+        String(zone.materialId || ""),
+        String(zone.mediaOptionId || ""),
+        String(zone.sameAsZoneId || ""),
+      ].join("|");
+      const keeper = seen.get(key);
+      if (!keeper) {
+        seen.set(key, zone);
+        continue;
+      }
+      await db.recipeLabelZone.updateMany({ where: { shop, sameAsZoneId: zone.id }, data: { sameAsZoneId: keeper.id } });
+      await db.recipeLabelZone.deleteMany({ where: { shop, id: zone.id } });
+      removed += 1;
+    }
+    return Response.json({ ok: true, message: `${removed} duplicate label zone(s) deleted.` });
+  }
+
+  if (intent === "cleanupAllRecipeDuplicates") {
+    const recipeId = String(formData.get("recipeId") || "");
+
+    const options = await db.recipeMediaOption.findMany({ where: { shop, recipeId }, orderBy: { createdAt: "asc" } });
+    const seenOptions = new Map<string, any>();
+    let removedOptions = 0;
+    for (const option of options as any[]) {
+      const key = `${String(option.name || "").trim().toLowerCase()}|${option.materialId || ""}`;
+      const keeper = seenOptions.get(key);
+      if (!keeper) seenOptions.set(key, option);
+      else {
+        await db.recipeLabelZone.updateMany({ where: { shop, mediaOptionId: option.id }, data: { mediaOptionId: keeper.id } });
+        await db.recipeMediaOption.deleteMany({ where: { shop, id: option.id } });
+        removedOptions += 1;
+      }
+    }
+
+    const zones = await db.recipeLabelZone.findMany({ where: { shop, recipeId }, orderBy: { createdAt: "asc" } });
+    const seenZones = new Map<string, any>();
+    let removedZones = 0;
+    for (const zone of zones as any[]) {
+      const key = [String(zone.name || "").trim().toLowerCase(), String(zone.position || ""), Number(zone.widthIn || 0).toFixed(4), Number(zone.heightIn || 0).toFixed(4), Number(zone.qtyPerUnit || 0).toFixed(4), String(zone.mediaMode || "fixed"), String(zone.materialId || ""), String(zone.mediaOptionId || ""), String(zone.sameAsZoneId || "")].join("|");
+      const keeper = seenZones.get(key);
+      if (!keeper) seenZones.set(key, zone);
+      else {
+        await db.recipeLabelZone.updateMany({ where: { shop, sameAsZoneId: zone.id }, data: { sameAsZoneId: keeper.id } });
+        await db.recipeLabelZone.deleteMany({ where: { shop, id: zone.id } });
+        removedZones += 1;
+      }
+    }
+
+    const rows = await db.recipeMaterial.findMany({ where: { shop, recipeId }, orderBy: { createdAt: "asc" } });
+    const seenRows = new Set<string>();
+    const duplicateRowIds: string[] = [];
+    for (const row of rows as any[]) {
+      const key = `${row.materialId}|${row.usageType}|${row.unit}`;
+      if (seenRows.has(key)) duplicateRowIds.push(row.id);
+      else seenRows.add(key);
+    }
+    if (duplicateRowIds.length) await db.recipeMaterial.deleteMany({ where: { shop, id: { in: duplicateRowIds } } });
+
+    return Response.json({ ok: true, message: `Cleanup complete: ${removedOptions} media option(s), ${removedZones} zone(s), ${duplicateRowIds.length} material row(s).` });
+  }
+
   if (intent === "syncTiersFromTemplate") {
     const recipeId = String(formData.get("recipeId") || "");
     const recipe = await db.productRecipe.findFirst({ where: { shop, id: recipeId }, include: { productTypeProfile: true } });
@@ -801,7 +898,7 @@ function PageStyles() {
 }
 
 export default function ProductSetupRecipeBuilder() {
-  const { templates, activeTemplates, recipes, materials, machines, recipeStatus = "active", recipeSearch = "" } = useLoaderData<any>();
+  const { templates, activeTemplates, recipes, materials, machines, recipeStatus = "active", recipeSearch = "", itemStatus = "active" } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const materialOptions = materials || [];
   const machineOptions = machines || [];
@@ -962,17 +1059,25 @@ export default function ProductSetupRecipeBuilder() {
             <option value="all">All recipes</option>
           </NativeSelect>
           <NativeInput label="Search recipes" name="recipeSearch" defaultValue={recipeSearch} placeholder="4x5, label, jar, SKU" />
+          <NativeSelect label="Recipe item rows" name="itemStatus" defaultValue={itemStatus}>
+            <option value="active">Active items only</option>
+            <option value="hidden">Hidden/archived items only</option>
+            <option value="all">All items</option>
+          </NativeSelect>
           <div className="button-row" style={{ alignItems: "end" }}>
             <button type="submit" className="secondary">Apply filter</button>
             <a className="secondary" href="/app/erp/product-setup">Reset</a>
           </div>
         </Form>
-        <p className="muted">Archived recipes are hidden by default. Use the status filter to restore or permanently delete old test/duplicate recipes.</p>
+        <p className="muted">Archived recipes are hidden by default. Hidden media options, zones, and material rows are also hidden by default. Use the item row filter to restore or permanently delete hidden/duplicate items.</p>
         {recipes.length ? recipes.map((recipe: any) => {
           const estimate = estimateRecipe(recipe);
           const templateTiers = recipe.pricingTemplateMode === "template" ? parseTiers(recipe.productTypeProfile?.tierTemplate) : [];
           const activeTiers = recipe.tiers?.length ? recipe.tiers : templateTiers;
           const machineId = recipe.machineRules?.[0]?.preferredMachineId || "";
+          const visibleMediaOptions = (recipe.mediaOptions || []).filter((option: any) => itemStatus === "all" ? true : itemStatus === "hidden" ? option.active === false : option.active !== false);
+          const visibleLabelZones = (recipe.labelZones || []).filter((zone: any) => itemStatus === "all" ? true : itemStatus === "hidden" ? zone.active === false : zone.active !== false);
+          const visibleRecipeMaterials = (recipe.materials || []).filter((row: any) => itemStatus === "all" ? true : itemStatus === "hidden" ? row.active === false : row.active !== false);
           return (
             <details key={recipe.id} open={false}>
               <summary>
@@ -1093,10 +1198,10 @@ export default function ProductSetupRecipeBuilder() {
               <div className="card" style={{ marginTop: 12 }}>
                 <h3>Media Options</h3>
                 <p className="muted">Use media options when a recipe can be quoted with different label media like matte, gloss, or holographic. Pricing comes automatically from the selected material cost per sqft; Premium is a badge only.</p>
-                {recipe.mediaOptions?.length ? <table>
+                {visibleMediaOptions.length ? <table>
                   <thead><tr><th>Option</th><th>Material</th><th>Badges</th><th>Status</th><th></th></tr></thead>
                   <tbody>
-                    {recipe.mediaOptions.map((option: any) => <tr key={option.id}>
+                    {visibleMediaOptions.map((option: any) => <tr key={option.id}>
                       <td><strong>{option.name}</strong><br /><span className="muted">{option.defaultOption ? "Default" : ""} {option.premiumOption ? "Premium" : ""}</span></td>
                       <td>{option.material?.name}<br /><span className="muted">{money(unitCost(option.material))}/{option.material?.recipeBaseUnit || option.material?.baseUnit || "unit"}</span></td>
                       <td>{option.premiumOption ? <span className="badge yellow">Premium</span> : <span className="muted">Standard</span>}</td>
@@ -1139,7 +1244,20 @@ export default function ProductSetupRecipeBuilder() {
                       </td>
                     </tr>)}
                   </tbody>
-                </table> : <p className="muted">No media options yet. Add Matte, Gloss, Holographic, or any other selectable media for this recipe.</p>}
+                </table> : <p className="muted">No media options match this item filter. Switch item rows to All/Hidden or add a new media option.</p>}
+
+                <div className="button-row">
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="cleanupDuplicateMediaOptions" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <button type="submit" className="secondary">Delete duplicate media options</button>
+                  </Form>
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="cleanupAllRecipeDuplicates" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <button type="submit" className="secondary">Clean all duplicate recipe items</button>
+                  </Form>
+                </div>
 
                 <details>
                   <summary>Add media option</summary>
@@ -1161,10 +1279,10 @@ export default function ProductSetupRecipeBuilder() {
               <div className="card" style={{ marginTop: 12 }}>
                 <h3>Application / Label Zones</h3>
                 <p className="muted">Use zones for sticker bags, jars, boxes, and any product with one or more applied labels. Each zone auto-calculates sqft and application labor.</p>
-                {recipe.labelZones?.length ? <table>
+                {visibleLabelZones.length ? <table>
                   <thead><tr><th>Zone</th><th>Size</th><th>Qty</th><th>Material</th><th>Area/unit</th><th>Apply time</th><th></th></tr></thead>
                   <tbody>
-                    {recipe.labelZones.map((zone: any) => <tr key={zone.id}>
+                    {visibleLabelZones.map((zone: any) => <tr key={zone.id}>
                       <td><strong>{zone.name}</strong><br /><span className="muted">{zone.position} {zone.required ? "| required" : "| optional"} {zone.active === false ? "| hidden" : ""}</span></td>
                       <td>{zone.widthIn} in x {zone.heightIn} in</td>
                       <td>{zone.qtyPerUnit}</td>
@@ -1233,7 +1351,15 @@ export default function ProductSetupRecipeBuilder() {
                       </td>
                     </tr>)}
                   </tbody>
-                </table> : <p className="muted">No label/application zones yet. Add one zone for a single-sided sticker bag, two zones for a double-sided bag, or multiple zones for jars.</p>}
+                </table> : <p className="muted">No label/application zones match this item filter. Switch item rows to All/Hidden or add a zone.</p>}
+
+                <div className="button-row">
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="cleanupDuplicateLabelZones" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <button type="submit" className="secondary">Delete duplicate label zones</button>
+                  </Form>
+                </div>
 
                 <details>
                   <summary>Add label/application zone</summary>
@@ -1279,10 +1405,10 @@ export default function ProductSetupRecipeBuilder() {
 
               <div className="card" style={{ marginTop: 12 }}>
                 <h3>Recipe Materials</h3>
-                {recipe.materials?.length ? <table>
+                {visibleRecipeMaterials.length ? <table>
                   <thead><tr><th>Material</th><th>Type</th><th>Qty / unit</th><th>Waste</th><th>Status</th><th>Cost/unit</th><th></th></tr></thead>
                   <tbody>
-                    {recipe.materials.map((row: any) => <tr key={row.id}>
+                    {visibleRecipeMaterials.map((row: any) => <tr key={row.id}>
                       <td>{row.material?.name}</td>
                       <td>{row.usageType}</td>
                       <td>{row.quantity} {row.unit}</td>
@@ -1333,7 +1459,7 @@ export default function ProductSetupRecipeBuilder() {
                       </td>
                     </tr>)}
                   </tbody>
-                </table> : <p className="muted">No materials added yet.</p>}
+                </table> : <p className="muted">No recipe material rows match this item filter. Switch item rows to All/Hidden or add a material row.</p>}
 
                 <Form method="post" className="button-row">
                   <input type="hidden" name="intent" value="cleanupDuplicateMaterials" />
