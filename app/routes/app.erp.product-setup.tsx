@@ -304,6 +304,156 @@ function estimateVariantFromRule(recipe: any, rule: any) {
   return { area, applySeconds, mediaCost, unitCost, price };
 }
 
+
+function normalizeVariantText(value: any) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function selectedOptionsText(selectedOptions: any[] = []) {
+  return selectedOptions
+    .map((option: any) => `${option?.name || ""}: ${option?.value || ""}`)
+    .join(" / ");
+}
+
+function matchesAny(value: string, terms: string[]) {
+  const normalized = normalizeVariantText(value);
+  return terms.some((term) => normalized.includes(normalizeVariantText(term)));
+}
+
+function pickSideModeFromVariantText(text: string) {
+  const normalized = normalizeVariantText(text);
+  if (matchesAny(normalized, ["single sided", "single side", "1 sided", "1 side", "one sided", "front only"])) {
+    return { sideMode: "single", useFrontZone: true, useBackZone: false, backMediaMode: "none" };
+  }
+  if (matchesAny(normalized, ["double sided", "double side", "2 sided", "2 side", "two sided", "front and back", "both sides"])) {
+    return { sideMode: "double_same", useFrontZone: true, useBackZone: true, backMediaMode: "same_as_front" };
+  }
+  return { sideMode: "single", useFrontZone: true, useBackZone: false, backMediaMode: "none" };
+}
+
+function mediaAliasesForOption(option: any) {
+  const name = String(option?.name || "");
+  const materialName = String(option?.material?.name || "");
+  const aliases = [name, materialName];
+
+  if (/holo|holographic/i.test(`${name} ${materialName}`)) aliases.push("holo", "holographic", "hologram");
+  if (/matte|matt/i.test(`${name} ${materialName}`)) aliases.push("matte", "matt");
+  if (/gloss/i.test(`${name} ${materialName}`)) aliases.push("gloss", "glossy");
+  if (/clear/i.test(`${name} ${materialName}`)) aliases.push("clear", "transparent");
+  if (/chrome|silver/i.test(`${name} ${materialName}`)) aliases.push("chrome", "silver");
+
+  return aliases.filter(Boolean);
+}
+
+function pickMediaOptionFromVariantText(text: string, mediaOptions: any[] = []) {
+  const activeOptions = (mediaOptions || []).filter((option: any) => option.active !== false);
+  const normalized = normalizeVariantText(text);
+
+  for (const option of activeOptions) {
+    if (mediaAliasesForOption(option).some((alias) => normalized.includes(normalizeVariantText(alias)))) {
+      return option;
+    }
+  }
+
+  return activeOptions.find((option: any) => option.defaultOption) || activeOptions[0] || null;
+}
+
+function pickBagColorFromSelectedOptions(selectedOptions: any[] = [], text = "") {
+  const colorTerms = [
+    "black", "white", "clear", "gold", "silver", "red", "blue", "green", "purple", "pink",
+    "orange", "yellow", "brown", "kraft", "mylar", "mixed", "assorted"
+  ];
+
+  for (const option of selectedOptions || []) {
+    const name = normalizeVariantText(option?.name);
+    const value = String(option?.value || "").trim();
+    const normalizedValue = normalizeVariantText(value);
+    if (!value) continue;
+    if (name.includes("color") || name.includes("colour") || name.includes("bag")) return value;
+    if (colorTerms.some((color) => normalizedValue === normalizeVariantText(color) || normalizedValue.includes(normalizeVariantText(color)))) return value;
+  }
+
+  const normalizedText = normalizeVariantText(text);
+  const found = colorTerms.find((color) => normalizedText.includes(normalizeVariantText(color)));
+  return found ? found.replace(/\b\w/g, (char) => char.toUpperCase()) : "Any";
+}
+
+function autoMapShopifyVariant(variant: any, recipe: any) {
+  const selectedOptions = variant?.selectedOptions || [];
+  const text = `${variant?.title || ""} / ${selectedOptionsText(selectedOptions)} / ${variant?.sku || ""}`;
+  const side = pickSideModeFromVariantText(text);
+  const mediaOption = pickMediaOptionFromVariantText(text, recipe?.mediaOptions || []);
+  const bagColor = pickBagColorFromSelectedOptions(selectedOptions, text);
+
+  const needsReview: string[] = [];
+  if (!mediaOption) needsReview.push("media option");
+  if (bagColor === "Any" && matchesAny(text, ["color", "colour", "bag color"])) needsReview.push("bag color");
+
+  return {
+    name: variant?.title ? `Auto - ${variant.title}` : "Auto-mapped Shopify variant",
+    shopifyVariantTitle: variant?.title || "",
+    sku: variant?.sku || "",
+    sideMode: side.sideMode,
+    bagColor,
+    frontMediaOptionId: mediaOption?.id || null,
+    backMediaMode: side.backMediaMode,
+    backMediaOptionId: null,
+    useFrontZone: side.useFrontZone,
+    useBackZone: side.useBackZone,
+    notes: needsReview.length
+      ? `Auto-synced from Shopify. Needs review: ${needsReview.join(", ")}. Quantities are handled by pricing templates, not Shopify variants.`
+      : "Auto-synced from Shopify variant options. Quantities are handled by pricing templates, not Shopify variants.",
+  };
+}
+
+async function fetchShopifyProductVariants(admin: any, productGid: string) {
+  const response = await admin.graphql(
+    `#graphql
+      query ProductRecipeVariantSync($id: ID!) {
+        product(id: $id) {
+          id
+          title
+          handle
+          options {
+            name
+            values
+          }
+          variants(first: 100) {
+            edges {
+              node {
+                id
+                title
+                sku
+                price
+                selectedOptions {
+                  name
+                  value
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    { variables: { id: productGid } }
+  );
+
+  const payload = await response.json();
+  if (payload?.errors?.length) {
+    throw new Error(payload.errors.map((error: any) => error.message).join(", "));
+  }
+
+  const product = payload?.data?.product;
+  return {
+    product,
+    variants: product?.variants?.edges?.map((edge: any) => edge.node) || [],
+  };
+}
+
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
@@ -346,7 +496,7 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
@@ -537,6 +687,113 @@ export async function action({ request }: { request: Request }) {
     await db.sourcedCostTier.deleteMany({ where: { shop, recipeId } });
     await db.productRecipe.deleteMany({ where: { shop, id: recipeId } });
     return Response.json({ ok: true, message: "Product recipe permanently deleted." });
+  }
+
+
+
+  if (intent === "syncShopifyVariants") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const productGid = String(formData.get("shopifyProductGid") || "").trim();
+
+    if (!recipeId) return Response.json({ ok: false, message: "Missing recipe." }, { status: 400 });
+    if (!productGid) return Response.json({ ok: false, message: "Add or paste the Shopify Product GID first." }, { status: 400 });
+
+    const recipe = await db.productRecipe.findFirst({
+      where: { shop, id: recipeId },
+      include: { mediaOptions: { include: { material: true } } },
+    });
+    if (!recipe) return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
+
+    const { product, variants } = await fetchShopifyProductVariants(admin, productGid);
+    if (!product) return Response.json({ ok: false, message: "Shopify product not found. Check the Product GID." }, { status: 404 });
+
+    await db.productRecipe.updateMany({
+      where: { shop, id: recipeId },
+      data: {
+        productGid,
+        notes: recipe.notes || "",
+      },
+    });
+
+    let created = 0;
+    let updated = 0;
+
+    for (const variant of variants) {
+      const mapped = autoMapShopifyVariant(variant, recipe);
+      const existing = await db.recipeVariantRule.findFirst({
+        where: { shop, recipeId, shopifyVariantGid: variant.id },
+      });
+
+      const data = {
+        name: mapped.name,
+        shopifyProductGid: product.id,
+        shopifyVariantGid: variant.id,
+        shopifyVariantTitle: mapped.shopifyVariantTitle,
+        sku: mapped.sku,
+        sideMode: mapped.sideMode,
+        bagColor: mapped.bagColor,
+        frontMediaOptionId: mapped.frontMediaOptionId,
+        backMediaMode: mapped.backMediaMode,
+        backMediaOptionId: mapped.backMediaOptionId,
+        useFrontZone: mapped.useFrontZone,
+        useBackZone: mapped.useBackZone,
+        active: true,
+        notes: mapped.notes,
+      };
+
+      if (existing) {
+        await db.recipeVariantRule.update({ where: { id: existing.id }, data });
+        updated += 1;
+      } else {
+        await db.recipeVariantRule.create({ data: { shop, recipeId, ...data } });
+        created += 1;
+      }
+    }
+
+    return Response.json({
+      ok: true,
+      message: `Synced ${variants.length} Shopify variant(s): ${created} created, ${updated} updated. Quantities were not parsed because tiers are handled by pricing templates.`,
+    });
+  }
+
+  if (intent === "autoMapExistingVariantRules") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const recipe = await db.productRecipe.findFirst({
+      where: { shop, id: recipeId },
+      include: { mediaOptions: { include: { material: true } } },
+    });
+    if (!recipe) return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
+
+    const rules = await db.recipeVariantRule.findMany({ where: { shop, recipeId }, orderBy: { createdAt: "asc" } });
+    let updated = 0;
+
+    for (const rule of rules) {
+      const mapped = autoMapShopifyVariant(
+        {
+          title: rule.shopifyVariantTitle || rule.name,
+          sku: rule.sku,
+          selectedOptions: [],
+        },
+        recipe
+      );
+
+      await db.recipeVariantRule.update({
+        where: { id: rule.id },
+        data: {
+          sideMode: mapped.sideMode,
+          bagColor: rule.bagColor || mapped.bagColor,
+          frontMediaOptionId: mapped.frontMediaOptionId || rule.frontMediaOptionId,
+          backMediaMode: mapped.backMediaMode,
+          backMediaOptionId: mapped.backMediaOptionId,
+          useFrontZone: mapped.useFrontZone,
+          useBackZone: mapped.useBackZone,
+          notes: rule.notes || mapped.notes,
+        },
+      });
+      updated += 1;
+    }
+
+    return Response.json({ ok: true, message: `Auto-mapped ${updated} existing variant mapping(s). Quantities remain controlled by pricing templates.` });
   }
 
 
@@ -1521,7 +1778,27 @@ export default function ProductSetupRecipeBuilder() {
 
               <div className="card" style={{ marginTop: 12 }}>
                 <h3>Shopify Variant Mapping</h3>
-                <p className="muted">Map existing Shopify variants or product options to this recipe. Use this to account for single-sided vs double-sided, bag color, matte/gloss/holographic media, and future tier pricing review.</p>
+                <p className="muted">Sync existing Shopify variants and let the app auto-map side count, bag color, and media from option names. Quantity is not parsed from variants; pricing tiers stay controlled by the selected pricing template.</p>
+
+                <details open>
+                  <summary>Sync / auto-map Shopify variants</summary>
+                  <Form method="post" className="form-grid">
+                    <input type="hidden" name="intent" value="syncShopifyVariants" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <NativeInput label="Shopify Product GID" name="shopifyProductGid" defaultValue={recipe.productGid || ""} placeholder="gid://shopify/Product/..." />
+                    <div className="wide muted">
+                      Paste or save the Shopify Product GID from the linked product. The sync reads every Shopify variant, then auto-matches:
+                      Single/Double sided, Matte/Gloss/Holographic, and Bag Color. Quantity tiers are applied from Pricing Templates, not variants.
+                    </div>
+                    <div className="button-row wide"><button type="submit">Sync Shopify variants + auto-map</button></div>
+                  </Form>
+                  <Form method="post" className="button-row">
+                    <input type="hidden" name="intent" value="autoMapExistingVariantRules" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <button type="submit" className="secondary">Auto-map existing saved mappings</button>
+                  </Form>
+                </details>
+
                 {(() => {
                   const visibleRules = (recipe.variantRules || []).filter((rule: any) => itemStatus === "all" ? true : itemStatus === "hidden" ? rule.active === false : rule.active !== false);
                   return visibleRules.length ? <table>
@@ -1602,7 +1879,7 @@ export default function ProductSetupRecipeBuilder() {
                 </Form>
 
                 <details>
-                  <summary>Add Shopify variant / option mapping</summary>
+                  <summary>Add manual Shopify variant / option mapping</summary>
                   <Form method="post" className="form-grid">
                     <input type="hidden" name="intent" value="addVariantRule" />
                     <input type="hidden" name="recipeId" value={recipe.id} />
@@ -1633,7 +1910,7 @@ export default function ProductSetupRecipeBuilder() {
                     </NativeSelect>
                     <label className="field"><span>Use front zone</span><input type="checkbox" name="useFrontZone" defaultChecked /></label>
                     <label className="field"><span>Use back zone</span><input type="checkbox" name="useBackZone" /></label>
-                    <NativeTextarea label="Notes" name="notes" placeholder="Use this for Shopify variants and pricing review later." />
+                    <NativeTextarea label="Notes" name="notes" placeholder="Manual fallback only. Normal variants should come from Shopify sync. Quantity tiers are controlled by pricing templates." />
                     <div className="button-row wide"><button type="submit">Add variant mapping</button></div>
                   </Form>
                 </details>
