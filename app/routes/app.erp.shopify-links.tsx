@@ -2,6 +2,12 @@ import { Form, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
+const PRODUCT_SEARCH_LIMIT = 25;
+const COLLECTION_SEARCH_LIMIT = 10;
+const COLLECTION_BATCH_SIZE = 25;
+const VARIANT_FETCH_LIMIT = 100;
+const GROUP_ROW_PREVIEW_LIMIT = 12;
+
 function normalize(value: any) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -22,10 +28,10 @@ function hasWord(text: string, word: string) {
 function pickSideModeFromVariantText(text: string) {
   const normalized = normalize(text);
   const isDouble =
-    matchesAny(normalized, ["double sided", "2 sided", "two sided", "front back", "front and back", "both sides", "double side"]) ||
+    matchesAny(normalized, ["double sided", "2 sided", "two sided", "front back", "front and back", "both sides", "double side", "two side"]) ||
     hasWord(normalized, "double");
   const isSingle =
-    matchesAny(normalized, ["single sided", "1 sided", "one sided", "front only", "single side"]) ||
+    matchesAny(normalized, ["single sided", "1 sided", "one sided", "front only", "single side", "one side"]) ||
     hasWord(normalized, "single");
 
   if (isDouble) {
@@ -100,7 +106,7 @@ function pickBagColorFromSelectedOptions(selectedOptions: any[] = [], text = "")
   return found ? found.replace(/\b\w/g, (char) => char.toUpperCase()) : "Any";
 }
 
-function autoMapShopifyVariant(variant: any, recipe: any) {
+function autoMapShopifyVariant(variant: any, recipe: any, product?: any, sourceLabel?: string) {
   const selectedOptions = variant?.selectedOptions || [];
   const text = `${variant?.title || ""} / ${selectedOptionsText(selectedOptions)} / ${variant?.sku || ""}`;
   const side = pickSideModeFromVariantText(text);
@@ -111,6 +117,9 @@ function autoMapShopifyVariant(variant: any, recipe: any) {
   if (!side.detected) needsReview.push("side count");
   if (!mediaOption) needsReview.push("media option");
   if (bagColor === "Any" && matchesAny(text, ["color", "colour", "bag color"])) needsReview.push("bag color");
+
+  const productTitle = product?.title || "Unknown product";
+  const sourceText = sourceLabel ? `Source: ${sourceLabel}. ` : "";
 
   return {
     name: variant?.title ? `Auto - ${variant.title}` : "Auto-mapped Shopify variant",
@@ -123,10 +132,15 @@ function autoMapShopifyVariant(variant: any, recipe: any) {
     backMediaOptionId: null,
     useFrontZone: side.useFrontZone,
     useBackZone: side.useBackZone,
-    notes: needsReview.length
-      ? `Auto-synced from Shopify Links. Needs review: ${needsReview.join(", ")}. Quantities are handled by pricing templates, not Shopify variants.`
-      : "Auto-synced from Shopify Links. Quantities are handled by pricing templates, not Shopify variants.",
+    notes: `${sourceText}Product: ${productTitle}. ${needsReview.length
+      ? `Needs review: ${needsReview.join(", ")}. `
+      : ""}Auto-synced from Shopify Links. Quantities are handled by pricing templates, not Shopify variants.`,
   };
+}
+
+function extractProductTitleFromNotes(notes: string) {
+  const match = String(notes || "").match(/Product:\s*([^\.]+)\./i);
+  return match?.[1]?.trim() || "";
 }
 
 async function searchShopifyProducts(admin: any, query: string) {
@@ -135,8 +149,8 @@ async function searchShopifyProducts(admin: any, query: string) {
 
   const response = await admin.graphql(
     `#graphql
-      query ProductRecipeProductSearch($query: String!) {
-        products(first: 10, query: $query) {
+      query ProductRecipeProductSearch($query: String!, $first: Int!) {
+        products(first: $first, query: $query) {
           edges {
             node {
               id
@@ -159,7 +173,7 @@ async function searchShopifyProducts(admin: any, query: string) {
         }
       }
     `,
-    { variables: { query: safeQuery } }
+    { variables: { query: safeQuery, first: PRODUCT_SEARCH_LIMIT } }
   );
 
   const payload = await response.json();
@@ -176,14 +190,15 @@ async function searchShopifyCollections(admin: any, query: string) {
 
   const response = await admin.graphql(
     `#graphql
-      query ProductRecipeCollectionSearch($query: String!) {
-        collections(first: 10, query: $query) {
+      query ProductRecipeCollectionSearch($query: String!, $first: Int!) {
+        collections(first: $first, query: $query) {
           edges {
             node {
               id
               title
               handle
-              products(first: 10) {
+              products(first: 5) {
+                pageInfo { hasNextPage endCursor }
                 edges {
                   node {
                     id
@@ -201,30 +216,31 @@ async function searchShopifyCollections(admin: any, query: string) {
         }
       }
     `,
-    { variables: { query: safeQuery } }
+    { variables: { query: safeQuery, first: COLLECTION_SEARCH_LIMIT } }
   );
 
   const payload = await response.json();
   if (payload?.errors?.length) throw new Error(payload.errors.map((error: any) => error.message).join(", "));
   return payload?.data?.collections?.edges?.map((edge: any) => ({
     ...edge.node,
-    products: edge.node?.products?.edges?.map((productEdge: any) => ({
+    previewProducts: edge.node?.products?.edges?.map((productEdge: any) => ({
       ...productEdge.node,
       sampleVariants: productEdge.node?.variants?.edges?.map((variantEdge: any) => variantEdge.node) || [],
     })) || [],
+    previewPageInfo: edge.node?.products?.pageInfo || null,
   })) || [];
 }
 
 async function fetchShopifyProductVariants(admin: any, productGid: string) {
   const response = await admin.graphql(
     `#graphql
-      query ProductRecipeVariantSync($id: ID!) {
+      query ProductRecipeVariantSync($id: ID!, $first: Int!) {
         product(id: $id) {
           id
           title
           handle
           totalVariants
-          variants(first: 100) {
+          variants(first: $first) {
             edges {
               node {
                 id
@@ -238,13 +254,56 @@ async function fetchShopifyProductVariants(admin: any, productGid: string) {
         }
       }
     `,
-    { variables: { id: productGid } }
+    { variables: { id: productGid, first: VARIANT_FETCH_LIMIT } }
   );
 
   const payload = await response.json();
   if (payload?.errors?.length) throw new Error(payload.errors.map((error: any) => error.message).join(", "));
   const product = payload?.data?.product;
   return { product, variants: product?.variants?.edges?.map((edge: any) => edge.node) || [] };
+}
+
+async function fetchCollectionProductBatch(admin: any, collectionGid: string, after?: string, first = COLLECTION_BATCH_SIZE) {
+  const response = await admin.graphql(
+    `#graphql
+      query CollectionProductBatch($id: ID!, $first: Int!, $after: String) {
+        collection(id: $id) {
+          id
+          title
+          handle
+          products(first: $first, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            edges {
+              cursor
+              node {
+                id
+                title
+                handle
+                totalVariants
+                variants(first: 100) {
+                  edges { node { id title sku price selectedOptions { name value } } }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    { variables: { id: collectionGid, first, after: after || null } }
+  );
+
+  const payload = await response.json();
+  if (payload?.errors?.length) throw new Error(payload.errors.map((error: any) => error.message).join(", "));
+  const collection = payload?.data?.collection;
+  const products = collection?.products?.edges?.map((edge: any) => ({
+    ...edge.node,
+    variantsList: edge.node?.variants?.edges?.map((variantEdge: any) => variantEdge.node) || [],
+  })) || [];
+  return {
+    collection,
+    products,
+    pageInfo: collection?.products?.pageInfo || { hasNextPage: false, endCursor: null },
+  };
 }
 
 async function cleanDuplicateMappings(shop: string, recipeId?: string, productGid?: string) {
@@ -280,71 +339,155 @@ async function cleanDuplicateMappings(shop: string, recipeId?: string, productGi
   return { scanned: rules.length, removed: deleteIds.length, kept: keepByKey.size };
 }
 
-async function syncProductToRecipe(shop: string, recipe: any, admin: any, productGid: string) {
+async function upsertVariantRule(shop: string, recipe: any, product: any, variant: any, sourceLabel?: string) {
+  const prisma: any = db;
+  const mapped = autoMapShopifyVariant(variant, recipe, product, sourceLabel);
+  const needsReview = String(mapped.notes || "").toLowerCase().includes("needs review") ? 1 : 0;
+
+  const existingRules = await prisma.recipeVariantRule.findMany({
+    where: { shop, recipeId: recipe.id, shopifyVariantGid: variant.id },
+    orderBy: [{ active: "desc" }, { updatedAt: "desc" }, { createdAt: "desc" }],
+  });
+  const existing = existingRules[0];
+  const duplicateIds = existingRules.slice(1).map((rule: any) => rule.id);
+  if (duplicateIds.length) {
+    await prisma.recipeVariantRule.deleteMany({ where: { shop, id: { in: duplicateIds } } });
+  }
+
+  const data = {
+    name: mapped.name,
+    shopifyProductGid: product.id,
+    shopifyVariantGid: variant.id,
+    shopifyVariantTitle: mapped.shopifyVariantTitle,
+    sku: mapped.sku,
+    sideMode: mapped.sideMode,
+    bagColor: mapped.bagColor,
+    frontMediaOptionId: mapped.frontMediaOptionId,
+    backMediaMode: mapped.backMediaMode,
+    backMediaOptionId: mapped.backMediaOptionId,
+    useFrontZone: mapped.useFrontZone,
+    useBackZone: mapped.useBackZone,
+    active: true,
+    notes: mapped.notes,
+  };
+
+  if (existing) {
+    await prisma.recipeVariantRule.update({ where: { id: existing.id }, data });
+    return { created: 0, updated: 1, duplicateCleaned: duplicateIds.length, needsReview };
+  }
+
+  await prisma.recipeVariantRule.create({ data: { shop, recipeId: recipe.id, ...data } });
+  return { created: 1, updated: 0, duplicateCleaned: duplicateIds.length, needsReview };
+}
+
+async function syncProductToRecipe(shop: string, recipe: any, admin: any, productGid: string, sourceLabel?: string) {
   const prisma: any = db;
   const { product, variants } = await fetchShopifyProductVariants(admin, productGid);
   if (!product) return { product: null, variants: [], created: 0, updated: 0, cleaned: 0, needsReview: 0 };
 
-  // Clean any older duplicates for this recipe + Shopify product before syncing.
   const preClean = await cleanDuplicateMappings(shop, recipe.id, product.id);
 
   let created = 0;
   let updated = 0;
+  let cleaned = preClean.removed;
   let needsReview = 0;
 
   for (const variant of variants) {
-    const mapped = autoMapShopifyVariant(variant, recipe);
-    if (String(mapped.notes || "").toLowerCase().includes("needs review")) needsReview += 1;
-
-    const existingRules = await prisma.recipeVariantRule.findMany({
-      where: { shop, recipeId: recipe.id, shopifyVariantGid: variant.id },
-      orderBy: [{ active: "desc" }, { updatedAt: "desc" }, { createdAt: "desc" }],
-    });
-    const existing = existingRules[0];
-    const duplicateIds = existingRules.slice(1).map((rule: any) => rule.id);
-    if (duplicateIds.length) {
-      await prisma.recipeVariantRule.deleteMany({ where: { shop, id: { in: duplicateIds } } });
-    }
-
-    const data = {
-      name: mapped.name,
-      shopifyProductGid: product.id,
-      shopifyVariantGid: variant.id,
-      shopifyVariantTitle: mapped.shopifyVariantTitle,
-      sku: mapped.sku,
-      sideMode: mapped.sideMode,
-      bagColor: mapped.bagColor,
-      frontMediaOptionId: mapped.frontMediaOptionId,
-      backMediaMode: mapped.backMediaMode,
-      backMediaOptionId: mapped.backMediaOptionId,
-      useFrontZone: mapped.useFrontZone,
-      useBackZone: mapped.useBackZone,
-      active: true,
-      notes: mapped.notes,
-    };
-
-    if (existing) {
-      await prisma.recipeVariantRule.update({ where: { id: existing.id }, data });
-      updated += 1;
-    } else {
-      await prisma.recipeVariantRule.create({ data: { shop, recipeId: recipe.id, ...data } });
-      created += 1;
-    }
+    const result = await upsertVariantRule(shop, recipe, product, variant, sourceLabel);
+    created += result.created;
+    updated += result.updated;
+    cleaned += result.duplicateCleaned;
+    needsReview += result.needsReview;
   }
 
   const postClean = await cleanDuplicateMappings(shop, recipe.id, product.id);
+  cleaned += postClean.removed;
 
   await prisma.productRecipe.updateMany({
     where: { shop, id: recipe.id, OR: [{ productGid: null }, { productGid: "" }] },
     data: { productGid: product.id },
   });
 
-  return { product, variants, created, updated, cleaned: preClean.removed + postClean.removed, needsReview };
+  return { product, variants, created, updated, cleaned, needsReview };
+}
+
+async function syncCollectionBatchToRecipe(shop: string, recipe: any, admin: any, collectionGid: string, after?: string) {
+  const { collection, products, pageInfo } = await fetchCollectionProductBatch(admin, collectionGid, after, COLLECTION_BATCH_SIZE);
+  if (!collection) return { collection: null, products: [], variants: 0, created: 0, updated: 0, cleaned: 0, needsReview: 0, pageInfo };
+
+  let variants = 0;
+  let created = 0;
+  let updated = 0;
+  let cleaned = 0;
+  let needsReview = 0;
+  const sourceLabel = `Collection: ${collection.title}`;
+
+  for (const product of products) {
+    const preClean = await cleanDuplicateMappings(shop, recipe.id, product.id);
+    cleaned += preClean.removed;
+    const productVariants = product.variantsList || [];
+    variants += productVariants.length;
+
+    for (const variant of productVariants) {
+      const result = await upsertVariantRule(shop, recipe, product, variant, sourceLabel);
+      created += result.created;
+      updated += result.updated;
+      cleaned += result.duplicateCleaned;
+      needsReview += result.needsReview;
+    }
+
+    const postClean = await cleanDuplicateMappings(shop, recipe.id, product.id);
+    cleaned += postClean.removed;
+  }
+
+  return { collection, products, variants, created, updated, cleaned, needsReview, pageInfo };
 }
 
 function productSampleText(product: any) {
   const samples = (product?.sampleVariants || []).map((variant: any) => [variant.title, variant.sku].filter(Boolean).join(" / ")).filter(Boolean);
   return samples.length ? samples.join("; ") : "No sample variants returned";
+}
+
+function groupedRulesByProduct(rules: any[] = []) {
+  const groups = new Map<string, any>();
+  for (const rule of rules || []) {
+    const productGid = rule.shopifyProductGid || "No product GID";
+    if (!groups.has(productGid)) groups.set(productGid, { productGid, productTitle: "", rules: [] });
+    const group = groups.get(productGid);
+    group.rules.push(rule);
+    if (!group.productTitle) group.productTitle = extractProductTitleFromNotes(rule.notes || "");
+  }
+  return Array.from(groups.values()).sort((a: any, b: any) => b.rules.length - a.rules.length);
+}
+
+function needsReview(rule: any) {
+  return String(rule?.notes || "").toLowerCase().includes("needs review");
+}
+
+function collectionLabelFromRule(rule: any) {
+  const match = String(rule?.notes || "").match(/Source:\s*Collection:\s*([^\.]+)\./i);
+  return match?.[1]?.trim() || "";
+}
+
+function recipeCollectionSummary(rules: any[] = []) {
+  const summary = new Map<string, any>();
+  for (const rule of rules || []) {
+    const collection = collectionLabelFromRule(rule);
+    if (!collection) continue;
+    if (!summary.has(collection)) summary.set(collection, { collection, productGids: new Set<string>(), variants: 0 });
+    const item = summary.get(collection);
+    if (rule.shopifyProductGid) item.productGids.add(rule.shopifyProductGid);
+    item.variants += 1;
+  }
+  return Array.from(summary.values()).map((item: any) => ({
+    collection: item.collection,
+    products: item.productGids.size,
+    variants: item.variants,
+  }));
+}
+
+function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" | "yellow" | "red" | "neutral" }) {
+  return <span className={`badge ${tone}`}>{children}</span>;
 }
 
 export async function loader({ request }: { request: Request }) {
@@ -357,11 +500,11 @@ export async function loader({ request }: { request: Request }) {
     orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
     include: {
       mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
-      variantRules: { orderBy: [{ active: "desc" }, { name: "asc" }] },
+      variantRules: { orderBy: [{ active: "desc" }, { updatedAt: "desc" }, { name: "asc" }] },
     },
   });
 
-  return Response.json({ recipes });
+  return Response.json({ recipes, collectionBatchSize: COLLECTION_BATCH_SIZE, groupRowPreviewLimit: GROUP_ROW_PREVIEW_LIMIT });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -383,7 +526,7 @@ export async function action({ request }: { request: Request }) {
       const query = String(formData.get("query") || "").trim();
       if (!query) return Response.json({ ok: false, message: "Enter a Shopify collection name." }, { status: 400 });
       const results = await searchShopifyCollections(admin, query);
-      return Response.json({ ok: true, intent, message: results.length ? `Found ${results.length} collection(s).` : "No collections found.", query, collectionResults: results });
+      return Response.json({ ok: true, intent, message: results.length ? `Found ${results.length} collection(s). Pick a collection, then sync in safe batches.` : "No collections found.", query, collectionResults: results });
     }
 
     if (intent === "syncProduct") {
@@ -392,34 +535,36 @@ export async function action({ request }: { request: Request }) {
       if (!recipeId || !productGid) return Response.json({ ok: false, message: "Missing recipe or Shopify product." }, { status: 400 });
       const recipe = await prisma.productRecipe.findFirst({ where: { shop, id: recipeId }, include: { mediaOptions: { include: { material: true } } } });
       if (!recipe) return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
-      const result = await syncProductToRecipe(shop, recipe, admin, productGid);
+      const result = await syncProductToRecipe(shop, recipe, admin, productGid, "Product link");
       if (!result.product) return Response.json({ ok: false, message: "Shopify product not found." }, { status: 404 });
       return Response.json({ ok: true, intent, message: `Synced ${result.product.title}: ${result.variants.length} variant(s), ${result.created} created, ${result.updated} updated, ${result.cleaned} duplicate(s) cleaned, ${result.needsReview} need review.` });
     }
 
-    if (intent === "syncCollection") {
+    if (intent === "syncCollectionBatch") {
       const recipeId = String(formData.get("recipeId") || "");
-      const productGids = String(formData.get("productGids") || "").split(",").map((value) => value.trim()).filter(Boolean);
-      if (!recipeId || !productGids.length) return Response.json({ ok: false, message: "Missing recipe or collection products." }, { status: 400 });
+      const collectionGid = String(formData.get("collectionGid") || "");
+      const cursor = String(formData.get("cursor") || "");
+      if (!recipeId || !collectionGid) return Response.json({ ok: false, message: "Missing recipe or collection." }, { status: 400 });
       const recipe = await prisma.productRecipe.findFirst({ where: { shop, id: recipeId }, include: { mediaOptions: { include: { material: true } } } });
       if (!recipe) return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
 
-      let products = 0;
-      let variants = 0;
-      let created = 0;
-      let updated = 0;
-      let cleaned = 0;
-      let needsReview = 0;
-      for (const productGid of productGids.slice(0, 20)) {
-        const result = await syncProductToRecipe(shop, recipe, admin, productGid);
-        if (result.product) products += 1;
-        variants += result.variants.length;
-        created += result.created;
-        updated += result.updated;
-        cleaned += result.cleaned || 0;
-        needsReview += result.needsReview || 0;
-      }
-      return Response.json({ ok: true, intent, message: `Synced ${products} product(s) from collection: ${variants} variant(s), ${created} created, ${updated} updated, ${cleaned} duplicate(s) cleaned, ${needsReview} need review.` });
+      const result = await syncCollectionBatchToRecipe(shop, recipe, admin, collectionGid, cursor || undefined);
+      if (!result.collection) return Response.json({ ok: false, message: "Collection not found." }, { status: 404 });
+
+      return Response.json({
+        ok: true,
+        intent,
+        message: `Synced batch from ${result.collection.title}: ${result.products.length} product(s), ${result.variants} variant(s), ${result.created} created, ${result.updated} updated, ${result.cleaned} duplicate(s) cleaned, ${result.needsReview} need review.${result.pageInfo?.hasNextPage ? " More products are available." : " Collection batch sync reached the end."}`,
+        batch: {
+          collectionId: result.collection.id,
+          collectionTitle: result.collection.title,
+          recipeId,
+          nextCursor: result.pageInfo?.endCursor || "",
+          hasNextPage: !!result.pageInfo?.hasNextPage,
+          products: result.products.length,
+          variants: result.variants,
+        },
+      });
     }
 
     if (intent === "cleanRecipeMappings") {
@@ -456,40 +601,44 @@ export async function action({ request }: { request: Request }) {
   }
 }
 
-function groupedRulesByProduct(rules: any[] = []) {
-  const groups = new Map<string, any>();
-  for (const rule of rules || []) {
-    const productGid = rule.shopifyProductGid || "No product GID";
-    if (!groups.has(productGid)) groups.set(productGid, { productGid, rules: [] });
-    groups.get(productGid).rules.push(rule);
-  }
-  return Array.from(groups.values()).sort((a: any, b: any) => b.rules.length - a.rules.length);
-}
-
-function needsReview(rule: any) {
-  return String(rule?.notes || "").toLowerCase().includes("needs review");
-}
-
-function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" | "yellow" | "red" | "neutral" }) {
-  return <span className={`badge ${tone}`}>{children}</span>;
-}
-
 export default function ShopifyLinksPage() {
-  const { recipes } = useLoaderData<any>();
+  const { recipes, collectionBatchSize, groupRowPreviewLimit } = useLoaderData<any>();
   const actionData = useActionData<any>();
 
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Safely connect Shopify products and collections to product recipes without touching the Recipe Builder page.</p>
+      <p>Connect products and large collections to rule-based product recipes without loading thousands of rows at once.</p>
     </header>
 
+    <section className="card wide plan-card">
+      <h2>Clean linking model</h2>
+      <div className="pill-row">
+        <Badge tone="green">Recipe = how it is made</Badge>
+        <Badge tone="neutral">Product/collection link = where it applies</Badge>
+        <Badge tone="yellow">Variant rules = parsed from option names</Badge>
+      </div>
+      <p className="muted">Stock Bags can contain thousands of products. This page syncs collections in safe batches of {collectionBatchSize} products and shows summaries first. Quantity tiers stay controlled by pricing templates, not Shopify variants.</p>
+    </section>
+
     {actionData?.message ? <div className={`notice ${actionData.ok ? "success" : "error"}`}>{actionData.message}</div> : null}
+
+    {actionData?.batch?.hasNextPage ? <section className="card wide continue-card">
+      <h2>Continue collection sync</h2>
+      <p><strong>{actionData.batch.collectionTitle}</strong> synced {actionData.batch.products} product(s) and {actionData.batch.variants} variant(s) in the last batch. More products are available.</p>
+      <Form method="post" className="button-row">
+        <input type="hidden" name="intent" value="syncCollectionBatch" />
+        <input type="hidden" name="recipeId" value={actionData.batch.recipeId} />
+        <input type="hidden" name="collectionGid" value={actionData.batch.collectionId} />
+        <input type="hidden" name="cursor" value={actionData.batch.nextCursor} />
+        <button type="submit">Sync next {collectionBatchSize} products</button>
+      </Form>
+    </section> : null}
 
     <section className="grid two">
       <div className="card">
         <h2>Search Shopify products</h2>
-        <p className="muted">Use this for individual products like 4x5 Custom Sticker Bags or 4x5 Stock Bags.</p>
+        <p className="muted">Use this for one product such as 4x5 Custom Sticker Bag. Results are intentionally limited to {PRODUCT_SEARCH_LIMIT}.</p>
         <Form method="post" className="row">
           <input type="hidden" name="intent" value="searchProducts" />
           <input name="query" defaultValue={actionData?.intent === "searchProducts" ? actionData.query : ""} placeholder="Example: 4x5 sticker bag" />
@@ -499,7 +648,7 @@ export default function ShopifyLinksPage() {
 
       <div className="card">
         <h2>Search Shopify collections</h2>
-        <p className="muted">Use this when a full collection should use the same recipe.</p>
+        <p className="muted">Use this for Stock Bags or any large group. Collection products are synced in batches, not all at once.</p>
         <Form method="post" className="row">
           <input type="hidden" name="intent" value="searchCollections" />
           <input name="query" defaultValue={actionData?.intent === "searchCollections" ? actionData.query : ""} placeholder="Example: Stock Bags" />
@@ -524,7 +673,7 @@ export default function ShopifyLinksPage() {
                   <option value="" disabled>Choose recipe</option>
                   {recipes.map((recipe: any) => <option key={recipe.id} value={recipe.id}>{recipe.name} · {recipe.productFamily || recipe.productTypeProfile?.name || "Recipe"}</option>)}
                 </select>
-                <button type="submit">Use this product + sync variants</button>
+                <button type="submit">Link product + sync variants</button>
               </Form>
             </td>
           </tr>)}
@@ -534,21 +683,23 @@ export default function ShopifyLinksPage() {
 
     {actionData?.collectionResults?.length ? <section className="card wide">
       <h2>Collection results</h2>
+      <p className="muted">The product list below is only a preview. When you sync, the app starts at the first page of the collection and can continue batch by batch.</p>
       <table>
-        <thead><tr><th>Collection</th><th>Products found</th><th>Link collection products to recipe</th></tr></thead>
+        <thead><tr><th>Collection</th><th>Preview products</th><th>Link collection to recipe</th></tr></thead>
         <tbody>
           {actionData.collectionResults.map((collection: any) => <tr key={collection.id}>
-            <td><strong>{collection.title}</strong><br /><span className="muted">{collection.handle}</span></td>
-            <td>{collection.products?.length ? collection.products.map((product: any) => <div key={product.id}>{product.title} <span className="muted">({product.totalVariants || 0} variant/s)</span></div>) : "No products returned"}</td>
+            <td><strong>{collection.title}</strong><br /><span className="muted">{collection.handle}</span><br />{collection.previewPageInfo?.hasNextPage ? <Badge tone="yellow">more than preview shown</Badge> : null}</td>
+            <td>{collection.previewProducts?.length ? collection.previewProducts.map((product: any) => <div key={product.id}>{product.title} <span className="muted">({product.totalVariants || 0} variant/s)</span></div>) : "No products returned"}</td>
             <td>
               <Form method="post" className="stacked">
-                <input type="hidden" name="intent" value="syncCollection" />
-                <input type="hidden" name="productGids" value={(collection.products || []).map((product: any) => product.id).join(",")} />
+                <input type="hidden" name="intent" value="syncCollectionBatch" />
+                <input type="hidden" name="collectionGid" value={collection.id} />
+                <input type="hidden" name="cursor" value="" />
                 <select name="recipeId" required defaultValue="">
                   <option value="" disabled>Choose recipe</option>
                   {recipes.map((recipe: any) => <option key={recipe.id} value={recipe.id}>{recipe.name} · {recipe.productFamily || recipe.productTypeProfile?.name || "Recipe"}</option>)}
                 </select>
-                <button type="submit">Sync collection products</button>
+                <button type="submit">Link collection + sync first {collectionBatchSize}</button>
               </Form>
             </td>
           </tr>)}
@@ -557,19 +708,21 @@ export default function ShopifyLinksPage() {
     </section> : null}
 
     <section className="card wide">
-      <h2>Recipe links / saved variant mappings</h2>
-      <p className="muted">Quantity tiers are not stored as Shopify variants. Tiers stay controlled by each recipe pricing template. Each Shopify variant should only have one active mapping per recipe.</p>
+      <h2>Linked recipe sources / saved variant rules</h2>
+      <p className="muted">This is summary-first. Expand a product only when you need to inspect a few variants. Each Shopify variant should only have one active mapping per recipe.</p>
       {recipes.map((recipe: any) => {
         const allRules = recipe.variantRules || [];
         const activeRules = allRules.filter((rule: any) => rule.active !== false);
         const grouped = groupedRulesByProduct(allRules);
         const reviewCount = allRules.filter(needsReview).length;
+        const collections = recipeCollectionSummary(allRules);
 
         return <details key={recipe.id} className="recipe-card">
           <summary>
             <strong>{recipe.name}</strong>
-            <Badge tone="green">{activeRules.length} active mappings</Badge>
+            <Badge tone="green">{activeRules.length} active variant rules</Badge>
             <Badge tone="neutral">{grouped.length} product group(s)</Badge>
+            {collections.length ? <Badge tone="neutral">{collections.length} collection source(s)</Badge> : null}
             {reviewCount ? <Badge tone="yellow">{reviewCount} need review</Badge> : null}
           </summary>
           <div className="recipe-body">
@@ -581,12 +734,21 @@ export default function ShopifyLinksPage() {
               <button type="submit" className="secondary">Clean duplicate mappings for this recipe</button>
             </Form>
 
+            {collections.length ? <div className="summary-box">
+              <h3>Collection source summaries</h3>
+              {collections.map((item: any) => <p key={item.collection}><strong>{item.collection}</strong>: {item.products} product(s), {item.variants} variant rule(s)</p>)}
+            </div> : null}
+
             {grouped.length ? grouped.map((group: any) => {
               const groupActive = group.rules.filter((rule: any) => rule.active !== false).length;
               const groupReview = group.rules.filter(needsReview).length;
+              const title = group.productTitle || group.productGid;
+              const previewRows = group.rules.slice(0, groupRowPreviewLimit || GROUP_ROW_PREVIEW_LIMIT);
+              const hiddenRows = Math.max(0, group.rules.length - previewRows.length);
               return <details key={group.productGid} className="product-group">
                 <summary>
-                  <strong>{group.productGid}</strong>
+                  <strong>{title}</strong>
+                  <span className="muted gid">{group.productTitle ? group.productGid : ""}</span>
                   <Badge tone="green">{groupActive} active</Badge>
                   <Badge tone="neutral">{group.rules.length} total</Badge>
                   {groupReview ? <Badge tone="yellow">{groupReview} need review</Badge> : null}
@@ -598,12 +760,13 @@ export default function ShopifyLinksPage() {
                     <input type="hidden" name="productGid" value={group.productGid} />
                     <button type="submit" className="secondary">Clean duplicate mappings for this product</button>
                   </Form>
+                  {hiddenRows ? <p className="muted">Showing first {previewRows.length} of {group.rules.length} variant rules. Use Margin Review later for full catalog audits.</p> : null}
                   <table>
-                    <thead><tr><th>Variant</th><th>Product / SKU</th><th>Auto rules</th><th>Status</th><th></th></tr></thead>
+                    <thead><tr><th>Variant</th><th>SKU</th><th>Auto rules</th><th>Status</th><th></th></tr></thead>
                     <tbody>
-                      {group.rules.map((rule: any) => <tr key={rule.id}>
+                      {previewRows.map((rule: any) => <tr key={rule.id}>
                         <td><strong>{rule.name}</strong><br /><span className="muted">{rule.shopifyVariantTitle || "No Shopify title"}</span></td>
-                        <td><span className="muted">{rule.shopifyProductGid || "No product GID"}</span><br />{rule.sku ? `SKU: ${rule.sku}` : "No SKU"}</td>
+                        <td>{rule.sku ? `SKU: ${rule.sku}` : <span className="muted">No SKU</span>}</td>
                         <td>
                           Side: {rule.sideMode || "single"}<br />
                           Color: {rule.bagColor || "Any"}<br />
@@ -623,7 +786,7 @@ export default function ShopifyLinksPage() {
                   </table>
                 </div>
               </details>;
-            }) : <p className="muted">No synced variant mappings yet.</p>}
+            }) : <p className="muted">No synced variant rules yet.</p>}
           </div>
         </details>;
       })}
@@ -637,7 +800,10 @@ export default function ShopifyLinksPage() {
       .grid.two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
       .card { background: #fff; border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
       .wide { width: 100%; }
+      .plan-card { border-color: #c7f0d2; }
+      .continue-card { border-color: #facc15; background: #fffbeb; }
       .muted { color: #666; font-size: 13px; }
+      .gid { display: block; margin-top: 2px; }
       .notice { border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
       .success { background: #e8fff0; border: 1px solid #b8ebc8; }
       .error { background: #ffe8e8; border: 1px solid #efb8b8; }
@@ -655,10 +821,13 @@ export default function ShopifyLinksPage() {
       .badge.yellow { background: #fef3c7; color: #92400e; }
       .badge.red { background: #fee2e2; color: #991b1b; }
       .badge.neutral { background: #eee; color: #333; }
+      .pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
       .recipe-card { border: 1px solid #e5e5e5; border-radius: 10px; padding: 12px; margin: 10px 0; }
       .recipe-body { padding-top: 10px; }
+      .summary-box { border: 1px solid #e5e7eb; border-radius: 10px; background: #f9fafb; padding: 12px; margin: 12px 0; }
+      .summary-box h3 { margin-top: 0; }
       .product-group { border: 1px solid #eee; border-radius: 10px; padding: 10px; margin: 10px 0; background: #fff; }
-      .button-row { display: flex; gap: 8px; flex-wrap: wrap; }
+      .button-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
       @media (max-width: 900px) { .grid.two { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; } }
     `}</style>
   </main>;
