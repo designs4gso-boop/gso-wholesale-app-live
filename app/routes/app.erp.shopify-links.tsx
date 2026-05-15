@@ -15,18 +15,26 @@ function matchesAny(text: string, terms: string[]) {
   return terms.some((term) => normalized.includes(normalize(term)));
 }
 
+function hasWord(text: string, word: string) {
+  return normalize(text).split(" ").includes(normalize(word));
+}
+
 function pickSideModeFromVariantText(text: string) {
   const normalized = normalize(text);
-  const isDouble = matchesAny(normalized, ["double sided", "2 sided", "two sided", "front back", "both sides", "double side"]);
-  const isSingle = matchesAny(normalized, ["single sided", "1 sided", "one sided", "front only", "single side"]);
+  const isDouble =
+    matchesAny(normalized, ["double sided", "2 sided", "two sided", "front back", "front and back", "both sides", "double side"]) ||
+    hasWord(normalized, "double");
+  const isSingle =
+    matchesAny(normalized, ["single sided", "1 sided", "one sided", "front only", "single side"]) ||
+    hasWord(normalized, "single");
 
   if (isDouble) {
-    return { sideMode: "double_same", useFrontZone: true, useBackZone: true, backMediaMode: "same_as_front" };
+    return { sideMode: "double_same", useFrontZone: true, useBackZone: true, backMediaMode: "same_as_front", detected: true };
   }
   if (isSingle) {
-    return { sideMode: "single", useFrontZone: true, useBackZone: false, backMediaMode: "none" };
+    return { sideMode: "single", useFrontZone: true, useBackZone: false, backMediaMode: "none", detected: true };
   }
-  return { sideMode: "single", useFrontZone: true, useBackZone: false, backMediaMode: "none" };
+  return { sideMode: "single", useFrontZone: true, useBackZone: false, backMediaMode: "none", detected: false };
 }
 
 function mediaAliasesForOption(option: any) {
@@ -100,6 +108,7 @@ function autoMapShopifyVariant(variant: any, recipe: any) {
   const bagColor = pickBagColorFromSelectedOptions(selectedOptions, text);
 
   const needsReview: string[] = [];
+  if (!side.detected) needsReview.push("side count");
   if (!mediaOption) needsReview.push("media option");
   if (bagColor === "Any" && matchesAny(text, ["color", "colour", "bag color"])) needsReview.push("bag color");
 
@@ -238,19 +247,64 @@ async function fetchShopifyProductVariants(admin: any, productGid: string) {
   return { product, variants: product?.variants?.edges?.map((edge: any) => edge.node) || [] };
 }
 
+async function cleanDuplicateMappings(shop: string, recipeId?: string, productGid?: string) {
+  const prisma: any = db;
+  const where: any = { shop };
+  if (recipeId) where.recipeId = recipeId;
+  if (productGid) where.shopifyProductGid = productGid;
+
+  const rules = await prisma.recipeVariantRule.findMany({
+    where,
+    orderBy: [{ active: "desc" }, { updatedAt: "desc" }, { createdAt: "desc" }],
+  });
+
+  const keepByKey = new Map<string, any>();
+  const deleteIds: string[] = [];
+
+  for (const rule of rules) {
+    const key = rule.shopifyVariantGid
+      ? `variant:${rule.shopifyVariantGid}`
+      : `fallback:${rule.recipeId || ""}:${rule.shopifyProductGid || ""}:${normalize(rule.shopifyVariantTitle || rule.name || "")}:${rule.sku || ""}`;
+
+    if (!keepByKey.has(key)) {
+      keepByKey.set(key, rule);
+    } else {
+      deleteIds.push(rule.id);
+    }
+  }
+
+  if (deleteIds.length) {
+    await prisma.recipeVariantRule.deleteMany({ where: { shop, id: { in: deleteIds } } });
+  }
+
+  return { scanned: rules.length, removed: deleteIds.length, kept: keepByKey.size };
+}
+
 async function syncProductToRecipe(shop: string, recipe: any, admin: any, productGid: string) {
   const prisma: any = db;
   const { product, variants } = await fetchShopifyProductVariants(admin, productGid);
-  if (!product) return { product: null, variants: [], created: 0, updated: 0 };
+  if (!product) return { product: null, variants: [], created: 0, updated: 0, cleaned: 0, needsReview: 0 };
+
+  // Clean any older duplicates for this recipe + Shopify product before syncing.
+  const preClean = await cleanDuplicateMappings(shop, recipe.id, product.id);
 
   let created = 0;
   let updated = 0;
+  let needsReview = 0;
 
   for (const variant of variants) {
     const mapped = autoMapShopifyVariant(variant, recipe);
-    const existing = await prisma.recipeVariantRule.findFirst({
+    if (String(mapped.notes || "").toLowerCase().includes("needs review")) needsReview += 1;
+
+    const existingRules = await prisma.recipeVariantRule.findMany({
       where: { shop, recipeId: recipe.id, shopifyVariantGid: variant.id },
+      orderBy: [{ active: "desc" }, { updatedAt: "desc" }, { createdAt: "desc" }],
     });
+    const existing = existingRules[0];
+    const duplicateIds = existingRules.slice(1).map((rule: any) => rule.id);
+    if (duplicateIds.length) {
+      await prisma.recipeVariantRule.deleteMany({ where: { shop, id: { in: duplicateIds } } });
+    }
 
     const data = {
       name: mapped.name,
@@ -278,12 +332,14 @@ async function syncProductToRecipe(shop: string, recipe: any, admin: any, produc
     }
   }
 
+  const postClean = await cleanDuplicateMappings(shop, recipe.id, product.id);
+
   await prisma.productRecipe.updateMany({
     where: { shop, id: recipe.id, OR: [{ productGid: null }, { productGid: "" }] },
     data: { productGid: product.id },
   });
 
-  return { product, variants, created, updated };
+  return { product, variants, created, updated, cleaned: preClean.removed + postClean.removed, needsReview };
 }
 
 function productSampleText(product: any) {
@@ -338,7 +394,7 @@ export async function action({ request }: { request: Request }) {
       if (!recipe) return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
       const result = await syncProductToRecipe(shop, recipe, admin, productGid);
       if (!result.product) return Response.json({ ok: false, message: "Shopify product not found." }, { status: 404 });
-      return Response.json({ ok: true, intent, message: `Synced ${result.product.title}: ${result.variants.length} variant(s), ${result.created} created, ${result.updated} updated.` });
+      return Response.json({ ok: true, intent, message: `Synced ${result.product.title}: ${result.variants.length} variant(s), ${result.created} created, ${result.updated} updated, ${result.cleaned} duplicate(s) cleaned, ${result.needsReview} need review.` });
     }
 
     if (intent === "syncCollection") {
@@ -352,14 +408,33 @@ export async function action({ request }: { request: Request }) {
       let variants = 0;
       let created = 0;
       let updated = 0;
+      let cleaned = 0;
+      let needsReview = 0;
       for (const productGid of productGids.slice(0, 20)) {
         const result = await syncProductToRecipe(shop, recipe, admin, productGid);
         if (result.product) products += 1;
         variants += result.variants.length;
         created += result.created;
         updated += result.updated;
+        cleaned += result.cleaned || 0;
+        needsReview += result.needsReview || 0;
       }
-      return Response.json({ ok: true, intent, message: `Synced ${products} product(s) from collection: ${variants} variant(s), ${created} created, ${updated} updated.` });
+      return Response.json({ ok: true, intent, message: `Synced ${products} product(s) from collection: ${variants} variant(s), ${created} created, ${updated} updated, ${cleaned} duplicate(s) cleaned, ${needsReview} need review.` });
+    }
+
+    if (intent === "cleanRecipeMappings") {
+      const recipeId = String(formData.get("recipeId") || "");
+      if (!recipeId) return Response.json({ ok: false, message: "Missing recipe." }, { status: 400 });
+      const result = await cleanDuplicateMappings(shop, recipeId);
+      return Response.json({ ok: true, message: `Cleaned recipe mappings: scanned ${result.scanned}, removed ${result.removed} duplicate(s), kept ${result.kept}.` });
+    }
+
+    if (intent === "cleanProductMappings") {
+      const recipeId = String(formData.get("recipeId") || "");
+      const productGid = String(formData.get("productGid") || "");
+      if (!recipeId || !productGid) return Response.json({ ok: false, message: "Missing recipe or product." }, { status: 400 });
+      const result = await cleanDuplicateMappings(shop, recipeId, productGid);
+      return Response.json({ ok: true, message: `Cleaned product mappings: scanned ${result.scanned}, removed ${result.removed} duplicate(s), kept ${result.kept}.` });
     }
 
     if (intent === "hideRule" || intent === "restoreRule") {
@@ -379,6 +454,20 @@ export async function action({ request }: { request: Request }) {
     console.error("Shopify Links action failed", error);
     return Response.json({ ok: false, message: error?.message || "Shopify link action failed." }, { status: 500 });
   }
+}
+
+function groupedRulesByProduct(rules: any[] = []) {
+  const groups = new Map<string, any>();
+  for (const rule of rules || []) {
+    const productGid = rule.shopifyProductGid || "No product GID";
+    if (!groups.has(productGid)) groups.set(productGid, { productGid, rules: [] });
+    groups.get(productGid).rules.push(rule);
+  }
+  return Array.from(groups.values()).sort((a: any, b: any) => b.rules.length - a.rules.length);
+}
+
+function needsReview(rule: any) {
+  return String(rule?.notes || "").toLowerCase().includes("needs review");
 }
 
 function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" | "yellow" | "red" | "neutral" }) {
@@ -469,36 +558,75 @@ export default function ShopifyLinksPage() {
 
     <section className="card wide">
       <h2>Recipe links / saved variant mappings</h2>
-      <p className="muted">Quantity tiers are not stored as Shopify variants. Tiers stay controlled by each recipe pricing template.</p>
-      {recipes.map((recipe: any) => <details key={recipe.id} className="recipe-card">
-        <summary><strong>{recipe.name}</strong> <Badge tone="green">{(recipe.variantRules || []).filter((rule: any) => rule.active !== false).length} active mappings</Badge></summary>
-        <div className="recipe-body">
-          <p><strong>Default Shopify product:</strong> {recipe.productGid || <span className="muted">Not set yet</span>}</p>
-          <p><strong>Media options:</strong> {(recipe.mediaOptions || []).map((option: any) => option.name).join(", ") || "No media options"}</p>
-          {(recipe.variantRules || []).length ? <table>
-            <thead><tr><th>Variant</th><th>Product / SKU</th><th>Auto rules</th><th>Status</th><th></th></tr></thead>
-            <tbody>
-              {(recipe.variantRules || []).map((rule: any) => <tr key={rule.id}>
-                <td><strong>{rule.name}</strong><br /><span className="muted">{rule.shopifyVariantTitle || "No Shopify title"}</span></td>
-                <td><span className="muted">{rule.shopifyProductGid || "No product GID"}</span><br />{rule.sku ? `SKU: ${rule.sku}` : "No SKU"}</td>
-                <td>
-                  Side: {rule.sideMode || "single"}<br />
-                  Color: {rule.bagColor || "Any"}<br />
-                  Front media: {recipe.mediaOptions?.find((option: any) => option.id === rule.frontMediaOptionId)?.name || "Default"}<br />
-                  Back: {rule.backMediaMode || "none"}
-                </td>
-                <td>{rule.active === false ? <Badge tone="yellow">Hidden</Badge> : <Badge tone="green">Active</Badge>}</td>
-                <td>
-                  <div className="button-row">
-                    <Form method="post"><input type="hidden" name="intent" value={rule.active === false ? "restoreRule" : "hideRule"} /><input type="hidden" name="ruleId" value={rule.id} /><button type="submit" className="secondary">{rule.active === false ? "Restore" : "Hide"}</button></Form>
-                    <Form method="post"><input type="hidden" name="intent" value="deleteRule" /><input type="hidden" name="ruleId" value={rule.id} /><button type="submit" className="danger">Delete</button></Form>
-                  </div>
-                </td>
-              </tr>)}
-            </tbody>
-          </table> : <p className="muted">No synced variant mappings yet.</p>}
-        </div>
-      </details>)}
+      <p className="muted">Quantity tiers are not stored as Shopify variants. Tiers stay controlled by each recipe pricing template. Each Shopify variant should only have one active mapping per recipe.</p>
+      {recipes.map((recipe: any) => {
+        const allRules = recipe.variantRules || [];
+        const activeRules = allRules.filter((rule: any) => rule.active !== false);
+        const grouped = groupedRulesByProduct(allRules);
+        const reviewCount = allRules.filter(needsReview).length;
+
+        return <details key={recipe.id} className="recipe-card">
+          <summary>
+            <strong>{recipe.name}</strong>
+            <Badge tone="green">{activeRules.length} active mappings</Badge>
+            <Badge tone="neutral">{grouped.length} product group(s)</Badge>
+            {reviewCount ? <Badge tone="yellow">{reviewCount} need review</Badge> : null}
+          </summary>
+          <div className="recipe-body">
+            <p><strong>Default Shopify product:</strong> {recipe.productGid || <span className="muted">Not set yet</span>}</p>
+            <p><strong>Media options:</strong> {(recipe.mediaOptions || []).map((option: any) => option.name).join(", ") || "No media options"}</p>
+            <Form method="post" style={{ marginBottom: 12 }}>
+              <input type="hidden" name="intent" value="cleanRecipeMappings" />
+              <input type="hidden" name="recipeId" value={recipe.id} />
+              <button type="submit" className="secondary">Clean duplicate mappings for this recipe</button>
+            </Form>
+
+            {grouped.length ? grouped.map((group: any) => {
+              const groupActive = group.rules.filter((rule: any) => rule.active !== false).length;
+              const groupReview = group.rules.filter(needsReview).length;
+              return <details key={group.productGid} className="product-group">
+                <summary>
+                  <strong>{group.productGid}</strong>
+                  <Badge tone="green">{groupActive} active</Badge>
+                  <Badge tone="neutral">{group.rules.length} total</Badge>
+                  {groupReview ? <Badge tone="yellow">{groupReview} need review</Badge> : null}
+                </summary>
+                <div style={{ marginTop: 10 }}>
+                  <Form method="post" style={{ marginBottom: 10 }}>
+                    <input type="hidden" name="intent" value="cleanProductMappings" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <input type="hidden" name="productGid" value={group.productGid} />
+                    <button type="submit" className="secondary">Clean duplicate mappings for this product</button>
+                  </Form>
+                  <table>
+                    <thead><tr><th>Variant</th><th>Product / SKU</th><th>Auto rules</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                      {group.rules.map((rule: any) => <tr key={rule.id}>
+                        <td><strong>{rule.name}</strong><br /><span className="muted">{rule.shopifyVariantTitle || "No Shopify title"}</span></td>
+                        <td><span className="muted">{rule.shopifyProductGid || "No product GID"}</span><br />{rule.sku ? `SKU: ${rule.sku}` : "No SKU"}</td>
+                        <td>
+                          Side: {rule.sideMode || "single"}<br />
+                          Color: {rule.bagColor || "Any"}<br />
+                          Front media: {recipe.mediaOptions?.find((option: any) => option.id === rule.frontMediaOptionId)?.name || "Default"}<br />
+                          Back: {rule.backMediaMode || "none"}
+                          {needsReview(rule) ? <><br /><Badge tone="yellow">Needs review</Badge></> : null}
+                        </td>
+                        <td>{rule.active === false ? <Badge tone="yellow">Hidden</Badge> : <Badge tone="green">Active</Badge>}</td>
+                        <td>
+                          <div className="button-row">
+                            <Form method="post"><input type="hidden" name="intent" value={rule.active === false ? "restoreRule" : "hideRule"} /><input type="hidden" name="ruleId" value={rule.id} /><button type="submit" className="secondary">{rule.active === false ? "Restore" : "Hide"}</button></Form>
+                            <Form method="post"><input type="hidden" name="intent" value="deleteRule" /><input type="hidden" name="ruleId" value={rule.id} /><button type="submit" className="danger">Delete</button></Form>
+                          </div>
+                        </td>
+                      </tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              </details>;
+            }) : <p className="muted">No synced variant mappings yet.</p>}
+          </div>
+        </details>;
+      })}
     </section>
 
     <style>{`
@@ -529,6 +657,7 @@ export default function ShopifyLinksPage() {
       .badge.neutral { background: #eee; color: #333; }
       .recipe-card { border: 1px solid #e5e5e5; border-radius: 10px; padding: 12px; margin: 10px 0; }
       .recipe-body { padding-top: 10px; }
+      .product-group { border: 1px solid #eee; border-radius: 10px; padding: 10px; margin: 10px 0; background: #fff; }
       .button-row { display: flex; gap: 8px; flex-wrap: wrap; }
       @media (max-width: 900px) { .grid.two { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; } }
     `}</style>
