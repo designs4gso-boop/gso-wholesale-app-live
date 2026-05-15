@@ -1894,37 +1894,7 @@ export default function ProductSetupRecipeBuilder() {
                     <div className="button-row wide"><button type="submit">Search Shopify products</button></div>
                   </Form>
 
-                  {actionData?.productSearchRecipeId === recipe.id && actionData?.productSearchResults?.length ? (
-                    <div className="card wide" style={{ marginTop: 12 }}>
-                      <h4>Search results</h4>
-                      <table>
-                        <thead><tr><th>Product</th><th>Sample variants</th><th>Action</th></tr></thead>
-                        <tbody>
-                          {actionData.productSearchResults.map((product: any) => (
-                            <tr key={product.id}>
-                              <td>
-                                <strong>{product.title}</strong><br />
-                                <span className="muted">{product.handle} • {product.totalVariants} variant(s) • {product.status}</span>
-                              </td>
-                              <td>
-                                {(product.variants || []).slice(0, 3).map((variant: any) => (
-                                  <div key={variant.id} className="muted">{variant.title}{variant.sku ? ` • SKU: ${variant.sku}` : ""}</div>
-                                ))}
-                              </td>
-                              <td>
-                                <Form method="post" className="button-row">
-                                  <input type="hidden" name="intent" value="syncShopifyVariants" />
-                                  <input type="hidden" name="recipeId" value={recipe.id} />
-                                  <input type="hidden" name="shopifyProductGid" value={product.id} />
-                                  <button type="submit">Use this product + sync variants</button>
-                                </Form>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : null}
+                  {null}
 
                   <details style={{ marginTop: 12 }}>
                     <summary>Advanced: paste Shopify Product GID manually</summary>
@@ -2160,6 +2130,7 @@ export default function ProductSetupRecipeBuilder() {
     </div>
   );
 }
+
 
 
 
