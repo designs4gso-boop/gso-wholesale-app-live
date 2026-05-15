@@ -24,7 +24,7 @@ function intValue(value: FormDataEntryValue | null, fallback = 0) {
 }
 
 function zoneAreaSqft(zone: any) {
-  return ((Number(zone?.widthIn || 0) * Number(zone?.heightIn || 0)) / 144) * Number(zone?.quantityPerUnit || 1);
+  return ((Number(zone?.widthIn || 0) * Number(zone?.heightIn || 0)) / 144) * Number(zone?.qtyPerUnit ?? zone?.quantityPerUnit ?? 1);
 }
 
 function money(value: any) {
@@ -304,9 +304,9 @@ function estimateVariantFromRule(recipe: any, rule: any) {
   const originalApplySeconds = Number(baseEstimate.labelApplicationSecondsPerUnit || 0);
   const laborRatePerHour = 20;
   const applyLaborDelta = ((applySeconds - originalApplySeconds) / 3600) * laborRatePerHour;
-  const unitCost = Number(baseEstimate.unitCostTotal || 0) - originalZoneCost + mediaCost + applyLaborDelta;
-  const price = priceFromMargin(unitCost, Number(recipe.targetMarginPct || 60));
-  return { area, applySeconds, mediaCost, unitCost, price };
+  const variantUnitCost = Number(baseEstimate.unitCostTotal || 0) - originalZoneCost + mediaCost + applyLaborDelta;
+  const price = priceFromMargin(variantUnitCost, Number(recipe.targetMarginPct || 60));
+  return { area, applySeconds, mediaCost, unitCost: variantUnitCost, price };
 }
 
 
