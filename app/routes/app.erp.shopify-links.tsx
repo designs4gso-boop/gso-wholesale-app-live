@@ -339,8 +339,20 @@ function collectionProgressHealth(item: any, totalProducts: any) {
   const total = Number(totalProducts || 0);
   const remaining = total ? Math.max(0, total - products) : null;
   const percent = total ? Math.min(100, Math.round((products / total) * 1000) / 10) : null;
+  const variantsPerProduct = products ? Math.round((variants / products) * 10) / 10 : null;
   const estimatedVariants = total && products ? Math.round((variants / products) * total) : null;
-  return { total, remaining, percent, estimatedVariants };
+  const isComplete = !!total && products >= total;
+  const isLargeCollection = !!total && total >= 500;
+  const needsBatching = !!remaining && remaining > COLLECTION_BATCH_SIZE;
+  return { total, remaining, percent, estimatedVariants, variantsPerProduct, isComplete, isLargeCollection, needsBatching };
+}
+
+function collectionGuardrailMessage(progress: any) {
+  if (!progress?.total) return "Search/relink this collection to load the Shopify total and enable progress guardrails.";
+  if (progress.isComplete) return "Collection appears fully synced. Continue is disabled to prevent duplicate batch work.";
+  if (progress.isLargeCollection) return `Large collection guardrail: sync ${COLLECTION_BATCH_SIZE} unsynced products per click and verify health before continuing.`;
+  if (progress.needsBatching) return `Batch guardrail: ${progress.remaining} product(s) remain, so continue in ${COLLECTION_BATCH_SIZE}-product batches.`;
+  return "Small collection: continue sync can finish the remaining products safely.";
 }
 
 async function cleanDuplicateMappings(shop: string, recipeId?: string, productGid?: string) {
@@ -770,6 +782,7 @@ export async function action({ request }: { request: Request }) {
           scannedProducts: result.scannedProducts || result.products.length,
           skippedAlreadyMapped: result.skippedAlreadyMapped || 0,
           pagesScanned: result.pagesScanned || 1,
+          guardrail: result.products.length ? "Batch completed. Review health badges before continuing." : "No new unsynced products were found in this batch.",
         },
       });
     }
@@ -885,17 +898,18 @@ export default function ShopifyLinksPage() {
 
     {actionData?.message ? <div className={`notice ${actionData.ok ? "success" : "error"}`}>{actionData.message}</div> : null}
 
-    {actionData?.batch?.hasNextPage ? <section className="card wide continue-card">
-      <h2>Continue collection sync</h2>
+    {actionData?.batch ? <section className="card wide continue-card">
+      <h2>Last collection batch</h2>
       <p><strong>{actionData.batch.collectionTitle}</strong> synced {actionData.batch.products} new product(s) and {actionData.batch.variants} variant rule(s) in the last batch.</p>
-      <p className="muted">Scanned {actionData.batch.scannedProducts || actionData.batch.products} product(s), skipped {actionData.batch.skippedAlreadyMapped || 0} already-linked product(s). Continue only after the latest batch looks correct.</p>
-      <Form method="post" className="button-row">
+      <p className="muted">Scanned {actionData.batch.scannedProducts || actionData.batch.products} product(s), skipped {actionData.batch.skippedAlreadyMapped || 0} already-linked product(s). {actionData.batch.hasNextPage ? "More products may be available." : "Shopify reported no more pages in this collection."}</p>
+      <p><Badge tone={actionData.batch.products ? "green" : "yellow"}>{actionData.batch.guardrail || "Review health badges before continuing."}</Badge></p>
+      {actionData.batch.hasNextPage ? <Form method="post" className="button-row" onSubmit={(event) => { if (!confirm(`Continue syncing ${collectionBatchSize} more unsynced products from ${actionData.batch.collectionTitle}? Check health badges after each batch.`)) event.preventDefault(); }}>
         <input type="hidden" name="intent" value="syncCollectionBatch" />
         <input type="hidden" name="recipeId" value={actionData.batch.recipeId} />
         <input type="hidden" name="collectionGid" value={actionData.batch.collectionId} />
         <input type="hidden" name="cursor" value={actionData.batch.nextCursor} />
         <button type="submit">Continue sync next {collectionBatchSize} unsynced products</button>
-      </Form>
+      </Form> : <p><Badge tone="green">No more Shopify pages reported</Badge></p>}
     </section> : null}
 
     <section className="grid two">
@@ -1027,7 +1041,13 @@ export default function ShopifyLinksPage() {
                         if (!progress.total) return <div className="muted">Shopify total not loaded yet. Search/relink the collection if progress total is missing.</div>;
                         return <div className="progress-box">
                           <div><strong>Progress:</strong> {item.products} / {progress.total} products synced ({progress.percent}%)</div>
-                          <div className="muted">Remaining: {progress.remaining} product(s){progress.estimatedVariants ? ` · Estimated complete variant rules: ${progress.estimatedVariants}` : ""}</div>
+                          <div className="muted">Remaining: {progress.remaining} product(s){progress.estimatedVariants ? ` · Estimated complete variant rules: ${progress.estimatedVariants}` : ""}{progress.variantsPerProduct ? ` · Avg ${progress.variantsPerProduct} variants/product` : ""}</div>
+                          <div className="pill-row tight">
+                            {progress.isComplete ? <Badge tone="green">complete</Badge> : <Badge tone="yellow">in progress</Badge>}
+                            {progress.isLargeCollection ? <Badge tone="yellow">large collection guardrail</Badge> : null}
+                            {progress.needsBatching ? <Badge tone="neutral">batch sync only</Badge> : null}
+                          </div>
+                          <div className="muted">{collectionGuardrailMessage(progress)}</div>
                           <div className="progress-track"><div className="progress-fill" style={{ width: `${progress.percent || 0}%` }} /></div>
                         </div>;
                       })()}
@@ -1036,12 +1056,16 @@ export default function ShopifyLinksPage() {
                   {item.collectionGid ? <div className="muted">Collection linked. Continue sync skips products already mapped to this recipe.</div> : <div className="muted">Older source without saved collection GID. Search this collection again to continue syncing.</div>}
                 </div>
                 <div className="button-row">
-                  {item.collectionGid ? <Form method="post">
-                    <input type="hidden" name="intent" value="syncCollectionBatch" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <input type="hidden" name="collectionGid" value={item.collectionGid} />
-                    <button type="submit">Continue next {collectionBatchSize}</button>
-                  </Form> : null}
+                  {item.collectionGid ? (() => {
+                    const progress = collectionProgressHealth(item, collectionTotalByGid[item.collectionGid]);
+                    if (progress.isComplete) return <button type="button" className="secondary" disabled>Collection complete</button>;
+                    return <Form method="post" onSubmit={(event) => { if (progress.isLargeCollection && !confirm(`Continue syncing ${collectionBatchSize} more unsynced products from ${item.collection}? Check health badges after each batch.`)) event.preventDefault(); }}>
+                      <input type="hidden" name="intent" value="syncCollectionBatch" />
+                      <input type="hidden" name="recipeId" value={recipe.id} />
+                      <input type="hidden" name="collectionGid" value={item.collectionGid} />
+                      <button type="submit">Continue next {collectionBatchSize}</button>
+                    </Form>;
+                  })() : null}
                   <Form method="post">
                     <input type="hidden" name="intent" value="hideCollectionMappings" />
                     <input type="hidden" name="recipeId" value={recipe.id} />
@@ -1181,6 +1205,7 @@ export default function ShopifyLinksPage() {
       button { border: 0; border-radius: 8px; background: #111827; color: white; padding: 9px 12px; cursor: pointer; }
       button.secondary { background: #e5e7eb; color: #111827; }
       button.danger { background: #b91c1c; color: #fff; }
+      button:disabled { opacity: .55; cursor: not-allowed; }
       table { width: 100%; border-collapse: collapse; }
       th, td { border-bottom: 1px solid #eee; padding: 10px; text-align: left; vertical-align: top; }
       th { font-size: 12px; color: #555; background: #fafafa; }
