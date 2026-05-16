@@ -486,6 +486,51 @@ function recipeCollectionSummary(rules: any[] = []) {
   }));
 }
 
+
+async function deleteMappingsForRecipe(shop: string, recipeId: string) {
+  const prisma: any = db;
+  const result = await prisma.recipeVariantRule.deleteMany({ where: { shop, recipeId } });
+  await prisma.productRecipe.updateMany({ where: { shop, id: recipeId }, data: { productGid: null, variantGid: null } });
+  return result.count || 0;
+}
+
+async function deleteMappingsForProduct(shop: string, recipeId: string, productGid: string) {
+  const prisma: any = db;
+  const result = await prisma.recipeVariantRule.deleteMany({ where: { shop, recipeId, shopifyProductGid: productGid } });
+  await prisma.productRecipe.updateMany({ where: { shop, id: recipeId, productGid }, data: { productGid: null, variantGid: null } });
+  return result.count || 0;
+}
+
+async function setProductMappingsActive(shop: string, recipeId: string, productGid: string, active: boolean) {
+  const prisma: any = db;
+  const result = await prisma.recipeVariantRule.updateMany({ where: { shop, recipeId, shopifyProductGid: productGid }, data: { active } });
+  return result.count || 0;
+}
+
+async function deleteMappingsForCollectionSource(shop: string, recipeId: string, collectionName: string) {
+  const prisma: any = db;
+  const rules = await prisma.recipeVariantRule.findMany({ where: { shop, recipeId } });
+  const target = normalize(collectionName);
+  const ids = rules
+    .filter((rule: any) => normalize(collectionLabelFromRule(rule) || "") === target)
+    .map((rule: any) => rule.id);
+  if (!ids.length) return 0;
+  const result = await prisma.recipeVariantRule.deleteMany({ where: { shop, id: { in: ids } } });
+  return result.count || 0;
+}
+
+async function setCollectionMappingsActive(shop: string, recipeId: string, collectionName: string, active: boolean) {
+  const prisma: any = db;
+  const rules = await prisma.recipeVariantRule.findMany({ where: { shop, recipeId } });
+  const target = normalize(collectionName);
+  const ids = rules
+    .filter((rule: any) => normalize(collectionLabelFromRule(rule) || "") === target)
+    .map((rule: any) => rule.id);
+  if (!ids.length) return 0;
+  const result = await prisma.recipeVariantRule.updateMany({ where: { shop, id: { in: ids } }, data: { active } });
+  return result.count || 0;
+}
+
 function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" | "yellow" | "red" | "neutral" }) {
   return <span className={`badge ${tone}`}>{children}</span>;
 }
@@ -582,6 +627,47 @@ export async function action({ request }: { request: Request }) {
       return Response.json({ ok: true, message: `Cleaned product mappings: scanned ${result.scanned}, removed ${result.removed} duplicate(s), kept ${result.kept}.` });
     }
 
+    if (intent === "deleteRecipeMappings") {
+      const recipeId = String(formData.get("recipeId") || "");
+      if (!recipeId) return Response.json({ ok: false, message: "Missing recipe." }, { status: 400 });
+      const deleted = await deleteMappingsForRecipe(shop, recipeId);
+      return Response.json({ ok: true, message: `Removed ${deleted} Shopify mapping(s) from this recipe. Recipe materials, media options, label zones, and pricing templates were not changed.` });
+    }
+
+    if (intent === "deleteProductMappings") {
+      const recipeId = String(formData.get("recipeId") || "");
+      const productGid = String(formData.get("productGid") || "");
+      if (!recipeId || !productGid) return Response.json({ ok: false, message: "Missing recipe or product." }, { status: 400 });
+      const deleted = await deleteMappingsForProduct(shop, recipeId, productGid);
+      return Response.json({ ok: true, message: `Removed ${deleted} mapping(s) for this Shopify product from the recipe.` });
+    }
+
+    if (intent === "hideProductMappings" || intent === "restoreProductMappings") {
+      const recipeId = String(formData.get("recipeId") || "");
+      const productGid = String(formData.get("productGid") || "");
+      if (!recipeId || !productGid) return Response.json({ ok: false, message: "Missing recipe or product." }, { status: 400 });
+      const active = intent === "restoreProductMappings";
+      const changed = await setProductMappingsActive(shop, recipeId, productGid, active);
+      return Response.json({ ok: true, message: `${active ? "Restored" : "Hid"} ${changed} mapping(s) for this Shopify product.` });
+    }
+
+    if (intent === "deleteCollectionMappings") {
+      const recipeId = String(formData.get("recipeId") || "");
+      const collectionName = String(formData.get("collectionName") || "");
+      if (!recipeId || !collectionName) return Response.json({ ok: false, message: "Missing recipe or collection source." }, { status: 400 });
+      const deleted = await deleteMappingsForCollectionSource(shop, recipeId, collectionName);
+      return Response.json({ ok: true, message: `Removed ${deleted} mapping(s) from collection source: ${collectionName}.` });
+    }
+
+    if (intent === "hideCollectionMappings" || intent === "restoreCollectionMappings") {
+      const recipeId = String(formData.get("recipeId") || "");
+      const collectionName = String(formData.get("collectionName") || "");
+      if (!recipeId || !collectionName) return Response.json({ ok: false, message: "Missing recipe or collection source." }, { status: 400 });
+      const active = intent === "restoreCollectionMappings";
+      const changed = await setCollectionMappingsActive(shop, recipeId, collectionName, active);
+      return Response.json({ ok: true, message: `${active ? "Restored" : "Hid"} ${changed} mapping(s) from collection source: ${collectionName}.` });
+    }
+
     if (intent === "hideRule" || intent === "restoreRule") {
       const ruleId = String(formData.get("ruleId") || "");
       await prisma.recipeVariantRule.updateMany({ where: { shop, id: ruleId }, data: { active: intent === "restoreRule" } });
@@ -608,7 +694,7 @@ export default function ShopifyLinksPage() {
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Summary-first Shopify linking for products and large collections. Link sources to recipes, scan safely, and review exceptions only.</p>
+      <p>Summary-first Shopify linking with cleanup controls. Link sources to recipes, scan safely, remove wrong sources, and review exceptions only.</p>
     </header>
 
     <section className="card wide plan-card">
@@ -728,15 +814,45 @@ export default function ShopifyLinksPage() {
           <div className="recipe-body">
             <p><strong>Default Shopify product:</strong> {recipe.productGid || <span className="muted">Not set yet</span>}</p>
             <p><strong>Media options:</strong> {(recipe.mediaOptions || []).map((option: any) => option.name).join(", ") || "No media options"}</p>
-            <Form method="post" style={{ marginBottom: 12 }}>
-              <input type="hidden" name="intent" value="cleanRecipeMappings" />
-              <input type="hidden" name="recipeId" value={recipe.id} />
-              <button type="submit" className="secondary">Clean duplicate mappings for this recipe</button>
-            </Form>
+            <div className="button-row" style={{ marginBottom: 12 }}>
+              <Form method="post">
+                <input type="hidden" name="intent" value="cleanRecipeMappings" />
+                <input type="hidden" name="recipeId" value={recipe.id} />
+                <button type="submit" className="secondary">Clean duplicate mappings for this recipe</button>
+              </Form>
+              <Form method="post" onSubmit={(event) => { if (!confirm(`Remove ALL Shopify mappings from ${recipe.name}? This does not delete the recipe or Shopify products.`)) event.preventDefault(); }}>
+                <input type="hidden" name="intent" value="deleteRecipeMappings" />
+                <input type="hidden" name="recipeId" value={recipe.id} />
+                <button type="submit" className="danger">Remove all Shopify mappings from this recipe</button>
+              </Form>
+            </div>
 
             {collections.length ? <div className="summary-box">
               <h3>Collection source summaries</h3>
-              {collections.map((item: any) => <p key={item.collection}><strong>{item.collection}</strong>: {item.products} product(s), {item.variants} variant rule(s)</p>)}
+              <p className="muted">Remove a collection source if the wrong collection was synced to this recipe. This deletes only the saved mapping rules created from that source; it does not touch Shopify products or the recipe setup.</p>
+              {collections.map((item: any) => <div key={item.collection} className="source-row">
+                <div><strong>{item.collection}</strong>: {item.products} product(s), {item.variants} variant rule(s)</div>
+                <div className="button-row">
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="hideCollectionMappings" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <input type="hidden" name="collectionName" value={item.collection} />
+                    <button type="submit" className="secondary">Hide source</button>
+                  </Form>
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="restoreCollectionMappings" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <input type="hidden" name="collectionName" value={item.collection} />
+                    <button type="submit" className="secondary">Restore source</button>
+                  </Form>
+                  <Form method="post" onSubmit={(event) => { if (!confirm(`Remove mappings from collection source ${item.collection}?`)) event.preventDefault(); }}>
+                    <input type="hidden" name="intent" value="deleteCollectionMappings" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <input type="hidden" name="collectionName" value={item.collection} />
+                    <button type="submit" className="danger">Remove source mappings</button>
+                  </Form>
+                </div>
+              </div>)}
             </div> : null}
 
             {grouped.length ? grouped.map((group: any) => {
@@ -754,12 +870,32 @@ export default function ShopifyLinksPage() {
                   {groupReview ? <Badge tone="yellow">{groupReview} need review</Badge> : null}
                 </summary>
                 <div style={{ marginTop: 10 }}>
-                  <Form method="post" style={{ marginBottom: 10 }}>
-                    <input type="hidden" name="intent" value="cleanProductMappings" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <input type="hidden" name="productGid" value={group.productGid} />
-                    <button type="submit" className="secondary">Clean duplicate mappings for this product</button>
-                  </Form>
+                  <div className="button-row" style={{ marginBottom: 10 }}>
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="cleanProductMappings" />
+                      <input type="hidden" name="recipeId" value={recipe.id} />
+                      <input type="hidden" name="productGid" value={group.productGid} />
+                      <button type="submit" className="secondary">Clean duplicates for this product</button>
+                    </Form>
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="hideProductMappings" />
+                      <input type="hidden" name="recipeId" value={recipe.id} />
+                      <input type="hidden" name="productGid" value={group.productGid} />
+                      <button type="submit" className="secondary">Hide product group</button>
+                    </Form>
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="restoreProductMappings" />
+                      <input type="hidden" name="recipeId" value={recipe.id} />
+                      <input type="hidden" name="productGid" value={group.productGid} />
+                      <button type="submit" className="secondary">Restore product group</button>
+                    </Form>
+                    <Form method="post" onSubmit={(event) => { if (!confirm(`Remove all mappings for ${title}? This does not delete the Shopify product.`)) event.preventDefault(); }}>
+                      <input type="hidden" name="intent" value="deleteProductMappings" />
+                      <input type="hidden" name="recipeId" value={recipe.id} />
+                      <input type="hidden" name="productGid" value={group.productGid} />
+                      <button type="submit" className="danger">Remove product mappings</button>
+                    </Form>
+                  </div>
                   {hiddenRows ? <p className="muted">Variant detail rows are hidden in this summary view. Use product cleanup here only when needed; full variant pricing audits will live in Margin Review.</p> : null}
                   {previewRows.length ? <table>
                     <thead><tr><th>Variant</th><th>SKU</th><th>Auto rules</th><th>Status</th><th></th></tr></thead>
@@ -826,6 +962,7 @@ export default function ShopifyLinksPage() {
       .recipe-body { padding-top: 10px; }
       .summary-box { border: 1px solid #e5e7eb; border-radius: 10px; background: #f9fafb; padding: 12px; margin: 12px 0; }
       .summary-box h3 { margin-top: 0; }
+      .source-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; border-top: 1px solid #e5e7eb; padding: 10px 0; }
       .product-group { border: 1px solid #eee; border-radius: 10px; padding: 10px; margin: 10px 0; background: #fff; }
       .button-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
       @media (max-width: 900px) { .grid.two { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; } }
