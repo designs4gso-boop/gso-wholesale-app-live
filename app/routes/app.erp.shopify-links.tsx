@@ -889,7 +889,7 @@ export default function ShopifyLinksPage() {
               const groupActive = group.rules.filter((rule: any) => rule.active !== false).length;
               const groupReview = group.rules.filter(needsReview).length;
               const title = group.productTitle || group.productGid;
-              const isInspecting = inspectRecipeId === recipe.id && inspectProductGid === group.productGid;
+              const isInspecting = true;
               const previewLimit = Number(inspectRowLimit || INSPECT_ROW_LIMIT);
               const previewRows = isInspecting ? group.rules.slice(0, previewLimit) : group.rules.slice(0, groupRowPreviewLimit || GROUP_ROW_PREVIEW_LIMIT);
               const hiddenRows = Math.max(0, group.rules.length - previewRows.length);
@@ -906,7 +906,7 @@ export default function ShopifyLinksPage() {
                 <div style={{ marginTop: 10 }}>
                   <div className="inspector-box">
                     <div className="button-row" style={{ marginBottom: 8 }}>
-                      {isInspecting ? <a className="button-link secondary" href="?">Hide variant details</a> : <a className="button-link" href={inspectHref}>View variant details</a>}
+                      <span className="badge">Variant details visible</span>
                       <span className="muted">Shows up to {previewLimit} variant rule(s) for this product only.</span>
                     </div>
                     {isInspecting ? <div className="breakdown-grid">
@@ -1020,4 +1020,5 @@ export default function ShopifyLinksPage() {
     `}</style>
   </main>;
 }
+
 
