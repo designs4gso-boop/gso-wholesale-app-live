@@ -307,6 +307,42 @@ async function fetchCollectionProductBatch(admin: any, collectionGid: string, af
   };
 }
 
+
+async function fetchCollectionTotalProducts(admin: any, collectionGid: string) {
+  if (!collectionGid) return null;
+  try {
+    const response = await admin.graphql(
+      `#graphql
+        query CollectionTotalProducts($id: ID!) {
+          collection(id: $id) {
+            id
+            title
+            handle
+            productsCount { count }
+          }
+        }
+      `,
+      { variables: { id: collectionGid } }
+    );
+    const payload = await response.json();
+    if (payload?.errors?.length) return null;
+    const count = payload?.data?.collection?.productsCount?.count;
+    return Number.isFinite(Number(count)) ? Number(count) : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function collectionProgressHealth(item: any, totalProducts: any) {
+  const products = Number(item?.products || 0);
+  const variants = Number(item?.activeVariants || item?.variants || 0);
+  const total = Number(totalProducts || 0);
+  const remaining = total ? Math.max(0, total - products) : null;
+  const percent = total ? Math.min(100, Math.round((products / total) * 1000) / 10) : null;
+  const estimatedVariants = total && products ? Math.round((variants / products) * total) : null;
+  return { total, remaining, percent, estimatedVariants };
+}
+
 async function cleanDuplicateMappings(shop: string, recipeId?: string, productGid?: string) {
   const prisma: any = db;
   const where: any = { shop };
@@ -645,7 +681,7 @@ function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" |
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
   const url = new URL(request.url);
   const inspectProductGid = url.searchParams.get("inspectProductGid") || "";
@@ -661,7 +697,18 @@ export async function loader({ request }: { request: Request }) {
     },
   });
 
-  return Response.json({ recipes, collectionBatchSize: COLLECTION_BATCH_SIZE, groupRowPreviewLimit: GROUP_ROW_PREVIEW_LIMIT, inspectProductGid, inspectRecipeId, inspectRowLimit: INSPECT_ROW_LIMIT });
+    const collectionTotalByGid: Record<string, number> = {};
+  const collectionGids = Array.from(new Set(recipes.flatMap((recipe: any) =>
+    recipeCollectionSummary(recipe.variantRules || [])
+      .map((item: any) => item.collectionGid)
+      .filter(Boolean)
+  )));
+  for (const gid of collectionGids.slice(0, 10)) {
+    const total = await fetchCollectionTotalProducts(admin, String(gid));
+    if (total !== null) collectionTotalByGid[String(gid)] = total;
+  }
+
+  return Response.json({ recipes, collectionBatchSize: COLLECTION_BATCH_SIZE, groupRowPreviewLimit: GROUP_ROW_PREVIEW_LIMIT, inspectProductGid, inspectRecipeId, inspectRowLimit: INSPECT_ROW_LIMIT, collectionTotalByGid });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -814,7 +861,7 @@ export async function action({ request }: { request: Request }) {
 }
 
 export default function ShopifyLinksPage() {
-  const { recipes, collectionBatchSize, groupRowPreviewLimit, inspectProductGid, inspectRecipeId, inspectRowLimit } = useLoaderData<any>();
+  const { recipes, collectionBatchSize, groupRowPreviewLimit, inspectProductGid, inspectRecipeId, inspectRowLimit, collectionTotalByGid = {} } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const inspectedRecipeId = actionData?.intent === "inspectProduct" ? actionData.inspectRecipeId : "";
   const inspectedProductGid = actionData?.intent === "inspectProduct" ? actionData.inspectProductGid : "";
@@ -975,6 +1022,15 @@ export default function ShopifyLinksPage() {
                         {health.hasHidden ? <Badge tone="yellow">hidden rules included</Badge> : null}
                         {item.needsReview ? <Badge tone="yellow">{item.needsReview} need review</Badge> : <Badge tone="green">0 need review</Badge>}
                       </div>
+                      {(() => {
+                        const progress = collectionProgressHealth(item, collectionTotalByGid[item.collectionGid]);
+                        if (!progress.total) return <div className="muted">Shopify total not loaded yet. Search/relink the collection if progress total is missing.</div>;
+                        return <div className="progress-box">
+                          <div><strong>Progress:</strong> {item.products} / {progress.total} products synced ({progress.percent}%)</div>
+                          <div className="muted">Remaining: {progress.remaining} product(s){progress.estimatedVariants ? ` · Estimated complete variant rules: ${progress.estimatedVariants}` : ""}</div>
+                          <div className="progress-track"><div className="progress-fill" style={{ width: `${progress.percent || 0}%` }} /></div>
+                        </div>;
+                      })()}
                     </>;
                   })()}
                   {item.collectionGid ? <div className="muted">Collection linked. Continue sync skips products already mapped to this recipe.</div> : <div className="muted">Older source without saved collection GID. Search this collection again to continue syncing.</div>}
@@ -1148,6 +1204,9 @@ export default function ShopifyLinksPage() {
       .breakdown-grid { display: grid; gap: 4px; font-size: 13px; color: #374151; }
 
       @media (max-width: 900px) { .grid.two { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; } }
+      .progress-box { margin-top: 8px; }
+      .progress-track { margin-top: 6px; height: 8px; background: #e5e7eb; border-radius: 999px; overflow: hidden; }
+      .progress-fill { height: 100%; background: #111827; }
     `}</style>
   </main>;
 }
