@@ -540,6 +540,36 @@ function recipeCollectionSummary(rules: any[] = []) {
 }
 
 
+function collectionVariantHealth(item: any) {
+  const products = Number(item?.products || 0);
+  const activeVariants = Number(item?.activeVariants || item?.variants || 0);
+  const totalVariants = Number(item?.variants || 0);
+  const perProduct = products ? activeVariants / products : 0;
+  const rounded = Math.round(perProduct * 10) / 10;
+  const isWhole = Math.abs(perProduct - Math.round(perProduct)) < 0.001;
+  const expectedPattern = isWhole && (Math.round(perProduct) === 24 || Math.round(perProduct) === 36);
+  const hasHidden = totalVariants !== activeVariants;
+  return {
+    products,
+    activeVariants,
+    totalVariants,
+    perProduct: rounded,
+    expectedPattern,
+    hasHidden,
+    label: products ? `${rounded} variants/product` : "No products synced",
+  };
+}
+
+function recipeHealthSummary(groups: any[] = []) {
+  const activeGroups = (groups || []).map((group: any) => {
+    const activeCount = (group.rules || []).filter((rule: any) => rule.active !== false).length;
+    return { ...group, activeCount };
+  }).filter((group: any) => group.activeCount > 0);
+  const expected = activeGroups.filter((group: any) => group.activeCount === 24 || group.activeCount === 36).length;
+  const unusual = activeGroups.filter((group: any) => group.activeCount !== 24 && group.activeCount !== 36).length;
+  return { total: activeGroups.length, expected, unusual };
+}
+
 async function deleteMappingsForRecipe(shop: string, recipeId: string) {
   const prisma: any = db;
   const result = await prisma.recipeVariantRule.deleteMany({ where: { shop, recipeId } });
@@ -902,6 +932,7 @@ export default function ShopifyLinksPage() {
         const grouped = groupedRulesByProduct(allRules);
         const reviewCount = allRules.filter(needsReview).length;
         const collections = recipeCollectionSummary(allRules);
+        const healthSummary = recipeHealthSummary(grouped);
 
         return <details key={recipe.id} className="recipe-card">
           <summary>
@@ -909,6 +940,8 @@ export default function ShopifyLinksPage() {
             <Badge tone="green">{activeRules.length} active variant rules</Badge>
             <Badge tone="neutral">{grouped.length} product group(s)</Badge>
             {collections.length ? <Badge tone="neutral">{collections.length} collection source(s)</Badge> : null}
+            {healthSummary.expected ? <Badge tone="green">{healthSummary.expected} healthy product group(s)</Badge> : null}
+            {healthSummary.unusual ? <Badge tone="yellow">{healthSummary.unusual} unusual count(s)</Badge> : null}
             {reviewCount ? <Badge tone="yellow">{reviewCount} need review</Badge> : null}
           </summary>
           <div className="recipe-body">
@@ -932,8 +965,18 @@ export default function ShopifyLinksPage() {
               <p className="muted">Remove a collection source if the wrong collection was synced to this recipe. This deletes only the saved mapping rules created from that source; it does not touch Shopify products or the recipe setup.</p>
               {collections.map((item: any) => <div key={item.collection} className="source-row">
                 <div>
-                  <strong>{item.collection}</strong>: {item.products} product(s), {item.activeVariants || item.variants} active / {item.variants} variant rule(s)
-                  {item.needsReview ? <Badge tone="yellow">{item.needsReview} need review</Badge> : null}
+                  {(() => {
+                    const health = collectionVariantHealth(item);
+                    return <>
+                      <strong>{item.collection}</strong>: {item.products} product(s), {item.activeVariants || item.variants} active / {item.variants} variant rule(s)
+                      <div className="pill-row tight">
+                        <Badge tone={health.expectedPattern ? "green" : "yellow"}>{health.label}</Badge>
+                        {health.expectedPattern ? <Badge tone="green">expected pattern</Badge> : <Badge tone="yellow">check variant count</Badge>}
+                        {health.hasHidden ? <Badge tone="yellow">hidden rules included</Badge> : null}
+                        {item.needsReview ? <Badge tone="yellow">{item.needsReview} need review</Badge> : <Badge tone="green">0 need review</Badge>}
+                      </div>
+                    </>;
+                  })()}
                   {item.collectionGid ? <div className="muted">Collection linked. Continue sync skips products already mapped to this recipe.</div> : <div className="muted">Older source without saved collection GID. Search this collection again to continue syncing.</div>}
                 </div>
                 <div className="button-row">
@@ -1091,6 +1134,7 @@ export default function ShopifyLinksPage() {
       .badge.red { background: #fee2e2; color: #991b1b; }
       .badge.neutral { background: #eee; color: #333; }
       .pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+      .pill-row.tight { margin: 6px 0 2px; }
       .recipe-card { border: 1px solid #e5e5e5; border-radius: 10px; padding: 12px; margin: 10px 0; }
       .recipe-body { padding-top: 10px; }
       .summary-box { border: 1px solid #e5e7eb; border-radius: 10px; background: #f9fafb; padding: 12px; margin: 12px 0; }
