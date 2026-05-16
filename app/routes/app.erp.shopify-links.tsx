@@ -7,6 +7,7 @@ const COLLECTION_SEARCH_LIMIT = 10;
 const COLLECTION_BATCH_SIZE = 25;
 const VARIANT_FETCH_LIMIT = 100;
 const GROUP_ROW_PREVIEW_LIMIT = 0;
+const INSPECT_ROW_LIMIT = 75;
 
 function normalize(value: any) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -531,6 +532,32 @@ async function setCollectionMappingsActive(shop: string, recipeId: string, colle
   return result.count || 0;
 }
 
+
+function ruleMediaName(rule: any, recipe: any) {
+  const option = (recipe?.mediaOptions || []).find((media: any) => media.id === rule.frontMediaOptionId);
+  return option?.name || "Default/unknown";
+}
+
+function countBy(values: string[]) {
+  const counts: Record<string, number> = {};
+  for (const value of values) counts[value || "Unknown"] = (counts[value || "Unknown"] || 0) + 1;
+  return Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function productGroupBreakdown(recipe: any, group: any) {
+  const activeRules = (group?.rules || []).filter((rule: any) => rule.active !== false);
+  return {
+    sides: countBy(activeRules.map((rule: any) => rule.sideMode || "single")),
+    media: countBy(activeRules.map((rule: any) => ruleMediaName(rule, recipe))),
+    colors: countBy(activeRules.map((rule: any) => rule.bagColor || "Any")),
+    needsReview: activeRules.filter(needsReview).length,
+  };
+}
+
+function BreakdownLine({ label, items }: { label: string; items: [string, number][] }) {
+  return <div><strong>{label}:</strong> {items.length ? items.map(([name, count]) => `${name}: ${count}`).join(" · ") : "None"}</div>;
+}
+
 function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" | "yellow" | "red" | "neutral" }) {
   return <span className={`badge ${tone}`}>{children}</span>;
 }
@@ -538,6 +565,9 @@ function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" |
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+  const url = new URL(request.url);
+  const inspectProductGid = url.searchParams.get("inspectProductGid") || "";
+  const inspectRecipeId = url.searchParams.get("inspectRecipeId") || "";
   const prisma: any = db;
 
   const recipes = await prisma.productRecipe.findMany({
@@ -549,7 +579,7 @@ export async function loader({ request }: { request: Request }) {
     },
   });
 
-  return Response.json({ recipes, collectionBatchSize: COLLECTION_BATCH_SIZE, groupRowPreviewLimit: GROUP_ROW_PREVIEW_LIMIT });
+  return Response.json({ recipes, collectionBatchSize: COLLECTION_BATCH_SIZE, groupRowPreviewLimit: GROUP_ROW_PREVIEW_LIMIT, inspectProductGid, inspectRecipeId, inspectRowLimit: INSPECT_ROW_LIMIT });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -688,7 +718,7 @@ export async function action({ request }: { request: Request }) {
 }
 
 export default function ShopifyLinksPage() {
-  const { recipes, collectionBatchSize, groupRowPreviewLimit } = useLoaderData<any>();
+  const { recipes, collectionBatchSize, groupRowPreviewLimit, inspectProductGid, inspectRecipeId, inspectRowLimit } = useLoaderData<any>();
   const actionData = useActionData<any>();
 
   return <main className="page">
@@ -859,9 +889,13 @@ export default function ShopifyLinksPage() {
               const groupActive = group.rules.filter((rule: any) => rule.active !== false).length;
               const groupReview = group.rules.filter(needsReview).length;
               const title = group.productTitle || group.productGid;
-              const previewRows = group.rules.slice(0, groupRowPreviewLimit || GROUP_ROW_PREVIEW_LIMIT);
+              const isInspecting = inspectRecipeId === recipe.id && inspectProductGid === group.productGid;
+              const previewLimit = Number(inspectRowLimit || INSPECT_ROW_LIMIT);
+              const previewRows = isInspecting ? group.rules.slice(0, previewLimit) : group.rules.slice(0, groupRowPreviewLimit || GROUP_ROW_PREVIEW_LIMIT);
               const hiddenRows = Math.max(0, group.rules.length - previewRows.length);
-              return <details key={group.productGid} className="product-group">
+              const breakdown = productGroupBreakdown(recipe, group);
+              const inspectHref = `?inspectRecipeId=${encodeURIComponent(recipe.id)}&inspectProductGid=${encodeURIComponent(group.productGid)}`;
+              return <details key={group.productGid} className="product-group" open={isInspecting}>
                 <summary>
                   <strong>{title}</strong>
                   <span className="muted gid">{group.productTitle ? group.productGid : ""}</span>
@@ -870,6 +904,18 @@ export default function ShopifyLinksPage() {
                   {groupReview ? <Badge tone="yellow">{groupReview} need review</Badge> : null}
                 </summary>
                 <div style={{ marginTop: 10 }}>
+                  <div className="inspector-box">
+                    <div className="button-row" style={{ marginBottom: 8 }}>
+                      {isInspecting ? <a className="button-link secondary" href="?">Hide variant details</a> : <a className="button-link" href={inspectHref}>View variant details</a>}
+                      <span className="muted">Shows up to {previewLimit} variant rule(s) for this product only.</span>
+                    </div>
+                    {isInspecting ? <div className="breakdown-grid">
+                      <BreakdownLine label="Side count" items={breakdown.sides} />
+                      <BreakdownLine label="Media count" items={breakdown.media} />
+                      <BreakdownLine label="Color count" items={breakdown.colors} />
+                      <div><strong>Needs review:</strong> {breakdown.needsReview}</div>
+                    </div> : null}
+                  </div>
                   <div className="button-row" style={{ marginBottom: 10 }}>
                     <Form method="post">
                       <input type="hidden" name="intent" value="cleanProductMappings" />
@@ -896,7 +942,7 @@ export default function ShopifyLinksPage() {
                       <button type="submit" className="danger">Remove product mappings</button>
                     </Form>
                   </div>
-                  {hiddenRows ? <p className="muted">Variant detail rows are hidden in this summary view. Use product cleanup here only when needed; full variant pricing audits will live in Margin Review.</p> : null}
+                  {hiddenRows ? <p className="muted">Variant detail rows are hidden in summary view. Click View variant details to inspect side/media/color for this product without flooding the page.</p> : null}
                   {previewRows.length ? <table>
                     <thead><tr><th>Variant</th><th>SKU</th><th>Auto rules</th><th>Status</th><th></th></tr></thead>
                     <tbody>
@@ -919,7 +965,7 @@ export default function ShopifyLinksPage() {
                         </td>
                       </tr>)}
                     </tbody>
-                  </table> : <p className="muted">Variant rows are intentionally hidden on this summary dashboard. This keeps large collections like Stock Bags usable. Clean duplicates from the product group here; use Margin Review later for full variant pricing and Shopify price updates.</p>}
+                  </table> : <p className="muted">Variant rows are hidden until you click View variant details. This keeps large collections like Stock Bags usable.</p>}
                 </div>
               </details>;
             }) : <p className="muted">No synced variant rules yet.</p>}
@@ -965,6 +1011,11 @@ export default function ShopifyLinksPage() {
       .source-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; border-top: 1px solid #e5e7eb; padding: 10px 0; }
       .product-group { border: 1px solid #eee; border-radius: 10px; padding: 10px; margin: 10px 0; background: #fff; }
       .button-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .button-link { display: inline-block; border-radius: 8px; background: #111827; color: white; padding: 9px 12px; text-decoration: none; }
+      .button-link.secondary { background: #e5e7eb; color: #111827; }
+      .inspector-box { border: 1px solid #e5e7eb; background: #f9fafb; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+      .breakdown-grid { display: grid; gap: 4px; font-size: 13px; color: #374151; }
+
       @media (max-width: 900px) { .grid.two { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; } }
     `}</style>
   </main>;
