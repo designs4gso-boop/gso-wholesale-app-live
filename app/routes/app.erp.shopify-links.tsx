@@ -606,36 +606,6 @@ function productGroupBreakdown(recipe: any, group: any) {
   };
 }
 
-function collectionSourceHealth(item: any) {
-  const products = Number(item?.products || 0);
-  const activeVariants = Number(item?.activeVariants || item?.variants || 0);
-  if (!products) return { label: "No products synced", tone: "neutral" as const };
-  const avg = activeVariants / products;
-  if (Number.isInteger(avg)) return { label: `${avg} variants/product`, tone: "green" as const };
-  return { label: `${avg.toFixed(1)} variants/product`, tone: "yellow" as const };
-}
-
-function productGroupHealth(recipe: any, group: any) {
-  const activeRules = (group?.rules || []).filter((rule: any) => rule.active !== false);
-  const breakdown = productGroupBreakdown(recipe, group);
-  const sideKinds = breakdown.sides.length;
-  const mediaKinds = breakdown.media.length;
-  const colorKinds = breakdown.colors.length;
-  const expected = sideKinds && mediaKinds && colorKinds ? sideKinds * mediaKinds * colorKinds : 0;
-  const activeCount = activeRules.length;
-  const matchedPattern = expected && expected === activeCount;
-  let label = matchedPattern ? `${sideKinds} sides × ${mediaKinds} media × ${colorKinds} colors = ${activeCount}` : `${activeCount} active rules`;
-  if (activeCount === 24 && matchedPattern) label = `Stock pattern: ${label}`;
-  if (activeCount === 36 && matchedPattern) label = `Gloss pattern: ${label}`;
-  return { label, tone: matchedPattern ? "green" as const : "yellow" as const, matchedPattern, breakdown };
-}
-
-function productGroupDisplayTitle(recipe: any, group: any) {
-  if (group?.productTitle) return group.productTitle;
-  if (recipe?.productGid && group?.productGid === recipe.productGid) return "Default Shopify product";
-  return group?.productGid || "No product GID";
-}
-
 function BreakdownLine({ label, items }: { label: string; items: [string, number][] }) {
   return <div><strong>{label}:</strong> {items.length ? items.map(([name, count]) => `${name}: ${count}`).join(" · ") : "None"}</div>;
 }
@@ -911,7 +881,7 @@ export default function ShopifyLinksPage() {
 
     <section className="card wide">
       <h2>Linked recipe sources / saved variant rules</h2>
-      <p className="muted">Summary-first view. Products and collections are grouped so large Stock Bags catalogs do not flood the page. Health badges show expected variant patterns; Margin Review will handle full price audits.</p>
+      <p className="muted">Summary-first view. Products and collections are grouped so large Stock Bags catalogs do not flood the page. Variant rows are hidden here; Margin Review will handle full price audits.</p>
       {recipes.map((recipe: any) => {
         const allRules = recipe.variantRules || [];
         const activeRules = allRules.filter((rule: any) => rule.active !== false);
@@ -928,7 +898,7 @@ export default function ShopifyLinksPage() {
             {reviewCount ? <Badge tone="yellow">{reviewCount} need review</Badge> : null}
           </summary>
           <div className="recipe-body">
-            <p><strong>Default Shopify product:</strong> {recipe.productGid ? <span><span className="muted">Linked:</span> {recipe.productGid}</span> : <span className="muted">Not set yet</span>}</p>
+            <p><strong>Default Shopify product:</strong> {recipe.productGid || <span className="muted">Not set yet</span>}</p>
             <p><strong>Media options:</strong> {(recipe.mediaOptions || []).map((option: any) => option.name).join(", ") || "No media options"}</p>
             <div className="button-row" style={{ marginBottom: 12 }}>
               <Form method="post">
@@ -949,7 +919,6 @@ export default function ShopifyLinksPage() {
               {collections.map((item: any) => <div key={item.collection} className="source-row">
                 <div>
                   <strong>{item.collection}</strong>: {item.products} product(s), {item.activeVariants || item.variants} active / {item.variants} variant rule(s)
-                  <Badge tone={collectionSourceHealth(item).tone}>{collectionSourceHealth(item).label}</Badge>
                   {item.needsReview ? <Badge tone="yellow">{item.needsReview} need review</Badge> : null}
                   {item.collectionGid ? <div className="muted">Collection linked. Continue sync skips products already mapped to this recipe.</div> : <div className="muted">Older source without saved collection GID. Search this collection again to continue syncing.</div>}
                 </div>
@@ -985,20 +954,19 @@ export default function ShopifyLinksPage() {
             {grouped.length ? grouped.map((group: any) => {
               const groupActive = group.rules.filter((rule: any) => rule.active !== false).length;
               const groupReview = group.rules.filter(needsReview).length;
-              const title = productGroupDisplayTitle(recipe, group);
-              const health = productGroupHealth(recipe, group);
+              const title = group.productTitle || group.productGid;
               const isInspecting = true;
               const previewLimit = Number(inspectRowLimit || INSPECT_ROW_LIMIT);
               const previewRows = isInspecting ? group.rules.slice(0, previewLimit) : group.rules.slice(0, groupRowPreviewLimit || GROUP_ROW_PREVIEW_LIMIT);
               const hiddenRows = Math.max(0, group.rules.length - previewRows.length);
               const breakdown = productGroupBreakdown(recipe, group);
+              const inspectHref = `?inspectRecipeId=${encodeURIComponent(recipe.id)}&inspectProductGid=${encodeURIComponent(group.productGid)}`;
               return <details key={group.productGid} className="product-group" open={isInspecting}>
                 <summary>
                   <strong>{title}</strong>
                   <span className="muted gid">{group.productTitle ? group.productGid : ""}</span>
                   <Badge tone="green">{groupActive} active</Badge>
                   <Badge tone="neutral">{group.rules.length} total</Badge>
-                  <Badge tone={health.tone}>{health.label}</Badge>
                   {groupReview ? <Badge tone="yellow">{groupReview} need review</Badge> : null}
                 </summary>
                 <div style={{ marginTop: 10 }}>
