@@ -412,16 +412,57 @@ async function syncProductToRecipe(shop: string, recipe: any, admin: any, produc
   return { product, variants, created, updated, cleaned, needsReview };
 }
 
+async function mappedProductGidsForRecipe(shop: string, recipeId: string) {
+  const prisma: any = db;
+  const rules = await prisma.recipeVariantRule.findMany({
+    where: { shop, recipeId, shopifyProductGid: { not: null } },
+    select: { shopifyProductGid: true },
+  });
+  return new Set((rules || []).map((rule: any) => rule.shopifyProductGid).filter(Boolean));
+}
+
+async function fetchNextUnsyncedCollectionProductBatch(admin: any, collectionGid: string, mappedProductGids: Set<string>, after?: string) {
+  let cursor = after || undefined;
+  let products: any[] = [];
+  let collection: any = null;
+  let pageInfo: any = { hasNextPage: false, endCursor: null };
+  let scannedProducts = 0;
+  let skippedAlreadyMapped = 0;
+  let pagesScanned = 0;
+
+  do {
+    const batch = await fetchCollectionProductBatch(admin, collectionGid, cursor, COLLECTION_BATCH_SIZE);
+    collection = batch.collection;
+    pageInfo = batch.pageInfo;
+    pagesScanned += 1;
+    scannedProducts += batch.products.length;
+
+    for (const product of batch.products || []) {
+      if (mappedProductGids.has(product.id)) {
+        skippedAlreadyMapped += 1;
+        continue;
+      }
+      products.push(product);
+      if (products.length >= COLLECTION_BATCH_SIZE) break;
+    }
+
+    cursor = pageInfo?.endCursor || undefined;
+  } while (collection && products.length < COLLECTION_BATCH_SIZE && pageInfo?.hasNextPage && pagesScanned < 12);
+
+  return { collection, products, pageInfo, scannedProducts, skippedAlreadyMapped, pagesScanned };
+}
+
 async function syncCollectionBatchToRecipe(shop: string, recipe: any, admin: any, collectionGid: string, after?: string) {
-  const { collection, products, pageInfo } = await fetchCollectionProductBatch(admin, collectionGid, after, COLLECTION_BATCH_SIZE);
-  if (!collection) return { collection: null, products: [], variants: 0, created: 0, updated: 0, cleaned: 0, needsReview: 0, pageInfo };
+  const mappedProductGids = await mappedProductGidsForRecipe(shop, recipe.id);
+  const { collection, products, pageInfo, scannedProducts, skippedAlreadyMapped, pagesScanned } = await fetchNextUnsyncedCollectionProductBatch(admin, collectionGid, mappedProductGids, after);
+  if (!collection) return { collection: null, products: [], variants: 0, created: 0, updated: 0, cleaned: 0, needsReview: 0, pageInfo, scannedProducts: 0, skippedAlreadyMapped: 0, pagesScanned: 0 };
 
   let variants = 0;
   let created = 0;
   let updated = 0;
   let cleaned = 0;
   let needsReview = 0;
-  const sourceLabel = `Collection: ${collection.title}`;
+  const sourceLabel = `Collection: ${collection.title}. Collection GID: ${collection.id}`;
 
   for (const product of products) {
     const preClean = await cleanDuplicateMappings(shop, recipe.id, product.id);
@@ -441,7 +482,7 @@ async function syncCollectionBatchToRecipe(shop: string, recipe: any, admin: any
     cleaned += postClean.removed;
   }
 
-  return { collection, products, variants, created, updated, cleaned, needsReview, pageInfo };
+  return { collection, products, variants, created, updated, cleaned, needsReview, pageInfo, scannedProducts, skippedAlreadyMapped, pagesScanned };
 }
 
 function productSampleText(product: any) {
@@ -470,20 +511,31 @@ function collectionLabelFromRule(rule: any) {
   return match?.[1]?.trim() || "";
 }
 
+function collectionGidFromRule(rule: any) {
+  const match = String(rule?.notes || "").match(/Collection GID:\s*(gid:\/\/shopify\/Collection\/[0-9]+)/i);
+  return match?.[1]?.trim() || "";
+}
+
 function recipeCollectionSummary(rules: any[] = []) {
   const summary = new Map<string, any>();
   for (const rule of rules || []) {
     const collection = collectionLabelFromRule(rule);
     if (!collection) continue;
-    if (!summary.has(collection)) summary.set(collection, { collection, productGids: new Set<string>(), variants: 0 });
+    if (!summary.has(collection)) summary.set(collection, { collection, collectionGid: "", productGids: new Set<string>(), variants: 0, activeVariants: 0, needsReview: 0 });
     const item = summary.get(collection);
+    if (!item.collectionGid) item.collectionGid = collectionGidFromRule(rule);
     if (rule.shopifyProductGid) item.productGids.add(rule.shopifyProductGid);
     item.variants += 1;
+    if (rule.active !== false) item.activeVariants += 1;
+    if (needsReview(rule)) item.needsReview += 1;
   }
   return Array.from(summary.values()).map((item: any) => ({
     collection: item.collection,
+    collectionGid: item.collectionGid,
     products: item.productGids.size,
     variants: item.variants,
+    activeVariants: item.activeVariants,
+    needsReview: item.needsReview,
   }));
 }
 
@@ -629,7 +681,7 @@ export async function action({ request }: { request: Request }) {
       return Response.json({
         ok: true,
         intent,
-        message: `Synced batch from ${result.collection.title}: ${result.products.length} product(s), ${result.variants} variant(s), ${result.created} created, ${result.updated} updated, ${result.cleaned} duplicate(s) cleaned, ${result.needsReview} need review.${result.pageInfo?.hasNextPage ? " More products are available." : " Collection batch sync reached the end."}`,
+        message: `Synced next unsynced batch from ${result.collection.title}: ${result.products.length} new product(s), ${result.variants} variant(s), ${result.created} created, ${result.updated} updated, ${result.cleaned} duplicate(s) cleaned, ${result.needsReview} need review. Scanned ${result.scannedProducts || result.products.length} product(s), skipped ${result.skippedAlreadyMapped || 0} already-linked product(s).${result.pageInfo?.hasNextPage ? " More products may be available." : " Collection batch sync reached the end."}`,
         batch: {
           collectionId: result.collection.id,
           collectionTitle: result.collection.title,
@@ -638,6 +690,9 @@ export async function action({ request }: { request: Request }) {
           hasNextPage: !!result.pageInfo?.hasNextPage,
           products: result.products.length,
           variants: result.variants,
+          scannedProducts: result.scannedProducts || result.products.length,
+          skippedAlreadyMapped: result.skippedAlreadyMapped || 0,
+          pagesScanned: result.pagesScanned || 1,
         },
       });
     }
@@ -734,20 +789,21 @@ export default function ShopifyLinksPage() {
         <Badge tone="neutral">Product/collection link = where it applies</Badge>
         <Badge tone="yellow">Variant rules = parsed from option names</Badge>
       </div>
-      <p className="muted">Stock Bags can contain thousands of products. This page syncs collections in safe batches of {collectionBatchSize} products and shows summaries first. Quantity tiers stay controlled by pricing templates, not Shopify variants.</p><p className="muted"><strong>Recommended flow:</strong> link the product or collection once, scan a small batch to verify rules, then continue only after Single/Double and media mapping look correct.</p>
+      <p className="muted">Stock Bags can contain thousands of products. This page syncs collections in safe batches of {collectionBatchSize} unsynced products, skips products already linked to the recipe, and shows summaries first. Quantity tiers stay controlled by pricing templates, not Shopify variants.</p><p className="muted"><strong>Recommended flow:</strong> link the product or collection once, scan a small batch to verify rules, then continue only after Single/Double and media mapping look correct.</p>
     </section>
 
     {actionData?.message ? <div className={`notice ${actionData.ok ? "success" : "error"}`}>{actionData.message}</div> : null}
 
     {actionData?.batch?.hasNextPage ? <section className="card wide continue-card">
       <h2>Continue collection sync</h2>
-      <p><strong>{actionData.batch.collectionTitle}</strong> synced {actionData.batch.products} product(s) and {actionData.batch.variants} variant(s) in the last batch. More products are available.</p>
+      <p><strong>{actionData.batch.collectionTitle}</strong> synced {actionData.batch.products} new product(s) and {actionData.batch.variants} variant rule(s) in the last batch.</p>
+      <p className="muted">Scanned {actionData.batch.scannedProducts || actionData.batch.products} product(s), skipped {actionData.batch.skippedAlreadyMapped || 0} already-linked product(s). Continue only after the latest batch looks correct.</p>
       <Form method="post" className="button-row">
         <input type="hidden" name="intent" value="syncCollectionBatch" />
         <input type="hidden" name="recipeId" value={actionData.batch.recipeId} />
         <input type="hidden" name="collectionGid" value={actionData.batch.collectionId} />
         <input type="hidden" name="cursor" value={actionData.batch.nextCursor} />
-        <button type="submit">Sync next {collectionBatchSize} products</button>
+        <button type="submit">Continue sync next {collectionBatchSize} unsynced products</button>
       </Form>
     </section> : null}
 
@@ -815,7 +871,7 @@ export default function ShopifyLinksPage() {
                   <option value="" disabled>Choose recipe</option>
                   {recipes.map((recipe: any) => <option key={recipe.id} value={recipe.id}>{recipe.name} · {recipe.productFamily || recipe.productTypeProfile?.name || "Recipe"}</option>)}
                 </select>
-                <button type="submit">Link collection + sync first {collectionBatchSize}</button>
+                <button type="submit">Link collection + sync next {collectionBatchSize} unsynced</button>
               </Form>
             </td>
           </tr>)}
@@ -861,8 +917,18 @@ export default function ShopifyLinksPage() {
               <h3>Collection source summaries</h3>
               <p className="muted">Remove a collection source if the wrong collection was synced to this recipe. This deletes only the saved mapping rules created from that source; it does not touch Shopify products or the recipe setup.</p>
               {collections.map((item: any) => <div key={item.collection} className="source-row">
-                <div><strong>{item.collection}</strong>: {item.products} product(s), {item.variants} variant rule(s)</div>
+                <div>
+                  <strong>{item.collection}</strong>: {item.products} product(s), {item.activeVariants || item.variants} active / {item.variants} variant rule(s)
+                  {item.needsReview ? <Badge tone="yellow">{item.needsReview} need review</Badge> : null}
+                  {item.collectionGid ? <div className="muted">Collection linked. Continue sync skips products already mapped to this recipe.</div> : <div className="muted">Older source without saved collection GID. Search this collection again to continue syncing.</div>}
+                </div>
                 <div className="button-row">
+                  {item.collectionGid ? <Form method="post">
+                    <input type="hidden" name="intent" value="syncCollectionBatch" />
+                    <input type="hidden" name="recipeId" value={recipe.id} />
+                    <input type="hidden" name="collectionGid" value={item.collectionGid} />
+                    <button type="submit">Continue next {collectionBatchSize}</button>
+                  </Form> : null}
                   <Form method="post">
                     <input type="hidden" name="intent" value="hideCollectionMappings" />
                     <input type="hidden" name="recipeId" value={recipe.id} />
@@ -1020,5 +1086,3 @@ export default function ShopifyLinksPage() {
     `}</style>
   </main>;
 }
-
-
