@@ -6,7 +6,7 @@ const PRODUCT_SEARCH_LIMIT = 25;
 const COLLECTION_SEARCH_LIMIT = 10;
 const COLLECTION_BATCH_SIZE = 25;
 const VARIANT_FETCH_LIMIT = 100;
-const GROUP_ROW_PREVIEW_LIMIT = 12;
+const GROUP_ROW_PREVIEW_LIMIT = 0;
 
 function normalize(value: any) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -608,7 +608,7 @@ export default function ShopifyLinksPage() {
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Connect products and large collections to rule-based product recipes without loading thousands of rows at once.</p>
+      <p>Summary-first Shopify linking for products and large collections. Link sources to recipes, scan safely, and review exceptions only.</p>
     </header>
 
     <section className="card wide plan-card">
@@ -618,7 +618,7 @@ export default function ShopifyLinksPage() {
         <Badge tone="neutral">Product/collection link = where it applies</Badge>
         <Badge tone="yellow">Variant rules = parsed from option names</Badge>
       </div>
-      <p className="muted">Stock Bags can contain thousands of products. This page syncs collections in safe batches of {collectionBatchSize} products and shows summaries first. Quantity tiers stay controlled by pricing templates, not Shopify variants.</p>
+      <p className="muted">Stock Bags can contain thousands of products. This page syncs collections in safe batches of {collectionBatchSize} products and shows summaries first. Quantity tiers stay controlled by pricing templates, not Shopify variants.</p><p className="muted"><strong>Recommended flow:</strong> link the product or collection once, scan a small batch to verify rules, then continue only after Single/Double and media mapping look correct.</p>
     </section>
 
     {actionData?.message ? <div className={`notice ${actionData.ok ? "success" : "error"}`}>{actionData.message}</div> : null}
@@ -709,7 +709,7 @@ export default function ShopifyLinksPage() {
 
     <section className="card wide">
       <h2>Linked recipe sources / saved variant rules</h2>
-      <p className="muted">This is summary-first. Expand a product only when you need to inspect a few variants. Each Shopify variant should only have one active mapping per recipe.</p>
+      <p className="muted">Summary-first view. Products and collections are grouped so large Stock Bags catalogs do not flood the page. Variant rows are hidden here; Margin Review will handle full price audits.</p>
       {recipes.map((recipe: any) => {
         const allRules = recipe.variantRules || [];
         const activeRules = allRules.filter((rule: any) => rule.active !== false);
@@ -760,8 +760,8 @@ export default function ShopifyLinksPage() {
                     <input type="hidden" name="productGid" value={group.productGid} />
                     <button type="submit" className="secondary">Clean duplicate mappings for this product</button>
                   </Form>
-                  {hiddenRows ? <p className="muted">Showing first {previewRows.length} of {group.rules.length} variant rules. Use Margin Review later for full catalog audits.</p> : null}
-                  <table>
+                  {hiddenRows ? <p className="muted">Variant detail rows are hidden in this summary view. Use product cleanup here only when needed; full variant pricing audits will live in Margin Review.</p> : null}
+                  {previewRows.length ? <table>
                     <thead><tr><th>Variant</th><th>SKU</th><th>Auto rules</th><th>Status</th><th></th></tr></thead>
                     <tbody>
                       {previewRows.map((rule: any) => <tr key={rule.id}>
@@ -783,7 +783,7 @@ export default function ShopifyLinksPage() {
                         </td>
                       </tr>)}
                     </tbody>
-                  </table>
+                  </table> : <p className="muted">Variant rows are intentionally hidden on this summary dashboard. This keeps large collections like Stock Bags usable. Clean duplicates from the product group here; use Margin Review later for full variant pricing and Shopify price updates.</p>}
                 </div>
               </details>;
             }) : <p className="muted">No synced variant rules yet.</p>}
