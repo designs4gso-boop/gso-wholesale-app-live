@@ -753,6 +753,17 @@ export async function action({ request }: { request: Request }) {
       return Response.json({ ok: true, message: `${active ? "Restored" : "Hid"} ${changed} mapping(s) from collection source: ${collectionName}.` });
     }
 
+    if (intent === "inspectProduct") {
+      const recipeId = String(formData.get("recipeId") || "");
+      const productGid = String(formData.get("productGid") || "");
+      if (!recipeId || !productGid) return Response.json({ ok: false, message: "Missing recipe or Shopify product group." }, { status: 400 });
+      return Response.json({ ok: true, intent, message: "Variant details opened for one product group.", inspectRecipeId: recipeId, inspectProductGid: productGid });
+    }
+
+    if (intent === "clearInspect") {
+      return Response.json({ ok: true, intent, message: "Variant details hidden." });
+    }
+
     if (intent === "hideRule" || intent === "restoreRule") {
       const ruleId = String(formData.get("ruleId") || "");
       await prisma.recipeVariantRule.updateMany({ where: { shop, id: ruleId }, data: { active: intent === "restoreRule" } });
@@ -775,6 +786,9 @@ export async function action({ request }: { request: Request }) {
 export default function ShopifyLinksPage() {
   const { recipes, collectionBatchSize, groupRowPreviewLimit, inspectProductGid, inspectRecipeId, inspectRowLimit } = useLoaderData<any>();
   const actionData = useActionData<any>();
+  const inspectedRecipeId = actionData?.intent === "inspectProduct" ? actionData.inspectRecipeId : "";
+  const inspectedProductGid = actionData?.intent === "inspectProduct" ? actionData.inspectProductGid : "";
+
 
   return <main className="page">
     <header className="hero">
@@ -955,12 +969,11 @@ export default function ShopifyLinksPage() {
               const groupActive = group.rules.filter((rule: any) => rule.active !== false).length;
               const groupReview = group.rules.filter(needsReview).length;
               const title = group.productTitle || group.productGid;
-              const isInspecting = false;
+              const isInspecting = inspectedRecipeId === recipe.id && inspectedProductGid === group.productGid;
               const previewLimit = Number(inspectRowLimit || INSPECT_ROW_LIMIT);
               const previewRows = isInspecting ? group.rules.slice(0, previewLimit) : group.rules.slice(0, groupRowPreviewLimit || GROUP_ROW_PREVIEW_LIMIT);
               const hiddenRows = Math.max(0, group.rules.length - previewRows.length);
               const breakdown = productGroupBreakdown(recipe, group);
-              const inspectHref = `?inspectRecipeId=${encodeURIComponent(recipe.id)}&inspectProductGid=${encodeURIComponent(group.productGid)}`;
               return <details key={group.productGid} className="product-group" open={isInspecting}>
                 <summary>
                   <strong>{title}</strong>
@@ -972,8 +985,16 @@ export default function ShopifyLinksPage() {
                 <div style={{ marginTop: 10 }}>
                   <div className="inspector-box">
                     <div className="button-row" style={{ marginBottom: 8 }}>
-                      <span className="badge">Variant details hidden</span>
-                      <span className="muted">Shows up to {previewLimit} variant rule(s) for this product only.</span>
+                      {isInspecting ? <Form method="post" className="inline-form">
+                        <input type="hidden" name="intent" value="clearInspect" />
+                        <button type="submit" className="secondary">Hide variant details</button>
+                      </Form> : <Form method="post" className="inline-form">
+                        <input type="hidden" name="intent" value="inspectProduct" />
+                        <input type="hidden" name="recipeId" value={recipe.id} />
+                        <input type="hidden" name="productGid" value={group.productGid} />
+                        <button type="submit" className="secondary">View variant details</button>
+                      </Form>}
+                      <span className="muted">{isInspecting ? `Showing up to ${previewLimit} variant rule(s) for this product only.` : "Variant details are hidden until opened for this product."}</span>
                     </div>
                     {isInspecting ? <div className="breakdown-grid">
                       <BreakdownLine label="Side count" items={breakdown.sides} />
@@ -1008,7 +1029,7 @@ export default function ShopifyLinksPage() {
                       <button type="submit" className="danger">Remove product mappings</button>
                     </Form>
                   </div>
-                  {hiddenRows ? <p className="muted">Variant detail rows are hidden in summary view. Click View variant details to inspect side/media/color for this product without flooding the page.</p> : null}
+                  {hiddenRows ? <p className="muted">Variant detail rows are hidden in summary view. Use View variant details to inspect side/media/color for this product without flooding the page.</p> : null}
                   {previewRows.length ? <table>
                     <thead><tr><th>Variant</th><th>SKU</th><th>Auto rules</th><th>Status</th><th></th></tr></thead>
                     <tbody>
@@ -1086,4 +1107,3 @@ export default function ShopifyLinksPage() {
     `}</style>
   </main>;
 }
-
