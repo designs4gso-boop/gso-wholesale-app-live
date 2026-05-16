@@ -9,6 +9,16 @@ const VARIANT_FETCH_LIMIT = 100;
 const GROUP_ROW_PREVIEW_LIMIT = 0;
 const INSPECT_ROW_LIMIT = 75;
 
+const STICKER_BAG_RULE_PRESET = {
+  name: "Sticker Bag Variant Rules",
+  sideSingle: ["Single", "Single Sided", "1 Sided", "One Side", "Front Only"],
+  sideDouble: ["Double", "Double Sided", "2 Sided", "Two Sided", "Front + Back", "Both Sides"],
+  mediaMatte: ["Matte", "Matt"],
+  mediaGloss: ["Gloss", "Glossy"],
+  mediaHolographic: ["Holographic", "Holo"],
+  colors: ["Black", "Green", "Lime Green", "Orange", "Purple", "Teal", "White", "Clear"],
+};
+
 function normalize(value: any) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -731,6 +741,34 @@ export async function action({ request }: { request: Request }) {
   const intent = String(formData.get("intent") || "");
 
   try {
+    if (intent === "testVariantRules") {
+      const recipeId = String(formData.get("recipeId") || "");
+      const variantText = String(formData.get("variantText") || "").trim();
+      if (!recipeId) return Response.json({ ok: false, message: "Choose a recipe to test rules." }, { status: 400 });
+      if (!variantText) return Response.json({ ok: false, message: "Enter a sample variant name to test." }, { status: 400 });
+      const recipe = await prisma.productRecipe.findFirst({ where: { shop, id: recipeId }, include: { mediaOptions: { include: { material: true } } } });
+      if (!recipe) return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
+      const mapped = autoMapShopifyVariant({ title: variantText, sku: "", selectedOptions: [] }, recipe, { title: "Rule test" }, "Rule tester");
+      const mediaName = (recipe.mediaOptions || []).find((option: any) => option.id === mapped.frontMediaOptionId)?.name || "Default / no match";
+      const reviewMatch = String(mapped.notes || "").match(/Needs review: ([^\.]+)\./i);
+      return Response.json({
+        ok: true,
+        intent,
+        message: `Rule test complete for: ${variantText}`,
+        ruleTest: {
+          recipeId,
+          variantText,
+          sideMode: mapped.sideMode,
+          useFrontZone: mapped.useFrontZone,
+          useBackZone: mapped.useBackZone,
+          backMediaMode: mapped.backMediaMode,
+          mediaName,
+          bagColor: mapped.bagColor,
+          needsReview: reviewMatch?.[1] || "None",
+        },
+      });
+    }
+
     if (intent === "searchProducts") {
       const query = String(formData.get("query") || "").trim();
       if (!query) return Response.json({ ok: false, message: "Enter a Shopify product name or SKU." }, { status: 400 });
@@ -911,6 +949,47 @@ export default function ShopifyLinksPage() {
         <button type="submit">Continue sync next {collectionBatchSize} unsynced products</button>
       </Form> : <p><Badge tone="green">No more Shopify pages reported</Badge></p>}
     </section> : null}
+
+    <section className="card wide rule-preset-card">
+      <h2>Variant Rule Presets</h2>
+      <p className="muted">Current preset: <strong>{STICKER_BAG_RULE_PRESET.name}</strong>. These rules tell the app how to read Shopify option names before creating recipe variant rules.</p>
+      <div className="grid two">
+        <div className="mini-card">
+          <h3>Side rules</h3>
+          <p><Badge tone="green">Single / front only</Badge> {STICKER_BAG_RULE_PRESET.sideSingle.join(", ")}</p>
+          <p><Badge tone="yellow">Double / front + back</Badge> {STICKER_BAG_RULE_PRESET.sideDouble.join(", ")}</p>
+        </div>
+        <div className="mini-card">
+          <h3>Media rules</h3>
+          <p><Badge tone="neutral">Matte</Badge> {STICKER_BAG_RULE_PRESET.mediaMatte.join(", ")}</p>
+          <p><Badge tone="neutral">Gloss</Badge> {STICKER_BAG_RULE_PRESET.mediaGloss.join(", ")}</p>
+          <p><Badge tone="neutral">Holographic</Badge> {STICKER_BAG_RULE_PRESET.mediaHolographic.join(", ")}</p>
+        </div>
+      </div>
+      <p className="muted"><strong>Known bag colors:</strong> {STICKER_BAG_RULE_PRESET.colors.join(", ")}</p>
+      <Form method="post" className="rule-test-form">
+        <input type="hidden" name="intent" value="testVariantRules" />
+        <label>Recipe
+          <select name="recipeId" defaultValue={actionData?.ruleTest?.recipeId || ""}>
+            <option value="">Choose recipe</option>
+            {recipes.map((recipe: any) => <option key={recipe.id} value={recipe.id}>{recipe.name} · {recipe.productFamily}</option>)}
+          </select>
+        </label>
+        <label>Sample Shopify variant text
+          <input name="variantText" defaultValue={actionData?.ruleTest?.variantText || "Double Sided / Holographic / Black"} placeholder="Example: Double Sided / Holographic / Black" />
+        </label>
+        <button type="submit">Test variant rules</button>
+      </Form>
+      {actionData?.ruleTest ? <div className="inspector-box" style={{ marginTop: 10 }}>
+        <h3>Rule test result</h3>
+        <p><strong>Variant:</strong> {actionData.ruleTest.variantText}</p>
+        <p><strong>Side:</strong> {actionData.ruleTest.sideMode} · Front: {String(actionData.ruleTest.useFrontZone)} · Back: {String(actionData.ruleTest.useBackZone)} · Back media: {actionData.ruleTest.backMediaMode}</p>
+        <p><strong>Media:</strong> {actionData.ruleTest.mediaName}</p>
+        <p><strong>Bag color:</strong> {actionData.ruleTest.bagColor}</p>
+        <p><strong>Needs review:</strong> {actionData.ruleTest.needsReview}</p>
+      </div> : null}
+      <p className="muted">Next version can move these presets into database records. For now this gives you a safe tester before syncing large batches.</p>
+    </section>
 
     <section className="grid two">
       <div className="card">
