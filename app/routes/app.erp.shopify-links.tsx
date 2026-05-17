@@ -956,6 +956,7 @@ export async function action({ request }: { request: Request }) {
       const recipeId = String(formData.get("recipeId") || "");
       const collectionGid = String(formData.get("collectionGid") || "");
       const cursor = String(formData.get("cursor") || "");
+      const autoSync = String(formData.get("autoSync") || "") === "1";
       if (!recipeId || !collectionGid) return Response.json({ ok: false, message: "Missing recipe or collection." }, { status: 400 });
       const recipe = await prisma.productRecipe.findFirst({ where: { shop, id: recipeId }, include: { mediaOptions: { include: { material: true } } } });
       if (!recipe) return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
@@ -979,6 +980,8 @@ export async function action({ request }: { request: Request }) {
           skippedAlreadyMapped: result.skippedAlreadyMapped || 0,
           pagesScanned: result.pagesScanned || 1,
           guardrail: result.products.length ? "Batch completed. Review health badges before continuing." : "No new unsynced products were found in this batch.",
+          autoSync,
+          autoContinue: autoSync && !!result.pageInfo?.hasNextPage && result.products.length > 0 && Number(result.needsReview || 0) === 0,
         },
       });
     }
@@ -1079,7 +1082,7 @@ export default function ShopifyLinksPage() {
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, and current-request sync logging, exception review, and link registry.</p>
+      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, current-request sync logging, exception review, link registry, and browser-safe auto batch sync.</p>
     </header>
 
     <section className="card wide plan-card">
@@ -1089,7 +1092,7 @@ export default function ShopifyLinksPage() {
         <Badge tone="neutral">Product/collection link = where it applies</Badge>
         <Badge tone="yellow">Variant rules = parsed from option names</Badge>
       </div>
-      <p className="muted">Stock Bags can contain thousands of products. This page syncs collections in safe batches of {collectionBatchSize} unsynced products, skips products already linked to the recipe, and shows summaries first. Quantity tiers stay controlled by pricing templates, not Shopify variants.</p><p className="muted"><strong>Recommended flow:</strong> link the product or collection once, scan a small batch to verify rules, then continue only after Single/Double and media mapping look correct.</p>
+      <p className="muted">Stock Bags can contain thousands of products. This page syncs collections in safe batches of {collectionBatchSize} unsynced products, skips products already linked to the recipe, and shows summaries first. Auto-sync is browser-driven: keep this page open and it will continue one safe batch at a time. Quantity tiers stay controlled by pricing templates, not Shopify variants.</p><p className="muted"><strong>Recommended flow:</strong> link the product or collection once, scan a small batch to verify rules, then continue only after Single/Double and media mapping look correct.</p>
     </section>
 
     {actionData?.message ? <div className={`notice ${actionData.ok ? "success" : "error"}`}>{actionData.message}</div> : null}
@@ -1100,14 +1103,27 @@ export default function ShopifyLinksPage() {
       <h2>Last collection batch</h2>
       <p><strong>{actionData.batch.collectionTitle}</strong> synced {actionData.batch.products} new product(s) and {actionData.batch.variants} variant rule(s) in the last batch.</p>
       <p className="muted">Scanned {actionData.batch.scannedProducts || actionData.batch.products} product(s), skipped {actionData.batch.skippedAlreadyMapped || 0} already-linked product(s). {actionData.batch.hasNextPage ? "More products may be available." : "Shopify reported no more pages in this collection."}</p>
-      <p><Badge tone={actionData.batch.products ? "green" : "yellow"}>{actionData.batch.guardrail || "Review health badges before continuing."}</Badge></p>
-      {actionData.batch.hasNextPage ? <Form method="post" className="button-row" onSubmit={(event) => { if (!confirm(`Continue syncing ${collectionBatchSize} more unsynced products from ${actionData.batch.collectionTitle}? Check health badges after each batch.`)) event.preventDefault(); }}>
-        <input type="hidden" name="intent" value="syncCollectionBatch" />
-        <input type="hidden" name="recipeId" value={actionData.batch.recipeId} />
-        <input type="hidden" name="collectionGid" value={actionData.batch.collectionId} />
-        <input type="hidden" name="cursor" value={actionData.batch.nextCursor} />
-        <button type="submit">Continue sync next {collectionBatchSize} unsynced products</button>
-      </Form> : <p><Badge tone="green">No more Shopify pages reported</Badge></p>}
+      <p><Badge tone={actionData.batch.products ? "green" : "yellow"}>{actionData.batch.guardrail || "Review health badges before continuing."}</Badge> {actionData.batch.autoSync ? <Badge tone={actionData.batch.autoContinue ? "green" : "yellow"}>auto-sync {actionData.batch.autoContinue ? "running" : "paused"}</Badge> : null}</p>
+      {actionData.batch.hasNextPage ? <div className="button-row">
+        <Form method="post" onSubmit={(event) => { if (!confirm(`Continue syncing ${collectionBatchSize} more unsynced products from ${actionData.batch.collectionTitle}? Check health badges after each batch.`)) event.preventDefault(); }}>
+          <input type="hidden" name="intent" value="syncCollectionBatch" />
+          <input type="hidden" name="recipeId" value={actionData.batch.recipeId} />
+          <input type="hidden" name="collectionGid" value={actionData.batch.collectionId} />
+          <input type="hidden" name="cursor" value={actionData.batch.nextCursor} />
+          <button type="submit">Continue sync next {collectionBatchSize} unsynced products</button>
+        </Form>
+        <Form method="post" id="auto-sync-next-batch-form">
+          <input type="hidden" name="intent" value="syncCollectionBatch" />
+          <input type="hidden" name="recipeId" value={actionData.batch.recipeId} />
+          <input type="hidden" name="collectionGid" value={actionData.batch.collectionId} />
+          <input type="hidden" name="cursor" value={actionData.batch.nextCursor} />
+          <input type="hidden" name="autoSync" value="1" />
+          <button type="submit" className="secondary">{actionData.batch.autoSync ? "Continue auto-sync now" : "Start auto-sync"}</button>
+        </Form>
+        {actionData.batch.autoSync ? <form><button type="submit" className="secondary">Pause auto-sync</button></form> : null}
+      </div> : <p><Badge tone="green">No more Shopify pages reported</Badge></p>}
+      {actionData.batch.autoContinue ? <div className="notice success auto-sync-banner">Auto-sync is running. Keep this tab open; the next safe batch will start automatically.</div> : null}
+      {actionData.batch.autoContinue ? <script dangerouslySetInnerHTML={{ __html: `setTimeout(function(){var f=document.getElementById('auto-sync-next-batch-form'); if(f) f.requestSubmit ? f.requestSubmit() : f.submit();}, 2500);` }} /> : null}
     </section> : null}
 
     <section className="card wide rule-preset-card">
@@ -1338,12 +1354,21 @@ export default function ShopifyLinksPage() {
                   {item.collectionGid ? (() => {
                     const progress = collectionProgressHealth(item, collectionTotalByGid[item.collectionGid]);
                     if (progress.isComplete) return <button type="button" className="secondary" disabled>Collection complete</button>;
-                    return <Form method="post" onSubmit={(event) => { if (progress.isLargeCollection && !confirm(`Continue syncing ${collectionBatchSize} more unsynced products from ${item.collection}? Check health badges after each batch.`)) event.preventDefault(); }}>
-                      <input type="hidden" name="intent" value="syncCollectionBatch" />
-                      <input type="hidden" name="recipeId" value={recipe.id} />
-                      <input type="hidden" name="collectionGid" value={item.collectionGid} />
-                      <button type="submit">Continue next {collectionBatchSize}</button>
-                    </Form>;
+                    return <>
+                      <Form method="post" onSubmit={(event) => { if (progress.isLargeCollection && !confirm(`Continue syncing ${collectionBatchSize} more unsynced products from ${item.collection}? Check health badges after each batch.`)) event.preventDefault(); }}>
+                        <input type="hidden" name="intent" value="syncCollectionBatch" />
+                        <input type="hidden" name="recipeId" value={recipe.id} />
+                        <input type="hidden" name="collectionGid" value={item.collectionGid} />
+                        <button type="submit">Continue next {collectionBatchSize}</button>
+                      </Form>
+                      <Form method="post" onSubmit={(event) => { if (progress.isLargeCollection && !confirm(`Start browser auto-sync for ${item.collection}? Keep this tab open. The app will stop if a batch creates no products, Shopify reports no more pages, or exceptions appear.`)) event.preventDefault(); }}>
+                        <input type="hidden" name="intent" value="syncCollectionBatch" />
+                        <input type="hidden" name="recipeId" value={recipe.id} />
+                        <input type="hidden" name="collectionGid" value={item.collectionGid} />
+                        <input type="hidden" name="autoSync" value="1" />
+                        <button type="submit" className="secondary">Start auto-sync</button>
+                      </Form>
+                    </>;
                   })() : null}
                   <Form method="post">
                     <input type="hidden" name="intent" value="hideCollectionMappings" />
