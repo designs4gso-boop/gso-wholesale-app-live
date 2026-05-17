@@ -749,6 +749,73 @@ function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" |
   return <span className={`badge ${tone}`}>{children}</span>;
 }
 
+
+function LinkRegistryPanel({ recipes, collectionTotalByGid = {} }: { recipes: any[]; collectionTotalByGid?: Record<string, any> }) {
+  const rows: any[] = [];
+
+  for (const recipe of recipes || []) {
+    const rules = recipe.variantRules || [];
+    const grouped = groupedRulesByProduct(rules);
+    const collections = recipeCollectionSummary(rules);
+
+    for (const group of grouped) {
+      const activeCount = (group.rules || []).filter((rule: any) => rule.active !== false).length;
+      if (!activeCount) continue;
+      const isCollectionProduct = (group.rules || []).some((rule: any) => collectionLabelFromRule(rule));
+      if (isCollectionProduct) continue;
+      const reviewCount = (group.rules || []).filter(needsReview).length;
+      const healthy = activeCount === 24 || activeCount === 36;
+      rows.push({
+        key: `${recipe.id}-product-${group.productGid}`,
+        recipe,
+        sourceType: "Product",
+        sourceName: group.productTitle || (recipe.productGid === group.productGid ? "Default Shopify product" : group.productGid),
+        gid: group.productGid,
+        synced: "1 product",
+        variants: activeCount,
+        healthTone: reviewCount ? "yellow" : healthy ? "green" : "yellow",
+        healthLabel: reviewCount ? `${reviewCount} need review` : healthy ? (activeCount === 36 ? "36 variant product" : "24 variant product") : "check variant count",
+        progress: recipe.productGid === group.productGid ? "Default product link" : "Direct product link",
+      });
+    }
+
+    for (const collection of collections) {
+      const progress = collectionProgressHealth(collection, collectionTotalByGid[collection.collectionGid]);
+      const health = collectionVariantHealth(collection);
+      rows.push({
+        key: `${recipe.id}-collection-${collection.collection}-${collection.collectionGid || "legacy"}`,
+        recipe,
+        sourceType: "Collection",
+        sourceName: collection.collection,
+        gid: collection.collectionGid || "Older source without saved collection GID",
+        synced: `${collection.products} product(s)`,
+        variants: collection.activeVariants || collection.variants,
+        healthTone: collection.needsReview ? "yellow" : health.expectedPattern ? "green" : "yellow",
+        healthLabel: collection.needsReview ? `${collection.needsReview} need review` : health.expectedPattern ? `${health.label}` : "check variant count",
+        progress: progress.total ? `${collection.products} / ${progress.total} synced (${progress.percent}%)` : "Total not loaded",
+        remaining: progress.total ? `${progress.remaining} remaining` : "Search/relink to load total",
+      });
+    }
+  }
+
+  return <section className="card wide link-registry">
+    <h2>Shopify Link Registry</h2>
+    <p className="muted">Read-only overview of every Shopify source connected to a recipe. Use this as the control-center view; detailed cleanup still lives inside each recipe accordion below.</p>
+    {rows.length ? <table>
+      <thead><tr><th>Recipe</th><th>Source</th><th>Synced</th><th>Health</th><th>Progress</th></tr></thead>
+      <tbody>
+        {rows.map((row: any) => <tr key={row.key}>
+          <td><strong>{row.recipe.name}</strong><br /><span className="muted">{row.recipe.productFamily || row.recipe.productTypeProfile?.name || "Recipe"}</span></td>
+          <td><Badge tone={row.sourceType === "Collection" ? "yellow" : "neutral"}>{row.sourceType}</Badge> <strong>{row.sourceName}</strong><br /><span className="muted gid">{row.gid}</span></td>
+          <td>{row.synced}<br /><span className="muted">{row.variants} active variant rule(s)</span></td>
+          <td><Badge tone={row.healthTone}>{row.healthLabel}</Badge></td>
+          <td>{row.progress}<br />{row.remaining ? <span className="muted">{row.remaining}</span> : null}</td>
+        </tr>)}
+      </tbody>
+    </table> : <p className="muted">No Shopify product or collection links have been synced yet.</p>}
+  </section>;
+}
+
 function SyncLogPanel({ actionData }: { actionData: any }) {
   const hasAction = Boolean(actionData?.intent || actionData?.message || actionData?.batch);
   const rows: any[] = [];
@@ -1012,7 +1079,7 @@ export default function ShopifyLinksPage() {
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, and current-request sync logging, and exception review.</p>
+      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, and current-request sync logging, exception review, and link registry.</p>
     </header>
 
     <section className="card wide plan-card">
@@ -1155,6 +1222,8 @@ export default function ShopifyLinksPage() {
         </tbody>
       </table>
     </section> : null}
+
+    <LinkRegistryPanel recipes={recipes} collectionTotalByGid={collectionTotalByGid} />
 
     <section className="card wide">
       <h2>Linked recipe sources / saved variant rules</h2>
