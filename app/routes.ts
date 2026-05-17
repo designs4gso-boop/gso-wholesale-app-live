@@ -35,6 +35,7 @@ export default [
     route("erp/admin-settings", "routes/app.erp.admin-settings.tsx"),
     route("erp/production/:id/print", "routes/app.erp.production.$id.print.tsx"),
     route("erp/production/:id/proof", "routes/app.erp.production.$id.proof.tsx"),
+    route("erp/margin-review", "routes/app.erp.margin-review.tsx"),
   ]),
 
   route("proof/:token", "routes/proof.$token.tsx"),

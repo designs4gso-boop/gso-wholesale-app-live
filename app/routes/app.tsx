@@ -36,6 +36,7 @@ export default function App() {
         <s-link href="/app/wholesale/rules">Pricing Rules</s-link>
         <s-link href="/app/wholesale">Wholesale Settings</s-link>
         <s-link href="/app/wholesale/customers">Customers</s-link>
+        <s-link href="/app/erp/margin-review">Margin Review</s-link>
       </s-app-nav>
 
       <Outlet />
