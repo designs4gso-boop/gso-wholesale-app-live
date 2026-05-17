@@ -2,7 +2,8 @@ import { Form, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const DEFAULT_LABOR_RATE_PER_HOUR = 25;
+const DEFAULT_SHOP_LABOR_RATE_PER_HOUR = 25;
+const DEFAULT_APPLICATION_LABOR_COST_PER_SIDE = 0.15;
 const DEFAULT_AUDIT_LIMIT = 150;
 
 function money(value: any) {
@@ -39,27 +40,118 @@ function unitCost(material: any) {
   return numberOr(material?.calculatedUnitCost, 0) || numberOr(material?.costPerUnit, 0) || numberOr(material?.purchaseCost, 0);
 }
 
-function estimateRecipeUnitCost(recipe: any) {
-  const qty = Math.max(1, Math.round(numberOr(recipe.defaultQuantity, 1)));
-  const materialRows = recipe.materials || [];
-  const materialCost = materialRows.reduce((sum: number, row: any) => {
-    const material = row.material || {};
-    const baseCost = unitCost(material);
+function zoneSqft(zone: any) {
+  return (numberOr(zone?.widthIn, 0) * numberOr(zone?.heightIn, 0) * Math.max(1, numberOr(zone?.qtyPerUnit, 1))) / 144;
+}
+
+function activeRows(rows: any[] = []) {
+  return (rows || []).filter((row: any) => row?.active !== false && !row?.archivedAt);
+}
+
+function findOption(options: any[] = [], id?: string | null) {
+  return (options || []).find((option: any) => option?.id === id);
+}
+
+function defaultMediaOption(options: any[] = []) {
+  return (options || []).find((option: any) => option?.defaultOption && option?.active !== false) || (options || []).find((option: any) => option?.active !== false) || null;
+}
+
+function optionFromRule(recipe: any, rule: any, side: "front" | "back") {
+  const options = recipe.mediaOptions || [];
+  if (side === "front") return findOption(options, rule?.frontMediaOptionId) || defaultMediaOption(options);
+  if (rule?.backMediaMode === "specific") return findOption(options, rule?.backMediaOptionId) || defaultMediaOption(options);
+  return optionFromRule(recipe, rule, "front");
+}
+
+function materialForZone(zone: any, zones: any[] = [], recipe: any = {}, rule: any = {}, side: "front" | "back" = "front") {
+  if (zone?.mediaMode === "media_option") {
+    const option = side === "back" ? optionFromRule(recipe, rule, "back") : optionFromRule(recipe, rule, "front");
+    return option?.material || zone?.mediaOption?.material || zone?.material;
+  }
+  if (zone?.mediaMode === "same_as_zone") {
+    const source = zones.find((candidate: any) => candidate.id === zone.sameAsZoneId) || zones.find((candidate: any) => String(candidate.position || candidate.name || "").toLowerCase().includes("front"));
+    if (source) return materialForZone(source, zones, recipe, rule, side);
+  }
+  return zone?.material || zone?.mediaOption?.material;
+}
+
+function selectedZonesForRule(recipe: any, rule: any) {
+  const zones = activeRows(recipe.labelZones || []);
+  const frontZone = zones.find((zone: any) => String(zone.position || zone.name || "").toLowerCase().includes("front")) || zones[0];
+  const backZone = zones.find((zone: any) => String(zone.position || zone.name || "").toLowerCase().includes("back")) || zones.find((zone: any) => zone?.id !== frontZone?.id) || null;
+  const sideMode = String(rule?.sideMode || "").toLowerCase();
+  const useFront = rule?.useFrontZone !== false && !!frontZone;
+  const useBack = (rule?.useBackZone === true || sideMode.includes("double")) && !!backZone;
+  const selected = [useFront ? { zone: frontZone, side: "front" as const } : null, useBack ? { zone: backZone, side: "back" as const } : null].filter(Boolean) as Array<{ zone: any; side: "front" | "back" }>;
+  return { zones, frontZone, backZone, selected };
+}
+
+function estimateRecipeVariantUnitCost(recipe: any, rule: any) {
+  const qty = Math.max(1, Math.round(numberOr(recipe.defaultQuantity, numberOr(recipe.minQuantity, 1))));
+  const laborRate = numberOr(recipe.laborRatePerHour, DEFAULT_SHOP_LABOR_RATE_PER_HOUR) || DEFAULT_SHOP_LABOR_RATE_PER_HOUR;
+  const rows = activeRows(recipe.materials || []);
+
+  const manualMaterialCostPerUnit = rows.reduce((sum: number, row: any) => {
     const quantity = numberOr(row.quantity, 0);
     const wasteMultiplier = row.includeWaste === false ? 1 : 1 + numberOr(row.wastePct, 0) / 100;
-    return sum + baseCost * quantity * wasteMultiplier;
+    return sum + unitCost(row.material) * quantity * wasteMultiplier;
   }, 0);
 
+  const baseMaterialCostPerUnit = rows.reduce((sum: number, row: any) => {
+    const name = normalize(`${row?.usageType || ""} ${row?.material?.materialType || ""} ${row?.material?.name || ""}`);
+    const looksBase = name.includes("blank") || name.includes("base") || name.includes("bag") || name.includes("jar") || name.includes("box");
+    if (!looksBase) return sum;
+    const wasteMultiplier = row.includeWaste === false ? 1 : 1 + numberOr(row.wastePct, 0) / 100;
+    return sum + unitCost(row.material) * numberOr(row.quantity, 0) * wasteMultiplier;
+  }, 0);
+
+  const { selected } = selectedZonesForRule(recipe, rule);
+  const wasteMultiplier = 1 + numberOr(recipe.wastePct, 0) / 100;
+  const labelSqftPerUnit = selected.reduce((sum, item) => sum + zoneSqft(item.zone), 0);
+  const labelMediaCostPerUnit = selected.reduce((sum, item) => {
+    const material = materialForZone(item.zone, recipe.labelZones || [], recipe, rule, item.side);
+    return sum + unitCost(material) * zoneSqft(item.zone) * wasteMultiplier;
+  }, 0);
+
+  const printedSides = Math.max(0, selected.length);
+  const applicationSecondsPerUnit = selected.reduce((sum, item) => sum + numberOr(item.zone?.applicationSecondsPerLabel, 0) * Math.max(1, numberOr(item.zone?.qtyPerUnit, 1)), 0);
+  const applicationLaborFromSeconds = (applicationSecondsPerUnit / 3600) * laborRate;
+  const applicationLaborFloor = printedSides ? printedSides * DEFAULT_APPLICATION_LABOR_COST_PER_SIDE : 0;
+  const applicationLaborCostPerUnit = Math.max(applicationLaborFromSeconds, applicationLaborFloor);
+  const applicationLaborFloorApplied = applicationLaborCostPerUnit > applicationLaborFromSeconds + 0.00001;
+
+  const packingLaborSeconds = numberOr(recipe.packingLaborSecondsPerUnit, 0);
+  const packingLaborCostPerUnit = (packingLaborSeconds / 3600) * laborRate;
+  const prepressLaborCostPerUnit = (numberOr(recipe.prepressMinutes, 0) / 60) * laborRate / qty;
+  const setupLaborCostPerUnit = (numberOr(recipe.laborMinutes, 0) / 60) * laborRate / qty;
   const setupCostPerUnit = numberOr(recipe.setupCost, 0) / qty;
-  const laborCostPerUnit = (numberOr(recipe.laborMinutes, 0) / 60) * DEFAULT_LABOR_RATE_PER_HOUR / qty;
-  const total = materialCost + setupCostPerUnit + laborCostPerUnit;
+  const total = manualMaterialCostPerUnit + labelMediaCostPerUnit + applicationLaborCostPerUnit + packingLaborCostPerUnit + prepressLaborCostPerUnit + setupLaborCostPerUnit + setupCostPerUnit;
+
+  const missingBaseCost = baseMaterialCostPerUnit <= 0;
+  const missingZones = !selected.length;
+  const costReviewNeeded = missingBaseCost || missingZones || applicationLaborFloorApplied;
 
   return {
     qty,
-    materialCost,
+    manualMaterialCostPerUnit,
+    baseMaterialCostPerUnit,
+    labelMediaCostPerUnit,
+    labelSqftPerUnit,
+    printedSides,
+    applicationSecondsPerUnit,
+    applicationLaborFromSeconds,
+    applicationLaborFloor,
+    applicationLaborCostPerUnit,
+    applicationLaborFloorApplied,
+    packingLaborCostPerUnit,
+    prepressLaborCostPerUnit,
+    setupLaborCostPerUnit,
     setupCostPerUnit,
-    laborCostPerUnit,
+    laborRate,
     total,
+    missingBaseCost,
+    missingZones,
+    costReviewNeeded,
   };
 }
 
@@ -120,6 +212,8 @@ export async function loader({ request }: { request: Request }) {
     where: { shop, active: true, ...(recipeId ? { id: recipeId } : {}) },
     include: {
       materials: { include: { material: true } },
+      labelZones: { include: { material: true, mediaOption: { include: { material: true } } }, orderBy: { createdAt: "asc" } },
+      mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
       tiers: { orderBy: { minQty: "asc" } },
     },
     orderBy: [{ name: "asc" }],
@@ -143,12 +237,11 @@ export async function loader({ request }: { request: Request }) {
     : [];
 
   const variantMap = await fetchShopifyVariantMap(admin, linkedRules.map((rule: any) => rule.shopifyVariantGid));
-  const costByRecipe = new Map(recipes.map((recipe: any) => [recipe.id, estimateRecipeUnitCost(recipe)]));
   const recipeById = new Map(recipes.map((recipe: any) => [recipe.id, recipe]));
 
   const rows = linkedRules.map((rule: any) => {
     const recipe = recipeById.get(rule.recipeId) || {};
-    const cost = costByRecipe.get(rule.recipeId) || { total: 0, materialCost: 0, setupCostPerUnit: 0, laborCostPerUnit: 0, qty: 1 };
+    const cost = estimateRecipeVariantUnitCost(recipe, rule);
     const shopify = variantMap.get(rule.shopifyVariantGid) || null;
     const currentPrice = numberOr(shopify?.price, 0);
     const targetMargin = numberOr(recipe.targetMarginPct, 40);
@@ -185,6 +278,7 @@ export async function loader({ request }: { request: Request }) {
     if (status === "needs_update" && !(row.currentMargin === null || row.currentMargin < row.targetMargin)) return false;
     if (status === "below_target" && !(row.currentMargin !== null && row.currentMargin < row.targetMargin)) return false;
     if (status === "no_price" && row.currentPrice > 0) return false;
+    if (status === "cost_review" && !row.cost?.costReviewNeeded) return false;
     return true;
   }).slice(0, DEFAULT_AUDIT_LIMIT);
 
@@ -193,6 +287,7 @@ export async function loader({ request }: { request: Request }) {
     belowTarget: filteredRows.filter((row: any) => row.currentMargin !== null && row.currentMargin < row.targetMargin).length,
     noPrice: filteredRows.filter((row: any) => !row.currentPrice).length,
     healthy: filteredRows.filter((row: any) => row.currentMargin !== null && row.currentMargin >= row.targetMargin).length,
+    costReview: filteredRows.filter((row: any) => row.cost?.costReviewNeeded).length,
     avgCost: filteredRows.length ? filteredRows.reduce((sum: number, row: any) => sum + row.cost.total, 0) / filteredRows.length : 0,
   };
 
@@ -214,7 +309,7 @@ export default function MarginReviewPage() {
         .hero h1 { margin: 0 0 6px; font-size: 28px; }
         .hero p { margin: 0; color: #f2e8ff; }
         .card { background: white; border: 1px solid #dfe3e8; border-radius: 12px; padding: 16px; margin: 14px 0; box-shadow: 0 1px 0 rgba(0,0,0,0.02); }
-        .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        .grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
         .filters { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end; }
         label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
         input, select { width: 100%; padding: 9px 10px; border: 1px solid #c9cccf; border-radius: 8px; background: white; }
@@ -233,6 +328,11 @@ export default function MarginReviewPage() {
         .right { text-align: right; }
         .price-low { color: #991b1b; font-weight: 800; }
         .healthy-text { color: #166534; font-weight: 800; }
+        details.cost-details { margin-top: 6px; text-align: left; }
+        details.cost-details summary { cursor: pointer; font-weight: 700; color: #374151; }
+        .cost-lines { margin-top: 6px; display: grid; gap: 3px; font-size: 12px; color: #4b5563; }
+        .cost-line { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed #e5e7eb; padding-bottom: 2px; }
+        .warn { color: #92400e; font-weight: 800; }
         @media (max-width: 900px) { .grid, .filters { grid-template-columns: 1fr; } }
       `}</style>
 
@@ -244,10 +344,11 @@ export default function MarginReviewPage() {
       <section className="card">
         <strong>Safe review workflow</strong>
         <p className="muted">
-          This first version is read-only. It pulls linked variant rules from Shopify Links, calculates estimated recipe cost, reads current Shopify prices, and flags items below target margin. It does not update Shopify prices yet.
+          This version is still read-only, but now uses the same recipe pieces we built in Product Setup: base materials, label zones, media options, waste, setup/prepress, packing, and per-side application labor. It does not update Shopify prices yet.
         </p>
         <Badge tone="green">Read-only</Badge>
-        <Badge tone="yellow">Estimated cost</Badge>
+        <Badge tone="yellow">Full cost breakdown</Badge>
+        <Badge tone="yellow">$0.15/side labor floor</Badge>
         <Badge tone="gray">Price update later</Badge>
       </section>
 
@@ -273,6 +374,7 @@ export default function MarginReviewPage() {
               <option value="needs_update">Needs update / no price</option>
               <option value="below_target">Below target margin</option>
               <option value="no_price">No Shopify price found</option>
+              <option value="cost_review">Cost review needed</option>
             </select>
           </div>
           <div><button type="submit">Run audit</button></div>
@@ -283,6 +385,7 @@ export default function MarginReviewPage() {
         <div className="stat"><span className="muted">Rows shown</span><strong>{summary.rows}</strong></div>
         <div className="stat"><span className="muted">Healthy</span><strong>{summary.healthy}</strong></div>
         <div className="stat"><span className="muted">Below target</span><strong>{summary.belowTarget}</strong></div>
+        <div className="stat"><span className="muted">Cost review</span><strong>{summary.costReview}</strong></div>
         <div className="stat"><span className="muted">Avg est. cost</span><strong>{money(summary.avgCost)}</strong></div>
       </section>
 
@@ -316,7 +419,25 @@ export default function MarginReviewPage() {
                 </td>
                 <td className="right">
                   <strong>{money(row.cost.total)}</strong><br />
-                  <span className="muted">Mat {money(row.cost.materialCost)} / Setup {money(row.cost.setupCostPerUnit)} / Labor {money(row.cost.laborCostPerUnit)}</span>
+                  {row.cost.costReviewNeeded ? <Badge tone="yellow">review cost</Badge> : null}
+                  <details className="cost-details">
+                    <summary>Breakdown</summary>
+                    <div className="cost-lines">
+                      <div className="cost-line"><span>Base/manual materials</span><strong>{money(row.cost.manualMaterialCostPerUnit)}</strong></div>
+                      <div className="cost-line"><span>Blank/base item included</span><strong>{money(row.cost.baseMaterialCostPerUnit)}</strong></div>
+                      <div className="cost-line"><span>Label/media zones ({row.cost.printedSides} side{row.cost.printedSides === 1 ? "" : "s"}, {row.cost.labelSqftPerUnit.toFixed(4)} sqft)</span><strong>{money(row.cost.labelMediaCostPerUnit)}</strong></div>
+                      <div className="cost-line"><span>Application labor applied</span><strong>{money(row.cost.applicationLaborCostPerUnit)}</strong></div>
+                      <div className="cost-line"><span>Application by seconds ({row.cost.applicationSecondsPerUnit.toFixed(1)} sec @ {money(row.cost.laborRate)}/hr)</span><strong>{money(row.cost.applicationLaborFromSeconds)}</strong></div>
+                      <div className="cost-line"><span>Per-side labor floor</span><strong>{money(row.cost.applicationLaborFloor)}</strong></div>
+                      <div className="cost-line"><span>Packing labor</span><strong>{money(row.cost.packingLaborCostPerUnit)}</strong></div>
+                      <div className="cost-line"><span>Prepress labor / unit</span><strong>{money(row.cost.prepressLaborCostPerUnit)}</strong></div>
+                      <div className="cost-line"><span>Setup labor / unit</span><strong>{money(row.cost.setupLaborCostPerUnit)}</strong></div>
+                      <div className="cost-line"><span>Setup cost / unit</span><strong>{money(row.cost.setupCostPerUnit)}</strong></div>
+                    </div>
+                    {row.cost.applicationLaborFloorApplied ? <p className="muted warn">Labor floor applied because application seconds are lower than $0.15 per printed side.</p> : null}
+                    {row.cost.missingBaseCost ? <p className="muted warn">No base/blank item detected in recipe material rows.</p> : null}
+                    {row.cost.missingZones ? <p className="muted warn">No active label zones detected for this variant.</p> : null}
+                  </details>
                 </td>
                 <td className="right"><strong>{money(row.currentPrice)}</strong></td>
                 <td className="right">{pct(row.targetMargin)}</td>
@@ -324,7 +445,10 @@ export default function MarginReviewPage() {
                   {row.currentMargin === null ? <span className="price-low">No price</span> : <span className={row.currentMargin >= row.targetMargin ? "healthy-text" : "price-low"}>{pct(row.currentMargin)}</span>}
                 </td>
                 <td className="right"><strong>{money(row.suggestedPrice)}</strong><br /><span className="muted">Δ {money(row.delta)}</span></td>
-                <td><Badge tone={row.status.tone}>{row.status.label}</Badge></td>
+                <td>
+                  <Badge tone={row.status.tone}>{row.status.label}</Badge>
+                  {row.cost.costReviewNeeded ? <Badge tone="yellow">cost review</Badge> : null}
+                </td>
               </tr>
             )) : (
               <tr><td colSpan={8}>No linked Shopify variant rows found for this filter yet. Link products/collections on Shopify Links first.</td></tr>
@@ -336,9 +460,9 @@ export default function MarginReviewPage() {
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Next phase</h2>
         <p className="muted">After this read-only audit is verified, the next patches should add tier-aware Shopify price comparison, approved price change queue, and safe Shopify price updates.</p>
-        <Badge tone="gray">v2 tier-aware review</Badge>
-        <Badge tone="gray">v3 price change queue</Badge>
-        <Badge tone="gray">v4 update Shopify prices</Badge>
+        <Badge tone="gray">v3 tier-aware review</Badge>
+        <Badge tone="gray">v4 price change queue</Badge>
+        <Badge tone="gray">v5 update Shopify prices</Badge>
       </section>
     </div>
   );
