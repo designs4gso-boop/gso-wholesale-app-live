@@ -9,6 +9,7 @@ const COLLECTION_SCAN_PAGE_SIZE = 50;
 const VARIANT_FETCH_LIMIT = 100;
 const GROUP_ROW_PREVIEW_LIMIT = 0;
 const INSPECT_ROW_LIMIT = 75;
+const ALLOWED_EXCEPTION_MARKER = "[ALLOWED_SHOPIFY_LINK_EXCEPTION]";
 
 const STICKER_BAG_RULE_PRESET = {
   name: "Sticker Bag Variant Rules",
@@ -582,7 +583,17 @@ function groupedRulesByProduct(rules: any[] = []) {
   return Array.from(groups.values()).sort((a: any, b: any) => b.rules.length - a.rules.length);
 }
 
+function isAllowedException(rule: any) {
+  return String(rule?.notes || "").includes(ALLOWED_EXCEPTION_MARKER);
+}
+
+function allowedExceptionReason(rule: any) {
+  const match = String(rule?.notes || "").match(/Allowed exception:\s*([^\[]+)/i);
+  return match?.[1]?.trim().replace(/[\.\s]+$/, "") || "Approved exception";
+}
+
 function needsReview(rule: any) {
+  if (isAllowedException(rule)) return false;
   return String(rule?.notes || "").toLowerCase().includes("needs review");
 }
 
@@ -643,25 +654,28 @@ function collectionVariantHealth(item: any) {
 function recipeHealthSummary(groups: any[] = []) {
   const activeGroups = (groups || []).map((group: any) => {
     const activeCount = (group.rules || []).filter((rule: any) => rule.active !== false).length;
-    return { ...group, activeCount };
+    const allowed = (group.rules || []).some(isAllowedException);
+    return { ...group, activeCount, allowed };
   }).filter((group: any) => group.activeCount > 0);
-  const expected = activeGroups.filter((group: any) => group.activeCount === 24 || group.activeCount === 36).length;
-  const unusual = activeGroups.filter((group: any) => group.activeCount !== 24 && group.activeCount !== 36).length;
-  return { total: activeGroups.length, expected, unusual };
+  const expected = activeGroups.filter((group: any) => group.activeCount === 24 || group.activeCount === 36 || group.allowed).length;
+  const unusual = activeGroups.filter((group: any) => !group.allowed && group.activeCount !== 24 && group.activeCount !== 36).length;
+  const allowed = activeGroups.filter((group: any) => group.allowed).length;
+  return { total: activeGroups.length, expected, unusual, allowed };
 }
 
 function productGroupExceptionRows(groups: any[] = []) {
   return (groups || []).map((group: any) => {
     const rules = group.rules || [];
+    const allowed = rules.some(isAllowedException);
     const activeCount = rules.filter((rule: any) => rule.active !== false).length;
     const totalCount = rules.length;
     const hiddenCount = totalCount - activeCount;
     const reviewCount = rules.filter(needsReview).length;
-    const unusualCount = activeCount > 0 && activeCount !== 24 && activeCount !== 36;
+    const unusualCount = !allowed && activeCount > 0 && activeCount !== 24 && activeCount !== 36;
     const reasons: string[] = [];
     if (unusualCount) reasons.push(`Unusual active variant count: ${activeCount}`);
     if (reviewCount) reasons.push(`${reviewCount} variant rule(s) need review`);
-    if (hiddenCount) reasons.push(`${hiddenCount} hidden/inactive rule(s)`);
+    if (!allowed && hiddenCount) reasons.push(`${hiddenCount} hidden/inactive rule(s)`);
     return {
       productGid: group.productGid,
       productTitle: group.productTitle || group.productGid,
@@ -672,6 +686,22 @@ function productGroupExceptionRows(groups: any[] = []) {
       reasons,
     };
   }).filter((item: any) => item.reasons.length);
+}
+
+function productGroupAllowedExceptionRows(groups: any[] = []) {
+  return (groups || []).map((group: any) => {
+    const rules = group.rules || [];
+    const allowedRule = rules.find(isAllowedException);
+    if (!allowedRule) return null;
+    const activeCount = rules.filter((rule: any) => rule.active !== false).length;
+    return {
+      productGid: group.productGid,
+      productTitle: group.productTitle || group.productGid,
+      activeCount,
+      totalCount: rules.length,
+      reason: allowedExceptionReason(allowedRule),
+    };
+  }).filter(Boolean);
 }
 
 
@@ -693,6 +723,28 @@ async function setProductMappingsActive(shop: string, recipeId: string, productG
   const prisma: any = db;
   const result = await prisma.recipeVariantRule.updateMany({ where: { shop, recipeId, shopifyProductGid: productGid }, data: { active } });
   return result.count || 0;
+}
+
+async function setProductAllowedException(shop: string, recipeId: string, productGid: string, allowed: boolean, reason = "Approved intentional variant count") {
+  const prisma: any = db;
+  const rules = await prisma.recipeVariantRule.findMany({ where: { shop, recipeId, shopifyProductGid: productGid } });
+  let changed = 0;
+  const cleanAllowedText = (notes: string) => String(notes || "")
+    .replace(/\s*Allowed exception:[^\[]*\[ALLOWED_SHOPIFY_LINK_EXCEPTION\]\.?/gi, "")
+    .trim();
+
+  for (const rule of rules || []) {
+    const currentNotes = String(rule.notes || "");
+    const baseNotes = cleanAllowedText(currentNotes);
+    const nextNotes = allowed
+      ? `${baseNotes}${baseNotes ? " " : ""}Allowed exception: ${reason || "Approved intentional variant count"}. ${ALLOWED_EXCEPTION_MARKER}`
+      : baseNotes;
+    if (nextNotes !== currentNotes) {
+      await prisma.recipeVariantRule.update({ where: { id: rule.id }, data: { notes: nextNotes } });
+      changed += 1;
+    }
+  }
+  return changed;
 }
 
 async function deleteMappingsForCollectionSource(shop: string, recipeId: string, collectionName: string) {
@@ -1128,6 +1180,16 @@ export async function action({ request }: { request: Request }) {
       return Response.json({ ok: true, message: `${active ? "Restored" : "Hid"} ${changed} mapping(s) from collection source: ${collectionName}.` });
     }
 
+    if (intent === "markAllowedException" || intent === "clearAllowedException") {
+      const recipeId = String(formData.get("recipeId") || "");
+      const productGid = String(formData.get("productGid") || "");
+      const reason = String(formData.get("reason") || "Approved intentional variant count").trim();
+      if (!recipeId || !productGid) return Response.json({ ok: false, message: "Missing recipe or Shopify product group." }, { status: 400 });
+      const allowed = intent === "markAllowedException";
+      const changed = await setProductAllowedException(shop, recipeId, productGid, allowed, reason);
+      return Response.json({ ok: true, intent, message: `${allowed ? "Marked" : "Cleared"} allowed exception on ${changed} variant mapping(s).` });
+    }
+
     if (intent === "inspectProduct") {
       const recipeId = String(formData.get("recipeId") || "");
       const productGid = String(formData.get("productGid") || "");
@@ -1168,7 +1230,7 @@ export default function ShopifyLinksPage() {
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, current-request sync logging, exception review, link registry, and browser-safe auto batch sync, and persistent sync history support.</p>
+      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, current-request sync logging, exception review, link registry, and browser-safe auto batch sync, and persistent sync history support, and allowed exception approvals.</p>
     </header>
 
     <section className="card wide plan-card">
@@ -1340,6 +1402,7 @@ export default function ShopifyLinksPage() {
         const collections = recipeCollectionSummary(allRules);
         const healthSummary = recipeHealthSummary(grouped);
         const exceptionRows = productGroupExceptionRows(grouped);
+        const allowedExceptionRows = productGroupAllowedExceptionRows(grouped);
 
         return <details key={recipe.id} className="recipe-card">
           <summary>
@@ -1349,6 +1412,7 @@ export default function ShopifyLinksPage() {
             {collections.length ? <Badge tone="neutral">{collections.length} collection source(s)</Badge> : null}
             {healthSummary.expected ? <Badge tone="green">{healthSummary.expected} healthy product group(s)</Badge> : null}
             {healthSummary.unusual ? <Badge tone="yellow">{healthSummary.unusual} unusual count(s)</Badge> : null}
+            {healthSummary.allowed ? <Badge tone="green">{healthSummary.allowed} allowed exception(s)</Badge> : null}
             {reviewCount ? <Badge tone="yellow">{reviewCount} need review</Badge> : null}
           </summary>
           <div className="recipe-body">
@@ -1391,6 +1455,13 @@ export default function ShopifyLinksPage() {
                           <input type="hidden" name="productGid" value={item.productGid} />
                           <button type="submit" className="secondary">Hide group</button>
                         </Form>
+                        <Form method="post" className="inline-form allowed-form" onSubmit={(event) => { if (!confirm(`Approve ${item.productTitle} as an allowed exception?`)) event.preventDefault(); }}>
+                          <input type="hidden" name="intent" value="markAllowedException" />
+                          <input type="hidden" name="recipeId" value={recipe.id} />
+                          <input type="hidden" name="productGid" value={item.productGid} />
+                          <input name="reason" defaultValue="Approved intentional Shopify variant structure" />
+                          <button type="submit" className="secondary">Mark allowed</button>
+                        </Form>
                         <Form method="post" className="inline-form" onSubmit={(event) => { if (!confirm(`Remove mappings for ${item.productTitle}?`)) event.preventDefault(); }}>
                           <input type="hidden" name="intent" value="deleteProductMappings" />
                           <input type="hidden" name="recipeId" value={recipe.id} />
@@ -1403,6 +1474,37 @@ export default function ShopifyLinksPage() {
                 </tbody>
               </table>
             </div> : <div className="summary-box"><h3>Exception Review</h3><Badge tone="green">No exceptions found</Badge><p className="muted">All active product groups currently match expected 24/36 variant patterns with no review flags.</p></div>}
+
+            {allowedExceptionRows.length ? <div className="summary-box allowed-exceptions">
+              <h3>Allowed Exceptions</h3>
+              <p className="muted">Approved product groups stay out of Exception Review. Use this only when a product intentionally has a different Shopify variant structure.</p>
+              <table>
+                <thead><tr><th>Product</th><th>Active / Total</th><th>Reason</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {allowedExceptionRows.map((item: any) => <tr key={item.productGid}>
+                    <td><strong>{item.productTitle}</strong><br /><span className="muted gid">{item.productGid}</span></td>
+                    <td>{item.activeCount} / {item.totalCount}</td>
+                    <td><Badge tone="green">{item.reason}</Badge></td>
+                    <td>
+                      <div className="button-row">
+                        <Form method="post" className="inline-form">
+                          <input type="hidden" name="intent" value="inspectProduct" />
+                          <input type="hidden" name="recipeId" value={recipe.id} />
+                          <input type="hidden" name="productGid" value={item.productGid} />
+                          <button type="submit" className="secondary">View details</button>
+                        </Form>
+                        <Form method="post" className="inline-form" onSubmit={(event) => { if (!confirm(`Clear allowed exception for ${item.productTitle}?`)) event.preventDefault(); }}>
+                          <input type="hidden" name="intent" value="clearAllowedException" />
+                          <input type="hidden" name="recipeId" value={recipe.id} />
+                          <input type="hidden" name="productGid" value={item.productGid} />
+                          <button type="submit" className="secondary">Clear allowed</button>
+                        </Form>
+                      </div>
+                    </td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </div> : null}
 
             {collections.length ? <div className="summary-box">
               <h3>Collection source summaries</h3>
