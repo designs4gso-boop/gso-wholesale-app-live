@@ -702,6 +702,50 @@ function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" |
   return <span className={`badge ${tone}`}>{children}</span>;
 }
 
+function SyncLogPanel({ actionData }: { actionData: any }) {
+  const hasAction = Boolean(actionData?.intent || actionData?.message || actionData?.batch);
+  const rows: any[] = [];
+
+  if (actionData?.batch) {
+    rows.push({
+      type: "Collection batch",
+      source: actionData.batch.collectionTitle || "Collection",
+      summary: `${actionData.batch.products || 0} product(s), ${actionData.batch.variants || 0} variant rule(s)`,
+      detail: `Scanned ${actionData.batch.scannedProducts || actionData.batch.products || 0}; skipped ${actionData.batch.skippedAlreadyMapped || 0}; ${actionData.batch.hasNextPage ? "more pages available" : "no more Shopify pages reported"}`
+    });
+  }
+
+  if (actionData?.intent && !actionData?.batch) {
+    rows.push({
+      type: actionData.intent,
+      source: actionData.query || actionData.collectionName || actionData.productTitle || "Shopify Links",
+      summary: actionData.message || (actionData.ok ? "Action completed" : "Action failed"),
+      detail: actionData.ok === false ? "Review the error before continuing." : "No full batch details for this action."
+    });
+  }
+
+  return <section className="card wide sync-log-card">
+    <details open={Boolean(actionData?.batch)}>
+      <summary><strong>Sync Log / Last Action</strong> <Badge tone={hasAction ? "green" : "neutral"}>{hasAction ? "action recorded" : "no action yet"}</Badge></summary>
+      <p className="muted">This panel shows the most recent Shopify Links action from the current page request. Full persistent batch history will move into database sync logs later.</p>
+      {rows.length ? <table>
+        <thead><tr><th>Type</th><th>Source</th><th>Summary</th><th>Detail</th></tr></thead>
+        <tbody>{rows.map((row, index) => <tr key={index}>
+          <td>{row.type}</td>
+          <td>{row.source}</td>
+          <td>{row.summary}</td>
+          <td>{row.detail}</td>
+        </tr>)}</tbody>
+      </table> : <p className="muted">No sync/search/cleanup action has run on this request yet. Use Search, Continue next 25, or cleanup buttons to populate the log.</p>}
+      <div className="pill-row tight">
+        <Badge tone="neutral">current request only</Badge>
+        <Badge tone="yellow">database sync log comes next</Badge>
+        <Badge tone="green">safe for large collections</Badge>
+      </div>
+    </details>
+  </section>;
+}
+
 export async function loader({ request }: { request: Request }) {
   const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
@@ -921,7 +965,7 @@ export default function ShopifyLinksPage() {
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Summary-first Shopify linking with cleanup controls. Link sources to recipes, scan safely, remove wrong sources, and review exceptions only.</p>
+      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, and current-request sync logging.</p>
     </header>
 
     <section className="card wide plan-card">
@@ -935,6 +979,8 @@ export default function ShopifyLinksPage() {
     </section>
 
     {actionData?.message ? <div className={`notice ${actionData.ok ? "success" : "error"}`}>{actionData.message}</div> : null}
+
+    <SyncLogPanel actionData={actionData} />
 
     {actionData?.batch ? <section className="card wide continue-card">
       <h2>Last collection batch</h2>
