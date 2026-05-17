@@ -5,6 +5,7 @@ import db from "../db.server";
 const PRODUCT_SEARCH_LIMIT = 25;
 const COLLECTION_SEARCH_LIMIT = 10;
 const COLLECTION_BATCH_SIZE = 25;
+const COLLECTION_SCAN_PAGE_SIZE = 50;
 const VARIANT_FETCH_LIMIT = 100;
 const GROUP_ROW_PREVIEW_LIMIT = 0;
 const INSPECT_ROW_LIMIT = 75;
@@ -274,7 +275,7 @@ async function fetchShopifyProductVariants(admin: any, productGid: string) {
   return { product, variants: product?.variants?.edges?.map((edge: any) => edge.node) || [] };
 }
 
-async function fetchCollectionProductBatch(admin: any, collectionGid: string, after?: string, first = COLLECTION_BATCH_SIZE) {
+async function fetchCollectionProductBatch(admin: any, collectionGid: string, after?: string, first = COLLECTION_SCAN_PAGE_SIZE) {
   const response = await admin.graphql(
     `#graphql
       query CollectionProductBatch($id: ID!, $first: Int!, $after: String) {
@@ -306,13 +307,16 @@ async function fetchCollectionProductBatch(admin: any, collectionGid: string, af
   const payload = await response.json();
   if (payload?.errors?.length) throw new Error(payload.errors.map((error: any) => error.message).join(", "));
   const collection = payload?.data?.collection;
-  const products = collection?.products?.edges?.map((edge: any) => ({
+  const productEdges = collection?.products?.edges || [];
+  const products = productEdges.map((edge: any) => ({
     ...edge.node,
+    cursor: edge.cursor,
     variantsList: edge.node?.variants?.edges?.map((variantEdge: any) => variantEdge.node) || [],
   })) || [];
   return {
     collection,
     products,
+    productEdges,
     pageInfo: collection?.products?.pageInfo || { hasNextPage: false, endCursor: null },
   };
 }
@@ -487,27 +491,45 @@ async function fetchNextUnsyncedCollectionProductBatch(admin: any, collectionGid
   let scannedProducts = 0;
   let skippedAlreadyMapped = 0;
   let pagesScanned = 0;
+  let nextCursor = after || undefined;
+  let stoppedAfterFindingBatch = false;
 
   do {
-    const batch = await fetchCollectionProductBatch(admin, collectionGid, cursor, COLLECTION_BATCH_SIZE);
+    const batch = await fetchCollectionProductBatch(admin, collectionGid, cursor, COLLECTION_SCAN_PAGE_SIZE);
     collection = batch.collection;
     pageInfo = batch.pageInfo;
     pagesScanned += 1;
-    scannedProducts += batch.products.length;
 
-    for (const product of batch.products || []) {
+    const batchProducts = batch.products || [];
+    for (const product of batchProducts) {
+      scannedProducts += 1;
+      nextCursor = product.cursor || nextCursor;
+
       if (mappedProductGids.has(product.id)) {
         skippedAlreadyMapped += 1;
-        continue;
+      } else {
+        products.push(product);
       }
-      products.push(product);
-      if (products.length >= COLLECTION_BATCH_SIZE) break;
+
+      if (products.length >= COLLECTION_BATCH_SIZE) {
+        stoppedAfterFindingBatch = true;
+        break;
+      }
     }
 
-    cursor = pageInfo?.endCursor || undefined;
-  } while (collection && products.length < COLLECTION_BATCH_SIZE && pageInfo?.hasNextPage && pagesScanned < 12);
+    if (stoppedAfterFindingBatch) break;
 
-  return { collection, products, pageInfo, scannedProducts, skippedAlreadyMapped, pagesScanned };
+    cursor = pageInfo?.endCursor || nextCursor || undefined;
+  } while (collection && pageInfo?.hasNextPage && pagesScanned < 12);
+
+  const hasMoreFromCurrentPage = stoppedAfterFindingBatch && !!nextCursor;
+  const normalizedPageInfo = {
+    hasNextPage: !!(hasMoreFromCurrentPage || pageInfo?.hasNextPage),
+    endCursor: nextCursor || pageInfo?.endCursor || null,
+    shopifyEndCursor: pageInfo?.endCursor || null,
+  };
+
+  return { collection, products, pageInfo: normalizedPageInfo, scannedProducts, skippedAlreadyMapped, pagesScanned };
 }
 
 async function syncCollectionBatchToRecipe(shop: string, recipe: any, admin: any, collectionGid: string, after?: string) {
