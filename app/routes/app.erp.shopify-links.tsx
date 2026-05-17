@@ -750,6 +750,69 @@ function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" |
 }
 
 
+async function writeShopifyLinkSyncLog(prisma: any, data: any) {
+  try {
+    if (!prisma?.shopifyLinkSyncLog?.create) return;
+    await prisma.shopifyLinkSyncLog.create({
+      data: {
+        shop: data.shop,
+        recipeId: data.recipeId || null,
+        recipeName: data.recipeName || null,
+        sourceType: data.sourceType || "collection",
+        sourceName: data.sourceName || null,
+        sourceGid: data.sourceGid || null,
+        action: data.action || "sync",
+        products: Number(data.products || 0),
+        variants: Number(data.variants || 0),
+        created: Number(data.created || 0),
+        updated: Number(data.updated || 0),
+        skipped: Number(data.skipped || 0),
+        scanned: Number(data.scanned || 0),
+        needsReview: Number(data.needsReview || 0),
+        hasNextPage: Boolean(data.hasNextPage),
+        ok: data.ok !== false,
+        message: data.message || null,
+      },
+    });
+  } catch (error) {
+    console.warn("Shopify link sync log was not saved", error);
+  }
+}
+
+async function loadShopifyLinkSyncLogs(prisma: any, shop: string) {
+  try {
+    if (!prisma?.shopifyLinkSyncLog?.findMany) return [];
+    return await prisma.shopifyLinkSyncLog.findMany({
+      where: { shop },
+      orderBy: { createdAt: "desc" },
+      take: 25,
+    });
+  } catch (_error) {
+    return [];
+  }
+}
+
+function PersistentSyncHistoryPanel({ logs = [] }: { logs?: any[] }) {
+  return <section className="card wide sync-history-card">
+    <details>
+      <summary><strong>Persistent Sync History</strong> <Badge tone={logs.length ? "green" : "neutral"}>{logs.length ? `${logs.length} recent log(s)` : "not enabled yet"}</Badge></summary>
+      <p className="muted">Stores completed collection/product sync batches in the database after the ShopifyLinkSyncLog Prisma model is added and migrated. The current page still works even if the table is not installed yet.</p>
+      {logs.length ? <table>
+        <thead><tr><th>Time</th><th>Source</th><th>Action</th><th>Products</th><th>Variants</th><th>Status</th></tr></thead>
+        <tbody>{logs.map((log: any) => <tr key={log.id}>
+          <td>{log.createdAt ? new Date(log.createdAt).toLocaleString() : ""}</td>
+          <td><Badge tone={log.sourceType === "collection" ? "yellow" : "neutral"}>{log.sourceType || "source"}</Badge> <strong>{log.sourceName || "Shopify source"}</strong><br /><span className="muted gid">{log.sourceGid || ""}</span></td>
+          <td>{log.action || "sync"}<br /><span className="muted">{log.message || ""}</span></td>
+          <td>{log.products || 0}<br /><span className="muted">scanned {log.scanned || 0}, skipped {log.skipped || 0}</span></td>
+          <td>{log.variants || 0}<br /><span className="muted">created {log.created || 0}, updated {log.updated || 0}</span></td>
+          <td><Badge tone={log.ok ? "green" : "red"}>{log.ok ? "ok" : "error"}</Badge> {log.needsReview ? <Badge tone="yellow">{log.needsReview} review</Badge> : null} {log.hasNextPage ? <Badge tone="neutral">more pages</Badge> : <Badge tone="green">end reached</Badge>}</td>
+        </tr>)}</tbody>
+      </table> : <p className="muted">No persistent logs are available yet. Add the schema model from the notes, run Prisma migrate/generate, then future batches will be saved here.</p>}
+    </details>
+  </section>;
+}
+
+
 function LinkRegistryPanel({ recipes, collectionTotalByGid = {} }: { recipes: any[]; collectionTotalByGid?: Record<string, any> }) {
   const rows: any[] = [];
 
@@ -888,7 +951,9 @@ export async function loader({ request }: { request: Request }) {
     if (total !== null) collectionTotalByGid[String(gid)] = total;
   }
 
-  return Response.json({ recipes, collectionBatchSize: COLLECTION_BATCH_SIZE, groupRowPreviewLimit: GROUP_ROW_PREVIEW_LIMIT, inspectProductGid, inspectRecipeId, inspectRowLimit: INSPECT_ROW_LIMIT, collectionTotalByGid });
+  const syncHistory = await loadShopifyLinkSyncLogs(prisma, shop);
+
+  return Response.json({ recipes, collectionBatchSize: COLLECTION_BATCH_SIZE, groupRowPreviewLimit: GROUP_ROW_PREVIEW_LIMIT, inspectProductGid, inspectRecipeId, inspectRowLimit: INSPECT_ROW_LIMIT, collectionTotalByGid, syncHistory });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -949,6 +1014,7 @@ export async function action({ request }: { request: Request }) {
       if (!recipe) return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
       const result = await syncProductToRecipe(shop, recipe, admin, productGid, "Product link");
       if (!result.product) return Response.json({ ok: false, message: "Shopify product not found." }, { status: 404 });
+      await writeShopifyLinkSyncLog(prisma, { shop, recipeId, recipeName: recipe.name, sourceType: "product", sourceName: result.product.title, sourceGid: productGid, action: "syncProduct", products: 1, variants: result.variants.length, created: result.created, updated: result.updated, skipped: 0, scanned: 1, needsReview: result.needsReview, hasNextPage: false, ok: true, message: "Direct product sync" });
       return Response.json({ ok: true, intent, message: `Synced ${result.product.title}: ${result.variants.length} variant(s), ${result.created} created, ${result.updated} updated, ${result.cleaned} duplicate(s) cleaned, ${result.needsReview} need review.` });
     }
 
@@ -963,6 +1029,26 @@ export async function action({ request }: { request: Request }) {
 
       const result = await syncCollectionBatchToRecipe(shop, recipe, admin, collectionGid, cursor || undefined);
       if (!result.collection) return Response.json({ ok: false, message: "Collection not found." }, { status: 404 });
+
+      await writeShopifyLinkSyncLog(prisma, {
+        shop,
+        recipeId,
+        recipeName: recipe.name,
+        sourceType: "collection",
+        sourceName: result.collection.title,
+        sourceGid: result.collection.id,
+        action: autoSync ? "autoSyncCollectionBatch" : "syncCollectionBatch",
+        products: result.products.length,
+        variants: result.variants,
+        created: result.created,
+        updated: result.updated,
+        skipped: result.skippedAlreadyMapped || 0,
+        scanned: result.scannedProducts || result.products.length,
+        needsReview: result.needsReview,
+        hasNextPage: !!result.pageInfo?.hasNextPage,
+        ok: true,
+        message: result.pageInfo?.hasNextPage ? "More collection products may be available" : "Shopify reported no more pages",
+      });
 
       return Response.json({
         ok: true,
@@ -1073,7 +1159,7 @@ export async function action({ request }: { request: Request }) {
 }
 
 export default function ShopifyLinksPage() {
-  const { recipes, collectionBatchSize, groupRowPreviewLimit, inspectProductGid, inspectRecipeId, inspectRowLimit, collectionTotalByGid = {} } = useLoaderData<any>();
+  const { recipes, collectionBatchSize, groupRowPreviewLimit, inspectProductGid, inspectRecipeId, inspectRowLimit, collectionTotalByGid = {}, syncHistory = [] } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const inspectedRecipeId = actionData?.intent === "inspectProduct" ? actionData.inspectRecipeId : "";
   const inspectedProductGid = actionData?.intent === "inspectProduct" ? actionData.inspectProductGid : "";
@@ -1082,7 +1168,7 @@ export default function ShopifyLinksPage() {
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, current-request sync logging, exception review, link registry, and browser-safe auto batch sync.</p>
+      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, current-request sync logging, exception review, link registry, and browser-safe auto batch sync, and persistent sync history support.</p>
     </header>
 
     <section className="card wide plan-card">
@@ -1098,6 +1184,8 @@ export default function ShopifyLinksPage() {
     {actionData?.message ? <div className={`notice ${actionData.ok ? "success" : "error"}`}>{actionData.message}</div> : null}
 
     <SyncLogPanel actionData={actionData} />
+
+    <PersistentSyncHistoryPanel logs={syncHistory} />
 
     {actionData?.batch ? <section className="card wide continue-card">
       <h2>Last collection batch</h2>
