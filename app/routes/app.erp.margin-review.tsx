@@ -91,27 +91,39 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any) {
   const laborRate = numberOr(recipe.laborRatePerHour, DEFAULT_SHOP_LABOR_RATE_PER_HOUR) || DEFAULT_SHOP_LABOR_RATE_PER_HOUR;
   const rows = activeRows(recipe.materials || []);
 
-  const manualMaterialCostPerUnit = rows.reduce((sum: number, row: any) => {
+  const materialLines = rows.map((row: any) => {
     const quantity = numberOr(row.quantity, 0);
     const wasteMultiplier = row.includeWaste === false ? 1 : 1 + numberOr(row.wastePct, 0) / 100;
-    return sum + unitCost(row.material) * quantity * wasteMultiplier;
-  }, 0);
+    const cost = unitCost(row.material) * quantity * wasteMultiplier;
+    const name = row?.material?.name || row?.materialName || "Material row";
+    const typeText = row?.usageType || row?.material?.materialType || "material";
+    const unitText = row?.unit || row?.material?.unit || "unit";
+    const normalized = normalize(`${row?.usageType || ""} ${row?.material?.materialType || ""} ${row?.material?.name || ""}`);
+    const looksBase = normalized.includes("blank") || normalized.includes("base") || normalized.includes("bag") || normalized.includes("jar") || normalized.includes("box");
+    return { name, typeText, unitText, quantity, wastePct: numberOr(row.wastePct, 0), includeWaste: row.includeWaste !== false, cost, looksBase };
+  });
 
-  const baseMaterialCostPerUnit = rows.reduce((sum: number, row: any) => {
-    const name = normalize(`${row?.usageType || ""} ${row?.material?.materialType || ""} ${row?.material?.name || ""}`);
-    const looksBase = name.includes("blank") || name.includes("base") || name.includes("bag") || name.includes("jar") || name.includes("box");
-    if (!looksBase) return sum;
-    const wasteMultiplier = row.includeWaste === false ? 1 : 1 + numberOr(row.wastePct, 0) / 100;
-    return sum + unitCost(row.material) * numberOr(row.quantity, 0) * wasteMultiplier;
-  }, 0);
+  const manualMaterialCostPerUnit = materialLines.reduce((sum: number, line: any) => sum + line.cost, 0);
+  const baseMaterialCostPerUnit = materialLines.filter((line: any) => line.looksBase).reduce((sum: number, line: any) => sum + line.cost, 0);
 
   const { selected } = selectedZonesForRule(recipe, rule);
   const wasteMultiplier = 1 + numberOr(recipe.wastePct, 0) / 100;
   const labelSqftPerUnit = selected.reduce((sum, item) => sum + zoneSqft(item.zone), 0);
-  const labelMediaCostPerUnit = selected.reduce((sum, item) => {
+  const zoneLines = selected.map((item) => {
     const material = materialForZone(item.zone, recipe.labelZones || [], recipe, rule, item.side);
-    return sum + unitCost(material) * zoneSqft(item.zone) * wasteMultiplier;
-  }, 0);
+    const sqft = zoneSqft(item.zone);
+    const cost = unitCost(material) * sqft * wasteMultiplier;
+    return {
+      side: item.side,
+      name: item.zone?.name || item.zone?.position || item.side,
+      materialName: material?.name || "Media material",
+      sqft,
+      cost,
+      applicationSeconds: numberOr(item.zone?.applicationSecondsPerLabel, 0) * Math.max(1, numberOr(item.zone?.qtyPerUnit, 1)),
+    };
+  });
+
+  const labelMediaCostPerUnit = zoneLines.reduce((sum: number, line: any) => sum + line.cost, 0);
 
   const printedSides = Math.max(0, selected.length);
   const applicationSecondsPerUnit = selected.reduce((sum, item) => sum + numberOr(item.zone?.applicationSecondsPerLabel, 0) * Math.max(1, numberOr(item.zone?.qtyPerUnit, 1)), 0);
@@ -119,6 +131,12 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any) {
   const applicationLaborFloor = printedSides ? printedSides * DEFAULT_APPLICATION_LABOR_COST_PER_SIDE : 0;
   const applicationLaborCostPerUnit = Math.max(applicationLaborFromSeconds, applicationLaborFloor);
   const applicationLaborFloorApplied = applicationLaborCostPerUnit > applicationLaborFromSeconds + 0.00001;
+  const applicationLaborLines = zoneLines.map((line: any) => {
+    const secondsCost = (line.applicationSeconds / 3600) * laborRate;
+    const floorCost = DEFAULT_APPLICATION_LABOR_COST_PER_SIDE;
+    const appliedCost = applicationLaborFloorApplied ? floorCost : secondsCost;
+    return { ...line, secondsCost, floorCost, appliedCost };
+  });
 
   const packingLaborSeconds = numberOr(recipe.packingLaborSecondsPerUnit, 0);
   const packingLaborCostPerUnit = (packingLaborSeconds / 3600) * laborRate;
@@ -135,13 +153,16 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any) {
     qty,
     manualMaterialCostPerUnit,
     baseMaterialCostPerUnit,
+    materialLines,
     labelMediaCostPerUnit,
+    zoneLines,
     labelSqftPerUnit,
     printedSides,
     applicationSecondsPerUnit,
     applicationLaborFromSeconds,
     applicationLaborFloor,
     applicationLaborCostPerUnit,
+    applicationLaborLines,
     applicationLaborFloorApplied,
     packingLaborCostPerUnit,
     prepressLaborCostPerUnit,
@@ -332,6 +353,10 @@ export default function MarginReviewPage() {
         details.cost-details summary { cursor: pointer; font-weight: 700; color: #374151; }
         .cost-lines { margin-top: 6px; display: grid; gap: 3px; font-size: 12px; color: #4b5563; }
         .cost-line { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed #e5e7eb; padding-bottom: 2px; }
+        .cost-line.child { padding-left: 14px; color: #6b7280; }
+        .cost-line.note { color: #6b7280; background: #fafafa; }
+        .cost-line.total { margin-top: 4px; padding-top: 4px; border-top: 1px solid #d1d5db; font-weight: 900; color: #111827; }
+        .cost-line.formula { color: #374151; font-style: italic; border-bottom: 0; }
         .warn { color: #92400e; font-weight: 800; }
         @media (max-width: 900px) { .grid, .filters { grid-template-columns: 1fr; } }
       `}</style>
@@ -347,7 +372,7 @@ export default function MarginReviewPage() {
           This version is still read-only, but now uses the same recipe pieces we built in Product Setup: base materials, label zones, media options, waste, setup/prepress, packing, and per-side application labor. It does not update Shopify prices yet.
         </p>
         <Badge tone="green">Read-only</Badge>
-        <Badge tone="yellow">Full cost breakdown</Badge>
+        <Badge tone="yellow">Clear cost breakdown</Badge>
         <Badge tone="yellow">$0.15/side labor floor</Badge>
         <Badge tone="gray">Price update later</Badge>
       </section>
@@ -423,16 +448,27 @@ export default function MarginReviewPage() {
                   <details className="cost-details">
                     <summary>Breakdown</summary>
                     <div className="cost-lines">
-                      <div className="cost-line"><span>Base/manual materials</span><strong>{money(row.cost.manualMaterialCostPerUnit)}</strong></div>
-                      <div className="cost-line"><span>Blank/base item included</span><strong>{money(row.cost.baseMaterialCostPerUnit)}</strong></div>
-                      <div className="cost-line"><span>Label/media zones ({row.cost.printedSides} side{row.cost.printedSides === 1 ? "" : "s"}, {row.cost.labelSqftPerUnit.toFixed(4)} sqft)</span><strong>{money(row.cost.labelMediaCostPerUnit)}</strong></div>
-                      <div className="cost-line"><span>Application labor applied</span><strong>{money(row.cost.applicationLaborCostPerUnit)}</strong></div>
-                      <div className="cost-line"><span>Application by seconds ({row.cost.applicationSecondsPerUnit.toFixed(1)} sec @ {money(row.cost.laborRate)}/hr)</span><strong>{money(row.cost.applicationLaborFromSeconds)}</strong></div>
-                      <div className="cost-line"><span>Per-side labor floor</span><strong>{money(row.cost.applicationLaborFloor)}</strong></div>
+                      <div className="cost-line"><span>Manual material total</span><strong>{money(row.cost.manualMaterialCostPerUnit)}</strong></div>
+                      {(row.cost.materialLines || []).map((line: any, index: number) => (
+                        <div className="cost-line child" key={`mat-${index}`}><span>↳ {line.name} ({line.quantity} {line.unitText}{line.includeWaste && line.wastePct ? ` + ${line.wastePct}% waste` : ""})</span><strong>{money(line.cost)}</strong></div>
+                      ))}
+                      <div className="cost-line note"><span>Base/blank portion inside material total</span><strong>{money(row.cost.baseMaterialCostPerUnit)}</strong></div>
+                      <div className="cost-line"><span>Label/media zone total ({row.cost.printedSides} side{row.cost.printedSides === 1 ? "" : "s"}, {row.cost.labelSqftPerUnit.toFixed(4)} sqft)</span><strong>{money(row.cost.labelMediaCostPerUnit)}</strong></div>
+                      {(row.cost.zoneLines || []).map((line: any, index: number) => (
+                        <div className="cost-line child" key={`zone-${index}`}><span>↳ {line.side} {line.name}: {line.materialName} / {line.sqft.toFixed(4)} sqft</span><strong>{money(line.cost)}</strong></div>
+                      ))}
+                      <div className="cost-line"><span>Application labor total</span><strong>{money(row.cost.applicationLaborCostPerUnit)}</strong></div>
+                      {(row.cost.applicationLaborLines || []).map((line: any, index: number) => (
+                        <div className="cost-line child" key={`labor-${index}`}><span>↳ {line.side} application labor ({line.applicationSeconds.toFixed(1)} sec; floor {money(line.floorCost)})</span><strong>{money(line.appliedCost)}</strong></div>
+                      ))}
+                      <div className="cost-line note"><span>Application by seconds total ({row.cost.applicationSecondsPerUnit.toFixed(1)} sec @ {money(row.cost.laborRate)}/hr)</span><strong>{money(row.cost.applicationLaborFromSeconds)}</strong></div>
+                      <div className="cost-line note"><span>Per-side labor floor total</span><strong>{money(row.cost.applicationLaborFloor)}</strong></div>
                       <div className="cost-line"><span>Packing labor</span><strong>{money(row.cost.packingLaborCostPerUnit)}</strong></div>
                       <div className="cost-line"><span>Prepress labor / unit</span><strong>{money(row.cost.prepressLaborCostPerUnit)}</strong></div>
                       <div className="cost-line"><span>Setup labor / unit</span><strong>{money(row.cost.setupLaborCostPerUnit)}</strong></div>
                       <div className="cost-line"><span>Setup cost / unit</span><strong>{money(row.cost.setupCostPerUnit)}</strong></div>
+                      <div className="cost-line total"><span>Total estimated cost</span><strong>{money(row.cost.total)}</strong></div>
+                      <div className="cost-line formula"><span>Suggested price formula</span><strong>cost ÷ (1 - target margin)</strong></div>
                     </div>
                     {row.cost.applicationLaborFloorApplied ? <p className="muted warn">Labor floor applied because application seconds are lower than $0.15 per printed side.</p> : null}
                     {row.cost.missingBaseCost ? <p className="muted warn">No base/blank item detected in recipe material rows.</p> : null}
@@ -460,9 +496,9 @@ export default function MarginReviewPage() {
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Next phase</h2>
         <p className="muted">After this read-only audit is verified, the next patches should add tier-aware Shopify price comparison, approved price change queue, and safe Shopify price updates.</p>
-        <Badge tone="gray">v3 tier-aware review</Badge>
-        <Badge tone="gray">v4 price change queue</Badge>
-        <Badge tone="gray">v5 update Shopify prices</Badge>
+        <Badge tone="gray">v4 tier-aware review</Badge>
+        <Badge tone="gray">v5 price change queue</Badge>
+        <Badge tone="gray">v6 update Shopify prices</Badge>
       </section>
     </div>
   );
