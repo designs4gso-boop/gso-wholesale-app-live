@@ -914,7 +914,7 @@ function LinkRegistryPanel({ recipes, collectionTotalByGid = {} }: { recipes: an
   }
 
   return <section className="card wide link-registry">
-    <h2>Shopify Link Registry</h2>
+    <h2>Shopify Link Registry / Control Center</h2>
     <p className="muted">Read-only overview of every Shopify source connected to a recipe. Use this as the control-center view; detailed cleanup still lives inside each recipe accordion below.</p>
     {rows.length ? <table>
       <thead><tr><th>Recipe</th><th>Source</th><th>Synced</th><th>Health</th><th>Progress</th></tr></thead>
@@ -1230,7 +1230,7 @@ export default function ShopifyLinksPage() {
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, current-request sync logging, exception review, link registry, and browser-safe auto batch sync, and persistent sync history support, and allowed exception approvals.</p>
+      <p>Control-center for connecting Shopify products and collections to recipes. Safe batch sync, auto-sync, exception review, link registry, sync history, and cleanup controls are kept on one page.</p>
     </header>
 
     <section className="card wide plan-card">
@@ -1244,6 +1244,19 @@ export default function ShopifyLinksPage() {
     </section>
 
     {actionData?.message ? <div className={`notice ${actionData.ok ? "success" : "error"}`}>{actionData.message}</div> : null}
+
+    <section className="card wide completion-card">
+      <h2>Shopify Links status</h2>
+      <div className="pill-row">
+        <Badge tone="green">Products linked</Badge>
+        <Badge tone="green">Collections linked</Badge>
+        <Badge tone="green">Batch sync guarded</Badge>
+        <Badge tone="green">Auto-sync available</Badge>
+        <Badge tone="green">Exception review ready</Badge>
+      </div>
+      <p className="muted"><strong>Use this page for linking only.</strong> Pricing tiers stay in templates. Cost and price updates happen later in Margin Review / Price Audit.</p>
+      <p className="muted"><strong>Safe workflow:</strong> link source → sync small batch → verify health → use auto-sync → review exceptions → move to Margin Review.</p>
+    </section>
 
     <SyncLogPanel actionData={actionData} />
 
@@ -1320,7 +1333,7 @@ export default function ShopifyLinksPage() {
     <section className="grid two">
       <div className="card">
         <h2>Search Shopify products</h2>
-        <p className="muted">Use this for one product such as 4x5 Custom Sticker Bag. Results are intentionally limited to {PRODUCT_SEARCH_LIMIT}.</p>
+        <p className="muted">Use this to link one exact Shopify product to a recipe. Results are intentionally limited to {PRODUCT_SEARCH_LIMIT}.</p>
         <Form method="post" className="row">
           <input type="hidden" name="intent" value="searchProducts" />
           <input name="query" defaultValue={actionData?.intent === "searchProducts" ? actionData.query : ""} placeholder="Example: 4x5 sticker bag" />
@@ -1330,7 +1343,7 @@ export default function ShopifyLinksPage() {
 
       <div className="card">
         <h2>Search Shopify collections</h2>
-        <p className="muted">Use this for Stock Bags or any large group. Collection products are synced in batches, not all at once.</p>
+        <p className="muted">Use this to link a large Shopify collection to a recipe. Collection products are synced in safe batches, not all at once.</p>
         <Form method="post" className="row">
           <input type="hidden" name="intent" value="searchCollections" />
           <input name="query" defaultValue={actionData?.intent === "searchCollections" ? actionData.query : ""} placeholder="Example: Stock Bags" />
@@ -1392,7 +1405,7 @@ export default function ShopifyLinksPage() {
     <LinkRegistryPanel recipes={recipes} collectionTotalByGid={collectionTotalByGid} />
 
     <section className="card wide">
-      <h2>Linked recipe sources / saved variant rules</h2>
+      <h2>Detailed linked sources / cleanup tools</h2>
       <p className="muted">Summary-first view. Products and collections are grouped so large Stock Bags catalogs do not flood the page. Variant rows are hidden here; Margin Review will handle full price audits.</p>
       {recipes.map((recipe: any) => {
         const allRules = recipe.variantRules || [];
@@ -1727,5 +1740,9 @@ export default function ShopifyLinksPage() {
       .progress-track { margin-top: 6px; height: 8px; background: #e5e7eb; border-radius: 999px; overflow: hidden; }
       .progress-fill { height: 100%; background: #111827; }
     `}</style>
-  </main>;
+    <section className="card wide next-step-card">
+    <h2>Next major section</h2>
+    <p className="muted">Once Shopify source linking is complete, use <strong>Margin Review / Price Audit</strong> to compare Shopify prices against calculated costs, target margins, and suggested prices.</p>
+  </section>
+</main>;
 }
