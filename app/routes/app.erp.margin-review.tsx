@@ -325,12 +325,41 @@ async function fetchShopifyVariantMap(admin: any, variantIds: string[]) {
   return map;
 }
 
+function idsFromCsv(value: any) {
+  return Array.from(new Set(String(value || "").split(",").map((id) => id.trim()).filter(Boolean)));
+}
+
 export async function action({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
   const prisma: any = db;
   const nextUrl = new URL(request.url);
+  const intent = String(formData.get("intent") || "saveAssumptions");
+
+  if (intent === "syncCostReviewFlags") {
+    const flagRecipeIds = idsFromCsv(formData.get("flagRecipeIds"));
+    const clearRecipeIds = idsFromCsv(formData.get("clearRecipeIds")).filter((id) => !flagRecipeIds.includes(id));
+
+    if (flagRecipeIds.length) {
+      await prisma.productRecipe.updateMany({
+        where: { shop, id: { in: flagRecipeIds } },
+        data: { costReviewNeeded: true },
+      });
+    }
+
+    if (clearRecipeIds.length) {
+      await prisma.productRecipe.updateMany({
+        where: { shop, id: { in: clearRecipeIds } },
+        data: { costReviewNeeded: false },
+      });
+    }
+
+    nextUrl.searchParams.set("flagsSynced", "1");
+    nextUrl.searchParams.set("flagged", String(flagRecipeIds.length));
+    nextUrl.searchParams.set("cleared", String(clearRecipeIds.length));
+    return redirect(`${nextUrl.pathname}${nextUrl.search}`);
+  }
 
   const data = {
     laborRatePerHour: numberOr(formData.get("laborRatePerHour"), DEFAULT_SHOP_LABOR_RATE_PER_HOUR),
@@ -371,6 +400,9 @@ export async function loader({ request }: { request: Request }) {
   const savedSettings = await getMarginReviewSettings(prisma, shop);
   const assumptions = assumptionsFromSettings(savedSettings, url);
   const saved = url.searchParams.get("saved") === "1";
+  const flagsSynced = url.searchParams.get("flagsSynced") === "1";
+  const syncedFlagged = Math.max(0, Math.round(numberOr(url.searchParams.get("flagged"), 0)));
+  const syncedCleared = Math.max(0, Math.round(numberOr(url.searchParams.get("cleared"), 0)));
 
   const recipes = await prisma.productRecipe.findMany({
     where: { shop, active: true, ...(recipeId ? { id: recipeId } : {}) },
@@ -452,6 +484,20 @@ export async function loader({ request }: { request: Request }) {
     return true;
   }).slice(0, assumptions.auditLimit);
 
+  const auditedRecipeIds = Array.from(new Set(filteredRows.map((row: any) => row.recipe?.id).filter(Boolean)));
+  const flagRecipeIds = Array.from(new Set(filteredRows.filter((row: any) => row.cost?.costReviewNeeded).map((row: any) => row.recipe?.id).filter(Boolean)));
+  const clearRecipeIds = auditedRecipeIds.filter((id: any) => !flagRecipeIds.includes(id));
+  const flagRecipeNames = recipes.filter((recipe: any) => flagRecipeIds.includes(recipe.id)).map((recipe: any) => recipe.name).slice(0, 8);
+
+  const recipeFlagPreview = {
+    auditedRecipeIds,
+    flagRecipeIds,
+    clearRecipeIds,
+    flagCount: flagRecipeIds.length,
+    clearCount: clearRecipeIds.length,
+    flagRecipeNames,
+  };
+
   const summary = {
     rows: filteredRows.length,
     belowTarget: filteredRows.filter((row: any) => row.currentMargin !== null && row.currentMargin < row.targetMargin).length,
@@ -482,7 +528,7 @@ export async function loader({ request }: { request: Request }) {
       action: !row.currentPrice ? "Add price" : row.currentPrice + 0.005 < row.suggestedPrice ? "Raise price" : row.tierIssues > 0 ? "Review tiers" : "No action",
     }));
 
-  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, assumptions, savedSettings, saved, filters: { search, recipeId, status } });
+  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, assumptions, savedSettings, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview, filters: { search, recipeId, status } });
 }
 
 function Badge({ tone, children }: { tone?: string; children: React.ReactNode }) {
@@ -490,7 +536,7 @@ function Badge({ tone, children }: { tone?: string; children: React.ReactNode })
 }
 
 export default function MarginReviewPage() {
-  const { recipes, rows, summary, approvalRows, filters, assumptions, saved } = useLoaderData<any>();
+  const { recipes, rows, summary, approvalRows, filters, assumptions, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview } = useLoaderData<any>();
 
   return (
     <div className="page">
@@ -535,6 +581,8 @@ export default function MarginReviewPage() {
         .queue-note { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
         .settings-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: end; }
         .queue-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+        .success-note { background: #ecfdf5; border: 1px solid #bbf7d0; color: #166534; border-radius: 10px; padding: 10px 12px; margin-top: 10px; font-size: 13px; font-weight: 700; }
+        .flag-panel { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px; margin-top: 12px; }
         .button.secondary { background: #e5e7eb; color: #111827; }
         .button.disabled { opacity: 0.55; cursor: not-allowed; }
         @media (max-width: 900px) { .grid, .filters, .settings-grid { grid-template-columns: 1fr; } }
@@ -555,6 +603,7 @@ export default function MarginReviewPage() {
         <Badge tone="yellow">Tier-aware review</Badge>
         <Badge tone="yellow">Approval queue preview</Badge>
         <Badge tone="yellow">Saved shop assumptions</Badge>
+        <Badge tone="yellow">Recipe cost review flags</Badge>
         <Badge tone="gray">Price update later</Badge>
       </section>
 
@@ -590,6 +639,31 @@ export default function MarginReviewPage() {
           <div><button type="submit">Save assumptions</button></div>
         </Form>
         <p className="muted" style={{ marginTop: 8 }}>Current audit assumptions: {money(assumptions.laborRatePerHour)}/hr labor, {money(assumptions.applicationLaborCostPerSide)} per printed side floor, {assumptions.auditLimit} rows max, {assumptions.warningBandPct}% warning band.</p>
+        {flagsSynced ? (
+          <div className="success-note">Recipe cost review flags synced. Flagged {syncedFlagged} recipe(s) and cleared {syncedCleared} recipe(s) from the current audit.</div>
+        ) : null}
+        <div className="flag-panel">
+          <strong>v8 Recipe Cost Review Flags</strong>
+          <p className="muted">
+            This sync pushes the current Margin Review cost-review results back into Product Setup. Recipes with missing base cost, missing zones, or application labor floor warnings will show as Cost Review in Product Setup. This still does not update Shopify prices.
+          </p>
+          <div className="queue-actions">
+            <Badge tone={recipeFlagPreview?.flagCount ? "yellow" : "green"}>{recipeFlagPreview?.flagCount || 0} recipe(s) to flag</Badge>
+            <Badge tone="gray">{recipeFlagPreview?.clearCount || 0} audited recipe(s) to clear</Badge>
+          </div>
+          {recipeFlagPreview?.flagRecipeNames?.length ? (
+            <p className="muted" style={{ marginTop: 8 }}>Will flag: {recipeFlagPreview.flagRecipeNames.join(", ")}{recipeFlagPreview.flagCount > recipeFlagPreview.flagRecipeNames.length ? "..." : ""}</p>
+          ) : (
+            <p className="muted" style={{ marginTop: 8 }}>No cost-review recipes found in the current audit filter.</p>
+          )}
+          <Form method="post" className="queue-actions">
+            <input type="hidden" name="intent" value="syncCostReviewFlags" />
+            <input type="hidden" name="flagRecipeIds" value={(recipeFlagPreview?.flagRecipeIds || []).join(",")} />
+            <input type="hidden" name="clearRecipeIds" value={(recipeFlagPreview?.clearRecipeIds || []).join(",")} />
+            <button type="submit">Sync recipe review flags</button>
+            <span className="button secondary disabled">Shopify updates still locked</span>
+          </Form>
+        </div>
       </section>
 
       <section className="card">
@@ -796,10 +870,11 @@ export default function MarginReviewPage() {
 
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Next phase</h2>
-        <p className="muted">This read-only audit now includes adjustable cost assumptions and tier-aware cost recalculation. Next patches should add approval records and safe Shopify price updates.</p>
-        <Badge tone="green">v6 cost assumptions</Badge>
-        <Badge tone="gray">v7 approval records</Badge>
-        <Badge tone="gray">v8 update Shopify prices</Badge>
+        <p className="muted">This read-only audit now includes saved shop assumptions, tier-aware cost recalculation, and safe recipe cost-review flag syncing. Next patches should add approval records and safe Shopify price updates.</p>
+        <Badge tone="green">v7 saved assumptions</Badge>
+        <Badge tone="green">v8 recipe review flags</Badge>
+        <Badge tone="gray">v9 approval records</Badge>
+        <Badge tone="gray">v10 update Shopify prices</Badge>
       </section>
     </div>
   );
