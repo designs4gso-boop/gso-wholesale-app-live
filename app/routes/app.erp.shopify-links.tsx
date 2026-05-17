@@ -650,6 +650,31 @@ function recipeHealthSummary(groups: any[] = []) {
   return { total: activeGroups.length, expected, unusual };
 }
 
+function productGroupExceptionRows(groups: any[] = []) {
+  return (groups || []).map((group: any) => {
+    const rules = group.rules || [];
+    const activeCount = rules.filter((rule: any) => rule.active !== false).length;
+    const totalCount = rules.length;
+    const hiddenCount = totalCount - activeCount;
+    const reviewCount = rules.filter(needsReview).length;
+    const unusualCount = activeCount > 0 && activeCount !== 24 && activeCount !== 36;
+    const reasons: string[] = [];
+    if (unusualCount) reasons.push(`Unusual active variant count: ${activeCount}`);
+    if (reviewCount) reasons.push(`${reviewCount} variant rule(s) need review`);
+    if (hiddenCount) reasons.push(`${hiddenCount} hidden/inactive rule(s)`);
+    return {
+      productGid: group.productGid,
+      productTitle: group.productTitle || group.productGid,
+      activeCount,
+      totalCount,
+      hiddenCount,
+      reviewCount,
+      reasons,
+    };
+  }).filter((item: any) => item.reasons.length);
+}
+
+
 async function deleteMappingsForRecipe(shop: string, recipeId: string) {
   const prisma: any = db;
   const result = await prisma.recipeVariantRule.deleteMany({ where: { shop, recipeId } });
@@ -987,7 +1012,7 @@ export default function ShopifyLinksPage() {
   return <main className="page">
     <header className="hero">
       <h1>Shopify Product / Collection Links</h1>
-      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, and current-request sync logging.</p>
+      <p>Summary-first Shopify linking with cleanup controls, safe collection batches, and current-request sync logging, and exception review.</p>
     </header>
 
     <section className="card wide plan-card">
@@ -1141,6 +1166,7 @@ export default function ShopifyLinksPage() {
         const reviewCount = allRules.filter(needsReview).length;
         const collections = recipeCollectionSummary(allRules);
         const healthSummary = recipeHealthSummary(grouped);
+        const exceptionRows = productGroupExceptionRows(grouped);
 
         return <details key={recipe.id} className="recipe-card">
           <summary>
@@ -1167,6 +1193,43 @@ export default function ShopifyLinksPage() {
                 <button type="submit" className="danger">Remove all Shopify mappings from this recipe</button>
               </Form>
             </div>
+
+            {exceptionRows.length ? <div className="summary-box exception-review">
+              <h3>Exception Review</h3>
+              <p className="muted">Only product groups with unusual counts, hidden/inactive mappings, or variant rules that need review appear here. Healthy 24-variant stock bag products and healthy 36-variant gloss products stay out of this list.</p>
+              <table>
+                <thead><tr><th>Product</th><th>Active / Total</th><th>Issue</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {exceptionRows.map((item: any) => <tr key={item.productGid}>
+                    <td><strong>{item.productTitle}</strong><br /><span className="muted gid">{item.productGid}</span></td>
+                    <td>{item.activeCount} / {item.totalCount}</td>
+                    <td>{item.reasons.map((reason: string) => <div key={reason}><Badge tone="yellow">{reason}</Badge></div>)}</td>
+                    <td>
+                      <div className="button-row">
+                        <Form method="post" className="inline-form">
+                          <input type="hidden" name="intent" value="inspectProduct" />
+                          <input type="hidden" name="recipeId" value={recipe.id} />
+                          <input type="hidden" name="productGid" value={item.productGid} />
+                          <button type="submit" className="secondary">View details</button>
+                        </Form>
+                        <Form method="post" className="inline-form">
+                          <input type="hidden" name="intent" value="hideProductMappings" />
+                          <input type="hidden" name="recipeId" value={recipe.id} />
+                          <input type="hidden" name="productGid" value={item.productGid} />
+                          <button type="submit" className="secondary">Hide group</button>
+                        </Form>
+                        <Form method="post" className="inline-form" onSubmit={(event) => { if (!confirm(`Remove mappings for ${item.productTitle}?`)) event.preventDefault(); }}>
+                          <input type="hidden" name="intent" value="deleteProductMappings" />
+                          <input type="hidden" name="recipeId" value={recipe.id} />
+                          <input type="hidden" name="productGid" value={item.productGid} />
+                          <button type="submit" className="danger">Remove mappings</button>
+                        </Form>
+                      </div>
+                    </td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </div> : <div className="summary-box"><h3>Exception Review</h3><Badge tone="green">No exceptions found</Badge><p className="muted">All active product groups currently match expected 24/36 variant patterns with no review flags.</p></div>}
 
             {collections.length ? <div className="summary-box">
               <h3>Collection source summaries</h3>
