@@ -86,8 +86,8 @@ function selectedZonesForRule(recipe: any, rule: any) {
   return { zones, frontZone, backZone, selected };
 }
 
-function estimateRecipeVariantUnitCost(recipe: any, rule: any) {
-  const qty = Math.max(1, Math.round(numberOr(recipe.defaultQuantity, numberOr(recipe.minQuantity, 1))));
+function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?: number) {
+  const qty = Math.max(1, Math.round(numberOr(quantityOverride, numberOr(recipe.defaultQuantity, numberOr(recipe.minQuantity, 1)))));
   const laborRate = numberOr(recipe.laborRatePerHour, DEFAULT_SHOP_LABOR_RATE_PER_HOUR) || DEFAULT_SHOP_LABOR_RATE_PER_HOUR;
   const rows = activeRows(recipe.materials || []);
 
@@ -187,6 +187,53 @@ function statusForMargin(currentMargin: number | null, targetMargin: number) {
   return { tone: "green", label: "healthy" };
 }
 
+function activeTiers(recipe: any) {
+  const tiers = (recipe?.tiers || [])
+    .filter((tier: any) => tier && numberOr(tier.minQty, 0) > 0)
+    .sort((a: any, b: any) => numberOr(a.minQty, 0) - numberOr(b.minQty, 0));
+
+  if (tiers.length) return tiers;
+
+  const minQty = Math.max(1, Math.round(numberOr(recipe?.minQuantity, 1)));
+  const defaultQty = Math.max(minQty, Math.round(numberOr(recipe?.defaultQuantity, minQty)));
+  return [{ id: "default", minQty: minQty, maxQty: null, marginPct: recipe?.targetMarginPct, fixedPrice: null, notes: "Fallback default tier" }];
+}
+
+function tierLabel(tier: any) {
+  const min = Math.max(1, Math.round(numberOr(tier?.minQty, 1)));
+  const max = tier?.maxQty ? Math.round(numberOr(tier.maxQty, 0)) : null;
+  return max ? `${min}-${max}` : `${min}+`;
+}
+
+function buildTierReview(recipe: any, rule: any, currentPrice: number) {
+  return activeTiers(recipe).map((tier: any) => {
+    const qty = Math.max(1, Math.round(numberOr(tier.minQty, recipe?.defaultQuantity || recipe?.minQuantity || 1)));
+    const tierCost = estimateRecipeVariantUnitCost(recipe, rule, qty);
+    const tierTargetMargin = numberOr(tier.marginPct, numberOr(recipe?.targetMarginPct, 40));
+    const suggestedPrice = priceForMargin(tierCost.total, tierTargetMargin);
+    const fixedPrice = tier.fixedPrice === null || tier.fixedPrice === undefined ? null : numberOr(tier.fixedPrice, 0);
+    const auditPrice = fixedPrice && fixedPrice > 0 ? fixedPrice : suggestedPrice;
+    const auditMargin = safeMargin(auditPrice, tierCost.total);
+    const shopifyMargin = currentPrice > 0 ? safeMargin(currentPrice, tierCost.total) : null;
+    const status = statusForMargin(auditMargin, tierTargetMargin);
+    return {
+      id: tier.id || `${qty}`,
+      label: tierLabel(tier),
+      qty,
+      tier,
+      cost: tierCost,
+      targetMargin: tierTargetMargin,
+      fixedPrice,
+      suggestedPrice,
+      auditPrice,
+      auditMargin,
+      shopifyMargin,
+      status,
+      priceSource: fixedPrice && fixedPrice > 0 ? "fixed tier price" : "suggested from margin",
+    };
+  });
+}
+
 async function fetchShopifyVariantMap(admin: any, variantIds: string[]) {
   const uniqueIds = Array.from(new Set(variantIds.filter(Boolean))).slice(0, DEFAULT_AUDIT_LIMIT);
   if (!uniqueIds.length) return new Map<string, any>();
@@ -270,6 +317,8 @@ export async function loader({ request }: { request: Request }) {
     const currentMargin = safeMargin(currentPrice, cost.total);
     const delta = suggestedPrice - currentPrice;
     const statusInfo = statusForMargin(currentMargin, targetMargin);
+    const tierReview = buildTierReview(recipe, rule, currentPrice);
+    const tierIssues = tierReview.filter((tier: any) => tier.auditMargin !== null && tier.auditMargin < tier.targetMargin).length;
     return {
       rule,
       recipe,
@@ -281,6 +330,8 @@ export async function loader({ request }: { request: Request }) {
       currentMargin,
       delta,
       status: statusInfo,
+      tierReview,
+      tierIssues,
     };
   });
 
@@ -300,6 +351,7 @@ export async function loader({ request }: { request: Request }) {
     if (status === "below_target" && !(row.currentMargin !== null && row.currentMargin < row.targetMargin)) return false;
     if (status === "no_price" && row.currentPrice > 0) return false;
     if (status === "cost_review" && !row.cost?.costReviewNeeded) return false;
+    if (status === "tier_review" && !row.tierIssues) return false;
     return true;
   }).slice(0, DEFAULT_AUDIT_LIMIT);
 
@@ -309,6 +361,7 @@ export async function loader({ request }: { request: Request }) {
     noPrice: filteredRows.filter((row: any) => !row.currentPrice).length,
     healthy: filteredRows.filter((row: any) => row.currentMargin !== null && row.currentMargin >= row.targetMargin).length,
     costReview: filteredRows.filter((row: any) => row.cost?.costReviewNeeded).length,
+    tierReview: filteredRows.filter((row: any) => row.tierIssues > 0).length,
     avgCost: filteredRows.length ? filteredRows.reduce((sum: number, row: any) => sum + row.cost.total, 0) / filteredRows.length : 0,
   };
 
@@ -330,7 +383,7 @@ export default function MarginReviewPage() {
         .hero h1 { margin: 0 0 6px; font-size: 28px; }
         .hero p { margin: 0; color: #f2e8ff; }
         .card { background: white; border: 1px solid #dfe3e8; border-radius: 12px; padding: 16px; margin: 14px 0; box-shadow: 0 1px 0 rgba(0,0,0,0.02); }
-        .grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+        .grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
         .filters { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end; }
         label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
         input, select { width: 100%; padding: 9px 10px; border: 1px solid #c9cccf; border-radius: 8px; background: white; }
@@ -358,6 +411,10 @@ export default function MarginReviewPage() {
         .cost-line.total { margin-top: 4px; padding-top: 4px; border-top: 1px solid #d1d5db; font-weight: 900; color: #111827; }
         .cost-line.formula { color: #374151; font-style: italic; border-bottom: 0; }
         .warn { color: #92400e; font-weight: 800; }
+        .tier-table { margin-top: 8px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+        .tier-table table { font-size: 12px; }
+        .tier-table th, .tier-table td { padding: 6px 8px; }
+        .tier-note { margin-top: 6px; padding: 8px; border-radius: 8px; background: #f9fafb; color: #4b5563; font-size: 12px; }
         @media (max-width: 900px) { .grid, .filters { grid-template-columns: 1fr; } }
       `}</style>
 
@@ -373,6 +430,7 @@ export default function MarginReviewPage() {
         </p>
         <Badge tone="green">Read-only</Badge>
         <Badge tone="yellow">Clear cost breakdown</Badge>
+        <Badge tone="yellow">Tier-aware review</Badge>
         <Badge tone="yellow">$0.15/side labor floor</Badge>
         <Badge tone="gray">Price update later</Badge>
       </section>
@@ -400,6 +458,7 @@ export default function MarginReviewPage() {
               <option value="below_target">Below target margin</option>
               <option value="no_price">No Shopify price found</option>
               <option value="cost_review">Cost review needed</option>
+              <option value="tier_review">Tier below target</option>
             </select>
           </div>
           <div><button type="submit">Run audit</button></div>
@@ -411,6 +470,7 @@ export default function MarginReviewPage() {
         <div className="stat"><span className="muted">Healthy</span><strong>{summary.healthy}</strong></div>
         <div className="stat"><span className="muted">Below target</span><strong>{summary.belowTarget}</strong></div>
         <div className="stat"><span className="muted">Cost review</span><strong>{summary.costReview}</strong></div>
+        <div className="stat"><span className="muted">Tier issues</span><strong>{summary.tierReview}</strong></div>
         <div className="stat"><span className="muted">Avg est. cost</span><strong>{money(summary.avgCost)}</strong></div>
       </section>
 
@@ -474,6 +534,37 @@ export default function MarginReviewPage() {
                     {row.cost.missingBaseCost ? <p className="muted warn">No base/blank item detected in recipe material rows.</p> : null}
                     {row.cost.missingZones ? <p className="muted warn">No active label zones detected for this variant.</p> : null}
                   </details>
+                  <details className="cost-details">
+                    <summary>Tier review</summary>
+                    <div className="tier-note">Tier costs are recalculated at each tier quantity so setup/prepress cost spreads correctly. This is read-only and does not update Shopify.</div>
+                    <div className="tier-table">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Tier</th>
+                            <th className="right">Cost</th>
+                            <th className="right">Target</th>
+                            <th className="right">Tier price</th>
+                            <th className="right">Margin</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(row.tierReview || []).map((tier: any) => (
+                            <tr key={tier.id}>
+                              <td><strong>{tier.label}</strong><br /><span className="muted">Qty basis {tier.qty}</span></td>
+                              <td className="right">{money(tier.cost.total)}</td>
+                              <td className="right">{pct(tier.targetMargin)}</td>
+                              <td className="right"><strong>{money(tier.auditPrice)}</strong><br /><span className="muted">{tier.priceSource}</span></td>
+                              <td className="right">{tier.auditMargin === null ? "No price" : pct(tier.auditMargin)}</td>
+                              <td><Badge tone={tier.status.tone}>{tier.status.label}</Badge>{tier.cost.costReviewNeeded ? <Badge tone="yellow">cost review</Badge> : null}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="tier-note">Current Shopify base price: {money(row.currentPrice)}. Future patches will compare/edit quantity-tier prices separately from base Shopify price.</div>
+                  </details>
                 </td>
                 <td className="right"><strong>{money(row.currentPrice)}</strong></td>
                 <td className="right">{pct(row.targetMargin)}</td>
@@ -484,6 +575,7 @@ export default function MarginReviewPage() {
                 <td>
                   <Badge tone={row.status.tone}>{row.status.label}</Badge>
                   {row.cost.costReviewNeeded ? <Badge tone="yellow">cost review</Badge> : null}
+                  {row.tierIssues ? <Badge tone="yellow">tier review</Badge> : null}
                 </td>
               </tr>
             )) : (
@@ -495,8 +587,8 @@ export default function MarginReviewPage() {
 
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Next phase</h2>
-        <p className="muted">After this read-only audit is verified, the next patches should add tier-aware Shopify price comparison, approved price change queue, and safe Shopify price updates.</p>
-        <Badge tone="gray">v4 tier-aware review</Badge>
+        <p className="muted">This read-only audit now includes tier-aware cost recalculation. Next patches should add an approved price change queue and safe Shopify price updates.</p>
+        <Badge tone="green">v4 tier-aware review</Badge>
         <Badge tone="gray">v5 price change queue</Badge>
         <Badge tone="gray">v6 update Shopify prices</Badge>
       </section>
