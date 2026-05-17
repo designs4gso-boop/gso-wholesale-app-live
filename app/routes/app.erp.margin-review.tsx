@@ -1,10 +1,12 @@
-import { Form, useLoaderData } from "react-router";
+import { Form, redirect, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
 const DEFAULT_SHOP_LABOR_RATE_PER_HOUR = 25;
 const DEFAULT_APPLICATION_LABOR_COST_PER_SIDE = 0.15;
 const DEFAULT_AUDIT_LIMIT = 150;
+const DEFAULT_WARNING_BAND_PCT = 5;
+const DEFAULT_COST_REVIEW_THRESHOLD_PCT = 0;
 
 function money(value: any) {
   const number = Number(value || 0);
@@ -182,9 +184,10 @@ function ruleTitle(rule: any) {
   return rule.shopifyVariantTitle || rule.name || rule.sku || rule.shopifyVariantGid || "Variant rule";
 }
 
-function statusForMargin(currentMargin: number | null, targetMargin: number) {
+function statusForMargin(currentMargin: number | null, targetMargin: number, warningBandPct = DEFAULT_WARNING_BAND_PCT) {
+  const warningBand = Math.max(0, numberOr(warningBandPct, DEFAULT_WARNING_BAND_PCT));
   if (currentMargin === null) return { tone: "yellow", label: "no price" };
-  if (currentMargin < targetMargin - 5) return { tone: "red", label: "price low" };
+  if (currentMargin < targetMargin - warningBand) return { tone: "red", label: "price low" };
   if (currentMargin < targetMargin) return { tone: "yellow", label: "near target" };
   return { tone: "green", label: "healthy" };
 }
@@ -217,7 +220,7 @@ function buildTierReview(recipe: any, rule: any, currentPrice: number, assumptio
     const auditPrice = fixedPrice && fixedPrice > 0 ? fixedPrice : suggestedPrice;
     const auditMargin = safeMargin(auditPrice, tierCost.total);
     const shopifyMargin = currentPrice > 0 ? safeMargin(currentPrice, tierCost.total) : null;
-    const status = statusForMargin(auditMargin, tierTargetMargin);
+    const status = statusForMargin(auditMargin, tierTargetMargin, assumptions.warningBandPct);
     return {
       id: tier.id || `${qty}`,
       label: tierLabel(tier),
@@ -234,6 +237,60 @@ function buildTierReview(recipe: any, rule: any, currentPrice: number, assumptio
       priceSource: fixedPrice && fixedPrice > 0 ? "fixed tier price" : "suggested from margin",
     };
   });
+}
+
+function clampAuditLimit(value: any) {
+  return Math.min(600, Math.max(25, Math.round(numberOr(value, DEFAULT_AUDIT_LIMIT))));
+}
+
+async function getMarginReviewSettings(prisma: any, shop: string) {
+  const existing = await prisma.marginReviewSetting.findFirst({
+    where: { shop, active: true },
+    orderBy: { updatedAt: "desc" },
+  });
+
+  if (existing) return existing;
+
+  return prisma.marginReviewSetting.create({
+    data: {
+      shop,
+      laborRatePerHour: DEFAULT_SHOP_LABOR_RATE_PER_HOUR,
+      applicationLaborFloorPerSide: 0.20,
+      auditRowLimit: DEFAULT_AUDIT_LIMIT,
+      warningBandPct: DEFAULT_WARNING_BAND_PCT,
+      costReviewThresholdPct: DEFAULT_COST_REVIEW_THRESHOLD_PCT,
+      active: true,
+    },
+  });
+}
+
+function assumptionsFromSettings(settings: any, url: URL) {
+  const hasLaborOverride = url.searchParams.has("laborRatePerHour");
+  const hasFloorOverride = url.searchParams.has("applicationLaborCostPerSide");
+  const hasLimitOverride = url.searchParams.has("auditLimit");
+  const hasWarningOverride = url.searchParams.has("warningBandPct");
+  const hasCostReviewOverride = url.searchParams.has("costReviewThresholdPct");
+
+  return {
+    laborRatePerHour: numberOr(
+      hasLaborOverride ? url.searchParams.get("laborRatePerHour") : settings?.laborRatePerHour,
+      DEFAULT_SHOP_LABOR_RATE_PER_HOUR
+    ),
+    applicationLaborCostPerSide: numberOr(
+      hasFloorOverride ? url.searchParams.get("applicationLaborCostPerSide") : settings?.applicationLaborFloorPerSide,
+      0.20
+    ),
+    auditLimit: clampAuditLimit(hasLimitOverride ? url.searchParams.get("auditLimit") : settings?.auditRowLimit),
+    warningBandPct: numberOr(
+      hasWarningOverride ? url.searchParams.get("warningBandPct") : settings?.warningBandPct,
+      DEFAULT_WARNING_BAND_PCT
+    ),
+    costReviewThresholdPct: numberOr(
+      hasCostReviewOverride ? url.searchParams.get("costReviewThresholdPct") : settings?.costReviewThresholdPct,
+      DEFAULT_COST_REVIEW_THRESHOLD_PCT
+    ),
+    usingUrlOverrides: hasLaborOverride || hasFloorOverride || hasLimitOverride || hasWarningOverride || hasCostReviewOverride,
+  };
 }
 
 async function fetchShopifyVariantMap(admin: any, variantIds: string[]) {
@@ -268,6 +325,40 @@ async function fetchShopifyVariantMap(admin: any, variantIds: string[]) {
   return map;
 }
 
+export async function action({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const formData = await request.formData();
+  const prisma: any = db;
+  const nextUrl = new URL(request.url);
+
+  const data = {
+    laborRatePerHour: numberOr(formData.get("laborRatePerHour"), DEFAULT_SHOP_LABOR_RATE_PER_HOUR),
+    applicationLaborFloorPerSide: numberOr(formData.get("applicationLaborCostPerSide"), 0.20),
+    auditRowLimit: clampAuditLimit(formData.get("auditLimit")),
+    warningBandPct: numberOr(formData.get("warningBandPct"), DEFAULT_WARNING_BAND_PCT),
+    costReviewThresholdPct: numberOr(formData.get("costReviewThresholdPct"), DEFAULT_COST_REVIEW_THRESHOLD_PCT),
+    active: true,
+  };
+
+  const existing = await prisma.marginReviewSetting.findFirst({
+    where: { shop, active: true },
+    orderBy: { updatedAt: "desc" },
+  });
+
+  if (existing) {
+    await prisma.marginReviewSetting.update({ where: { id: existing.id }, data });
+  } else {
+    await prisma.marginReviewSetting.create({ data: { shop, ...data } });
+  }
+
+  for (const key of ["laborRatePerHour", "applicationLaborCostPerSide", "auditLimit", "warningBandPct", "costReviewThresholdPct"]) {
+    nextUrl.searchParams.delete(key);
+  }
+  nextUrl.searchParams.set("saved", "1");
+  return redirect(`${nextUrl.pathname}${nextUrl.search}`);
+}
+
 export async function loader({ request }: { request: Request }) {
   const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
@@ -275,13 +366,11 @@ export async function loader({ request }: { request: Request }) {
   const search = String(url.searchParams.get("search") || "").trim();
   const recipeId = String(url.searchParams.get("recipeId") || "").trim();
   const status = String(url.searchParams.get("status") || "all");
-  const assumptions = {
-    laborRatePerHour: numberOr(url.searchParams.get("laborRatePerHour"), DEFAULT_SHOP_LABOR_RATE_PER_HOUR),
-    applicationLaborCostPerSide: numberOr(url.searchParams.get("applicationLaborCostPerSide"), DEFAULT_APPLICATION_LABOR_COST_PER_SIDE),
-    auditLimit: Math.min(600, Math.max(25, Math.round(numberOr(url.searchParams.get("auditLimit"), DEFAULT_AUDIT_LIMIT)))),
-  };
 
   const prisma: any = db;
+  const savedSettings = await getMarginReviewSettings(prisma, shop);
+  const assumptions = assumptionsFromSettings(savedSettings, url);
+  const saved = url.searchParams.get("saved") === "1";
 
   const recipes = await prisma.productRecipe.findMany({
     where: { shop, active: true, ...(recipeId ? { id: recipeId } : {}) },
@@ -323,7 +412,7 @@ export async function loader({ request }: { request: Request }) {
     const suggestedPrice = priceForMargin(cost.total, targetMargin);
     const currentMargin = safeMargin(currentPrice, cost.total);
     const delta = suggestedPrice - currentPrice;
-    const statusInfo = statusForMargin(currentMargin, targetMargin);
+    const statusInfo = statusForMargin(currentMargin, targetMargin, assumptions.warningBandPct);
     const tierReview = buildTierReview(recipe, rule, currentPrice, assumptions);
     const tierIssues = tierReview.filter((tier: any) => tier.auditMargin !== null && tier.auditMargin < tier.targetMargin).length;
     return {
@@ -393,7 +482,7 @@ export async function loader({ request }: { request: Request }) {
       action: !row.currentPrice ? "Add price" : row.currentPrice + 0.005 < row.suggestedPrice ? "Raise price" : row.tierIssues > 0 ? "Review tiers" : "No action",
     }));
 
-  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, assumptions, filters: { search, recipeId, status } });
+  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, assumptions, savedSettings, saved, filters: { search, recipeId, status } });
 }
 
 function Badge({ tone, children }: { tone?: string; children: React.ReactNode }) {
@@ -401,7 +490,7 @@ function Badge({ tone, children }: { tone?: string; children: React.ReactNode })
 }
 
 export default function MarginReviewPage() {
-  const { recipes, rows, summary, approvalRows, filters, assumptions } = useLoaderData<any>();
+  const { recipes, rows, summary, approvalRows, filters, assumptions, saved } = useLoaderData<any>();
 
   return (
     <div className="page">
@@ -465,14 +554,16 @@ export default function MarginReviewPage() {
         <Badge tone="yellow">Clear cost breakdown</Badge>
         <Badge tone="yellow">Tier-aware review</Badge>
         <Badge tone="yellow">Approval queue preview</Badge>
-        <Badge tone="yellow">Editable labor assumptions</Badge>
+        <Badge tone="yellow">Saved shop assumptions</Badge>
         <Badge tone="gray">Price update later</Badge>
       </section>
 
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Cost Assumption Settings</h2>
-        <p className="muted">Use this to test margin sensitivity before changing recipes. These are temporary audit overrides from the URL only; they do not update Product Setup yet.</p>
-        <Form method="get" className="settings-grid">
+        <p className="muted">Save your real shop defaults here so Margin Review opens with the correct numbers every time. URL overrides still work for quick tests, but saved settings are now the official defaults for this screen.</p>
+        {saved ? <p className="muted" style={{ color: "#166534", fontWeight: 800 }}>Saved. Margin Review will now open with these shop assumptions.</p> : null}
+        {assumptions.usingUrlOverrides ? <p className="muted warn">You are viewing temporary URL overrides. Click Save assumptions to make these the official shop defaults.</p> : null}
+        <Form method="post" className="settings-grid">
           <input type="hidden" name="recipeId" value={filters.recipeId || ""} />
           <input type="hidden" name="search" value={filters.search || ""} />
           <input type="hidden" name="status" value={filters.status || "all"} />
@@ -488,9 +579,17 @@ export default function MarginReviewPage() {
             <label>Audit row limit</label>
             <input name="auditLimit" type="number" step="25" min="25" max="600" defaultValue={assumptions.auditLimit} />
           </div>
-          <div><button type="submit">Apply assumptions</button></div>
+          <div>
+            <label>Target margin warning band %</label>
+            <input name="warningBandPct" type="number" step="0.1" min="0" max="50" defaultValue={assumptions.warningBandPct} />
+          </div>
+          <div>
+            <label>Cost review threshold %</label>
+            <input name="costReviewThresholdPct" type="number" step="0.1" min="0" max="100" defaultValue={assumptions.costReviewThresholdPct} />
+          </div>
+          <div><button type="submit">Save assumptions</button></div>
         </Form>
-        <p className="muted" style={{ marginTop: 8 }}>Current audit assumptions: {money(assumptions.laborRatePerHour)}/hr labor, {money(assumptions.applicationLaborCostPerSide)} per printed side floor, {assumptions.auditLimit} rows max.</p>
+        <p className="muted" style={{ marginTop: 8 }}>Current audit assumptions: {money(assumptions.laborRatePerHour)}/hr labor, {money(assumptions.applicationLaborCostPerSide)} per printed side floor, {assumptions.auditLimit} rows max, {assumptions.warningBandPct}% warning band.</p>
       </section>
 
       <section className="card">
@@ -498,6 +597,8 @@ export default function MarginReviewPage() {
           <input type="hidden" name="laborRatePerHour" value={assumptions.laborRatePerHour} />
           <input type="hidden" name="applicationLaborCostPerSide" value={assumptions.applicationLaborCostPerSide} />
           <input type="hidden" name="auditLimit" value={assumptions.auditLimit} />
+          <input type="hidden" name="warningBandPct" value={assumptions.warningBandPct} />
+          <input type="hidden" name="costReviewThresholdPct" value={assumptions.costReviewThresholdPct} />
           <div>
             <label>Recipe</label>
             <select name="recipeId" defaultValue={filters.recipeId || ""}>
@@ -584,7 +685,7 @@ export default function MarginReviewPage() {
 
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Audit rows</h2>
-        <p className="muted">Showing up to {DEFAULT_AUDIT_LIMIT} linked Shopify variants. Start with one recipe like 4x5 Sticker Bag, then expand to more products once the numbers look right.</p>
+        <p className="muted">Showing up to {assumptions.auditLimit} linked Shopify variants. Start with one recipe like 4x5 Sticker Bag, then expand to more products once the numbers look right.</p>
         <table>
           <thead>
             <tr>
