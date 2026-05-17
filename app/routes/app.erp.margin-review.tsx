@@ -352,6 +352,7 @@ export async function loader({ request }: { request: Request }) {
     if (status === "no_price" && row.currentPrice > 0) return false;
     if (status === "cost_review" && !row.cost?.costReviewNeeded) return false;
     if (status === "tier_review" && !row.tierIssues) return false;
+    if (status === "approval_queue" && !(!row.currentPrice || row.currentPrice + 0.005 < row.suggestedPrice || row.tierIssues > 0)) return false;
     return true;
   }).slice(0, DEFAULT_AUDIT_LIMIT);
 
@@ -362,10 +363,30 @@ export async function loader({ request }: { request: Request }) {
     healthy: filteredRows.filter((row: any) => row.currentMargin !== null && row.currentMargin >= row.targetMargin).length,
     costReview: filteredRows.filter((row: any) => row.cost?.costReviewNeeded).length,
     tierReview: filteredRows.filter((row: any) => row.tierIssues > 0).length,
+    priceQueue: filteredRows.filter((row: any) => !row.currentPrice || row.currentPrice + 0.005 < row.suggestedPrice || row.tierIssues > 0).length,
     avgCost: filteredRows.length ? filteredRows.reduce((sum: number, row: any) => sum + row.cost.total, 0) / filteredRows.length : 0,
   };
 
-  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, filters: { search, recipeId, status } });
+  const approvalRows = filteredRows
+    .filter((row: any) => !row.currentPrice || row.currentPrice + 0.005 < row.suggestedPrice || row.tierIssues > 0)
+    .slice(0, 50)
+    .map((row: any) => ({
+      id: row.rule.id,
+      productTitle: row.shopify?.product?.title || row.rule.shopifyProductGid || "Shopify product",
+      variantTitle: row.shopify?.title || ruleTitle(row.rule),
+      recipeName: row.recipe?.name,
+      currentPrice: row.currentPrice,
+      suggestedPrice: row.suggestedPrice,
+      targetMargin: row.targetMargin,
+      currentMargin: row.currentMargin,
+      delta: row.suggestedPrice - row.currentPrice,
+      estimatedCost: row.cost.total,
+      costReviewNeeded: row.cost.costReviewNeeded,
+      tierIssues: row.tierIssues,
+      action: !row.currentPrice ? "Add price" : row.currentPrice + 0.005 < row.suggestedPrice ? "Raise price" : row.tierIssues > 0 ? "Review tiers" : "No action",
+    }));
+
+  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, filters: { search, recipeId, status } });
 }
 
 function Badge({ tone, children }: { tone?: string; children: React.ReactNode }) {
@@ -373,7 +394,7 @@ function Badge({ tone, children }: { tone?: string; children: React.ReactNode })
 }
 
 export default function MarginReviewPage() {
-  const { recipes, rows, summary, filters } = useLoaderData<any>();
+  const { recipes, rows, summary, approvalRows, filters } = useLoaderData<any>();
 
   return (
     <div className="page">
@@ -415,6 +436,10 @@ export default function MarginReviewPage() {
         .tier-table table { font-size: 12px; }
         .tier-table th, .tier-table td { padding: 6px 8px; }
         .tier-note { margin-top: 6px; padding: 8px; border-radius: 8px; background: #f9fafb; color: #4b5563; font-size: 12px; }
+        .queue-note { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+        .queue-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+        .button.secondary { background: #e5e7eb; color: #111827; }
+        .button.disabled { opacity: 0.55; cursor: not-allowed; }
         @media (max-width: 900px) { .grid, .filters { grid-template-columns: 1fr; } }
       `}</style>
 
@@ -431,6 +456,7 @@ export default function MarginReviewPage() {
         <Badge tone="green">Read-only</Badge>
         <Badge tone="yellow">Clear cost breakdown</Badge>
         <Badge tone="yellow">Tier-aware review</Badge>
+        <Badge tone="yellow">Approval queue preview</Badge>
         <Badge tone="yellow">$0.15/side labor floor</Badge>
         <Badge tone="gray">Price update later</Badge>
       </section>
@@ -459,6 +485,7 @@ export default function MarginReviewPage() {
               <option value="no_price">No Shopify price found</option>
               <option value="cost_review">Cost review needed</option>
               <option value="tier_review">Tier below target</option>
+              <option value="approval_queue">Price approval candidates</option>
             </select>
           </div>
           <div><button type="submit">Run audit</button></div>
@@ -472,6 +499,52 @@ export default function MarginReviewPage() {
         <div className="stat"><span className="muted">Cost review</span><strong>{summary.costReview}</strong></div>
         <div className="stat"><span className="muted">Tier issues</span><strong>{summary.tierReview}</strong></div>
         <div className="stat"><span className="muted">Avg est. cost</span><strong>{money(summary.avgCost)}</strong></div>
+      </section>
+
+
+      <section className="card">
+        <h2 style={{ marginTop: 0 }}>Price Change Approval Queue Preview</h2>
+        <div className="queue-note">
+          <strong>Read-only queue.</strong> This panel lists variants that would need a price increase, a missing price, or tier review. It does not update Shopify yet. Cost review rows should stay on hold until the recipe cost is approved.
+        </div>
+        <div className="queue-actions">
+          <Badge tone={summary.priceQueue ? "yellow" : "green"}>{summary.priceQueue || 0} candidate row(s)</Badge>
+          <span className="button secondary disabled">Approve selected later</span>
+          <span className="button secondary disabled">Export queue later</span>
+          <span className="button secondary disabled">Update Shopify later</span>
+        </div>
+        {approvalRows?.length ? (
+          <table style={{ marginTop: 12 }}>
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Product / Variant</th>
+                <th>Recipe</th>
+                <th className="right">Cost</th>
+                <th className="right">Current</th>
+                <th className="right">Suggested</th>
+                <th className="right">Delta</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {approvalRows.map((row: any) => (
+                <tr key={`queue-${row.id}`}>
+                  <td><strong>{row.action}</strong></td>
+                  <td><strong>{row.productTitle}</strong><br /><span className="muted">{row.variantTitle}</span></td>
+                  <td>{row.recipeName}</td>
+                  <td className="right">{money(row.estimatedCost)}</td>
+                  <td className="right">{row.currentPrice ? money(row.currentPrice) : "No price"}</td>
+                  <td className="right"><strong>{money(row.suggestedPrice)}</strong></td>
+                  <td className="right">{money(row.delta)}</td>
+                  <td>{row.costReviewNeeded ? <Badge tone="yellow">hold: cost review</Badge> : null}{row.tierIssues ? <Badge tone="yellow">tier review</Badge> : null}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="muted" style={{ marginTop: 10 }}>No price increase candidates in the current filtered audit. Healthy rows may still appear below for review.</p>
+        )}
       </section>
 
       <section className="card">
@@ -588,9 +661,9 @@ export default function MarginReviewPage() {
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Next phase</h2>
         <p className="muted">This read-only audit now includes tier-aware cost recalculation. Next patches should add an approved price change queue and safe Shopify price updates.</p>
-        <Badge tone="green">v4 tier-aware review</Badge>
-        <Badge tone="gray">v5 price change queue</Badge>
-        <Badge tone="gray">v6 update Shopify prices</Badge>
+        <Badge tone="green">v5 approval queue preview</Badge>
+        <Badge tone="gray">v6 approval records</Badge>
+        <Badge tone="gray">v7 update Shopify prices</Badge>
       </section>
     </div>
   );
