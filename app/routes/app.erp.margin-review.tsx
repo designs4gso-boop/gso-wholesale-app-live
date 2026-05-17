@@ -86,9 +86,10 @@ function selectedZonesForRule(recipe: any, rule: any) {
   return { zones, frontZone, backZone, selected };
 }
 
-function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?: number) {
+function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?: number, assumptions: any = {}) {
   const qty = Math.max(1, Math.round(numberOr(quantityOverride, numberOr(recipe.defaultQuantity, numberOr(recipe.minQuantity, 1)))));
-  const laborRate = numberOr(recipe.laborRatePerHour, DEFAULT_SHOP_LABOR_RATE_PER_HOUR) || DEFAULT_SHOP_LABOR_RATE_PER_HOUR;
+  const laborRate = numberOr(assumptions.laborRatePerHour, numberOr(recipe.laborRatePerHour, DEFAULT_SHOP_LABOR_RATE_PER_HOUR)) || DEFAULT_SHOP_LABOR_RATE_PER_HOUR;
+  const sideLaborFloor = numberOr(assumptions.applicationLaborCostPerSide, DEFAULT_APPLICATION_LABOR_COST_PER_SIDE) || DEFAULT_APPLICATION_LABOR_COST_PER_SIDE;
   const rows = activeRows(recipe.materials || []);
 
   const materialLines = rows.map((row: any) => {
@@ -128,12 +129,12 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?
   const printedSides = Math.max(0, selected.length);
   const applicationSecondsPerUnit = selected.reduce((sum, item) => sum + numberOr(item.zone?.applicationSecondsPerLabel, 0) * Math.max(1, numberOr(item.zone?.qtyPerUnit, 1)), 0);
   const applicationLaborFromSeconds = (applicationSecondsPerUnit / 3600) * laborRate;
-  const applicationLaborFloor = printedSides ? printedSides * DEFAULT_APPLICATION_LABOR_COST_PER_SIDE : 0;
+  const applicationLaborFloor = printedSides ? printedSides * sideLaborFloor : 0;
   const applicationLaborCostPerUnit = Math.max(applicationLaborFromSeconds, applicationLaborFloor);
   const applicationLaborFloorApplied = applicationLaborCostPerUnit > applicationLaborFromSeconds + 0.00001;
   const applicationLaborLines = zoneLines.map((line: any) => {
     const secondsCost = (line.applicationSeconds / 3600) * laborRate;
-    const floorCost = DEFAULT_APPLICATION_LABOR_COST_PER_SIDE;
+    const floorCost = sideLaborFloor;
     const appliedCost = applicationLaborFloorApplied ? floorCost : secondsCost;
     return { ...line, secondsCost, floorCost, appliedCost };
   });
@@ -164,6 +165,7 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?
     applicationLaborCostPerUnit,
     applicationLaborLines,
     applicationLaborFloorApplied,
+    sideLaborFloor,
     packingLaborCostPerUnit,
     prepressLaborCostPerUnit,
     setupLaborCostPerUnit,
@@ -205,10 +207,10 @@ function tierLabel(tier: any) {
   return max ? `${min}-${max}` : `${min}+`;
 }
 
-function buildTierReview(recipe: any, rule: any, currentPrice: number) {
+function buildTierReview(recipe: any, rule: any, currentPrice: number, assumptions: any = {}) {
   return activeTiers(recipe).map((tier: any) => {
     const qty = Math.max(1, Math.round(numberOr(tier.minQty, recipe?.defaultQuantity || recipe?.minQuantity || 1)));
-    const tierCost = estimateRecipeVariantUnitCost(recipe, rule, qty);
+    const tierCost = estimateRecipeVariantUnitCost(recipe, rule, qty, assumptions);
     const tierTargetMargin = numberOr(tier.marginPct, numberOr(recipe?.targetMarginPct, 40));
     const suggestedPrice = priceForMargin(tierCost.total, tierTargetMargin);
     const fixedPrice = tier.fixedPrice === null || tier.fixedPrice === undefined ? null : numberOr(tier.fixedPrice, 0);
@@ -273,6 +275,11 @@ export async function loader({ request }: { request: Request }) {
   const search = String(url.searchParams.get("search") || "").trim();
   const recipeId = String(url.searchParams.get("recipeId") || "").trim();
   const status = String(url.searchParams.get("status") || "all");
+  const assumptions = {
+    laborRatePerHour: numberOr(url.searchParams.get("laborRatePerHour"), DEFAULT_SHOP_LABOR_RATE_PER_HOUR),
+    applicationLaborCostPerSide: numberOr(url.searchParams.get("applicationLaborCostPerSide"), DEFAULT_APPLICATION_LABOR_COST_PER_SIDE),
+    auditLimit: Math.min(600, Math.max(25, Math.round(numberOr(url.searchParams.get("auditLimit"), DEFAULT_AUDIT_LIMIT)))),
+  };
 
   const prisma: any = db;
 
@@ -309,7 +316,7 @@ export async function loader({ request }: { request: Request }) {
 
   const rows = linkedRules.map((rule: any) => {
     const recipe = recipeById.get(rule.recipeId) || {};
-    const cost = estimateRecipeVariantUnitCost(recipe, rule);
+    const cost = estimateRecipeVariantUnitCost(recipe, rule, undefined, assumptions);
     const shopify = variantMap.get(rule.shopifyVariantGid) || null;
     const currentPrice = numberOr(shopify?.price, 0);
     const targetMargin = numberOr(recipe.targetMarginPct, 40);
@@ -317,7 +324,7 @@ export async function loader({ request }: { request: Request }) {
     const currentMargin = safeMargin(currentPrice, cost.total);
     const delta = suggestedPrice - currentPrice;
     const statusInfo = statusForMargin(currentMargin, targetMargin);
-    const tierReview = buildTierReview(recipe, rule, currentPrice);
+    const tierReview = buildTierReview(recipe, rule, currentPrice, assumptions);
     const tierIssues = tierReview.filter((tier: any) => tier.auditMargin !== null && tier.auditMargin < tier.targetMargin).length;
     return {
       rule,
@@ -354,7 +361,7 @@ export async function loader({ request }: { request: Request }) {
     if (status === "tier_review" && !row.tierIssues) return false;
     if (status === "approval_queue" && !(!row.currentPrice || row.currentPrice + 0.005 < row.suggestedPrice || row.tierIssues > 0)) return false;
     return true;
-  }).slice(0, DEFAULT_AUDIT_LIMIT);
+  }).slice(0, assumptions.auditLimit);
 
   const summary = {
     rows: filteredRows.length,
@@ -386,7 +393,7 @@ export async function loader({ request }: { request: Request }) {
       action: !row.currentPrice ? "Add price" : row.currentPrice + 0.005 < row.suggestedPrice ? "Raise price" : row.tierIssues > 0 ? "Review tiers" : "No action",
     }));
 
-  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, filters: { search, recipeId, status } });
+  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, assumptions, filters: { search, recipeId, status } });
 }
 
 function Badge({ tone, children }: { tone?: string; children: React.ReactNode }) {
@@ -394,7 +401,7 @@ function Badge({ tone, children }: { tone?: string; children: React.ReactNode })
 }
 
 export default function MarginReviewPage() {
-  const { recipes, rows, summary, approvalRows, filters } = useLoaderData<any>();
+  const { recipes, rows, summary, approvalRows, filters, assumptions } = useLoaderData<any>();
 
   return (
     <div className="page">
@@ -437,10 +444,11 @@ export default function MarginReviewPage() {
         .tier-table th, .tier-table td { padding: 6px 8px; }
         .tier-note { margin-top: 6px; padding: 8px; border-radius: 8px; background: #f9fafb; color: #4b5563; font-size: 12px; }
         .queue-note { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+        .settings-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: end; }
         .queue-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
         .button.secondary { background: #e5e7eb; color: #111827; }
         .button.disabled { opacity: 0.55; cursor: not-allowed; }
-        @media (max-width: 900px) { .grid, .filters { grid-template-columns: 1fr; } }
+        @media (max-width: 900px) { .grid, .filters, .settings-grid { grid-template-columns: 1fr; } }
       `}</style>
 
       <section className="hero">
@@ -457,12 +465,39 @@ export default function MarginReviewPage() {
         <Badge tone="yellow">Clear cost breakdown</Badge>
         <Badge tone="yellow">Tier-aware review</Badge>
         <Badge tone="yellow">Approval queue preview</Badge>
-        <Badge tone="yellow">$0.15/side labor floor</Badge>
+        <Badge tone="yellow">Editable labor assumptions</Badge>
         <Badge tone="gray">Price update later</Badge>
       </section>
 
       <section className="card">
+        <h2 style={{ marginTop: 0 }}>Cost Assumption Settings</h2>
+        <p className="muted">Use this to test margin sensitivity before changing recipes. These are temporary audit overrides from the URL only; they do not update Product Setup yet.</p>
+        <Form method="get" className="settings-grid">
+          <input type="hidden" name="recipeId" value={filters.recipeId || ""} />
+          <input type="hidden" name="search" value={filters.search || ""} />
+          <input type="hidden" name="status" value={filters.status || "all"} />
+          <div>
+            <label>Shop labor rate / hour</label>
+            <input name="laborRatePerHour" type="number" step="0.01" min="0" defaultValue={assumptions.laborRatePerHour} />
+          </div>
+          <div>
+            <label>Application labor floor / printed side</label>
+            <input name="applicationLaborCostPerSide" type="number" step="0.01" min="0" defaultValue={assumptions.applicationLaborCostPerSide} />
+          </div>
+          <div>
+            <label>Audit row limit</label>
+            <input name="auditLimit" type="number" step="25" min="25" max="600" defaultValue={assumptions.auditLimit} />
+          </div>
+          <div><button type="submit">Apply assumptions</button></div>
+        </Form>
+        <p className="muted" style={{ marginTop: 8 }}>Current audit assumptions: {money(assumptions.laborRatePerHour)}/hr labor, {money(assumptions.applicationLaborCostPerSide)} per printed side floor, {assumptions.auditLimit} rows max.</p>
+      </section>
+
+      <section className="card">
         <Form method="get" className="filters">
+          <input type="hidden" name="laborRatePerHour" value={assumptions.laborRatePerHour} />
+          <input type="hidden" name="applicationLaborCostPerSide" value={assumptions.applicationLaborCostPerSide} />
+          <input type="hidden" name="auditLimit" value={assumptions.auditLimit} />
           <div>
             <label>Recipe</label>
             <select name="recipeId" defaultValue={filters.recipeId || ""}>
@@ -603,7 +638,7 @@ export default function MarginReviewPage() {
                       <div className="cost-line total"><span>Total estimated cost</span><strong>{money(row.cost.total)}</strong></div>
                       <div className="cost-line formula"><span>Suggested price formula</span><strong>cost ÷ (1 - target margin)</strong></div>
                     </div>
-                    {row.cost.applicationLaborFloorApplied ? <p className="muted warn">Labor floor applied because application seconds are lower than $0.15 per printed side.</p> : null}
+                    {row.cost.applicationLaborFloorApplied ? <p className="muted warn">Labor floor applied because application seconds are lower than the selected per-side labor floor.</p> : null}
                     {row.cost.missingBaseCost ? <p className="muted warn">No base/blank item detected in recipe material rows.</p> : null}
                     {row.cost.missingZones ? <p className="muted warn">No active label zones detected for this variant.</p> : null}
                   </details>
@@ -660,10 +695,10 @@ export default function MarginReviewPage() {
 
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Next phase</h2>
-        <p className="muted">This read-only audit now includes tier-aware cost recalculation. Next patches should add an approved price change queue and safe Shopify price updates.</p>
-        <Badge tone="green">v5 approval queue preview</Badge>
-        <Badge tone="gray">v6 approval records</Badge>
-        <Badge tone="gray">v7 update Shopify prices</Badge>
+        <p className="muted">This read-only audit now includes adjustable cost assumptions and tier-aware cost recalculation. Next patches should add approval records and safe Shopify price updates.</p>
+        <Badge tone="green">v6 cost assumptions</Badge>
+        <Badge tone="gray">v7 approval records</Badge>
+        <Badge tone="gray">v8 update Shopify prices</Badge>
       </section>
     </div>
   );
