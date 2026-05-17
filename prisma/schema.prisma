@@ -1314,3 +1314,18 @@ model ErpAdminSetting {
   @@index([category])
   @@index([key])
 }
+
+model MarginReviewSetting {
+  id                           String   @id @default(cuid())
+  shop                         String
+  laborRatePerHour             Float    @default(25)
+  applicationLaborFloorPerSide Float    @default(0.20)
+  auditRowLimit                Int      @default(150)
+  warningBandPct               Float    @default(5)
+  costReviewThresholdPct       Float    @default(0)
+  active                       Boolean  @default(true)
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+
+  @@index([shop])
+}
