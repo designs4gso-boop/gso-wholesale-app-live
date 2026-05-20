@@ -540,11 +540,12 @@ export async function loader({ request }: { request: Request }) {
   const url = new URL(request.url);
   const recipeStatus = url.searchParams.get("recipeStatus") || "active";
   const recipeSearch = (url.searchParams.get("recipeSearch") || "").trim();
-  const itemStatus = url.searchParams.get("itemStatus") || "active";
+  const selectedRecipeId = url.searchParams.get("recipeId") || "";
   const recipePage = Math.max(1, parseInt(url.searchParams.get("recipePage") || "1", 10) || 1);
-  const requestedLimit = Math.max(5, parseInt(url.searchParams.get("recipeLimit") || "25", 10) || 25);
-  const recipeLimit = Math.min(requestedLimit, 50);
+  const requestedLimit = Math.max(5, parseInt(url.searchParams.get("recipeLimit") || "15", 10) || 15);
+  const recipeLimit = Math.min(requestedLimit, 25);
   const recipeSkip = (recipePage - 1) * recipeLimit;
+
   const recipeWhere: any = { shop };
   if (recipeStatus === "active") recipeWhere.active = true;
   if (recipeStatus === "archived") recipeWhere.active = false;
@@ -556,45 +557,72 @@ export async function loader({ request }: { request: Request }) {
     ];
   }
 
-  const [templates, recipeCount, recipes, materials, machines] = await Promise.all([
-    db.productTypeProfile.findMany({ where: { shop }, orderBy: [{ active: "desc" }, { name: "asc" }] }),
+  const selectedWhere = selectedRecipeId ? { shop, id: selectedRecipeId } : null;
+
+  const [templates, recipeCount, recipeRows, selectedRecipe] = await Promise.all([
+    db.productTypeProfile.findMany({
+      where: { shop },
+      orderBy: [{ active: "desc" }, { name: "asc" }],
+      select: { id: true, name: true, key: true, productFamily: true, defaultMarginPct: true, active: true, productionMode: true },
+    }),
     db.productRecipe.count({ where: recipeWhere }),
     db.productRecipe.findMany({
       where: recipeWhere,
       orderBy: [{ active: "desc" }, { costReviewNeeded: "desc" }, { updatedAt: "desc" }],
       take: recipeLimit,
       skip: recipeSkip,
-      include: {
-        productTypeProfile: true,
-        materials: { include: { material: true }, orderBy: { createdAt: "asc" } },
-        labelZones: { include: { material: true, mediaOption: { include: { material: true } } }, orderBy: { createdAt: "asc" } },
-        mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
-        tiers: { orderBy: { minQty: "asc" } },
-        machineRules: { include: { preferredMachine: true } },
-        variantRules: { orderBy: [{ active: "desc" }, { name: "asc" }] },
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        productFamily: true,
+        productType: true,
+        productionMode: true,
+        targetMarginPct: true,
+        defaultSellPrice: true,
+        costReviewNeeded: true,
+        costReviewReasons: true,
+        costReviewSyncedAt: true,
+        costReviewSource: true,
+        active: true,
+        updatedAt: true,
+        productTypeProfile: { select: { id: true, name: true, defaultMarginPct: true, active: true } },
       },
     }),
-    db.material.findMany({ where: { shop, active: true, useInRecipes: true }, orderBy: { name: "asc" } }),
-    db.machine.findMany({ where: { shop, active: true }, orderBy: { name: "asc" } }),
+    selectedWhere
+      ? db.productRecipe.findFirst({
+          where: selectedWhere,
+          include: {
+            productTypeProfile: true,
+            materials: { include: { material: true }, orderBy: { createdAt: "asc" } },
+            labelZones: { include: { material: true, mediaOption: { include: { material: true } } }, orderBy: { createdAt: "asc" } },
+            mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
+            tiers: { orderBy: { minQty: "asc" } },
+            machineRules: { include: { preferredMachine: true } },
+            variantRules: { orderBy: [{ active: "desc" }, { name: "asc" }] },
+          },
+        })
+      : Promise.resolve(null),
   ]);
 
   const activeTemplates = templates.filter((template: any) => template.active);
   const recipeTotalPages = Math.max(1, Math.ceil(recipeCount / recipeLimit));
+
   return Response.json({
     templates,
     activeTemplates,
-    recipes,
-    materials,
-    machines,
+    recipes: recipeRows,
+    selectedRecipe,
+    selectedRecipeId,
     recipeStatus,
     recipeSearch,
-    itemStatus,
     recipeCount,
     recipePage,
     recipeLimit,
     recipeTotalPages,
     hasPrevRecipes: recipePage > 1,
     hasNextRecipes: recipePage < recipeTotalPages,
+    memorySafeMode: true,
   });
 }
 
@@ -1409,815 +1437,187 @@ function PageStyles() {
 }
 
 export default function ProductSetupRecipeBuilder() {
-  const productSearchResults: any[] = [];
   const {
-    templates,
-    activeTemplates,
-    recipes,
-    materials,
-    machines,
+    templates = [],
+    activeTemplates = [],
+    recipes = [],
+    selectedRecipe = null,
+    selectedRecipeId = "",
     recipeStatus = "active",
     recipeSearch = "",
-    itemStatus = "active",
     recipeCount = 0,
     recipePage = 1,
-    recipeLimit = 25,
+    recipeLimit = 15,
     recipeTotalPages = 1,
     hasPrevRecipes = false,
     hasNextRecipes = false,
+    memorySafeMode = true,
   } = useLoaderData<any>();
-  const recipeBaseQuery = `recipeStatus=${encodeURIComponent(recipeStatus)}&recipeSearch=${encodeURIComponent(recipeSearch)}&itemStatus=${encodeURIComponent(itemStatus)}&recipeLimit=${encodeURIComponent(String(recipeLimit))}`;
   const actionData = useActionData<any>();
-  const materialOptions = materials || [];
-  const machineOptions = machines || [];
-  const templateOptions = templates || [];
-  const activeTemplateOptions = activeTemplates || templateOptions.filter((template: any) => template.active);
+  const recipeBaseQuery = `recipeStatus=${encodeURIComponent(recipeStatus)}&recipeSearch=${encodeURIComponent(recipeSearch)}&recipeLimit=${encodeURIComponent(String(recipeLimit))}`;
+
+  function recipeHref(recipeId: string) {
+    return `/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage}&recipeId=${encodeURIComponent(recipeId)}`;
+  }
 
   return (
     <div className="erp-page">
       <PageStyles />
       <div className="hero">
         <h1>Product Setup / Recipe Builder</h1>
-        <p>Build reusable product recipes, assign category pricing templates, preview tier profitability, and keep quotes simple.</p>
+        <p>512MB-safe recipe control center. Recipes load as a light list first; full details load only after selecting one recipe.</p>
       </div>
 
       {actionData?.message ? <div className="card"><span className={actionData.ok ? "badge green" : "badge red"}>{actionData.message}</span></div> : null}
 
       <div className="card">
-        <h2>Clean pricing workflow</h2>
-        <p className="muted">Use category templates for normal tier pricing. Use custom product tiers only when a specific item truly needs special pricing. Material cost changes will be handled later in Margin Review / Price Audit.</p>
-        <div>
-          <span className="badge green">Templates = pricing rules</span>
-          <span className="badge">Recipes = how product is made</span>
-          <span className="badge yellow">Margin Review = update Shopify prices later</span>
-        </div>
-      </div>
-
-      <div className="grid">
-        <div className="card">
-          <h2>Pricing Templates</h2>
-          <p className="muted">Use templates for category-level tiered pricing. Most products should use a template instead of custom tiers.</p>
-          <div className="button-row">
-            <Form method="post">
-              <input type="hidden" name="intent" value="seedTemplates" />
-              <button type="submit">Create / refresh approved templates</button>
-            </Form>
-            <Form method="post">
-              <input type="hidden" name="intent" value="cleanupTemplates" />
-              <button type="submit" className="secondary">Archive duplicates / old categories</button>
-            </Form>
-          </div>
-          <p className="muted">Approved templates: Labels, Sticker Bags, DTP Bags, Boxes, and DTF / Apparel. Stock Bags should use Sticker Bags; sourced work is handled by Production Mode, not a family.</p>
-          <details open>
-            <summary>Add pricing template</summary>
-            <Form method="post" className="form-grid">
-              <input type="hidden" name="intent" value="createTemplate" />
-              <NativeInput label="Template name" name="name" placeholder="Sticker Bags Pricing Template" />
-              <NativeSelect label="Product family" name="family" defaultValue="Sticker Bags">
-                {PRODUCT_FAMILIES.map((family) => <option key={family} value={family}>{family}</option>)}
-              </NativeSelect>
-              <NativeSelect label="Production mode" name="productionMode" defaultValue="in_house">
-                {PRODUCTION_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
-              </NativeSelect>
-              <NativeInput label="MOQ" name="minQuantity" type="number" defaultValue="64" />
-              <NativeInput label="Default qty" name="defaultQuantity" type="number" defaultValue="250" />
-              <NativeInput label="Default margin %" name="defaultMarginPct" type="number" step="0.01" defaultValue="60" />
-              <NativeTextarea label="Tier rows" name="tiers" rows={7} defaultValue={"64-199: 70%\n200-499: 65%\n500-999: 60%\n1000-2499: 55%\n2500+: 50%"} />
-              <NativeTextarea label="Notes" name="notes" />
-              <div className="button-row wide"><button type="submit">Save template</button></div>
-            </Form>
-          </details>
-        </div>
-
-        <div className="card">
-          <h2>Create Product Recipe</h2>
-          <p className="muted">Use this for existing Shopify products, new manual products, or reusable products created from quotes later.</p>
-          <Form method="post" className="form-grid">
-            <input type="hidden" name="intent" value="createRecipe" />
-            <NativeInput label="Recipe / product name" name="name" placeholder="4x5 Sticker Bag" />
-            <NativeInput label="SKU / internal code" name="sku" />
-            <NativeSelect label="Product family" name="productFamily" defaultValue="Sticker Bags">
-              {PRODUCT_FAMILIES.map((family) => <option key={family} value={family}>{family}</option>)}
-            </NativeSelect>
-            <NativeSelect label="Pricing template" name="templateId">
-              <option value="">No template / custom</option>
-              {activeTemplateOptions.map((template: any) => <option key={template.id} value={template.id}>{template.name}</option>)}
-            </NativeSelect>
-            <NativeSelect label="Pricing mode" name="pricingTemplateMode" defaultValue="template">
-              <option value="template">Use category template</option>
-              <option value="custom">Custom product tiers</option>
-            </NativeSelect>
-            <NativeSelect label="Production mode" name="productionMode" defaultValue="in_house">
-              {PRODUCTION_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
-            </NativeSelect>
-            <NativeSelect label="Machine" name="machineId">
-              <option value="">None / choose later</option>
-              {machineOptions.map((machine: any) => <option key={machine.id} value={machine.id}>{machine.name}</option>)}
-            </NativeSelect>
-            <NativeInput label="Shopify Product GID" name="productGid" placeholder="optional" />
-            <NativeInput label="Shopify Variant GID" name="variantGid" placeholder="optional" />
-            <NativeInput label="MOQ" name="minQuantity" type="number" defaultValue="64" />
-            <NativeInput label="Default qty" name="defaultQuantity" type="number" defaultValue="250" />
-            <NativeInput label="Target margin %" name="targetMarginPct" type="number" step="0.01" defaultValue="60" />
-            <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue="15" />
-            <NativeInput label="Setup cost / job" name="setupCost" type="number" step="0.01" defaultValue="0" />
-            <NativeInput label="Setup labor min / job" name="laborMinutes" type="number" step="0.01" defaultValue="0" />
-            <NativeInput label="Prepress min / job" name="prepressMinutes" type="number" step="0.01" defaultValue="0" />
-            <input type="hidden" name="applicationLaborSecondsPerUnit" value="0" />
-            <NativeInput label="Packing sec / unit" name="packingLaborSecondsPerUnit" type="number" step="0.01" defaultValue="0" />
-            <p className="muted wide">Application labor is entered on label/application zones. This prevents double-counting front/back/lid labels.</p>
-            <label className="field"><span>Use in quotes</span><input type="checkbox" name="useInQuotes" defaultChecked /></label>
-            <label className="field"><span>Cost review needed</span><input type="checkbox" name="costReviewNeeded" /></label>
-            <NativeTextarea label="Notes" name="notes" />
-            <div className="button-row wide"><button type="submit">Create recipe</button></div>
-          </Form>
-        </div>
+        <h2>Memory-safe mode is active</h2>
+        <p className="muted">
+          This page is optimized for the current 512MB Render server. It avoids loading every recipe, material, media option, rule, and tier at once.
+        </p>
+        <span className="badge green">512MB safe</span>
+        <span className="badge">{recipeCount} recipe(s)</span>
+        <span className="badge">{recipeLimit} per page max</span>
+        <span className="badge yellow">Shopify updates still locked</span>
       </div>
 
       <div className="card">
-        <h2>Saved Pricing Templates</h2>
-        {templateOptions.length ? templateOptions.map((template: any) => {
-          const tiers = parseTiers(template.tierTemplate);
-          return (
-            <details key={template.id}>
-              <summary>{template.name} {template.active ? <span className="badge green">Active</span> : <span className="badge red">Archived</span>}</summary>
-              <Form method="post" className="form-grid">
-                <input type="hidden" name="intent" value="updateTemplate" />
-                <input type="hidden" name="templateId" value={template.id} />
-                <NativeInput label="Template name" name="name" defaultValue={template.name} />
-                <NativeSelect label="Production mode" name="productionMode" defaultValue={template.productionMode}>
-                  {PRODUCTION_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
-                </NativeSelect>
-                <NativeInput label="MOQ" name="minQuantity" type="number" defaultValue={template.minQuantity} />
-                <NativeInput label="Default qty" name="defaultQuantity" type="number" defaultValue={template.defaultQuantity} />
-                <NativeInput label="Default margin %" name="defaultMarginPct" type="number" step="0.01" defaultValue={template.defaultMarginPct} />
-                <NativeTextarea label="Tier rows" name="tiers" rows={7} defaultValue={tiersToText(tiers)} />
-                <NativeTextarea label="Notes" name="notes" defaultValue={template.notes || ""} />
-                <div className="button-row wide">
-                  <button type="submit">Save template</button>
-                </div>
-              </Form>
-              <div className="button-row">
-                {template.active ? <Form method="post">
-                  <input type="hidden" name="intent" value="archiveTemplate" />
-                  <input type="hidden" name="templateId" value={template.id} />
-                  <button type="submit" className="danger">Archive template</button>
-                </Form> : <Form method="post">
-                  <input type="hidden" name="intent" value="restoreTemplate" />
-                  <input type="hidden" name="templateId" value={template.id} />
-                  <button type="submit" className="secondary">Restore template</button>
-                </Form>}
-                <Form method="post">
-                  <input type="hidden" name="intent" value="deleteTemplate" />
-                  <input type="hidden" name="templateId" value={template.id} />
-                  <button type="submit" className="danger">Delete Forever if unused</button>
-                </Form>
-              </div>
-            </details>
-          );
-        }) : <p className="muted">No pricing templates yet. Click Create default templates.</p>}
+        <h2>Create Product Recipe</h2>
+        <p className="muted">Use this for new recipe shells. Open a recipe later to attach materials, zones, tiers, and rules.</p>
+        <Form method="post" className="form-grid">
+          <input type="hidden" name="intent" value="createRecipe" />
+          <NativeInput label="Recipe / product name" name="name" placeholder="4x5 Sticker Bag" />
+          <NativeInput label="SKU / internal code" name="sku" placeholder="STICKER-BAG-4X5" />
+          <NativeSelect label="Product family" name="productFamily" defaultValue="Sticker Bags">
+            {PRODUCT_FAMILIES.map((family) => <option key={family} value={family}>{family}</option>)}
+          </NativeSelect>
+          <NativeSelect label="Pricing template" name="productTypeProfileId">
+            <option value="">No template yet</option>
+            {(activeTemplates || templates).map((template: any) => <option key={template.id} value={template.id}>{template.name}</option>)}
+          </NativeSelect>
+          <NativeInput label="Target margin %" name="targetMarginPct" type="number" step="0.01" defaultValue="60" />
+          <NativeInput label="Default sell price" name="defaultSellPrice" type="number" step="0.01" placeholder="1.90" />
+          <div className="wide button-row"><button type="submit">Create recipe</button></div>
+        </Form>
       </div>
 
       <div className="card">
         <h2>Product Recipes</h2>
-        <p className="muted">Recipe cost preview is a working estimate. It uses material unit costs, waste, labor assumptions, setup cost, and target margins.</p>
-        <Form method="get" className="form-grid" style={{ marginTop: 10, marginBottom: 12 }}>
+        <p className="muted">Open one recipe at a time. Cost review flags from Margin Review will show here with reason details.</p>
+        <Form method="get" className="form-grid">
           <NativeSelect label="Recipe status" name="recipeStatus" defaultValue={recipeStatus}>
-            <option value="active">Active recipes only</option>
-            <option value="archived">Archived recipes only</option>
+            <option value="active">Active recipes</option>
+            <option value="archived">Archived recipes</option>
             <option value="all">All recipes</option>
           </NativeSelect>
-          <NativeInput label="Search recipes" name="recipeSearch" defaultValue={recipeSearch} placeholder="4x5, label, jar, SKU" />
-          <NativeSelect label="Recipe item rows" name="itemStatus" defaultValue={itemStatus}>
-            <option value="active">Active items only</option>
-            <option value="hidden">Hidden/archived items only</option>
-            <option value="all">All items</option>
-          </NativeSelect>
+          <NativeInput label="Search recipes" name="recipeSearch" defaultValue={recipeSearch} placeholder="name, SKU, family" />
           <NativeSelect label="Recipes per page" name="recipeLimit" defaultValue={String(recipeLimit)}>
-            <option value="10">10 recipes</option>
-            <option value="25">25 recipes</option>
-            <option value="50">50 recipes max</option>
+            <option value="10">10</option>
+            <option value="15">15</option>
+            <option value="25">25 max</option>
           </NativeSelect>
           <input type="hidden" name="recipePage" value="1" />
-          <div className="button-row" style={{ alignItems: "end" }}>
-            <button type="submit" className="secondary">Apply filter</button>
-            <a className="secondary" href="/app/erp/product-setup">Reset</a>
-          </div>
+          <div className="field"><span>&nbsp;</span><button type="submit">Search recipes</button></div>
         </Form>
-        <div className="button-row" style={{ marginTop: 0, marginBottom: 10 }}>
-          <span className="badge">Showing {recipes.length} of {recipeCount} recipe(s)</span>
+        <div className="button-row">
+          <span className="badge">Showing {recipes.length} of {recipeCount}</span>
           <span className="badge">Page {recipePage} of {recipeTotalPages}</span>
-          {hasPrevRecipes ? <a className="secondary" href={`/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage - 1}`}>Previous recipes</a> : null}
-          {hasNextRecipes ? <a className="secondary" href={`/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage + 1}`}>Next recipes</a> : null}
+          {hasPrevRecipes ? <a className="button secondary" href={`/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage - 1}`}>Previous recipes</a> : null}
+          {hasNextRecipes ? <a className="button secondary" href={`/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage + 1}`}>Next recipes</a> : null}
         </div>
-        <p className="muted">Memory-safe mode is on: Product Setup now loads recipes in pages instead of loading every recipe and every recipe detail at once. Archived recipes are hidden by default. Hidden media options, zones, and material rows are also hidden by default. Use the item row filter to restore or permanently delete hidden/duplicate items.</p>
-        {recipes.length ? recipes.map((recipe: any) => {
-          const estimate = estimateRecipe(recipe);
-          const templateTiers = recipe.pricingTemplateMode === "template" ? parseTiers(recipe.productTypeProfile?.tierTemplate) : [];
-          const activeTiers = recipe.tiers?.length ? recipe.tiers : templateTiers;
-          const machineId = recipe.machineRules?.[0]?.preferredMachineId || "";
-          const visibleMediaOptions = (recipe.mediaOptions || []).filter((option: any) => itemStatus === "all" ? true : itemStatus === "hidden" ? option.active === false : option.active !== false);
-          const visibleLabelZones = (recipe.labelZones || []).filter((zone: any) => itemStatus === "all" ? true : itemStatus === "hidden" ? zone.active === false : zone.active !== false);
-          const visibleRecipeMaterials = (recipe.materials || []).filter((row: any) => itemStatus === "all" ? true : itemStatus === "hidden" ? row.active === false : row.active !== false);
-          return (
-            <details key={recipe.id} open={false}>
-              <summary>
-                {recipe.name} <span className="badge">{recipe.productFamily || recipe.productType}</span>
-                {recipe.active ? <span className="badge green">Active</span> : <span className="badge red">Archived</span>}
-                {recipe.useInQuotes ? <span className="badge green">Use in Quotes</span> : <span className="badge yellow">Hidden</span>}
-                {recipe.costReviewNeeded ? <span className="badge red">Cost Review</span> : null}
-              </summary>
 
-              {recipe.costReviewNeeded ? (
-                <div className="cost-review-panel">
-                  <strong>Cost Review Needed</strong>
-                  <p className="muted">Fix these recipe setup issues before approving price changes or updating Shopify.</p>
-                  {costReviewReasonList(recipe).length ? (
-                    <ul>
-                      {costReviewReasonList(recipe).map((reason: string) => <li key={reason}>{reason}</li>)}
-                    </ul>
-                  ) : (
-                    <p className="muted">No reason details saved yet. Run Margin Review, then click Sync recipe review flags.</p>
-                  )}
-                  {recipe.costReviewSyncedAt ? <p className="muted">Last synced from Margin Review: {shortDateTime(recipe.costReviewSyncedAt)}</p> : null}
-                </div>
-              ) : null}
-
-              <div className="grid" style={{ marginTop: 12 }}>
-                <div>
-                  <h3>Recipe Details</h3>
-                  <Form method="post" className="form-grid">
-                    <input type="hidden" name="intent" value="updateRecipe" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <NativeInput label="Recipe / product name" name="name" defaultValue={recipe.name} />
-                    <NativeInput label="SKU / internal code" name="sku" defaultValue={recipe.sku || ""} />
-                    <NativeSelect label="Product family" name="productFamily" defaultValue={recipe.productFamily || "Labels"}>
-                      {PRODUCT_FAMILIES.map((family) => <option key={family} value={family}>{family}</option>)}
-                    </NativeSelect>
-                    <NativeSelect label="Pricing template" name="templateId" defaultValue={recipe.productTypeProfileId || ""}>
-                      <option value="">No template / custom</option>
-                      {activeTemplateOptions.map((template: any) => <option key={template.id} value={template.id}>{template.name}</option>)}
-                    </NativeSelect>
-                    <NativeSelect label="Pricing mode" name="pricingTemplateMode" defaultValue={recipe.pricingTemplateMode || "template"}>
-                      <option value="template">Use category template</option>
-                      <option value="custom">Custom product tiers</option>
-                    </NativeSelect>
-                    <NativeSelect label="Production mode" name="productionMode" defaultValue={recipe.productionMode || "in_house"}>
-                      {PRODUCTION_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
-                    </NativeSelect>
-                    <NativeSelect label="Machine" name="machineId" defaultValue={machineId}>
-                      <option value="">None / choose later</option>
-                      {machineOptions.map((machine: any) => <option key={machine.id} value={machine.id}>{machine.name}</option>)}
-                    </NativeSelect>
-                    <NativeInput label="Shopify Product GID" name="productGid" defaultValue={recipe.productGid || ""} />
-                    <NativeInput label="Shopify Variant GID" name="variantGid" defaultValue={recipe.variantGid || ""} />
-                    <NativeInput label="MOQ" name="minQuantity" type="number" defaultValue={recipe.minQuantity} />
-                    <NativeInput label="Default qty" name="defaultQuantity" type="number" defaultValue={recipe.defaultQuantity} />
-                    <NativeInput label="Target margin %" name="targetMarginPct" type="number" step="0.01" defaultValue={recipe.targetMarginPct} />
-                    <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue={recipe.wastePct} />
-                    <NativeInput label="Setup cost / job" name="setupCost" type="number" step="0.01" defaultValue={recipe.setupCost} />
-                    <NativeInput label="Setup labor min / job" name="laborMinutes" type="number" step="0.01" defaultValue={recipe.laborMinutes} />
-                    <NativeInput label="Prepress min / job" name="prepressMinutes" type="number" step="0.01" defaultValue={recipe.prepressMinutes} />
-                    <input type="hidden" name="applicationLaborSecondsPerUnit" value="0" />
-                    <NativeInput label="Packing sec / unit" name="packingLaborSecondsPerUnit" type="number" step="0.01" defaultValue={recipe.packingLaborSecondsPerUnit} />
-                    <p className="muted wide">Application labor comes from active label/application zones. Recipe-level application seconds are hidden and ignored when zones exist.</p>
-                    <label className="field"><span>Use in quotes</span><input type="checkbox" name="useInQuotes" defaultChecked={recipe.useInQuotes} /></label>
-                    <label className="field"><span>Cost review needed</span><input type="checkbox" name="costReviewNeeded" defaultChecked={recipe.costReviewNeeded} /></label>
-                    <NativeTextarea label="Notes" name="notes" defaultValue={recipe.notes || ""} />
-                    <div className="button-row wide"><button type="submit">Save recipe</button></div>
-                  </Form>
-
-                  <div className="button-row">
-                    {recipe.active ? <Form method="post">
-                      <input type="hidden" name="intent" value="archiveRecipe" />
-                      <input type="hidden" name="recipeId" value={recipe.id} />
-                      <button type="submit" className="danger">Archive recipe</button>
-                    </Form> : <Form method="post">
-                      <input type="hidden" name="intent" value="restoreRecipe" />
-                      <input type="hidden" name="recipeId" value={recipe.id} />
-                      <button type="submit" className="secondary">Restore recipe</button>
-                    </Form>}
-                    <Form method="post">
-                      <input type="hidden" name="intent" value="deleteRecipeForever" />
-                      <input type="hidden" name="recipeId" value={recipe.id} />
-                      <button type="submit" className="danger">Delete forever</button>
-                    </Form>
-                  </div>
-                </div>
-
-                <div>
-                  <h3>Cost + Tier Preview</h3>
-                  <p><strong>Default quantity:</strong> {estimate.qty}</p>
-                  <p><strong>Material cost/unit:</strong> {money(estimate.materialCostPerUnit)}</p>
-                  <p><strong>Manual material rows:</strong> {money(estimate.materialRowCostPerUnit || 0)}</p>
-                  <p><strong>Label zone media:</strong> {money(estimate.labelMediaCostPerUnit || 0)} | {(estimate.labelSqftPerUnit || 0).toFixed(4)} sqft/unit</p>
-                  <p><strong>Label application time:</strong> {(estimate.labelApplicationSecondsPerUnit || 0).toFixed(1)} sec/unit</p>
-                  <p><strong>Labor cost/unit:</strong> {money(estimate.perUnitLaborCost + estimate.perJobLaborCost)}</p>
-                  <p><strong>Setup cost/unit:</strong> {money(estimate.setupCostPerUnit)}</p>
-                  <p><strong>Estimated total cost/unit:</strong> {money(estimate.unitCostTotal)}</p>
-                  <p><strong>Suggested price at target margin:</strong> {money(estimate.suggestedPrice)}</p>
-
-                  <table>
-                    <thead><tr><th>Tier</th><th>Margin/Price</th><th>Suggested unit price</th><th>Profit/unit</th></tr></thead>
-                    <tbody>
-                      {(activeTiers || []).map((tier: any, index: number) => {
-                        const margin = tier.marginPct ?? recipe.targetMarginPct;
-                        const price = tier.fixedPrice || priceFromMargin(estimate.unitCostTotal, Number(margin || 0));
-                        return <tr key={index}>
-                          <td>{tier.maxQty ? `${tier.minQty}-${tier.maxQty}` : `${tier.minQty}+`}</td>
-                          <td>{tier.fixedPrice ? money(tier.fixedPrice) : pct(margin)}</td>
-                          <td>{money(price)}</td>
-                          <td>{money(Number(price) - estimate.unitCostTotal)}</td>
-                        </tr>;
-                      })}
-                    </tbody>
-                  </table>
-
-                  <Form method="post" className="button-row">
-                    <input type="hidden" name="intent" value="syncTiersFromTemplate" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <button type="submit" className="secondary">Sync tiers from template</button>
-                  </Form>
-
-                  <details>
-                    <summary>Custom tiers for this recipe</summary>
-                    <Form method="post" className="form-grid">
-                      <input type="hidden" name="intent" value="saveCustomTiers" />
-                      <input type="hidden" name="recipeId" value={recipe.id} />
-                      <input type="hidden" name="targetMarginPct" value={recipe.targetMarginPct} />
-                      <NativeTextarea label="Tier rows" name="tiers" rows={7} defaultValue={tiersToText(recipe.tiers)} />
-                      <div className="button-row wide"><button type="submit">Save custom tiers</button></div>
-                    </Form>
-                  </details>
-                </div>
-              </div>
-
-              <div className="card" style={{ marginTop: 12 }}>
-                <h3>Media Options</h3>
-                <p className="muted">Use media options when a recipe can be quoted with different label media like matte, gloss, or holographic. Pricing comes automatically from the selected material cost per sqft; Premium is a badge only.</p>
-                {visibleMediaOptions.length ? <table>
-                  <thead><tr><th>Option</th><th>Material</th><th>Badges</th><th>Status</th><th></th></tr></thead>
-                  <tbody>
-                    {visibleMediaOptions.map((option: any) => <tr key={option.id}>
-                      <td><strong>{option.name}</strong><br /><span className="muted">{option.defaultOption ? "Default" : ""} {option.premiumOption ? "Premium" : ""}</span></td>
-                      <td>{option.material?.name}<br /><span className="muted">{money(unitCost(option.material))}/{option.material?.recipeBaseUnit || option.material?.baseUnit || "unit"}</span></td>
-                      <td>{option.premiumOption ? <span className="badge yellow">Premium</span> : <span className="muted">Standard</span>}</td>
-                      <td><span className={option.active ? "badge green" : "badge yellow"}>{option.active ? "Active" : "Archived"}</span></td>
-                      <td>
-                        <details>
-                          <summary>Edit</summary>
-                          <Form method="post" className="form-grid">
-                            <input type="hidden" name="intent" value="updateMediaOption" />
-                            <input type="hidden" name="recipeId" value={recipe.id} />
-                            <input type="hidden" name="mediaOptionId" value={option.id} />
-                            <NativeInput label="Option name" name="name" defaultValue={option.name} />
-                            <NativeSelect label="Material" name="materialId" defaultValue={option.materialId}>
-                              {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
-                            </NativeSelect>
-                            <label className="field"><span>Default option</span><input type="checkbox" name="defaultOption" defaultChecked={option.defaultOption} /></label>
-                            <label className="field"><span>Premium badge</span><input type="checkbox" name="premiumOption" defaultChecked={option.premiumOption} /></label>
-                            <label className="field"><span>Active</span><input type="checkbox" name="active" defaultChecked={option.active} /></label>
-                            <NativeTextarea label="Notes" name="notes" defaultValue={option.notes || ""} />
-                            <div className="button-row wide"><button type="submit">Save media option</button></div>
-                          </Form>
-                        </details>
-                        <div className="button-row">
-                          <Form method="post">
-                            <input type="hidden" name="intent" value={option.active ? "archiveMediaOption" : "restoreMediaOption"} />
-                            <input type="hidden" name="mediaOptionId" value={option.id} />
-                            <button type="submit" className="secondary">{option.active ? "Archive" : "Restore"}</button>
-                          </Form>
-                          <Form method="post">
-                            <input type="hidden" name="intent" value="deleteMediaOption" />
-                            <input type="hidden" name="mediaOptionId" value={option.id} />
-                            <button type="submit" className="danger">Delete if unused</button>
-                          </Form>
-                          <Form method="post">
-                            <input type="hidden" name="intent" value="deleteMediaOptionForever" />
-                            <input type="hidden" name="mediaOptionId" value={option.id} />
-                            <button type="submit" className="danger">Delete forever</button>
-                          </Form>
-                        </div>
-                      </td>
-                    </tr>)}
-                  </tbody>
-                </table> : <p className="muted">No media options match this item filter. Switch item rows to All/Hidden or add a new media option.</p>}
-
-                <div className="button-row">
-                  <Form method="post">
-                    <input type="hidden" name="intent" value="cleanupDuplicateMediaOptions" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <button type="submit" className="secondary">Delete duplicate media options</button>
-                  </Form>
-                  <Form method="post">
-                    <input type="hidden" name="intent" value="cleanupAllRecipeDuplicates" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <button type="submit" className="secondary">Clean all duplicate recipe items</button>
-                  </Form>
-                </div>
-
-                <details>
-                  <summary>Add media option</summary>
-                  <Form method="post" className="form-grid">
-                    <input type="hidden" name="intent" value="addMediaOption" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <NativeInput label="Option name" name="name" placeholder="Matte" />
-                    <NativeSelect label="Material" name="materialId">
-                      {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
-                    </NativeSelect>
-                    <label className="field"><span>Default option</span><input type="checkbox" name="defaultOption" /></label>
-                    <label className="field"><span>Premium option</span><input type="checkbox" name="premiumOption" /></label>
-                    <NativeTextarea label="Notes" name="notes" placeholder="Example: standard matte media, premium holographic media, check stock before quoting" />
-                    <div className="button-row wide"><button type="submit">Add media option</button></div>
-                  </Form>
-                </details>
-              </div>
-
-              <div className="card" style={{ marginTop: 12 }}>
-                <h3>Application / Label Zones</h3>
-                <p className="muted">Use zones for sticker bags, jars, boxes, and any product with one or more applied labels. Each zone auto-calculates sqft and application labor.</p>
-                {visibleLabelZones.length ? <table>
-                  <thead><tr><th>Zone</th><th>Size</th><th>Qty</th><th>Material</th><th>Area/unit</th><th>Apply time</th><th></th></tr></thead>
-                  <tbody>
-                    {visibleLabelZones.map((zone: any) => <tr key={zone.id}>
-                      <td><strong>{zone.name}</strong><br /><span className="muted">{zone.position} {zone.required ? "| required" : "| optional"} {zone.active === false ? "| hidden" : ""}</span></td>
-                      <td>{zone.widthIn} in x {zone.heightIn} in</td>
-                      <td>{zone.qtyPerUnit}</td>
-                      <td>{mediaLabelForZone(zone, recipe.labelZones || [])}<br /><span className="muted">{materialForZone(zone, recipe.labelZones || [])?.name || ""}</span></td>
-                      <td>{zoneSqft(zone).toFixed(4)} sqft</td>
-                      <td>{(Number(zone.applicationSecondsPerLabel || 0) * Number(zone.qtyPerUnit || 1)).toFixed(1)} sec/unit</td>
-                      <td>
-                        <details>
-                          <summary>Edit zone</summary>
-                          <Form method="post" className="form-grid">
-                            <input type="hidden" name="intent" value="updateLabelZone" />
-                            <input type="hidden" name="zoneId" value={zone.id} />
-                            <NativeInput label="Zone name" name="name" defaultValue={zone.name} />
-                            <NativeSelect label="Position" name="position" defaultValue={zone.position || "Front"}>
-                              <option value="Front">Front</option>
-                              <option value="Back">Back</option>
-                              <option value="Lid">Lid</option>
-                              <option value="Side">Side</option>
-                              <option value="Bottom">Bottom</option>
-                              <option value="Custom">Custom</option>
-                            </NativeSelect>
-                            <NativeInput label="Width inches" name="widthIn" type="number" step="0.0001" defaultValue={zone.widthIn} />
-                            <NativeInput label="Height inches" name="heightIn" type="number" step="0.0001" defaultValue={zone.heightIn} />
-                            <NativeInput label="Qty per finished item" name="qtyPerUnit" type="number" step="0.0001" defaultValue={zone.qtyPerUnit} />
-                            <NativeInput label="Application sec per label" name="applicationSecondsPerLabel" type="number" step="0.01" defaultValue={zone.applicationSecondsPerLabel} />
-                            <NativeSelect label="Media mode" name="mediaMode" defaultValue={zone.mediaMode || "fixed"}>
-                              <option value="fixed">Fixed material</option>
-                              <option value="media_option">Selectable media option</option>
-                              <option value="same_as_zone">Same as another zone</option>
-                            </NativeSelect>
-                            <NativeSelect label="Fixed material" name="materialId" defaultValue={zone.materialId || ""}>
-                              <option value="">No fixed material</option>
-                              {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
-                            </NativeSelect>
-                            <NativeSelect label="Media option" name="mediaOptionId" defaultValue={zone.mediaOptionId || ""}>
-                              <option value="">No media option</option>
-                              {(recipe.mediaOptions || []).filter((option: any) => option.active || option.id === zone.mediaOptionId).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
-                            </NativeSelect>
-                            <NativeSelect label="Same as zone" name="sameAsZoneId" defaultValue={zone.sameAsZoneId || ""}>
-                              <option value="">Auto / front zone</option>
-                              {(recipe.labelZones || []).filter((candidate: any) => candidate.id !== zone.id).map((candidate: any) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
-                            </NativeSelect>
-                            <label className="field"><span>Required</span><input type="checkbox" name="required" defaultChecked={zone.required} /></label>
-                            <label className="field"><span>Active</span><input type="checkbox" name="active" defaultChecked={zone.active !== false} /></label>
-                            <NativeTextarea label="Notes" name="notes" defaultValue={zone.notes || ""} />
-                            <div className="button-row wide"><button type="submit">Save zone</button></div>
-                          </Form>
-                        </details>
-                        <div className="button-row">
-                          <Form method="post">
-                            <input type="hidden" name="intent" value="duplicateLabelZone" />
-                            <input type="hidden" name="zoneId" value={zone.id} />
-                            <button type="submit" className="secondary">Duplicate</button>
-                          </Form>
-                          <Form method="post">
-                            <input type="hidden" name="intent" value={zone.active === false ? "restoreLabelZone" : "archiveLabelZone"} />
-                            <input type="hidden" name="zoneId" value={zone.id} />
-                            <button type="submit" className="secondary">{zone.active === false ? "Restore" : "Hide"}</button>
-                          </Form>
-                          <Form method="post">
-                            <input type="hidden" name="intent" value="deleteLabelZone" />
-                            <input type="hidden" name="zoneId" value={zone.id} />
-                            <button type="submit" className="danger">Delete forever</button>
-                          </Form>
-                        </div>
-                      </td>
-                    </tr>)}
-                  </tbody>
-                </table> : <p className="muted">No label/application zones match this item filter. Switch item rows to All/Hidden or add a zone.</p>}
-
-                <div className="button-row">
-                  <Form method="post">
-                    <input type="hidden" name="intent" value="cleanupDuplicateLabelZones" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <button type="submit" className="secondary">Delete duplicate label zones</button>
-                  </Form>
-                </div>
-
-                <details>
-                  <summary>Add label/application zone</summary>
-                  <Form method="post" className="form-grid">
-                    <input type="hidden" name="intent" value="addLabelZone" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <NativeInput label="Zone name" name="name" placeholder="Front label" />
-                    <NativeSelect label="Position" name="position" defaultValue="Front">
-                      <option value="Front">Front</option>
-                      <option value="Back">Back</option>
-                      <option value="Lid">Lid</option>
-                      <option value="Side">Side</option>
-                      <option value="Bottom">Bottom</option>
-                      <option value="Custom">Custom</option>
-                    </NativeSelect>
-                    <NativeInput label="Width inches" name="widthIn" type="number" step="0.0001" defaultValue="4" />
-                    <NativeInput label="Height inches" name="heightIn" type="number" step="0.0001" defaultValue="5" />
-                    <NativeInput label="Qty per finished item" name="qtyPerUnit" type="number" step="0.0001" defaultValue="1" />
-                    <NativeInput label="Application sec per label" name="applicationSecondsPerLabel" type="number" step="0.01" defaultValue="6" />
-                    <NativeSelect label="Media mode" name="mediaMode" defaultValue="fixed">
-                      <option value="fixed">Fixed material</option>
-                      <option value="media_option">Selectable media option</option>
-                      <option value="same_as_zone">Same as another zone</option>
-                    </NativeSelect>
-                    <NativeSelect label="Fixed material" name="materialId">
-                      <option value="">No fixed material</option>
-                      {materialOptions.filter((material: any) => String(material.materialType || "").toLowerCase().includes("roll") || String(material.materialType || "").toLowerCase().includes("label") || String(material.name || "").toLowerCase().includes("poseidon") || String(material.name || "").toLowerCase().includes("holo")).map((material: any) => <option key={material.id} value={material.id}>{material.name} | {money(unitCost(material))}/{material.recipeBaseUnit || material.baseUnit || "unit"}</option>)}
-                    </NativeSelect>
-                    <NativeSelect label="Media option" name="mediaOptionId">
-                      <option value="">No media option</option>
-                      {(recipe.mediaOptions || []).filter((option: any) => option.active).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
-                    </NativeSelect>
-                    <NativeSelect label="Same as zone" name="sameAsZoneId">
-                      <option value="">Auto / front zone</option>
-                      {(recipe.labelZones || []).map((zone: any) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}
-                    </NativeSelect>
-                    <label className="field"><span>Required</span><input type="checkbox" name="required" defaultChecked /></label>
-                    <NativeTextarea label="Notes" name="notes" placeholder="Example: 4x5 front sticker, Miron jar lid label, back compliance label" />
-                    <div className="button-row wide"><button type="submit">Add label zone</button></div>
-                  </Form>
-                </details>
-              </div>
-
-
-              <div className="card" style={{ marginTop: 12 }}>
-                <h3>Shopify Variant Mapping</h3>
-                <p className="muted">Sync existing Shopify variants and let the app auto-map side count, bag color, and media from option names. Quantity is not parsed from variants; pricing tiers stay controlled by the selected pricing template.</p>
-
-                <details open>
-                  <summary>Search product, sync variants, and auto-map</summary>
-                  <div className="muted wide" style={{ marginBottom: 10 }}>
-                    Search Shopify products by title or SKU, pick the matching product, then sync. The app reads each Shopify variant and auto-maps side count, media, and bag color. Quantity tiers remain controlled by Pricing Templates, not variants.
-                  </div>
-
-                  <Form method="post" className="form-grid">
-                    <input type="hidden" name="intent" value="searchShopifyProductsForRecipe" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <NativeInput label="Search Shopify product" name="productSearch" defaultValue={recipe.name || ""} placeholder="Example: 4x5 Sticker Bag" />
-                    <div className="button-row wide"><button type="submit">Search Shopify products</button></div>
-                  </Form>
-
-                  {null}
-
-                  <details style={{ marginTop: 12 }}>
-                    <summary>Advanced: paste Shopify Product GID manually</summary>
-                    <Form method="post" className="form-grid">
-                      <input type="hidden" name="intent" value="syncShopifyVariants" />
-                      <input type="hidden" name="recipeId" value={recipe.id} />
-                      <NativeInput label="Shopify Product GID" name="shopifyProductGid" defaultValue={recipe.productGid || ""} placeholder="gid://shopify/Product/..." />
-                      <div className="button-row wide"><button type="submit">Sync Shopify variants + auto-map</button></div>
-                    </Form>
-                  </details>
-
-                  <Form method="post" className="button-row" style={{ marginTop: 10 }}>
-                    <input type="hidden" name="intent" value="autoMapExistingVariantRules" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <button type="submit" className="secondary">Auto-map existing saved mappings</button>
-                  </Form>
-                </details>
-
-                {(() => {
-                  const visibleRules = (recipe.variantRules || []).filter((rule: any) => itemStatus === "all" ? true : itemStatus === "hidden" ? rule.active === false : rule.active !== false);
-                  return visibleRules.length ? <table>
-                    <thead><tr><th>Variant rule</th><th>Shopify / SKU</th><th>Cost drivers</th><th>Preview</th><th>Status</th><th></th></tr></thead>
-                    <tbody>
-                      {visibleRules.map((rule: any) => {
-                        const variantEstimate = estimateVariantFromRule(recipe, rule);
-                        return <tr key={rule.id}>
-                          <td><strong>{rule.name}</strong><br/><span className="muted">{rule.shopifyVariantTitle || "Manual mapping"}</span></td>
-                          <td>{rule.shopifyVariantGid ? <span className="muted">{rule.shopifyVariantGid}</span> : "No Shopify variant GID"}<br/>{rule.sku ? <span>SKU: {rule.sku}</span> : null}</td>
-                          <td>
-                            Side: {rule.sideMode}<br/>
-                            Bag color: {rule.bagColor || "Any"}<br/>
-                            Front: {mediaOptionLabel(recipe.mediaOptions || [], rule.frontMediaOptionId)}<br/>
-                            Back: {rule.backMediaMode === "specific" ? mediaOptionLabel(recipe.mediaOptions || [], rule.backMediaOptionId) : "Same as front"}
-                          </td>
-                          <td>
-                            Area: {variantEstimate.area.toFixed(4)} sqft<br/>
-                            Apply: {variantEstimate.applySeconds.toFixed(1)} sec<br/>
-                            Est cost: {money(variantEstimate.unitCost)}<br/>
-                            Target price: {money(variantEstimate.price)}
-                          </td>
-                          <td><span className={rule.active === false ? "badge yellow" : "badge green"}>{rule.active === false ? "Hidden" : "Active"}</span></td>
-                          <td>
-                            <details>
-                              <summary>Edit mapping</summary>
-                              <Form method="post" className="form-grid">
-                                <input type="hidden" name="intent" value="updateVariantRule" />
-                                <input type="hidden" name="variantRuleId" value={rule.id} />
-                                <input type="hidden" name="recipeId" value={recipe.id} />
-                                <NativeInput label="Rule name" name="name" defaultValue={rule.name} />
-                                <NativeInput label="Shopify variant title" name="shopifyVariantTitle" defaultValue={rule.shopifyVariantTitle || ""} placeholder="Single Sided / Black / Matte" />
-                                <NativeInput label="Shopify Variant GID" name="shopifyVariantGid" defaultValue={rule.shopifyVariantGid || ""} />
-                                <NativeInput label="Shopify Product GID" name="shopifyProductGid" defaultValue={rule.shopifyProductGid || recipe.productGid || ""} />
-                                <NativeInput label="SKU" name="sku" defaultValue={rule.sku || ""} />
-                                <NativeSelect label="Side rule" name="sideMode" defaultValue={rule.sideMode || "single"}>
-                                  <option value="single">Single sided / front only</option>
-                                  <option value="double_same">Double sided / same media</option>
-                                  <option value="double_mixed">Double sided / mixed media</option>
-                                  <option value="custom">Custom</option>
-                                </NativeSelect>
-                                <NativeInput label="Bag color / option" name="bagColor" defaultValue={rule.bagColor || ""} placeholder="Black, White, Clear, Any" />
-                                <NativeSelect label="Front media" name="frontMediaOptionId" defaultValue={rule.frontMediaOptionId || ""}>
-                                  <option value="">Default media</option>
-                                  {(recipe.mediaOptions || []).filter((option: any) => option.active !== false).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
-                                </NativeSelect>
-                                <NativeSelect label="Back media mode" name="backMediaMode" defaultValue={rule.backMediaMode || "same_as_front"}>
-                                  <option value="same_as_front">Same as front</option>
-                                  <option value="specific">Specific back media</option>
-                                  <option value="none">No back label</option>
-                                </NativeSelect>
-                                <NativeSelect label="Specific back media" name="backMediaOptionId" defaultValue={rule.backMediaOptionId || ""}>
-                                  <option value="">Default / same as front</option>
-                                  {(recipe.mediaOptions || []).filter((option: any) => option.active !== false).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
-                                </NativeSelect>
-                                <label className="field"><span>Use front zone</span><input type="checkbox" name="useFrontZone" defaultChecked={rule.useFrontZone !== false} /></label>
-                                <label className="field"><span>Use back zone</span><input type="checkbox" name="useBackZone" defaultChecked={rule.useBackZone === true} /></label>
-                                <label className="field"><span>Active</span><input type="checkbox" name="active" defaultChecked={rule.active !== false} /></label>
-                                <NativeTextarea label="Notes" name="notes" defaultValue={rule.notes || ""} />
-                                <div className="button-row wide"><button type="submit">Save variant mapping</button></div>
-                              </Form>
-                            </details>
-                            <div className="button-row">
-                              <Form method="post"><input type="hidden" name="intent" value={rule.active === false ? "restoreVariantRule" : "archiveVariantRule"} /><input type="hidden" name="variantRuleId" value={rule.id} /><button type="submit" className="secondary">{rule.active === false ? "Restore" : "Hide"}</button></Form>
-                              <Form method="post"><input type="hidden" name="intent" value="deleteVariantRule" /><input type="hidden" name="variantRuleId" value={rule.id} /><button type="submit" className="danger">Delete forever</button></Form>
-                            </div>
-                          </td>
-                        </tr>;
-                      })}
-                    </tbody>
-                  </table> : <p className="muted">No variant mappings match this item filter. Add mappings for existing Shopify variants like Single Sided / Matte / Black or Double Sided / Holographic.</p>;
-                })()}
-
-                <Form method="post" className="button-row">
-                  <input type="hidden" name="intent" value="cleanupDuplicateVariantRules" />
-                  <input type="hidden" name="recipeId" value={recipe.id} />
-                  <button type="submit" className="secondary">Delete duplicate variant mappings</button>
-                </Form>
-
-                <details>
-                  <summary>Add manual Shopify variant / option mapping</summary>
-                  <Form method="post" className="form-grid">
-                    <input type="hidden" name="intent" value="addVariantRule" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <NativeInput label="Rule name" name="name" placeholder="Single Sided - Matte - Black" />
-                    <NativeInput label="Shopify variant title" name="shopifyVariantTitle" placeholder="Single Sided / Black / Matte" />
-                    <NativeInput label="Shopify Variant GID" name="shopifyVariantGid" placeholder="optional for now" />
-                    <NativeInput label="Shopify Product GID" name="shopifyProductGid" defaultValue={recipe.productGid || ""} placeholder="optional for now" />
-                    <NativeInput label="SKU" name="sku" />
-                    <NativeSelect label="Side rule" name="sideMode" defaultValue="single">
-                      <option value="single">Single sided / front only</option>
-                      <option value="double_same">Double sided / same media</option>
-                      <option value="double_mixed">Double sided / mixed media</option>
-                      <option value="custom">Custom</option>
-                    </NativeSelect>
-                    <NativeInput label="Bag color / option" name="bagColor" placeholder="Black, White, Clear, Any" />
-                    <NativeSelect label="Front media" name="frontMediaOptionId">
-                      <option value="">Default media</option>
-                      {(recipe.mediaOptions || []).filter((option: any) => option.active !== false).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
-                    </NativeSelect>
-                    <NativeSelect label="Back media mode" name="backMediaMode" defaultValue="same_as_front">
-                      <option value="same_as_front">Same as front</option>
-                      <option value="specific">Specific back media</option>
-                      <option value="none">No back label</option>
-                    </NativeSelect>
-                    <NativeSelect label="Specific back media" name="backMediaOptionId">
-                      <option value="">Default / same as front</option>
-                      {(recipe.mediaOptions || []).filter((option: any) => option.active !== false).map((option: any) => <option key={option.id} value={option.id}>{option.name} → {option.material?.name}</option>)}
-                    </NativeSelect>
-                    <label className="field"><span>Use front zone</span><input type="checkbox" name="useFrontZone" defaultChecked /></label>
-                    <label className="field"><span>Use back zone</span><input type="checkbox" name="useBackZone" /></label>
-                    <NativeTextarea label="Notes" name="notes" placeholder="Manual fallback only. Normal variants should come from Shopify sync. Quantity tiers are controlled by pricing templates." />
-                    <div className="button-row wide"><button type="submit">Add variant mapping</button></div>
-                  </Form>
-                </details>
-              </div>
-
-              <div className="card" style={{ marginTop: 12 }}>
-                <h3>Recipe Materials</h3>
-                {visibleRecipeMaterials.length ? <table>
-                  <thead><tr><th>Material</th><th>Type</th><th>Qty / unit</th><th>Waste</th><th>Status</th><th>Cost/unit</th><th></th></tr></thead>
-                  <tbody>
-                    {visibleRecipeMaterials.map((row: any) => <tr key={row.id}>
-                      <td>{row.material?.name}</td>
-                      <td>{row.usageType}</td>
-                      <td>{row.quantity} {row.unit}</td>
-                      <td>{row.includeWaste ? `${row.wastePct || 0}%` : "No waste"}</td>
-                      <td><span className={row.active === false ? "badge yellow" : "badge green"}>{row.active === false ? "Hidden" : "Active"}</span></td>
-                      <td>{row.active === false ? <span className="muted">Not counted</span> : money(unitCost(row.material) * Number(row.quantity || 0) * (row.includeWaste ? 1 + Number(row.wastePct || 0) / 100 : 1))}</td>
-                      <td>
-                        <details>
-                          <summary>Edit row</summary>
-                          <Form method="post" className="form-grid">
-                            <input type="hidden" name="intent" value="updateMaterialRow" />
-                            <input type="hidden" name="recipeMaterialId" value={row.id} />
-                            <NativeSelect label="Material" name="materialId" defaultValue={row.materialId}>
-                              {materialOptions.map((material: any) => <option key={material.id} value={material.id}>{material.name} | {material.materialType} | {material.productFamilies}</option>)}
-                            </NativeSelect>
-                            <NativeSelect label="Usage type" name="usageType" defaultValue={row.usageType}>
-                              <option value="media">Media</option>
-                              <option value="ink">Ink / coating</option>
-                              <option value="blank">Blank / base item</option>
-                              <option value="laminate">Laminate</option>
-                              <option value="packaging">Packaging</option>
-                              <option value="sourced">Sourced</option>
-                              <option value="other">Other</option>
-                            </NativeSelect>
-                            <NativeInput label="Qty used per unit" name="quantity" type="number" step="0.0001" defaultValue={row.quantity} />
-                            <NativeSelect label="Unit" name="unit" defaultValue={row.unit}>
-                              {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
-                            </NativeSelect>
-                            <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue={row.wastePct} />
-                            <label className="field"><span>Include waste</span><input type="checkbox" name="includeWaste" defaultChecked={row.includeWaste} /></label>
-                            <label className="field"><span>Active / counted in cost</span><input type="checkbox" name="active" defaultChecked={row.active !== false} /></label>
-                            <NativeTextarea label="Notes" name="notes" defaultValue={row.notes || ""} />
-                            <div className="button-row wide"><button type="submit">Save material row</button></div>
-                          </Form>
-                        </details>
-                        <div className="button-row">
-                          <Form method="post">
-                            <input type="hidden" name="intent" value={row.active === false ? "restoreMaterialRow" : "archiveMaterialRow"} />
-                            <input type="hidden" name="recipeMaterialId" value={row.id} />
-                            <button type="submit" className="secondary">{row.active === false ? "Restore" : "Hide"}</button>
-                          </Form>
-                          <Form method="post">
-                            <input type="hidden" name="intent" value="deleteMaterialRow" />
-                            <input type="hidden" name="recipeMaterialId" value={row.id} />
-                            <button type="submit" className="danger">Delete forever</button>
-                          </Form>
-                        </div>
-                      </td>
-                    </tr>)}
-                  </tbody>
-                </table> : <p className="muted">No recipe material rows match this item filter. Switch item rows to All/Hidden or add a material row.</p>}
-
-                <Form method="post" className="button-row">
-                  <input type="hidden" name="intent" value="cleanupDuplicateMaterials" />
-                  <input type="hidden" name="recipeId" value={recipe.id} />
-                  <button type="submit" className="secondary">Delete duplicate material rows</button>
-                </Form>
-
-                <details>
-                  <summary>Add material to recipe</summary>
-                  {((recipe.labelZones ?? []).filter((zone: any) => zone.active !== false && !zone.archivedAt)).length ? <p className="muted">This recipe already calculates label media from zones. Add only fixed/base materials here, like blank bags, jars, boxes, packaging, or sourced base items. Do not add Matte/Gloss/Holographic media here unless it is an extra fixed material.</p> : null}
-                  <Form method="post" className="form-grid">
-                    <input type="hidden" name="intent" value="addMaterial" />
-                    <input type="hidden" name="recipeId" value={recipe.id} />
-                    <NativeSelect label="Material" name="materialId">
-                      {materialOptions.map((material: any) => <option key={material.id} value={material.id}>{material.name} | {material.materialType} | {material.productFamilies}</option>)}
-                    </NativeSelect>
-                    <NativeSelect label="Usage type" name="usageType" defaultValue="blank">
-                      <option value="media">Media</option>
-                      <option value="ink">Ink / coating</option>
-                      <option value="blank">Blank / base item</option>
-                      <option value="laminate">Laminate</option>
-                      <option value="packaging">Packaging</option>
-                      <option value="sourced">Sourced</option>
-                      <option value="other">Other</option>
-                    </NativeSelect>
-                    <NativeInput label="Qty used per unit" name="quantity" type="number" step="0.0001" defaultValue="1" />
-                    <NativeSelect label="Unit" name="unit" defaultValue="each">
-                      {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
-                    </NativeSelect>
-                    <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue="0" />
-                    <label className="field"><span>Include waste</span><input type="checkbox" name="includeWaste" /></label>
-                    <NativeTextarea label="Notes" name="notes" />
-                    <div className="button-row wide"><button type="submit">Add material</button></div>
-                  </Form>
-                </details>
-              </div>
-            </details>
-          );
-        }) : <p className="muted">No recipes match this filter. Create a recipe above or switch the status filter to Archived/All.</p>}
+        {recipes.length ? <table>
+          <thead>
+            <tr>
+              <th>Recipe</th>
+              <th>Family</th>
+              <th>Template</th>
+              <th>Margin</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {recipes.map((recipe: any) => {
+              const reasons = costReviewReasonList(recipe);
+              return <tr key={recipe.id}>
+                <td><strong>{recipe.name}</strong><br/><span className="muted">{recipe.sku || "No SKU"}</span></td>
+                <td>{recipe.productFamily || recipe.productType}</td>
+                <td>{recipe.productTypeProfile?.name || "No template"}</td>
+                <td>{pct(recipe.targetMarginPct)}</td>
+                <td>
+                  {recipe.active ? <span className="badge green">Active</span> : <span className="badge red">Archived</span>}
+                  {recipe.costReviewNeeded ? <span className="badge yellow">Cost Review</span> : <span className="badge green">Cost OK</span>}
+                  {reasons.length ? <div className="muted">{reasons[0]}</div> : null}
+                </td>
+                <td><a className="button" href={recipeHref(recipe.id)}>Open</a></td>
+              </tr>;
+            })}
+          </tbody>
+        </table> : <p>No recipes found.</p>}
       </div>
+
+      {selectedRecipe ? <div className="card">
+        <h2>{selectedRecipe.name}</h2>
+        <p className="muted">Full recipe details are loaded only for this one selected recipe to protect server memory.</p>
+        {selectedRecipe.costReviewNeeded ? <div className="cost-review-panel">
+          <strong>Cost Review Needed</strong>
+          <p className="muted">Fix these recipe setup issues before approving price changes or updating Shopify.</p>
+          {costReviewReasonList(selectedRecipe).length ? <ul>
+            {costReviewReasonList(selectedRecipe).map((reason: string, index: number) => <li key={`${reason}-${index}`}>{reason}</li>)}
+          </ul> : <p className="muted">Margin Review flagged this recipe, but no reason text was saved yet. Re-run Margin Review and sync recipe review flags.</p>}
+          {selectedRecipe.costReviewSyncedAt ? <p className="muted">Last synced from Margin Review: {shortDateTime(selectedRecipe.costReviewSyncedAt)}</p> : null}
+        </div> : <div className="card"><span className="badge green">No cost review flag</span></div>}
+
+        <div className="grid">
+          <div className="card">
+            <h3>Recipe Details</h3>
+            <Form method="post" className="form-grid">
+              <input type="hidden" name="intent" value="updateRecipe" />
+              <input type="hidden" name="recipeId" value={selectedRecipe.id} />
+              <NativeInput label="Recipe / product name" name="name" defaultValue={selectedRecipe.name} />
+              <NativeInput label="SKU" name="sku" defaultValue={selectedRecipe.sku || ""} />
+              <NativeSelect label="Product family" name="productFamily" defaultValue={selectedRecipe.productFamily || "Sticker Bags"}>
+                {PRODUCT_FAMILIES.map((family) => <option key={family} value={family}>{family}</option>)}
+              </NativeSelect>
+              <NativeSelect label="Production mode" name="productionMode" defaultValue={selectedRecipe.productionMode || "in_house"}>
+                {PRODUCTION_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+              </NativeSelect>
+              <NativeInput label="Target margin %" name="targetMarginPct" type="number" step="0.01" defaultValue={selectedRecipe.targetMarginPct} />
+              <NativeInput label="Default sell price" name="defaultSellPrice" type="number" step="0.01" defaultValue={selectedRecipe.defaultSellPrice || ""} />
+              <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue={selectedRecipe.wastePct || 0} />
+              <NativeInput label="Setup cost" name="setupCost" type="number" step="0.01" defaultValue={selectedRecipe.setupCost || 0} />
+              <NativeInput label="Packing labor seconds/unit" name="packingLaborSecondsPerUnit" type="number" step="0.01" defaultValue={selectedRecipe.packingLaborSecondsPerUnit || 0} />
+              <NativeTextarea label="Notes" name="notes" defaultValue={selectedRecipe.notes || ""} />
+              <div className="wide button-row"><button type="submit">Save recipe</button></div>
+            </Form>
+          </div>
+
+          <div className="card">
+            <h3>Loaded detail counts</h3>
+            <p><span className="badge">Materials: {(selectedRecipe.materials || []).length}</span></p>
+            <p><span className="badge">Label zones: {(selectedRecipe.labelZones || []).length}</span></p>
+            <p><span className="badge">Media options: {(selectedRecipe.mediaOptions || []).length}</span></p>
+            <p><span className="badge">Variant rules: {(selectedRecipe.variantRules || []).length}</span></p>
+            <p><span className="badge">Tiers: {(selectedRecipe.tiers || []).length}</span></p>
+            <p className="muted">Deep editing for zones/material rows will be restored in a separate optimized editor if needed. This page is now protected from all-at-once memory crashes.</p>
+          </div>
+        </div>
+
+        <details open>
+          <summary>Recipe material/media summary</summary>
+          <div className="grid">
+            <div>
+              <h3>Recipe materials</h3>
+              {(selectedRecipe.materials || []).length ? <table><tbody>{selectedRecipe.materials.map((row: any) => <tr key={row.id}><td>{row.material?.name || row.name || "Material"}</td><td>{row.quantityPerUnit || row.qtyPerUnit || 0} {row.unit || row.material?.unit || "unit"}</td><td>{row.active === false ? "Hidden" : "Active"}</td></tr>)}</tbody></table> : <p className="muted">No fixed materials loaded.</p>}
+            </div>
+            <div>
+              <h3>Label/application zones</h3>
+              {(selectedRecipe.labelZones || []).length ? <table><tbody>{selectedRecipe.labelZones.map((zone: any) => <tr key={zone.id}><td>{zone.name}</td><td>{zone.widthIn || 0} × {zone.heightIn || 0}</td><td>{zone.mediaOption?.name || zone.material?.name || "No media"}</td></tr>)}</tbody></table> : <p className="muted">No zones loaded.</p>}
+            </div>
+          </div>
+        </details>
+      </div> : selectedRecipeId ? <div className="card"><span className="badge red">Selected recipe was not found.</span></div> : null}
     </div>
   );
 }
-
-
-
-
-
-
-
