@@ -34,6 +34,20 @@ function money(value: any) {
 function pct(value: any) {
   return `${(Number(value) || 0).toFixed(1)}%`;
 }
+function costReviewReasonList(recipe: any) {
+  return String(recipe?.costReviewReasons || "")
+    .split(/\r?\n/)
+    .map((reason) => reason.trim())
+    .filter(Boolean);
+}
+
+function shortDateTime(value: any) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
+}
+
 
 function parseTiers(value: any) {
   if (!value) return [];
@@ -1364,6 +1378,10 @@ function PageStyles() {
     th { color:#374151; background:#f9fafb; }
     details { border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px 12px; margin-top: 10px; }
     summary { cursor: pointer; font-weight: 800; }
+    .cost-review-panel { margin: 12px 0; padding: 12px; border: 1px solid #f59e0b; background: #fffbeb; border-radius: 10px; }
+    .cost-review-panel strong { color: #92400e; }
+    .cost-review-panel ul { margin: 8px 0 0 18px; padding: 0; color: #92400e; font-weight: 600; }
+    .cost-review-panel li { margin: 4px 0; }
   `}</style>;
 }
 
@@ -1558,6 +1576,21 @@ export default function ProductSetupRecipeBuilder() {
                 {recipe.useInQuotes ? <span className="badge green">Use in Quotes</span> : <span className="badge yellow">Hidden</span>}
                 {recipe.costReviewNeeded ? <span className="badge red">Cost Review</span> : null}
               </summary>
+
+              {recipe.costReviewNeeded ? (
+                <div className="cost-review-panel">
+                  <strong>Cost Review Needed</strong>
+                  <p className="muted">Fix these recipe setup issues before approving price changes or updating Shopify.</p>
+                  {costReviewReasonList(recipe).length ? (
+                    <ul>
+                      {costReviewReasonList(recipe).map((reason: string) => <li key={reason}>{reason}</li>)}
+                    </ul>
+                  ) : (
+                    <p className="muted">No reason details saved yet. Run Margin Review, then click Sync recipe review flags.</p>
+                  )}
+                  {recipe.costReviewSyncedAt ? <p className="muted">Last synced from Margin Review: {shortDateTime(recipe.costReviewSyncedAt)}</p> : null}
+                </div>
+              ) : null}
 
               <div className="grid" style={{ marginTop: 12 }}>
                 <div>

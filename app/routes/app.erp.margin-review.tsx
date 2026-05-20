@@ -150,7 +150,14 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?
 
   const missingBaseCost = baseMaterialCostPerUnit <= 0;
   const missingZones = !selected.length;
-  const costReviewNeeded = missingBaseCost || missingZones || applicationLaborFloorApplied;
+  const missingMediaCost = !missingZones && zoneLines.some((line: any) => numberOr(line.cost, 0) <= 0);
+  const costReviewReasons = uniqueStrings([
+    missingBaseCost ? "Missing base/blank cost. Add a blank bag, jar, box, or base material with a real unit cost." : "",
+    missingZones ? "Missing active label/application zones. Add active front/back zones so media and application labor can be calculated." : "",
+    missingMediaCost ? "One or more active label/media zones has missing or zero media cost." : "",
+    applicationLaborFloorApplied ? `Application labor floor applied because zone labor seconds are too low. Current floor: ${money(sideLaborFloor)} per printed side.` : "",
+  ]);
+  const costReviewNeeded = costReviewReasons.length > 0;
 
   return {
     qty,
@@ -176,6 +183,9 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?
     total,
     missingBaseCost,
     missingZones,
+    missingMediaCost,
+    costReviewReasons,
+    costReviewReasonText: costReviewReasons.join("\n"),
     costReviewNeeded,
   };
 }
@@ -329,6 +339,19 @@ function idsFromCsv(value: any) {
   return Array.from(new Set(String(value || "").split(",").map((id) => id.trim()).filter(Boolean)));
 }
 
+function uniqueStrings(values: any[] = []) {
+  return Array.from(new Set((values || []).map((value) => String(value || "").trim()).filter(Boolean)));
+}
+
+function parseJsonObject(value: any) {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
 export async function action({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
@@ -340,18 +363,30 @@ export async function action({ request }: { request: Request }) {
   if (intent === "syncCostReviewFlags") {
     const flagRecipeIds = idsFromCsv(formData.get("flagRecipeIds"));
     const clearRecipeIds = idsFromCsv(formData.get("clearRecipeIds")).filter((id) => !flagRecipeIds.includes(id));
+    const flagRecipeReasons = parseJsonObject(formData.get("flagRecipeReasonsJson"));
+    const syncedAt = new Date();
 
     if (flagRecipeIds.length) {
-      await prisma.productRecipe.updateMany({
-        where: { shop, id: { in: flagRecipeIds } },
-        data: { costReviewNeeded: true },
-      });
+      await Promise.all(flagRecipeIds.map((id) => prisma.productRecipe.updateMany({
+        where: { shop, id },
+        data: {
+          costReviewNeeded: true,
+          costReviewReasons: Array.isArray(flagRecipeReasons[id]) ? flagRecipeReasons[id].join("\n") : String(flagRecipeReasons[id] || "Needs recipe cost review before price approval."),
+          costReviewSyncedAt: syncedAt,
+          costReviewSource: "margin_review_v8_1",
+        },
+      })));
     }
 
     if (clearRecipeIds.length) {
       await prisma.productRecipe.updateMany({
         where: { shop, id: { in: clearRecipeIds } },
-        data: { costReviewNeeded: false },
+        data: {
+          costReviewNeeded: false,
+          costReviewReasons: null,
+          costReviewSyncedAt: syncedAt,
+          costReviewSource: "margin_review_v8_1",
+        },
       });
     }
 
@@ -488,11 +523,22 @@ export async function loader({ request }: { request: Request }) {
   const flagRecipeIds = Array.from(new Set(filteredRows.filter((row: any) => row.cost?.costReviewNeeded).map((row: any) => row.recipe?.id).filter(Boolean)));
   const clearRecipeIds = auditedRecipeIds.filter((id: any) => !flagRecipeIds.includes(id));
   const flagRecipeNames = recipes.filter((recipe: any) => flagRecipeIds.includes(recipe.id)).map((recipe: any) => recipe.name).slice(0, 8);
+  const flagRecipeReasons = filteredRows.reduce((map: any, row: any) => {
+    if (!row.recipe?.id || !row.cost?.costReviewNeeded) return map;
+    map[row.recipe.id] = uniqueStrings([...(map[row.recipe.id] || []), ...(row.cost?.costReviewReasons || [])]);
+    return map;
+  }, {});
+  const flagRecipeReasonPreview = Object.entries(flagRecipeReasons).slice(0, 5).map(([id, reasons]: any) => {
+    const recipe = recipes.find((item: any) => item.id === id);
+    return { id, name: recipe?.name || id, reasons };
+  });
 
   const recipeFlagPreview = {
     auditedRecipeIds,
     flagRecipeIds,
     clearRecipeIds,
+    flagRecipeReasons,
+    flagRecipeReasonPreview,
     flagCount: flagRecipeIds.length,
     clearCount: clearRecipeIds.length,
     flagRecipeNames,
@@ -643,16 +689,33 @@ export default function MarginReviewPage() {
           <div className="success-note">Recipe cost review flags synced. Flagged {syncedFlagged} recipe(s) and cleared {syncedCleared} recipe(s) from the current audit.</div>
         ) : null}
         <div className="flag-panel">
-          <strong>v8 Recipe Cost Review Flags</strong>
+          <strong>v8.1 Recipe Cost Review Flags + Details</strong>
           <p className="muted">
-            This sync pushes the current Margin Review cost-review results back into Product Setup. Recipes with missing base cost, missing zones, or application labor floor warnings will show as Cost Review in Product Setup. This still does not update Shopify prices.
+            This sync pushes the current Margin Review cost-review results back into Product Setup. Recipes with missing base cost, missing zones, missing media cost, or application labor floor warnings will show as Cost Review in Product Setup with reason details. This still does not update Shopify prices.
           </p>
           <div className="queue-actions">
             <Badge tone={recipeFlagPreview?.flagCount ? "yellow" : "green"}>{recipeFlagPreview?.flagCount || 0} recipe(s) to flag</Badge>
             <Badge tone="gray">{recipeFlagPreview?.clearCount || 0} audited recipe(s) to clear</Badge>
           </div>
           {recipeFlagPreview?.flagRecipeNames?.length ? (
-            <p className="muted" style={{ marginTop: 8 }}>Will flag: {recipeFlagPreview.flagRecipeNames.join(", ")}{recipeFlagPreview.flagCount > recipeFlagPreview.flagRecipeNames.length ? "..." : ""}</p>
+            <div style={{ marginTop: 8 }}>
+              <p className="muted">Will flag: {recipeFlagPreview.flagRecipeNames.join(", ")}{recipeFlagPreview.flagCount > recipeFlagPreview.flagRecipeNames.length ? "..." : ""}</p>
+              {recipeFlagPreview.flagRecipeReasonPreview?.length ? (
+                <details className="cost-details">
+                  <summary>Preview review reasons</summary>
+                  <div className="cost-lines">
+                    {recipeFlagPreview.flagRecipeReasonPreview.map((item: any) => (
+                      <div key={item.id} className="tier-note">
+                        <strong>{item.name}</strong>
+                        <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                          {(item.reasons || []).map((reason: string) => <li key={reason}>{reason}</li>)}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </div>
           ) : (
             <p className="muted" style={{ marginTop: 8 }}>No cost-review recipes found in the current audit filter.</p>
           )}
@@ -660,6 +723,7 @@ export default function MarginReviewPage() {
             <input type="hidden" name="intent" value="syncCostReviewFlags" />
             <input type="hidden" name="flagRecipeIds" value={(recipeFlagPreview?.flagRecipeIds || []).join(",")} />
             <input type="hidden" name="clearRecipeIds" value={(recipeFlagPreview?.clearRecipeIds || []).join(",")} />
+            <input type="hidden" name="flagRecipeReasonsJson" value={JSON.stringify(recipeFlagPreview?.flagRecipeReasons || {})} />
             <button type="submit">Sync recipe review flags</button>
             <span className="button secondary disabled">Shopify updates still locked</span>
           </Form>

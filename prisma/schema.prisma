@@ -364,9 +364,12 @@ model ProductRecipe {
   sku                            String?
   productType                    String  @default("label") // label, dtp_bag, box, sourced_product, die_cut_bag, general
   productFamily                  String  @default("Labels") // Labels, Sticker Bags, DTP Bags, Boxes, DTF / Apparel, custom
-  pricingTemplateMode            String  @default("template") // template, custom
-  costReviewNeeded               Boolean @default(false)
-  useInQuotes                    Boolean @default(true)
+  pricingTemplateMode            String   @default("template") // template, custom
+  costReviewNeeded               Boolean  @default(false)
+  costReviewReasons              String?
+  costReviewSyncedAt             DateTime?
+  costReviewSource               String?
+  useInQuotes                    Boolean  @default(true)
   applicationLaborSecondsPerUnit Float   @default(0)
   packingLaborSecondsPerUnit     Float   @default(0)
   prepressMinutes                Float   @default(0)
