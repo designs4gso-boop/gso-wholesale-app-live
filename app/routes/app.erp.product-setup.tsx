@@ -541,6 +541,10 @@ export async function loader({ request }: { request: Request }) {
   const recipeStatus = url.searchParams.get("recipeStatus") || "active";
   const recipeSearch = (url.searchParams.get("recipeSearch") || "").trim();
   const itemStatus = url.searchParams.get("itemStatus") || "active";
+  const recipePage = Math.max(1, parseInt(url.searchParams.get("recipePage") || "1", 10) || 1);
+  const requestedLimit = Math.max(5, parseInt(url.searchParams.get("recipeLimit") || "25", 10) || 25);
+  const recipeLimit = Math.min(requestedLimit, 50);
+  const recipeSkip = (recipePage - 1) * recipeLimit;
   const recipeWhere: any = { shop };
   if (recipeStatus === "active") recipeWhere.active = true;
   if (recipeStatus === "archived") recipeWhere.active = false;
@@ -552,11 +556,14 @@ export async function loader({ request }: { request: Request }) {
     ];
   }
 
-  const [templates, recipes, materials, machines] = await Promise.all([
+  const [templates, recipeCount, recipes, materials, machines] = await Promise.all([
     db.productTypeProfile.findMany({ where: { shop }, orderBy: [{ active: "desc" }, { name: "asc" }] }),
+    db.productRecipe.count({ where: recipeWhere }),
     db.productRecipe.findMany({
       where: recipeWhere,
-      orderBy: [{ active: "desc" }, { updatedAt: "desc" }],
+      orderBy: [{ active: "desc" }, { costReviewNeeded: "desc" }, { updatedAt: "desc" }],
+      take: recipeLimit,
+      skip: recipeSkip,
       include: {
         productTypeProfile: true,
         materials: { include: { material: true }, orderBy: { createdAt: "asc" } },
@@ -572,7 +579,23 @@ export async function loader({ request }: { request: Request }) {
   ]);
 
   const activeTemplates = templates.filter((template: any) => template.active);
-  return Response.json({ templates, activeTemplates, recipes, materials, machines, recipeStatus, recipeSearch, itemStatus });
+  const recipeTotalPages = Math.max(1, Math.ceil(recipeCount / recipeLimit));
+  return Response.json({
+    templates,
+    activeTemplates,
+    recipes,
+    materials,
+    machines,
+    recipeStatus,
+    recipeSearch,
+    itemStatus,
+    recipeCount,
+    recipePage,
+    recipeLimit,
+    recipeTotalPages,
+    hasPrevRecipes: recipePage > 1,
+    hasNextRecipes: recipePage < recipeTotalPages,
+  });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -1387,7 +1410,23 @@ function PageStyles() {
 
 export default function ProductSetupRecipeBuilder() {
   const productSearchResults: any[] = [];
-  const { templates, activeTemplates, recipes, materials, machines, recipeStatus = "active", recipeSearch = "", itemStatus = "active" } = useLoaderData<any>();
+  const {
+    templates,
+    activeTemplates,
+    recipes,
+    materials,
+    machines,
+    recipeStatus = "active",
+    recipeSearch = "",
+    itemStatus = "active",
+    recipeCount = 0,
+    recipePage = 1,
+    recipeLimit = 25,
+    recipeTotalPages = 1,
+    hasPrevRecipes = false,
+    hasNextRecipes = false,
+  } = useLoaderData<any>();
+  const recipeBaseQuery = `recipeStatus=${encodeURIComponent(recipeStatus)}&recipeSearch=${encodeURIComponent(recipeSearch)}&itemStatus=${encodeURIComponent(itemStatus)}&recipeLimit=${encodeURIComponent(String(recipeLimit))}`;
   const actionData = useActionData<any>();
   const materialOptions = materials || [];
   const machineOptions = machines || [];
@@ -1554,12 +1593,24 @@ export default function ProductSetupRecipeBuilder() {
             <option value="hidden">Hidden/archived items only</option>
             <option value="all">All items</option>
           </NativeSelect>
+          <NativeSelect label="Recipes per page" name="recipeLimit" defaultValue={String(recipeLimit)}>
+            <option value="10">10 recipes</option>
+            <option value="25">25 recipes</option>
+            <option value="50">50 recipes max</option>
+          </NativeSelect>
+          <input type="hidden" name="recipePage" value="1" />
           <div className="button-row" style={{ alignItems: "end" }}>
             <button type="submit" className="secondary">Apply filter</button>
             <a className="secondary" href="/app/erp/product-setup">Reset</a>
           </div>
         </Form>
-        <p className="muted">Archived recipes are hidden by default. Hidden media options, zones, and material rows are also hidden by default. Use the item row filter to restore or permanently delete hidden/duplicate items.</p>
+        <div className="button-row" style={{ marginTop: 0, marginBottom: 10 }}>
+          <span className="badge">Showing {recipes.length} of {recipeCount} recipe(s)</span>
+          <span className="badge">Page {recipePage} of {recipeTotalPages}</span>
+          {hasPrevRecipes ? <a className="secondary" href={`/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage - 1}`}>Previous recipes</a> : null}
+          {hasNextRecipes ? <a className="secondary" href={`/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage + 1}`}>Next recipes</a> : null}
+        </div>
+        <p className="muted">Memory-safe mode is on: Product Setup now loads recipes in pages instead of loading every recipe and every recipe detail at once. Archived recipes are hidden by default. Hidden media options, zones, and material rows are also hidden by default. Use the item row filter to restore or permanently delete hidden/duplicate items.</p>
         {recipes.length ? recipes.map((recipe: any) => {
           const estimate = estimateRecipe(recipe);
           const templateTiers = recipe.pricingTemplateMode === "template" ? parseTiers(recipe.productTypeProfile?.tierTemplate) : [];
