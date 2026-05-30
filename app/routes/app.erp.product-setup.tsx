@@ -563,7 +563,7 @@ export async function loader({ request }: { request: Request }) {
     db.productTypeProfile.findMany({
       where: { shop },
       orderBy: [{ active: "desc" }, { name: "asc" }],
-      select: { id: true, name: true, key: true, productFamily: true, defaultMarginPct: true, active: true, productionMode: true },
+      select: { id: true, name: true, key: true, defaultMarginPct: true, active: true, productionMode: true },
     }),
     db.productRecipe.count({ where: recipeWhere }),
     db.productRecipe.findMany({
