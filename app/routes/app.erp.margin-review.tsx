@@ -395,13 +395,136 @@ function cleanApprovalRows(value: any) {
   })).filter((row: any) => row.variantRuleId && row.suggestedPrice > 0);
 }
 
+
+function formIds(formData: FormData, field = "recordIds") {
+  return Array.from(new Set(formData.getAll(field).map((id) => String(id || "").trim()).filter(Boolean)));
+}
+
+function approvalBadgeTone(status: string) {
+  if (status === "approved" || status === "updated_in_shopify") return "green";
+  if (status === "cost_review_hold") return "yellow";
+  if (status === "rejected") return "red";
+  if (status === "skipped") return "gray";
+  return "blue";
+}
+
+function approvalStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    needs_review: "needs review",
+    cost_review_hold: "cost-review hold",
+    approved: "approved",
+    rejected: "rejected",
+    skipped: "skipped",
+    updated_in_shopify: "updated in Shopify",
+  };
+  return labels[status] || status;
+}
+
+async function updateShopifyVariantPrice(admin: any, variantId: string, price: number) {
+  const response = await admin.graphql(
+    `#graphql
+      mutation MarginReviewUpdateVariantPrice($input: ProductVariantInput!) {
+        productVariantUpdate(input: $input) {
+          productVariant { id price }
+          userErrors { field message }
+        }
+      }
+    `,
+    { variables: { input: { id: variantId, price: price.toFixed(2) } } }
+  );
+  const payload = await response.json();
+  const errors = payload?.data?.productVariantUpdate?.userErrors || payload?.errors || [];
+  if (errors.length) {
+    return { ok: false, error: errors.map((item: any) => item.message || JSON.stringify(item)).join("; ") };
+  }
+  return { ok: true, variant: payload?.data?.productVariantUpdate?.productVariant || null };
+}
+
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
   const prisma: any = db;
   const nextUrl = new URL(request.url);
   const intent = String(formData.get("intent") || "saveAssumptions");
+
+  if (intent === "reviewApprovalRecords") {
+    const ids = formIds(formData).slice(0, 100);
+    const nextStatus = String(formData.get("nextStatus") || "");
+    const allowed = new Set(["approved", "rejected", "skipped"]);
+    let changed = 0;
+    let heldBlocked = 0;
+
+    if (ids.length && allowed.has(nextStatus)) {
+      const records = await prisma.priceApprovalRecord.findMany({
+        where: { shop, id: { in: ids } },
+        select: { id: true, status: true, costReviewNeeded: true },
+      });
+
+      for (const record of records) {
+        if (nextStatus === "approved" && (record.costReviewNeeded || record.status === "cost_review_hold")) {
+          heldBlocked += 1;
+          continue;
+        }
+        const data: any = { status: nextStatus };
+        if (nextStatus === "approved") data.approvedAt = new Date();
+        if (nextStatus === "rejected") data.rejectedAt = new Date();
+        await prisma.priceApprovalRecord.update({ where: { id: record.id }, data });
+        changed += 1;
+      }
+    }
+
+    nextUrl.searchParams.set("approvalAction", "1");
+    nextUrl.searchParams.set("approvalChanged", String(changed));
+    nextUrl.searchParams.set("approvalBlocked", String(heldBlocked));
+    return redirect(`${nextUrl.pathname}${nextUrl.search}`);
+  }
+
+  if (intent === "safeShopifyPriceUpdate") {
+    const approvedRecords = await prisma.priceApprovalRecord.findMany({
+      where: {
+        shop,
+        status: "approved",
+        costReviewNeeded: false,
+        shopifyVariantGid: { not: null },
+        suggestedPrice: { gt: 0 },
+      },
+      orderBy: [{ approvedAt: "asc" }, { updatedAt: "asc" }],
+      take: 25,
+    });
+
+    let updated = 0;
+    let failed = 0;
+    for (const record of approvedRecords) {
+      const result = await updateShopifyVariantPrice(admin, record.shopifyVariantGid, record.suggestedPrice);
+      if (result.ok) {
+        await prisma.priceApprovalRecord.update({
+          where: { id: record.id },
+          data: {
+            status: "updated_in_shopify",
+            currentPrice: record.suggestedPrice,
+            delta: 0,
+            updatedInShopifyAt: new Date(),
+            reason: [record.reason, `Updated Shopify price to ${money(record.suggestedPrice)} from Margin Review approval.`].filter(Boolean).join("\n"),
+          },
+        });
+        updated += 1;
+      } else {
+        await prisma.priceApprovalRecord.update({
+          where: { id: record.id },
+          data: {
+            reason: [record.reason, `Shopify update failed: ${result.error}`].filter(Boolean).join("\n"),
+          },
+        });
+        failed += 1;
+      }
+    }
+
+    nextUrl.searchParams.set("shopifyUpdated", "1");
+    nextUrl.searchParams.set("shopifyUpdatedCount", String(updated));
+    nextUrl.searchParams.set("shopifyFailedCount", String(failed));
+    return redirect(`${nextUrl.pathname}${nextUrl.search}`);
+  }
 
   if (intent === "createPriceApprovalRecords") {
     const approvalRows = cleanApprovalRows(formData.get("approvalRowsJson")).slice(0, 100);
@@ -556,6 +679,12 @@ export async function loader({ request }: { request: Request }) {
   const approvalsCreated = url.searchParams.get("approvalsCreated") === "1";
   const approvalCount = Math.max(0, Math.round(numberOr(url.searchParams.get("approvalCount"), 0)));
   const approvalHeld = Math.max(0, Math.round(numberOr(url.searchParams.get("approvalHeld"), 0)));
+  const approvalAction = url.searchParams.get("approvalAction") === "1";
+  const approvalChanged = Math.max(0, Math.round(numberOr(url.searchParams.get("approvalChanged"), 0)));
+  const approvalBlocked = Math.max(0, Math.round(numberOr(url.searchParams.get("approvalBlocked"), 0)));
+  const shopifyUpdated = url.searchParams.get("shopifyUpdated") === "1";
+  const shopifyUpdatedCount = Math.max(0, Math.round(numberOr(url.searchParams.get("shopifyUpdatedCount"), 0)));
+  const shopifyFailedCount = Math.max(0, Math.round(numberOr(url.searchParams.get("shopifyFailedCount"), 0)));
 
   const approvalStatusCounts = await prisma.priceApprovalRecord.groupBy({
     by: ["status"],
@@ -706,7 +835,13 @@ export async function loader({ request }: { request: Request }) {
       action: !row.currentPrice ? "Add price" : row.currentPrice + 0.005 < row.suggestedPrice ? "Raise price" : row.tierIssues > 0 ? "Review tiers" : "No action",
     }));
 
-  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, approvalSummary, approvalsCreated, approvalCount, approvalHeld, assumptions, savedSettings, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview, filters: { search, recipeId, status } });
+  const savedApprovalRecords = await prisma.priceApprovalRecord.findMany({
+    where: { shop },
+    orderBy: [{ updatedAt: "desc" }],
+    take: 100,
+  }).catch(() => []);
+
+  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, savedApprovalRecords, approvalSummary, approvalsCreated, approvalCount, approvalHeld, approvalAction, approvalChanged, approvalBlocked, shopifyUpdated, shopifyUpdatedCount, shopifyFailedCount, assumptions, savedSettings, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview, filters: { search, recipeId, status } });
 }
 
 function Badge({ tone, children }: { tone?: string; children: React.ReactNode }) {
@@ -714,7 +849,7 @@ function Badge({ tone, children }: { tone?: string; children: React.ReactNode })
 }
 
 export default function MarginReviewPage() {
-  const { recipes, rows, summary, approvalRows, approvalSummary, approvalsCreated, approvalCount, approvalHeld, filters, assumptions, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview } = useLoaderData<any>();
+  const { recipes, rows, summary, approvalRows, savedApprovalRecords, approvalSummary, approvalsCreated, approvalCount, approvalHeld, approvalAction, approvalChanged, approvalBlocked, shopifyUpdated, shopifyUpdatedCount, shopifyFailedCount, filters, assumptions, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview } = useLoaderData<any>();
 
   return (
     <div className="page">
@@ -779,10 +914,10 @@ export default function MarginReviewPage() {
         <Badge tone="green">Read-only</Badge>
         <Badge tone="yellow">Clear cost breakdown</Badge>
         <Badge tone="yellow">Tier-aware review</Badge>
-        <Badge tone="yellow">Approval queue preview</Badge>
+        <Badge tone="yellow">Approval queue records</Badge>
         <Badge tone="yellow">Saved shop assumptions</Badge>
         <Badge tone="yellow">Recipe cost review flags</Badge>
-        <Badge tone="gray">Price update later</Badge>
+        <Badge tone="yellow">Approved-only Shopify updater</Badge>
       </section>
 
       <section className="card">
@@ -822,6 +957,12 @@ export default function MarginReviewPage() {
         ) : null}
         {approvalsCreated ? (
           <div className="success-note">Price approval records saved. Wrote {approvalCount} approval record(s); {approvalHeld} are on cost-review hold until recipe issues are fixed.</div>
+        ) : null}
+        {approvalAction ? (
+          <div className="success-note">Approval review saved. Changed {approvalChanged} record(s). Blocked {approvalBlocked} cost-review hold approval attempt(s).</div>
+        ) : null}
+        {shopifyUpdated ? (
+          <div className="success-note">Shopify price updater ran. Updated {shopifyUpdatedCount} approved record(s). Failed {shopifyFailedCount} record(s).</div>
         ) : null}
         <div className="flag-panel">
           <strong>v8.1 Recipe Cost Review Flags + Details</strong>
@@ -914,56 +1055,73 @@ export default function MarginReviewPage() {
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Price Change Approval Queue</h2>
         <div className="queue-note">
-          <strong>v9 saved approval records.</strong> This panel now saves real approval queue rows from the current audit. It still does not update Shopify. Cost-review rows are saved as holds until recipe issues are fixed.
+          <strong>v9.1 + v10 approval workflow.</strong> This panel saves real approval queue rows, lets you approve/reject/skip records, and can update Shopify only for approved rows with no cost-review hold. Cost-review rows stay locked until recipe issues are fixed.
         </div>
         <div className="queue-actions">
-          <Badge tone={summary.priceQueue ? "yellow" : "green"}>{summary.priceQueue || 0} candidate row(s)</Badge>
-          <Badge tone="gray">{approvalSummary?.needs_review || 0} saved needs review</Badge>
+          <Badge tone={summary.priceQueue ? "yellow" : "green"}>{summary.priceQueue || 0} current audit candidates</Badge>
+          <Badge tone="blue">{approvalSummary?.needs_review || 0} saved clean review</Badge>
           <Badge tone="yellow">{approvalSummary?.cost_review_hold || 0} saved cost holds</Badge>
           <Badge tone="green">{approvalSummary?.approved || 0} approved</Badge>
-          <span className="button secondary disabled">Approve/reject in v9.1</span>
-          <span className="button secondary disabled">Update Shopify in v10</span>
+          <Badge tone="gray">{approvalSummary?.rejected || 0} rejected</Badge>
+          <Badge tone="gray">{approvalSummary?.skipped || 0} skipped</Badge>
+          <Badge tone="green">{approvalSummary?.updated_in_shopify || 0} updated</Badge>
         </div>
         {approvalRows?.length ? (
           <Form method="post" className="queue-actions">
             <input type="hidden" name="intent" value="createPriceApprovalRecords" />
             <input type="hidden" name="approvalRowsJson" value={JSON.stringify(approvalRows)} />
             <button type="submit">Create / refresh approval records</button>
-            <span className="button secondary disabled">Shopify updates still locked</span>
           </Form>
         ) : null}
-        {approvalRows?.length ? (
-          <table style={{ marginTop: 12 }}>
-            <thead>
-              <tr>
-                <th>Action</th>
-                <th>Product / Variant</th>
-                <th>Recipe</th>
-                <th className="right">Cost</th>
-                <th className="right">Current</th>
-                <th className="right">Suggested</th>
-                <th className="right">Delta</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {approvalRows.map((row: any) => (
-                <tr key={`queue-${row.id}`}>
-                  <td><strong>{row.action}</strong></td>
-                  <td><strong>{row.productTitle}</strong><br /><span className="muted">{row.variantTitle}</span></td>
-                  <td>{row.recipeName}</td>
-                  <td className="right">{money(row.estimatedCost)}</td>
-                  <td className="right">{row.currentPrice ? money(row.currentPrice) : "No price"}</td>
-                  <td className="right"><strong>{money(row.suggestedPrice)}</strong></td>
-                  <td className="right">{money(row.delta)}</td>
-                  <td>{row.costReviewNeeded ? <Badge tone="yellow">hold: cost review</Badge> : null}{row.tierIssues ? <Badge tone="yellow">tier review</Badge> : null}</td>
+        {savedApprovalRecords?.length ? (
+          <Form method="post" style={{ marginTop: 12 }}>
+            <div className="queue-actions">
+              <button type="submit" name="nextStatus" value="approved">Approve selected</button>
+              <button type="submit" name="nextStatus" value="rejected">Reject selected</button>
+              <button type="submit" name="nextStatus" value="skipped">Skip selected</button>
+              <span className="muted">Approvals are blocked for cost-review holds.</span>
+            </div>
+            <input type="hidden" name="intent" value="reviewApprovalRecords" />
+            <table style={{ marginTop: 12 }}>
+              <thead>
+                <tr>
+                  <th>Select</th>
+                  <th>Product / Variant</th>
+                  <th>Recipe</th>
+                  <th className="right">Cost</th>
+                  <th className="right">Current</th>
+                  <th className="right">Suggested</th>
+                  <th className="right">Delta</th>
+                  <th>Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {savedApprovalRecords.map((row: any) => (
+                  <tr key={`approval-${row.id}`}>
+                    <td><input type="checkbox" name="recordIds" value={row.id} disabled={row.status === "updated_in_shopify"} /></td>
+                    <td><strong>{row.productTitle || "Shopify product"}</strong><br /><span className="muted">{row.variantTitle || "Variant"}</span></td>
+                    <td>{row.recipeName || "No recipe"}</td>
+                    <td className="right">{money(row.estimatedCost)}</td>
+                    <td className="right">{row.currentPrice ? money(row.currentPrice) : "No price"}</td>
+                    <td className="right"><strong>{money(row.suggestedPrice)}</strong></td>
+                    <td className="right">{money(row.delta)}</td>
+                    <td>
+                      <Badge tone={approvalBadgeTone(row.status)}>{approvalStatusLabel(row.status)}</Badge>
+                      {row.reason ? <details><summary className="muted">Reason</summary><div className="muted" style={{ whiteSpace: "pre-wrap" }}>{row.reason}</div></details> : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Form>
         ) : (
-          <p className="muted" style={{ marginTop: 10 }}>No price increase candidates in the current filtered audit. Healthy rows may still appear below for review.</p>
+          <p className="muted" style={{ marginTop: 10 }}>No saved approval records yet. Run the audit, then create approval records.</p>
         )}
+        <Form method="post" className="queue-actions">
+          <input type="hidden" name="intent" value="safeShopifyPriceUpdate" />
+          <button type="submit">Update approved Shopify prices</button>
+          <span className="muted">Updates max 25 approved clean records per run. Cost-review holds, rejected rows, skipped rows, and already-updated rows are ignored.</span>
+        </Form>
       </section>
 
       <section className="card">
