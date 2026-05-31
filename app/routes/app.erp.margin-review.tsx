@@ -155,7 +155,9 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?
     missingBaseCost ? "Missing base/blank cost. Add a blank bag, jar, box, or base material with a real unit cost." : "",
     missingZones ? "Missing active label/application zones. Add active front/back zones so media and application labor can be calculated." : "",
     missingMediaCost ? "One or more active label/media zones has missing or zero media cost." : "",
-    applicationLaborFloorApplied ? `Application labor floor applied because zone labor seconds are too low. Current floor: ${money(sideLaborFloor)} per printed side.` : "",
+  ]);
+  const costReviewWarnings = uniqueStrings([
+    applicationLaborFloorApplied ? `Warning only: application labor floor applied because zone labor seconds are too low. Current floor: ${money(sideLaborFloor)} per printed side.` : "",
   ]);
   const costReviewNeeded = costReviewReasons.length > 0;
 
@@ -186,6 +188,9 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?
     missingMediaCost,
     costReviewReasons,
     costReviewReasonText: costReviewReasons.join("\n"),
+    costReviewWarnings,
+    costReviewWarningText: costReviewWarnings.join("\n"),
+    costReviewSeverity: costReviewNeeded ? "hard_hold" : costReviewWarnings.length ? "warning" : "clean",
     costReviewNeeded,
   };
 }
@@ -366,8 +371,12 @@ function approvalStatusForRow(row: any) {
 }
 
 function approvalReasonForRow(row: any) {
+  const warningText = Array.isArray(row?.costReviewWarnings)
+    ? row.costReviewWarnings.join("\n")
+    : String(row?.costReviewWarningText || "");
   return uniqueStrings([
-    row?.costReviewNeeded ? "Recipe has cost review hold. Fix recipe assumptions before approval." : "",
+    row?.costReviewNeeded ? "Hard cost-review hold. Fix missing recipe costs/setup before approval." : "",
+    warningText ? warningText : "",
     numberOr(row?.tierIssues, 0) > 0 ? "One or more pricing tiers is below target margin." : "",
     !numberOr(row?.currentPrice, 0) ? "Shopify variant has no current price." : "",
     numberOr(row?.currentPrice, 0) && numberOr(row?.currentPrice, 0) + 0.005 < numberOr(row?.suggestedPrice, 0) ? "Current Shopify price is below suggested target-margin price." : "",
@@ -391,6 +400,9 @@ function cleanApprovalRows(value: any) {
     delta: numberOr(row?.delta, 0),
     action: String(row?.action || "Review price").trim(),
     costReviewNeeded: !!row?.costReviewNeeded,
+    costReviewWarnings: Array.isArray(row?.costReviewWarnings) ? row.costReviewWarnings.map((item: any) => String(item || "").trim()).filter(Boolean) : [],
+    costReviewWarningText: String(row?.costReviewWarningText || "").trim(),
+    costReviewSeverity: String(row?.costReviewSeverity || (row?.costReviewNeeded ? "hard_hold" : "clean")),
     tierIssues: Math.max(0, Math.round(numberOr(row?.tierIssues, 0))),
   })).filter((row: any) => row.variantRuleId && row.suggestedPrice > 0);
 }
@@ -807,6 +819,7 @@ export async function loader({ request }: { request: Request }) {
     noPrice: filteredRows.filter((row: any) => !row.currentPrice).length,
     healthy: filteredRows.filter((row: any) => row.currentMargin !== null && row.currentMargin >= row.targetMargin).length,
     costReview: filteredRows.filter((row: any) => row.cost?.costReviewNeeded).length,
+    costWarnings: filteredRows.filter((row: any) => !row.cost?.costReviewNeeded && row.cost?.costReviewWarnings?.length).length,
     tierReview: filteredRows.filter((row: any) => row.tierIssues > 0).length,
     priceQueue: filteredRows.filter((row: any) => !row.currentPrice || row.currentPrice + 0.005 < row.suggestedPrice || row.tierIssues > 0).length,
     avgCost: filteredRows.length ? filteredRows.reduce((sum: number, row: any) => sum + row.cost.total, 0) / filteredRows.length : 0,
@@ -831,6 +844,9 @@ export async function loader({ request }: { request: Request }) {
       delta: row.suggestedPrice - row.currentPrice,
       estimatedCost: row.cost.total,
       costReviewNeeded: row.cost.costReviewNeeded,
+      costReviewWarnings: row.cost.costReviewWarnings || [],
+      costReviewWarningText: row.cost.costReviewWarningText || "",
+      costReviewSeverity: row.cost.costReviewSeverity || (row.cost.costReviewNeeded ? "hard_hold" : "clean"),
       tierIssues: row.tierIssues,
       action: !row.currentPrice ? "Add price" : row.currentPrice + 0.005 < row.suggestedPrice ? "Raise price" : row.tierIssues > 0 ? "Review tiers" : "No action",
     }));
@@ -967,7 +983,7 @@ export default function MarginReviewPage() {
         <div className="flag-panel">
           <strong>v8.1 Recipe Cost Review Flags + Details</strong>
           <p className="muted">
-            This sync pushes the current Margin Review cost-review results back into Product Setup. Recipes with missing base cost, missing zones, missing media cost, or application labor floor warnings will show as Cost Review in Product Setup with reason details. This still does not update Shopify prices.
+            This sync pushes hard cost-review results back into Product Setup. Missing base cost, missing zones, or missing media cost will show as Cost Review in Product Setup. Labor floor use is now a warning only and will not block approval by itself. This still does not update Shopify prices.
           </p>
           <div className="queue-actions">
             <Badge tone={recipeFlagPreview?.flagCount ? "yellow" : "green"}>{recipeFlagPreview?.flagCount || 0} recipe(s) to flag</Badge>
@@ -1046,7 +1062,8 @@ export default function MarginReviewPage() {
         <div className="stat"><span className="muted">Rows shown</span><strong>{summary.rows}</strong></div>
         <div className="stat"><span className="muted">Healthy</span><strong>{summary.healthy}</strong></div>
         <div className="stat"><span className="muted">Below target</span><strong>{summary.belowTarget}</strong></div>
-        <div className="stat"><span className="muted">Cost review</span><strong>{summary.costReview}</strong></div>
+        <div className="stat"><span className="muted">Hard cost holds</span><strong>{summary.costReview}</strong></div>
+        <div className="stat"><span className="muted">Cost warnings</span><strong>{summary.costWarnings || 0}</strong></div>
         <div className="stat"><span className="muted">Tier issues</span><strong>{summary.tierReview}</strong></div>
         <div className="stat"><span className="muted">Avg est. cost</span><strong>{money(summary.avgCost)}</strong></div>
       </section>
@@ -1055,7 +1072,7 @@ export default function MarginReviewPage() {
       <section className="card">
         <h2 style={{ marginTop: 0 }}>Price Change Approval Queue</h2>
         <div className="queue-note">
-          <strong>v9.1 + v10 approval workflow.</strong> This panel saves real approval queue rows, lets you approve/reject/skip records, and can update Shopify only for approved rows with no cost-review hold. Cost-review rows stay locked until recipe issues are fixed.
+          <strong>v10.1 approval workflow.</strong> This panel saves real approval queue rows, lets you approve/reject/skip records, and can update Shopify only for approved rows with no hard cost-review hold. Labor-floor use is now a warning, not an automatic block.
         </div>
         <div className="queue-actions">
           <Badge tone={summary.priceQueue ? "yellow" : "green"}>{summary.priceQueue || 0} current audit candidates</Badge>
@@ -1079,7 +1096,7 @@ export default function MarginReviewPage() {
               <button type="submit" name="nextStatus" value="approved">Approve selected</button>
               <button type="submit" name="nextStatus" value="rejected">Reject selected</button>
               <button type="submit" name="nextStatus" value="skipped">Skip selected</button>
-              <span className="muted">Approvals are blocked for cost-review holds.</span>
+              <span className="muted">Approvals are blocked only for hard cost-review holds. Warning-only rows can be approved.</span>
             </div>
             <input type="hidden" name="intent" value="reviewApprovalRecords" />
             <table style={{ marginTop: 12 }}>
