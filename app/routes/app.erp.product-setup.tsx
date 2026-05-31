@@ -1,4 +1,4 @@
-import { Form, useActionData, useLoaderData } from "react-router";
+import { Form, Link, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -1522,8 +1522,8 @@ export default function ProductSetupRecipeBuilder() {
         <div className="button-row">
           <span className="badge">Showing {recipes.length} of {recipeCount}</span>
           <span className="badge">Page {recipePage} of {recipeTotalPages}</span>
-          {hasPrevRecipes ? <a className="button secondary" href={`?${recipeBaseQuery}&recipePage=${recipePage - 1}`}>Previous recipes</a> : null}
-          {hasNextRecipes ? <a className="button secondary" href={`?${recipeBaseQuery}&recipePage=${recipePage + 1}`}>Next recipes</a> : null}
+          {hasPrevRecipes ? <Link className="button secondary" to={`?${recipeBaseQuery}&recipePage=${recipePage - 1}`}>Previous recipes</Link> : null}
+          {hasNextRecipes ? <Link className="button secondary" to={`?${recipeBaseQuery}&recipePage=${recipePage + 1}`}>Next recipes</Link> : null}
         </div>
 
         {recipes.length ? <table>
@@ -1550,7 +1550,7 @@ export default function ProductSetupRecipeBuilder() {
                   {recipe.costReviewNeeded ? <span className="badge yellow">Cost Review</span> : <span className="badge green">Cost OK</span>}
                   {reasons.length ? <div className="muted">{reasons[0]}</div> : null}
                 </td>
-                <td><a className="button" href={recipeHref(recipe.id)}>Open</a></td>
+                <td><Link className="button" to={recipeHref(recipe.id)} preventScrollReset>Open</Link></td>
               </tr>;
             })}
           </tbody>
