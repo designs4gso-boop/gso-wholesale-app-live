@@ -21,6 +21,7 @@ type FieldGroup =
   | "supplier_cost_tiers"
   | "size_area"
   | "material_cost"
+  | "ink_machine_cost"
   | "label_cost"
   | "application_labor"
   | "finishing_labor"
@@ -48,6 +49,29 @@ type ProductTypeOption = {
   routes: RouteConfig[];
 };
 
+
+type MaterialCostOption = {
+  id: string;
+  name: string;
+  materialType: string;
+  unit: string;
+  baseUnit: string;
+  costPerUnit: number;
+  calculatedUnitCost: number;
+  costPerSqIn: number;
+  sourceNote: string;
+};
+
+type MachineCostOption = {
+  id: string;
+  name: string;
+  machineType: string;
+  costPerHour: number;
+  sqftPerHour: number;
+  inkCostPerSqInAt100: number;
+  sourceNote: string;
+};
+
 type CalculatorInput = {
   productName: string;
   productTypeKey: string;
@@ -62,6 +86,11 @@ type CalculatorInput = {
   materialCostMode: "manual_each" | "area_rate";
   materialCostPerSqIn: number;
   labelCostEach: number;
+  labelMaterialId: string;
+  laminateMaterialId: string;
+  inkMachineId: string;
+  inkCoveragePct: number;
+  inkCostPerSqIn: number;
   applicationCount: number;
   applicationSecondsPerUnit: number;
   finishingSecondsPerUnit: number;
@@ -86,19 +115,19 @@ const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
       key: "fully_in_house",
       name: "Fully in-house label/sticker",
       help: "Use this when GSO produces the label or sticker internally. This route asks for label size, material, finish, waste, setup, and labor.",
-      fields: ["size_area", "material_cost", "finishing_labor", "setup_prepress", "packing_labor", "manual_sell_tiers"],
+      fields: ["size_area", "material_cost", "ink_machine_cost", "finishing_labor", "setup_prepress", "packing_labor", "manual_sell_tiers"],
     },
     {
       key: "outsourced_print_in_house_finish",
       name: "Outsourced print + in-house finishing",
       help: "Use this when printed labels are bought from a supplier but GSO adds finishing, packing, QC, or setup work. Label size/material fields still appear so staff can document what was quoted.",
-      fields: ["supplier_cost_tiers", "size_area", "material_cost", "finishing_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
+      fields: ["supplier_cost_tiers", "size_area", "material_cost", "ink_machine_cost", "finishing_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
     },
     {
       key: "outsourced_item_in_house_label_application",
       name: "Outsourced item + in-house label/application",
       help: "Use this when GSO buys an item such as a jar, bag, or container and then produces/applies labels in-house.",
-      fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
+      fields: ["supplier_cost_tiers", "size_area", "material_cost", "ink_machine_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
     },
   ],
   box: [
@@ -140,7 +169,7 @@ const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
       key: "outsourced_item_in_house_label_application",
       name: "Outsourced item + in-house label/application",
       help: "Use this for pop tops, jars, or containers bought from a supplier and labeled by GSO.",
-      fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
+      fields: ["supplier_cost_tiers", "size_area", "material_cost", "ink_machine_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
     },
   ],
   sticker_bag: [
@@ -148,7 +177,7 @@ const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
       key: "outsourced_blank_in_house_label_application",
       name: "Outsourced blank + in-house label/application",
       help: "Use this for custom sticker-bag work that is not already a Shopify product.",
-      fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "setup_prepress", "manual_sell_tiers"],
+      fields: ["supplier_cost_tiers", "size_area", "material_cost", "ink_machine_cost", "label_cost", "application_labor", "packing_labor", "setup_prepress", "manual_sell_tiers"],
     },
   ],
   sourced: [
@@ -173,7 +202,8 @@ const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
 const FIELD_LABELS: Record<FieldGroup, string> = {
   supplier_cost_tiers: "Supplier cost tiers",
   size_area: "Size / area",
-  material_cost: "Material cost",
+  material_cost: "Material / media cost",
+  ink_machine_cost: "Ink / machine cost",
   label_cost: "Manual label cost",
   application_labor: "Application labor",
   finishing_labor: "Finishing labor",
@@ -209,6 +239,67 @@ const FALLBACK_PRODUCT_TYPES: ProductTypeOption[] = [
     routes: ROUTES.sourced,
   },
 ];
+
+
+function materialCostPerSqIn(material: any) {
+  const calculated = Number(material?.calculatedUnitCost || 0);
+  const costPerUnit = Number(material?.costPerUnit || 0);
+  const purchaseCost = Number(material?.purchaseCost || 0);
+  const baseUnit = String(material?.baseUnit || "").toLowerCase();
+  const unit = String(material?.unit || "").toLowerCase();
+  const yieldQuantity = Number(material?.yieldQuantity || 0);
+  const yieldUnit = String(material?.yieldUnit || "").toLowerCase();
+  const rollWidthIn = Number(material?.rollWidthIn || 0);
+  const rollLengthFt = Number(material?.rollLengthFt || 0);
+
+  if (baseUnit === "sqin" && calculated > 0) return { value: calculated, note: "calculated unit cost / sq in" };
+  if (baseUnit === "sqft" && calculated > 0) return { value: calculated / 144, note: "calculated unit cost / sq ft converted to sq in" };
+  if (unit === "sqin" && costPerUnit > 0) return { value: costPerUnit, note: "cost per sq in" };
+  if (unit === "sqft" && costPerUnit > 0) return { value: costPerUnit / 144, note: "cost per sq ft converted to sq in" };
+  if (yieldUnit === "sqin" && yieldQuantity > 0 && purchaseCost > 0) return { value: purchaseCost / yieldQuantity, note: "purchase cost / sq in yield" };
+  if (yieldUnit === "sqft" && yieldQuantity > 0 && purchaseCost > 0) return { value: purchaseCost / (yieldQuantity * 144), note: "purchase cost / sq ft yield converted to sq in" };
+  if (rollWidthIn > 0 && rollLengthFt > 0 && purchaseCost > 0) {
+    return { value: purchaseCost / (rollWidthIn * rollLengthFt * 12), note: "roll width × length converted to sq in" };
+  }
+  return { value: 0, note: "missing sq in conversion data" };
+}
+
+function materialToOption(material: any): MaterialCostOption {
+  const perSqIn = materialCostPerSqIn(material);
+  return {
+    id: String(material.id),
+    name: String(material.name || "Material"),
+    materialType: String(material.materialType || "general"),
+    unit: String(material.unit || "each"),
+    baseUnit: String(material.baseUnit || "each"),
+    costPerUnit: Number(material.costPerUnit || 0),
+    calculatedUnitCost: Number(material.calculatedUnitCost || 0),
+    costPerSqIn: Number(perSqIn.value || 0),
+    sourceNote: perSqIn.note,
+  };
+}
+
+function machineToOption(machine: any): MachineCostOption {
+  const channels = Array.isArray(machine?.inkChannels) ? machine.inkChannels : [];
+  const inkCostPerSqftAt100 = channels.reduce((sum: number, channel: any) => {
+    const costPerMl = Number(channel?.costPerMl || 0);
+    const mlPerSqft100 = Number(channel?.mlPerSqft100 || 0);
+    return sum + costPerMl * mlPerSqft100;
+  }, 0);
+  const inkCostPerSqInAt100 = inkCostPerSqftAt100 / 144;
+  const machineCostPerSqIn = Number(machine?.costPerHour || 0) > 0 && Number(machine?.sqftPerHour || 0) > 0
+    ? Number(machine.costPerHour) / (Number(machine.sqftPerHour) * 144)
+    : 0;
+  return {
+    id: String(machine.id),
+    name: String(machine.name || "Machine"),
+    machineType: String(machine.machineType || "machine"),
+    costPerHour: Number(machine.costPerHour || 0),
+    sqftPerHour: Number(machine.sqftPerHour || 0),
+    inkCostPerSqInAt100: inkCostPerSqInAt100 + machineCostPerSqIn,
+    sourceNote: channels.length ? `${channels.length} ink channel(s) + machine recovery` : "machine recovery only / no ink channels",
+  };
+}
 
 function money(value: number | null | undefined) {
   const numeric = Number(value || 0);
@@ -431,15 +522,16 @@ function costBreakdownForRoute(route: RouteConfig, input: CalculatorInput, quant
       : input.materialCostEach
     : 0;
   const labelCost = boolField(route, "label_cost") ? input.labelCostEach : 0;
+  const inkMachineCost = boolField(route, "ink_machine_cost") ? sizeArea * Math.max(0, input.inkCostPerSqIn) : 0;
   const applicationRaw = boolField(route, "application_labor") ? (input.applicationSecondsPerUnit / 3600) * laborRatePerHour * Math.max(1, input.applicationCount) : 0;
   const applicationFloor = boolField(route, "application_labor") ? appFloorPerSide * Math.max(1, input.applicationCount) : 0;
   const applicationLabor = boolField(route, "application_labor") ? Math.max(applicationRaw, applicationFloor) : 0;
   const finishingLabor = boolField(route, "finishing_labor") ? (input.finishingSecondsPerUnit / 3600) * laborRatePerHour : 0;
   const packingLabor = boolField(route, "packing_labor") ? (input.packingSecondsPerUnit / 3600) * laborRatePerHour : 0;
-  const preWaste = supplierCostEach + perUnitAllocation + setupPerUnit + materialCost + labelCost;
+  const preWaste = supplierCostEach + perUnitAllocation + setupPerUnit + materialCost + labelCost + inkMachineCost;
   const wasteCost = preWaste * Math.max(0, input.wastePct) / 100;
   const total = preWaste + wasteCost + applicationLabor + finishingLabor + packingLabor;
-  return { sizeArea, supplierCostEach, perUnitAllocation, setupPerUnit, materialCost, labelCost, wasteCost, applicationLabor, finishingLabor, packingLabor, total };
+  return { sizeArea, supplierCostEach, perUnitAllocation, setupPerUnit, materialCost, labelCost, inkMachineCost, wasteCost, applicationLabor, finishingLabor, packingLabor, total };
 }
 
 function buildTierRows(url: URL, input: CalculatorInput, productType: ProductTypeOption, route: RouteConfig, laborRatePerHour: number, appFloorPerSide: number): TierRow[] {
@@ -488,12 +580,52 @@ export async function loader({ request }: { request: Request }) {
     take: 50,
   });
 
+  const materialsRaw = await db.material.findMany({
+    where: { shop, active: true, useInRecipes: true },
+    select: { id: true, name: true, materialType: true, unit: true, costPerUnit: true, purchaseCost: true, baseUnit: true, yieldQuantity: true, yieldUnit: true, rollWidthIn: true, rollLengthFt: true, calculatedUnitCost: true, productFamilies: true },
+    orderBy: [{ materialType: "asc" }, { name: "asc" }],
+    take: 200,
+  });
+
+  const machinesRaw = await db.machine.findMany({
+    where: { shop, active: true },
+    select: {
+      id: true, name: true, machineType: true, costPerHour: true, sqftPerHour: true,
+      inkChannels: { where: { enabled: true }, select: { costPerMl: true, mlPerSqft100: true } },
+    },
+    orderBy: [{ name: "asc" }],
+    take: 25,
+  });
+
   const erpProductTypes = profiles.map(productTypeToOption);
   const productTypes = erpProductTypes.length ? [...erpProductTypes, ...FALLBACK_PRODUCT_TYPES] : FALLBACK_PRODUCT_TYPES;
   const selectedProductTypeKey = stringParam(url, "productTypeKey", productTypes[0]?.key || "general_sourced_product");
   const selectedProductType = productTypes.find((type) => type.key === selectedProductTypeKey) || productTypes[0] || FALLBACK_PRODUCT_TYPES[0];
   const requestedRouteKey = stringParam(url, "routeKey", selectedProductType.routes[0]?.key || "fully_outsourced");
   const selectedRoute = selectedProductType.routes.find((route) => route.key === requestedRouteKey) || selectedProductType.routes[0] || ROUTES.sourced[0];
+
+  const materialOptions = materialsRaw.map(materialToOption);
+  const labelMaterialOptions = materialOptions.filter((material) => {
+    const haystack = `${material.name} ${material.materialType}`.toLowerCase();
+    return haystack.includes("label") || haystack.includes("media") || haystack.includes("vinyl") || haystack.includes("sticker") || haystack.includes("matte") || haystack.includes("gloss") || haystack.includes("holo") || haystack.includes("clear") || haystack.includes("white");
+  });
+  const laminateOptions = materialOptions.filter((material) => {
+    const haystack = `${material.name} ${material.materialType}`.toLowerCase();
+    return haystack.includes("laminate") || haystack.includes("lamination") || haystack.includes("finish") || haystack.includes("gloss");
+  });
+  const machineOptions = machinesRaw.map(machineToOption);
+
+  const selectedMaterialId = stringParam(url, "labelMaterialId", labelMaterialOptions[0]?.id || "");
+  const selectedMaterial = labelMaterialOptions.find((material) => material.id === selectedMaterialId) || null;
+  const selectedLaminateId = stringParam(url, "laminateMaterialId", "");
+  const selectedLaminate = laminateOptions.find((material) => material.id === selectedLaminateId) || null;
+  const selectedMachineId = stringParam(url, "inkMachineId", machineOptions[0]?.id || "");
+  const selectedMachine = machineOptions.find((machine) => machine.id === selectedMachineId) || null;
+  const urlHasMaterialRate = url.searchParams.has("materialCostPerSqIn");
+  const urlHasInkRate = url.searchParams.has("inkCostPerSqIn");
+  const autoMaterialRate = Number(selectedMaterial?.costPerSqIn || 0) + Number(selectedLaminate?.costPerSqIn || 0);
+  const inkCoveragePct = numberParam(url, "inkCoveragePct", 40);
+  const autoInkRate = Number(selectedMachine?.inkCostPerSqInAt100 || 0) * Math.max(0, inkCoveragePct) / 100;
 
   const input: CalculatorInput = {
     productName: stringParam(url, "productName", "New custom item"),
@@ -506,9 +638,14 @@ export async function loader({ request }: { request: Request }) {
     widthIn: numberParam(url, "widthIn", 0),
     heightIn: numberParam(url, "heightIn", 0),
     materialCostEach: numberParam(url, "materialCostEach", 0),
-    materialCostMode: stringParam(url, "materialCostMode", "manual_each") === "area_rate" ? "area_rate" : "manual_each",
-    materialCostPerSqIn: numberParam(url, "materialCostPerSqIn", 0),
+    materialCostMode: stringParam(url, "materialCostMode", selectedMaterial ? "area_rate" : "manual_each") === "area_rate" ? "area_rate" : "manual_each",
+    materialCostPerSqIn: numberParam(url, "materialCostPerSqIn", urlHasMaterialRate ? 0 : autoMaterialRate),
     labelCostEach: numberParam(url, "labelCostEach", 0),
+    labelMaterialId: selectedMaterialId,
+    laminateMaterialId: selectedLaminateId,
+    inkMachineId: selectedMachineId,
+    inkCoveragePct,
+    inkCostPerSqIn: numberParam(url, "inkCostPerSqIn", urlHasInkRate ? 0 : autoInkRate),
     applicationCount: numberParam(url, "applicationCount", 1),
     applicationSecondsPerUnit: numberParam(url, "applicationSecondsPerUnit", 10),
     finishingSecondsPerUnit: numberParam(url, "finishingSecondsPerUnit", 0),
@@ -539,6 +676,12 @@ export async function loader({ request }: { request: Request }) {
     selectedRoute,
     tierRows,
     routeFields: selectedRoute.fields,
+    materialOptions: labelMaterialOptions,
+    laminateOptions,
+    machineOptions,
+    selectedMaterial,
+    selectedLaminate,
+    selectedMachine,
     firstBreakdown,
     savedDraft: url.searchParams.get("savedDraft") === "1",
     savedQuoteId: url.searchParams.get("quoteId") || "",
@@ -587,7 +730,7 @@ export async function action({ request }: { request: Request }) {
     `Product type: ${productType?.name || ""}`,
     `Production route: ${route?.name || ""}`,
     `Vendor: ${input?.vendor || ""}`,
-    `Saved from Product Cost Calculator v12.10.`,
+    `Saved from Product Cost Calculator v12.11.`,
     internalNotes ? `Internal notes: ${internalNotes}` : "",
   ].filter(Boolean).join("\n");
 
@@ -672,7 +815,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.10: save calculator drafts. Add/remove tiers, calculate custom pricing, and save the current result as a draft quote.
+          v12.11: route cost variables auto-pull. Materials, laminate, ink/machine, labor floors, tiers, and manual overrides now work together.
         </p>
       </section>
 
@@ -768,11 +911,29 @@ export default function WholesaleCalculator() {
           {(show("material_cost") || show("label_cost")) && (
             <>
               <label style={labelStyle()}>
-                Label material
+                Label material source
+                <select name="labelMaterialId" defaultValue={input.labelMaterialId} onChange={(event) => submitCalculatorForm(event.currentTarget)} style={fieldStyle}>
+                  <option value="">Manual / custom material</option>
+                  {data.materialOptions.map((material: MaterialCostOption) => (
+                    <option key={material.id} value={material.id}>{material.name} {material.costPerSqIn > 0 ? `(${money(material.costPerSqIn)}/sq in)` : "(missing rate)"}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={labelStyle()}>
+                Laminate / finish source
+                <select name="laminateMaterialId" defaultValue={input.laminateMaterialId} onChange={(event) => submitCalculatorForm(event.currentTarget)} style={fieldStyle}>
+                  <option value="">None / manual finish</option>
+                  {data.laminateOptions.map((material: MaterialCostOption) => (
+                    <option key={material.id} value={material.id}>{material.name} {material.costPerSqIn > 0 ? `(${money(material.costPerSqIn)}/sq in)` : "(missing rate)"}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={labelStyle()}>
+                Material note / override label
                 <input name="labelMaterial" defaultValue={input.labelMaterial} placeholder="Matte, holo, clear, white" style={fieldStyle} />
               </label>
               <label style={labelStyle()}>
-                Finish / gloss
+                Finish / gloss note
                 <input name="labelFinish" defaultValue={input.labelFinish} placeholder="None, gloss, SG, laminate" style={fieldStyle} />
               </label>
             </>
@@ -792,8 +953,36 @@ export default function WholesaleCalculator() {
                 <input name="materialCostEach" type="number" min="0" step="0.0001" defaultValue={input.materialCostEach} style={fieldStyle} />
               </label>
               <label style={labelStyle()}>
-                Material cost per sq in
+                Material cost per sq in (auto-filled from material when available)
                 <input name="materialCostPerSqIn" type="number" min="0" step="0.000001" defaultValue={input.materialCostPerSqIn} style={fieldStyle} />
+              </label>
+            </>
+          )}
+
+          {show("ink_machine_cost") && (
+            <>
+              <section style={{ gridColumn: "span 6", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 10, padding: 12 }}>
+                <strong>Ink / machine cost</strong>
+                <p style={{ margin: "4px 0 0", color: "#3730a3", fontSize: 12 }}>
+                  Pulls enabled ink channels and machine recovery from Machine Center when available. You can override the rate for special jobs.
+                </p>
+              </section>
+              <label style={labelStyle("span 2")}>
+                Machine / ink source
+                <select name="inkMachineId" defaultValue={input.inkMachineId} onChange={(event) => submitCalculatorForm(event.currentTarget)} style={fieldStyle}>
+                  <option value="">Manual / no machine selected</option>
+                  {data.machineOptions.map((machine: MachineCostOption) => (
+                    <option key={machine.id} value={machine.id}>{machine.name} {machine.inkCostPerSqInAt100 > 0 ? `(${money(machine.inkCostPerSqInAt100)}/sq in @100%)` : "(missing rate)"}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={labelStyle()}>
+                Ink coverage %
+                <input name="inkCoveragePct" type="number" min="0" max="500" step="1" defaultValue={input.inkCoveragePct} style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                Ink/machine cost per sq in
+                <input name="inkCostPerSqIn" type="number" min="0" step="0.000001" defaultValue={input.inkCostPerSqIn} style={fieldStyle} />
               </label>
             </>
           )}
@@ -904,7 +1093,7 @@ export default function WholesaleCalculator() {
         <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Cost sections used by this route</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
           <Mini title="Supplier/item" value={money(data.firstBreakdown.supplierCostEach)} active={show("supplier_cost_tiers")} />
-          <Mini title="Material" value={money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost)} active={show("material_cost") || show("label_cost")} />
+          <Mini title="Material" value={money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost + data.firstBreakdown.inkMachineCost)} active={show("material_cost") || show("label_cost")} />
           <Mini title="Labor" value={money(data.firstBreakdown.applicationLabor + data.firstBreakdown.finishingLabor + data.firstBreakdown.packingLabor)} active={show("application_labor") || show("finishing_labor") || show("packing_labor")} />
           <Mini title="Freight/tool/setup" value={money(data.firstBreakdown.perUnitAllocation + data.firstBreakdown.setupPerUnit)} active={show("freight_tooling") || show("setup_prepress")} />
           <Mini title="Waste" value={money(data.firstBreakdown.wasteCost)} active={input.wastePct > 0} />
@@ -914,7 +1103,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginBottom: 16 }}>
         <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Formula check</h2>
         <p style={{ margin: 0, fontSize: 13, color: "#4b5563" }}>
-          First tier calculation uses {data.firstBreakdown.sizeArea.toFixed(3)} sq in, {money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost)} material/label cost, {money(data.firstBreakdown.applicationLabor + data.firstBreakdown.finishingLabor + data.firstBreakdown.packingLabor)} labor, {money(data.firstBreakdown.perUnitAllocation + data.firstBreakdown.setupPerUnit)} allocated freight/tooling/setup, {money(data.firstBreakdown.wasteCost)} waste, and {(data.tierRows as TierRow[])[0]?.tierMarginPct.toFixed(1)}% tier margin target.
+          First tier calculation uses {data.firstBreakdown.sizeArea.toFixed(3)} sq in, {money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost)} material/label cost, {money(data.firstBreakdown.inkMachineCost)} ink/machine cost, {money(data.firstBreakdown.applicationLabor + data.firstBreakdown.finishingLabor + data.firstBreakdown.packingLabor)} labor, {money(data.firstBreakdown.perUnitAllocation + data.firstBreakdown.setupPerUnit)} allocated freight/tooling/setup, {money(data.firstBreakdown.wasteCost)} waste, and {(data.tierRows as TierRow[])[0]?.tierMarginPct.toFixed(1)}% tier margin target.
         </p>
       </section>
 

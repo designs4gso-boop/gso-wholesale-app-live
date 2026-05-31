@@ -6,6 +6,7 @@ type FieldGroup =
   | "supplier_cost_tiers"
   | "size_area"
   | "material_cost"
+  | "ink_machine_cost"
   | "label_cost"
   | "application_labor"
   | "finishing_labor"
@@ -26,7 +27,8 @@ type ProductKind = "label" | "box" | "dtp" | "jar" | "sticker_bag" | "sourced" |
 const FIELD_LABELS: Record<FieldGroup, string> = {
   supplier_cost_tiers: "Supplier cost tiers",
   size_area: "Size / area",
-  material_cost: "Material cost",
+  material_cost: "Material / media cost",
+  ink_machine_cost: "Ink / machine cost",
   label_cost: "Manual label cost",
   application_labor: "Application labor",
   finishing_labor: "Finishing labor",
@@ -38,9 +40,9 @@ const FIELD_LABELS: Record<FieldGroup, string> = {
 
 const ROUTES: Record<ProductKind, RouteConfig[]> = {
   label: [
-    { key: "fully_in_house", name: "Fully in-house label/sticker", help: "GSO produces the label/sticker work internally. Opens label size, material, finish, setup, and labor fields.", fields: ["size_area", "material_cost", "finishing_labor", "setup_prepress", "packing_labor", "manual_sell_tiers"] },
-    { key: "outsourced_print_in_house_finish", name: "Outsourced print + in-house finishing", help: "Supplier prints/laminates; GSO adds finishing, packing, or QC. Label size/material fields remain visible for quote clarity.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "finishing_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
-    { key: "outsourced_item_in_house_label_application", name: "Outsourced item + in-house label/application", help: "GSO buys an item like a jar, bag, or container, then produces/applies labels in-house.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
+    { key: "fully_in_house", name: "Fully in-house label/sticker", help: "GSO produces the label/sticker work internally. Opens label size, material, finish, setup, and labor fields.", fields: ["size_area", "material_cost", "ink_machine_cost", "finishing_labor", "setup_prepress", "packing_labor", "manual_sell_tiers"] },
+    { key: "outsourced_print_in_house_finish", name: "Outsourced print + in-house finishing", help: "Supplier prints/laminates; GSO adds finishing, packing, or QC. Label size/material fields remain visible for quote clarity.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "ink_machine_cost", "finishing_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
+    { key: "outsourced_item_in_house_label_application", name: "Outsourced item + in-house label/application", help: "GSO buys an item like a jar, bag, or container, then produces/applies labels in-house.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "ink_machine_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
   ],
   box: [
     { key: "fully_outsourced", name: "Fully outsourced", help: "Supplier provides the finished box and GSO marks it up.", fields: ["supplier_cost_tiers", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
@@ -52,10 +54,10 @@ const ROUTES: Record<ProductKind, RouteConfig[]> = {
   ],
   jar: [
     { key: "fully_outsourced", name: "Fully outsourced", help: "Jar/container is purchased finished and sold as-is.", fields: ["supplier_cost_tiers", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
-    { key: "outsourced_item_in_house_label_application", name: "Outsourced item + in-house label/application", help: "Pop tops, jars, or containers bought from a supplier and labeled by GSO.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
+    { key: "outsourced_item_in_house_label_application", name: "Outsourced item + in-house label/application", help: "Pop tops, jars, or containers bought from a supplier and labeled by GSO.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "ink_machine_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
   ],
   sticker_bag: [
-    { key: "outsourced_blank_in_house_label_application", name: "Outsourced blank + in-house label/application", help: "Custom sticker-bag work that is not already a Shopify product.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "setup_prepress", "manual_sell_tiers"] },
+    { key: "outsourced_blank_in_house_label_application", name: "Outsourced blank + in-house label/application", help: "Custom sticker-bag work that is not already a Shopify product.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "ink_machine_cost", "label_cost", "application_labor", "packing_labor", "setup_prepress", "manual_sell_tiers"] },
   ],
   sourced: [
     { key: "fully_outsourced", name: "Fully outsourced / sourced product", help: "New sourced products where staff enters supplier cost and sell tiers.", fields: ["supplier_cost_tiers", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
