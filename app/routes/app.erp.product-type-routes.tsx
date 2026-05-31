@@ -159,10 +159,13 @@ export async function action({ request }: { request: Request }) {
   const formData = await request.formData();
   const id = String(formData.get("id") || "");
   const kind = validKind(formData.get("calculatorKind")) || "general";
-  const selectedRoutes = formData.getAll("routeKeys").map((value) => {
-    const key = String(value);
-    return kind === "label" && key === "outsourced_blank_in_house_finish" ? "outsourced_item_in_house_label_application" : key;
-  });
+  const intent = String(formData.get("intent") || "save");
+  const selectedRoutes = intent === "reset"
+    ? (ROUTES[kind] || ROUTES.general).map((route) => route.key)
+    : formData.getAll("routeKeys").map((value) => {
+        const key = String(value);
+        return kind === "label" && key === "outsourced_blank_in_house_finish" ? "outsourced_item_in_house_label_application" : key;
+      });
   const routes = (ROUTES[kind] || ROUTES.general).filter((route) => selectedRoutes.includes(route.key));
   const routesToSave = routes.length ? routes : [ROUTES[kind][0] || ROUTES.general[0]];
 
@@ -177,6 +180,30 @@ export async function action({ request }: { request: Request }) {
   return Response.redirect("/app/erp/product-type-routes?saved=1");
 }
 
+function kindLabel(kind: ProductKind) {
+  return KIND_OPTIONS.find((option) => option.key === kind)?.label || "Product Type";
+}
+
+function routeNamesFor(profile: any) {
+  const routes = ROUTES[profile.resolvedKind as ProductKind] || ROUTES.general;
+  return routes
+    .filter((route) => profile.savedRouteKeys.includes(route.key))
+    .map((route) => route.name);
+}
+
+const pillStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  borderRadius: 999,
+  padding: "4px 9px",
+  fontSize: 12,
+  fontWeight: 700,
+  background: "#eef2ff",
+  color: "#3730a3",
+  marginRight: 6,
+  marginTop: 6,
+};
+
 export default function ProductTypeRoutes() {
   const data = useLoaderData<typeof loader>();
 
@@ -185,7 +212,7 @@ export default function ProductTypeRoutes() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Type Route Setup</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.6: each ERP product type controls the production routes and calculator sections shown in the Product Cost Calculator.
+          v12.7: clean route setup. Each product type controls the routes staff can use and the calculator field groups that appear for that route.
         </p>
       </section>
 
@@ -196,12 +223,16 @@ export default function ProductTypeRoutes() {
       )}
 
       <section style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <strong>How this works:</strong> Choose the calculator kind for each product type, then choose which production routes staff can use. The calculator will only show fields attached to the selected route.
+        <strong>Setup rule:</strong> Product Type controls the route dropdown. Production Route controls the calculator fields. Existing Shopify product prices still stay in Margin Review; this setup only controls custom/new-product calculator jobs.
+        <div style={{ marginTop: 10 }}>
+          <a href="/app/wholesale/calculator" style={{ color: "#1d4ed8", fontWeight: 800 }}>Open Product Cost Calculator</a>
+        </div>
       </section>
 
       <div style={{ display: "grid", gap: 14 }}>
         {data.profiles.map((profile: any) => {
           const routes = ROUTES[profile.resolvedKind as ProductKind] || ROUTES.general;
+          const selectedRouteNames = routeNamesFor(profile);
           return (
             <section key={profile.id} style={{ background: "#fff", border: "1px solid #d9dde6", borderRadius: 12, padding: 16 }}>
               <Form method="post" style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12, alignItems: "start" }}>
@@ -210,6 +241,10 @@ export default function ProductTypeRoutes() {
                   <h2 style={{ margin: "0 0 4px", fontSize: 18 }}>{profile.displayName}</h2>
                   <p style={{ margin: 0, color: "#6b7280", fontSize: 12 }}>ERP key: {profile.key}</p>
                   <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: 12 }}>Default margin: {Number(profile.defaultMarginPct || 0).toFixed(1)}%</p>
+                  <div style={{ marginTop: 8 }}>
+                    <span style={pillStyle}>{kindLabel(profile.resolvedKind)}</span>
+                    <span style={{ ...pillStyle, background: "#dcfce7", color: "#166534" }}>{selectedRouteNames.length} active route(s)</span>
+                  </div>
                 </div>
 
                 <label style={{ gridColumn: "span 2", fontSize: 12, fontWeight: 700 }}>
@@ -218,16 +253,18 @@ export default function ProductTypeRoutes() {
                     {data.kindOptions.map((kind: any) => <option key={kind.key} value={kind.key}>{kind.label}</option>)}
                   </select>
                   <span style={{ display: "block", color: "#6b7280", fontWeight: 400, marginTop: 4 }}>
-                    Save after changing kind to refresh route choices.
+                    This maps existing ERP profiles into clean calculator categories like Labels, Boxes, DTP Bags, Sticker Bags, and Sourced Products. Save after changing kind.
                   </span>
                 </label>
 
                 <div style={{ gridColumn: "span 2" }}>
-                  <button type="submit" style={buttonStyle}>Save route setup</button>
+                  <button type="submit" name="intent" value="save" style={buttonStyle}>Save route setup</button>
+                  <button type="submit" name="intent" value="reset" style={secondaryButtonStyle}>Reset to recommended routes</button>
                 </div>
 
                 <div style={{ gridColumn: "span 6", borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
-                  <strong style={{ fontSize: 13 }}>Allowed production routes</strong>
+                  <strong style={{ fontSize: 13 }}>Allowed production routes for this product type</strong>
+                  <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: 12 }}>Only checked routes will appear in the calculator. Each route displays only its listed calculator field groups.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginTop: 8 }}>
                     {routes.map((route) => (
                       <label key={route.key} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, display: "block", fontSize: 12 }}>
@@ -236,9 +273,11 @@ export default function ProductTypeRoutes() {
                           <strong>{route.name}</strong>
                         </div>
                         <p style={{ margin: "6px 0", color: "#6b7280" }}>{route.help}</p>
-                        <p style={{ margin: 0, color: "#374151" }}>
-                          Fields: {route.fields.map((field) => FIELD_LABELS[field]).join(", ")}
-                        </p>
+                        <div style={{ marginTop: 8 }}>
+                          {route.fields.map((field) => (
+                            <span key={field} style={{ ...pillStyle, background: "#f3f4f6", color: "#374151", fontWeight: 600 }}>{FIELD_LABELS[field]}</span>
+                          ))}
+                        </div>
                       </label>
                     ))}
                   </div>
@@ -254,3 +293,4 @@ export default function ProductTypeRoutes() {
 
 const fieldStyle: React.CSSProperties = { width: "100%", border: "1px solid #cfd6e4", borderRadius: 6, padding: "9px 10px", marginTop: 4 };
 const buttonStyle: React.CSSProperties = { width: "100%", background: "#111827", color: "#fff", border: 0, borderRadius: 8, padding: "11px 14px", fontWeight: 800, cursor: "pointer", marginTop: 18 };
+const secondaryButtonStyle: React.CSSProperties = { width: "100%", background: "#f3f4f6", color: "#111827", border: "1px solid #d1d5db", borderRadius: 8, padding: "10px 14px", fontWeight: 800, cursor: "pointer", marginTop: 8 };
