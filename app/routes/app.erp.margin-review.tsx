@@ -352,6 +352,49 @@ function parseJsonObject(value: any) {
   }
 }
 
+function parseJsonArray(value: any) {
+  try {
+    const parsed = JSON.parse(String(value || "[]"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function approvalStatusForRow(row: any) {
+  return row?.costReviewNeeded ? "cost_review_hold" : "needs_review";
+}
+
+function approvalReasonForRow(row: any) {
+  return uniqueStrings([
+    row?.costReviewNeeded ? "Recipe has cost review hold. Fix recipe assumptions before approval." : "",
+    numberOr(row?.tierIssues, 0) > 0 ? "One or more pricing tiers is below target margin." : "",
+    !numberOr(row?.currentPrice, 0) ? "Shopify variant has no current price." : "",
+    numberOr(row?.currentPrice, 0) && numberOr(row?.currentPrice, 0) + 0.005 < numberOr(row?.suggestedPrice, 0) ? "Current Shopify price is below suggested target-margin price." : "",
+  ]).join("\n");
+}
+
+function cleanApprovalRows(value: any) {
+  return parseJsonArray(value).map((row: any) => ({
+    variantRuleId: String(row?.variantRuleId || row?.id || "").trim(),
+    recipeId: String(row?.recipeId || "").trim() || null,
+    recipeName: String(row?.recipeName || "").trim() || null,
+    shopifyProductGid: String(row?.shopifyProductGid || "").trim() || null,
+    shopifyVariantGid: String(row?.shopifyVariantGid || "").trim() || null,
+    productTitle: String(row?.productTitle || "").trim() || null,
+    variantTitle: String(row?.variantTitle || "").trim() || null,
+    currentPrice: row?.currentPrice === null || row?.currentPrice === undefined ? null : numberOr(row.currentPrice, 0),
+    suggestedPrice: numberOr(row?.suggestedPrice, 0),
+    estimatedCost: numberOr(row?.estimatedCost, 0),
+    targetMarginPct: numberOr(row?.targetMargin, 0),
+    currentMarginPct: row?.currentMargin === null || row?.currentMargin === undefined ? null : numberOr(row.currentMargin, 0),
+    delta: numberOr(row?.delta, 0),
+    action: String(row?.action || "Review price").trim(),
+    costReviewNeeded: !!row?.costReviewNeeded,
+    tierIssues: Math.max(0, Math.round(numberOr(row?.tierIssues, 0))),
+  })).filter((row: any) => row.variantRuleId && row.suggestedPrice > 0);
+}
+
 export async function action({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
@@ -359,6 +402,78 @@ export async function action({ request }: { request: Request }) {
   const prisma: any = db;
   const nextUrl = new URL(request.url);
   const intent = String(formData.get("intent") || "saveAssumptions");
+
+  if (intent === "createPriceApprovalRecords") {
+    const approvalRows = cleanApprovalRows(formData.get("approvalRowsJson")).slice(0, 100);
+    const createdAt = new Date();
+    let written = 0;
+    let held = 0;
+
+    for (const row of approvalRows) {
+      const desiredStatus = approvalStatusForRow(row);
+      if (desiredStatus === "cost_review_hold") held += 1;
+      const existing = await prisma.priceApprovalRecord.findUnique({
+        where: { shop_variantRuleId: { shop, variantRuleId: row.variantRuleId } },
+        select: { id: true, status: true },
+      });
+      const status = existing?.status === "approved" || existing?.status === "rejected" || existing?.status === "updated_in_shopify"
+        ? existing.status
+        : desiredStatus;
+
+      await prisma.priceApprovalRecord.upsert({
+        where: { shop_variantRuleId: { shop, variantRuleId: row.variantRuleId } },
+        create: {
+          shop,
+          source: "margin_review_v9",
+          variantRuleId: row.variantRuleId,
+          recipeId: row.recipeId,
+          recipeName: row.recipeName,
+          shopifyProductGid: row.shopifyProductGid,
+          shopifyVariantGid: row.shopifyVariantGid,
+          productTitle: row.productTitle,
+          variantTitle: row.variantTitle,
+          currentPrice: row.currentPrice,
+          suggestedPrice: row.suggestedPrice,
+          estimatedCost: row.estimatedCost,
+          targetMarginPct: row.targetMarginPct,
+          currentMarginPct: row.currentMarginPct,
+          delta: row.delta,
+          action: row.action,
+          status,
+          reason: approvalReasonForRow(row),
+          costReviewNeeded: row.costReviewNeeded,
+          tierIssues: row.tierIssues,
+          createdAt,
+        },
+        update: {
+          source: "margin_review_v9",
+          recipeId: row.recipeId,
+          recipeName: row.recipeName,
+          shopifyProductGid: row.shopifyProductGid,
+          shopifyVariantGid: row.shopifyVariantGid,
+          productTitle: row.productTitle,
+          variantTitle: row.variantTitle,
+          currentPrice: row.currentPrice,
+          suggestedPrice: row.suggestedPrice,
+          estimatedCost: row.estimatedCost,
+          targetMarginPct: row.targetMarginPct,
+          currentMarginPct: row.currentMarginPct,
+          delta: row.delta,
+          action: row.action,
+          status,
+          reason: approvalReasonForRow(row),
+          costReviewNeeded: row.costReviewNeeded,
+          tierIssues: row.tierIssues,
+        },
+      });
+      written += 1;
+    }
+
+    nextUrl.searchParams.set("approvalsCreated", "1");
+    nextUrl.searchParams.set("approvalCount", String(written));
+    nextUrl.searchParams.set("approvalHeld", String(held));
+    return redirect(`${nextUrl.pathname}${nextUrl.search}`);
+  }
 
   if (intent === "syncCostReviewFlags") {
     const flagRecipeIds = idsFromCsv(formData.get("flagRecipeIds"));
@@ -438,6 +553,19 @@ export async function loader({ request }: { request: Request }) {
   const flagsSynced = url.searchParams.get("flagsSynced") === "1";
   const syncedFlagged = Math.max(0, Math.round(numberOr(url.searchParams.get("flagged"), 0)));
   const syncedCleared = Math.max(0, Math.round(numberOr(url.searchParams.get("cleared"), 0)));
+  const approvalsCreated = url.searchParams.get("approvalsCreated") === "1";
+  const approvalCount = Math.max(0, Math.round(numberOr(url.searchParams.get("approvalCount"), 0)));
+  const approvalHeld = Math.max(0, Math.round(numberOr(url.searchParams.get("approvalHeld"), 0)));
+
+  const approvalStatusCounts = await prisma.priceApprovalRecord.groupBy({
+    by: ["status"],
+    where: { shop },
+    _count: { _all: true },
+  }).catch(() => []);
+  const approvalSummary = approvalStatusCounts.reduce((map: any, item: any) => {
+    map[item.status] = item._count?._all || 0;
+    return map;
+  }, {});
 
   const recipes = await prisma.productRecipe.findMany({
     where: { shop, active: true, ...(recipeId ? { id: recipeId } : {}) },
@@ -560,6 +688,10 @@ export async function loader({ request }: { request: Request }) {
     .slice(0, 50)
     .map((row: any) => ({
       id: row.rule.id,
+      variantRuleId: row.rule.id,
+      recipeId: row.recipe?.id,
+      shopifyProductGid: row.rule.shopifyProductGid || row.shopify?.product?.id || null,
+      shopifyVariantGid: row.rule.shopifyVariantGid || row.shopify?.id || null,
       productTitle: row.shopify?.product?.title || row.rule.shopifyProductGid || "Shopify product",
       variantTitle: row.shopify?.title || ruleTitle(row.rule),
       recipeName: row.recipe?.name,
@@ -574,7 +706,7 @@ export async function loader({ request }: { request: Request }) {
       action: !row.currentPrice ? "Add price" : row.currentPrice + 0.005 < row.suggestedPrice ? "Raise price" : row.tierIssues > 0 ? "Review tiers" : "No action",
     }));
 
-  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, assumptions, savedSettings, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview, filters: { search, recipeId, status } });
+  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, approvalSummary, approvalsCreated, approvalCount, approvalHeld, assumptions, savedSettings, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview, filters: { search, recipeId, status } });
 }
 
 function Badge({ tone, children }: { tone?: string; children: React.ReactNode }) {
@@ -582,7 +714,7 @@ function Badge({ tone, children }: { tone?: string; children: React.ReactNode })
 }
 
 export default function MarginReviewPage() {
-  const { recipes, rows, summary, approvalRows, filters, assumptions, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview } = useLoaderData<any>();
+  const { recipes, rows, summary, approvalRows, approvalSummary, approvalsCreated, approvalCount, approvalHeld, filters, assumptions, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview } = useLoaderData<any>();
 
   return (
     <div className="page">
@@ -688,6 +820,9 @@ export default function MarginReviewPage() {
         {flagsSynced ? (
           <div className="success-note">Recipe cost review flags synced. Flagged {syncedFlagged} recipe(s) and cleared {syncedCleared} recipe(s) from the current audit.</div>
         ) : null}
+        {approvalsCreated ? (
+          <div className="success-note">Price approval records saved. Wrote {approvalCount} approval record(s); {approvalHeld} are on cost-review hold until recipe issues are fixed.</div>
+        ) : null}
         <div className="flag-panel">
           <strong>v8.1 Recipe Cost Review Flags + Details</strong>
           <p className="muted">
@@ -777,16 +912,26 @@ export default function MarginReviewPage() {
 
 
       <section className="card">
-        <h2 style={{ marginTop: 0 }}>Price Change Approval Queue Preview</h2>
+        <h2 style={{ marginTop: 0 }}>Price Change Approval Queue</h2>
         <div className="queue-note">
-          <strong>Read-only queue.</strong> This panel lists variants that would need a price increase, a missing price, or tier review. It does not update Shopify yet. Cost review rows should stay on hold until the recipe cost is approved.
+          <strong>v9 saved approval records.</strong> This panel now saves real approval queue rows from the current audit. It still does not update Shopify. Cost-review rows are saved as holds until recipe issues are fixed.
         </div>
         <div className="queue-actions">
           <Badge tone={summary.priceQueue ? "yellow" : "green"}>{summary.priceQueue || 0} candidate row(s)</Badge>
-          <span className="button secondary disabled">Approve selected later</span>
-          <span className="button secondary disabled">Export queue later</span>
-          <span className="button secondary disabled">Update Shopify later</span>
+          <Badge tone="gray">{approvalSummary?.needs_review || 0} saved needs review</Badge>
+          <Badge tone="yellow">{approvalSummary?.cost_review_hold || 0} saved cost holds</Badge>
+          <Badge tone="green">{approvalSummary?.approved || 0} approved</Badge>
+          <span className="button secondary disabled">Approve/reject in v9.1</span>
+          <span className="button secondary disabled">Update Shopify in v10</span>
         </div>
+        {approvalRows?.length ? (
+          <Form method="post" className="queue-actions">
+            <input type="hidden" name="intent" value="createPriceApprovalRecords" />
+            <input type="hidden" name="approvalRowsJson" value={JSON.stringify(approvalRows)} />
+            <button type="submit">Create / refresh approval records</button>
+            <span className="button secondary disabled">Shopify updates still locked</span>
+          </Form>
+        ) : null}
         {approvalRows?.length ? (
           <table style={{ marginTop: 12 }}>
             <thead>

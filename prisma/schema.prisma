@@ -1318,6 +1318,42 @@ model ErpAdminSetting {
   @@index([key])
 }
 
+
+model PriceApprovalRecord {
+  id                String    @id @default(cuid())
+  shop              String
+  source            String    @default("margin_review")
+  variantRuleId     String
+  recipeId          String?
+  recipeName        String?
+  shopifyProductGid String?
+  shopifyVariantGid String?
+  productTitle      String?
+  variantTitle      String?
+  currentPrice      Float?
+  suggestedPrice    Float
+  estimatedCost     Float
+  targetMarginPct   Float?
+  currentMarginPct  Float?
+  delta             Float?
+  action            String    @default("Review price")
+  status            String    @default("needs_review") // needs_review, cost_review_hold, approved, rejected, skipped, updated_in_shopify
+  reason            String?
+  costReviewNeeded  Boolean   @default(false)
+  tierIssues        Int       @default(0)
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  updatedInShopifyAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([shop, variantRuleId])
+  @@index([shop])
+  @@index([shop, status])
+  @@index([shop, recipeId])
+  @@index([shop, shopifyVariantGid])
+}
+
 model MarginReviewSetting {
   id                           String   @id @default(cuid())
   shop                         String
