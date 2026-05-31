@@ -154,6 +154,33 @@ const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
   ],
 };
 
+
+const FIELD_LABELS: Record<FieldGroup, string> = {
+  supplier_cost_tiers: "Supplier cost tiers",
+  size_area: "Size / area",
+  material_cost: "Material cost",
+  label_cost: "Label cost",
+  application_labor: "Application labor",
+  finishing_labor: "Finishing labor",
+  packing_labor: "Packing labor",
+  freight_tooling: "Freight / tooling",
+  setup_prepress: "Setup / prepress",
+  manual_sell_tiers: "Manual sell tiers",
+};
+
+function cleanProductTypeName(name: string, key: string) {
+  const raw = String(name || key || "Product Type").trim();
+  const cleaned = raw
+    .replace(/\s*[-–—]?\s*Pricing\s+Template\s*$/i, "")
+    .replace(/\s*[-–—]?\s*Calculator\s+Template\s*$/i, "")
+    .replace(/\s*[-–—]?\s*Template\s*$/i, "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "Product Type";
+  return cleaned;
+}
+
 const FALLBACK_PRODUCT_TYPES: ProductTypeOption[] = [
   {
     id: "fallback-sourced",
@@ -216,7 +243,7 @@ function productTypeToOption(profile: { id: string; key: string; name: string; d
   return {
     id: profile.id,
     key: profile.key || normalizeKey(profile.name),
-    name: profile.name,
+    name: cleanProductTypeName(profile.name, profile.key),
     source: "erp",
     defaultMarginPct: Number(profile.defaultMarginPct || 60),
     tierBreakpoints: profile.tierBreakpoints || "100,500,1000,2500,5000,10000",
@@ -400,7 +427,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.4: product type and production route driven. Product types come from ERP Product Type setup where available; each route opens only the calculator sections needed for that job.
+          v12.4.1: product type and production route driven. Product type names are cleaned for staff use while still pulling from ERP setup where available; each route opens only the calculator sections needed for that job.
         </p>
       </section>
 
@@ -416,7 +443,7 @@ export default function WholesaleCalculator() {
             <input name="productName" defaultValue={input.productName} placeholder="Pop top jar, custom box, shape bag" style={fieldStyle} />
           </label>
           <label style={labelStyle("span 2")}>
-            Product type from ERP setup
+            Product type
             <select name="productTypeKey" defaultValue={input.productTypeKey} style={fieldStyle}>
               {data.productTypes.map((type: ProductTypeOption) => <option key={type.key} value={type.key}>{type.name}{type.source === "fallback" ? " (fallback)" : ""}</option>)}
             </select>
@@ -456,7 +483,7 @@ export default function WholesaleCalculator() {
             <strong>{selectedRoute.name}</strong>
             <p style={{ margin: "4px 0 0", color: "#4b5563", fontSize: 12 }}>{selectedRoute.help}</p>
             <p style={{ margin: "8px 0 0", color: "#6b7280", fontSize: 12 }}>
-              Active calculator sections: {routeFields.map((field) => field.replaceAll("_", " ")).join(", ")}
+              Active calculator sections: {routeFields.map((field) => FIELD_LABELS[field] || field.replaceAll("_", " ")).join(", ")}
             </p>
           </section>
 
