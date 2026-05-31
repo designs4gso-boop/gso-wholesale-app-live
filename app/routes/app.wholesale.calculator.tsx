@@ -77,6 +77,8 @@ type CalculatorInput = {
 };
 
 const DEFAULT_TIERS = [500, 1000, 2500, 5000, 10000];
+const MIN_TIER_COUNT = 1;
+const MAX_TIER_COUNT = 10;
 
 const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
   label: [
@@ -327,7 +329,7 @@ function productTypeToOption(profile: { id: string; key: string; name: string; d
   };
 }
 
-function parseTierDefaults(productType: ProductTypeOption) {
+function parseTierDefaults(productType: ProductTypeOption, tierCount = DEFAULT_TIERS.length) {
   const parsed = String(productType.tierBreakpoints || "")
     .split(",")
     .map((part) => Number(part.trim()))
@@ -339,11 +341,27 @@ function parseTierDefaults(productType: ProductTypeOption) {
   }
 
   for (const value of DEFAULT_TIERS) {
-    if (unique.length >= 5) break;
     if (!unique.includes(value)) unique.push(value);
   }
 
-  return unique.slice(0, 5);
+  while (unique.length < tierCount) {
+    const last = unique[unique.length - 1] || 10000;
+    const next = last >= 10000 ? last + 15000 : last * 2;
+    if (!unique.includes(next)) unique.push(next);
+    else unique.push(last + 10000);
+  }
+
+  return unique.slice(0, tierCount);
+}
+
+function getTierCount(url: URL) {
+  const current = Math.round(numberParam(url, "tierCount", DEFAULT_TIERS.length));
+  const action = url.searchParams.get("tierAction");
+  let next = Number.isFinite(current) ? current : DEFAULT_TIERS.length;
+  if (action === "addTier") next += 1;
+  if (action === "removeTier") next -= 1;
+  if (action === "resetTiers") next = DEFAULT_TIERS.length;
+  return Math.min(MAX_TIER_COUNT, Math.max(MIN_TIER_COUNT, next));
 }
 
 function roundGsoWholesalePrice(value: number) {
@@ -425,15 +443,17 @@ function costBreakdownForRoute(route: RouteConfig, input: CalculatorInput, quant
 }
 
 function buildTierRows(url: URL, input: CalculatorInput, productType: ProductTypeOption, route: RouteConfig, laborRatePerHour: number, appFloorPerSide: number): TierRow[] {
-  return parseTierDefaults(productType).map((defaultQty, i) => {
+  const tierCount = getTierCount(url);
+  const resetTiers = url.searchParams.get("tierAction") === "resetTiers";
+  return parseTierDefaults(productType, tierCount).map((defaultQty, i) => {
     const index = i + 1;
-    const quantity = Math.max(1, Math.round(numberParam(url, `qty${index}`, defaultQty)));
+    const quantity = Math.max(1, Math.round(resetTiers ? defaultQty : numberParam(url, `qty${index}`, defaultQty)));
     const defaultCost = input.costMode === "flat" ? input.flatCostEach : input.flatCostEach;
-    const supplierCostEach = boolField(route, "supplier_cost_tiers") ? Math.max(0, numberParam(url, `cost${index}`, defaultCost)) : 0;
-    const manualPriceEach = Math.max(0, numberParam(url, `price${index}`, 0));
+    const supplierCostEach = boolField(route, "supplier_cost_tiers") ? Math.max(0, resetTiers ? defaultCost : numberParam(url, `cost${index}`, defaultCost)) : 0;
+    const manualPriceEach = Math.max(0, resetTiers ? 0 : numberParam(url, `price${index}`, 0));
     const breakdown = costBreakdownForRoute(route, input, quantity, supplierCostEach, laborRatePerHour, appFloorPerSide);
     const calculatedCostEach = breakdown.total;
-    const tierMarginPct = clampMargin(numberParam(url, `margin${index}`, stickerBagBaseTierMargin(index, input.targetMargin)));
+    const tierMarginPct = clampMargin(resetTiers ? stickerBagBaseTierMargin(index, input.targetMargin) : numberParam(url, `margin${index}`, stickerBagBaseTierMargin(index, input.targetMargin)));
     const rawSuggestedPriceEach = priceForMargin(calculatedCostEach, tierMarginPct);
     const suggestedPriceEach = roundGsoWholesalePrice(rawSuggestedPriceEach);
     const suggestedMargin = marginFromPrice(suggestedPriceEach, calculatedCostEach);
@@ -556,7 +576,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.9.3: clean five-tier GSO sticker-bag margin curve with 10,000+ final tier and low-cost rounding.
+          v12.9.4: custom tier rows. Add/remove tiers, reset to GSO default tiers, and keep the GSO sticker-bag margin curve editable.
         </p>
       </section>
 
@@ -757,9 +777,11 @@ export default function WholesaleCalculator() {
           <section style={{ gridColumn: "span 6", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
             <strong>Tier margin curve</strong>
             <p style={{ margin: "4px 0 0", color: "#166534", fontSize: 12 }}>
-              Uses your current 4x5 matte single-sided sticker bag margins as the base: 58%, 53%, 51%, 48%, and 46%. The calculator now keeps one clean final 10,000+ tier, and under $0.50 it rounds to the next cent so low-cost label tiers still step down instead of bunching at the same price.
+              Uses your current 4x5 matte single-sided sticker bag margins as the base: 58%, 53%, 51%, 48%, and 46%. You can add/remove tier rows when a job needs more quantity breaks, or reset back to the clean GSO defaults. Under $0.50, the app rounds to the next cent so low-cost label tiers still step down instead of bunching at the same price.
             </p>
           </section>
+
+          <input type="hidden" name="tierCount" value={(data.tierRows as TierRow[]).length} />
 
           <button type="submit" style={{ padding: "12px 16px", borderRadius: 8, background: "#111827", color: "white", border: 0, fontWeight: 800, gridColumn: "span 2" }}>Calculate pricing</button>
           <p style={{ gridColumn: "span 4", margin: 0, fontSize: 12, color: "#6b7280" }}>
@@ -842,38 +864,48 @@ export default function WholesaleCalculator() {
 }
 
 function TierEditTable({ rows, hideSupplierCost = false }: { rows: TierRow[]; hideSupplierCost?: boolean }) {
+  const canRemove = rows.length > MIN_TIER_COUNT;
+  const canAdd = rows.length < MAX_TIER_COUNT;
   return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead>
-          <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
-            <th style={cellHeader}>Tier</th>
-            <th style={cellHeader}>Quantity</th>
-            {!hideSupplierCost && <th style={cellHeader}>Supplier cost each</th>}
-            <th style={cellHeader}>Tier margin %</th>
-            <th style={cellHeader}>Manual sell price each</th>
-            <th style={cellHeader}>Calculated cost</th>
-            <th style={cellHeader}>Suggested price</th>
-            <th style={cellHeader}>Manual margin</th>
-            <th style={cellHeader}>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.index}>
-              <td style={cell}>{row.index}</td>
-              <td style={cell}><input name={`qty${row.index}`} type="number" min="1" defaultValue={row.quantity} style={smallInputStyle} /></td>
-              {!hideSupplierCost && <td style={cell}><input name={`cost${row.index}`} type="number" min="0" step="0.0001" defaultValue={row.supplierCostEach} style={smallInputStyle} /></td>}
-              <td style={cell}><input name={`margin${row.index}`} type="number" min="0" max="95" step="0.1" defaultValue={row.tierMarginPct} style={smallInputStyle} /></td>
-              <td style={cell}><input name={`price${row.index}`} type="number" min="0" step="0.01" defaultValue={row.manualPriceEach || ""} placeholder="optional" style={smallInputStyle} /></td>
-              <td style={cell}>{money(row.calculatedCostEach)}</td>
-              <td style={{ ...cell, fontWeight: 800 }}>{money(row.suggestedPriceEach)}</td>
-              <td style={cell}>{row.manualMargin == null ? "N/A" : pct(row.manualMargin)}</td>
-              <td style={cell}><StatusBadge status={row.status} /></td>
+    <div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
+              <th style={cellHeader}>Tier</th>
+              <th style={cellHeader}>Quantity</th>
+              {!hideSupplierCost && <th style={cellHeader}>Supplier cost each</th>}
+              <th style={cellHeader}>Tier margin %</th>
+              <th style={cellHeader}>Manual sell price each</th>
+              <th style={cellHeader}>Calculated cost</th>
+              <th style={cellHeader}>Suggested price</th>
+              <th style={cellHeader}>Manual margin</th>
+              <th style={cellHeader}>Status</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.index}>
+                <td style={cell}>{row.index === rows.length ? `${row.index} / final +` : row.index}</td>
+                <td style={cell}><input name={`qty${row.index}`} type="number" min="1" defaultValue={row.quantity} style={smallInputStyle} /></td>
+                {!hideSupplierCost && <td style={cell}><input name={`cost${row.index}`} type="number" min="0" step="0.0001" defaultValue={row.supplierCostEach} style={smallInputStyle} /></td>}
+                <td style={cell}><input name={`margin${row.index}`} type="number" min="0" max="95" step="0.1" defaultValue={row.tierMarginPct} style={smallInputStyle} /></td>
+                <td style={cell}><input name={`price${row.index}`} type="number" min="0" step="0.01" defaultValue={row.manualPriceEach || ""} placeholder="optional" style={smallInputStyle} /></td>
+                <td style={cell}>{money(row.calculatedCostEach)}</td>
+                <td style={{ ...cell, fontWeight: 800 }}>{money(row.suggestedPriceEach)}</td>
+                <td style={cell}>{row.manualMargin == null ? "N/A" : pct(row.manualMargin)}</td>
+                <td style={cell}><StatusBadge status={row.status} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+        <button type="submit" name="tierAction" value="addTier" disabled={!canAdd} style={{ ...secondaryButtonStyle, opacity: canAdd ? 1 : 0.5 }}>+ Add tier row</button>
+        <button type="submit" name="tierAction" value="removeTier" disabled={!canRemove} style={{ ...secondaryButtonStyle, opacity: canRemove ? 1 : 0.5 }}>Remove last row</button>
+        <button type="submit" name="tierAction" value="resetTiers" style={secondaryButtonStyle}>Reset GSO default tiers</button>
+        <span style={{ fontSize: 12, color: "#6b7280" }}>Rows can be edited before calculating. New rows default to the last GSO margin step unless you change them.</span>
+      </div>
     </div>
   );
 }
@@ -882,6 +914,7 @@ const cellHeader = { padding: "10px 8px", borderBottom: "1px solid #e5e7eb", fon
 const cell = { padding: "10px 8px", borderBottom: "1px solid #eef0f3", verticalAlign: "middle" };
 const fieldStyle = { padding: 10, border: "1px solid #cfd4dc", borderRadius: 6 };
 const smallInputStyle = { ...fieldStyle, width: "100%", minWidth: 90, boxSizing: "border-box" as const };
+const secondaryButtonStyle = { padding: "9px 12px", borderRadius: 8, background: "#f3f4f6", color: "#111827", border: "1px solid #d1d5db", fontWeight: 800 };
 function labelStyle(gridColumn = "span 1") {
   return { display: "grid", gap: 4, fontSize: 12, gridColumn };
 }
