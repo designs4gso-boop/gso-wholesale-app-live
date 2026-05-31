@@ -33,7 +33,8 @@ export default function App() {
         <s-link href="/app/erp/vendors">Vendor Center</s-link>
         <s-link href="/app/erp/vendor-cost-book">Vendor Cost Book</s-link>
         <s-link href="/app/product-costs">Product Costs</s-link>
-        <s-link href="/app/wholesale/calculator">Pricing Calculator</s-link>
+        <s-link href="/app/wholesale/calculator">Cost Calculator</s-link>
+        <s-link href="/app/erp/product-type-routes">Product Type Routes</s-link>
         <s-link href="/app/wholesale/rules">Pricing Rules</s-link>
         <s-link href="/app/wholesale">Wholesale Settings</s-link>
         <s-link href="/app/wholesale/customers">Customers</s-link>

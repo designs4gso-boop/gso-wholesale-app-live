@@ -238,8 +238,39 @@ function normalizeKey(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
-function productTypeToOption(profile: { id: string; key: string; name: string; defaultMarginPct: number; tierBreakpoints: string; productionMode: string; }): ProductTypeOption {
-  const kind = inferKind(profile.key, profile.name, profile.productionMode);
+
+function validKind(value: unknown): ProductTypeOption["kind"] | null {
+  const key = String(value || "").trim();
+  if (["label", "box", "dtp", "jar", "sticker_bag", "sourced", "general"].includes(key)) return key as ProductTypeOption["kind"];
+  return null;
+}
+
+function parseCalculatorRoutes(json: string | null | undefined, fallback: RouteConfig[]) {
+  if (!json) return fallback;
+  try {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) return fallback;
+    const routes = parsed
+      .map((route: any) => {
+        const key = String(route?.key || "").trim();
+        const name = String(route?.name || key).trim();
+        const help = String(route?.help || "Configured in Product Type Route Setup.").trim();
+        const fields = Array.isArray(route?.fields)
+          ? route.fields.filter((field: string) => Object.prototype.hasOwnProperty.call(FIELD_LABELS, field))
+          : [];
+        if (!key || !name || fields.length === 0) return null;
+        return { key, name, help, fields } as RouteConfig;
+      })
+      .filter(Boolean) as RouteConfig[];
+    return routes.length ? routes : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function productTypeToOption(profile: { id: string; key: string; name: string; defaultMarginPct: number; tierBreakpoints: string; productionMode: string; calculatorKind?: string | null; calculatorRoutesJson?: string | null; }): ProductTypeOption {
+  const kind = validKind(profile.calculatorKind) || inferKind(profile.key, profile.name, profile.productionMode);
+  const fallbackRoutes = ROUTES[kind] || ROUTES.general;
   return {
     id: profile.id,
     key: profile.key || normalizeKey(profile.name),
@@ -249,7 +280,7 @@ function productTypeToOption(profile: { id: string; key: string; name: string; d
     tierBreakpoints: profile.tierBreakpoints || "100,500,1000,2500,5000,10000",
     productionMode: profile.productionMode || "hybrid",
     kind,
-    routes: ROUTES[kind] || ROUTES.general,
+    routes: parseCalculatorRoutes(profile.calculatorRoutesJson, fallbackRoutes),
   };
 }
 
@@ -353,7 +384,7 @@ export async function loader({ request }: { request: Request }) {
   const settings = await db.marginReviewSetting.findFirst({ where: { shop, active: true }, orderBy: { updatedAt: "desc" } });
   const profiles = await db.productTypeProfile.findMany({
     where: { shop, active: true },
-    select: { id: true, key: true, name: true, defaultMarginPct: true, tierBreakpoints: true, productionMode: true },
+    select: { id: true, key: true, name: true, defaultMarginPct: true, tierBreakpoints: true, productionMode: true, calculatorKind: true, calculatorRoutesJson: true },
     orderBy: [{ name: "asc" }],
     take: 50,
   });
@@ -427,7 +458,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.4.1: product type and production route driven. Product type names are cleaned for staff use while still pulling from ERP setup where available; each route opens only the calculator sections needed for that job.
+          v12.5: product type and production route driven. Routes can now be configured from Product Type Route Setup; each route opens only the calculator sections needed for that job.
         </p>
       </section>
 
