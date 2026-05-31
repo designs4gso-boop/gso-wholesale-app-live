@@ -488,6 +488,20 @@ export async function loader({ request }: { request: Request }) {
   });
 }
 
+
+function submitCalculatorFormWithRouteReset(select: HTMLSelectElement) {
+  const form = select.form;
+  if (!form) return;
+  const routeSelect = form.elements.namedItem("routeKey") as HTMLSelectElement | null;
+  if (routeSelect) routeSelect.value = "";
+  form.requestSubmit();
+}
+
+function submitCalculatorForm(select: HTMLSelectElement) {
+  const form = select.form;
+  if (!form) return;
+  form.requestSubmit();
+}
 export default function WholesaleCalculator() {
   const data = useLoaderData<typeof loader>();
   const input = data.input as CalculatorInput;
@@ -500,7 +514,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.6: route field groups for labels and application. Product Type Route Setup controls route choices, and label/application routes now open label size, material, finish, and application fields when needed.
+          v12.7.2: route sync fix. Product Type controls the route dropdown, invalid old routes are cleared, and label/application routes open the correct calculator fields.
         </p>
       </section>
 
@@ -517,13 +531,13 @@ export default function WholesaleCalculator() {
           </label>
           <label style={labelStyle("span 2")}>
             Product type
-            <select name="productTypeKey" defaultValue={input.productTypeKey} style={fieldStyle}>
+            <select name="productTypeKey" defaultValue={input.productTypeKey} onChange={(event) => submitCalculatorFormWithRouteReset(event.currentTarget)} style={fieldStyle}>
               {data.productTypes.map((type: ProductTypeOption) => <option key={type.key} value={type.key}>{type.name}{type.source === "fallback" ? " (fallback)" : ""}</option>)}
             </select>
           </label>
           <label style={labelStyle("span 2")}>
             Production route
-            <select name="routeKey" defaultValue={input.routeKey} style={fieldStyle}>
+            <select name="routeKey" defaultValue={input.routeKey} onChange={(event) => submitCalculatorForm(event.currentTarget)} style={fieldStyle}>
               {(data.selectedProductType.routes as RouteConfig[]).map((route: RouteConfig) => <option key={route.key} value={route.key}>{route.name}</option>)}
             </select>
           </label>
