@@ -57,6 +57,8 @@ type CalculatorInput = {
   widthIn: number;
   heightIn: number;
   materialCostEach: number;
+  materialCostMode: "manual_each" | "area_rate";
+  materialCostPerSqIn: number;
   labelCostEach: number;
   applicationCount: number;
   applicationSecondsPerUnit: number;
@@ -375,7 +377,13 @@ function costBreakdownForRoute(route: RouteConfig, input: CalculatorInput, quant
   const perUnitAllocation = (boolField(route, "freight_tooling") ? input.freightTotal + input.toolingTotal : 0) / Math.max(1, quantity);
   const setupPerUnit = boolField(route, "setup_prepress") ? input.setupPrepressTotal / Math.max(1, quantity) : 0;
   const sizeArea = Math.max(0, input.widthIn) * Math.max(0, input.heightIn);
-  const materialCost = boolField(route, "size_area") || boolField(route, "material_cost") ? input.materialCostEach : 0;
+  const routeUsesMaterial = boolField(route, "size_area") || boolField(route, "material_cost");
+  const areaBasedMaterialCost = sizeArea * Math.max(0, input.materialCostPerSqIn);
+  const materialCost = routeUsesMaterial
+    ? input.materialCostMode === "area_rate"
+      ? areaBasedMaterialCost
+      : input.materialCostEach
+    : 0;
   const labelCost = boolField(route, "label_cost") ? input.labelCostEach : 0;
   const applicationRaw = boolField(route, "application_labor") ? (input.applicationSecondsPerUnit / 3600) * laborRatePerHour * Math.max(1, input.applicationCount) : 0;
   const applicationFloor = boolField(route, "application_labor") ? appFloorPerSide * Math.max(1, input.applicationCount) : 0;
@@ -446,6 +454,8 @@ export async function loader({ request }: { request: Request }) {
     widthIn: numberParam(url, "widthIn", 0),
     heightIn: numberParam(url, "heightIn", 0),
     materialCostEach: numberParam(url, "materialCostEach", 0),
+    materialCostMode: stringParam(url, "materialCostMode", "manual_each") === "area_rate" ? "area_rate" : "manual_each",
+    materialCostPerSqIn: numberParam(url, "materialCostPerSqIn", 0),
     labelCostEach: numberParam(url, "labelCostEach", 0),
     applicationCount: numberParam(url, "applicationCount", 1),
     applicationSecondsPerUnit: numberParam(url, "applicationSecondsPerUnit", 10),
@@ -514,7 +524,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.7.2: route sync fix. Product Type controls the route dropdown, invalid old routes are cleared, and label/application routes open the correct calculator fields.
+          v12.8: formula cleanup. Label routes can now calculate material cost from label area and cost per square inch, while still supporting manual each-cost entry.
         </p>
       </section>
 
@@ -614,10 +624,23 @@ export default function WholesaleCalculator() {
           )}
 
           {show("material_cost") && (
-            <label style={labelStyle()}>
-              Label material/media cost each
-              <input name="materialCostEach" type="number" min="0" step="0.0001" defaultValue={input.materialCostEach} style={fieldStyle} />
-            </label>
+            <>
+              <label style={labelStyle()}>
+                Material cost method
+                <select name="materialCostMode" defaultValue={input.materialCostMode} style={fieldStyle}>
+                  <option value="manual_each">Manual cost each</option>
+                  <option value="area_rate">Area × cost/sq in</option>
+                </select>
+              </label>
+              <label style={labelStyle()}>
+                Manual material/media cost each
+                <input name="materialCostEach" type="number" min="0" step="0.0001" defaultValue={input.materialCostEach} style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                Material cost per sq in
+                <input name="materialCostPerSqIn" type="number" min="0" step="0.000001" defaultValue={input.materialCostPerSqIn} style={fieldStyle} />
+              </label>
+            </>
           )}
 
           {show("label_cost") && (
@@ -724,6 +747,13 @@ export default function WholesaleCalculator() {
         </div>
       </section>
 
+      <section style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Formula check</h2>
+        <p style={{ margin: 0, fontSize: 13, color: "#4b5563" }}>
+          First tier calculation uses {data.firstBreakdown.sizeArea.toFixed(3)} sq in, {money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost)} material/label cost, {money(data.firstBreakdown.applicationLabor + data.firstBreakdown.finishingLabor + data.firstBreakdown.packingLabor)} labor, {money(data.firstBreakdown.perUnitAllocation + data.firstBreakdown.setupPerUnit)} allocated freight/tooling/setup, and {money(data.firstBreakdown.wasteCost)} waste.
+        </p>
+      </section>
+
       <section style={{ background: "#fff", border: "1px solid #d9dde6", borderRadius: 12, padding: 18, marginBottom: 16 }}>
         <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Suggested sell tiers</h2>
         <div style={{ overflowX: "auto" }}>
@@ -761,7 +791,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
         <h2 style={{ margin: "0 0 6px", fontSize: 16 }}>Next ERP actions</h2>
         <p style={{ margin: 0, fontSize: 13, color: "#4b5563" }}>
-          Next patch can add a Product Type setup editor so you can control allowed routes and field groups without code. For now this page reads ERP Product Type profiles and applies safe default route rules.
+          Next patch can save calculator drafts/quotes from these results. For now this page remains calculator-only and does not update Shopify.
         </p>
       </section>
     </main>
