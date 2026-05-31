@@ -8,6 +8,7 @@ type TierRow = {
   supplierCostEach: number;
   calculatedCostEach: number;
   manualPriceEach: number;
+  rawSuggestedPriceEach: number;
   suggestedPriceEach: number;
   suggestedTotal: number;
   manualMargin: number | null;
@@ -75,7 +76,7 @@ type CalculatorInput = {
   notes: string;
 };
 
-const DEFAULT_TIERS = [100, 500, 1000, 2500, 5000, 10000];
+const DEFAULT_TIERS = [500, 1000, 2500, 5000, 10000];
 
 const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
   label: [
@@ -200,7 +201,7 @@ const FALLBACK_PRODUCT_TYPES: ProductTypeOption[] = [
     name: "General Sourced Product",
     source: "fallback",
     defaultMarginPct: 60,
-    tierBreakpoints: "100,500,1000,2500,5000,10000",
+    tierBreakpoints: "500,1000,2500,5000,10000",
     productionMode: "outsourced",
     kind: "sourced",
     routes: ROUTES.sourced,
@@ -330,16 +331,30 @@ function parseTierDefaults(productType: ProductTypeOption) {
   const parsed = String(productType.tierBreakpoints || "")
     .split(",")
     .map((part) => Number(part.trim()))
-    .filter((value) => Number.isFinite(value) && value > 0)
-    .slice(0, 6);
-  const merged = parsed.length ? parsed : DEFAULT_TIERS;
-  while (merged.length < 6) merged.push(DEFAULT_TIERS[merged.length] || merged[merged.length - 1] * 2);
-  return merged.slice(0, 6);
+    .filter((value) => Number.isFinite(value) && value > 0);
+
+  const unique: number[] = [];
+  for (const value of parsed.length ? parsed : DEFAULT_TIERS) {
+    if (!unique.includes(value)) unique.push(value);
+  }
+
+  for (const value of DEFAULT_TIERS) {
+    if (unique.length >= 5) break;
+    if (!unique.includes(value)) unique.push(value);
+  }
+
+  return unique.slice(0, 6);
 }
 
-function roundNickel(value: number) {
+function roundGsoWholesalePrice(value: number) {
   if (!Number.isFinite(value) || value <= 0) return 0;
-  return Math.ceil(value * 20) / 20;
+  // Low-cost label/sticker items should not all round to the same nickel.
+  // Under $0.50, round up to the next cent so tier curves stay visible.
+  if (value < 0.5) return Math.ceil(value * 100) / 100;
+  // Mid-range items use clean nickel pricing.
+  if (value < 1) return Math.ceil(value * 20) / 20;
+  // Higher prices use clean dime pricing.
+  return Math.ceil(value * 10) / 10;
 }
 
 function clampMargin(value: number) {
@@ -419,7 +434,8 @@ function buildTierRows(url: URL, input: CalculatorInput, productType: ProductTyp
     const breakdown = costBreakdownForRoute(route, input, quantity, supplierCostEach, laborRatePerHour, appFloorPerSide);
     const calculatedCostEach = breakdown.total;
     const tierMarginPct = clampMargin(numberParam(url, `margin${index}`, stickerBagBaseTierMargin(index, input.targetMargin)));
-    const suggestedPriceEach = roundNickel(priceForMargin(calculatedCostEach, tierMarginPct));
+    const rawSuggestedPriceEach = priceForMargin(calculatedCostEach, tierMarginPct);
+    const suggestedPriceEach = roundGsoWholesalePrice(rawSuggestedPriceEach);
     const suggestedMargin = marginFromPrice(suggestedPriceEach, calculatedCostEach);
     const manualMargin = marginFromPrice(manualPriceEach, calculatedCostEach);
     return {
@@ -428,6 +444,7 @@ function buildTierRows(url: URL, input: CalculatorInput, productType: ProductTyp
       supplierCostEach,
       calculatedCostEach,
       manualPriceEach,
+      rawSuggestedPriceEach,
       suggestedPriceEach,
       suggestedTotal: suggestedPriceEach * quantity,
       manualMargin,
@@ -539,7 +556,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.9.1: true GSO sticker-bag base margins. Defaults to 58%, 53%, 51%, 48%, and 46% by tier, and every tier margin is editable.
+          v12.9.2: true GSO sticker-bag base margin curve with cleaner low-cost rounding and no duplicate 10K tier.
         </p>
       </section>
 
@@ -740,7 +757,7 @@ export default function WholesaleCalculator() {
           <section style={{ gridColumn: "span 6", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
             <strong>Tier margin curve</strong>
             <p style={{ margin: "4px 0 0", color: "#166534", fontSize: 12 }}>
-              Uses your current 4x5 matte single-sided sticker bag margins as the base: 58%, 53%, 51%, 48%, and 46%. You can adjust the base/top margin or edit each tier margin directly before calculating.
+              Uses your current 4x5 matte single-sided sticker bag margins as the base: 58%, 53%, 51%, 48%, and 46%. Under $0.50, the app rounds to the next cent so low-cost label tiers still step down instead of bunching at the same price.
             </p>
           </section>
 
@@ -785,6 +802,7 @@ export default function WholesaleCalculator() {
                 <th style={cellHeader}>Quantity</th>
                 <th style={cellHeader}>Calculated cost</th>
                 <th style={cellHeader}>Tier margin target</th>
+                <th style={cellHeader}>Raw target price</th>
                 <th style={cellHeader}>Suggested sell price</th>
                 <th style={cellHeader}>Suggested margin</th>
                 <th style={cellHeader}>Suggested total</th>
@@ -799,6 +817,7 @@ export default function WholesaleCalculator() {
                   <td style={cell}>{row.quantity.toLocaleString()}</td>
                   <td style={cell}>{money(row.calculatedCostEach)}</td>
                   <td style={cell}>{pct(row.tierMarginPct)}</td>
+                  <td style={cell}>{money(row.rawSuggestedPriceEach)}</td>
                   <td style={{ ...cell, fontWeight: 800 }}>{money(row.suggestedPriceEach)}</td>
                   <td style={cell}>{pct(row.suggestedMargin)}</td>
                   <td style={cell}>{money(row.suggestedTotal)}</td>
