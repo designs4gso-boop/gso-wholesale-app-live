@@ -12,6 +12,7 @@ type TierRow = {
   suggestedTotal: number;
   manualMargin: number | null;
   suggestedMargin: number | null;
+  tierMarginPct: number;
   status: "below_cost" | "low_margin" | "safe" | "no_manual";
 };
 
@@ -341,8 +342,20 @@ function roundNickel(value: number) {
   return Math.ceil(value * 20) / 20;
 }
 
+function clampMargin(value: number) {
+  return Math.min(95, Math.max(0, value));
+}
+
+function stickerBagBaseTierMargin(index: number, baseMargin: number) {
+  // True GSO 4x5 matte single-sided sticker bag base curve.
+  // Default base/top margin is 58%, which becomes: 58%, 53%, 51%, 48%, 46%, 46%.
+  // If the base/top margin is adjusted, the same step-down shape is preserved.
+  const offsets = [0, -5, -7, -10, -12, -12];
+  return clampMargin(baseMargin + (offsets[index - 1] ?? offsets[offsets.length - 1]));
+}
+
 function priceForMargin(cost: number, marginPct: number) {
-  const margin = Math.min(95, Math.max(0, marginPct)) / 100;
+  const margin = clampMargin(marginPct) / 100;
   return cost / (1 - margin);
 }
 
@@ -405,7 +418,8 @@ function buildTierRows(url: URL, input: CalculatorInput, productType: ProductTyp
     const manualPriceEach = Math.max(0, numberParam(url, `price${index}`, 0));
     const breakdown = costBreakdownForRoute(route, input, quantity, supplierCostEach, laborRatePerHour, appFloorPerSide);
     const calculatedCostEach = breakdown.total;
-    const suggestedPriceEach = roundNickel(priceForMargin(calculatedCostEach, input.targetMargin));
+    const tierMarginPct = clampMargin(numberParam(url, `margin${index}`, stickerBagBaseTierMargin(index, input.targetMargin)));
+    const suggestedPriceEach = roundNickel(priceForMargin(calculatedCostEach, tierMarginPct));
     const suggestedMargin = marginFromPrice(suggestedPriceEach, calculatedCostEach);
     const manualMargin = marginFromPrice(manualPriceEach, calculatedCostEach);
     return {
@@ -418,7 +432,8 @@ function buildTierRows(url: URL, input: CalculatorInput, productType: ProductTyp
       suggestedTotal: suggestedPriceEach * quantity,
       manualMargin,
       suggestedMargin,
-      status: statusForManualPrice(manualPriceEach, calculatedCostEach, input.targetMargin),
+      tierMarginPct,
+      status: statusForManualPrice(manualPriceEach, calculatedCostEach, tierMarginPct),
     };
   });
 }
@@ -448,7 +463,7 @@ export async function loader({ request }: { request: Request }) {
     productTypeKey: selectedProductType.key,
     routeKey: selectedRoute.key,
     vendor: stringParam(url, "vendor", ""),
-    targetMargin: numberParam(url, "targetMargin", selectedProductType.defaultMarginPct || 60),
+    targetMargin: numberParam(url, "targetMargin", 58),
     costMode: stringParam(url, "costMode", "flat") === "breaks" ? "breaks" : "flat",
     flatCostEach: numberParam(url, "flatCostEach", 0.5),
     widthIn: numberParam(url, "widthIn", 0),
@@ -524,7 +539,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.8: formula cleanup. Label routes can now calculate material cost from label area and cost per square inch, while still supporting manual each-cost entry.
+          v12.9.1: true GSO sticker-bag base margins. Defaults to 58%, 53%, 51%, 48%, and 46% by tier, and every tier margin is editable.
         </p>
       </section>
 
@@ -557,7 +572,7 @@ export default function WholesaleCalculator() {
             <input name="vendor" defaultValue={input.vendor} placeholder="optional" style={fieldStyle} />
           </label>
           <label style={labelStyle()}>
-            Target margin %
+            Base/top margin %
             <input name="targetMargin" type="number" min="0" max="95" step="0.1" defaultValue={input.targetMargin} style={fieldStyle} />
           </label>
           <label style={labelStyle()}>
@@ -722,6 +737,13 @@ export default function WholesaleCalculator() {
             </div>
           )}
 
+          <section style={{ gridColumn: "span 6", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
+            <strong>Tier margin curve</strong>
+            <p style={{ margin: "4px 0 0", color: "#166534", fontSize: 12 }}>
+              Uses your current 4x5 matte single-sided sticker bag margins as the base: 58%, 53%, 51%, 48%, and 46%. You can adjust the base/top margin or edit each tier margin directly before calculating.
+            </p>
+          </section>
+
           <button type="submit" style={{ padding: "12px 16px", borderRadius: 8, background: "#111827", color: "white", border: 0, fontWeight: 800, gridColumn: "span 2" }}>Calculate pricing</button>
           <p style={{ gridColumn: "span 4", margin: 0, fontSize: 12, color: "#6b7280" }}>
             This page does not update Shopify. Product Type setup controls which routes and fields appear; this keeps staff from seeing irrelevant calculator inputs.
@@ -732,7 +754,7 @@ export default function WholesaleCalculator() {
       <section style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
         <Metric title="Product" value={input.productName || "New product"} note={`${data.selectedProductType.name} / ${selectedRoute.name}`} />
         <Metric title="Average calculated cost" value={money(data.metrics.averageCost)} note="Across entered tiers" />
-        <Metric title="Lowest suggested price" value={money(data.metrics.lowestSuggested)} note={`${pct(input.targetMargin)} target margin`} strong />
+        <Metric title="Lowest suggested price" value={money(data.metrics.lowestSuggested)} note="Sticker-bag curve pricing" strong />
         <Metric title="Manual price warnings" value={`${data.metrics.lowMarginCount}`} note="Low margin or below cost" />
       </section>
 
@@ -750,7 +772,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginBottom: 16 }}>
         <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Formula check</h2>
         <p style={{ margin: 0, fontSize: 13, color: "#4b5563" }}>
-          First tier calculation uses {data.firstBreakdown.sizeArea.toFixed(3)} sq in, {money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost)} material/label cost, {money(data.firstBreakdown.applicationLabor + data.firstBreakdown.finishingLabor + data.firstBreakdown.packingLabor)} labor, {money(data.firstBreakdown.perUnitAllocation + data.firstBreakdown.setupPerUnit)} allocated freight/tooling/setup, and {money(data.firstBreakdown.wasteCost)} waste.
+          First tier calculation uses {data.firstBreakdown.sizeArea.toFixed(3)} sq in, {money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost)} material/label cost, {money(data.firstBreakdown.applicationLabor + data.firstBreakdown.finishingLabor + data.firstBreakdown.packingLabor)} labor, {money(data.firstBreakdown.perUnitAllocation + data.firstBreakdown.setupPerUnit)} allocated freight/tooling/setup, {money(data.firstBreakdown.wasteCost)} waste, and {(data.tierRows as TierRow[])[0]?.tierMarginPct.toFixed(1)}% tier margin target.
         </p>
       </section>
 
@@ -762,6 +784,7 @@ export default function WholesaleCalculator() {
               <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
                 <th style={cellHeader}>Quantity</th>
                 <th style={cellHeader}>Calculated cost</th>
+                <th style={cellHeader}>Tier margin target</th>
                 <th style={cellHeader}>Suggested sell price</th>
                 <th style={cellHeader}>Suggested margin</th>
                 <th style={cellHeader}>Suggested total</th>
@@ -775,6 +798,7 @@ export default function WholesaleCalculator() {
                 <tr key={row.index}>
                   <td style={cell}>{row.quantity.toLocaleString()}</td>
                   <td style={cell}>{money(row.calculatedCostEach)}</td>
+                  <td style={cell}>{pct(row.tierMarginPct)}</td>
                   <td style={{ ...cell, fontWeight: 800 }}>{money(row.suggestedPriceEach)}</td>
                   <td style={cell}>{pct(row.suggestedMargin)}</td>
                   <td style={cell}>{money(row.suggestedTotal)}</td>
@@ -807,6 +831,7 @@ function TierEditTable({ rows, hideSupplierCost = false }: { rows: TierRow[]; hi
             <th style={cellHeader}>Tier</th>
             <th style={cellHeader}>Quantity</th>
             {!hideSupplierCost && <th style={cellHeader}>Supplier cost each</th>}
+            <th style={cellHeader}>Tier margin %</th>
             <th style={cellHeader}>Manual sell price each</th>
             <th style={cellHeader}>Calculated cost</th>
             <th style={cellHeader}>Suggested price</th>
@@ -820,6 +845,7 @@ function TierEditTable({ rows, hideSupplierCost = false }: { rows: TierRow[]; hi
               <td style={cell}>{row.index}</td>
               <td style={cell}><input name={`qty${row.index}`} type="number" min="1" defaultValue={row.quantity} style={smallInputStyle} /></td>
               {!hideSupplierCost && <td style={cell}><input name={`cost${row.index}`} type="number" min="0" step="0.0001" defaultValue={row.supplierCostEach} style={smallInputStyle} /></td>}
+              <td style={cell}><input name={`margin${row.index}`} type="number" min="0" max="95" step="0.1" defaultValue={row.tierMarginPct} style={smallInputStyle} /></td>
               <td style={cell}><input name={`price${row.index}`} type="number" min="0" step="0.01" defaultValue={row.manualPriceEach || ""} placeholder="optional" style={smallInputStyle} /></td>
               <td style={cell}>{money(row.calculatedCostEach)}</td>
               <td style={{ ...cell, fontWeight: 800 }}>{money(row.suggestedPriceEach)}</td>
