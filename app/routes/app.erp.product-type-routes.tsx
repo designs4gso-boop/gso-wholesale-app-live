@@ -27,7 +27,7 @@ const FIELD_LABELS: Record<FieldGroup, string> = {
   supplier_cost_tiers: "Supplier cost tiers",
   size_area: "Size / area",
   material_cost: "Material cost",
-  label_cost: "Label cost",
+  label_cost: "Manual label cost",
   application_labor: "Application labor",
   finishing_labor: "Finishing labor",
   packing_labor: "Packing labor",
@@ -38,8 +38,9 @@ const FIELD_LABELS: Record<FieldGroup, string> = {
 
 const ROUTES: Record<ProductKind, RouteConfig[]> = {
   label: [
-    { key: "fully_in_house", name: "Fully in-house", help: "GSO produces the label/sticker work internally.", fields: ["size_area", "material_cost", "finishing_labor", "setup_prepress", "packing_labor", "manual_sell_tiers"] },
-    { key: "outsourced_print_in_house_finish", name: "Outsourced print + in-house finishing", help: "Supplier prints/laminates; GSO adds finishing, packing, or QC.", fields: ["supplier_cost_tiers", "finishing_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
+    { key: "fully_in_house", name: "Fully in-house label/sticker", help: "GSO produces the label/sticker work internally. Opens label size, material, finish, setup, and labor fields.", fields: ["size_area", "material_cost", "finishing_labor", "setup_prepress", "packing_labor", "manual_sell_tiers"] },
+    { key: "outsourced_print_in_house_finish", name: "Outsourced print + in-house finishing", help: "Supplier prints/laminates; GSO adds finishing, packing, or QC. Label size/material fields remain visible for quote clarity.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "finishing_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
+    { key: "outsourced_item_in_house_label_application", name: "Outsourced item + in-house label/application", help: "GSO buys an item like a jar, bag, or container, then produces/applies labels in-house.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
   ],
   box: [
     { key: "fully_outsourced", name: "Fully outsourced", help: "Supplier provides the finished box and GSO marks it up.", fields: ["supplier_cost_tiers", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
@@ -51,10 +52,10 @@ const ROUTES: Record<ProductKind, RouteConfig[]> = {
   ],
   jar: [
     { key: "fully_outsourced", name: "Fully outsourced", help: "Jar/container is purchased finished and sold as-is.", fields: ["supplier_cost_tiers", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
-    { key: "outsourced_item_in_house_label_application", name: "Outsourced item + in-house label/application", help: "Pop tops, jars, or containers bought from a supplier and labeled by GSO.", fields: ["supplier_cost_tiers", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
+    { key: "outsourced_item_in_house_label_application", name: "Outsourced item + in-house label/application", help: "Pop tops, jars, or containers bought from a supplier and labeled by GSO.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
   ],
   sticker_bag: [
-    { key: "outsourced_blank_in_house_label_application", name: "Outsourced blank + in-house label/application", help: "Custom sticker-bag work that is not already a Shopify product.", fields: ["supplier_cost_tiers", "label_cost", "application_labor", "packing_labor", "setup_prepress", "manual_sell_tiers"] },
+    { key: "outsourced_blank_in_house_label_application", name: "Outsourced blank + in-house label/application", help: "Custom sticker-bag work that is not already a Shopify product.", fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "setup_prepress", "manual_sell_tiers"] },
   ],
   sourced: [
     { key: "fully_outsourced", name: "Fully outsourced / sourced product", help: "New sourced products where staff enters supplier cost and sell tiers.", fields: ["supplier_cost_tiers", "freight_tooling", "setup_prepress", "manual_sell_tiers"] },
@@ -158,7 +159,10 @@ export async function action({ request }: { request: Request }) {
   const formData = await request.formData();
   const id = String(formData.get("id") || "");
   const kind = validKind(formData.get("calculatorKind")) || "general";
-  const selectedRoutes = formData.getAll("routeKeys").map((value) => String(value));
+  const selectedRoutes = formData.getAll("routeKeys").map((value) => {
+    const key = String(value);
+    return kind === "label" && key === "outsourced_blank_in_house_finish" ? "outsourced_item_in_house_label_application" : key;
+  });
   const routes = (ROUTES[kind] || ROUTES.general).filter((route) => selectedRoutes.includes(route.key));
   const routesToSave = routes.length ? routes : [ROUTES[kind][0] || ROUTES.general[0]];
 
@@ -181,7 +185,7 @@ export default function ProductTypeRoutes() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Type Route Setup</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.5: each ERP product type controls the production routes and calculator sections shown in the Product Cost Calculator.
+          v12.6: each ERP product type controls the production routes and calculator sections shown in the Product Cost Calculator.
         </p>
       </section>
 

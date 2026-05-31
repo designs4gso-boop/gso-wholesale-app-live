@@ -66,6 +66,9 @@ type CalculatorInput = {
   toolingTotal: number;
   setupPrepressTotal: number;
   wastePct: number;
+  labelMaterial: string;
+  labelFinish: string;
+  labelShape: string;
   notes: string;
 };
 
@@ -75,15 +78,21 @@ const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
   label: [
     {
       key: "fully_in_house",
-      name: "Fully in-house",
-      help: "Use this when GSO produces the label/sticker work internally.",
+      name: "Fully in-house label/sticker",
+      help: "Use this when GSO produces the label or sticker internally. This route asks for label size, material, finish, waste, setup, and labor.",
       fields: ["size_area", "material_cost", "finishing_labor", "setup_prepress", "packing_labor", "manual_sell_tiers"],
     },
     {
       key: "outsourced_print_in_house_finish",
       name: "Outsourced print + in-house finishing",
-      help: "Use this when print/lamination is bought from a supplier but GSO adds finishing, packing, or QC.",
-      fields: ["supplier_cost_tiers", "finishing_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
+      help: "Use this when printed labels are bought from a supplier but GSO adds finishing, packing, QC, or setup work. Label size/material fields still appear so staff can document what was quoted.",
+      fields: ["supplier_cost_tiers", "size_area", "material_cost", "finishing_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
+    },
+    {
+      key: "outsourced_item_in_house_label_application",
+      name: "Outsourced item + in-house label/application",
+      help: "Use this when GSO buys an item such as a jar, bag, or container and then produces/applies labels in-house.",
+      fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
     },
   ],
   box: [
@@ -125,7 +134,7 @@ const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
       key: "outsourced_item_in_house_label_application",
       name: "Outsourced item + in-house label/application",
       help: "Use this for pop tops, jars, or containers bought from a supplier and labeled by GSO.",
-      fields: ["supplier_cost_tiers", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
+      fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "freight_tooling", "setup_prepress", "manual_sell_tiers"],
     },
   ],
   sticker_bag: [
@@ -133,7 +142,7 @@ const ROUTES: Record<ProductTypeOption["kind"], RouteConfig[]> = {
       key: "outsourced_blank_in_house_label_application",
       name: "Outsourced blank + in-house label/application",
       help: "Use this for custom sticker-bag work that is not already a Shopify product.",
-      fields: ["supplier_cost_tiers", "label_cost", "application_labor", "packing_labor", "setup_prepress", "manual_sell_tiers"],
+      fields: ["supplier_cost_tiers", "size_area", "material_cost", "label_cost", "application_labor", "packing_labor", "setup_prepress", "manual_sell_tiers"],
     },
   ],
   sourced: [
@@ -159,7 +168,7 @@ const FIELD_LABELS: Record<FieldGroup, string> = {
   supplier_cost_tiers: "Supplier cost tiers",
   size_area: "Size / area",
   material_cost: "Material cost",
-  label_cost: "Label cost",
+  label_cost: "Manual label cost",
   application_labor: "Application labor",
   finishing_labor: "Finishing labor",
   packing_labor: "Packing labor",
@@ -268,6 +277,36 @@ function parseCalculatorRoutes(json: string | null | undefined, fallback: RouteC
   }
 }
 
+function mergeFields(base: FieldGroup[], extras: FieldGroup[]) {
+  return Array.from(new Set([...base, ...extras]));
+}
+
+function normalizeRoutesForKind(kind: ProductTypeOption["kind"], routes: RouteConfig[]) {
+  const fallbackRoutes = ROUTES[kind] || ROUTES.general;
+  const fallbackByKey = new Map(fallbackRoutes.map((route) => [route.key, route]));
+
+  const normalized = routes
+    .map((route) => {
+      let key = route.key;
+      if (kind === "label" && key === "outsourced_blank_in_house_finish") {
+        key = "outsourced_item_in_house_label_application";
+      }
+      const fallback = fallbackByKey.get(key);
+      if (!fallback) return null;
+      return {
+        ...fallback,
+        ...route,
+        key: fallback.key,
+        name: fallback.name,
+        help: fallback.help,
+        fields: mergeFields(fallback.fields, route.fields || []),
+      } as RouteConfig;
+    })
+    .filter(Boolean) as RouteConfig[];
+
+  return normalized.length ? normalized : fallbackRoutes;
+}
+
 function productTypeToOption(profile: { id: string; key: string; name: string; defaultMarginPct: number; tierBreakpoints: string; productionMode: string; calculatorKind?: string | null; calculatorRoutesJson?: string | null; }): ProductTypeOption {
   const kind = validKind(profile.calculatorKind) || inferKind(profile.key, profile.name, profile.productionMode);
   const fallbackRoutes = ROUTES[kind] || ROUTES.general;
@@ -280,7 +319,7 @@ function productTypeToOption(profile: { id: string; key: string; name: string; d
     tierBreakpoints: profile.tierBreakpoints || "100,500,1000,2500,5000,10000",
     productionMode: profile.productionMode || "hybrid",
     kind,
-    routes: parseCalculatorRoutes(profile.calculatorRoutesJson, fallbackRoutes),
+    routes: normalizeRoutesForKind(kind, parseCalculatorRoutes(profile.calculatorRoutesJson, fallbackRoutes)),
   };
 }
 
@@ -416,6 +455,9 @@ export async function loader({ request }: { request: Request }) {
     toolingTotal: numberParam(url, "toolingTotal", 0),
     setupPrepressTotal: numberParam(url, "setupPrepressTotal", 0),
     wastePct: numberParam(url, "wastePct", 0),
+    labelMaterial: stringParam(url, "labelMaterial", "Matte"),
+    labelFinish: stringParam(url, "labelFinish", "None"),
+    labelShape: stringParam(url, "labelShape", "Rectangle"),
     notes: stringParam(url, "notes", ""),
   };
 
@@ -458,7 +500,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.5: product type and production route driven. Routes can now be configured from Product Type Route Setup; each route opens only the calculator sections needed for that job.
+          v12.6: route field groups for labels and application. Product Type Route Setup controls route choices, and label/application routes now open label size, material, finish, and application fields when needed.
         </p>
       </section>
 
@@ -518,41 +560,73 @@ export default function WholesaleCalculator() {
             </p>
           </section>
 
+          {(show("size_area") || show("material_cost") || show("label_cost")) && (
+            <section style={{ gridColumn: "span 6", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10, padding: 12 }}>
+              <strong>Label / sticker details</strong>
+              <p style={{ margin: "4px 0 0", color: "#7c2d12", fontSize: 12 }}>
+                Use this section any time the route includes label production or label application. Existing Shopify product pricing still stays in Margin Review.
+              </p>
+            </section>
+          )}
+
           {show("size_area") && (
             <>
               <label style={labelStyle()}>
-                Width inches
+                Label width inches
                 <input name="widthIn" type="number" min="0" step="0.001" defaultValue={input.widthIn} style={fieldStyle} />
               </label>
               <label style={labelStyle()}>
-                Height inches
+                Label height inches
                 <input name="heightIn" type="number" min="0" step="0.001" defaultValue={input.heightIn} style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                Shape / cut type
+                <input name="labelShape" defaultValue={input.labelShape} placeholder="Rectangle, circle, die cut" style={fieldStyle} />
+              </label>
+            </>
+          )}
+
+          {(show("material_cost") || show("label_cost")) && (
+            <>
+              <label style={labelStyle()}>
+                Label material
+                <input name="labelMaterial" defaultValue={input.labelMaterial} placeholder="Matte, holo, clear, white" style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                Finish / gloss
+                <input name="labelFinish" defaultValue={input.labelFinish} placeholder="None, gloss, SG, laminate" style={fieldStyle} />
               </label>
             </>
           )}
 
           {show("material_cost") && (
             <label style={labelStyle()}>
-              Material cost each
+              Label material/media cost each
               <input name="materialCostEach" type="number" min="0" step="0.0001" defaultValue={input.materialCostEach} style={fieldStyle} />
             </label>
           )}
 
           {show("label_cost") && (
             <label style={labelStyle()}>
-              Label cost each
+              Extra/manual label cost each
               <input name="labelCostEach" type="number" min="0" step="0.0001" defaultValue={input.labelCostEach} style={fieldStyle} />
             </label>
           )}
 
           {show("application_labor") && (
             <>
+              <section style={{ gridColumn: "span 6", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
+                <strong>Application labor</strong>
+                <p style={{ margin: "4px 0 0", color: "#166534", fontSize: 12 }}>
+                  Use this when GSO applies labels to jars, bags, boxes, or another sourced item. The saved per-side/application labor floor is used automatically.
+                </p>
+              </section>
               <label style={labelStyle()}>
                 Application count
                 <input name="applicationCount" type="number" min="1" step="1" defaultValue={input.applicationCount} style={fieldStyle} />
               </label>
               <label style={labelStyle()}>
-                App seconds/unit
+                Application seconds/unit
                 <input name="applicationSecondsPerUnit" type="number" min="0" step="0.1" defaultValue={input.applicationSecondsPerUnit} style={fieldStyle} />
               </label>
             </>
