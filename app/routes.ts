@@ -15,6 +15,7 @@ export default [
     route("quotes", "routes/app.quotes.tsx"),
     route("product-costs", "routes/app.product-costs.tsx"),
     route("erp/product-setup", "routes/app.erp.product-setup.tsx"),
+    route("erp/product-type-routes", "routes/app.erp.product-type-routes.tsx"),
     route("erp/shopify-links", "routes/app.erp.shopify-links.tsx"),
     route("erp/product-costs", "routes/app.erp.product-costs.tsx"),
     route("erp/cost-calculator", "routes/app.erp.cost-calculator.tsx"),
