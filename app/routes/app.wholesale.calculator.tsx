@@ -1,5 +1,6 @@
 import { Form, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
+import db from "../db.server";
 
 type TierPrice = { min: number; max?: number | null; label: string; price: number | null };
 type FinishOption = {
@@ -17,6 +18,18 @@ type ProductTemplate = {
   defaultMargin: number;
   defaultQuantity: number;
   finishes: FinishOption[];
+};
+
+type RecipeEstimate = {
+  recipeId: string;
+  recipeName: string;
+  costEach: number;
+  materialCost: number;
+  zoneMediaCost: number;
+  applicationLaborCost: number;
+  packingLaborCost: number;
+  setupCostEach: number;
+  warning: string | null;
 };
 
 function money(value: number | null | undefined) {
@@ -187,8 +200,72 @@ function selectedMarginBase(template: ProductTemplate, selected: FinishOption, q
   return { base, baseTier, baseMargin: baseMargin ?? template.defaultMargin };
 }
 
+
+function unitCost(material: any) {
+  const calculated = Number(material?.calculatedUnitCost || 0);
+  const base = Number(material?.costPerUnit || 0);
+  return calculated > 0 ? calculated : base;
+}
+
+function materialUsageCost(row: any) {
+  const qty = Number(row?.quantity || 0);
+  const cost = unitCost(row?.material);
+  const wastePct = row?.includeWaste ? Number(row?.wastePct || 0) : 0;
+  return qty * cost * (1 + wastePct / 100);
+}
+
+function labelZoneCost(zone: any) {
+  const qty = Number(zone?.qtyPerUnit || 1);
+  const width = Number(zone?.widthIn || 0);
+  const height = Number(zone?.heightIn || 0);
+  const areaSqin = width * height * qty;
+  const areaSqft = areaSqin / 144;
+  const material = zone?.mediaOption?.material || zone?.material;
+  const cost = unitCost(material);
+  const unit = String(material?.unit || material?.baseUnit || "sqft").toLowerCase();
+  if (!material || cost <= 0) return 0;
+  if (unit.includes("sqin")) return areaSqin * cost;
+  if (unit.includes("each")) return qty * cost;
+  return areaSqft * cost;
+}
+
+function recipeEstimate(recipe: any, settings: any, quantity: number): RecipeEstimate {
+  const laborRate = Number(settings?.laborRatePerHour || 25);
+  const laborFloor = Number(settings?.applicationLaborFloorPerSide || 0.2);
+  const materialCost = (recipe?.materials || []).filter((row: any) => row.active !== false).reduce((sum: number, row: any) => sum + materialUsageCost(row), 0);
+  const activeZones = (recipe?.labelZones || []).filter((zone: any) => zone.active !== false);
+  const zoneMediaCost = activeZones.reduce((sum: number, zone: any) => sum + labelZoneCost(zone), 0);
+  const zoneLaborBySeconds = activeZones.reduce((sum: number, zone: any) => {
+    const seconds = Number(zone?.applicationSecondsPerLabel || 0) * Number(zone?.qtyPerUnit || 1);
+    return sum + (seconds / 3600) * laborRate;
+  }, 0);
+  const printedSides = Math.max(1, activeZones.length || 1);
+  const applicationLaborCost = Math.max(zoneLaborBySeconds, printedSides * laborFloor);
+  const packingLaborCost = (Number(recipe?.packingLaborSecondsPerUnit || 0) / 3600) * laborRate;
+  const safeQuantity = Math.max(1, quantity || Number(recipe?.defaultQuantity || 1));
+  const setupCostEach = Number(recipe?.setupCost || 0) / safeQuantity;
+  const rawCost = materialCost + zoneMediaCost + applicationLaborCost + packingLaborCost + setupCostEach;
+  const costEach = Math.max(0, rawCost);
+  let warning = null;
+  if (!recipe) warning = "No recipe selected.";
+  else if (costEach <= 0) warning = "Recipe cost came back as zero, using manual/template cost instead.";
+  else if (zoneLaborBySeconds < printedSides * laborFloor) warning = "Recipe labor seconds are below the saved labor floor, so the calculator used the floor.";
+  return {
+    recipeId: recipe?.id || "",
+    recipeName: recipe?.name || "",
+    costEach,
+    materialCost,
+    zoneMediaCost,
+    applicationLaborCost,
+    packingLaborCost,
+    setupCostEach,
+    warning,
+  };
+}
+
 export async function loader({ request }: { request: Request }) {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
   const url = new URL(request.url);
   const templateKey = stringParam(url, "template", "sticker_4x5_double");
   const template = findTemplate(templateKey);
@@ -196,7 +273,32 @@ export async function loader({ request }: { request: Request }) {
   const finish = findFinish(template, finishKey);
   const quantity = Math.max(1, Math.round(numberParam(url, "quantity", template.defaultQuantity)));
   const targetMargin = numberParam(url, "targetMargin", template.defaultMargin);
-  const estimatedCost = numberParam(url, "estimatedCost", finish.defaultCost);
+  const manualCost = numberParam(url, "estimatedCost", finish.defaultCost);
+  const recipeId = stringParam(url, "recipeId", "");
+
+  const settings = await db.marginReviewSetting.findFirst({ where: { shop, active: true }, orderBy: { updatedAt: "desc" } });
+
+  const recipes = await db.productRecipe.findMany({
+    where: { shop, active: true },
+    orderBy: [{ costReviewNeeded: "desc" }, { name: "asc" }],
+    take: 50,
+    select: { id: true, name: true, sku: true, productFamily: true, targetMarginPct: true, defaultQuantity: true },
+  });
+
+  const selectedRecipe = recipeId
+    ? await db.productRecipe.findFirst({
+        where: { shop, id: recipeId, active: true },
+        include: {
+          materials: { where: { active: true }, include: { material: true } },
+          labelZones: { where: { active: true }, include: { material: true, mediaOption: { include: { material: true } } } },
+        },
+      })
+    : null;
+
+  const recipeCost = selectedRecipe ? recipeEstimate(selectedRecipe, settings, quantity) : null;
+  const estimatedCost = recipeCost && recipeCost.costEach > 0 ? recipeCost.costEach : manualCost;
+  const costSource = recipeCost && recipeCost.costEach > 0 ? "recipe" : "manual";
+
   const selectedTier = tierForQuantity(finish, quantity);
   const currentPrice = selectedTier?.price ?? null;
   const currentMargin = marginFromPrice(currentPrice, estimatedCost);
@@ -227,7 +329,12 @@ export async function loader({ request }: { request: Request }) {
     finish,
     quantity,
     targetMargin,
+    manualCost,
     estimatedCost,
+    costSource,
+    recipeId,
+    recipes,
+    recipeCost,
     selectedTier,
     currentPrice,
     currentMargin,
@@ -275,22 +382,44 @@ export default function WholesaleCalculator() {
             <input name="targetMargin" type="number" min="0" max="95" step="0.1" defaultValue={data.targetMargin} style={{ padding: 10, border: "1px solid #cfd4dc", borderRadius: 6 }} />
           </label>
           <label style={{ display: "grid", gap: 4, fontSize: 12, gridColumn: "span 2" }}>
-            Estimated real cost each
-            <input name="estimatedCost" type="number" min="0" step="0.01" defaultValue={data.estimatedCost} style={{ padding: 10, border: "1px solid #cfd4dc", borderRadius: 6 }} />
+            Product Setup recipe cost source
+            <select name="recipeId" defaultValue={data.recipeId || ""} style={{ padding: 10, border: "1px solid #cfd4dc", borderRadius: 6 }}>
+              <option value="">Manual/template cost fallback</option>
+              {data.recipes.map((recipe: any) => <option key={recipe.id} value={recipe.id}>{recipe.name}{recipe.sku ? ` / ${recipe.sku}` : ""}</option>)}
+            </select>
+          </label>
+          <label style={{ display: "grid", gap: 4, fontSize: 12, gridColumn: "span 2" }}>
+            Manual fallback cost each
+            <input name="estimatedCost" type="number" min="0" step="0.01" defaultValue={data.manualCost} style={{ padding: 10, border: "1px solid #cfd4dc", borderRadius: 6 }} />
           </label>
           <button type="submit" style={{ padding: "11px 16px", borderRadius: 8, background: "#111827", color: "white", border: 0, fontWeight: 700, gridColumn: "span 2" }}>Calculate price</button>
           <p style={{ gridColumn: "span 6", margin: 0, fontSize: 12, color: "#6b7280" }}>
-            Cost is editable in this foundation patch. Next calibration connects these defaults to Product Setup recipes/materials so staff do not need to type costs manually.
+            v12.1 uses selected Product Setup recipe costs when available. If no recipe is selected or the recipe cost is zero, the calculator uses the manual fallback cost.
           </p>
         </Form>
       </section>
 
       <section style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 16 }}>
         <Metric title="Current GSO price" value={data.currentPrice ? money(data.currentPrice) : "No price"} note={data.selectedTier?.label || "No tier"} />
-        <Metric title="Estimated cost" value={money(data.estimatedCost)} note={`${template.label} / ${finish.label}`} />
+        <Metric title="Estimated cost" value={money(data.estimatedCost)} note={data.costSource === "recipe" ? "From Product Setup recipe" : "Manual/template fallback"} />
         <Metric title="Current margin" value={data.currentMargin == null ? "N/A" : pct(data.currentMargin)} note="Using current GSO price" />
         <Metric title="Safe price" value={money(data.safePrice)} note={`${pct(data.targetMargin)} target margin`} />
         <Metric title="Recommended" value={money(data.recommendedPrice)} note="Highest safe/current/matched" strong />
+      </section>
+
+      <section style={{ background: data.costSource === "recipe" ? "#ecfdf5" : "#f8fafc", border: "1px solid #d9dde6", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <h2 style={{ margin: "0 0 6px", fontSize: 16 }}>Recipe cost connection</h2>
+        {data.costSource === "recipe" && data.recipeCost ? (
+          <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+            <p style={{ margin: 0 }}>Using real Product Setup recipe: <strong>{data.recipeCost.recipeName}</strong>.</p>
+            <p style={{ margin: "4px 0 0" }}>
+              Materials: <strong>{money(data.recipeCost.materialCost)}</strong> · Label/media zones: <strong>{money(data.recipeCost.zoneMediaCost)}</strong> · Application labor: <strong>{money(data.recipeCost.applicationLaborCost)}</strong> · Packing: <strong>{money(data.recipeCost.packingLaborCost)}</strong> · Setup/unit: <strong>{money(data.recipeCost.setupCostEach)}</strong>
+            </p>
+            {data.recipeCost.warning ? <p style={{ margin: "6px 0 0", color: "#92400e", fontWeight: 700 }}>{data.recipeCost.warning}</p> : null}
+          </div>
+        ) : (
+          <p style={{ margin: 0, fontSize: 13 }}>No Product Setup recipe is selected. The calculator is using the manual/template fallback cost.</p>
+        )}
       </section>
 
       <section style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginBottom: 16 }}>
