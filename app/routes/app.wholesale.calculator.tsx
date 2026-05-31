@@ -2,41 +2,39 @@ import { Form, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-type Tier = { label: string; quantity: number };
-type JobPreset = {
-  key: string;
-  label: string;
-  description: string;
-  defaultQuantity: number;
-  defaultTargetMargin: number;
-  defaultBaseCostEach: number;
-  defaultBaseMaterialCostEach: number;
-  defaultUpgradeMaterialCostEach: number;
-  defaultPrintedSides: number;
-  defaultApplicationSeconds: number;
-  defaultPackingSeconds: number;
-  defaultSetupCost: number;
-  defaultPrepressCost: number;
-  defaultWastePct: number;
-  tiers: Tier[];
+type TierRow = {
+  index: number;
+  quantity: number;
+  costEach: number;
+  manualPriceEach: number;
+  suggestedPriceEach: number;
+  suggestedTotal: number;
+  manualMargin: number | null;
+  suggestedMargin: number | null;
+  status: "below_cost" | "low_margin" | "safe" | "no_manual";
 };
 
-type CalcInput = {
-  jobType: string;
-  quantity: number;
+type CalculatorInput = {
+  productName: string;
+  category: string;
+  vendor: string;
   targetMargin: number;
-  baseCostEach: number;
-  baseMaterialCostEach: number;
-  upgradeMaterialCostEach: number;
-  useUpgradeMaterial: boolean;
-  printedSides: number;
-  applicationSeconds: number;
-  packingSeconds: number;
-  setupCost: number;
-  prepressCost: number;
-  wastePct: number;
-  currentPriceEach: number;
+  costMode: "flat" | "breaks";
+  flatCostEach: number;
+  notes: string;
 };
+
+const DEFAULT_TIERS = [100, 500, 1000, 2500, 5000, 10000];
+const CATEGORY_OPTIONS = [
+  "Jar / Container",
+  "Pop Top Jar",
+  "Bag / Pouch",
+  "Box",
+  "Label / Sticker",
+  "DTP Bag",
+  "Bundle / Combo",
+  "General Sourced Product",
+];
 
 function money(value: number | null | undefined) {
   const numeric = Number(value || 0);
@@ -60,12 +58,6 @@ function stringParam(url: URL, key: string, fallback: string) {
   return value && value.trim() ? value : fallback;
 }
 
-function boolParam(url: URL, key: string, fallback: boolean) {
-  const value = url.searchParams.get(key);
-  if (value == null) return fallback;
-  return value === "1" || value === "true" || value === "on";
-}
-
 function roundNickel(value: number) {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.ceil(value * 20) / 20;
@@ -81,205 +73,80 @@ function marginFromPrice(price: number, cost: number) {
   return ((price - cost) / price) * 100;
 }
 
-const PRESETS: JobPreset[] = [
-  {
-    key: "custom_sticker_bag",
-    label: "Custom sticker bag / label application",
-    description: "Use for new sticker bag sizes, new materials, odd quantities, custom add-ons, or jobs not already built as Shopify products.",
-    defaultQuantity: 1000,
-    defaultTargetMargin: 60,
-    defaultBaseCostEach: 0.16,
-    defaultBaseMaterialCostEach: 0.28,
-    defaultUpgradeMaterialCostEach: 0,
-    defaultPrintedSides: 2,
-    defaultApplicationSeconds: 10,
-    defaultPackingSeconds: 5,
-    defaultSetupCost: 5,
-    defaultPrepressCost: 25,
-    defaultWastePct: 15,
-    tiers: [
-      { label: "100", quantity: 100 },
-      { label: "300", quantity: 300 },
-      { label: "500", quantity: 500 },
-      { label: "1,000", quantity: 1000 },
-      { label: "2,000", quantity: 2000 },
-      { label: "5,000", quantity: 5000 },
-      { label: "10,000", quantity: 10000 },
-    ],
-  },
-  {
-    key: "custom_jar_label",
-    label: "Custom jar label / application",
-    description: "Use for jar jobs, Miron-style label jobs, side/top labels, new jar sizes, or custom label finish combinations.",
-    defaultQuantity: 300,
-    defaultTargetMargin: 58,
-    defaultBaseCostEach: 1.25,
-    defaultBaseMaterialCostEach: 0.55,
-    defaultUpgradeMaterialCostEach: 0,
-    defaultPrintedSides: 2,
-    defaultApplicationSeconds: 18,
-    defaultPackingSeconds: 6,
-    defaultSetupCost: 10,
-    defaultPrepressCost: 35,
-    defaultWastePct: 10,
-    tiers: [
-      { label: "64", quantity: 64 },
-      { label: "100", quantity: 100 },
-      { label: "250", quantity: 250 },
-      { label: "500", quantity: 500 },
-      { label: "800", quantity: 800 },
-      { label: "1,000", quantity: 1000 },
-      { label: "2,000", quantity: 2000 },
-    ],
-  },
-  {
-    key: "custom_box_bundle",
-    label: "Custom box / bundle",
-    description: "Use for bag+box bundles, custom boxes, inserts, or jobs with combined components.",
-    defaultQuantity: 500,
-    defaultTargetMargin: 55,
-    defaultBaseCostEach: 0.75,
-    defaultBaseMaterialCostEach: 0.35,
-    defaultUpgradeMaterialCostEach: 0,
-    defaultPrintedSides: 1,
-    defaultApplicationSeconds: 0,
-    defaultPackingSeconds: 8,
-    defaultSetupCost: 25,
-    defaultPrepressCost: 50,
-    defaultWastePct: 10,
-    tiers: [
-      { label: "100", quantity: 100 },
-      { label: "250", quantity: 250 },
-      { label: "500", quantity: 500 },
-      { label: "1,000", quantity: 1000 },
-      { label: "2,500", quantity: 2500 },
-      { label: "5,000", quantity: 5000 },
-    ],
-  },
-  {
-    key: "general_custom",
-    label: "General custom job",
-    description: "Use when the job does not match a saved product or template yet. Enter cost assumptions manually.",
-    defaultQuantity: 1000,
-    defaultTargetMargin: 55,
-    defaultBaseCostEach: 0,
-    defaultBaseMaterialCostEach: 0,
-    defaultUpgradeMaterialCostEach: 0,
-    defaultPrintedSides: 1,
-    defaultApplicationSeconds: 0,
-    defaultPackingSeconds: 0,
-    defaultSetupCost: 0,
-    defaultPrepressCost: 0,
-    defaultWastePct: 10,
-    tiers: [
-      { label: "100", quantity: 100 },
-      { label: "250", quantity: 250 },
-      { label: "500", quantity: 500 },
-      { label: "1,000", quantity: 1000 },
-      { label: "5,000", quantity: 5000 },
-      { label: "10,000", quantity: 10000 },
-    ],
-  },
-];
-
-function findPreset(key: string) {
-  return PRESETS.find((preset) => preset.key === key) || PRESETS[0];
+function statusForManualPrice(manualPrice: number, cost: number, targetMargin: number): TierRow["status"] {
+  if (!manualPrice || manualPrice <= 0) return "no_manual";
+  if (manualPrice <= cost) return "below_cost";
+  const margin = marginFromPrice(manualPrice, cost);
+  if (margin != null && margin + 0.5 < targetMargin) return "low_margin";
+  return "safe";
 }
 
-function calculate(input: CalcInput, settings: any, quantityOverride?: number) {
-  const quantity = Math.max(1, Math.round(quantityOverride || input.quantity || 1));
-  const laborRate = Number(settings?.laborRatePerHour || 25);
-  const laborFloorPerSide = Number(settings?.applicationLaborFloorPerSide || 0.2);
-  const materialEach = input.useUpgradeMaterial ? input.upgradeMaterialCostEach : input.baseMaterialCostEach;
-  const materialWithWaste = materialEach * (1 + Math.max(0, input.wastePct) / 100);
-  const applicationBySeconds = (Math.max(0, input.applicationSeconds) / 3600) * laborRate;
-  const applicationFloor = Math.max(0, input.printedSides) * laborFloorPerSide;
-  const applicationLaborEach = Math.max(applicationBySeconds, applicationFloor);
-  const packingLaborEach = (Math.max(0, input.packingSeconds) / 3600) * laborRate;
-  const setupEach = (Math.max(0, input.setupCost) + Math.max(0, input.prepressCost)) / quantity;
-  const costEach = Math.max(0, input.baseCostEach + materialWithWaste + applicationLaborEach + packingLaborEach + setupEach);
-  const safePrice = roundNickel(priceForMargin(costEach, input.targetMargin));
-  const manualMargin = input.currentPriceEach > 0 ? marginFromPrice(input.currentPriceEach, costEach) : null;
-  const currentPriceStatus = !input.currentPriceEach
-    ? "No manual price"
-    : manualMargin != null && manualMargin + 0.5 < input.targetMargin
-      ? "Low margin"
-      : "Safe";
-  return {
-    quantity,
-    laborRate,
-    laborFloorPerSide,
-    materialEach,
-    materialWithWaste,
-    applicationBySeconds,
-    applicationFloor,
-    applicationLaborEach,
-    packingLaborEach,
-    setupEach,
-    costEach,
-    safePrice,
-    totalCost: costEach * quantity,
-    totalPrice: safePrice * quantity,
-    estimatedProfit: (safePrice - costEach) * quantity,
-    manualMargin,
-    currentPriceStatus,
-    laborFloorUsed: applicationLaborEach === applicationFloor && applicationFloor > applicationBySeconds,
-  };
+function statusLabel(status: TierRow["status"]) {
+  if (status === "below_cost") return "Below cost";
+  if (status === "low_margin") return "Low margin";
+  if (status === "safe") return "Safe";
+  return "No manual price";
+}
+
+function statusColor(status: TierRow["status"]) {
+  if (status === "below_cost") return "#fee2e2";
+  if (status === "low_margin") return "#fef3c7";
+  if (status === "safe") return "#dcfce7";
+  return "#f3f4f6";
+}
+
+function buildTierRows(url: URL, input: CalculatorInput): TierRow[] {
+  return DEFAULT_TIERS.map((defaultQty, i) => {
+    const index = i + 1;
+    const quantity = Math.max(1, Math.round(numberParam(url, `qty${index}`, defaultQty)));
+    const defaultCost = input.costMode === "flat" ? input.flatCostEach : input.flatCostEach;
+    const costEach = Math.max(0, numberParam(url, `cost${index}`, defaultCost));
+    const manualPriceEach = Math.max(0, numberParam(url, `price${index}`, 0));
+    const suggestedPriceEach = roundNickel(priceForMargin(costEach, input.targetMargin));
+    const suggestedMargin = marginFromPrice(suggestedPriceEach, costEach);
+    const manualMargin = marginFromPrice(manualPriceEach, costEach);
+    return {
+      index,
+      quantity,
+      costEach,
+      manualPriceEach,
+      suggestedPriceEach,
+      suggestedTotal: suggestedPriceEach * quantity,
+      manualMargin,
+      suggestedMargin,
+      status: statusForManualPrice(manualPriceEach, costEach, input.targetMargin),
+    };
+  });
 }
 
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const url = new URL(request.url);
-  const preset = findPreset(stringParam(url, "jobType", "custom_sticker_bag"));
-  const input: CalcInput = {
-    jobType: preset.key,
-    quantity: Math.max(1, Math.round(numberParam(url, "quantity", preset.defaultQuantity))),
-    targetMargin: numberParam(url, "targetMargin", preset.defaultTargetMargin),
-    baseCostEach: numberParam(url, "baseCostEach", preset.defaultBaseCostEach),
-    baseMaterialCostEach: numberParam(url, "baseMaterialCostEach", preset.defaultBaseMaterialCostEach),
-    upgradeMaterialCostEach: numberParam(url, "upgradeMaterialCostEach", preset.defaultUpgradeMaterialCostEach),
-    useUpgradeMaterial: boolParam(url, "useUpgradeMaterial", false),
-    printedSides: numberParam(url, "printedSides", preset.defaultPrintedSides),
-    applicationSeconds: numberParam(url, "applicationSeconds", preset.defaultApplicationSeconds),
-    packingSeconds: numberParam(url, "packingSeconds", preset.defaultPackingSeconds),
-    setupCost: numberParam(url, "setupCost", preset.defaultSetupCost),
-    prepressCost: numberParam(url, "prepressCost", preset.defaultPrepressCost),
-    wastePct: numberParam(url, "wastePct", preset.defaultWastePct),
-    currentPriceEach: numberParam(url, "currentPriceEach", 0),
-  };
-
   const settings = await db.marginReviewSetting.findFirst({ where: { shop, active: true }, orderBy: { updatedAt: "desc" } });
-  const result = calculate(input, settings);
-  const baseComparisonInput = { ...input, useUpgradeMaterial: false };
-  const baseComparison = calculate(baseComparisonInput, settings);
-  const baseMargin = marginFromPrice(baseComparison.safePrice, baseComparison.costEach) ?? input.targetMargin;
-  const matchedUpgradePrice = roundNickel(priceForMargin(result.costEach, baseMargin));
-  const tierRows = preset.tiers.map((tier) => {
-    const row = calculate(input, settings, tier.quantity);
-    const rowBase = calculate(baseComparisonInput, settings, tier.quantity);
-    const rowBaseMargin = marginFromPrice(rowBase.safePrice, rowBase.costEach) ?? input.targetMargin;
-    const rowMatched = roundNickel(priceForMargin(row.costEach, rowBaseMargin));
-    return {
-      ...tier,
-      costEach: row.costEach,
-      safePrice: row.safePrice,
-      matchedUpgradePrice: rowMatched,
-      recommendedPrice: Math.max(row.safePrice, rowMatched),
-      total: Math.max(row.safePrice, rowMatched) * tier.quantity,
-      laborFloorUsed: row.laborFloorUsed,
-    };
-  });
+  const input: CalculatorInput = {
+    productName: stringParam(url, "productName", "Pop Top Jar"),
+    category: stringParam(url, "category", "Pop Top Jar"),
+    vendor: stringParam(url, "vendor", ""),
+    targetMargin: numberParam(url, "targetMargin", 60),
+    costMode: stringParam(url, "costMode", "flat") === "breaks" ? "breaks" : "flat",
+    flatCostEach: numberParam(url, "flatCostEach", 0.5),
+    notes: stringParam(url, "notes", ""),
+  };
+  const tierRows = buildTierRows(url, input);
+  const validCosts = tierRows.filter((row) => row.costEach > 0);
+  const averageCost = validCosts.length ? validCosts.reduce((sum, row) => sum + row.costEach, 0) / validCosts.length : 0;
+  const lowestSuggested = tierRows.reduce((min, row) => row.suggestedPriceEach > 0 ? Math.min(min, row.suggestedPriceEach) : min, Number.POSITIVE_INFINITY);
+  const lowMarginCount = tierRows.filter((row) => row.status === "low_margin" || row.status === "below_cost").length;
 
   return Response.json({
-    presets: PRESETS.map((item) => ({ key: item.key, label: item.label })),
-    preset,
     input,
-    result,
-    baseComparison,
-    matchedUpgradePrice,
     tierRows,
-    settings: {
+    categoryOptions: CATEGORY_OPTIONS,
+    metrics: {
+      averageCost,
+      lowestSuggested: Number.isFinite(lowestSuggested) ? lowestSuggested : 0,
+      lowMarginCount,
       laborRatePerHour: Number(settings?.laborRatePerHour || 25),
       applicationLaborFloorPerSide: Number(settings?.applicationLaborFloorPerSide || 0.2),
     },
@@ -288,152 +155,146 @@ export async function loader({ request }: { request: Request }) {
 
 export default function WholesaleCalculator() {
   const data = useLoaderData<typeof loader>();
-  const input = data.input as CalcInput;
-  const result = data.result;
+  const input = data.input as CalculatorInput;
 
   return (
     <main style={{ maxWidth: 1180, margin: "0 auto", padding: 20, fontFamily: "Inter, Arial, sans-serif", color: "#111827" }}>
-      <section style={{ background: "linear-gradient(90deg,#220033,#4b0072)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
-        <h1 style={{ margin: 0, fontSize: 28 }}>Custom Job Calculator</h1>
+      <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
+        <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.2 reset: use this for new items, custom jobs, odd quantities, new materials, and quotes that are not already set up as Shopify products. Existing Shopify product pricing stays in Margin Review.
+          v12.3 reset: use this for new sourced products or custom products that are not already set up on Shopify. Enter supplier cost, supplier quantity breaks, target margin, and optional manual sell prices.
         </p>
       </section>
 
-      <section style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <strong>Important workflow:</strong> This page is not for repricing existing Shopify products like the standard 4x5 Sticker Bag product. Use Margin Review for existing products. Use this calculator when staff needs to price something custom or not built on the website yet.
+      <section style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <strong>Correct workflow:</strong> Existing Shopify products stay in Margin Review. This calculator is for a new item like a pop top jar, new box, new bag size, or any sourced product where you call the supplier and enter the cost.
       </section>
 
       <section style={{ background: "#fff", border: "1px solid #d9dde6", borderRadius: 12, padding: 18, marginBottom: 16 }}>
-        <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Custom job inputs</h2>
+        <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Product cost setup</h2>
         <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12, alignItems: "end" }}>
-          <label style={labelStyle("span 3")}>
-            Job type / starting template
-            <select name="jobType" defaultValue={input.jobType} style={fieldStyle}>
-              {data.presets.map((item: any) => <option key={item.key} value={item.key}>{item.label}</option>)}
+          <label style={labelStyle("span 2")}>
+            New product / item name
+            <input name="productName" defaultValue={input.productName} placeholder="Pop Top Jar" style={fieldStyle} />
+          </label>
+          <label style={labelStyle("span 2")}>
+            Product type / category
+            <select name="category" defaultValue={input.category} style={fieldStyle}>
+              {data.categoryOptions.map((category: string) => <option key={category} value={category}>{category}</option>)}
             </select>
           </label>
           <label style={labelStyle()}>
-            Quantity
-            <input name="quantity" type="number" min="1" defaultValue={input.quantity} style={fieldStyle} />
+            Vendor / supplier
+            <input name="vendor" defaultValue={input.vendor} placeholder="optional" style={fieldStyle} />
           </label>
           <label style={labelStyle()}>
             Target margin %
             <input name="targetMargin" type="number" min="0" max="95" step="0.1" defaultValue={input.targetMargin} style={fieldStyle} />
           </label>
+
+          <label style={labelStyle("span 2")}>
+            Supplier cost type
+            <select name="costMode" defaultValue={input.costMode} style={fieldStyle}>
+              <option value="flat">Same cost at every quantity</option>
+              <option value="breaks">Supplier cost breaks by quantity</option>
+            </select>
+          </label>
           <label style={labelStyle()}>
-            Current/manual price each
-            <input name="currentPriceEach" type="number" min="0" step="0.01" defaultValue={input.currentPriceEach || ""} placeholder="optional" style={fieldStyle} />
+            Default / flat cost each
+            <input name="flatCostEach" type="number" min="0" step="0.0001" defaultValue={input.flatCostEach} style={fieldStyle} />
+          </label>
+          <label style={labelStyle("span 3")}>
+            Notes
+            <input name="notes" defaultValue={input.notes} placeholder="Supplier quote, MOQ, cap included, shipping not included, etc." style={fieldStyle} />
           </label>
 
-          <label style={labelStyle()}>
-            Base item cost each
-            <input name="baseCostEach" type="number" min="0" step="0.01" defaultValue={input.baseCostEach} style={fieldStyle} />
-          </label>
-          <label style={labelStyle()}>
-            Base material/media cost each
-            <input name="baseMaterialCostEach" type="number" min="0" step="0.01" defaultValue={input.baseMaterialCostEach} style={fieldStyle} />
-          </label>
-          <label style={labelStyle()}>
-            Upgrade material cost each
-            <input name="upgradeMaterialCostEach" type="number" min="0" step="0.01" defaultValue={input.upgradeMaterialCostEach} style={fieldStyle} />
-          </label>
-          <label style={{ ...labelStyle(), alignContent: "end" }}>
-            <span>Use upgrade material?</span>
-            <span style={{ display: "flex", gap: 8, alignItems: "center", height: 42 }}>
-              <input name="useUpgradeMaterial" type="checkbox" defaultChecked={input.useUpgradeMaterial} /> Use upgrade cost instead of base material cost
-            </span>
-          </label>
-          <label style={labelStyle()}>
-            Printed sides / label zones
-            <input name="printedSides" type="number" min="0" step="1" defaultValue={input.printedSides} style={fieldStyle} />
-          </label>
-          <label style={labelStyle()}>
-            Waste %
-            <input name="wastePct" type="number" min="0" step="0.1" defaultValue={input.wastePct} style={fieldStyle} />
-          </label>
+          <div style={{ gridColumn: "span 6", borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Supplier costs and selling tiers</h3>
+            <p style={{ margin: "0 0 10px", color: "#6b7280", fontSize: 12 }}>
+              If the supplier gives one cost, keep the same cost in each row. If the supplier gives breaks, enter the cost for each quantity. Manual sell price is optional and will be checked against your target margin.
+            </p>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
+                    <th style={cellHeader}>Tier</th>
+                    <th style={cellHeader}>Quantity</th>
+                    <th style={cellHeader}>Supplier cost each</th>
+                    <th style={cellHeader}>Manual sell price each</th>
+                    <th style={cellHeader}>Suggested price</th>
+                    <th style={cellHeader}>Manual margin</th>
+                    <th style={cellHeader}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.tierRows.map((row: TierRow) => (
+                    <tr key={row.index}>
+                      <td style={cell}>{row.index}</td>
+                      <td style={cell}><input name={`qty${row.index}`} type="number" min="1" defaultValue={row.quantity} style={smallInputStyle} /></td>
+                      <td style={cell}><input name={`cost${row.index}`} type="number" min="0" step="0.0001" defaultValue={row.costEach} style={smallInputStyle} /></td>
+                      <td style={cell}><input name={`price${row.index}`} type="number" min="0" step="0.01" defaultValue={row.manualPriceEach || ""} placeholder="optional" style={smallInputStyle} /></td>
+                      <td style={{ ...cell, fontWeight: 800 }}>{money(row.suggestedPriceEach)}</td>
+                      <td style={cell}>{row.manualMargin == null ? "N/A" : pct(row.manualMargin)}</td>
+                      <td style={cell}><StatusBadge status={row.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
-          <label style={labelStyle()}>
-            Application seconds/unit
-            <input name="applicationSeconds" type="number" min="0" step="0.1" defaultValue={input.applicationSeconds} style={fieldStyle} />
-          </label>
-          <label style={labelStyle()}>
-            Packing seconds/unit
-            <input name="packingSeconds" type="number" min="0" step="0.1" defaultValue={input.packingSeconds} style={fieldStyle} />
-          </label>
-          <label style={labelStyle()}>
-            Setup cost total
-            <input name="setupCost" type="number" min="0" step="0.01" defaultValue={input.setupCost} style={fieldStyle} />
-          </label>
-          <label style={labelStyle()}>
-            Prepress/design total
-            <input name="prepressCost" type="number" min="0" step="0.01" defaultValue={input.prepressCost} style={fieldStyle} />
-          </label>
-          <button type="submit" style={{ padding: "11px 16px", borderRadius: 8, background: "#111827", color: "white", border: 0, fontWeight: 700, gridColumn: "span 2" }}>Calculate custom job</button>
-          <p style={{ gridColumn: "span 6", margin: 0, fontSize: 12, color: "#6b7280" }}>
-            Saved shop labor assumptions are used automatically: {money(data.settings.laborRatePerHour)}/hr and {money(data.settings.applicationLaborFloorPerSide)} per printed side.
+          <button type="submit" style={{ padding: "12px 16px", borderRadius: 8, background: "#111827", color: "white", border: 0, fontWeight: 800, gridColumn: "span 2" }}>Calculate pricing</button>
+          <p style={{ gridColumn: "span 4", margin: 0, fontSize: 12, color: "#6b7280" }}>
+            This page does not update Shopify. It is for checking cost, margin, and suggested tiers before creating a quote or new product.
           </p>
         </Form>
       </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 16 }}>
-        <Metric title="Estimated cost each" value={money(result.costEach)} note="All inputs included" />
-        <Metric title="Suggested price each" value={money(result.safePrice)} note={`${pct(input.targetMargin)} target margin`} strong />
-        <Metric title="Total quote" value={money(result.totalPrice)} note={`${result.quantity.toLocaleString()} units`} />
-        <Metric title="Estimated profit" value={money(result.estimatedProfit)} note="Suggested price minus cost" />
-        <Metric title="Manual price margin" value={result.manualMargin == null ? "N/A" : pct(result.manualMargin)} note={result.currentPriceStatus} />
+      <section style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+        <Metric title="Product" value={input.productName || "New product"} note={input.category} />
+        <Metric title="Average supplier cost" value={money(data.metrics.averageCost)} note="Across entered tiers" />
+        <Metric title="Lowest suggested price" value={money(data.metrics.lowestSuggested)} note={`${pct(input.targetMargin)} target margin`} strong />
+        <Metric title="Manual price warnings" value={`${data.metrics.lowMarginCount}`} note="Low margin or below cost" />
       </section>
 
-      <section style={{ background: "#f8fafc", border: "1px solid #d9dde6", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <h2 style={{ margin: "0 0 6px", fontSize: 16 }}>Cost breakdown</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, fontSize: 13 }}>
-          <Breakdown label="Base item" value={input.baseCostEach} />
-          <Breakdown label="Material/media with waste" value={result.materialWithWaste} />
-          <Breakdown label="Application labor" value={result.applicationLaborEach} note={result.laborFloorUsed ? "floor used" : "seconds used"} />
-          <Breakdown label="Packing labor" value={result.packingLaborEach} />
-          <Breakdown label="Setup/prepress per unit" value={result.setupEach} />
-        </div>
-      </section>
-
-      <section style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <h2 style={{ margin: "0 0 6px", fontSize: 16 }}>Material upgrade margin matching</h2>
-        <p style={{ margin: 0, fontSize: 13 }}>
-          Base material cost each is <strong>{money(input.baseMaterialCostEach)}</strong>. Upgrade material cost each is <strong>{money(input.upgradeMaterialCostEach)}</strong>. With the current inputs, the matched-margin upgrade price is <strong>{money(data.matchedUpgradePrice)}</strong> each. Use this when comparing matte vs holo, clear, white, premium laminate, or other upgraded materials.
-        </p>
-      </section>
-
-      <section style={{ background: "#fff", border: "1px solid #d9dde6", borderRadius: 12, padding: 18 }}>
-        <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Suggested quantity tiers for this custom job</h2>
+      <section style={{ background: "#fff", border: "1px solid #d9dde6", borderRadius: 12, padding: 18, marginBottom: 16 }}>
+        <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Suggested sell tiers</h2>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
-                <th style={cellHeader}>Tier quantity</th>
-                <th style={cellHeader}>Cost each</th>
-                <th style={cellHeader}>Safe price</th>
-                <th style={cellHeader}>Matched upgrade price</th>
-                <th style={cellHeader}>Recommended</th>
-                <th style={cellHeader}>Quote total</th>
-                <th style={cellHeader}>Note</th>
+                <th style={cellHeader}>Quantity</th>
+                <th style={cellHeader}>Supplier cost</th>
+                <th style={cellHeader}>Suggested sell price</th>
+                <th style={cellHeader}>Suggested margin</th>
+                <th style={cellHeader}>Suggested total</th>
+                <th style={cellHeader}>Manual price</th>
+                <th style={cellHeader}>Manual margin</th>
+                <th style={cellHeader}>Check</th>
               </tr>
             </thead>
             <tbody>
-              {data.tierRows.map((row: any) => (
-                <tr key={row.label}>
-                  <td style={cell}>{row.label}</td>
+              {data.tierRows.map((row: TierRow) => (
+                <tr key={row.index}>
+                  <td style={cell}>{row.quantity.toLocaleString()}</td>
                   <td style={cell}>{money(row.costEach)}</td>
-                  <td style={cell}>{money(row.safePrice)}</td>
-                  <td style={cell}>{money(row.matchedUpgradePrice)}</td>
-                  <td style={{ ...cell, fontWeight: 800 }}>{money(row.recommendedPrice)}</td>
-                  <td style={cell}>{money(row.total)}</td>
-                  <td style={cell}>{row.laborFloorUsed ? <StatusBadge status="Labor floor" /> : <StatusBadge status="Calculated" />}</td>
+                  <td style={{ ...cell, fontWeight: 800 }}>{money(row.suggestedPriceEach)}</td>
+                  <td style={cell}>{pct(row.suggestedMargin)}</td>
+                  <td style={cell}>{money(row.suggestedTotal)}</td>
+                  <td style={cell}>{row.manualPriceEach > 0 ? money(row.manualPriceEach) : "—"}</td>
+                  <td style={cell}>{row.manualMargin == null ? "—" : pct(row.manualMargin)}</td>
+                  <td style={cell}><StatusBadge status={row.status} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p style={{ margin: "12px 0 0", fontSize: 12, color: "#6b7280" }}>
-          This calculator is for staff quoting only. It does not approve prices, does not update Shopify, and does not change product page pricing.
+      </section>
+
+      <section style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
+        <h2 style={{ margin: "0 0 6px", fontSize: 16 }}>Next ERP actions</h2>
+        <p style={{ margin: 0, fontSize: 13, color: "#4b5563" }}>
+          Future buttons will save this as a quote draft, save it as a new pricing draft, or create a Shopify product draft. For now this is a safe calculator only.
         </p>
       </section>
     </main>
@@ -441,8 +302,9 @@ export default function WholesaleCalculator() {
 }
 
 const cellHeader = { padding: "10px 8px", borderBottom: "1px solid #e5e7eb", fontWeight: 700 };
-const cell = { padding: "10px 8px", borderBottom: "1px solid #eef0f3", verticalAlign: "top" };
+const cell = { padding: "10px 8px", borderBottom: "1px solid #eef0f3", verticalAlign: "middle" };
 const fieldStyle = { padding: 10, border: "1px solid #cfd4dc", borderRadius: 6 };
+const smallInputStyle = { ...fieldStyle, width: "100%", minWidth: 90, boxSizing: "border-box" as const };
 function labelStyle(gridColumn = "span 1") {
   return { display: "grid", gap: 4, fontSize: 12, gridColumn };
 }
@@ -451,23 +313,12 @@ function Metric({ title, value, note, strong = false }: { title: string; value: 
   return (
     <div style={{ background: "#fff", border: "1px solid #d9dde6", borderRadius: 12, padding: 14 }}>
       <div style={{ fontSize: 12, color: "#6b7280" }}>{title}</div>
-      <div style={{ fontSize: strong ? 24 : 22, fontWeight: 800, marginTop: 4 }}>{value}</div>
+      <div style={{ fontSize: strong ? 24 : 20, fontWeight: 800, marginTop: 4, overflowWrap: "anywhere" }}>{value}</div>
       <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>{note}</div>
     </div>
   );
 }
 
-function Breakdown({ label, value, note }: { label: string; value: number; note?: string }) {
-  return (
-    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 12 }}>
-      <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 800, marginTop: 4 }}>{money(value)}</div>
-      {note ? <div style={{ fontSize: 11, color: "#92400e", marginTop: 4 }}>{note}</div> : null}
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const color = status === "Labor floor" ? "#fef3c7" : "#dcfce7";
-  return <span style={{ display: "inline-block", padding: "4px 8px", borderRadius: 999, background: color, fontWeight: 700 }}>{status}</span>;
+function StatusBadge({ status }: { status: TierRow["status"] }) {
+  return <span style={{ display: "inline-block", padding: "4px 8px", borderRadius: 999, background: statusColor(status), fontWeight: 800 }}>{statusLabel(status)}</span>;
 }
