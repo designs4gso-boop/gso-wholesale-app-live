@@ -343,7 +343,7 @@ function parseTierDefaults(productType: ProductTypeOption) {
     if (!unique.includes(value)) unique.push(value);
   }
 
-  return unique.slice(0, 6);
+  return unique.slice(0, 5);
 }
 
 function roundGsoWholesalePrice(value: number) {
@@ -556,7 +556,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.9.2: true GSO sticker-bag base margin curve with cleaner low-cost rounding and no duplicate 10K tier.
+          v12.9.3: clean five-tier GSO sticker-bag margin curve with 10,000+ final tier and low-cost rounding.
         </p>
       </section>
 
@@ -757,7 +757,7 @@ export default function WholesaleCalculator() {
           <section style={{ gridColumn: "span 6", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
             <strong>Tier margin curve</strong>
             <p style={{ margin: "4px 0 0", color: "#166534", fontSize: 12 }}>
-              Uses your current 4x5 matte single-sided sticker bag margins as the base: 58%, 53%, 51%, 48%, and 46%. Under $0.50, the app rounds to the next cent so low-cost label tiers still step down instead of bunching at the same price.
+              Uses your current 4x5 matte single-sided sticker bag margins as the base: 58%, 53%, 51%, 48%, and 46%. The calculator now keeps one clean final 10,000+ tier, and under $0.50 it rounds to the next cent so low-cost label tiers still step down instead of bunching at the same price.
             </p>
           </section>
 
@@ -814,7 +814,7 @@ export default function WholesaleCalculator() {
             <tbody>
               {(data.tierRows as TierRow[]).map((row) => (
                 <tr key={row.index}>
-                  <td style={cell}>{row.quantity.toLocaleString()}</td>
+                  <td style={cell}>{row.index === (data.tierRows as TierRow[]).length ? `${row.quantity.toLocaleString()}+` : row.quantity.toLocaleString()}</td>
                   <td style={cell}>{money(row.calculatedCostEach)}</td>
                   <td style={cell}>{pct(row.tierMarginPct)}</td>
                   <td style={cell}>{money(row.rawSuggestedPriceEach)}</td>
