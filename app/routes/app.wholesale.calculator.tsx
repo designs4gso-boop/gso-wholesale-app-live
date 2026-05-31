@@ -68,7 +68,11 @@ type MachineCostOption = {
   machineType: string;
   costPerHour: number;
   sqftPerHour: number;
-  inkCostPerSqInAt100: number;
+  cmykInkCostPerSqInAt100: number;
+  whiteInkCostPerSqInAt100: number;
+  glossInkCostPerSqInAt100: number;
+  machineCostPerSqIn: number;
+  allPrintCostPerSqInAt100: number;
   sourceNote: string;
 };
 
@@ -91,6 +95,14 @@ type CalculatorInput = {
   inkMachineId: string;
   inkCoveragePct: number;
   inkCostPerSqIn: number;
+  whiteLayer: boolean;
+  whiteCoveragePct: number;
+  whiteInkCostPerSqIn: number;
+  glossLayer: boolean;
+  glossCoveragePct: number;
+  glossInkCostPerSqIn: number;
+  machineOverheadPerSqIn: number;
+  printSlowdownMultiplier: number;
   applicationCount: number;
   applicationSecondsPerUnit: number;
   finishingSecondsPerUnit: number;
@@ -279,6 +291,28 @@ function materialToOption(material: any): MaterialCostOption {
   };
 }
 
+function materialHaystack(material: MaterialCostOption) {
+  return `${material.name} ${material.materialType} ${material.unit} ${material.baseUnit}`.toLowerCase();
+}
+
+function isInkOrCoatingMaterial(material: MaterialCostOption) {
+  const hay = materialHaystack(material);
+  return hay.includes("ink") || hay.includes("coating") || hay.includes("cartridge") || hay.includes("cmyk");
+}
+
+function isBaseLabelMedia(material: MaterialCostOption) {
+  const hay = materialHaystack(material);
+  if (isInkOrCoatingMaterial(material)) return false;
+  if (hay.includes("laminate") || hay.includes("lamination") || hay.includes("overlam")) return false;
+  return hay.includes("roll media") || hay.includes("label media") || hay.includes("vinyl") || hay.includes("sticker media") || hay.includes("print media") || hay.includes("holographic") || hay.includes("poseidon") || hay.includes("matte") || hay.includes("clear label") || hay.includes("white label");
+}
+
+function isLaminateFinishMaterial(material: MaterialCostOption) {
+  const hay = materialHaystack(material);
+  if (isInkOrCoatingMaterial(material)) return false;
+  return hay.includes("laminate") || hay.includes("lamination") || hay.includes("overlam") || hay.includes("finish film") || hay.includes("protective film");
+}
+
 function machineIsPrinter(machine: any): boolean {
   const type = String(machine?.machineType || "").toLowerCase();
   const name = String(machine?.name || "").toLowerCase();
@@ -321,15 +355,26 @@ function findInkMaterialForChannel(channel: any, inkMaterials: any[]) {
 
 function machineToOption(machine: any, inkMaterials: any[] = []): MachineCostOption {
   const channels = Array.isArray(machine?.inkChannels) ? machine.inkChannels : [];
-  const inkCostPerSqftAt100 = channels.reduce((sum: number, channel: any) => {
+  const bucketRate = (match: (hay: string) => boolean) => channels.reduce((sum: number, channel: any) => {
+    const inkType = String(channel?.inkType || "").toLowerCase();
+    const inkName = String(channel?.inkName || "").toLowerCase();
+    const hay = `${inkType} ${inkName}`;
+    if (!match(hay)) return sum;
+
     const matchedMaterial = findInkMaterialForChannel(channel, inkMaterials);
     const costPerMl = Number(channel?.costPerMl || 0)
       || (Number(channel?.cartridgeCost || 0) > 0 && Number(channel?.cartridgeMl || 0) > 0 ? Number(channel.cartridgeCost) / Number(channel.cartridgeMl) : 0)
       || (matchedMaterial ? inkMaterialCostPerMl(matchedMaterial) : 0);
     const mlPerSqft100 = Number(channel?.mlPerSqft100 || 0) || Number(channel?.mlPerSqft1Pct || 0) * 100;
     return sum + costPerMl * mlPerSqft100;
-  }, 0);
-  const inkCostPerSqInAt100 = inkCostPerSqftAt100 / 144;
+  }, 0) / 144;
+
+  const cmykInkCostPerSqInAt100 = bucketRate((hay) => hay.includes("cmyk") || hay.includes("cyan") || hay.includes("magenta") || hay.includes("yellow") || hay.includes("black") || hay.includes("process"));
+  const whiteInkCostPerSqInAt100 = bucketRate((hay) => hay.includes("white"));
+  const glossInkCostPerSqInAt100 = bucketRate((hay) => hay.includes("gloss") || hay.includes("clear") || hay.includes("varnish"));
+  const fallbackAllInk = bucketRate(() => true);
+  const usableCmyk = cmykInkCostPerSqInAt100 || fallbackAllInk;
+
   const machineCostPerSqIn = Number(machine?.costPerHour || 0) > 0 && Number(machine?.sqftPerHour || 0) > 0
     ? Number(machine.costPerHour) / (Number(machine.sqftPerHour) * 144)
     : 0;
@@ -339,8 +384,12 @@ function machineToOption(machine: any, inkMaterials: any[] = []): MachineCostOpt
     machineType: String(machine.machineType || "machine"),
     costPerHour: Number(machine.costPerHour || 0),
     sqftPerHour: Number(machine.sqftPerHour || 0),
-    inkCostPerSqInAt100: inkCostPerSqInAt100 + machineCostPerSqIn,
-    sourceNote: channels.length ? `${channels.length} ink channel(s) + machine/material ink recovery` : "machine recovery only / no ink channels",
+    cmykInkCostPerSqInAt100: usableCmyk,
+    whiteInkCostPerSqInAt100,
+    glossInkCostPerSqInAt100,
+    machineCostPerSqIn,
+    allPrintCostPerSqInAt100: usableCmyk + whiteInkCostPerSqInAt100 + glossInkCostPerSqInAt100 + machineCostPerSqIn,
+    sourceNote: channels.length ? `${channels.length} ink channel(s), split into CMYK / white / gloss where possible` : "machine recovery only / no ink channels",
   };
 }
 
@@ -359,6 +408,12 @@ function numberParam(url: URL, key: string, fallback: number) {
   if (raw == null || raw === "") return fallback;
   const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function boolParam(url: URL, key: string, fallback = false) {
+  const raw = url.searchParams.get(key);
+  if (raw == null || raw === "") return fallback;
+  return raw === "1" || raw === "true" || raw === "on" || raw === "yes";
 }
 
 function stringParam(url: URL, key: string, fallback: string) {
@@ -565,7 +620,11 @@ function costBreakdownForRoute(route: RouteConfig, input: CalculatorInput, quant
       : input.materialCostEach
     : 0;
   const labelCost = boolField(route, "label_cost") ? input.labelCostEach : 0;
-  const inkMachineCost = boolField(route, "ink_machine_cost") ? sizeArea * Math.max(0, input.inkCostPerSqIn) : 0;
+  const cmykInkCost = boolField(route, "ink_machine_cost") ? sizeArea * Math.max(0, input.inkCostPerSqIn) : 0;
+  const whiteInkCost = boolField(route, "ink_machine_cost") && input.whiteLayer ? sizeArea * Math.max(0, input.whiteInkCostPerSqIn) : 0;
+  const glossInkCost = boolField(route, "ink_machine_cost") && input.glossLayer ? sizeArea * Math.max(0, input.glossInkCostPerSqIn) : 0;
+  const machineOverheadCost = boolField(route, "ink_machine_cost") ? sizeArea * Math.max(0, input.machineOverheadPerSqIn) * Math.max(1, input.printSlowdownMultiplier) : 0;
+  const inkMachineCost = cmykInkCost + whiteInkCost + glossInkCost + machineOverheadCost;
   const applicationRaw = boolField(route, "application_labor") ? (input.applicationSecondsPerUnit / 3600) * laborRatePerHour * Math.max(1, input.applicationCount) : 0;
   const applicationFloor = boolField(route, "application_labor") ? appFloorPerSide * Math.max(1, input.applicationCount) : 0;
   const applicationLabor = boolField(route, "application_labor") ? Math.max(applicationRaw, applicationFloor) : 0;
@@ -574,7 +633,7 @@ function costBreakdownForRoute(route: RouteConfig, input: CalculatorInput, quant
   const preWaste = supplierCostEach + perUnitAllocation + setupPerUnit + materialCost + labelCost + inkMachineCost;
   const wasteCost = preWaste * Math.max(0, input.wastePct) / 100;
   const total = preWaste + wasteCost + applicationLabor + finishingLabor + packingLabor;
-  return { sizeArea, supplierCostEach, perUnitAllocation, setupPerUnit, materialCost, labelCost, inkMachineCost, wasteCost, applicationLabor, finishingLabor, packingLabor, total };
+  return { sizeArea, supplierCostEach, perUnitAllocation, setupPerUnit, materialCost, labelCost, cmykInkCost, whiteInkCost, glossInkCost, machineOverheadCost, inkMachineCost, wasteCost, applicationLabor, finishingLabor, packingLabor, total };
 }
 
 function buildTierRows(url: URL, input: CalculatorInput, productType: ProductTypeOption, route: RouteConfig, laborRatePerHour: number, appFloorPerSide: number): TierRow[] {
@@ -648,14 +707,8 @@ export async function loader({ request }: { request: Request }) {
   const selectedRoute = selectedProductType.routes.find((route) => route.key === requestedRouteKey) || selectedProductType.routes[0] || ROUTES.sourced[0];
 
   const materialOptions = materialsRaw.map(materialToOption);
-  const labelMaterialOptions = materialOptions.filter((material) => {
-    const haystack = `${material.name} ${material.materialType}`.toLowerCase();
-    return haystack.includes("label") || haystack.includes("media") || haystack.includes("vinyl") || haystack.includes("sticker") || haystack.includes("matte") || haystack.includes("gloss") || haystack.includes("holo") || haystack.includes("clear") || haystack.includes("white");
-  });
-  const laminateOptions = materialOptions.filter((material) => {
-    const haystack = `${material.name} ${material.materialType}`.toLowerCase();
-    return haystack.includes("laminate") || haystack.includes("lamination") || haystack.includes("finish") || haystack.includes("gloss");
-  });
+  const labelMaterialOptions = materialOptions.filter(isBaseLabelMedia);
+  const laminateOptions = materialOptions.filter(isLaminateFinishMaterial);
   const inkMaterialsRaw = materialsRaw.filter((material: any) => String(material.materialType || "").toLowerCase().includes("ink") || String(material.materialType || "").toLowerCase().includes("coating") || String(material.name || "").toLowerCase().includes(" ink"));
   const machineOptions = machinesRaw.filter(machineIsPrinter).map((machine: any) => machineToOption(machine, inkMaterialsRaw));
 
@@ -669,7 +722,15 @@ export async function loader({ request }: { request: Request }) {
   const urlHasInkRate = url.searchParams.has("inkCostPerSqIn");
   const autoMaterialRate = Number(selectedMaterial?.costPerSqIn || 0) + Number(selectedLaminate?.costPerSqIn || 0);
   const inkCoveragePct = numberParam(url, "inkCoveragePct", 40);
-  const autoInkRate = Number(selectedMachine?.inkCostPerSqInAt100 || 0) * Math.max(0, inkCoveragePct) / 100;
+  const whiteLayer = boolParam(url, "whiteLayer", false);
+  const glossLayer = boolParam(url, "glossLayer", false);
+  const whiteCoveragePct = numberParam(url, "whiteCoveragePct", whiteLayer ? 100 : 0);
+  const glossCoveragePct = numberParam(url, "glossCoveragePct", glossLayer ? 35 : 0);
+  const autoInkRate = Number(selectedMachine?.cmykInkCostPerSqInAt100 || 0) * Math.max(0, inkCoveragePct) / 100;
+  const autoWhiteRate = Number(selectedMachine?.whiteInkCostPerSqInAt100 || 0) * Math.max(0, whiteCoveragePct) / 100;
+  const autoGlossRate = Number(selectedMachine?.glossInkCostPerSqInAt100 || 0) * Math.max(0, glossCoveragePct) / 100;
+  const autoMachineRate = Number(selectedMachine?.machineCostPerSqIn || 0);
+  const layerSlowdown = 1 + (whiteLayer ? 0.35 : 0) + (glossLayer ? 0.25 : 0);
 
   const input: CalculatorInput = {
     productName: stringParam(url, "productName", "New custom item"),
@@ -690,6 +751,14 @@ export async function loader({ request }: { request: Request }) {
     inkMachineId: selectedMachineId,
     inkCoveragePct,
     inkCostPerSqIn: numberParam(url, "inkCostPerSqIn", urlHasInkRate ? 0 : autoInkRate),
+    whiteLayer,
+    whiteCoveragePct,
+    whiteInkCostPerSqIn: numberParam(url, "whiteInkCostPerSqIn", url.searchParams.has("whiteInkCostPerSqIn") ? 0 : autoWhiteRate),
+    glossLayer,
+    glossCoveragePct,
+    glossInkCostPerSqIn: numberParam(url, "glossInkCostPerSqIn", url.searchParams.has("glossInkCostPerSqIn") ? 0 : autoGlossRate),
+    machineOverheadPerSqIn: numberParam(url, "machineOverheadPerSqIn", url.searchParams.has("machineOverheadPerSqIn") ? 0 : autoMachineRate),
+    printSlowdownMultiplier: numberParam(url, "printSlowdownMultiplier", layerSlowdown),
     applicationCount: numberParam(url, "applicationCount", 1),
     applicationSecondsPerUnit: numberParam(url, "applicationSecondsPerUnit", 10),
     finishingSecondsPerUnit: numberParam(url, "finishingSecondsPerUnit", 0),
@@ -955,7 +1024,7 @@ export default function WholesaleCalculator() {
           {(show("material_cost") || show("label_cost")) && (
             <>
               <label style={labelStyle()}>
-                Label material source
+                Print material / media source
                 <select name="labelMaterialId" defaultValue={input.labelMaterialId} onChange={(event) => submitCalculatorForm(event.currentTarget)} style={fieldStyle}>
                   <option value="">Manual / custom material</option>
                   {data.materialOptions.map((material: MaterialCostOption) => (
@@ -964,9 +1033,9 @@ export default function WholesaleCalculator() {
                 </select>
               </label>
               <label style={labelStyle()}>
-                Laminate / finish source
+                Lamination / finish source
                 <select name="laminateMaterialId" defaultValue={input.laminateMaterialId} onChange={(event) => submitCalculatorForm(event.currentTarget)} style={fieldStyle}>
-                  <option value="">None / manual finish</option>
+                  <option value="">None / no laminate</option>
                   {data.laminateOptions.map((material: MaterialCostOption) => (
                     <option key={material.id} value={material.id}>{material.name} {material.costPerSqIn > 0 ? `(${money(material.costPerSqIn)}/sq in)` : "(missing rate)"}</option>
                   ))}
@@ -1012,21 +1081,59 @@ export default function WholesaleCalculator() {
                 </p>
               </section>
               <label style={labelStyle("span 2")}>
-                Machine / ink source
+                Printer / machine profile
                 <select name="inkMachineId" defaultValue={input.inkMachineId} onChange={(event) => submitCalculatorForm(event.currentTarget)} style={fieldStyle}>
                   <option value="">Manual / no machine selected</option>
                   {data.machineOptions.map((machine: MachineCostOption) => (
-                    <option key={machine.id} value={machine.id}>{machine.name} {machine.inkCostPerSqInAt100 > 0 ? `(${money(machine.inkCostPerSqInAt100)}/sq in @100%)` : "(missing rate)"}</option>
+                    <option key={machine.id} value={machine.id}>{machine.name} {machine.allPrintCostPerSqInAt100 > 0 ? `(${money(machine.allPrintCostPerSqInAt100)}/sq in all layers @100%)` : "(missing rate)"}</option>
                   ))}
                 </select>
               </label>
               <label style={labelStyle()}>
-                Ink coverage %
+                CMYK ink coverage %
                 <input name="inkCoveragePct" type="number" min="0" max="500" step="1" defaultValue={input.inkCoveragePct} style={fieldStyle} />
               </label>
               <label style={labelStyle()}>
-                Ink/machine cost per sq in
+                CMYK ink cost/sq in
                 <input name="inkCostPerSqIn" type="number" min="0" step="0.000001" defaultValue={input.inkCostPerSqIn} style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                White ink layer
+                <select name="whiteLayer" defaultValue={input.whiteLayer ? "1" : "0"} style={fieldStyle}>
+                  <option value="0">No white</option>
+                  <option value="1">Add white ink</option>
+                </select>
+              </label>
+              <label style={labelStyle()}>
+                White coverage %
+                <input name="whiteCoveragePct" type="number" min="0" max="500" step="1" defaultValue={input.whiteCoveragePct} style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                White ink cost/sq in
+                <input name="whiteInkCostPerSqIn" type="number" min="0" step="0.000001" defaultValue={input.whiteInkCostPerSqIn} style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                Gloss / clear layer
+                <select name="glossLayer" defaultValue={input.glossLayer ? "1" : "0"} style={fieldStyle}>
+                  <option value="0">No gloss / clear</option>
+                  <option value="1">Add gloss / clear</option>
+                </select>
+              </label>
+              <label style={labelStyle()}>
+                Gloss / clear coverage %
+                <input name="glossCoveragePct" type="number" min="0" max="500" step="1" defaultValue={input.glossCoveragePct} style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                Gloss / clear ink cost/sq in
+                <input name="glossInkCostPerSqIn" type="number" min="0" step="0.000001" defaultValue={input.glossInkCostPerSqIn} style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                Machine overhead/sq in
+                <input name="machineOverheadPerSqIn" type="number" min="0" step="0.000001" defaultValue={input.machineOverheadPerSqIn} style={fieldStyle} />
+              </label>
+              <label style={labelStyle()}>
+                Print slowdown multiplier
+                <input name="printSlowdownMultiplier" type="number" min="1" step="0.01" defaultValue={input.printSlowdownMultiplier} style={fieldStyle} />
               </label>
             </>
           )}
@@ -1137,7 +1244,10 @@ export default function WholesaleCalculator() {
         <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Cost sections used by this route</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
           <Mini title="Supplier/item" value={money(data.firstBreakdown.supplierCostEach)} active={show("supplier_cost_tiers")} />
-          <Mini title="Material" value={money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost + data.firstBreakdown.inkMachineCost)} active={show("material_cost") || show("label_cost")} />
+          <Mini title="Media/laminate" value={money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost)} active={show("material_cost") || show("label_cost")} />
+          <Mini title="CMYK ink" value={money(data.firstBreakdown.cmykInkCost)} active={show("ink_machine_cost")} />
+          <Mini title="White/gloss ink" value={money(data.firstBreakdown.whiteInkCost + data.firstBreakdown.glossInkCost)} active={show("ink_machine_cost") && (input.whiteLayer || input.glossLayer)} />
+          <Mini title="Machine overhead" value={money(data.firstBreakdown.machineOverheadCost)} active={show("ink_machine_cost")} />
           <Mini title="Labor" value={money(data.firstBreakdown.applicationLabor + data.firstBreakdown.finishingLabor + data.firstBreakdown.packingLabor)} active={show("application_labor") || show("finishing_labor") || show("packing_labor")} />
           <Mini title="Freight/tool/setup" value={money(data.firstBreakdown.perUnitAllocation + data.firstBreakdown.setupPerUnit)} active={show("freight_tooling") || show("setup_prepress")} />
           <Mini title="Waste" value={money(data.firstBreakdown.wasteCost)} active={input.wastePct > 0} />
@@ -1147,7 +1257,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginBottom: 16 }}>
         <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Formula check</h2>
         <p style={{ margin: 0, fontSize: 13, color: "#4b5563" }}>
-          First tier calculation uses {data.firstBreakdown.sizeArea.toFixed(3)} sq in, {money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost)} material/label cost, {money(data.firstBreakdown.inkMachineCost)} ink/machine cost, {money(data.firstBreakdown.applicationLabor + data.firstBreakdown.finishingLabor + data.firstBreakdown.packingLabor)} labor, {money(data.firstBreakdown.perUnitAllocation + data.firstBreakdown.setupPerUnit)} allocated freight/tooling/setup, {money(data.firstBreakdown.wasteCost)} waste, and {(data.tierRows as TierRow[])[0]?.tierMarginPct.toFixed(1)}% tier margin target.
+          First tier calculation uses {data.firstBreakdown.sizeArea.toFixed(3)} sq in, {money(data.firstBreakdown.materialCost + data.firstBreakdown.labelCost)} media/laminate, {money(data.firstBreakdown.cmykInkCost)} CMYK ink, {money(data.firstBreakdown.whiteInkCost)} white ink, {money(data.firstBreakdown.glossInkCost)} gloss/clear ink, {money(data.firstBreakdown.machineOverheadCost)} machine overhead, {money(data.firstBreakdown.applicationLabor + data.firstBreakdown.finishingLabor + data.firstBreakdown.packingLabor)} labor, {money(data.firstBreakdown.perUnitAllocation + data.firstBreakdown.setupPerUnit)} allocated freight/tooling/setup, {money(data.firstBreakdown.wasteCost)} waste, and {(data.tierRows as TierRow[])[0]?.tierMarginPct.toFixed(1)}% tier margin target.
         </p>
       </section>
 
