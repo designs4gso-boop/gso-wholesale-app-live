@@ -119,7 +119,6 @@ export async function loader({ request }: { request: Request }) {
   const shop = session.shop;
   const url = new URL(request.url);
   const saved = url.searchParams.get("saved") === "1";
-  const error = url.searchParams.get("error") || "";
 
   const profiles = await db.productTypeProfile.findMany({
     where: { shop, active: true },
@@ -139,7 +138,6 @@ export async function loader({ request }: { request: Request }) {
 
   return Response.json({
     saved,
-    error,
     profiles: profiles.map((profile) => {
       const kind = validKind(profile.calculatorKind) || inferKind(profile.key, profile.name, profile.productionMode);
       const routeKeys = parseRouteKeys(profile.calculatorRoutesJson);
@@ -159,38 +157,30 @@ export async function action({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
-  const id = String(formData.get("id") || "").trim();
+  const id = String(formData.get("id") || "");
   const kind = validKind(formData.get("calculatorKind")) || "general";
   const intent = String(formData.get("intent") || "save");
-
-  const profile = id
-    ? await db.productTypeProfile.findFirst({ where: { id, shop }, select: { id: true } })
-    : null;
-
-  if (!profile) {
-    return Response.redirect("/app/erp/product-type-routes?error=missing-profile");
-  }
-
-  const recommendedRoutes = ROUTES[kind] || ROUTES.general;
-  const selectedRouteKeys = intent === "reset"
-    ? recommendedRoutes.map((route) => route.key)
+  const selectedRoutes = intent === "reset"
+    ? (ROUTES[kind] || ROUTES.general).map((route) => route.key)
     : formData.getAll("routeKeys").map((value) => {
         const key = String(value);
         return kind === "label" && key === "outsourced_blank_in_house_finish" ? "outsourced_item_in_house_label_application" : key;
       });
-
-  const routes = recommendedRoutes.filter((route) => selectedRouteKeys.includes(route.key));
-  const routesToSave = routes.length ? routes : [recommendedRoutes[0] || ROUTES.general[0]];
+  const routes = (ROUTES[kind] || ROUTES.general).filter((route) => selectedRoutes.includes(route.key));
+  const routesToSave = routes.length ? routes : [ROUTES[kind][0] || ROUTES.general[0]];
 
   await db.productTypeProfile.update({
-    where: { id: profile.id },
+    where: { id, shop },
     data: {
       calculatorKind: kind,
       calculatorRoutesJson: JSON.stringify(routesToSave),
     },
   });
 
-  return Response.redirect("/app/erp/product-type-routes?saved=1");
+  return new Response(null, {
+    status: 302,
+    headers: { Location: "/app/erp/product-type-routes?saved=1" },
+  });
 }
 
 function kindLabel(kind: ProductKind) {
@@ -225,19 +215,13 @@ export default function ProductTypeRoutes() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Type Route Setup</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.7.2: safe reset + clean route setup. Each product type controls the routes staff can use and the calculator field groups that appear for that route.
+          v12.7: clean route setup. Each product type controls the routes staff can use and the calculator field groups that appear for that route.
         </p>
       </section>
 
       {data.saved && (
         <section style={{ background: "#dcfce7", border: "1px solid #86efac", borderRadius: 12, padding: 14, marginBottom: 16, color: "#166534", fontWeight: 700 }}>
           Product type calculator route settings saved.
-        </section>
-      )}
-
-      {data.error && (
-        <section style={{ background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 12, padding: 14, marginBottom: 16, color: "#991b1b", fontWeight: 700 }}>
-          Could not save route setup. Refresh this page and try again.
         </section>
       )}
 
