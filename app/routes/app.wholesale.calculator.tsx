@@ -540,6 +540,8 @@ export async function loader({ request }: { request: Request }) {
     tierRows,
     routeFields: selectedRoute.fields,
     firstBreakdown,
+    savedDraft: url.searchParams.get("savedDraft") === "1",
+    savedQuoteId: url.searchParams.get("quoteId") || "",
     metrics: {
       averageCost,
       lowestSuggested: Number.isFinite(lowestSuggested) ? lowestSuggested : 0,
@@ -547,6 +549,100 @@ export async function loader({ request }: { request: Request }) {
       laborRatePerHour,
       applicationLaborFloorPerSide,
     },
+  });
+}
+
+export async function action({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") || "");
+
+  if (intent !== "save_calculator_draft") {
+    return Response.json({ ok: false, error: "Unknown calculator action." }, { status: 400 });
+  }
+
+  const snapshotRaw = String(formData.get("calculatorSnapshotJson") || "{}");
+  let snapshot: any = {};
+  try {
+    snapshot = JSON.parse(snapshotRaw);
+  } catch {
+    snapshot = {};
+  }
+
+  const input = snapshot?.input || {};
+  const productType = snapshot?.selectedProductType || {};
+  const route = snapshot?.selectedRoute || {};
+  const rows = Array.isArray(snapshot?.tierRows) ? snapshot.tierRows.slice(0, 10) : [];
+
+  const quoteTitle = String(formData.get("quoteTitle") || input.productName || "Custom calculator draft").trim() || "Custom calculator draft";
+  const customerName = String(formData.get("customerName") || "").trim();
+  const company = String(formData.get("company") || "").trim();
+  const email = String(formData.get("email") || "").trim();
+  const phone = String(formData.get("phone") || "").trim();
+  const internalNotes = String(formData.get("internalNotes") || "").trim();
+
+  const calculatorSummary = [
+    `Calculator draft: ${quoteTitle}`,
+    `Product type: ${productType?.name || ""}`,
+    `Production route: ${route?.name || ""}`,
+    `Vendor: ${input?.vendor || ""}`,
+    `Saved from Product Cost Calculator v12.10.`,
+    internalNotes ? `Internal notes: ${internalNotes}` : "",
+  ].filter(Boolean).join("\n");
+
+  const quote = await db.quote.create({
+    data: {
+      shop,
+      customerName: customerName || null,
+      company: company || null,
+      email: email || null,
+      phone: phone || null,
+      status: "draft",
+      notes: calculatorSummary + "\n\nCalculator snapshot:\n" + JSON.stringify(snapshot, null, 2),
+      items: {
+        create: rows.length ? rows.map((row: any) => {
+          const quantity = Math.max(1, Math.round(Number(row?.quantity || 1)));
+          const unitPrice = Number(row?.manualPriceEach || 0) > 0 ? Number(row.manualPriceEach) : Number(row?.suggestedPriceEach || 0);
+          const unitCost = Number(row?.calculatedCostEach || 0);
+          const tierLabel = row?.index === rows.length ? `${quantity.toLocaleString()}+` : quantity.toLocaleString();
+          const tierNotes = [
+            `Calculator tier: ${tierLabel}`,
+            `Tier margin target: ${Number(row?.tierMarginPct || 0).toFixed(1)}%`,
+            `Suggested price: ${money(Number(row?.suggestedPriceEach || 0))}`,
+            Number(row?.manualPriceEach || 0) > 0 ? `Manual price: ${money(Number(row.manualPriceEach))}` : "Manual price: none",
+            `Suggested margin: ${row?.suggestedMargin == null ? "N/A" : Number(row.suggestedMargin).toFixed(1) + "%"}`,
+            `Status: ${row?.status || ""}`,
+          ].join("\n");
+          return {
+            productName: `${quoteTitle} - ${tierLabel} tier`,
+            variant: route?.name || productType?.name || null,
+            quantity,
+            unitPrice,
+            unitCost,
+            notes: tierNotes,
+            pricingSource: "custom_calculator",
+            tierLabel,
+            marginPct: row?.suggestedMargin == null ? null : Number(row.suggestedMargin),
+            costSnapshot: JSON.stringify({ input, row, productType, route }),
+            priceSnapshot: JSON.stringify({ unitPrice, row }),
+          };
+        }) : [{
+          productName: quoteTitle,
+          variant: route?.name || productType?.name || null,
+          quantity: 1,
+          unitPrice: 0,
+          unitCost: 0,
+          notes: "Calculator draft saved without tier rows.",
+          pricingSource: "custom_calculator",
+        }],
+      },
+    },
+  });
+
+  return new Response(null, {
+    status: 302,
+    headers: { Location: `/app/wholesale/calculator?savedDraft=1&quoteId=${encodeURIComponent(quote.id)}` },
   });
 }
 
@@ -576,9 +672,16 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.9.4: custom tier rows. Add/remove tiers, reset to GSO default tiers, and keep the GSO sticker-bag margin curve editable.
+          v12.10: save calculator drafts. Add/remove tiers, calculate custom pricing, and save the current result as a draft quote.
         </p>
       </section>
+
+      {data.savedDraft && (
+        <section style={{ background: "#dcfce7", border: "1px solid #86efac", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <strong>Calculator draft saved.</strong> A draft quote was created from the current calculator tiers.
+          {data.savedQuoteId ? <span> Quote ID: <code>{data.savedQuoteId}</code>.</span> : null}
+        </section>
+      )}
 
       <section style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: 16, marginBottom: 16 }}>
         <strong>Correct workflow:</strong> Existing Shopify products stay in Margin Review. Use this calculator for new/custom products, outsourced items, or jobs that are not already priced on the website.
@@ -853,10 +956,49 @@ export default function WholesaleCalculator() {
         </div>
       </section>
 
+      <section style={{ background: "#fff", border: "1px solid #d9dde6", borderRadius: 12, padding: 18, marginBottom: 16 }}>
+        <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Save calculator draft</h2>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "#4b5563" }}>
+          Click Calculate pricing first, then save the current result as a draft quote. This does not update Shopify and does not send anything to the customer.
+        </p>
+        <Form method="post" style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12, alignItems: "end" }}>
+          <input type="hidden" name="intent" value="save_calculator_draft" />
+          <input type="hidden" name="calculatorSnapshotJson" value={JSON.stringify({ input: data.input, selectedProductType: data.selectedProductType, selectedRoute: data.selectedRoute, tierRows: data.tierRows, metrics: data.metrics, firstBreakdown: data.firstBreakdown })} />
+          <label style={labelStyle("span 2")}>
+            Quote title
+            <input name="quoteTitle" defaultValue={input.productName || "Custom calculator draft"} style={fieldStyle} />
+          </label>
+          <label style={labelStyle("span 2")}>
+            Customer name
+            <input name="customerName" placeholder="optional" style={fieldStyle} />
+          </label>
+          <label style={labelStyle("span 2")}>
+            Company
+            <input name="company" placeholder="optional" style={fieldStyle} />
+          </label>
+          <label style={labelStyle("span 2")}>
+            Email
+            <input name="email" type="email" placeholder="optional" style={fieldStyle} />
+          </label>
+          <label style={labelStyle("span 2")}>
+            Phone
+            <input name="phone" placeholder="optional" style={fieldStyle} />
+          </label>
+          <label style={labelStyle("span 2")}>
+            Internal notes
+            <input name="internalNotes" placeholder="supplier quote, approval notes, etc." style={fieldStyle} />
+          </label>
+          <button type="submit" style={{ padding: "12px 16px", borderRadius: 8, background: "#166534", color: "white", border: 0, fontWeight: 800, gridColumn: "span 2" }}>Save draft quote</button>
+          <p style={{ gridColumn: "span 4", margin: 0, fontSize: 12, color: "#6b7280" }}>
+            Saves one draft quote with one line item per tier. This gives staff a record they can reopen from Quotes later.
+          </p>
+        </Form>
+      </section>
+
       <section style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
         <h2 style={{ margin: "0 0 6px", fontSize: 16 }}>Next ERP actions</h2>
         <p style={{ margin: 0, fontSize: 13, color: "#4b5563" }}>
-          Next patch can save calculator drafts/quotes from these results. For now this page remains calculator-only and does not update Shopify.
+          Next patch can add a dedicated Saved Calculator Drafts list and a direct link from saved draft quote to the quote builder. This page still does not update Shopify.
         </p>
       </section>
     </main>
