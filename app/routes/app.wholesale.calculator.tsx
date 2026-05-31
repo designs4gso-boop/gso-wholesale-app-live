@@ -279,11 +279,54 @@ function materialToOption(material: any): MaterialCostOption {
   };
 }
 
-function machineToOption(machine: any): MachineCostOption {
+function machineIsPrinter(machine: any): boolean {
+  const type = String(machine?.machineType || "").toLowerCase();
+  const name = String(machine?.name || "").toLowerCase();
+  if (type.includes("outsource") || type.includes("vendor") || type.includes("other") || name.includes("outsource")) return false;
+  return type.includes("printer") || type.includes("print") || name.includes("roland") || name.includes("mimaki");
+}
+
+function inkMaterialCostPerMl(material: any): number {
+  const calculated = Number(material?.calculatedUnitCost || 0);
+  const costPerUnit = Number(material?.costPerUnit || 0);
+  const purchaseCost = Number(material?.purchaseCost || 0);
+  const volumeMl = Number(material?.volumeMl || 0) || Number(material?.yieldQuantity || 0);
+  const baseUnit = String(material?.baseUnit || material?.unit || "").toLowerCase();
+  const unit = String(material?.unit || "").toLowerCase();
+  if (baseUnit === "ml" || unit === "ml") return calculated || costPerUnit || (volumeMl > 0 ? purchaseCost / volumeMl : 0);
+  if (purchaseCost > 0 && volumeMl > 0) return purchaseCost / volumeMl;
+  return 0;
+}
+
+function findInkMaterialForChannel(channel: any, inkMaterials: any[]) {
+  const inkType = String(channel?.inkType || "").toLowerCase();
+  const inkName = String(channel?.inkName || "").toLowerCase();
+  const hay = `${inkType} ${inkName}`;
+  const scored = inkMaterials
+    .map((material) => {
+      const name = String(material?.name || "").toLowerCase();
+      let score = 0;
+      if (inkName && name.includes(inkName)) score += 5;
+      if (inkType && name.includes(inkType)) score += 4;
+      if (hay.includes("white") && name.includes("white")) score += 8;
+      if ((hay.includes("gloss") || hay.includes("clear")) && (name.includes("gloss") || name.includes("clear"))) score += 8;
+      if (hay.includes("cmyk") && name.includes("cmyk")) score += 8;
+      if (hay.includes("cyan") && name.includes("cmyk")) score += 3;
+      return { material, score };
+    })
+    .filter((row) => row.score > 0 && inkMaterialCostPerMl(row.material) > 0)
+    .sort((a, b) => b.score - a.score);
+  return scored[0]?.material || null;
+}
+
+function machineToOption(machine: any, inkMaterials: any[] = []): MachineCostOption {
   const channels = Array.isArray(machine?.inkChannels) ? machine.inkChannels : [];
   const inkCostPerSqftAt100 = channels.reduce((sum: number, channel: any) => {
-    const costPerMl = Number(channel?.costPerMl || 0);
-    const mlPerSqft100 = Number(channel?.mlPerSqft100 || 0);
+    const matchedMaterial = findInkMaterialForChannel(channel, inkMaterials);
+    const costPerMl = Number(channel?.costPerMl || 0)
+      || (Number(channel?.cartridgeCost || 0) > 0 && Number(channel?.cartridgeMl || 0) > 0 ? Number(channel.cartridgeCost) / Number(channel.cartridgeMl) : 0)
+      || (matchedMaterial ? inkMaterialCostPerMl(matchedMaterial) : 0);
+    const mlPerSqft100 = Number(channel?.mlPerSqft100 || 0) || Number(channel?.mlPerSqft1Pct || 0) * 100;
     return sum + costPerMl * mlPerSqft100;
   }, 0);
   const inkCostPerSqInAt100 = inkCostPerSqftAt100 / 144;
@@ -297,7 +340,7 @@ function machineToOption(machine: any): MachineCostOption {
     costPerHour: Number(machine.costPerHour || 0),
     sqftPerHour: Number(machine.sqftPerHour || 0),
     inkCostPerSqInAt100: inkCostPerSqInAt100 + machineCostPerSqIn,
-    sourceNote: channels.length ? `${channels.length} ink channel(s) + machine recovery` : "machine recovery only / no ink channels",
+    sourceNote: channels.length ? `${channels.length} ink channel(s) + machine/material ink recovery` : "machine recovery only / no ink channels",
   };
 }
 
@@ -582,7 +625,7 @@ export async function loader({ request }: { request: Request }) {
 
   const materialsRaw = await db.material.findMany({
     where: { shop, active: true, useInRecipes: true },
-    select: { id: true, name: true, materialType: true, unit: true, costPerUnit: true, purchaseCost: true, baseUnit: true, yieldQuantity: true, yieldUnit: true, rollWidthIn: true, rollLengthFt: true, calculatedUnitCost: true, productFamilies: true },
+    select: { id: true, name: true, materialType: true, unit: true, costPerUnit: true, purchaseCost: true, baseUnit: true, yieldQuantity: true, yieldUnit: true, rollWidthIn: true, rollLengthFt: true, calculatedUnitCost: true, volumeMl: true, productFamilies: true },
     orderBy: [{ materialType: "asc" }, { name: "asc" }],
     take: 200,
   });
@@ -591,7 +634,7 @@ export async function loader({ request }: { request: Request }) {
     where: { shop, active: true },
     select: {
       id: true, name: true, machineType: true, costPerHour: true, sqftPerHour: true,
-      inkChannels: { where: { enabled: true }, select: { costPerMl: true, mlPerSqft100: true } },
+      inkChannels: { where: { enabled: true }, select: { inkName: true, inkType: true, costPerMl: true, cartridgeCost: true, cartridgeMl: true, mlPerSqft1Pct: true, mlPerSqft100: true } },
     },
     orderBy: [{ name: "asc" }],
     take: 25,
@@ -613,7 +656,8 @@ export async function loader({ request }: { request: Request }) {
     const haystack = `${material.name} ${material.materialType}`.toLowerCase();
     return haystack.includes("laminate") || haystack.includes("lamination") || haystack.includes("finish") || haystack.includes("gloss");
   });
-  const machineOptions = machinesRaw.map(machineToOption);
+  const inkMaterialsRaw = materialsRaw.filter((material: any) => String(material.materialType || "").toLowerCase().includes("ink") || String(material.materialType || "").toLowerCase().includes("coating") || String(material.name || "").toLowerCase().includes(" ink"));
+  const machineOptions = machinesRaw.filter(machineIsPrinter).map((machine: any) => machineToOption(machine, inkMaterialsRaw));
 
   const selectedMaterialId = stringParam(url, "labelMaterialId", labelMaterialOptions[0]?.id || "");
   const selectedMaterial = labelMaterialOptions.find((material) => material.id === selectedMaterialId) || null;
@@ -815,7 +859,7 @@ export default function WholesaleCalculator() {
       <section style={{ background: "linear-gradient(90deg,#111827,#4b5563)", color: "white", borderRadius: 12, padding: 24, marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 28 }}>Product Cost Calculator</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13 }}>
-          v12.11: route cost variables auto-pull. Materials, laminate, ink/machine, labor floors, tiers, and manual overrides now work together.
+          v13.1: machine ink cleanup. Printer choices ignore outsourced placeholders and can use matching ink materials for cost/ml when machine slots are incomplete.
         </p>
       </section>
 

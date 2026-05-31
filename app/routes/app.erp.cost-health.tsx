@@ -65,6 +65,42 @@ function inkCostPerMl(material: any): number {
   return 0;
 }
 
+
+function machineIsPrinter(machine: any): boolean {
+  const type = lower(machine.machineType);
+  const name = lower(machine.name);
+  if (type.includes("outsource") || type.includes("vendor") || type.includes("other") || name.includes("outsource")) return false;
+  return type.includes("printer") || type.includes("print") || name.includes("roland") || name.includes("mimaki");
+}
+
+function findInkMaterialForChannel(channel: any, inkMaterials: any[]) {
+  const inkType = lower(channel.inkType);
+  const inkName = lower(channel.inkName);
+  const hay = `${inkType} ${inkName}`;
+  const scored = inkMaterials
+    .map((material) => {
+      const name = lower(material.name);
+      let score = 0;
+      if (inkName && name.includes(inkName)) score += 5;
+      if (inkType && name.includes(inkType)) score += 4;
+      if (hay.includes("white") && name.includes("white")) score += 8;
+      if ((hay.includes("gloss") || hay.includes("clear")) && (name.includes("gloss") || name.includes("clear"))) score += 8;
+      if (hay.includes("cmyk") && name.includes("cmyk")) score += 8;
+      if ((hay.includes("cyan") || hay.includes("magenta") || hay.includes("yellow") || hay.includes("black")) && name.includes("cmyk")) score += 3;
+      return { material, score };
+    })
+    .filter((row) => row.score > 0 && inkCostPerMl(row.material) > 0)
+    .sort((a, b) => b.score - a.score);
+  return scored[0]?.material || null;
+}
+
+function channelCostPerMl(channel: any, inkMaterials: any[]): number {
+  const channelCost = num(channel.costPerMl) || (num(channel.cartridgeCost) > 0 && num(channel.cartridgeMl) > 0 ? num(channel.cartridgeCost) / num(channel.cartridgeMl) : 0);
+  if (channelCost > 0) return channelCost;
+  const matched = findInkMaterialForChannel(channel, inkMaterials);
+  return matched ? inkCostPerMl(matched) : 0;
+}
+
 function statusRank(status: Status): number {
   if (status === "critical") return 0;
   if (status === "warning") return 1;
@@ -179,14 +215,27 @@ export async function loader({ request }: { request: Request }) {
     }
   }
 
+  const inkMaterials = materials.filter((material: any) => {
+    const type = lower(material.materialType);
+    const name = lower(material.name);
+    return material.active && (type.includes("ink") || type.includes("coating") || name.includes(" ink") || name.includes("gloss ink") || name.includes("white ink"));
+  });
+
   for (const machine of machines) {
     const name = machine.name || "Unnamed machine";
     const active = Boolean(machine.active);
     const enabledChannels = (machine.inkChannels || []).filter((c: any) => c.enabled);
-    const isPrinter = lower(machine.machineType).includes("printer") || lower(machine.machineType).includes("print");
+    const isPrinter = machineIsPrinter(machine);
 
     if (!active) {
       issues.push({ area: "Machines", item: name, status: "warning", message: "Inactive machine. It will not be used by calculator auto-pull.", fix: "Reactivate only if this machine is part of production routing." });
+      continue;
+    }
+
+    if (!isPrinter) {
+      if (enabledChannels.length > 0) {
+        issues.push({ area: "Machines", item: name, status: "warning", message: "Non-printer/vendor machine has ink channels, but they are ignored by calculator auto-pull.", fix: "Leave as-is for outsourced/vendor routes, or change machine type/name to printer if it is a real print device." });
+      }
       continue;
     }
 
@@ -204,9 +253,13 @@ export async function loader({ request }: { request: Request }) {
 
     for (const channel of enabledChannels) {
       const channelName = `${name} slot ${channel.slotNumber}: ${channel.inkName || channel.inkType || "unnamed ink"}`;
-      const costPerMl = num(channel.costPerMl) || (num(channel.cartridgeCost) > 0 && num(channel.cartridgeMl) > 0 ? num(channel.cartridgeCost) / num(channel.cartridgeMl) : 0);
+      const directCostPerMl = num(channel.costPerMl) || (num(channel.cartridgeCost) > 0 && num(channel.cartridgeMl) > 0 ? num(channel.cartridgeCost) / num(channel.cartridgeMl) : 0);
+      const matchedInkMaterial = findInkMaterialForChannel(channel, inkMaterials);
+      const costPerMl = directCostPerMl || (matchedInkMaterial ? inkCostPerMl(matchedInkMaterial) : 0);
       if (costPerMl <= 0) {
-        issues.push({ area: "Machines", item: channelName, status: "critical", message: "Ink channel has no cost per ml.", fix: "Enter cartridge/bottle cost and ml, or cost per ml." });
+        issues.push({ area: "Machines", item: channelName, status: "critical", message: "Ink channel has no cost per ml and no matching ink material was found.", fix: "Enter cartridge/bottle cost and ml, or name/type the slot so it matches a saved CMYK, white, gloss, or clear ink material." });
+      } else if (directCostPerMl <= 0 && matchedInkMaterial) {
+        issues.push({ area: "Machines", item: channelName, status: "warning", message: `Ink channel cost is being estimated from material: ${matchedInkMaterial.name}.`, fix: "This is OK short term. For best accuracy, save the ink material link/cost in the machine slot later." });
       }
       if (num(channel.mlPerSqft1Pct) <= 0 && num(channel.mlPerSqft100) <= 0) {
         issues.push({ area: "Machines", item: channelName, status: "warning", message: "Ink usage rate is missing, so the calculator can only estimate or ignore this ink layer.", fix: "Add ml per sq ft at 1% coverage or 100% coverage. RIP imports can replace estimates later." });
@@ -238,9 +291,10 @@ export async function loader({ request }: { request: Request }) {
   const rollMediaReady = activeMaterials.filter((m: any) => (lower(m.materialType).includes("roll") || lower(m.name).includes("roll media")) && materialCostPerSqIn(m) > 0).length;
   const inkMaterialsReady = activeMaterials.filter((m: any) => (lower(m.materialType).includes("ink") || lower(m.name).includes(" ink")) && inkCostPerMl(m) > 0).length;
   const activeMachines = machines.filter((m: any) => m.active);
-  const machinesReady = activeMachines.filter((m: any) => {
+  const activePrinterMachines = activeMachines.filter(machineIsPrinter);
+  const machinesReady = activePrinterMachines.filter((m: any) => {
     const channels = (m.inkChannels || []).filter((c: any) => c.enabled);
-    return channels.length > 0 && channels.some((c: any) => num(c.costPerMl) > 0 || (num(c.cartridgeCost) > 0 && num(c.cartridgeMl) > 0));
+    return channels.length > 0 && channels.some((c: any) => channelCostPerMl(c, inkMaterials) > 0);
   }).length;
   const criticalCount = issues.filter((i) => i.status === "critical").length;
   const warningCount = issues.filter((i) => i.status === "warning").length;
@@ -249,7 +303,7 @@ export async function loader({ request }: { request: Request }) {
     { label: "Active materials", value: activeMaterials.length, status: activeMaterials.length > 0 ? "ready" : "critical", help: "Materials available for recipes/calculator." },
     { label: "Roll media ready", value: rollMediaReady, status: rollMediaReady > 0 ? "ready" : "critical", help: "Roll media with usable cost per square inch." },
     { label: "Ink materials ready", value: inkMaterialsReady, status: inkMaterialsReady > 0 ? "ready" : "critical", help: "Ink/coating materials with usable cost per ml." },
-    { label: "Machines ready", value: `${machinesReady}/${activeMachines.length}`, status: machinesReady > 0 ? "warning" : "critical", help: "Active machines with at least one usable ink channel." },
+    { label: "Printer machines ready", value: `${machinesReady}/${activePrinterMachines.length}`, status: machinesReady > 0 ? "warning" : "critical", help: "Active printer machines with at least one usable ink channel. Outsourced/vendor placeholders are ignored." },
     { label: "Critical issues", value: criticalCount, status: criticalCount === 0 ? "ready" : "critical", help: "Must be fixed before trusting auto-pricing." },
     { label: "Warnings", value: warningCount, status: warningCount === 0 ? "ready" : "warning", help: "Can calculate, but results may be estimates/manual fallback." },
   ];
@@ -275,16 +329,21 @@ export async function loader({ request }: { request: Request }) {
       id: m.id,
       name: m.name,
       type: m.machineType,
+      isPrinter: machineIsPrinter(m),
       costPerHour: num(m.costPerHour),
       sqftPerHour: num(m.sqftPerHour),
-      channels: (m.inkChannels || []).filter((c: any) => c.enabled).map((c: any) => ({
-        slotNumber: c.slotNumber,
-        inkName: c.inkName,
-        inkType: c.inkType,
-        costPerMl: num(c.costPerMl) || (num(c.cartridgeCost) > 0 && num(c.cartridgeMl) > 0 ? num(c.cartridgeCost) / num(c.cartridgeMl) : 0),
-        mlPerSqft1Pct: num(c.mlPerSqft1Pct),
-        mlPerSqft100: num(c.mlPerSqft100),
-      })),
+      channels: (m.inkChannels || []).filter((c: any) => c.enabled).map((c: any) => {
+        const matched = findInkMaterialForChannel(c, inkMaterials);
+        return {
+          slotNumber: c.slotNumber,
+          inkName: c.inkName,
+          inkType: c.inkType,
+          costPerMl: channelCostPerMl(c, inkMaterials),
+          matchedMaterialName: matched?.name || "",
+          mlPerSqft1Pct: num(c.mlPerSqft1Pct),
+          mlPerSqft100: num(c.mlPerSqft100),
+        };
+      }),
     })),
   };
 }
@@ -333,7 +392,7 @@ export default function CostHealthRoute() {
 
       <div className="hero">
         <h1>Cost Source Health Check</h1>
-        <p>v13.0: audits materials, roll-media conversion, ink/ml setup, machine ink channels, print-layer readiness, and product type tier setup before calculator pricing is trusted.</p>
+        <p>v13.1: audits materials, roll-media conversion, ink/ml setup, and printer-only ink channels. Outsourced/vendor machines are ignored, and machine slots can use matching ink material costs as a temporary bridge.</p>
       </div>
 
       <div className="notice">
@@ -411,19 +470,20 @@ export default function CostHealthRoute() {
         <p>CMYK should be your base print layer. White and gloss/clear should be add-on layers with their own ink cost and production slowdown handling. This page checks whether the machine has enough setup to support that.</p>
         <table>
           <thead>
-            <tr><th>Machine</th><th>Type</th><th>Cost/hr</th><th>Sqft/hr</th><th>Enabled ink channels</th></tr>
+            <tr><th>Machine</th><th>Type</th><th>Printer?</th><th>Cost/hr</th><th>Sqft/hr</th><th>Enabled ink channels</th></tr>
           </thead>
           <tbody>
             {data.machinePreview.map((m) => (
               <tr key={m.id}>
                 <td><strong>{m.name}</strong></td>
                 <td>{m.type}</td>
+                <td>{m.isPrinter ? "Yes" : "No / ignored"}</td>
                 <td>{money(m.costPerHour, 2)}</td>
                 <td>{m.sqftPerHour.toFixed(2)}</td>
                 <td>
                   {m.channels.length === 0 ? "No enabled ink channels" : m.channels.map((c) => (
                     <div key={`${m.id}-${c.slotNumber}`}>
-                      Slot {c.slotNumber}: <strong>{c.inkName || c.inkType}</strong> ({c.inkType}) — cost/ml <span className="mono">{money(c.costPerMl, 6)}</span>, usage 1% <span className="mono">{c.mlPerSqft1Pct.toFixed(6)}</span>, usage 100% <span className="mono">{c.mlPerSqft100.toFixed(6)}</span>
+                      Slot {c.slotNumber}: <strong>{c.inkName || c.inkType}</strong> ({c.inkType}) — cost/ml <span className="mono">{money(c.costPerMl, 6)}</span>{c.matchedMaterialName ? <span> via {c.matchedMaterialName}</span> : null}, usage 1% <span className="mono">{c.mlPerSqft1Pct.toFixed(6)}</span>, usage 100% <span className="mono">{c.mlPerSqft100.toFixed(6)}</span>
                     </div>
                   ))}
                 </td>
