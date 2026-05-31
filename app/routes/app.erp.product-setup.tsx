@@ -1457,7 +1457,7 @@ export default function ProductSetupRecipeBuilder() {
   const recipeBaseQuery = `recipeStatus=${encodeURIComponent(recipeStatus)}&recipeSearch=${encodeURIComponent(recipeSearch)}&recipeLimit=${encodeURIComponent(String(recipeLimit))}`;
 
   function recipeHref(recipeId: string) {
-    return `/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage}&recipeId=${encodeURIComponent(recipeId)}`;
+    return `?${recipeBaseQuery}&recipePage=${recipePage}&recipeId=${encodeURIComponent(recipeId)}`;
   }
 
   return (
@@ -1522,8 +1522,8 @@ export default function ProductSetupRecipeBuilder() {
         <div className="button-row">
           <span className="badge">Showing {recipes.length} of {recipeCount}</span>
           <span className="badge">Page {recipePage} of {recipeTotalPages}</span>
-          {hasPrevRecipes ? <a className="button secondary" href={`/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage - 1}`}>Previous recipes</a> : null}
-          {hasNextRecipes ? <a className="button secondary" href={`/app/erp/product-setup?${recipeBaseQuery}&recipePage=${recipePage + 1}`}>Next recipes</a> : null}
+          {hasPrevRecipes ? <a className="button secondary" href={`?${recipeBaseQuery}&recipePage=${recipePage - 1}`}>Previous recipes</a> : null}
+          {hasNextRecipes ? <a className="button secondary" href={`?${recipeBaseQuery}&recipePage=${recipePage + 1}`}>Next recipes</a> : null}
         </div>
 
         {recipes.length ? <table>
