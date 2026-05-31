@@ -7,6 +7,7 @@ const DEFAULT_APPLICATION_LABOR_COST_PER_SIDE = 0.15;
 const DEFAULT_AUDIT_LIMIT = 150;
 const DEFAULT_WARNING_BAND_PCT = 5;
 const DEFAULT_COST_REVIEW_THRESHOLD_PCT = 0;
+const DEFAULT_WHOLESALE_QTY_BREAKS = [1000, 2000, 5000, 10000];
 
 function money(value: any) {
   const number = Number(value || 0);
@@ -364,6 +365,43 @@ function parseJsonArray(value: any) {
   } catch (_error) {
     return [];
   }
+}
+
+
+function buildWholesaleBreakReview(recipe: any, rule: any, currentPrice: number, assumptions: any = {}) {
+  const targetMargin = numberOr(recipe?.targetMarginPct, 40);
+  const breaks = DEFAULT_WHOLESALE_QTY_BREAKS.map((qty) => {
+    const cost = estimateRecipeVariantUnitCost(recipe, rule, qty, assumptions);
+    const safePrice = priceForMargin(cost.total, targetMargin);
+    const currentMargin = currentPrice > 0 ? safeMargin(currentPrice, cost.total) : null;
+    return {
+      qty,
+      cost,
+      safePrice,
+      currentPrice,
+      targetMargin,
+      currentMargin,
+      costReviewNeeded: cost.costReviewNeeded,
+      warnings: cost.costReviewWarnings || [],
+    };
+  });
+  const baseSafePrice = breaks[0]?.safePrice || 0;
+  return breaks.map((item) => ({
+    ...item,
+    discountFromFirstPct: baseSafePrice > 0 ? Math.max(0, ((baseSafePrice - item.safePrice) / baseSafePrice) * 100) : 0,
+    status: item.costReviewNeeded
+      ? { tone: "yellow", label: "cost hold" }
+      : item.currentMargin !== null && item.currentMargin >= item.targetMargin
+        ? { tone: "green", label: "safe" }
+        : { tone: "yellow", label: "review price" },
+  }));
+}
+
+function summarizeWholesaleBreaks(breaks: any[] = []) {
+  const clean = (breaks || []).filter((item: any) => !item.costReviewNeeded);
+  const hardHolds = (breaks || []).filter((item: any) => item.costReviewNeeded).length;
+  const reviewPrices = clean.filter((item: any) => item.currentMargin === null || item.currentMargin < item.targetMargin).length;
+  return { clean: clean.length, hardHolds, reviewPrices };
 }
 
 function approvalStatusForRow(row: any) {
@@ -751,6 +789,8 @@ export async function loader({ request }: { request: Request }) {
     const statusInfo = statusForMargin(currentMargin, targetMargin, assumptions.warningBandPct);
     const tierReview = buildTierReview(recipe, rule, currentPrice, assumptions);
     const tierIssues = tierReview.filter((tier: any) => tier.auditMargin !== null && tier.auditMargin < tier.targetMargin).length;
+    const wholesaleBreaks = buildWholesaleBreakReview(recipe, rule, currentPrice, assumptions);
+    const wholesaleSummary = summarizeWholesaleBreaks(wholesaleBreaks);
     return {
       rule,
       recipe,
@@ -764,6 +804,8 @@ export async function loader({ request }: { request: Request }) {
       status: statusInfo,
       tierReview,
       tierIssues,
+      wholesaleBreaks,
+      wholesaleSummary,
     };
   });
 
@@ -822,6 +864,8 @@ export async function loader({ request }: { request: Request }) {
     costWarnings: filteredRows.filter((row: any) => !row.cost?.costReviewNeeded && row.cost?.costReviewWarnings?.length).length,
     tierReview: filteredRows.filter((row: any) => row.tierIssues > 0).length,
     priceQueue: filteredRows.filter((row: any) => !row.currentPrice || row.currentPrice + 0.005 < row.suggestedPrice || row.tierIssues > 0).length,
+    wholesaleRows: filteredRows.filter((row: any) => row.wholesaleBreaks?.length).length,
+    wholesaleReview: filteredRows.reduce((sum: number, row: any) => sum + numberOr(row.wholesaleSummary?.reviewPrices, 0), 0),
     avgCost: filteredRows.length ? filteredRows.reduce((sum: number, row: any) => sum + row.cost.total, 0) / filteredRows.length : 0,
   };
 
@@ -910,6 +954,9 @@ export default function MarginReviewPage() {
         .queue-note { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
         .settings-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: end; }
         .queue-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+        .wholesale-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+        .wholesale-card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; background: #fff; }
+        .wholesale-card strong { display: block; font-size: 16px; margin-top: 2px; }
         .success-note { background: #ecfdf5; border: 1px solid #bbf7d0; color: #166534; border-radius: 10px; padding: 10px 12px; margin-top: 10px; font-size: 13px; font-weight: 700; }
         .flag-panel { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px; margin-top: 12px; }
         .button.secondary { background: #e5e7eb; color: #111827; }
@@ -930,6 +977,7 @@ export default function MarginReviewPage() {
         <Badge tone="green">Read-only</Badge>
         <Badge tone="yellow">Clear cost breakdown</Badge>
         <Badge tone="yellow">Tier-aware review</Badge>
+        <Badge tone="yellow">v11 wholesale quantity breaks</Badge>
         <Badge tone="yellow">Approval queue records</Badge>
         <Badge tone="yellow">Saved shop assumptions</Badge>
         <Badge tone="yellow">Recipe cost review flags</Badge>
@@ -1066,6 +1114,51 @@ export default function MarginReviewPage() {
         <div className="stat"><span className="muted">Cost warnings</span><strong>{summary.costWarnings || 0}</strong></div>
         <div className="stat"><span className="muted">Tier issues</span><strong>{summary.tierReview}</strong></div>
         <div className="stat"><span className="muted">Avg est. cost</span><strong>{money(summary.avgCost)}</strong></div>
+      </section>
+
+      <section className="card">
+        <h2 style={{ marginTop: 0 }}>v11 Wholesale Quantity Break Preview</h2>
+        <div className="queue-note">
+          <strong>Margin-safe quantity discounts.</strong> This preview calculates safe wholesale prices for 1,000 / 2,000 / 5,000 / 10,000 units using the same recipe cost engine, saved labor assumptions, and target margin. It does not update Shopify yet.
+        </div>
+        <div className="queue-actions">
+          <Badge tone="green">{summary.wholesaleRows || 0} row(s) checked</Badge>
+          <Badge tone={(summary.wholesaleReview || 0) ? "yellow" : "green"}>{summary.wholesaleReview || 0} tier price review(s)</Badge>
+          <Badge tone="yellow">Shopify quantity pricing still locked</Badge>
+        </div>
+        {rows?.length ? (
+          <div className="wholesale-grid">
+            {(rows || []).slice(0, 4).map((row: any) => (
+              <div className="wholesale-card" key={`wholesale-${row.rule.id}`}>
+                <div className="muted">{row.shopify?.product?.title || row.recipe?.name || "Product"}</div>
+                <strong>{row.shopify?.title || ruleTitle(row.rule)}</strong>
+                <div className="tier-table" style={{ marginTop: 8 }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Qty</th>
+                        <th className="right">Safe price</th>
+                        <th className="right">Cost</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(row.wholesaleBreaks || []).map((tier: any) => (
+                        <tr key={`${row.rule.id}-${tier.qty}`}>
+                          <td>{tier.qty.toLocaleString()}</td>
+                          <td className="right"><strong>{money(tier.safePrice)}</strong></td>
+                          <td className="right">{money(tier.cost.total)}</td>
+                          <td><Badge tone={tier.status.tone}>{tier.status.label}</Badge></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="muted" style={{ marginBottom: 0 }}>Target margin: {pct(row.targetMargin)}. Quantity pricing is preview-only until v12/v13.</p>
+              </div>
+            ))}
+          </div>
+        ) : <p className="muted">Run an audit to preview wholesale quantity breaks.</p>}
       </section>
 
 
@@ -1230,7 +1323,7 @@ export default function MarginReviewPage() {
                         </tbody>
                       </table>
                     </div>
-                    <div className="tier-note">Current Shopify base price: {money(row.currentPrice)}. Future patches will compare/edit quantity-tier prices separately from base Shopify price.</div>
+                    <div className="tier-note">Current Shopify base price: {money(row.currentPrice)}. v11 now previews quantity-break wholesale pricing. Future patches will let staff edit/approve those tiers and sync them to product pages safely.</div>
                   </details>
                 </td>
                 <td className="right"><strong>{money(row.currentPrice)}</strong></td>
