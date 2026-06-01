@@ -1,0 +1,20 @@
+{
+  "erpUploadUrl": "https://gso-wholesale-app-live.onrender.com/api/rip-imports/upload",
+  "uploadToken": "PASTE_TOKEN_FROM_/app/erp/print-intake",
+  "printIntakeFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\Prints For Today",
+  "needsReviewFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\print-intake\\needs-review",
+  "renamedFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\print-intake\\renamed",
+  "sentToRipFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\print-intake\\sent-to-rip",
+  "processedLogFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\processed",
+  "errorLogFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\error",
+  "versaworksLogFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\versaworks\\incoming",
+  "rasterlinkLogFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\rasterlink\\incoming",
+  "defaultRoute": "LG640-CMYK",
+  "defaultHotFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-hotfolders\\versaworks\\LG640-CMYK",
+  "routes": [
+    { "route": "LG640-CMYK-WHITE-GLOSS", "match": ["white gloss", "w+g", "white-gloss"], "hotFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-hotfolders\\versaworks\\LG640-CMYK-WHITE-GLOSS" },
+    { "route": "LG640-CMYK-WHITE", "match": ["white", "wht"], "hotFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-hotfolders\\versaworks\\LG640-CMYK-WHITE" },
+    { "route": "LG640-CMYK-GLOSS", "match": ["gloss", "spot gloss", "sg"], "hotFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-hotfolders\\versaworks\\LG640-CMYK-GLOSS" },
+    { "route": "MIMAKI-CMYK", "match": ["mimaki", "ucjv", "rasterlink"], "hotFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-hotfolders\\rasterlink\\MIMAKI-CMYK" }
+  ]
+}

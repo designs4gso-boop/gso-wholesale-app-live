@@ -22,10 +22,11 @@ export default [
     route("create-order", "routes/app.create-order.tsx"),
     route("erp/materials", "routes/app.erp.materials.tsx"),
     route("erp/machines", "routes/app.erp.machines.tsx"),
-    route("erp/cost-health", "routes/app.erp.cost-health.tsx"),
     route("erp/production", "routes/app.erp.production.tsx"),
     route("erp/production-calendar", "routes/app.erp.production-calendar.tsx"),
     route("erp/print-logs", "routes/app.erp.print-logs.tsx"),
+    route("erp/rip-imports", "routes/app.erp.rip-imports.tsx"),
+    route("erp/print-intake", "routes/app.erp.print-intake.tsx"),
     route("erp/print-log-settings", "routes/app.erp.print-log-settings.tsx"),
     route("erp/reorder-report", "routes/app.erp.reorder-report.tsx"),
     route("erp/purchase-requests", "routes/app.erp.purchase-requests.tsx"),
@@ -42,6 +43,7 @@ export default [
   route("proof/:token", "routes/proof.$token.tsx"),
 
   route("api/print-logs/upload", "routes/api.print-logs.upload.tsx"),
+  route("api/rip-imports/upload", "routes/api.rip-imports.upload.tsx"),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
   route("apps/wholesale-lite/pricing", "routes/apps.wholesale-lite.pricing.ts"),
