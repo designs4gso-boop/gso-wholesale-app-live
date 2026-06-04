@@ -35,12 +35,19 @@ type MaterialOption = {
   purchaseCost: number;
 };
 
+type BlankItemTier = { minQty: number; unitCost: number; label: string };
+
 type BlankItemOption = {
   id: string;
-  source: "material" | "vendor";
+  source: "preset" | "material" | "vendor";
   name: string;
   productType: string;
   unitCost: number;
+  tiers?: BlankItemTier[];
+  defaultApplicationMode: string;
+  applicationKey: string;
+  wastePct: number;
+  vendor: string;
 };
 
 type QuoteLine = {
@@ -56,6 +63,8 @@ type QuoteLine = {
   ripResultMode: string;
   inkEstimateProfile: string;
   customInkCostPerSqft: number;
+  labelType: string;
+  labelTypeName: string;
   baseSqft: number;
   wasteAdjustedSqft: number;
   effectiveUnits: number;
@@ -160,8 +169,13 @@ function uniqueLatestByQuote(rows: QuoteRipRow[]) {
   return out;
 }
 
-function materialSqftCost(material?: MaterialOption | null, fallback = 0.26) {
+function materialSqftCost(material?: MaterialOption | null, fallback = 0.31) {
   if (!material) return fallback;
+  const materialName = `${material.name || ""}`.toLowerCase();
+  if (materialName.includes("holographic") || materialName.includes("holo")) return 0.72;
+  if (materialName.includes("avery") || materialName.includes("3.5")) return 0.33;
+  if (materialName.includes("matte") && materialName.includes("6")) return 0.31;
+  if (materialName.includes("gloss") && materialName.includes("6")) return 0.31;
   const unitCost = material.calculatedUnitCost || material.costPerUnit || material.purchaseCost || fallback;
   const unit = `${material.baseUnit || material.unit || ""}`.toLowerCase();
   if (unit.includes("sqin")) return unitCost * 144;
@@ -169,13 +183,136 @@ function materialSqftCost(material?: MaterialOption | null, fallback = 0.26) {
 }
 
 function inkEstimateCostPerSqft(profile: string, custom: number) {
-  if (profile === "light") return 0.12;
-  if (profile === "medium") return 0.23;
-  if (profile === "heavy") return 0.38;
-  if (profile === "roland-gloss") return 0.35;
-  if (profile === "white-gloss") return 0.55;
+  if (profile === "cmyk-heavy") return 0.50;
+  if (profile === "cmyk-white-heavy") return 1.00;
+  if (profile === "cmyk-gloss-heavy") return 1.00;
+  if (profile === "cmyk-white-gloss-heavy") return 1.50;
+  if (profile === "cmyk-2x-gloss-heavy") return 1.50;
+  if (profile === "cmyk-3x-gloss-heavy") return 2.00;
+  if (profile === "cmyk-4x-gloss-heavy") return 2.50;
   if (profile === "custom") return custom;
-  return 0.23;
+  return 0.50;
+}
+
+function labelTypeName(labelType: string) {
+  if (labelType === "side") return "Side label";
+  if (labelType === "lid") return "Lid label";
+  if (labelType === "lid-side") return "Lid side label";
+  if (labelType === "front") return "Front label";
+  if (labelType === "back") return "Back label";
+  if (labelType === "warning") return "Warning label";
+  if (labelType === "box") return "Box label";
+  if (labelType === "custom") return "Custom label";
+  return "Side label";
+}
+
+function presetBlankItems(): BlankItemOption[] {
+  const mironTiers = {
+    jar50: [
+      { minQty: 0, unitCost: 2.46, label: "<250" },
+      { minQty: 250, unitCost: 2.24, label: "250+" },
+      { minQty: 500, unitCost: 2.03, label: "500+" },
+      { minQty: 1000, unitCost: 1.89, label: "1,000+" },
+      { minQty: 2500, unitCost: 1.74, label: "2,500+" },
+    ],
+    jar100Tall: [
+      { minQty: 0, unitCost: 2.86, label: "<250" },
+      { minQty: 250, unitCost: 2.63, label: "250+" },
+      { minQty: 500, unitCost: 2.41, label: "500+" },
+      { minQty: 1000, unitCost: 2.22, label: "1,000+" },
+      { minQty: 2500, unitCost: 2.07, label: "2,500+" },
+    ],
+    jar100Wide: [
+      { minQty: 0, unitCost: 2.90, label: "<250" },
+      { minQty: 250, unitCost: 2.67, label: "250+" },
+      { minQty: 500, unitCost: 2.44, label: "500+" },
+      { minQty: 1000, unitCost: 2.26, label: "1,000+" },
+      { minQty: 2500, unitCost: 2.10, label: "2,500+" },
+    ],
+    jar150: [
+      { minQty: 0, unitCost: 3.26, label: "<250" },
+      { minQty: 250, unitCost: 3.00, label: "250+" },
+      { minQty: 500, unitCost: 2.76, label: "500+" },
+      { minQty: 1000, unitCost: 2.54, label: "1,000+" },
+      { minQty: 2500, unitCost: 2.37, label: "2,500+" },
+    ],
+    jar250: [
+      { minQty: 0, unitCost: 3.92, label: "<250" },
+      { minQty: 250, unitCost: 3.60, label: "250+" },
+      { minQty: 500, unitCost: 3.32, label: "500+" },
+      { minQty: 1000, unitCost: 3.11, label: "1,000+" },
+      { minQty: 2500, unitCost: 2.92, label: "2,500+" },
+    ],
+  };
+  const fixed = (id: string, name: string, unitCost: number, productType: string, app: string, key: string, wastePct: number, vendor: string): BlankItemOption =>
+    ({ id, source: "preset", name, productType, unitCost, defaultApplicationMode: app, applicationKey: key, wastePct, vendor });
+  const tiered = (id: string, name: string, tiers: BlankItemTier[], key: string): BlankItemOption =>
+    ({ id, source: "preset", name, productType: "jar", unitCost: tiers[0]?.unitCost || 0, tiers, defaultApplicationMode: "apply-jar", applicationKey: key, wastePct: 2, vendor: "MIRON" });
+  return [
+    fixed("preset:customer-supplied", "Customer supplied item - $0.00", 0, "customer-supplied", "none", "customer", 0, "Customer"),
+    fixed("preset:blank-4x5-bag", "Blank 4x5 bag", 0.09, "bag", "apply-flat-bag", "blank-4x5-bag", 4, "SAFE CARE"),
+    fixed("preset:oz-bag", "OZ bag", 0.40, "bag", "apply-flat-bag", "oz-bag", 2, "SAFE CARE"),
+    fixed("preset:pound-bag", "Pound bag", 1.00, "bag", "apply-flat-bag", "pound-bag", 2, "SAFE CARE"),
+    fixed("preset:3oz-jar-clear", "3oz jar - clear", 0.50, "jar", "apply-jar", "safe-care-jar", 2, "SAFE CARE"),
+    fixed("preset:3oz-jar-black-white", "3oz jar - black/white", 0.62, "jar", "apply-jar", "safe-care-jar", 2, "SAFE CARE"),
+    fixed("preset:4oz-jar-clear", "4oz jar - clear", 0.60, "jar", "apply-jar", "safe-care-jar", 2, "SAFE CARE"),
+    fixed("preset:4oz-jar-black-white", "4oz jar - black/white", 0.65, "jar", "apply-jar", "safe-care-jar", 2, "SAFE CARE"),
+    fixed("preset:5oz-jar-clear", "5oz jar - clear", 0.60, "jar", "apply-jar", "safe-care-jar", 2, "SAFE CARE"),
+    fixed("preset:soda-can", "Soda can", 0.52, "jar", "apply-jar", "soda-can", 2, "P1"),
+    tiered("preset:miron-50ml", "50ml Miron jar + lid", mironTiers.jar50, "miron-50ml"),
+    tiered("preset:miron-100ml-tall", "100ml tall Miron jar + lid", mironTiers.jar100Tall, "miron-100ml"),
+    tiered("preset:miron-100ml-wide", "100ml wide Miron jar + lid", mironTiers.jar100Wide, "miron-100ml"),
+    tiered("preset:miron-150ml", "150ml Miron jar + lid", mironTiers.jar150, "miron-150ml"),
+    tiered("preset:miron-250ml", "250ml Miron jar + lid", mironTiers.jar250, "miron-250ml"),
+  ];
+}
+
+function blankItemUnitCost(item: BlankItemOption | null, qty: number) {
+  if (!item) return 0;
+  if (!item.tiers?.length) return item.unitCost || 0;
+  const sorted = [...item.tiers].sort((a, b) => b.minQty - a.minQty);
+  return sorted.find((tier) => qty >= tier.minQty)?.unitCost || item.unitCost || 0;
+}
+
+function blankItemTierLabel(item: BlankItemOption | null, qty: number) {
+  if (!item?.tiers?.length) return "fixed";
+  const sorted = [...item.tiers].sort((a, b) => b.minQty - a.minQty);
+  const tier = sorted.find((t) => qty >= t.minQty);
+  return tier?.label || "<250";
+}
+
+function secondsForKnownApplication(item: BlankItemOption | null, line: Pick<QuoteLine, "labelType" | "widthIn" | "heightIn">, mode: string) {
+  const labelType = line.labelType || "side";
+  const area = Math.max((line.widthIn || 0) * (line.heightIn || 0), 1);
+  const key = item?.applicationKey || "";
+  if (mode === "apply-flat-bag") {
+    if (key === "blank-4x5-bag") return 10;
+    if (key === "oz-bag") return 12;
+    if (key === "pound-bag") return 15;
+    return 10;
+  }
+  if (mode === "apply-jar" || mode === "apply-tube") {
+    if (key === "soda-can") return 10;
+    if (key === "safe-care-jar") return labelType === "lid" || labelType === "lid-side" ? 8 : 10;
+    if (key === "miron-50ml" || key === "miron-100ml") {
+      if (labelType === "lid") return 10;
+      if (labelType === "lid-side") return 12;
+      return 12;
+    }
+    if (key === "miron-150ml") {
+      if (labelType === "lid") return 10;
+      if (labelType === "lid-side") return 12;
+      return 13;
+    }
+    if (key === "miron-250ml") {
+      if (labelType === "lid") return 10;
+      if (labelType === "lid-side") return 12;
+      return 15;
+    }
+    return labelType === "lid" ? 8 : 10;
+  }
+  if (mode === "apply-box") return Math.max(5, 4 + area * 0.12);
+  return 0;
 }
 
 function estimateApplicationRule(mode: string, avgLabelSqIn: number, labelsPerItem: number) {
@@ -261,11 +398,32 @@ export async function loader({ request }: { request: Request }) {
   const defaultMaterial = materials.find((m) => `${m.baseUnit} ${m.unit}`.toLowerCase().includes("sqft")) || materials[0] || null;
 
   const blankItems: BlankItemOption[] = [
+    ...presetBlankItems(),
     ...materials
       .filter((m) => [m.unit, m.baseUnit].join(" ").toLowerCase().includes("each") || ["blank", "packaging", "general"].includes(m.materialType))
       .slice(0, 100)
-      .map((m) => ({ id: `material:${m.id}`, source: "material" as const, name: m.name, productType: m.materialType, unitCost: m.calculatedUnitCost || m.costPerUnit || m.purchaseCost || 0 })),
-    ...vendorProducts.slice(0, 100).map((p) => ({ id: `vendor:${p.id}`, source: "vendor" as const, name: p.name, productType: p.productType, unitCost: p.defaultUnitCost || 0 })),
+      .map((m) => ({
+        id: `material:${m.id}`,
+        source: "material" as const,
+        name: m.name,
+        productType: m.materialType,
+        unitCost: m.calculatedUnitCost || m.costPerUnit || m.purchaseCost || 0,
+        defaultApplicationMode: "none",
+        applicationKey: "custom",
+        wastePct: 0,
+        vendor: "Saved material",
+      })),
+    ...vendorProducts.slice(0, 100).map((p) => ({
+      id: `vendor:${p.id}`,
+      source: "vendor" as const,
+      name: p.name,
+      productType: p.productType,
+      unitCost: p.defaultUnitCost || 0,
+      defaultApplicationMode: "none",
+      applicationKey: "custom",
+      wastePct: 0,
+      vendor: "Vendor product",
+    })),
   ];
   const blankItemById = new Map(blankItems.map((item) => [item.id, item]));
 
@@ -288,6 +446,7 @@ export async function loader({ request }: { request: Request }) {
   const lineRipModes = url.searchParams.getAll("lineRipResultMode");
   const lineInkProfiles = url.searchParams.getAll("lineInkEstimateProfile");
   const lineCustomInkCosts = url.searchParams.getAll("lineCustomInkCostPerSqft");
+  const lineLabelTypes = url.searchParams.getAll("lineLabelType");
 
   const lines: QuoteLine[] = Array.from({ length: lineCount }, (_, index) => {
     const name = cleanText(getAt(lineNames, index, index === 0 ? "Main label" : `Label ${index + 1}`));
@@ -295,12 +454,13 @@ export async function loader({ request }: { request: Request }) {
     const widthIn = getNumberAt(lineWidths, index, 4);
     const heightIn = getNumberAt(lineHeights, index, 5);
     const materialId = cleanText(getAt(lineMaterials, index, defaultMaterial?.id || "custom"));
-    const customMaterialCostPerSqft = getNumberAt(customMaterialCosts, index, 0.26);
+    const customMaterialCostPerSqft = getNumberAt(customMaterialCosts, index, 0.31);
     const wastePct = getNumberAt(lineWastes, index, 10);
     const quoteId = cleanText(getAt(lineQuoteIds, index, rows[0]?.quoteId || ""));
     const ripResultMode = cleanText(getAt(lineRipModes, index, "per-piece"));
-    const inkEstimateProfile = cleanText(getAt(lineInkProfiles, index, "medium"));
-    const customInkCostPerSqft = getNumberAt(lineCustomInkCosts, index, 0.23);
+    const inkEstimateProfile = cleanText(getAt(lineInkProfiles, index, "cmyk-heavy"));
+    const customInkCostPerSqft = getNumberAt(lineCustomInkCosts, index, 0.50);
+    const labelType = cleanText(getAt(lineLabelTypes, index, "side"));
     const material = materialById.get(materialId);
     const materialCostPerSqft = materialId === "custom" ? customMaterialCostPerSqft : materialSqftCost(material, customMaterialCostPerSqft);
     const sqftPerUnit = widthIn > 0 && heightIn > 0 ? (widthIn * heightIn) / 144 : 0;
@@ -329,6 +489,8 @@ export async function loader({ request }: { request: Request }) {
       ripResultMode,
       inkEstimateProfile,
       customInkCostPerSqft,
+      labelType,
+      labelTypeName: labelTypeName(labelType),
       baseSqft,
       wasteAdjustedSqft,
       effectiveUnits,
@@ -354,19 +516,28 @@ export async function loader({ request }: { request: Request }) {
   const customItemName = cleanText(url.searchParams.get("customItemName") || "Custom item");
   const customItemUnitCost = fieldNumber(url, "customItemUnitCost", 0);
   const selectedItem = blankItemById.get(itemId) || null;
-  const itemUnitCost = itemMode === "none" ? 0 : itemId === "custom" ? customItemUnitCost : selectedItem?.unitCost || 0;
+  const itemUnitCost = itemMode === "none" ? 0 : itemId === "custom" ? customItemUnitCost : blankItemUnitCost(selectedItem, itemQty);
+  const itemTierLabel = itemMode === "inventory" ? blankItemTierLabel(selectedItem, itemQty) : "fixed";
   const itemName = itemMode === "none" ? "No blank item" : itemId === "custom" ? customItemName : selectedItem?.name || "Selected item";
   const itemCost = itemQty * itemUnitCost;
 
-  const applicationMode = cleanText(url.searchParams.get("applicationMode") || "none");
+  const rawApplicationMode = url.searchParams.get("applicationMode");
+  const applicationMode = cleanText(rawApplicationMode || (itemMode === "inventory" ? selectedItem?.defaultApplicationMode || "none" : "none"));
   const applicationRule = estimateApplicationRule(applicationMode, averageLabelSqIn, lines.length);
   const customApplicationSecondsPerUnit = fieldNumber(url, "applicationSecondsPerUnit", 8);
   const customApplicationUnitCost = fieldNumber(url, "applicationUnitCost", 0);
-  const applicationQty = applicationMode === "none" ? 0 : applicationMode === "apply-label-set" ? primaryQuantity : totalLabelApplications;
-  const applicationSecondsPerUnit = applicationMode === "custom" ? customApplicationSecondsPerUnit : applicationRule.secondsPerUnit;
+  const applicationSetupMinutes = applicationMode === "none" ? 0 : applicationMode === "apply-flat-bag" ? 5 : applicationMode === "apply-box" ? 8 : 10;
+  const applicationLineDetails = applicationMode === "none" ? [] : lines.map((line) => {
+    const seconds = applicationMode === "custom" ? customApplicationSecondsPerUnit : secondsForKnownApplication(selectedItem, line, applicationMode) || applicationRule.secondsPerUnit;
+    const apps = line.quantity;
+    const minutes = (apps * seconds) / 60;
+    return { lineName: line.name, labelType: line.labelTypeName, apps, seconds, minutes, laborCost: (minutes / 60) * laborRatePerHour };
+  });
+  const applicationQty = applicationMode === "none" ? 0 : applicationLineDetails.reduce((sum, line) => sum + line.apps, 0);
+  const applicationSecondsPerUnit = applicationMode === "none" ? 0 : applicationLineDetails.length ? applicationLineDetails.reduce((sum, line) => sum + line.seconds, 0) / applicationLineDetails.length : 0;
   const applicationUnitCost = applicationMode === "custom" ? customApplicationUnitCost : applicationRule.extraCostPerUnit;
-  const applicationSetupMinutes = applicationMode === "none" ? 0 : applicationRule.setupMinutes;
-  const applicationLaborMinutes = applicationMode === "none" ? 0 : applicationSetupMinutes + (applicationQty * applicationSecondsPerUnit) / 60;
+  const applicationMinutesBeforeSetup = applicationLineDetails.reduce((sum, line) => sum + line.minutes, 0);
+  const applicationLaborMinutes = applicationMode === "none" ? 0 : applicationSetupMinutes + applicationMinutesBeforeSetup;
   const applicationLaborCost = (applicationLaborMinutes / 60) * laborRatePerHour + applicationQty * applicationUnitCost;
 
   const lineMaterialCost = lines.reduce((sum, line) => sum + line.materialCost, 0);
@@ -405,12 +576,14 @@ export async function loader({ request }: { request: Request }) {
       itemQty,
       customItemName,
       customItemUnitCost,
+      itemTierLabel,
       applicationMode,
       applicationQty,
       applicationSecondsPerUnit,
       applicationUnitCost,
       applicationSetupMinutes,
       applicationName: applicationRule.name,
+      applicationLineDetails,
       averageLabelSqIn,
     },
     calc: {
@@ -422,6 +595,7 @@ export async function loader({ request }: { request: Request }) {
       itemName,
       itemQty,
       itemUnitCost,
+      itemTierLabel,
       itemCost,
       applicationLaborMinutes,
       applicationLaborCost,
@@ -429,6 +603,7 @@ export async function loader({ request }: { request: Request }) {
       applicationSecondsPerUnit,
       applicationSetupMinutes,
       applicationName: applicationRule.name,
+      applicationLineDetails,
       processLaborCost,
       processMachineCost,
       totalCost,
@@ -455,7 +630,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.7 cleans up item/application previews, clarifies print setup vs application setup, and hides helper text that does not apply.</p>
+        <p style={{ marginBottom: 0 }}>v1.8 adds GSO blank item presets, Miron tier pricing, label type per print line, and shop-specific application labor timing.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -498,6 +673,18 @@ export default function ErpCostCalculatorRoute() {
                   <label>Qty<br /><input name="lineQty" type="number" defaultValue={line.quantity} style={inputStyle} /></label>
                   <label>Width in<br /><input name="lineWidthIn" type="number" step="0.01" defaultValue={line.widthIn} style={inputStyle} /></label>
                   <label>Height in<br /><input name="lineHeightIn" type="number" step="0.01" defaultValue={line.heightIn} style={inputStyle} /></label>
+                  <label>Label type<br />
+                    <select name="lineLabelType" defaultValue={line.labelType} style={inputStyle}>
+                      <option value="side">Side label</option>
+                      <option value="lid">Lid label</option>
+                      <option value="lid-side">Lid side label</option>
+                      <option value="front">Front label</option>
+                      <option value="back">Back label</option>
+                      <option value="warning">Warning label</option>
+                      <option value="box">Box label</option>
+                      <option value="custom">Custom label</option>
+                    </select>
+                  </label>
                   <label style={{ gridColumn: "1 / 3" }}>Material<br />
                     <select name="lineMaterialId" defaultValue={line.materialId} style={inputStyle}>
                       {materials.map((material) => <option key={material.id} value={material.id}>{material.name} - {money(materialSqftCost(material, 0))}/sqft</option>)}
@@ -535,11 +722,13 @@ export default function ErpCostCalculatorRoute() {
                       <input type="hidden" name="lineRipResultMode" value={line.ripResultMode} />
                       <label>Estimated ink profile<br />
                         <select name="lineInkEstimateProfile" defaultValue={line.inkEstimateProfile} style={inputStyle}>
-                          <option value="light">Light CMYK - $0.12/sqft</option>
-                          <option value="medium">Medium CMYK - $0.23/sqft</option>
-                          <option value="heavy">Heavy CMYK - $0.38/sqft</option>
-                          <option value="roland-gloss">Roland gloss - $0.35/sqft</option>
-                          <option value="white-gloss">White + gloss - $0.55/sqft</option>
+                          <option value="cmyk-heavy">CMYK Heavy - $0.50/sqft</option>
+                          <option value="cmyk-white-heavy">CMYK + White Heavy - $1.00/sqft</option>
+                          <option value="cmyk-gloss-heavy">CMYK + Gloss Heavy - $1.00/sqft</option>
+                          <option value="cmyk-white-gloss-heavy">CMYK + White + Gloss Heavy - $1.50/sqft</option>
+                          <option value="cmyk-2x-gloss-heavy">CMYK + 2X Gloss Heavy - $1.50/sqft</option>
+                          <option value="cmyk-3x-gloss-heavy">CMYK + 3X Gloss Heavy - $2.00/sqft</option>
+                          <option value="cmyk-4x-gloss-heavy">CMYK + 4X Gloss Heavy - $2.50/sqft</option>
                           <option value="custom">Custom ink $/sqft</option>
                         </select>
                         <div style={smallHelp}>Estimated mode ignores GSOQ files until artwork is ready.</div>
@@ -578,7 +767,7 @@ export default function ErpCostCalculatorRoute() {
               <label style={{ gridColumn: "1 / -1" }}>Inventory item<br />
                 <select name="itemId" defaultValue={form.itemId} style={inputStyle}>
                   <option value="custom">Custom item</option>
-                  {blankItems.map((item) => <option key={item.id} value={item.id}>{item.name} - {money(item.unitCost)} each</option>)}
+                  {blankItems.map((item) => <option key={item.id} value={item.id}>{item.name} - {item.tiers?.length ? "tiered" : `${money(item.unitCost)} each`}</option>)}
                 </select>
               </label>
             ) : <input type="hidden" name="itemId" value={form.itemId} />}
@@ -595,7 +784,7 @@ export default function ErpCostCalculatorRoute() {
             )}
             {form.itemMode !== "none" ? (
               <div style={{ gridColumn: "1 / -1", fontSize: 13, color: "#374151", background: "#f3f4f6", borderRadius: 10, padding: 10 }}>
-                Item cost preview: {calc.itemName}. Qty {num(calc.itemQty, 0)} × {money(calc.itemUnitCost)} = {money(calc.itemCost)}.
+                Item cost preview: {calc.itemName}. Qty {num(calc.itemQty, 0)} × {money(calc.itemUnitCost)} {form.itemTierLabel !== "fixed" ? `(tier ${form.itemTierLabel})` : ""} = {money(calc.itemCost)}.
               </div>
             ) : null}
           </div>
@@ -612,7 +801,7 @@ export default function ErpCostCalculatorRoute() {
                 <option value="apply-label-set">Apply full label set to item</option>
                 <option value="custom">Custom application</option>
               </select>
-              <div style={smallHelp}>Application quantity and seconds are estimated automatically from label size, label count, and application type.</div>
+              <div style={smallHelp}>Application quantity and seconds are calculated automatically from the selected blank item and each line label type.</div>
             </label>
             {form.applicationMode === "custom" ? (
               <>
@@ -628,7 +817,7 @@ export default function ErpCostCalculatorRoute() {
             <input type="hidden" name="applicationQty" value={form.applicationQty} />
             {form.applicationMode !== "none" ? (
               <div style={{ gridColumn: "1 / -1", fontSize: 13, color: "#374151", background: "#f3f4f6", borderRadius: 10, padding: 10 }}>
-                Auto application labor rule: {form.applicationName}. Qty {num(form.applicationQty, 0)} × {num(form.applicationSecondsPerUnit, 2)} sec + {num(form.applicationSetupMinutes, 1)} min application setup = {num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)}.
+                Auto application labor rule: {form.applicationName}. {form.applicationLineDetails.map((detail) => `${detail.lineName} ${detail.labelType}: ${num(detail.apps, 0)} × ${num(detail.seconds, 2)} sec`).join("; ")} + {num(form.applicationSetupMinutes, 1)} min application setup = {num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)}.
               </div>
             ) : null}
           </div>
@@ -647,7 +836,7 @@ export default function ErpCostCalculatorRoute() {
               <tr><td>Label material cost</td><td align="right">{money(calc.lineMaterialCost)}</td></tr>
               <tr><td>Ink cost</td><td align="right">{money(calc.lineInkCost)}</td></tr>
               <tr><td>{calc.itemName}</td><td align="right">{calc.itemQty ? `${num(calc.itemQty, 0)} x ${money(calc.itemUnitCost)} = ${money(calc.itemCost)}` : money(0)}</td></tr>
-              <tr><td>Application labor</td><td align="right">{form.applicationMode === "none" ? "No application / $0.00" : `${calc.applicationName}: ${num(calc.applicationQty, 0)} apps, ${num(calc.applicationLaborMinutes, 1)} min incl. ${num(calc.applicationSetupMinutes, 1)} min application setup / ${money(calc.applicationLaborCost)}`}</td></tr>
+              <tr><td>Application labor</td><td align="right">{form.applicationMode === "none" ? "No application / $0.00" : `${calc.applicationName}: ${num(calc.applicationQty, 0)} apps, ${num(calc.applicationLaborMinutes, 1)} min incl. setup / ${money(calc.applicationLaborCost)}`}</td></tr>
               <tr><td>Print/setup labor</td><td align="right">{money(calc.processLaborCost)}</td></tr>
               <tr><td>Machine/setup cost</td><td align="right">{money(calc.processMachineCost)}</td></tr>
               <tr style={{ borderTop: "1px solid #e5e7eb" }}><td><b>Total cost</b></td><td align="right"><b>{money(calc.totalCost)}</b></td></tr>
@@ -663,7 +852,7 @@ export default function ErpCostCalculatorRoute() {
             {form.lines.map((line) => (
               <div key={`summary-${line.index}`} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, fontSize: 13 }}>
                 <b>{line.name}</b><br />
-                {num(line.quantity, 0)} pcs · {num(line.widthIn, 2)} x {num(line.heightIn, 2)} in · {num(line.wasteAdjustedSqft, 2)} sqft with waste<br />
+                {num(line.quantity, 0)} pcs · {line.labelTypeName} · {num(line.widthIn, 2)} x {num(line.heightIn, 2)} in · {num(line.wasteAdjustedSqft, 2)} sqft with waste<br />
                 Material {money(line.materialCost)} · Ink {money(line.inkCost)} · Line cost {money(line.totalCost)}
               </div>
             ))}
