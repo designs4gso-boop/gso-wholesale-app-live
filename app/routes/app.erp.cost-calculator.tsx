@@ -455,7 +455,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.6 auto-matches blank item and application quantities to the quote quantity, and uses backend application labor rules instead of asking staff to guess seconds.</p>
+        <p style={{ marginBottom: 0 }}>v1.7 cleans up item/application previews, clarifies print setup vs application setup, and hides helper text that does not apply.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -571,7 +571,7 @@ export default function ErpCostCalculatorRoute() {
                 <option value="inventory">Use inventory/vendor item</option>
                 <option value="custom">Custom one-time item</option>
               </select>
-              <div style={smallHelp}>Item quantity auto-matches the main label quantity: {num(form.itemQty, 0)}.</div>
+              <div style={smallHelp}>{form.itemMode === "none" ? "No blank item selected." : `Item quantity auto-matches the main label quantity: ${num(form.itemQty, 0)}.`}</div>
             </label>
             <input type="hidden" name="itemQty" value={form.itemQty} />
             {form.itemMode === "inventory" ? (
@@ -593,6 +593,11 @@ export default function ErpCostCalculatorRoute() {
                 <input type="hidden" name="customItemUnitCost" value={form.customItemUnitCost} />
               </>
             )}
+            {form.itemMode !== "none" ? (
+              <div style={{ gridColumn: "1 / -1", fontSize: 13, color: "#374151", background: "#f3f4f6", borderRadius: 10, padding: 10 }}>
+                Item cost preview: {calc.itemName}. Qty {num(calc.itemQty, 0)} × {money(calc.itemUnitCost)} = {money(calc.itemCost)}.
+              </div>
+            ) : null}
           </div>
 
           <h3>Application / finishing</h3>
@@ -623,7 +628,7 @@ export default function ErpCostCalculatorRoute() {
             <input type="hidden" name="applicationQty" value={form.applicationQty} />
             {form.applicationMode !== "none" ? (
               <div style={{ gridColumn: "1 / -1", fontSize: 13, color: "#374151", background: "#f3f4f6", borderRadius: 10, padding: 10 }}>
-                Auto labor rule: {form.applicationName}. Qty {num(form.applicationQty, 0)} × {num(form.applicationSecondsPerUnit, 2)} sec + {num(form.applicationSetupMinutes, 1)} setup min = {num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)}.
+                Auto application labor rule: {form.applicationName}. Qty {num(form.applicationQty, 0)} × {num(form.applicationSecondsPerUnit, 2)} sec + {num(form.applicationSetupMinutes, 1)} min application setup = {num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)}.
               </div>
             ) : null}
           </div>
@@ -642,8 +647,8 @@ export default function ErpCostCalculatorRoute() {
               <tr><td>Label material cost</td><td align="right">{money(calc.lineMaterialCost)}</td></tr>
               <tr><td>Ink cost</td><td align="right">{money(calc.lineInkCost)}</td></tr>
               <tr><td>{calc.itemName}</td><td align="right">{calc.itemQty ? `${num(calc.itemQty, 0)} x ${money(calc.itemUnitCost)} = ${money(calc.itemCost)}` : money(0)}</td></tr>
-              <tr><td>Application labor</td><td align="right">{calc.applicationName}: {num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)}</td></tr>
-              <tr><td>Setup/finishing labor</td><td align="right">{money(calc.processLaborCost)}</td></tr>
+              <tr><td>Application labor</td><td align="right">{form.applicationMode === "none" ? "No application / $0.00" : `${calc.applicationName}: ${num(calc.applicationQty, 0)} apps, ${num(calc.applicationLaborMinutes, 1)} min incl. ${num(calc.applicationSetupMinutes, 1)} min application setup / ${money(calc.applicationLaborCost)}`}</td></tr>
+              <tr><td>Print/setup labor</td><td align="right">{money(calc.processLaborCost)}</td></tr>
               <tr><td>Machine/setup cost</td><td align="right">{money(calc.processMachineCost)}</td></tr>
               <tr style={{ borderTop: "1px solid #e5e7eb" }}><td><b>Total cost</b></td><td align="right"><b>{money(calc.totalCost)}</b></td></tr>
               <tr><td><b>Unit cost</b></td><td align="right"><b>{money(calc.unitCost)}</b></td></tr>
