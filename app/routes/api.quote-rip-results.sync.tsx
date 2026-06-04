@@ -124,14 +124,16 @@ export async function action({ request }: { request: Request }) {
   let bodyToken = "";
 
   if (contentType.includes("multipart/form-data")) {
-    const form = await request.formData();
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch (error) {
+      return json({ ok: false, error: "Could not parse multipart upload. Use JSON sync v1.3 instead.", detail: String(error) }, 400);
+    }
     bodyToken = cleanText(form.get("token"));
     source = cleanText(form.get("source") || source);
     const file = form.get("file") as unknown;
 
-    // Render/Node runtimes can expose multipart uploads as File, Blob-like,
-    // or FormData values without a global File constructor. Do not use
-    // `instanceof File` here; it can throw a server 500 before we can respond.
     if (!file || typeof (file as { text?: unknown }).text !== "function") {
       return json({ ok: false, error: "Missing file field." }, 400);
     }
@@ -139,12 +141,14 @@ export async function action({ request }: { request: Request }) {
     const upload = file as { name?: string; text: () => Promise<string> };
     fileName = cleanText(upload.name || fileName);
     rawText = await upload.text();
-  } else {
+  } else if (contentType.includes("application/json")) {
     const body = await request.json().catch(() => null) as { token?: string; source?: string; fileName?: string; csv?: string } | null;
     bodyToken = cleanText(body?.token);
     source = cleanText(body?.source || source);
     fileName = cleanText(body?.fileName || fileName);
     rawText = String(body?.csv || "");
+  } else {
+    rawText = await request.text();
   }
 
   const uploadToken = token || bodyToken;
@@ -167,7 +171,7 @@ export async function action({ request }: { request: Request }) {
       totalSqft: 0,
       totalInkMl: rows.reduce((sum, row) => sum + row.totalCc, 0),
       status: "quote_results_synced",
-      notes: "Uploaded from local GSO quote RIP results sync v1.2.",
+      notes: "Uploaded from local GSO quote RIP results sync v1.3.",
     },
   });
 
@@ -226,4 +230,4 @@ export async function action({ request }: { request: Request }) {
   return json({ ok: true, source, fileName, rows: rows.length, created, skipped });
 }
 
-export const loader = () => json({ ok: true, endpoint: "POST multipart file + x-gso-rip-token to sync GSOQ quote RIP results." });
+export const loader = () => json({ ok: true, version: "v1.3", endpoint: "POST JSON { token, csv, fileName } or multipart file + x-gso-rip-token to sync GSOQ quote RIP results." });
