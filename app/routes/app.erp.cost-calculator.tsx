@@ -1,6 +1,8 @@
-import fs from "fs";
+import crypto from "crypto";
+import type React from "react";
 import { Form, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
+import db from "../db.server";
 
 type QuoteRipRow = {
   importedAt: string;
@@ -31,99 +33,12 @@ function parseNumber(value: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseCsv(text: string) {
-  const rows: string[][] = [];
-  let field = "";
-  let row: string[] = [];
-  let quoted = false;
-  const input = text.replace(/^\uFEFF/, "");
-
-  for (let i = 0; i < input.length; i += 1) {
-    const ch = input[i];
-    const next = input[i + 1];
-    if (ch === '"') {
-      if (quoted && next === '"') {
-        field += '"';
-        i += 1;
-      } else {
-        quoted = !quoted;
-      }
-    } else if (ch === "," && !quoted) {
-      row.push(field);
-      field = "";
-    } else if ((ch === "\n" || ch === "\r") && !quoted) {
-      if (ch === "\r" && next === "\n") i += 1;
-      row.push(field);
-      field = "";
-      if (row.some((cell) => cleanText(cell))) rows.push(row);
-      row = [];
-    } else {
-      field += ch;
-    }
-  }
-
-  if (field || row.length) {
-    row.push(field);
-    if (row.some((cell) => cleanText(cell))) rows.push(row);
-  }
-
-  if (!rows.length) return [] as Record<string, string>[];
-  const headers = rows[0].map(cleanText);
-  return rows.slice(1).map((cells) => {
-    const obj: Record<string, string> = {};
-    headers.forEach((header, index) => {
-      obj[header] = cleanText(cells[index]);
-    });
-    return obj;
-  });
-}
-
-function readQuoteRipRows(csvPath: string): QuoteRipRow[] {
-  if (!fs.existsSync(csvPath)) return [];
-  const raw = fs.readFileSync(csvPath, "utf8");
-  return parseCsv(raw).map((row) => ({
-    importedAt: cleanText(row.importedAt),
-    quoteId: cleanText(row.quoteId),
-    workflow: cleanText(row.workflow || "cost-calculation"),
-    source: cleanText(row.source),
-    fileName: cleanText(row.fileName),
-    status: cleanText(row.status),
-    cyanCc: parseNumber(row.cyanCc),
-    magentaCc: parseNumber(row.magentaCc),
-    yellowCc: parseNumber(row.yellowCc),
-    blackCc: parseNumber(row.blackCc),
-    whiteCc: parseNumber(row.whiteCc),
-    clearCc: parseNumber(row.clearCc),
-    totalCc: parseNumber(row.totalCc),
-    ripSeconds: parseNumber(row.ripSeconds),
-    estimatedInkCost: parseNumber(row.estimatedInkCost),
-    confidence: cleanText(row.confidence),
-    sourceFile: cleanText(row.sourceFile),
-  })).filter((row) => row.quoteId || row.fileName);
-}
-
 function money(value: number) {
   return `$${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function num(value: number, digits = 3) {
   return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: digits });
-}
-
-function newestFirst(rows: QuoteRipRow[]) {
-  return [...rows].sort((a, b) => String(b.importedAt).localeCompare(String(a.importedAt)));
-}
-
-function uniqueLatestByQuote(rows: QuoteRipRow[]) {
-  const seen = new Set<string>();
-  const out: QuoteRipRow[] = [];
-  for (const row of newestFirst(rows)) {
-    const key = row.quoteId || row.fileName;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(row);
-  }
-  return out;
 }
 
 function fieldNumber(url: URL, name: string, fallback: number) {
@@ -133,11 +48,96 @@ function fieldNumber(url: URL, name: string, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseRawRow(rawRow?: string | null) {
+  if (!rawRow) return {} as Record<string, unknown>;
+  try {
+    return JSON.parse(rawRow) as Record<string, unknown>;
+  } catch {
+    return {} as Record<string, unknown>;
+  }
+}
+
+function rowFromEntry(entry: {
+  createdAt: Date;
+  jobTicket: string | null;
+  sourceJobName: string | null;
+  printerSoftware: string | null;
+  status: string | null;
+  inkMl: number;
+  cmykInkMl: number;
+  whiteInkMl: number;
+  glossInkMl: number;
+  printMinutes: number;
+  rawRow: string | null;
+}): QuoteRipRow {
+  const raw = parseRawRow(entry.rawRow);
+  return {
+    importedAt: cleanText(raw.importedAt) || entry.createdAt.toISOString(),
+    quoteId: cleanText(raw.quoteId) || cleanText(entry.jobTicket),
+    workflow: cleanText(raw.workflow) || cleanText(entry.status || "cost-calculation"),
+    source: cleanText(raw.source) || cleanText(entry.printerSoftware || "quote-rip-sync"),
+    fileName: cleanText(raw.fileName) || cleanText(entry.sourceJobName),
+    status: cleanText(raw.status) || cleanText(entry.status),
+    cyanCc: parseNumber(raw.cyanCc),
+    magentaCc: parseNumber(raw.magentaCc),
+    yellowCc: parseNumber(raw.yellowCc),
+    blackCc: parseNumber(raw.blackCc),
+    whiteCc: parseNumber(raw.whiteCc) || entry.whiteInkMl,
+    clearCc: parseNumber(raw.clearCc) || entry.glossInkMl,
+    totalCc: parseNumber(raw.totalCc) || entry.inkMl,
+    ripSeconds: parseNumber(raw.ripSeconds) || Math.round((entry.printMinutes || 0) * 60),
+    estimatedInkCost: parseNumber(raw.estimatedInkCost),
+    confidence: cleanText(raw.confidence || "medium"),
+    sourceFile: cleanText(raw.sourceFile),
+  };
+}
+
+function uniqueLatestByQuote(rows: QuoteRipRow[]) {
+  const seen = new Set<string>();
+  const out: QuoteRipRow[] = [];
+  for (const row of rows) {
+    const key = row.quoteId || row.fileName;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+async function ensureSetting(shop: string) {
+  return db.printLogAutoImportSetting.upsert({
+    where: { shop },
+    update: {},
+    create: {
+      shop,
+      uploadToken: crypto.randomUUID(),
+      incomingFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\Prints For Today",
+      versaworksFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\versaworks\\incoming",
+      rasterlinkFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\rasterlink\\incoming",
+      processedFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\processed",
+      errorFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\error",
+      expectedTicketPattern: "GSO-{jobNumber}_{customer}_{product}_{side}_{material}_{route}_R{revision}",
+    },
+  });
+}
+
 export async function loader({ request }: { request: Request }) {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const setting = await ensureSetting(shop);
   const url = new URL(request.url);
-  const quoteResultsPath = "\\\\SynologyNAS\\GSOP\\GSOP\\Prints For Today\\COST CALCULATION\\_Quote RIP\\results\\gso-quote-rip-results-summary.csv";
-  const rows = uniqueLatestByQuote(readQuoteRipRows(quoteResultsPath));
+  const appOrigin = new URL(request.url).origin;
+
+  const entries = await db.printLogEntry.findMany({
+    where: {
+      shop,
+      jobTicket: { startsWith: "GSOQ-" },
+      inkMl: { gt: 0 },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+  const rows = uniqueLatestByQuote(entries.map(rowFromEntry));
   const selectedId = cleanText(url.searchParams.get("quoteId") || rows[0]?.quoteId || "");
   const selected = rows.find((row) => row.quoteId === selectedId) || rows[0] || null;
 
@@ -169,10 +169,12 @@ export async function loader({ request }: { request: Request }) {
   const grossProfit = suggestedTotal - totalCost;
 
   return {
-    quoteResultsPath,
-    pathExists: fs.existsSync(quoteResultsPath),
+    appOrigin,
+    syncEndpoint: `${appOrigin}/api/quote-rip-results/sync`,
+    uploadToken: setting.uploadToken,
     rows,
     selected,
+    lastAutoImportAt: setting.lastAutoImportAt ? setting.lastAutoImportAt.toISOString() : null,
     form: { selectedId, quantity, widthIn, heightIn, materialCostPerSqft, laborRatePerHour, setupMinutes, finishingMinutes, machineCostPerHour, wastePct, targetMarginPct },
     calc: { sqftPerUnit, totalSqft, materialCost, inkCost, inkCostPerUnit, ripMinutes, totalMachineMinutes, laborCost, machineCost, totalCost, unitCost, suggestedTotal, suggestedUnit, grossProfit },
   };
@@ -180,22 +182,29 @@ export async function loader({ request }: { request: Request }) {
 
 const inputStyle: React.CSSProperties = { width: "100%", padding: 10, border: "1px solid #d1d5db", borderRadius: 8 };
 const cardStyle: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 14, padding: 16, background: "white" };
+const codeStyle: React.CSSProperties = { background: "#111827", color: "#f9fafb", padding: 10, borderRadius: 8, display: "block", overflowX: "auto", fontSize: 12 };
 
 export default function ErpCostCalculatorRoute() {
-  const { quoteResultsPath, pathExists, rows, selected, form, calc } = useLoaderData<typeof loader>();
+  const { syncEndpoint, uploadToken, rows, selected, lastAutoImportAt, form, calc } = useLoaderData<typeof loader>();
 
   return (
     <main style={{ maxWidth: 1200, margin: "32px auto", padding: 20, fontFamily: "system-ui, sans-serif", background: "#f9fafb" }}>
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a></p>
-      <section style={{ background: "linear-gradient(135deg,#111827,#7c2d12)", color: "white", padding: 24, borderRadius: 16 }}>
+      <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.0 reads Cost Calculation RIP results from the NAS and turns exact ink usage into a quote estimate.</p>
+        <p style={{ marginBottom: 0 }}>v1.2 uses synced GSOQ RIP results from the app database, so Render does not need direct NAS access.</p>
       </section>
 
-      <section style={{ ...cardStyle, marginTop: 16, borderColor: pathExists ? "#bbf7d0" : "#fecaca", background: pathExists ? "#f0fdf4" : "#fef2f2" }}>
-        <b>Quote result source</b>
-        <div style={{ fontSize: 13, marginTop: 6 }}><code>{quoteResultsPath}</code></div>
-        <div style={{ marginTop: 8 }}>{pathExists ? `Loaded ${rows.length} quote result(s).` : "No quote result CSV found yet. RIP/import one GSOQ job first."}</div>
+      <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
+        <h2 style={{ marginTop: 0 }}>Sync control</h2>
+        <div style={{ display: "grid", gap: 8 }}>
+          <div><b>Synced GSOQ results:</b> {rows.length}</div>
+          <div><b>Last sync:</b> {lastAutoImportAt ? new Date(lastAutoImportAt).toLocaleString() : "Not synced yet"}</div>
+          <div><b>Upload endpoint:</b> <code>{syncEndpoint}</code></div>
+          <div><b>Upload token:</b> <code>{uploadToken}</code></div>
+          <div style={{ color: "#4b5563", fontSize: 13 }}>Run the local sync script after RasterLink imports a GSOQ result. The script posts the local quote result CSV to this hosted app.</div>
+          <code style={codeStyle}>powershell -ExecutionPolicy Bypass -File .\tools\gso-sync-quote-rip-results-to-app.ps1 -AppUrl "{new URL(syncEndpoint).origin}" -Token "{uploadToken}"</code>
+        </div>
       </section>
 
       <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 16, marginTop: 16 }}>
@@ -206,7 +215,7 @@ export default function ErpCostCalculatorRoute() {
               <select name="quoteId" defaultValue={form.selectedId} style={inputStyle}>
                 {rows.length ? rows.map((row) => (
                   <option key={`${row.quoteId}-${row.fileName}`} value={row.quoteId}>{row.quoteId} — {row.fileName}</option>
-                )) : <option value="">No GSOQ results yet</option>}
+                )) : <option value="">No synced GSOQ results yet</option>}
               </select>
             </label>
             <label>Quantity<br /><input name="quantity" type="number" defaultValue={form.quantity} style={inputStyle} /></label>
@@ -244,12 +253,12 @@ export default function ErpCostCalculatorRoute() {
                 </tbody>
               </table>
             </>
-          ) : <p>No RIP quote result selected yet.</p>}
+          ) : <p>No synced RIP quote result selected yet.</p>}
         </section>
       </div>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Recent GSOQ results</h2>
+        <h2 style={{ marginTop: 0 }}>Recent synced GSOQ results</h2>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Imported</th><th align="left">Quote</th><th align="left">File</th><th>Ink cc</th><th>RIP sec</th><th>Ink cost</th><th>Confidence</th></tr></thead>
           <tbody>
@@ -258,7 +267,7 @@ export default function ErpCostCalculatorRoute() {
                 <td>{row.importedAt}</td><td>{row.quoteId}</td><td>{row.fileName}</td><td align="center">{num(row.totalCc)}</td><td align="center">{num(row.ripSeconds, 0)}</td><td align="center">{money(row.estimatedInkCost)}</td><td align="center">{row.confidence}</td>
               </tr>
             ))}
-            {!rows.length ? <tr><td colSpan={7} style={{ padding: 12, color: "#6b7280" }}>No quote RIP results yet. Run RasterLink capture/import on a GSOQ job first.</td></tr> : null}
+            {!rows.length ? <tr><td colSpan={7} style={{ padding: 12, color: "#6b7280" }}>No synced GSOQ results yet. Run the local sync script after a GSOQ RasterLink capture/import.</td></tr> : null}
           </tbody>
         </table>
       </section>
