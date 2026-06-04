@@ -96,7 +96,8 @@ function num(value: number, digits = 3) {
 }
 
 function fieldNumber(url: URL, name: string, fallback: number) {
-  const raw = url.searchParams.get(name);
+  const values = url.searchParams.getAll(name);
+  const raw = values.length ? values[values.length - 1] : null;
   if (raw === null || raw === "") return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -630,7 +631,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.9 adds staff-ready line breakdowns with material, ink, application labor, and shared job costs separated clearly.</p>
+        <p style={{ marginBottom: 0 }}>v1.9.1 fixes the Add label size button and keeps the staff-ready line breakdowns with material, ink, application labor, and shared job costs separated clearly.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
