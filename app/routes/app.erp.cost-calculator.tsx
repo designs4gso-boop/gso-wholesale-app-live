@@ -415,7 +415,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.4 supports estimated quotes before artwork, actual GSOQ RIP costs after artwork, multiple label sizes, material picker, blank item picker, and application labor.</p>
+        <p style={{ marginBottom: 0 }}>v1.5 cleans up quote mode fields, hides irrelevant custom inputs, separates estimated vs actual RIP workflows, and makes the estimate breakdown easier to audit.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -463,31 +463,54 @@ export default function ErpCostCalculatorRoute() {
                       {materials.map((material) => <option key={material.id} value={material.id}>{material.name} - {money(materialSqftCost(material, 0))}/sqft</option>)}
                       <option value="custom">Custom one-time material price</option>
                     </select>
+                    <div style={smallHelp}>{line.materialId === "custom" ? "Using one-time custom material price below." : `Using saved material cost: ${money(line.materialCostPerSqft)}/sqft.`}</div>
                   </label>
-                  <label>Custom material $/sqft<br /><input name="lineCustomMaterialCostPerSqft" type="number" step="0.0001" defaultValue={line.customMaterialCostPerSqft} style={inputStyle} /></label>
+                  {line.materialId === "custom" ? (
+                    <label>Custom material $/sqft<br /><input name="lineCustomMaterialCostPerSqft" type="number" step="0.0001" defaultValue={line.customMaterialCostPerSqft} style={inputStyle} /></label>
+                  ) : (
+                    <input type="hidden" name="lineCustomMaterialCostPerSqft" value={line.customMaterialCostPerSqft} />
+                  )}
                   <label>Waste %<br /><input name="lineWastePct" type="number" step="0.1" defaultValue={line.wastePct} style={inputStyle} /></label>
-                  <label style={{ gridColumn: "1 / 3" }}>GSOQ RIP result for this line<br />
-                    <select name="lineQuoteId" defaultValue={line.quoteId} style={inputStyle}>
-                      {rows.length ? rows.map((row) => <option key={`${row.quoteId}-${row.fileName}`} value={row.quoteId}>{row.quoteId} - {row.fileName}</option>) : <option value="">No synced GSOQ results yet</option>}
-                    </select>
-                  </label>
-                  <label>RIP mode<br />
-                    <select name="lineRipResultMode" defaultValue={line.ripResultMode} style={inputStyle}>
-                      <option value="per-piece">One piece/artboard</option>
-                      <option value="full-job">Full production layout</option>
-                    </select>
-                  </label>
-                  <label>Estimated ink profile<br />
-                    <select name="lineInkEstimateProfile" defaultValue={line.inkEstimateProfile} style={inputStyle}>
-                      <option value="light">Light CMYK - $0.12/sqft</option>
-                      <option value="medium">Medium CMYK - $0.23/sqft</option>
-                      <option value="heavy">Heavy CMYK - $0.38/sqft</option>
-                      <option value="roland-gloss">Roland gloss - $0.35/sqft</option>
-                      <option value="white-gloss">White + gloss - $0.55/sqft</option>
-                      <option value="custom">Custom ink $/sqft</option>
-                    </select>
-                  </label>
-                  <label>Custom ink $/sqft<br /><input name="lineCustomInkCostPerSqft" type="number" step="0.0001" defaultValue={line.customInkCostPerSqft} style={inputStyle} /></label>
+
+                  {form.quoteMode === "actual" ? (
+                    <>
+                      <label style={{ gridColumn: "1 / 3" }}>GSOQ RIP result for this line<br />
+                        <select name="lineQuoteId" defaultValue={line.quoteId} style={inputStyle}>
+                          {rows.length ? rows.map((row) => <option key={`${row.quoteId}-${row.fileName}`} value={row.quoteId}>{row.quoteId} - {row.fileName}</option>) : <option value="">No synced GSOQ results yet</option>}
+                        </select>
+                        <div style={smallHelp}>Actual mode uses synced RasterLink/VersaWorks ink from the selected GSOQ result.</div>
+                      </label>
+                      <label>RIP mode<br />
+                        <select name="lineRipResultMode" defaultValue={line.ripResultMode} style={inputStyle}>
+                          <option value="per-piece">One piece/artboard</option>
+                          <option value="full-job">Full production layout</option>
+                        </select>
+                      </label>
+                      <input type="hidden" name="lineInkEstimateProfile" value={line.inkEstimateProfile} />
+                      <input type="hidden" name="lineCustomInkCostPerSqft" value={line.customInkCostPerSqft} />
+                    </>
+                  ) : (
+                    <>
+                      <input type="hidden" name="lineQuoteId" value={line.quoteId} />
+                      <input type="hidden" name="lineRipResultMode" value={line.ripResultMode} />
+                      <label>Estimated ink profile<br />
+                        <select name="lineInkEstimateProfile" defaultValue={line.inkEstimateProfile} style={inputStyle}>
+                          <option value="light">Light CMYK - $0.12/sqft</option>
+                          <option value="medium">Medium CMYK - $0.23/sqft</option>
+                          <option value="heavy">Heavy CMYK - $0.38/sqft</option>
+                          <option value="roland-gloss">Roland gloss - $0.35/sqft</option>
+                          <option value="white-gloss">White + gloss - $0.55/sqft</option>
+                          <option value="custom">Custom ink $/sqft</option>
+                        </select>
+                        <div style={smallHelp}>Estimated mode ignores GSOQ files until artwork is ready.</div>
+                      </label>
+                      {line.inkEstimateProfile === "custom" ? (
+                        <label>Custom ink $/sqft<br /><input name="lineCustomInkCostPerSqft" type="number" step="0.0001" defaultValue={line.customInkCostPerSqft} style={inputStyle} /></label>
+                      ) : (
+                        <input type="hidden" name="lineCustomInkCostPerSqft" value={line.customInkCostPerSqft} />
+                      )}
+                    </>
+                  )}
                 </div>
                 <div style={{ marginTop: 10, fontSize: 13, color: "#374151" }}>
                   {num(line.baseSqft, 2)} base sqft · {num(line.wasteAdjustedSqft, 2)} waste sqft · {line.materialName} · material {money(line.materialCost)} · ink {money(line.inkCost)} ({line.inkSource})
@@ -510,14 +533,25 @@ export default function ErpCostCalculatorRoute() {
               </select>
             </label>
             <label>Item qty<br /><input name="itemQty" type="number" defaultValue={form.itemQty} style={inputStyle} /></label>
-            <label style={{ gridColumn: "1 / -1" }}>Inventory item<br />
-              <select name="itemId" defaultValue={form.itemId} style={inputStyle}>
-                <option value="custom">Custom item</option>
-                {blankItems.map((item) => <option key={item.id} value={item.id}>{item.name} - {money(item.unitCost)} each</option>)}
-              </select>
-            </label>
-            <label>Custom item name<br /><input name="customItemName" defaultValue={form.customItemName} style={inputStyle} /></label>
-            <label>Custom item unit cost<br /><input name="customItemUnitCost" type="number" step="0.0001" defaultValue={form.customItemUnitCost} style={inputStyle} /></label>
+            {form.itemMode === "inventory" ? (
+              <label style={{ gridColumn: "1 / -1" }}>Inventory item<br />
+                <select name="itemId" defaultValue={form.itemId} style={inputStyle}>
+                  <option value="custom">Custom item</option>
+                  {blankItems.map((item) => <option key={item.id} value={item.id}>{item.name} - {money(item.unitCost)} each</option>)}
+                </select>
+              </label>
+            ) : <input type="hidden" name="itemId" value={form.itemId} />}
+            {form.itemMode === "custom" ? (
+              <>
+                <label>Custom item name<br /><input name="customItemName" defaultValue={form.customItemName} style={inputStyle} /></label>
+                <label>Custom item unit cost<br /><input name="customItemUnitCost" type="number" step="0.0001" defaultValue={form.customItemUnitCost} style={inputStyle} /></label>
+              </>
+            ) : (
+              <>
+                <input type="hidden" name="customItemName" value={form.customItemName} />
+                <input type="hidden" name="customItemUnitCost" value={form.customItemUnitCost} />
+              </>
+            )}
           </div>
 
           <h3>Application / finishing</h3>
@@ -530,9 +564,19 @@ export default function ErpCostCalculatorRoute() {
                 <option value="custom">Custom application</option>
               </select>
             </label>
-            <label>Application qty<br /><input name="applicationQty" type="number" defaultValue={form.applicationQty} style={inputStyle} /></label>
-            <label>Seconds per unit<br /><input name="applicationSecondsPerUnit" type="number" step="0.1" defaultValue={form.applicationSecondsPerUnit} style={inputStyle} /></label>
-            <label>Extra application $/unit<br /><input name="applicationUnitCost" type="number" step="0.0001" defaultValue={form.applicationUnitCost} style={inputStyle} /></label>
+            {form.applicationMode === "none" ? (
+              <>
+                <input type="hidden" name="applicationQty" value={form.applicationQty} />
+                <input type="hidden" name="applicationSecondsPerUnit" value={form.applicationSecondsPerUnit} />
+                <input type="hidden" name="applicationUnitCost" value={form.applicationUnitCost} />
+              </>
+            ) : (
+              <>
+                <label>Application qty<br /><input name="applicationQty" type="number" defaultValue={form.applicationQty} style={inputStyle} /></label>
+                <label>Seconds per unit<br /><input name="applicationSecondsPerUnit" type="number" step="0.1" defaultValue={form.applicationSecondsPerUnit} style={inputStyle} /></label>
+                <label>Extra application $/unit<br /><input name="applicationUnitCost" type="number" step="0.0001" defaultValue={form.applicationUnitCost} style={inputStyle} /></label>
+              </>
+            )}
           </div>
 
           <button type="submit" style={{ marginTop: 16, width: "100%", background: "#111827", color: "white", border: 0, borderRadius: 10, padding: 14, fontWeight: 800 }}>Calculate quote cost</button>
@@ -544,7 +588,7 @@ export default function ErpCostCalculatorRoute() {
             <tbody>
               <tr><td>Quote mode</td><td align="right"><b>{form.quoteMode === "actual" ? "Actual GSOQ RIP" : "Estimated before art"}</b></td></tr>
               <tr><td>Label base sqft</td><td align="right">{num(calc.lineBaseSqft, 2)}</td></tr>
-              <tr><td>Label waste sqft</td><td align="right">{num(calc.lineWasteAdjustedSqft, 2)}</td></tr>
+              <tr><td>Waste-adjusted label sqft</td><td align="right">{num(calc.lineWasteAdjustedSqft, 2)}</td></tr>
               <tr><td>Calculated job ink cc</td><td align="right">{num(calc.lineInkCc, 2)}</td></tr>
               <tr><td>Label material cost</td><td align="right">{money(calc.lineMaterialCost)}</td></tr>
               <tr><td>Ink cost</td><td align="right">{money(calc.lineInkCost)}</td></tr>
