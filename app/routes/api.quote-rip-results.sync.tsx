@@ -52,10 +52,10 @@ function parseCsv(text: string) {
     if (row.some((cell) => cleanText(cell))) rows.push(row);
   }
 
-  if (!rows.length) return [] as Record<string, string>[];
+  if (!rows.length) return [] as Record<string, unknown>[];
   const headers = rows[0].map(cleanText);
   return rows.slice(1).map((cells) => {
-    const obj: Record<string, string> = {};
+    const obj: Record<string, unknown> = {};
     headers.forEach((header, index) => {
       obj[header] = cleanText(cells[index]);
     });
@@ -76,59 +76,67 @@ function parseDate(value: unknown) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function parseQuoteRows(text: string) {
-  return parseCsv(text)
-    .map((row) => {
-      const quoteId = normalizeQuoteId(row.quoteId || row.jobId || row.fileName || row.sourceFile);
-      const fileName = cleanText(row.fileName);
-      const totalCc = parseNumber(row.totalCc);
-      const cyanCc = parseNumber(row.cyanCc);
-      const magentaCc = parseNumber(row.magentaCc);
-      const yellowCc = parseNumber(row.yellowCc);
-      const blackCc = parseNumber(row.blackCc);
-      const whiteCc = parseNumber(row.whiteCc);
-      const clearCc = parseNumber(row.clearCc);
-      const ripSeconds = parseNumber(row.ripSeconds);
-      const estimatedInkCost = parseNumber(row.estimatedInkCost);
-      const workflow = cleanText(row.workflow || "cost-calculation");
-      return {
-        importedAt: cleanText(row.importedAt),
-        quoteId,
-        workflow,
-        source: cleanText(row.source || "rasterlink"),
-        fileName,
-        status: cleanText(row.status || workflow),
-        cyanCc,
-        magentaCc,
-        yellowCc,
-        blackCc,
-        whiteCc,
-        clearCc,
-        totalCc,
-        ripSeconds,
-        estimatedInkCost,
-        confidence: cleanText(row.confidence || "medium"),
-        sourceFile: cleanText(row.sourceFile),
-        raw: row,
-      };
-    })
+function normalizeRow(row: Record<string, unknown>) {
+  const quoteId = normalizeQuoteId(row.quoteId || row.jobId || row.fileName || row.sourceFile);
+  const fileName = cleanText(row.fileName);
+  const totalCc = parseNumber(row.totalCc);
+  const cyanCc = parseNumber(row.cyanCc);
+  const magentaCc = parseNumber(row.magentaCc);
+  const yellowCc = parseNumber(row.yellowCc);
+  const blackCc = parseNumber(row.blackCc);
+  const whiteCc = parseNumber(row.whiteCc);
+  const clearCc = parseNumber(row.clearCc);
+  const ripSeconds = parseNumber(row.ripSeconds);
+  const estimatedInkCost = parseNumber(row.estimatedInkCost);
+  const workflow = cleanText(row.workflow || "cost-calculation");
+  return {
+    importedAt: cleanText(row.importedAt),
+    quoteId,
+    workflow,
+    source: cleanText(row.source || "rasterlink"),
+    fileName,
+    status: cleanText(row.status || workflow),
+    cyanCc,
+    magentaCc,
+    yellowCc,
+    blackCc,
+    whiteCc,
+    clearCc,
+    totalCc,
+    ripSeconds,
+    estimatedInkCost,
+    confidence: cleanText(row.confidence || "medium"),
+    sourceFile: cleanText(row.sourceFile),
+    raw: row,
+  };
+}
+
+function parseQuoteRowsFromObjects(inputRows: unknown[]) {
+  return inputRows
+    .filter((row): row is Record<string, unknown> => !!row && typeof row === "object" && !Array.isArray(row))
+    .map(normalizeRow)
     .filter((row) => row.quoteId && row.fileName && row.totalCc > 0);
 }
 
+function parseQuoteRowsFromCsv(text: string) {
+  return parseQuoteRowsFromObjects(parseCsv(text));
+}
+
 export async function action({ request }: { request: Request }) {
-  const token = cleanText(request.headers.get("x-gso-rip-token"));
+  const headerToken = cleanText(request.headers.get("x-gso-rip-token"));
   const contentType = request.headers.get("content-type") || "";
   let fileName = "gso-quote-rip-results-summary.csv";
   let rawText = "";
   let source = "quote-rip-sync";
   let bodyToken = "";
+  let rows: ReturnType<typeof parseQuoteRowsFromObjects> = [];
 
   if (contentType.includes("multipart/form-data")) {
     let form: FormData;
     try {
       form = await request.formData();
     } catch (error) {
-      return json({ ok: false, error: "Could not parse multipart upload. Use JSON sync v1.3 instead.", detail: String(error) }, 400);
+      return json({ ok: false, error: "Could not parse multipart upload. Use JSON sync v1.4 instead.", detail: String(error) }, 400);
     }
     bodyToken = cleanText(form.get("token"));
     source = cleanText(form.get("source") || source);
@@ -141,25 +149,37 @@ export async function action({ request }: { request: Request }) {
     const upload = file as { name?: string; text: () => Promise<string> };
     fileName = cleanText(upload.name || fileName);
     rawText = await upload.text();
+    rows = parseQuoteRowsFromCsv(rawText);
   } else if (contentType.includes("application/json")) {
-    const body = await request.json().catch(() => null) as { token?: string; source?: string; fileName?: string; csv?: string } | null;
+    const body = await request.json().catch(() => null) as {
+      token?: string;
+      source?: string;
+      fileName?: string;
+      csv?: string;
+      rows?: unknown[];
+    } | null;
     bodyToken = cleanText(body?.token);
     source = cleanText(body?.source || source);
     fileName = cleanText(body?.fileName || fileName);
-    rawText = String(body?.csv || "");
+
+    if (Array.isArray(body?.rows)) {
+      rows = parseQuoteRowsFromObjects(body.rows);
+      rawText = JSON.stringify(body.rows).slice(0, 250000);
+    } else {
+      rawText = String(body?.csv || "");
+      rows = parseQuoteRowsFromCsv(rawText);
+    }
   } else {
     rawText = await request.text();
+    rows = parseQuoteRowsFromCsv(rawText);
   }
 
-  const uploadToken = token || bodyToken;
+  const uploadToken = headerToken || bodyToken;
   if (!uploadToken) return json({ ok: false, error: "Missing upload token." }, 401);
 
   const setting = await db.printLogAutoImportSetting.findUnique({ where: { uploadToken } });
   if (!setting || !setting.enabled) return json({ ok: false, error: "Invalid or disabled upload token." }, 403);
-  if (!rawText.trim()) return json({ ok: false, error: "Missing CSV content." }, 400);
-
-  const rows = parseQuoteRows(rawText);
-  if (!rows.length) return json({ ok: false, error: "No valid GSOQ quote result rows found." }, 400);
+  if (!rows.length) return json({ ok: false, error: "No valid GSOQ quote result rows found.", receivedFormat: rawText.trim().startsWith("[") ? "json-rows" : "csv-or-text" }, 400);
 
   const importRecord = await db.printLogImport.create({
     data: {
@@ -171,7 +191,7 @@ export async function action({ request }: { request: Request }) {
       totalSqft: 0,
       totalInkMl: rows.reduce((sum, row) => sum + row.totalCc, 0),
       status: "quote_results_synced",
-      notes: "Uploaded from local GSO quote RIP results sync v1.3.",
+      notes: "Uploaded from local GSO quote RIP results sync v1.4.",
     },
   });
 
@@ -227,7 +247,7 @@ export async function action({ request }: { request: Request }) {
   });
   await db.printLogAutoImportSetting.update({ where: { id: setting.id }, data: { lastAutoImportAt: new Date() } });
 
-  return json({ ok: true, source, fileName, rows: rows.length, created, skipped });
+  return json({ ok: true, version: "v1.4", source, fileName, rows: rows.length, created, skipped });
 }
 
-export const loader = () => json({ ok: true, version: "v1.3", endpoint: "POST JSON { token, csv, fileName } or multipart file + x-gso-rip-token to sync GSOQ quote RIP results." });
+export const loader = () => json({ ok: true, version: "v1.4", endpoint: "POST JSON { token, rows, fileName } preferred; CSV still supported." });
