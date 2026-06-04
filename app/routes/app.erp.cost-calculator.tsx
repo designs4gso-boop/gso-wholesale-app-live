@@ -151,13 +151,20 @@ export async function loader({ request }: { request: Request }) {
   const machineCostPerHour = fieldNumber(url, "machineCostPerHour", 8);
   const wastePct = fieldNumber(url, "wastePct", 10);
   const targetMarginPct = fieldNumber(url, "targetMarginPct", 40);
+  const ripResultMode = cleanText(url.searchParams.get("ripResultMode") || "per-piece");
+  const isPerPieceRip = ripResultMode !== "full-job";
 
   const sqftPerUnit = widthIn > 0 && heightIn > 0 ? (widthIn * heightIn) / 144 : 0;
-  const totalSqft = sqftPerUnit * quantity;
+  const baseSqft = sqftPerUnit * quantity;
   const wasteMultiplier = 1 + wastePct / 100;
-  const materialCost = totalSqft * materialCostPerSqft * wasteMultiplier;
-  const inkCostPerUnit = selected && quantity > 0 ? selected.estimatedInkCost / quantity : 0;
-  const inkCost = selected?.estimatedInkCost || 0;
+  const wasteAdjustedSqft = baseSqft * wasteMultiplier;
+  const effectiveUnits = quantity * wasteMultiplier;
+  const materialCost = wasteAdjustedSqft * materialCostPerSqft;
+  const ripInkCost = selected?.estimatedInkCost || 0;
+  const ripInkCc = selected?.totalCc || 0;
+  const inkCost = isPerPieceRip ? ripInkCost * effectiveUnits : ripInkCost;
+  const jobInkCc = isPerPieceRip ? ripInkCc * effectiveUnits : ripInkCc;
+  const inkCostPerUnit = quantity > 0 ? inkCost / quantity : 0;
   const ripMinutes = selected ? selected.ripSeconds / 60 : 0;
   const totalMachineMinutes = ripMinutes + setupMinutes + finishingMinutes;
   const laborCost = (totalMachineMinutes / 60) * laborRatePerHour;
@@ -175,8 +182,8 @@ export async function loader({ request }: { request: Request }) {
     rows,
     selected,
     lastAutoImportAt: setting.lastAutoImportAt ? setting.lastAutoImportAt.toISOString() : null,
-    form: { selectedId, quantity, widthIn, heightIn, materialCostPerSqft, laborRatePerHour, setupMinutes, finishingMinutes, machineCostPerHour, wastePct, targetMarginPct },
-    calc: { sqftPerUnit, totalSqft, materialCost, inkCost, inkCostPerUnit, ripMinutes, totalMachineMinutes, laborCost, machineCost, totalCost, unitCost, suggestedTotal, suggestedUnit, grossProfit },
+    form: { selectedId, quantity, widthIn, heightIn, materialCostPerSqft, laborRatePerHour, setupMinutes, finishingMinutes, machineCostPerHour, wastePct, targetMarginPct, ripResultMode },
+    calc: { sqftPerUnit, baseSqft, wasteAdjustedSqft, effectiveUnits, materialCost, ripInkCost, ripInkCc, inkCost, jobInkCc, inkCostPerUnit, ripMinutes, totalMachineMinutes, laborCost, machineCost, totalCost, unitCost, suggestedTotal, suggestedUnit, grossProfit },
   };
 }
 
@@ -192,7 +199,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.2 uses synced GSOQ RIP results from the app database, so Render does not need direct NAS access.</p>
+        <p style={{ marginBottom: 0 }}>v1.3 uses synced GSOQ RIP results, separates base sqft from waste-adjusted sqft, and scales ink correctly for one-piece/artboard quote RIPs.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -218,6 +225,12 @@ export default function ErpCostCalculatorRoute() {
                 )) : <option value="">No synced GSOQ results yet</option>}
               </select>
             </label>
+            <label style={{ gridColumn: "1 / -1" }}>RIP result represents<br />
+              <select name="ripResultMode" defaultValue={form.ripResultMode} style={inputStyle}>
+                <option value="per-piece">One piece / one artboard — scale ink by quantity + waste</option>
+                <option value="full-job">Full production layout — use RIP ink as total job ink</option>
+              </select>
+            </label>
             <label>Quantity<br /><input name="quantity" type="number" defaultValue={form.quantity} style={inputStyle} /></label>
             <label>Target margin %<br /><input name="targetMarginPct" type="number" step="0.1" defaultValue={form.targetMarginPct} style={inputStyle} /></label>
             <label>Width inches<br /><input name="widthIn" type="number" step="0.01" defaultValue={form.widthIn} style={inputStyle} /></label>
@@ -239,9 +252,11 @@ export default function ErpCostCalculatorRoute() {
               <div style={{ fontSize: 13, color: "#4b5563", marginBottom: 12 }}>{selected.quoteId} · {selected.fileName}</div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <tbody>
-                  <tr><td>Total ink</td><td align="right"><b>{num(selected.totalCc)} cc</b></td></tr>
-                  <tr><td>Ink cost from RIP</td><td align="right"><b>{money(calc.inkCost)}</b></td></tr>
-                  <tr><td>Total sqft</td><td align="right">{num(calc.totalSqft, 2)}</td></tr>
+                  <tr><td>RIP ink</td><td align="right"><b>{num(calc.ripInkCc)} cc / {money(calc.ripInkCost)}</b></td></tr>
+                  <tr><td>Calculated job ink</td><td align="right"><b>{num(calc.jobInkCc)} cc / {money(calc.inkCost)}</b></td></tr>
+                  <tr><td>Base sqft</td><td align="right">{num(calc.baseSqft, 2)}</td></tr>
+                  <tr><td>Waste-adjusted sqft</td><td align="right">{num(calc.wasteAdjustedSqft, 2)}</td></tr>
+                  <tr><td>Effective pieces incl. waste</td><td align="right">{num(calc.effectiveUnits, 0)}</td></tr>
                   <tr><td>Material cost</td><td align="right">{money(calc.materialCost)}</td></tr>
                   <tr><td>Labor cost</td><td align="right">{money(calc.laborCost)}</td></tr>
                   <tr><td>Machine cost</td><td align="right">{money(calc.machineCost)}</td></tr>
