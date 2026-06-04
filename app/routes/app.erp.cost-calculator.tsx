@@ -531,7 +531,7 @@ export async function loader({ request }: { request: Request }) {
     const seconds = applicationMode === "custom" ? customApplicationSecondsPerUnit : secondsForKnownApplication(selectedItem, line, applicationMode) || applicationRule.secondsPerUnit;
     const apps = line.quantity;
     const minutes = (apps * seconds) / 60;
-    return { lineName: line.name, labelType: line.labelTypeName, apps, seconds, minutes, laborCost: (minutes / 60) * laborRatePerHour };
+    return { lineIndex: line.index, lineName: line.name, labelType: line.labelTypeName, apps, seconds, minutes, laborCost: (minutes / 60) * laborRatePerHour };
   });
   const applicationQty = applicationMode === "none" ? 0 : applicationLineDetails.reduce((sum, line) => sum + line.apps, 0);
   const applicationSecondsPerUnit = applicationMode === "none" ? 0 : applicationLineDetails.length ? applicationLineDetails.reduce((sum, line) => sum + line.seconds, 0) / applicationLineDetails.length : 0;
@@ -630,7 +630,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.8 adds GSO blank item presets, Miron tier pricing, label type per print line, and shop-specific application labor timing.</p>
+        <p style={{ marginBottom: 0 }}>v1.9 adds staff-ready line breakdowns with material, ink, application labor, and shared job costs separated clearly.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -647,6 +647,9 @@ export default function ErpCostCalculatorRoute() {
       <Form method="get" style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 16, marginTop: 16 }}>
         <section style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Quote inputs</h2>
+          <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: 12, marginBottom: 12, fontSize: 13, color: "#1e3a8a" }}>
+            <b>Staff flow:</b> choose estimated mode before customer art, or actual GSOQ mode after RIP. Add each label size, pick the blank item, then pick the application type. The calculator handles material, ink, item cost, application labor, setup, margin, and unit price.
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label>Quote mode<br />
               <select name="quoteMode" defaultValue={form.quoteMode} style={inputStyle}>
@@ -836,7 +839,7 @@ export default function ErpCostCalculatorRoute() {
               <tr><td>Label material cost</td><td align="right">{money(calc.lineMaterialCost)}</td></tr>
               <tr><td>Ink cost</td><td align="right">{money(calc.lineInkCost)}</td></tr>
               <tr><td>{calc.itemName}</td><td align="right">{calc.itemQty ? `${num(calc.itemQty, 0)} x ${money(calc.itemUnitCost)} = ${money(calc.itemCost)}` : money(0)}</td></tr>
-              <tr><td>Application labor</td><td align="right">{form.applicationMode === "none" ? "No application / $0.00" : `${calc.applicationName}: ${num(calc.applicationQty, 0)} apps, ${num(calc.applicationLaborMinutes, 1)} min incl. setup / ${money(calc.applicationLaborCost)}`}</td></tr>
+              <tr><td>Application labor</td><td align="right">{form.applicationMode === "none" ? "No application / $0.00" : `${num(calc.applicationQty, 0)} apps · ${num(calc.applicationLaborMinutes, 1)} min incl. setup · ${money(calc.applicationLaborCost)}`}</td></tr>
               <tr><td>Print/setup labor</td><td align="right">{money(calc.processLaborCost)}</td></tr>
               <tr><td>Machine/setup cost</td><td align="right">{money(calc.processMachineCost)}</td></tr>
               <tr style={{ borderTop: "1px solid #e5e7eb" }}><td><b>Total cost</b></td><td align="right"><b>{money(calc.totalCost)}</b></td></tr>
@@ -848,14 +851,39 @@ export default function ErpCostCalculatorRoute() {
           </table>
 
           <h3>Line breakdown</h3>
-          <div style={{ display: "grid", gap: 8 }}>
-            {form.lines.map((line) => (
-              <div key={`summary-${line.index}`} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, fontSize: 13 }}>
-                <b>{line.name}</b><br />
-                {num(line.quantity, 0)} pcs · {line.labelTypeName} · {num(line.widthIn, 2)} x {num(line.heightIn, 2)} in · {num(line.wasteAdjustedSqft, 2)} sqft with waste<br />
-                Material {money(line.materialCost)} · Ink {money(line.inkCost)} · Line cost {money(line.totalCost)}
-              </div>
-            ))}
+          <div style={{ display: "grid", gap: 10 }}>
+            {form.lines.map((line) => {
+              const appDetail = calc.applicationLineDetails.find((detail: any) => detail.lineIndex === line.index);
+              const appCost = appDetail?.laborCost || 0;
+              const appMinutes = appDetail?.minutes || 0;
+              const appSeconds = appDetail?.seconds || 0;
+              const lineSubtotal = line.materialCost + line.inkCost + appCost;
+              return (
+                <div key={`summary-${line.index}`} style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, fontSize: 13, background: "#fff" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                    <b>{line.name}</b>
+                    <b>{money(lineSubtotal)}</b>
+                  </div>
+                  <div>{num(line.quantity, 0)} pcs · {line.labelTypeName} · {num(line.widthIn, 2)} x {num(line.heightIn, 2)} in</div>
+                  <div style={{ color: "#4b5563", marginTop: 4 }}>Base sqft {num(line.baseSqft, 2)} · Waste-adjusted sqft {num(line.wasteAdjustedSqft, 2)} · Waste {num(line.wastePct, 1)}%</div>
+                  <div style={{ marginTop: 6 }}>Material: {line.materialName} @ {money(line.materialCostPerSqft)}/sqft = <b>{money(line.materialCost)}</b></div>
+                  <div>Ink: {line.inkSource} = <b>{money(line.inkCost)}</b>{line.inkCc ? ` (${num(line.inkCc, 2)} cc)` : ""}</div>
+                  {form.applicationMode !== "none" ? (
+                    <div>Application labor: {num(line.quantity, 0)} × {num(appSeconds, 2)} sec = {num(appMinutes, 1)} min / <b>{money(appCost)}</b></div>
+                  ) : null}
+                  <div style={{ color: "#6b7280", marginTop: 6 }}>Line subtotal includes material + ink{form.applicationMode !== "none" ? " + direct application labor" : ""}. Shared setup, blank item, and machine costs are listed below.</div>
+                </div>
+              );
+            })}
+          </div>
+
+          <h3>Shared job costs</h3>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, fontSize: 13, background: "#f9fafb" }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Blank item / product</span><b>{money(calc.itemCost)}</b></div>
+            <div style={{ color: "#6b7280", marginBottom: 6 }}>{calc.itemQty ? `${calc.itemName}: ${num(calc.itemQty, 0)} × ${money(calc.itemUnitCost)}${calc.itemTierLabel !== "fixed" ? ` tier ${calc.itemTierLabel}` : ""}` : "No blank item selected."}</div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Application setup included in application labor</span><b>{form.applicationMode === "none" ? money(0) : `${num(calc.applicationSetupMinutes, 1)} min`}</b></div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Print/setup labor</span><b>{money(calc.processLaborCost)}</b></div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Machine/setup cost</span><b>{money(calc.processMachineCost)}</b></div>
           </div>
         </section>
       </Form>
