@@ -178,6 +178,31 @@ function inkEstimateCostPerSqft(profile: string, custom: number) {
   return 0.23;
 }
 
+function estimateApplicationRule(mode: string, avgLabelSqIn: number, labelsPerItem: number) {
+  const safeSqIn = Math.max(avgLabelSqIn || 0, 1);
+  const safeLabels = Math.max(labelsPerItem || 1, 1);
+
+  if (mode === "apply-flat-bag") {
+    return { name: "Apply label to flat bag/pouch", secondsPerUnit: Math.max(4, 3 + safeSqIn * 0.12), setupMinutes: 5, extraCostPerUnit: 0 };
+  }
+  if (mode === "apply-jar") {
+    return { name: "Apply label to jar", secondsPerUnit: Math.max(6, 5 + safeSqIn * 0.15), setupMinutes: 10, extraCostPerUnit: 0 };
+  }
+  if (mode === "apply-box") {
+    return { name: "Apply label to box", secondsPerUnit: Math.max(5, 4 + safeSqIn * 0.12), setupMinutes: 7, extraCostPerUnit: 0 };
+  }
+  if (mode === "apply-tube") {
+    return { name: "Apply label to round tube", secondsPerUnit: Math.max(7, 6 + safeSqIn * 0.18), setupMinutes: 10, extraCostPerUnit: 0 };
+  }
+  if (mode === "apply-label-set") {
+    return { name: "Apply full label set to item", secondsPerUnit: Math.max(6, 4 + safeSqIn * 0.13) * safeLabels, setupMinutes: 10, extraCostPerUnit: 0 };
+  }
+  if (mode === "custom") {
+    return { name: "Custom application", secondsPerUnit: 0, setupMinutes: 0, extraCostPerUnit: 0 };
+  }
+  return { name: "No application", secondsPerUnit: 0, setupMinutes: 0, extraCostPerUnit: 0 };
+}
+
 async function ensureSetting(shop: string) {
   return db.printLogAutoImportSetting.upsert({
     where: { shop },
@@ -318,9 +343,14 @@ export async function loader({ request }: { request: Request }) {
     };
   });
 
+  const primaryQuantity = Math.max(lines[0]?.quantity || 0, 1);
+  const totalLabelApplications = lines.reduce((sum, line) => sum + line.quantity, 0);
+  const totalLabelAreaSqIn = lines.reduce((sum, line) => sum + line.quantity * line.widthIn * line.heightIn, 0);
+  const averageLabelSqIn = totalLabelApplications > 0 ? totalLabelAreaSqIn / totalLabelApplications : (lines[0]?.widthIn || 4) * (lines[0]?.heightIn || 5);
+
   const itemMode = cleanText(url.searchParams.get("itemMode") || "none");
   const itemId = cleanText(url.searchParams.get("itemId") || "custom");
-  const itemQty = fieldNumber(url, "itemQty", lines[0]?.quantity || 1000);
+  const itemQty = itemMode === "none" ? 0 : primaryQuantity;
   const customItemName = cleanText(url.searchParams.get("customItemName") || "Custom item");
   const customItemUnitCost = fieldNumber(url, "customItemUnitCost", 0);
   const selectedItem = blankItemById.get(itemId) || null;
@@ -329,10 +359,14 @@ export async function loader({ request }: { request: Request }) {
   const itemCost = itemQty * itemUnitCost;
 
   const applicationMode = cleanText(url.searchParams.get("applicationMode") || "none");
-  const applicationQty = fieldNumber(url, "applicationQty", itemQty || lines[0]?.quantity || 1000);
-  const applicationSecondsPerUnit = fieldNumber(url, "applicationSecondsPerUnit", applicationMode === "apply-one" ? 8 : applicationMode === "apply-two" ? 16 : 0);
-  const applicationUnitCost = fieldNumber(url, "applicationUnitCost", 0);
-  const applicationLaborMinutes = (applicationQty * applicationSecondsPerUnit) / 60;
+  const applicationRule = estimateApplicationRule(applicationMode, averageLabelSqIn, lines.length);
+  const customApplicationSecondsPerUnit = fieldNumber(url, "applicationSecondsPerUnit", 8);
+  const customApplicationUnitCost = fieldNumber(url, "applicationUnitCost", 0);
+  const applicationQty = applicationMode === "none" ? 0 : applicationMode === "apply-label-set" ? primaryQuantity : totalLabelApplications;
+  const applicationSecondsPerUnit = applicationMode === "custom" ? customApplicationSecondsPerUnit : applicationRule.secondsPerUnit;
+  const applicationUnitCost = applicationMode === "custom" ? customApplicationUnitCost : applicationRule.extraCostPerUnit;
+  const applicationSetupMinutes = applicationMode === "none" ? 0 : applicationRule.setupMinutes;
+  const applicationLaborMinutes = applicationMode === "none" ? 0 : applicationSetupMinutes + (applicationQty * applicationSecondsPerUnit) / 60;
   const applicationLaborCost = (applicationLaborMinutes / 60) * laborRatePerHour + applicationQty * applicationUnitCost;
 
   const lineMaterialCost = lines.reduce((sum, line) => sum + line.materialCost, 0);
@@ -344,7 +378,6 @@ export async function loader({ request }: { request: Request }) {
   const processLaborCost = (setupAndFinishingMinutes / 60) * laborRatePerHour;
   const processMachineCost = (setupAndFinishingMinutes / 60) * machineCostPerHour;
   const totalCost = lineMaterialCost + lineInkCost + itemCost + applicationLaborCost + processLaborCost + processMachineCost;
-  const primaryQuantity = Math.max(lines[0]?.quantity || 0, 1);
   const unitCost = totalCost / primaryQuantity;
   const suggestedTotal = targetMarginPct >= 100 ? 0 : totalCost / (1 - targetMarginPct / 100);
   const suggestedUnit = suggestedTotal / primaryQuantity;
@@ -376,6 +409,9 @@ export async function loader({ request }: { request: Request }) {
       applicationQty,
       applicationSecondsPerUnit,
       applicationUnitCost,
+      applicationSetupMinutes,
+      applicationName: applicationRule.name,
+      averageLabelSqIn,
     },
     calc: {
       lineMaterialCost,
@@ -389,6 +425,10 @@ export async function loader({ request }: { request: Request }) {
       itemCost,
       applicationLaborMinutes,
       applicationLaborCost,
+      applicationQty,
+      applicationSecondsPerUnit,
+      applicationSetupMinutes,
+      applicationName: applicationRule.name,
       processLaborCost,
       processMachineCost,
       totalCost,
@@ -415,7 +455,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.5 cleans up quote mode fields, hides irrelevant custom inputs, separates estimated vs actual RIP workflows, and makes the estimate breakdown easier to audit.</p>
+        <p style={{ marginBottom: 0 }}>v1.6 auto-matches blank item and application quantities to the quote quantity, and uses backend application labor rules instead of asking staff to guess seconds.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -531,8 +571,9 @@ export default function ErpCostCalculatorRoute() {
                 <option value="inventory">Use inventory/vendor item</option>
                 <option value="custom">Custom one-time item</option>
               </select>
+              <div style={smallHelp}>Item quantity auto-matches the main label quantity: {num(form.itemQty, 0)}.</div>
             </label>
-            <label>Item qty<br /><input name="itemQty" type="number" defaultValue={form.itemQty} style={inputStyle} /></label>
+            <input type="hidden" name="itemQty" value={form.itemQty} />
             {form.itemMode === "inventory" ? (
               <label style={{ gridColumn: "1 / -1" }}>Inventory item<br />
                 <select name="itemId" defaultValue={form.itemId} style={inputStyle}>
@@ -559,24 +600,32 @@ export default function ErpCostCalculatorRoute() {
             <label>Application type<br />
               <select name="applicationMode" defaultValue={form.applicationMode} style={inputStyle}>
                 <option value="none">No application</option>
-                <option value="apply-one">Apply 1 label per item</option>
-                <option value="apply-two">Apply 2 labels per item</option>
+                <option value="apply-flat-bag">Apply label to flat bag/pouch</option>
+                <option value="apply-jar">Apply label to jar</option>
+                <option value="apply-box">Apply label to box</option>
+                <option value="apply-tube">Apply label to round tube</option>
+                <option value="apply-label-set">Apply full label set to item</option>
                 <option value="custom">Custom application</option>
               </select>
+              <div style={smallHelp}>Application quantity and seconds are estimated automatically from label size, label count, and application type.</div>
             </label>
-            {form.applicationMode === "none" ? (
+            {form.applicationMode === "custom" ? (
               <>
-                <input type="hidden" name="applicationQty" value={form.applicationQty} />
-                <input type="hidden" name="applicationSecondsPerUnit" value={form.applicationSecondsPerUnit} />
-                <input type="hidden" name="applicationUnitCost" value={form.applicationUnitCost} />
+                <label>Custom seconds per unit<br /><input name="applicationSecondsPerUnit" type="number" step="0.1" defaultValue={form.applicationSecondsPerUnit} style={inputStyle} /></label>
+                <label>Extra application $/unit<br /><input name="applicationUnitCost" type="number" step="0.0001" defaultValue={form.applicationUnitCost} style={inputStyle} /></label>
               </>
             ) : (
               <>
-                <label>Application qty<br /><input name="applicationQty" type="number" defaultValue={form.applicationQty} style={inputStyle} /></label>
-                <label>Seconds per unit<br /><input name="applicationSecondsPerUnit" type="number" step="0.1" defaultValue={form.applicationSecondsPerUnit} style={inputStyle} /></label>
-                <label>Extra application $/unit<br /><input name="applicationUnitCost" type="number" step="0.0001" defaultValue={form.applicationUnitCost} style={inputStyle} /></label>
+                <input type="hidden" name="applicationSecondsPerUnit" value={form.applicationSecondsPerUnit} />
+                <input type="hidden" name="applicationUnitCost" value={form.applicationUnitCost} />
               </>
             )}
+            <input type="hidden" name="applicationQty" value={form.applicationQty} />
+            {form.applicationMode !== "none" ? (
+              <div style={{ gridColumn: "1 / -1", fontSize: 13, color: "#374151", background: "#f3f4f6", borderRadius: 10, padding: 10 }}>
+                Auto labor rule: {form.applicationName}. Qty {num(form.applicationQty, 0)} × {num(form.applicationSecondsPerUnit, 2)} sec + {num(form.applicationSetupMinutes, 1)} setup min = {num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)}.
+              </div>
+            ) : null}
           </div>
 
           <button type="submit" style={{ marginTop: 16, width: "100%", background: "#111827", color: "white", border: 0, borderRadius: 10, padding: 14, fontWeight: 800 }}>Calculate quote cost</button>
@@ -593,7 +642,7 @@ export default function ErpCostCalculatorRoute() {
               <tr><td>Label material cost</td><td align="right">{money(calc.lineMaterialCost)}</td></tr>
               <tr><td>Ink cost</td><td align="right">{money(calc.lineInkCost)}</td></tr>
               <tr><td>{calc.itemName}</td><td align="right">{calc.itemQty ? `${num(calc.itemQty, 0)} x ${money(calc.itemUnitCost)} = ${money(calc.itemCost)}` : money(0)}</td></tr>
-              <tr><td>Application labor</td><td align="right">{num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)}</td></tr>
+              <tr><td>Application labor</td><td align="right">{calc.applicationName}: {num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)}</td></tr>
               <tr><td>Setup/finishing labor</td><td align="right">{money(calc.processLaborCost)}</td></tr>
               <tr><td>Machine/setup cost</td><td align="right">{money(calc.processMachineCost)}</td></tr>
               <tr style={{ borderTop: "1px solid #e5e7eb" }}><td><b>Total cost</b></td><td align="right"><b>{money(calc.totalCost)}</b></td></tr>
