@@ -776,7 +776,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.9.5 adds staff safety warnings plus optional cutting, prepress, and packout cost sections before tiered pricing.</p>
+        <p style={{ marginBottom: 0 }}>v1.9.6 adds auto-refreshing dropdowns so staff do not need to press Calculate just to reveal inventory/custom fields.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -806,7 +806,7 @@ export default function ErpCostCalculatorRoute() {
           ) : null}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label>Quote mode<br />
-              <select name="quoteMode" defaultValue={form.quoteMode} style={inputStyle}>
+              <select name="quoteMode" defaultValue={form.quoteMode} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                 <option value="estimated">Estimated quote - no customer art yet</option>
                 <option value="actual">Actual GSOQ RIP quote - artwork is ready</option>
               </select>
@@ -843,7 +843,7 @@ export default function ErpCostCalculatorRoute() {
                     </select>
                   </label>
                   <label style={{ gridColumn: "1 / 3" }}>Material / roll media only<br />
-                    <select name="lineMaterialId" defaultValue={line.materialId} style={inputStyle}>
+                    <select name="lineMaterialId" defaultValue={line.materialId} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                       <option value="">Select material</option>
                       {materials.map((material) => <option key={material.id} value={material.id}>{material.name} - {money(materialSqftCost(material, 0))}/sqft</option>)}
                       <option value="custom">Custom one-time material price</option>
@@ -860,13 +860,13 @@ export default function ErpCostCalculatorRoute() {
                   {form.quoteMode === "actual" ? (
                     <>
                       <label style={{ gridColumn: "1 / 3" }}>GSOQ RIP result for this line<br />
-                        <select name="lineQuoteId" defaultValue={line.quoteId} style={inputStyle}>
+                        <select name="lineQuoteId" defaultValue={line.quoteId} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                           {rows.length ? rows.map((row) => <option key={`${row.quoteId}-${row.fileName}`} value={row.quoteId}>{row.quoteId} - {row.fileName}</option>) : <option value="">No synced GSOQ results yet</option>}
                         </select>
                         <div style={smallHelp}>Actual mode uses synced RasterLink/VersaWorks ink from the selected GSOQ result.</div>
                       </label>
                       <label>RIP mode<br />
-                        <select name="lineRipResultMode" defaultValue={line.ripResultMode} style={inputStyle}>
+                        <select name="lineRipResultMode" defaultValue={line.ripResultMode} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                           <option value="per-piece">One piece/artboard</option>
                           <option value="full-job">Full production layout</option>
                         </select>
@@ -879,7 +879,7 @@ export default function ErpCostCalculatorRoute() {
                       <input type="hidden" name="lineQuoteId" value={line.quoteId} />
                       <input type="hidden" name="lineRipResultMode" value={line.ripResultMode} />
                       <label>Estimated ink profile<br />
-                        <select name="lineInkEstimateProfile" defaultValue={line.inkEstimateProfile} style={inputStyle}>
+                        <select name="lineInkEstimateProfile" defaultValue={line.inkEstimateProfile} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                           <option value="cmyk-heavy">CMYK Heavy - $0.50/sqft</option>
                           <option value="cmyk-white-heavy">CMYK + White Heavy - $1.00/sqft</option>
                           <option value="cmyk-gloss-heavy">CMYK + Gloss Heavy - $1.00/sqft</option>
@@ -913,7 +913,7 @@ export default function ErpCostCalculatorRoute() {
           <h3>Blank item / product being labeled</h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label>Item mode<br />
-              <select name="itemMode" defaultValue={form.itemMode} style={inputStyle}>
+              <select name="itemMode" defaultValue={form.itemMode} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                 <option value="none">No blank item</option>
                 <option value="inventory">Use inventory/vendor item</option>
                 <option value="custom">Custom one-time item</option>
@@ -923,7 +923,7 @@ export default function ErpCostCalculatorRoute() {
             <input type="hidden" name="itemQty" value={form.itemQty} />
             {form.itemMode === "inventory" ? (
               <label style={{ gridColumn: "1 / -1" }}>Inventory item<br />
-                <select name="itemId" defaultValue={form.itemId} style={inputStyle}>
+                <select name="itemId" defaultValue={form.itemId} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                   <option value="custom">Custom item</option>
                   {blankItems.map((item) => <option key={item.id} value={item.id}>{item.name} - {item.tiers?.length ? "tiered" : `${money(item.unitCost)} each`}</option>)}
                 </select>
@@ -950,7 +950,7 @@ export default function ErpCostCalculatorRoute() {
           <h3>Application / finishing</h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label>Application type<br />
-              <select name="applicationMode" defaultValue={form.applicationMode} style={inputStyle}>
+              <select name="applicationMode" defaultValue={form.applicationMode} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                 <option value="none">No application</option>
                 <option value="apply-flat-bag">Apply label to flat bag/pouch</option>
                 <option value="apply-jar">Apply label to jar</option>
@@ -983,7 +983,7 @@ export default function ErpCostCalculatorRoute() {
           <h3>Optional cutting / finishing</h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label>Cutting / finishing type<br />
-              <select name="cuttingMode" defaultValue={form.cuttingMode} style={inputStyle}>
+              <select name="cuttingMode" defaultValue={form.cuttingMode} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                 <option value="none">No cutting / finishing</option>
                 <option value="square">Square/rectangle cut</option>
                 <option value="contour">Contour cut</option>
@@ -1010,7 +1010,7 @@ export default function ErpCostCalculatorRoute() {
           <h3>Optional prepress / design setup</h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label>Prepress type<br />
-              <select name="prepressMode" defaultValue={form.prepressMode} style={inputStyle}>
+              <select name="prepressMode" defaultValue={form.prepressMode} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                 <option value="none">No prepress/design</option>
                 <option value="basic">Basic proof / file check</option>
                 <option value="repair">File repair</option>
@@ -1036,7 +1036,7 @@ export default function ErpCostCalculatorRoute() {
           <h3>Optional packout / packing supplies</h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label>Packout type<br />
-              <select name="packoutMode" defaultValue={form.packoutMode} style={inputStyle}>
+              <select name="packoutMode" defaultValue={form.packoutMode} onChange={(event) => event.currentTarget.form?.requestSubmit()} style={inputStyle}>
                 <option value="none">No packout</option>
                 <option value="standard">Standard packout</option>
                 <option value="bulk">Bulk packout</option>
