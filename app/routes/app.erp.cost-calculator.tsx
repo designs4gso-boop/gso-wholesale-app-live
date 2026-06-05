@@ -173,7 +173,7 @@ function uniqueLatestByQuote(rows: QuoteRipRow[]) {
   return out;
 }
 
-function materialSqftCost(material?: MaterialOption | null, fallback = 0.31) {
+function materialSqftCost(material?: MaterialOption | null, fallback = 0) {
   if (!material) return fallback;
   const materialName = `${material.name || ""}`.toLowerCase();
   if (materialName.includes("holographic") || materialName.includes("holo")) return 0.72;
@@ -416,10 +416,7 @@ export async function loader({ request }: { request: Request }) {
     calculatedUnitCost: m.calculatedUnitCost,
     purchaseCost: m.purchaseCost,
   }));
-  const materials: MaterialOption[] = [
-    ...presetRollMaterials(),
-    ...savedMaterials.filter(isAllowedRollMaterial),
-  ];
+  const materials: MaterialOption[] = presetRollMaterials();
   const materialById = new Map(materials.map((m) => [m.id, m]));
 
   const blankItems: BlankItemOption[] = [
@@ -680,7 +677,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.9.3 cleans the material list, blocks incomplete label lines from costing, and applies blank item waste/spoilage.</p>
+        <p style={{ marginBottom: 0 }}>v1.9.4 hard-locks the material dropdown to approved roll/media presets only, removes duplicate saved materials, and blocks zero-cost material lookups.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
