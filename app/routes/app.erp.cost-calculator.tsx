@@ -362,6 +362,59 @@ function estimateApplicationRule(mode: string, avgLabelSqIn: number, labelsPerIt
   return { name: "No application", secondsPerUnit: 0, setupMinutes: 0, extraCostPerUnit: 0 };
 }
 
+
+function cuttingRule(mode: string, qty: number, customMinutes: number, customFlatCost: number, laborRatePerHour: number) {
+  const safeQty = Math.max(qty || 0, 0);
+  const rules: Record<string, { name: string; setupMinutes: number; secondsPerUnit: number; flatCost: number }> = {
+    none: { name: "No cutting / finishing", setupMinutes: 0, secondsPerUnit: 0, flatCost: 0 },
+    square: { name: "Square/rectangle cut", setupMinutes: 5, secondsPerUnit: 1, flatCost: 0 },
+    contour: { name: "Contour cut", setupMinutes: 10, secondsPerUnit: 4, flatCost: 0 },
+    diecut: { name: "Die-cut sticker", setupMinutes: 15, secondsPerUnit: 6, flatCost: 0 },
+    sheet: { name: "Sheet cut / trim down", setupMinutes: 5, secondsPerUnit: 2, flatCost: 0 },
+    weed: { name: "Weeded decal", setupMinutes: 10, secondsPerUnit: 8, flatCost: 0 },
+  };
+  if (mode === "custom") {
+    const minutes = Math.max(customMinutes || 0, 0);
+    return { name: "Custom cutting / finishing", minutes, cost: Math.max(customFlatCost || 0, 0) + (minutes / 60) * laborRatePerHour };
+  }
+  const rule = rules[mode] || rules.none;
+  const minutes = rule.setupMinutes + (safeQty * rule.secondsPerUnit) / 60;
+  return { name: rule.name, minutes, cost: rule.flatCost + (minutes / 60) * laborRatePerHour };
+}
+
+function prepressRule(mode: string, customMinutes: number, customFlatCost: number, laborRatePerHour: number) {
+  const rules: Record<string, { name: string; minutes: number; flatCost: number }> = {
+    none: { name: "No prepress/design", minutes: 0, flatCost: 0 },
+    basic: { name: "Basic proof / file check", minutes: 15, flatCost: 0 },
+    repair: { name: "File repair", minutes: 25, flatCost: 0 },
+    dieline: { name: "Dieline setup", minutes: 35, flatCost: 0 },
+    color: { name: "Color match / test setup", minutes: 30, flatCost: 0 },
+  };
+  if (mode === "custom") {
+    const minutes = Math.max(customMinutes || 0, 0);
+    return { name: "Custom prepress/design", minutes, cost: Math.max(customFlatCost || 0, 0) + (minutes / 60) * laborRatePerHour };
+  }
+  const rule = rules[mode] || rules.none;
+  return { name: rule.name, minutes: rule.minutes, cost: rule.flatCost + (rule.minutes / 60) * laborRatePerHour };
+}
+
+function packoutRule(mode: string, qty: number, customUnitCost: number, customFlatCost: number) {
+  const safeQty = Math.max(qty || 0, 0);
+  const rules: Record<string, { name: string; unitCost: number; flatCost: number }> = {
+    none: { name: "No packout", unitCost: 0, flatCost: 0 },
+    standard: { name: "Standard packout", unitCost: 0.02, flatCost: 2 },
+    bulk: { name: "Bulk packout", unitCost: 0.01, flatCost: 2 },
+    individual: { name: "Individual packout", unitCost: 0.05, flatCost: 5 },
+  };
+  if (mode === "custom") {
+    const unitCost = Math.max(customUnitCost || 0, 0);
+    const flatCost = Math.max(customFlatCost || 0, 0);
+    return { name: "Custom packout", unitCost, flatCost, cost: flatCost + safeQty * unitCost };
+  }
+  const rule = rules[mode] || rules.none;
+  return { name: rule.name, unitCost: rule.unitCost, flatCost: rule.flatCost, cost: rule.flatCost + safeQty * rule.unitCost };
+}
+
 async function ensureSetting(shop: string) {
   return db.printLogAutoImportSetting.upsert({
     where: { shop },
@@ -586,6 +639,29 @@ export async function loader({ request }: { request: Request }) {
   const applicationLaborMinutes = applicationMode === "none" ? 0 : applicationSetupMinutes + applicationMinutesBeforeSetup;
   const applicationLaborCost = (applicationLaborMinutes / 60) * laborRatePerHour + applicationQty * applicationUnitCost;
 
+  const cuttingMode = cleanText(url.searchParams.get("cuttingMode") || "none");
+  const cuttingCustomMinutes = fieldNumber(url, "cuttingCustomMinutes", 0);
+  const cuttingCustomFlatCost = fieldNumber(url, "cuttingCustomFlatCost", 0);
+  const cutting = cuttingRule(cuttingMode, primaryQuantity, cuttingCustomMinutes, cuttingCustomFlatCost, laborRatePerHour);
+
+  const prepressMode = cleanText(url.searchParams.get("prepressMode") || "none");
+  const prepressCustomMinutes = fieldNumber(url, "prepressCustomMinutes", 0);
+  const prepressCustomFlatCost = fieldNumber(url, "prepressCustomFlatCost", 0);
+  const prepress = prepressRule(prepressMode, prepressCustomMinutes, prepressCustomFlatCost, laborRatePerHour);
+
+  const packoutMode = cleanText(url.searchParams.get("packoutMode") || "none");
+  const packoutCustomUnitCost = fieldNumber(url, "packoutCustomUnitCost", 0);
+  const packoutCustomFlatCost = fieldNumber(url, "packoutCustomFlatCost", 0);
+  const packout = packoutRule(packoutMode, primaryQuantity, packoutCustomUnitCost, packoutCustomFlatCost);
+
+  const safetyWarnings: string[] = [];
+  if (itemMode !== "none" && applicationMode === "none") safetyWarnings.push("Blank item selected but application is No application. If GSO is applying labels, choose an application type.");
+  if (applicationMode !== "none" && itemMode === "none") safetyWarnings.push("Application selected but no blank item/product is selected. Confirm this is intentional.");
+  if (completeLines.length > 1) {
+    const quantities = [...new Set(completeLines.map((line) => line.quantity))];
+    if (quantities.length > 1) safetyWarnings.push("Multiple label lines have different quantities. Confirm this is intentional before quoting.");
+  }
+
   const lineMaterialCost = lines.reduce((sum, line) => sum + line.materialCost, 0);
   const lineInkCost = lines.reduce((sum, line) => sum + line.inkCost, 0);
   const lineBaseSqft = lines.reduce((sum, line) => sum + line.baseSqft, 0);
@@ -594,7 +670,10 @@ export async function loader({ request }: { request: Request }) {
   const setupAndFinishingMinutes = setupMinutes + finishingMinutes;
   const processLaborCost = (setupAndFinishingMinutes / 60) * laborRatePerHour;
   const processMachineCost = (setupAndFinishingMinutes / 60) * machineCostPerHour;
-  const totalCost = lineMaterialCost + lineInkCost + itemCost + applicationLaborCost + processLaborCost + processMachineCost;
+  const cuttingCost = cutting.cost;
+  const prepressCost = prepress.cost;
+  const packoutCost = packout.cost;
+  const totalCost = lineMaterialCost + lineInkCost + itemCost + applicationLaborCost + processLaborCost + processMachineCost + cuttingCost + prepressCost + packoutCost;
   const unitCost = totalCost / primaryQuantity;
   const suggestedTotal = targetMarginPct >= 100 ? 0 : totalCost / (1 - targetMarginPct / 100);
   const suggestedUnit = suggestedTotal / primaryQuantity;
@@ -633,6 +712,16 @@ export async function loader({ request }: { request: Request }) {
       applicationName: applicationRule.name,
       applicationLineDetails,
       averageLabelSqIn,
+      cuttingMode,
+      cuttingCustomMinutes,
+      cuttingCustomFlatCost,
+      prepressMode,
+      prepressCustomMinutes,
+      prepressCustomFlatCost,
+      packoutMode,
+      packoutCustomUnitCost,
+      packoutCustomFlatCost,
+      safetyWarnings,
     },
     calc: {
       lineMaterialCost,
@@ -656,6 +745,16 @@ export async function loader({ request }: { request: Request }) {
       applicationLineDetails,
       processLaborCost,
       processMachineCost,
+      cuttingName: cutting.name,
+      cuttingMinutes: cutting.minutes,
+      cuttingCost,
+      prepressName: prepress.name,
+      prepressMinutes: prepress.minutes,
+      prepressCost,
+      packoutName: packout.name,
+      packoutUnitCost: packout.unitCost,
+      packoutFlatCost: packout.flatCost,
+      packoutCost,
       totalCost,
       unitCost,
       suggestedTotal,
@@ -677,7 +776,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.9.4 hard-locks the material dropdown to approved roll/media presets only, removes duplicate saved materials, and blocks zero-cost material lookups.</p>
+        <p style={{ marginBottom: 0 }}>v1.9.5 adds staff safety warnings plus optional cutting, prepress, and packout cost sections before tiered pricing.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -695,8 +794,16 @@ export default function ErpCostCalculatorRoute() {
         <section style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Quote inputs</h2>
           <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: 12, marginBottom: 12, fontSize: 13, color: "#1e3a8a" }}>
-            <b>Staff flow:</b> choose estimated mode before customer art, or actual GSOQ mode after RIP. Fill every required label field, pick roll media only from Material, pick the blank item/product below, then pick the application type. Incomplete label lines are ignored until fixed.
+            <b>Staff flow:</b> choose estimated mode before customer art, or actual GSOQ mode after RIP. Fill every required label field, pick roll media only from Material, pick the blank item/product below, then pick the application type. Incomplete label lines are ignored until fixed. Use optional finishing, prepress, and packout sections when those costs apply.
           </div>
+          {form.safetyWarnings.length ? (
+            <div style={{ background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 12, padding: 12, marginBottom: 12, fontSize: 13, color: "#92400e" }}>
+              <b>Quote check:</b>
+              <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                {form.safetyWarnings.map((warning: string) => <li key={warning}>{warning}</li>)}
+              </ul>
+            </div>
+          ) : null}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label>Quote mode<br />
               <select name="quoteMode" defaultValue={form.quoteMode} style={inputStyle}>
@@ -873,6 +980,84 @@ export default function ErpCostCalculatorRoute() {
             ) : null}
           </div>
 
+          <h3>Optional cutting / finishing</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <label>Cutting / finishing type<br />
+              <select name="cuttingMode" defaultValue={form.cuttingMode} style={inputStyle}>
+                <option value="none">No cutting / finishing</option>
+                <option value="square">Square/rectangle cut</option>
+                <option value="contour">Contour cut</option>
+                <option value="diecut">Die-cut sticker</option>
+                <option value="sheet">Sheet cut / trim down</option>
+                <option value="weed">Weeded decal</option>
+                <option value="custom">Custom cutting / finishing</option>
+              </select>
+            </label>
+            {form.cuttingMode === "custom" ? (
+              <>
+                <label>Custom cutting minutes<br /><input name="cuttingCustomMinutes" type="number" step="0.1" defaultValue={form.cuttingCustomMinutes || ""} placeholder="Minutes" style={inputStyle} /></label>
+                <label>Custom cutting flat cost<br /><input name="cuttingCustomFlatCost" type="number" step="0.01" defaultValue={form.cuttingCustomFlatCost || ""} placeholder="Flat cost" style={inputStyle} /></label>
+              </>
+            ) : (
+              <>
+                <input type="hidden" name="cuttingCustomMinutes" value={form.cuttingCustomMinutes} />
+                <input type="hidden" name="cuttingCustomFlatCost" value={form.cuttingCustomFlatCost} />
+              </>
+            )}
+          </div>
+          {form.cuttingMode !== "none" ? <div style={smallHelp}>Cutting estimate: {calc.cuttingName} = {num(calc.cuttingMinutes, 1)} min / {money(calc.cuttingCost)}.</div> : null}
+
+          <h3>Optional prepress / design setup</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <label>Prepress type<br />
+              <select name="prepressMode" defaultValue={form.prepressMode} style={inputStyle}>
+                <option value="none">No prepress/design</option>
+                <option value="basic">Basic proof / file check</option>
+                <option value="repair">File repair</option>
+                <option value="dieline">Dieline setup</option>
+                <option value="color">Color match / test setup</option>
+                <option value="custom">Custom prepress/design</option>
+              </select>
+            </label>
+            {form.prepressMode === "custom" ? (
+              <>
+                <label>Custom prepress minutes<br /><input name="prepressCustomMinutes" type="number" step="0.1" defaultValue={form.prepressCustomMinutes || ""} placeholder="Minutes" style={inputStyle} /></label>
+                <label>Custom prepress flat cost<br /><input name="prepressCustomFlatCost" type="number" step="0.01" defaultValue={form.prepressCustomFlatCost || ""} placeholder="Flat cost" style={inputStyle} /></label>
+              </>
+            ) : (
+              <>
+                <input type="hidden" name="prepressCustomMinutes" value={form.prepressCustomMinutes} />
+                <input type="hidden" name="prepressCustomFlatCost" value={form.prepressCustomFlatCost} />
+              </>
+            )}
+          </div>
+          {form.prepressMode !== "none" ? <div style={smallHelp}>Prepress estimate: {calc.prepressName} = {num(calc.prepressMinutes, 1)} min / {money(calc.prepressCost)}.</div> : null}
+
+          <h3>Optional packout / packing supplies</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <label>Packout type<br />
+              <select name="packoutMode" defaultValue={form.packoutMode} style={inputStyle}>
+                <option value="none">No packout</option>
+                <option value="standard">Standard packout</option>
+                <option value="bulk">Bulk packout</option>
+                <option value="individual">Individual packout</option>
+                <option value="custom">Custom packout</option>
+              </select>
+            </label>
+            {form.packoutMode === "custom" ? (
+              <>
+                <label>Custom packout $/unit<br /><input name="packoutCustomUnitCost" type="number" step="0.0001" defaultValue={form.packoutCustomUnitCost || ""} placeholder="Cost/unit" style={inputStyle} /></label>
+                <label>Custom packout flat cost<br /><input name="packoutCustomFlatCost" type="number" step="0.01" defaultValue={form.packoutCustomFlatCost || ""} placeholder="Flat cost" style={inputStyle} /></label>
+              </>
+            ) : (
+              <>
+                <input type="hidden" name="packoutCustomUnitCost" value={form.packoutCustomUnitCost} />
+                <input type="hidden" name="packoutCustomFlatCost" value={form.packoutCustomFlatCost} />
+              </>
+            )}
+          </div>
+          {form.packoutMode !== "none" ? <div style={smallHelp}>Packout estimate: {calc.packoutName} = {money(calc.packoutFlatCost)} flat + {num(calc.itemQty || form.lines[0]?.quantity || 0, 0)} × {money(calc.packoutUnitCost)} = {money(calc.packoutCost)}.</div> : null}
+
           <button name="quoteAction" value="calculate" type="submit" style={{ marginTop: 16, width: "100%", background: "#111827", color: "white", border: 0, borderRadius: 10, padding: 14, fontWeight: 800 }}>Calculate quote cost</button>
         </section>
 
@@ -890,6 +1075,9 @@ export default function ErpCostCalculatorRoute() {
               <tr><td>Application labor</td><td align="right">{form.applicationMode === "none" ? "No application / $0.00" : `${num(calc.applicationQty, 0)} apps · ${num(calc.applicationLaborMinutes, 1)} min incl. setup · ${money(calc.applicationLaborCost)}`}</td></tr>
               <tr><td>Print/setup labor</td><td align="right">{money(calc.processLaborCost)}</td></tr>
               <tr><td>Machine/setup cost</td><td align="right">{money(calc.processMachineCost)}</td></tr>
+              <tr><td>Cutting / finishing</td><td align="right">{calc.cuttingCost ? `${calc.cuttingName}: ${num(calc.cuttingMinutes, 1)} min / ${money(calc.cuttingCost)}` : money(0)}</td></tr>
+              <tr><td>Prepress / design</td><td align="right">{calc.prepressCost ? `${calc.prepressName}: ${num(calc.prepressMinutes, 1)} min / ${money(calc.prepressCost)}` : money(0)}</td></tr>
+              <tr><td>Packout / supplies</td><td align="right">{calc.packoutCost ? `${calc.packoutName}: ${money(calc.packoutCost)}` : money(0)}</td></tr>
               <tr style={{ borderTop: "1px solid #e5e7eb" }}><td><b>Total cost</b></td><td align="right"><b>{money(calc.totalCost)}</b></td></tr>
               <tr><td><b>Unit cost</b></td><td align="right"><b>{money(calc.unitCost)}</b></td></tr>
               <tr style={{ borderTop: "1px solid #e5e7eb" }}><td><b>Suggested total</b></td><td align="right"><b>{money(calc.suggestedTotal)}</b></td></tr>
@@ -933,6 +1121,9 @@ export default function ErpCostCalculatorRoute() {
             <div style={{ display: "flex", justifyContent: "space-between" }}><span>Application setup included in application labor</span><b>{form.applicationMode === "none" ? money(0) : `${num(calc.applicationSetupMinutes, 1)} min`}</b></div>
             <div style={{ display: "flex", justifyContent: "space-between" }}><span>Print/setup labor</span><b>{money(calc.processLaborCost)}</b></div>
             <div style={{ display: "flex", justifyContent: "space-between" }}><span>Machine/setup cost</span><b>{money(calc.processMachineCost)}</b></div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Cutting / finishing</span><b>{calc.cuttingCost ? `${calc.cuttingName}: ${money(calc.cuttingCost)}` : money(0)}</b></div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Prepress / design</span><b>{calc.prepressCost ? `${calc.prepressName}: ${money(calc.prepressCost)}` : money(0)}</b></div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Packout / supplies</span><b>{calc.packoutCost ? `${calc.packoutName}: ${money(calc.packoutCost)}` : money(0)}</b></div>
           </div>
         </section>
       </Form>
