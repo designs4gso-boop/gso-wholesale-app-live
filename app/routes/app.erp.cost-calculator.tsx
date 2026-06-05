@@ -396,7 +396,6 @@ export async function loader({ request }: { request: Request }) {
     purchaseCost: m.purchaseCost,
   }));
   const materialById = new Map(materials.map((m) => [m.id, m]));
-  const defaultMaterial = materials.find((m) => `${m.baseUnit} ${m.unit}`.toLowerCase().includes("sqft")) || materials[0] || null;
 
   const blankItems: BlankItemOption[] = [
     ...presetBlankItems(),
@@ -434,7 +433,13 @@ export async function loader({ request }: { request: Request }) {
   const machineCostPerHour = fieldNumber(url, "machineCostPerHour", 8);
   const setupMinutes = fieldNumber(url, "setupMinutes", 10);
   const finishingMinutes = fieldNumber(url, "finishingMinutes", 0);
-  const lineCount = Math.min(Math.max(fieldNumber(url, "lineCount", 1), 1), 8);
+  const quoteAction = cleanText(url.searchParams.get("quoteAction") || "calculate");
+  const submittedLineCount = Math.min(Math.max(fieldNumber(url, "lineCount", 1), 1), 8);
+  const lineCount = quoteAction === "add-label"
+    ? Math.min(submittedLineCount + 1, 8)
+    : quoteAction === "remove-label"
+      ? Math.max(submittedLineCount - 1, 1)
+      : submittedLineCount;
 
   const lineNames = url.searchParams.getAll("lineName");
   const lineQtys = url.searchParams.getAll("lineQty");
@@ -450,17 +455,17 @@ export async function loader({ request }: { request: Request }) {
   const lineLabelTypes = url.searchParams.getAll("lineLabelType");
 
   const lines: QuoteLine[] = Array.from({ length: lineCount }, (_, index) => {
-    const name = cleanText(getAt(lineNames, index, index === 0 ? "Main label" : `Label ${index + 1}`));
-    const quantity = getNumberAt(lineQtys, index, 1000);
-    const widthIn = getNumberAt(lineWidths, index, 4);
-    const heightIn = getNumberAt(lineHeights, index, 5);
-    const materialId = cleanText(getAt(lineMaterials, index, defaultMaterial?.id || "custom"));
-    const customMaterialCostPerSqft = getNumberAt(customMaterialCosts, index, 0.31);
+    const name = cleanText(getAt(lineNames, index, ""));
+    const quantity = getNumberAt(lineQtys, index, 0);
+    const widthIn = getNumberAt(lineWidths, index, 0);
+    const heightIn = getNumberAt(lineHeights, index, 0);
+    const materialId = cleanText(getAt(lineMaterials, index, ""));
+    const customMaterialCostPerSqft = getNumberAt(customMaterialCosts, index, 0);
     const wastePct = getNumberAt(lineWastes, index, 10);
-    const quoteId = cleanText(getAt(lineQuoteIds, index, rows[0]?.quoteId || ""));
+    const quoteId = cleanText(getAt(lineQuoteIds, index, ""));
     const ripResultMode = cleanText(getAt(lineRipModes, index, "per-piece"));
     const inkEstimateProfile = cleanText(getAt(lineInkProfiles, index, "cmyk-heavy"));
-    const customInkCostPerSqft = getNumberAt(lineCustomInkCosts, index, 0.50);
+    const customInkCostPerSqft = getNumberAt(lineCustomInkCosts, index, 0);
     const labelType = cleanText(getAt(lineLabelTypes, index, "side"));
     const material = materialById.get(materialId);
     const materialCostPerSqft = materialId === "custom" ? customMaterialCostPerSqft : materialSqftCost(material, customMaterialCostPerSqft);
@@ -509,7 +514,7 @@ export async function loader({ request }: { request: Request }) {
   const primaryQuantity = Math.max(lines[0]?.quantity || 0, 1);
   const totalLabelApplications = lines.reduce((sum, line) => sum + line.quantity, 0);
   const totalLabelAreaSqIn = lines.reduce((sum, line) => sum + line.quantity * line.widthIn * line.heightIn, 0);
-  const averageLabelSqIn = totalLabelApplications > 0 ? totalLabelAreaSqIn / totalLabelApplications : (lines[0]?.widthIn || 4) * (lines[0]?.heightIn || 5);
+  const averageLabelSqIn = totalLabelApplications > 0 ? totalLabelAreaSqIn / totalLabelApplications : 0;
 
   const itemMode = cleanText(url.searchParams.get("itemMode") || "none");
   const itemId = cleanText(url.searchParams.get("itemId") || "custom");
@@ -623,15 +628,12 @@ const smallHelp: React.CSSProperties = { color: "#6b7280", fontSize: 12, marginT
 
 export default function ErpCostCalculatorRoute() {
   const { syncEndpoint, uploadToken, rows, lastAutoImportAt, materials, blankItems, form, calc } = useLoaderData<typeof loader>();
-  const nextLineCount = Math.min(form.lineCount + 1, 8);
-  const removeLineCount = Math.max(form.lineCount - 1, 1);
-
   return (
     <main style={{ maxWidth: 1280, margin: "32px auto", padding: 20, fontFamily: "system-ui, sans-serif", background: "#f9fafb" }}>
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v1.9.1 fixes the Add label size button and keeps the staff-ready line breakdowns with material, ink, application labor, and shared job costs separated clearly.</p>
+        <p style={{ marginBottom: 0 }}>v1.9.2 fixes Calculate so it never adds labels, and new label lines now start blank so staff must enter the real qty and size.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -671,12 +673,12 @@ export default function ErpCostCalculatorRoute() {
           <div style={{ display: "grid", gap: 12 }}>
             {form.lines.map((line) => (
               <div key={line.index} style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#f9fafb" }}>
-                <h4 style={{ margin: "0 0 10px" }}>Line {line.index + 1}: {line.name}</h4>
+                <h4 style={{ margin: "0 0 10px" }}>Line {line.index + 1}: {line.name || "New label"}</h4>
                 <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.8fr 0.8fr", gap: 10 }}>
-                  <label>Label name<br /><input name="lineName" defaultValue={line.name} style={inputStyle} /></label>
-                  <label>Qty<br /><input name="lineQty" type="number" defaultValue={line.quantity} style={inputStyle} /></label>
-                  <label>Width in<br /><input name="lineWidthIn" type="number" step="0.01" defaultValue={line.widthIn} style={inputStyle} /></label>
-                  <label>Height in<br /><input name="lineHeightIn" type="number" step="0.01" defaultValue={line.heightIn} style={inputStyle} /></label>
+                  <label>Label name<br /><input name="lineName" defaultValue={line.name} placeholder="Example: Side label" style={inputStyle} /></label>
+                  <label>Qty<br /><input name="lineQty" type="number" defaultValue={line.quantity || ""} placeholder="Enter qty" style={inputStyle} /></label>
+                  <label>Width in<br /><input name="lineWidthIn" type="number" step="0.01" defaultValue={line.widthIn || ""} placeholder="Width" style={inputStyle} /></label>
+                  <label>Height in<br /><input name="lineHeightIn" type="number" step="0.01" defaultValue={line.heightIn || ""} placeholder="Height" style={inputStyle} /></label>
                   <label>Label type<br />
                     <select name="lineLabelType" defaultValue={line.labelType} style={inputStyle}>
                       <option value="side">Side label</option>
@@ -691,13 +693,14 @@ export default function ErpCostCalculatorRoute() {
                   </label>
                   <label style={{ gridColumn: "1 / 3" }}>Material<br />
                     <select name="lineMaterialId" defaultValue={line.materialId} style={inputStyle}>
+                      <option value="">Select material</option>
                       {materials.map((material) => <option key={material.id} value={material.id}>{material.name} - {money(materialSqftCost(material, 0))}/sqft</option>)}
                       <option value="custom">Custom one-time material price</option>
                     </select>
-                    <div style={smallHelp}>{line.materialId === "custom" ? "Using one-time custom material price below." : `Using saved material cost: ${money(line.materialCostPerSqft)}/sqft.`}</div>
+                    <div style={smallHelp}>{line.materialId === "" ? "Select a material to calculate material cost." : line.materialId === "custom" ? "Using one-time custom material price below." : `Using saved material cost: ${money(line.materialCostPerSqft)}/sqft.`}</div>
                   </label>
                   {line.materialId === "custom" ? (
-                    <label>Custom material $/sqft<br /><input name="lineCustomMaterialCostPerSqft" type="number" step="0.0001" defaultValue={line.customMaterialCostPerSqft} style={inputStyle} /></label>
+                    <label>Custom material $/sqft<br /><input name="lineCustomMaterialCostPerSqft" type="number" step="0.0001" defaultValue={line.customMaterialCostPerSqft || ""} placeholder="Cost/sqft" style={inputStyle} /></label>
                   ) : (
                     <input type="hidden" name="lineCustomMaterialCostPerSqft" value={line.customMaterialCostPerSqft} />
                   )}
@@ -738,7 +741,7 @@ export default function ErpCostCalculatorRoute() {
                         <div style={smallHelp}>Estimated mode ignores GSOQ files until artwork is ready.</div>
                       </label>
                       {line.inkEstimateProfile === "custom" ? (
-                        <label>Custom ink $/sqft<br /><input name="lineCustomInkCostPerSqft" type="number" step="0.0001" defaultValue={line.customInkCostPerSqft} style={inputStyle} /></label>
+                        <label>Custom ink $/sqft<br /><input name="lineCustomInkCostPerSqft" type="number" step="0.0001" defaultValue={line.customInkCostPerSqft || ""} placeholder="Ink cost/sqft" style={inputStyle} /></label>
                       ) : (
                         <input type="hidden" name="lineCustomInkCostPerSqft" value={line.customInkCostPerSqft} />
                       )}
@@ -752,8 +755,8 @@ export default function ErpCostCalculatorRoute() {
             ))}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button name="lineCount" value={nextLineCount} type="submit" style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db", background: "white" }}>+ Add label size</button>
-            <button name="lineCount" value={removeLineCount} type="submit" style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db", background: "white" }}>Remove last label</button>
+            <button name="quoteAction" value="add-label" type="submit" style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db", background: "white" }}>+ Add label size</button>
+            <button name="quoteAction" value="remove-label" type="submit" style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db", background: "white" }}>Remove last label</button>
           </div>
 
           <h3>Blank item / product being labeled</h3>
@@ -826,7 +829,7 @@ export default function ErpCostCalculatorRoute() {
             ) : null}
           </div>
 
-          <button type="submit" style={{ marginTop: 16, width: "100%", background: "#111827", color: "white", border: 0, borderRadius: 10, padding: 14, fontWeight: 800 }}>Calculate quote cost</button>
+          <button name="quoteAction" value="calculate" type="submit" style={{ marginTop: 16, width: "100%", background: "#111827", color: "white", border: 0, borderRadius: 10, padding: 14, fontWeight: 800 }}>Calculate quote cost</button>
         </section>
 
         <section style={cardStyle}>
