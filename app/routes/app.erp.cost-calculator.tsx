@@ -660,7 +660,7 @@ export async function loader({ request }: { request: Request }) {
   if (cuttingMode === "custom" && cuttingCustomMinutes <= 0 && cuttingCustomFlatCost <= 0) safetyWarnings.push("Custom cutting selected but no custom cutting minutes or flat cost was entered.");
   if (prepressMode === "custom" && prepressCustomMinutes <= 0 && prepressCustomFlatCost <= 0) safetyWarnings.push("Custom prepress selected but no custom prepress minutes or flat cost was entered.");
   if (packoutMode === "custom" && packoutCustomUnitCost <= 0 && packoutCustomFlatCost <= 0) safetyWarnings.push("Custom packout selected but no custom packout unit cost or flat cost was entered.");
-  if (completeLines.length > 1) {
+  if (form.lines.filter((line) => Number(line.quantity || 0) > 0 && Number(line.widthIn || 0) > 0 && Number(line.heightIn || 0) > 0).length > 1) {
     const quantities = [...new Set(completeLines.map((line) => line.quantity))];
     if (quantities.length > 1) safetyWarnings.push("Multiple label lines have different quantities. Confirm this is intentional before quoting.");
   }
@@ -1096,7 +1096,7 @@ export default function ErpCostCalculatorRoute() {
 
           <h3>Quote Checklist</h3>
           <div style={{ border: "1px solid #d1fae5", borderRadius: 12, padding: 12, fontSize: 13, background: "#ecfdf5", display: "grid", gap: 6 }}>
-            <div><b>{completeLines.length ? "✓" : "□"}</b> Label lines ready: {completeLines.length} complete / {form.lines.length} total</div>
+            <div><b>{form.lines.filter((line) => Number(line.quantity || 0) > 0 && Number(line.widthIn || 0) > 0 && Number(line.heightIn || 0) > 0).length ? "✓" : "□"}</b> Label lines ready: {form.lines.filter((line) => Number(line.quantity || 0) > 0 && Number(line.widthIn || 0) > 0 && Number(line.heightIn || 0) > 0).length} complete / {form.lines.length} total</div>
             <div><b>{calc.lineMaterialCost > 0 ? "✓" : "□"}</b> Roll media/material cost included</div>
             <div><b>{calc.lineInkCost > 0 || form.quoteMode === "actual" ? "✓" : "□"}</b> Ink cost included ({form.quoteMode === "actual" ? "actual GSOQ RIP mode" : "estimated heavy coverage mode"})</div>
             <div><b>{form.itemMode !== "none" ? "✓" : "□"}</b> Blank item/product: {form.itemMode !== "none" ? calc.itemName : "none selected"}</div>
@@ -1164,4 +1164,5 @@ export default function ErpCostCalculatorRoute() {
     </main>
   );
 }
+
 
