@@ -657,10 +657,7 @@ export async function loader({ request }: { request: Request }) {
   const safetyWarnings: string[] = [];
   if (itemMode !== "none" && applicationMode === "none") safetyWarnings.push("Blank item selected but application is No application. If GSO is applying labels, choose an application type.");
   if (applicationMode !== "none" && itemMode === "none") safetyWarnings.push("Application selected but no blank item/product is selected. Confirm this is intentional.");
-  if (cuttingMode === "custom" && cuttingCustomMinutes <= 0 && cuttingCustomFlatCost <= 0) safetyWarnings.push("Custom cutting selected but no custom cutting minutes or flat cost was entered.");
-  if (prepressMode === "custom" && prepressCustomMinutes <= 0 && prepressCustomFlatCost <= 0) safetyWarnings.push("Custom prepress selected but no custom prepress minutes or flat cost was entered.");
-  if (packoutMode === "custom" && packoutCustomUnitCost <= 0 && packoutCustomFlatCost <= 0) safetyWarnings.push("Custom packout selected but no custom packout unit cost or flat cost was entered.");
-  if (form.lines.filter((line) => Number(line.quantity || 0) > 0 && Number(line.widthIn || 0) > 0 && Number(line.heightIn || 0) > 0).length > 1) {
+  if (completeLines.length > 1) {
     const quantities = [...new Set(completeLines.map((line) => line.quantity))];
     if (quantities.length > 1) safetyWarnings.push("Multiple label lines have different quantities. Confirm this is intentional before quoting.");
   }
@@ -779,7 +776,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v2.0 staff-ready cleanup: clearer warnings, final quote checklist, required-field protection, and cleaner cost sections before tiered pricing.</p>
+        <p style={{ marginBottom: 0 }}>v1.9.5 adds staff safety warnings plus optional cutting, prepress, and packout cost sections before tiered pricing.</p>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
@@ -797,11 +794,11 @@ export default function ErpCostCalculatorRoute() {
         <section style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Quote inputs</h2>
           <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: 12, marginBottom: 12, fontSize: 13, color: "#1e3a8a" }}>
-            <b>Staff flow:</b> 1) choose estimate or actual RIP, 2) fill every label line, 3) choose roll media only, 4) choose blank item/product, 5) choose application if GSO is applying labels, 6) add cutting, prepress, or packout only when needed, then calculate and review the Quote Checklist.
+            <b>Staff flow:</b> choose estimated mode before customer art, or actual GSOQ mode after RIP. Fill every required label field, pick roll media only from Material, pick the blank item/product below, then pick the application type. Incomplete label lines are ignored until fixed. Use optional finishing, prepress, and packout sections when those costs apply.
           </div>
           {form.safetyWarnings.length ? (
-            <div style={{ background: "#fff7ed", border: "1px solid #fb923c", borderRadius: 12, padding: 12, marginBottom: 12, fontSize: 13, color: "#92400e" }}>
-              <b>Action needed:</b>
+            <div style={{ background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 12, padding: 12, marginBottom: 12, fontSize: 13, color: "#92400e" }}>
+              <b>Quote check:</b>
               <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
                 {form.safetyWarnings.map((warning: string) => <li key={warning}>{warning}</li>)}
               </ul>
@@ -983,8 +980,7 @@ export default function ErpCostCalculatorRoute() {
             ) : null}
           </div>
 
-          <h3>Cutting / finishing add-ons</h3>
-          <div style={smallHelp}>Only use this when the job needs cutting, trimming, contour cutting, die-cutting, weeding, or extra finishing beyond normal printing.</div>
+          <h3>Optional cutting / finishing</h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label>Cutting / finishing type<br />
               <select name="cuttingMode" defaultValue={form.cuttingMode} style={inputStyle}>
@@ -1011,8 +1007,7 @@ export default function ErpCostCalculatorRoute() {
           </div>
           {form.cuttingMode !== "none" ? <div style={smallHelp}>Cutting estimate: {calc.cuttingName} = {num(calc.cuttingMinutes, 1)} min / {money(calc.cuttingCost)}.</div> : null}
 
-          <h3>Prepress / design setup add-ons</h3>
-          <div style={smallHelp}>Only use this when the file needs proof setup, repair, dieline setup, or color-match/test setup.</div>
+          <h3>Optional prepress / design setup</h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label>Prepress type<br />
               <select name="prepressMode" defaultValue={form.prepressMode} style={inputStyle}>
@@ -1038,8 +1033,7 @@ export default function ErpCostCalculatorRoute() {
           </div>
           {form.prepressMode !== "none" ? <div style={smallHelp}>Prepress estimate: {calc.prepressName} = {num(calc.prepressMinutes, 1)} min / {money(calc.prepressCost)}.</div> : null}
 
-          <h3>Packout / packing supplies add-ons</h3>
-          <div style={smallHelp}>Only use this when GSO is packing/bundling the finished order or adding packaging supplies.</div>
+          <h3>Optional packout / packing supplies</h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label>Packout type<br />
               <select name="packoutMode" defaultValue={form.packoutMode} style={inputStyle}>
@@ -1091,19 +1085,6 @@ export default function ErpCostCalculatorRoute() {
               <tr><td>Gross profit</td><td align="right">{money(calc.grossProfit)}</td></tr>
             </tbody>
           </table>
-
-
-
-          <h3>Quote Checklist</h3>
-          <div style={{ border: "1px solid #d1fae5", borderRadius: 12, padding: 12, fontSize: 13, background: "#ecfdf5", display: "grid", gap: 6 }}>
-            <div><b>{form.lines.filter((line) => Number(line.quantity || 0) > 0 && Number(line.widthIn || 0) > 0 && Number(line.heightIn || 0) > 0).length ? "✓" : "□"}</b> Label lines ready: {form.lines.filter((line) => Number(line.quantity || 0) > 0 && Number(line.widthIn || 0) > 0 && Number(line.heightIn || 0) > 0).length} complete / {form.lines.length} total</div>
-            <div><b>{calc.lineMaterialCost > 0 ? "✓" : "□"}</b> Roll media/material cost included</div>
-            <div><b>{calc.lineInkCost > 0 || form.quoteMode === "actual" ? "✓" : "□"}</b> Ink cost included ({form.quoteMode === "actual" ? "actual GSOQ RIP mode" : "estimated heavy coverage mode"})</div>
-            <div><b>{form.itemMode !== "none" ? "✓" : "□"}</b> Blank item/product: {form.itemMode !== "none" ? calc.itemName : "none selected"}</div>
-            <div><b>{form.applicationMode !== "none" ? "✓" : "□"}</b> Application labor: {form.applicationMode !== "none" ? `${num(calc.applicationLaborMinutes, 1)} min / ${money(calc.applicationLaborCost)}` : "none selected"}</div>
-            <div><b>{calc.cuttingCost || calc.prepressCost || calc.packoutCost ? "✓" : "□"}</b> Extra add-ons: cutting {money(calc.cuttingCost)}, prepress {money(calc.prepressCost)}, packout {money(calc.packoutCost)}</div>
-            <div><b>{form.safetyWarnings.length ? "!" : "✓"}</b> Staff warnings: {form.safetyWarnings.length ? `${form.safetyWarnings.length} warning(s) to review` : "none"}</div>
-          </div>
 
           <h3>Line breakdown</h3>
           <div style={{ display: "grid", gap: 10 }}>
@@ -1164,5 +1145,3 @@ export default function ErpCostCalculatorRoute() {
     </main>
   );
 }
-
-
