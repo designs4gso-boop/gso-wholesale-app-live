@@ -2,7 +2,7 @@ import { Form, Link, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const VERSION = "Tier Rule Manager v1.0";
+const VERSION = "Tier Rule Manager v1.1";
 const DEFAULT_TIERS = [100, 250, 500, 1000, 2500, 5000, 10000];
 const SCOPE_OPTIONS = ["global", "collection", "product", "variant"] as const;
 const MODE_OPTIONS = ["percent_off", "fixed_price"] as const;
@@ -24,6 +24,7 @@ type TierRuleRow = {
     minOrderTotal?: number;
     rounding?: string;
     mode?: string;
+    recipe?: any;
   };
   createdAt: string;
   updatedAt: string;
@@ -44,8 +45,17 @@ function intValue(value: FormDataEntryValue | null, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function settingString(values: { minMarginPct: number; minOrderTotal: number; rounding: string; mode: string }) {
-  return `tier_settings|mode:${values.mode}|margin:${values.minMarginPct}|round:${values.rounding}|minTotal:${values.minOrderTotal}`;
+function settingString(values: {
+  minMarginPct: number;
+  minOrderTotal: number;
+  rounding: string;
+  mode: string;
+  recipe?: any;
+}) {
+  const recipePart = values.recipe
+    ? `|recipe:${encodeURIComponent(JSON.stringify(values.recipe))}`
+    : "";
+  return `tier_settings|mode:${values.mode}|margin:${values.minMarginPct}|round:${values.rounding}|minTotal:${values.minOrderTotal}${recipePart}`;
 }
 
 function parseSettings(value: string | null | undefined) {
@@ -57,6 +67,13 @@ function parseSettings(value: string | null | undefined) {
     if (key === "minTotal") settings.minOrderTotal = Number(val || 0);
     if (key === "round") settings.rounding = val || "0.05";
     if (key === "mode") settings.mode = val || "percent_off";
+    if (key === "recipe") {
+      try {
+        settings.recipe = JSON.parse(decodeURIComponent(val || ""));
+      } catch (error) {
+        settings.recipe = null;
+      }
+    }
   }
   return settings;
 }
@@ -71,15 +88,25 @@ function scopeFields(scopeType: string, target: string) {
     return { productTag: null, productGid: trimmed || null, variantGid: null };
   }
   if (scope === "collection") {
-    return { productTag: `collection:${trimmed || "unassigned"}`, productGid: null, variantGid: null };
+    return {
+      productTag: `collection:${trimmed || "unassigned"}`,
+      productGid: null,
+      variantGid: null,
+    };
   }
   return { productTag: "global", productGid: null, variantGid: null };
 }
 
 function scopeLabel(rule: any) {
-  if (rule.variantGid) return { scopeType: "variant", scopeTarget: rule.variantGid };
-  if (rule.productGid) return { scopeType: "product", scopeTarget: rule.productGid };
-  if (String(rule.productTag || "").startsWith("collection:")) return { scopeType: "collection", scopeTarget: String(rule.productTag).replace("collection:", "") };
+  if (rule.variantGid)
+    return { scopeType: "variant", scopeTarget: rule.variantGid };
+  if (rule.productGid)
+    return { scopeType: "product", scopeTarget: rule.productGid };
+  if (String(rule.productTag || "").startsWith("collection:"))
+    return {
+      scopeType: "collection",
+      scopeTarget: String(rule.productTag).replace("collection:", ""),
+    };
   return { scopeType: "global", scopeTarget: "All products" };
 }
 
@@ -88,9 +115,130 @@ function tierRowLabel(row: TierRuleRow) {
   return `${Number(row.percentOff || 0).toFixed(2)}% off`;
 }
 
+async function searchShopifyProducts(admin: any, query: string) {
+  const safeQuery = String(query || "").trim();
+  if (!safeQuery) return [];
+
+  const response = await admin.graphql(
+    `#graphql
+      query TierRuleProductSearch($query: String!) {
+        products(first: 20, query: $query) {
+          edges {
+            node {
+              id
+              title
+              handle
+              status
+              totalVariants
+              variants(first: 8) {
+                edges { node { id title sku price selectedOptions { name value } } }
+              }
+              collections(first: 5) {
+                edges { node { id title handle } }
+              }
+            }
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        query: `title:*${safeQuery}* OR sku:*${safeQuery}* OR handle:*${safeQuery}*`,
+      },
+    },
+  );
+
+  const payload = await response.json();
+  if (payload?.errors?.length)
+    throw new Error(
+      payload.errors.map((error: any) => error.message).join(", "),
+    );
+  return (payload?.data?.products?.edges || []).map((edge: any) => {
+    const product = edge.node;
+    return {
+      id: product.id,
+      type: "product",
+      title: product.title,
+      handle: product.handle,
+      status: product.status,
+      totalVariants: product.totalVariants || 0,
+      variants: (product.variants?.edges || []).map(
+        (variantEdge: any) => variantEdge.node,
+      ),
+      collections: (product.collections?.edges || []).map(
+        (collectionEdge: any) => collectionEdge.node,
+      ),
+    };
+  });
+}
+
+async function searchShopifyCollections(admin: any, query: string) {
+  const safeQuery = String(query || "").trim();
+  if (!safeQuery) return [];
+
+  const response = await admin.graphql(
+    `#graphql
+      query TierRuleCollectionSearch($query: String!) {
+        collections(first: 20, query: $query) {
+          edges {
+            node {
+              id
+              title
+              handle
+              products(first: 5) {
+                pageInfo { hasNextPage }
+                edges {
+                  node {
+                    id
+                    title
+                    handle
+                    totalVariants
+                    variants(first: 3) { edges { node { id title sku price selectedOptions { name value } } } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    { variables: { query: `title:*${safeQuery}* OR handle:*${safeQuery}*` } },
+  );
+
+  const payload = await response.json();
+  if (payload?.errors?.length)
+    throw new Error(
+      payload.errors.map((error: any) => error.message).join(", "),
+    );
+  return (payload?.data?.collections?.edges || []).map((edge: any) => {
+    const collection = edge.node;
+    return {
+      id: collection.id,
+      type: "collection",
+      title: collection.title,
+      handle: collection.handle,
+      products: (collection.products?.edges || []).map((productEdge: any) => ({
+        ...productEdge.node,
+        variants: (productEdge.node?.variants?.edges || []).map(
+          (variantEdge: any) => variantEdge.node,
+        ),
+      })),
+      hasMoreProducts: Boolean(collection.products?.pageInfo?.hasNextPage),
+    };
+  });
+}
+
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
+  const url = new URL(request.url);
+  const targetSearch = String(
+    url.searchParams.get("targetSearch") || "",
+  ).trim();
+  const targetType =
+    String(url.searchParams.get("targetType") || "collection") === "product"
+      ? "product"
+      : "collection";
 
   const rows = await db.pricingRule.findMany({
     where: { shop, customerTag: "gso_tier_rule" },
@@ -117,12 +265,26 @@ export async function loader({ request }: { request: Request }) {
     };
   });
 
-  return { version: VERSION, rules };
+  const targetOptions = targetSearch
+    ? targetType === "product"
+      ? await searchShopifyProducts(admin, targetSearch)
+      : await searchShopifyCollections(admin, targetSearch)
+    : [];
+
+  return { version: VERSION, rules, targetSearch, targetType, targetOptions };
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
+  const url = new URL(request.url);
+  const targetSearch = String(
+    url.searchParams.get("targetSearch") || "",
+  ).trim();
+  const targetType =
+    String(url.searchParams.get("targetType") || "collection") === "product"
+      ? "product"
+      : "collection";
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
 
@@ -130,7 +292,10 @@ export async function action({ request }: { request: Request }) {
     const title = String(form.get("title") || "").trim();
     const scopeType = String(form.get("scopeType") || "global").trim();
     const scopeTarget = String(form.get("scopeTarget") || "").trim();
-    const fields = scopeFields(scopeType, scopeTarget === "All products" ? "" : scopeTarget);
+    const fields = scopeFields(
+      scopeType,
+      scopeTarget === "All products" ? "" : scopeTarget,
+    );
     await db.pricingRule.deleteMany({
       where: {
         shop,
@@ -145,27 +310,86 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (intent === "create") {
-    const title = String(form.get("title") || "").trim() || "Untitled tier rule";
+    const title =
+      String(form.get("title") || "").trim() || "Untitled tier rule";
     const scopeType = String(form.get("scopeType") || "global").trim();
     const scopeTarget = String(form.get("scopeTarget") || "").trim();
-    const mode = String(form.get("pricingMode") || "percent_off") === "fixed_price" ? "fixed_price" : "percent_off";
+    const mode =
+      String(form.get("pricingMode") || "percent_off") === "fixed_price"
+        ? "fixed_price"
+        : "percent_off";
     const minMarginPct = numberValue(form.get("minMarginPct"), 50);
     const minOrderTotal = numberValue(form.get("minOrderTotal"), 0);
     const minUnitPrice = numberValue(form.get("minUnitPrice"), 0);
     const rounding = String(form.get("rounding") || "0.05");
     const active = String(form.get("active") || "on") === "on";
     const fields = scopeFields(scopeType, scopeTarget);
-    const priority = scopeType === "variant" ? 10 : scopeType === "product" ? 25 : scopeType === "collection" ? 50 : 100;
-    const settings = settingString({ minMarginPct, minOrderTotal, rounding, mode });
+    const priority =
+      scopeType === "variant"
+        ? 10
+        : scopeType === "product"
+          ? 25
+          : scopeType === "collection"
+            ? 50
+            : 100;
+    const recipe = {
+      family: String(form.get("recipeFamily") || "").trim(),
+      baseLabels: {
+        side: {
+          width: numberValue(form.get("sideLabelWidth"), 0),
+          height: numberValue(form.get("sideLabelHeight"), 0),
+          required: String(form.get("includeSideLabel") || "on") === "on",
+        },
+        lid: {
+          width: numberValue(form.get("lidLabelWidth"), 0),
+          height: numberValue(form.get("lidLabelHeight"), 0),
+          required: String(form.get("includeLidLabel") || "on") === "on",
+        },
+      },
+      optionalLabels: {
+        sideLid: {
+          width: numberValue(form.get("sideLidLabelWidth"), 0),
+          height: numberValue(form.get("sideLidLabelHeight"), 0),
+          enabledByOption: String(
+            form.get("sideLidOptionName") || "Side Lid + application",
+          ).trim(),
+          enabledByValue: String(
+            form.get("sideLidOptionValue") || "yes",
+          ).trim(),
+        },
+      },
+      variantMappings: {
+        materialOptionName: String(
+          form.get("materialOptionName") || "Material",
+        ).trim(),
+        glossOptionName: String(form.get("glossOptionName") || "Gloss").trim(),
+        applicationOptionName: String(
+          form.get("applicationOptionName") || "Side Lid + application",
+        ).trim(),
+      },
+      notes: String(form.get("recipeNotes") || "").trim(),
+    };
+    const settings = settingString({
+      minMarginPct,
+      minOrderTotal,
+      rounding,
+      mode,
+      recipe,
+    });
 
     const tierRows = DEFAULT_TIERS.map((qty) => {
       const discountPct = numberValue(form.get(`discount_${qty}`), 0);
       const fixedPrice = numberValue(form.get(`fixed_${qty}`), 0);
       return { qty, discountPct, fixedPrice };
-    }).filter((tier) => tier.qty > 0 && (mode === "percent_off" || tier.fixedPrice > 0));
+    }).filter(
+      (tier) => tier.qty > 0 && (mode === "percent_off" || tier.fixedPrice > 0),
+    );
 
     if (!tierRows.length) {
-      return { ok: false, message: "Add at least one valid tier row before saving." };
+      return {
+        ok: false,
+        message: "Add at least one valid tier row before saving.",
+      };
     }
 
     await db.pricingRule.deleteMany({
@@ -198,7 +422,10 @@ export async function action({ request }: { request: Request }) {
       })),
     });
 
-    return { ok: true, message: `Saved ${tierRows.length} tier rows for ${title}.` };
+    return {
+      ok: true,
+      message: `Saved ${tierRows.length} tier rows for ${title}.`,
+    };
   }
 
   return { ok: false, message: "Unknown tier rule action." };
@@ -212,80 +439,302 @@ function groupRules(rows: TierRuleRow[]) {
     group.push(row);
     groups.set(key, group);
   }
-  return Array.from(groups.entries()).map(([key, group]) => ({ key, group: group.sort((a, b) => a.minQty - b.minQty) }));
+  return Array.from(groups.entries()).map(([key, group]) => ({
+    key,
+    group: group.sort((a, b) => a.minQty - b.minQty),
+  }));
 }
 
 export default function ErpPricingRulesRoute() {
-  const { version, rules } = useLoaderData<typeof loader>();
+  const { version, rules, targetSearch, targetType, targetOptions } =
+    useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const groups = groupRules(rules as TierRuleRow[]);
 
   return (
-    <main style={{ maxWidth: 1180, margin: "32px auto", padding: 20, fontFamily: "Inter, system-ui, sans-serif" }}>
-      <div style={{ marginBottom: 16, display: "flex", gap: 12, flexWrap: "wrap" }}>
+    <main
+      style={{
+        maxWidth: 1180,
+        margin: "32px auto",
+        padding: 20,
+        fontFamily: "Inter, system-ui, sans-serif",
+      }}
+    >
+      <div
+        style={{ marginBottom: 16, display: "flex", gap: 12, flexWrap: "wrap" }}
+      >
         <Link to="/app">Dashboard</Link>
         <Link to="/app/erp/cost-calculator">Cost Calculator</Link>
         <Link to="/app/erp/product-setup">Product Setup</Link>
       </div>
 
-      <section style={{ border: "1px solid #ddd", borderRadius: 14, padding: 20, marginBottom: 20, background: "#fff" }}>
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: 14,
+          padding: 20,
+          marginBottom: 20,
+          background: "#fff",
+        }}
+      >
         <p style={{ margin: "0 0 6px", color: "#666" }}>{version}</p>
         <h1 style={{ margin: 0 }}>Tier Rule Manager</h1>
         <p style={{ maxWidth: 900, lineHeight: 1.5 }}>
-          Build tier rules that can later power product page live pricing, cart pricing, and Shopify Discount Function checkout enforcement. Rules support both percentage discounts and fixed unit prices. Rule priority will be: variant, product, collection, then global fallback.
+          Build tier rules connected to existing Shopify products and
+          collections. v1.1 pulls Shopify targets into the setup, stores
+          label-size recipe data, and saves variant option mappings so tier
+          pricing can become automatic later.
         </p>
         {actionData?.message ? (
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: actionData.ok ? "#e8f7ed" : "#fff3cd", border: "1px solid #ddd" }}>
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: 10,
+              background: actionData.ok ? "#e8f7ed" : "#fff3cd",
+              border: "1px solid #ddd",
+            }}
+          >
             {actionData.message}
           </div>
         ) : null}
       </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "minmax(360px, 0.95fr) minmax(420px, 1.25fr)", gap: 20, alignItems: "start" }}>
-        <Form method="post" style={{ border: "1px solid #ddd", borderRadius: 14, padding: 20, background: "#fff" }}>
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: 14,
+          padding: 20,
+          marginBottom: 20,
+          background: "#fff",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Find existing Shopify target</h2>
+        <p style={{ color: "#666" }}>
+          Search an existing collection or product first. Then use the exact
+          Shopify GID in the rule so future product creation, tier pricing,
+          storefront pricing, and Discount Function enforcement all point to the
+          same source of truth.
+        </p>
+        <Form
+          method="get"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "180px 1fr auto",
+            gap: 10,
+            alignItems: "end",
+          }}
+        >
+          <label>
+            Target type
+            <select
+              name="targetType"
+              defaultValue={targetType}
+              style={inputStyle}
+            >
+              <option value="collection">Collection</option>
+              <option value="product">Product</option>
+            </select>
+          </label>
+          <label>
+            Search Shopify
+            <input
+              name="targetSearch"
+              defaultValue={targetSearch}
+              placeholder="Stock Bags, 150ML Miron Jars, product handle..."
+              style={inputStyle}
+            />
+          </label>
+          <button type="submit" style={secondaryButtonStyle}>
+            Search
+          </button>
+        </Form>
+        {targetOptions?.length ? (
+          <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+            <strong>Found Shopify targets</strong>
+            {targetOptions.map((target: any) => (
+              <div
+                key={target.id}
+                style={{
+                  border: "1px solid #e2e2e2",
+                  borderRadius: 10,
+                  padding: 12,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div>
+                    <strong>{target.title}</strong>{" "}
+                    <span style={{ color: "#666" }}>/{target.handle}</span>
+                    <div style={{ fontSize: 12, color: "#666", marginTop: 3 }}>
+                      {target.id}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#666" }}>
+                    {target.type === "collection"
+                      ? `${target.products?.length || 0} preview products${target.hasMoreProducts ? " + more" : ""}`
+                      : `${target.totalVariants || 0} variants`}
+                  </div>
+                </div>
+                {target.products?.length ? (
+                  <div style={{ marginTop: 8, fontSize: 12, color: "#555" }}>
+                    Preview:{" "}
+                    {target.products
+                      .slice(0, 3)
+                      .map((product: any) => product.title)
+                      .join(", ")}
+                    {target.hasMoreProducts ? "..." : ""}
+                  </div>
+                ) : null}
+                {target.variants?.length ? (
+                  <div style={{ marginTop: 8, fontSize: 12, color: "#555" }}>
+                    Variants:{" "}
+                    {target.variants
+                      .slice(0, 4)
+                      .map(
+                        (variant: any) =>
+                          `${variant.title} @ ${money(variant.price)}`,
+                      )
+                      .join(" | ")}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : targetSearch ? (
+          <p style={{ marginTop: 12 }}>
+            No Shopify targets found for this search.
+          </p>
+        ) : null}
+      </section>
+
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(360px, 0.95fr) minmax(420px, 1.25fr)",
+          gap: 20,
+          alignItems: "start",
+        }}
+      >
+        <Form
+          method="post"
+          style={{
+            border: "1px solid #ddd",
+            borderRadius: 14,
+            padding: 20,
+            background: "#fff",
+          }}
+        >
           <input type="hidden" name="intent" value="create" />
           <h2 style={{ marginTop: 0 }}>Create or replace tier rule</h2>
           <p style={{ color: "#666" }}>
-            Use collection scope for bulk rules like Stock Bags. Use product or variant scope for overrides.
+            Use collection scope for bulk rules like Stock Bags. Use product or
+            variant scope for overrides.
           </p>
 
           <label style={{ display: "block", marginTop: 12 }}>
             Rule name
-            <input name="title" defaultValue="Stock Bags Tier Rule" style={inputStyle} />
+            <input
+              name="title"
+              defaultValue="Stock Bags Tier Rule"
+              style={inputStyle}
+            />
           </label>
 
           <label style={{ display: "block", marginTop: 12 }}>
             Scope
-            <select name="scopeType" defaultValue="collection" style={inputStyle}>
-              {SCOPE_OPTIONS.map((scope) => <option key={scope} value={scope}>{scope}</option>)}
+            <select
+              name="scopeType"
+              defaultValue={targetType || "collection"}
+              style={inputStyle}
+            >
+              {SCOPE_OPTIONS.map((scope) => (
+                <option key={scope} value={scope}>
+                  {scope}
+                </option>
+              ))}
             </select>
           </label>
 
           <label style={{ display: "block", marginTop: 12 }}>
             Target ID / handle
-            <input name="scopeTarget" placeholder="Stock Bags, collection handle, product GID, or variant GID" defaultValue="Stock Bags" style={inputStyle} />
+            {targetOptions?.length ? (
+              <select
+                name="scopeTarget"
+                defaultValue={targetOptions[0]?.id || ""}
+                style={inputStyle}
+              >
+                {targetOptions.map((target: any) => (
+                  <option key={target.id} value={target.id}>
+                    {target.title} / {target.handle} — {target.id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                name="scopeTarget"
+                placeholder="Search above first, or paste collection/product/variant GID"
+                defaultValue="Stock Bags"
+                style={inputStyle}
+              />
+            )}
           </label>
 
           <label style={{ display: "block", marginTop: 12 }}>
             Pricing mode
-            <select name="pricingMode" defaultValue="percent_off" style={inputStyle}>
+            <select
+              name="pricingMode"
+              defaultValue="percent_off"
+              style={inputStyle}
+            >
               <option value="percent_off">Percentage discount tiers</option>
               <option value="fixed_price">Fixed unit price tiers</option>
             </select>
           </label>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 10,
+              marginTop: 12,
+            }}
+          >
             <label>
               Min margin %
-              <input name="minMarginPct" type="number" step="0.01" defaultValue="50" style={inputStyle} />
+              <input
+                name="minMarginPct"
+                type="number"
+                step="0.01"
+                defaultValue="50"
+                style={inputStyle}
+              />
             </label>
             <label>
               Min unit price
-              <input name="minUnitPrice" type="number" step="0.01" defaultValue="0" style={inputStyle} />
+              <input
+                name="minUnitPrice"
+                type="number"
+                step="0.01"
+                defaultValue="0"
+                style={inputStyle}
+              />
             </label>
             <label>
               Min order total
-              <input name="minOrderTotal" type="number" step="0.01" defaultValue="0" style={inputStyle} />
+              <input
+                name="minOrderTotal"
+                type="number"
+                step="0.01"
+                defaultValue="0"
+                style={inputStyle}
+              />
             </label>
           </div>
 
@@ -300,55 +749,311 @@ export default function ErpPricingRulesRoute() {
             </select>
           </label>
 
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginTop: 12,
+            }}
+          >
             <input name="active" type="checkbox" defaultChecked /> Active rule
           </label>
 
           <h3>Tier rows</h3>
           <div style={{ display: "grid", gap: 8 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 1fr", gap: 8, fontWeight: 700 }}>
-              <span>Qty</span><span>% off</span><span>Fixed price</span>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "80px 1fr 1fr",
+                gap: 8,
+                fontWeight: 700,
+              }}
+            >
+              <span>Qty</span>
+              <span>% off</span>
+              <span>Fixed price</span>
             </div>
             {DEFAULT_TIERS.map((qty, index) => (
-              <div key={qty} style={{ display: "grid", gridTemplateColumns: "80px 1fr 1fr", gap: 8 }}>
-                <input value={qty} readOnly style={{ ...inputStyle, background: "#f8f8f8" }} />
-                <input name={`discount_${qty}`} type="number" step="0.01" defaultValue={index === 0 ? 0 : [5, 8, 12, 16, 20, 24][index - 1] || 0} style={inputStyle} />
-                <input name={`fixed_${qty}`} type="number" step="0.01" placeholder="optional" style={inputStyle} />
+              <div
+                key={qty}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "80px 1fr 1fr",
+                  gap: 8,
+                }}
+              >
+                <input
+                  value={qty}
+                  readOnly
+                  style={{ ...inputStyle, background: "#f8f8f8" }}
+                />
+                <input
+                  name={`discount_${qty}`}
+                  type="number"
+                  step="0.01"
+                  defaultValue={
+                    index === 0 ? 0 : [5, 8, 12, 16, 20, 24][index - 1] || 0
+                  }
+                  style={inputStyle}
+                />
+                <input
+                  name={`fixed_${qty}`}
+                  type="number"
+                  step="0.01"
+                  placeholder="optional"
+                  style={inputStyle}
+                />
               </div>
             ))}
           </div>
 
-          <button type="submit" style={primaryButtonStyle}>Save tier rule</button>
+          <section
+            style={{
+              marginTop: 18,
+              padding: 14,
+              border: "1px solid #dbeafe",
+              borderRadius: 12,
+              background: "#eff6ff",
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>
+              Production recipe attached to this rule
+            </h3>
+            <p style={{ color: "#475569", marginTop: 0 }}>
+              These fields save the label sizes and variant meanings with the
+              Shopify product/collection rule. The next preview/pricing patch
+              will use this data to calculate sqft, ink/gloss/white, labor, and
+              safe tier prices automatically.
+            </p>
+            <label style={{ display: "block", marginTop: 10 }}>
+              Recipe family
+              <select name="recipeFamily" defaultValue="jar" style={inputStyle}>
+                <option value="stock_bag">Stock bag</option>
+                <option value="jar">Jar / lid label set</option>
+                <option value="bag_label_set">Bag + label set</option>
+                <option value="dtp_bag">DTP bag</option>
+                <option value="box">Box</option>
+                <option value="sticker_label">Sticker / label only</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 10,
+                marginTop: 10,
+              }}
+            >
+              <label>
+                Side label width
+                <input
+                  name="sideLabelWidth"
+                  type="number"
+                  step="0.001"
+                  placeholder="ex: 7.2"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Side label height
+                <input
+                  name="sideLabelHeight"
+                  type="number"
+                  step="0.001"
+                  placeholder="ex: 3.2"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Lid label width
+                <input
+                  name="lidLabelWidth"
+                  type="number"
+                  step="0.001"
+                  placeholder="ex: 2"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Lid label height
+                <input
+                  name="lidLabelHeight"
+                  type="number"
+                  step="0.001"
+                  placeholder="ex: 2"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Side-lid label width
+                <input
+                  name="sideLidLabelWidth"
+                  type="number"
+                  step="0.001"
+                  placeholder="optional"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Side-lid label height
+                <input
+                  name="sideLidLabelHeight"
+                  type="number"
+                  step="0.001"
+                  placeholder="optional"
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 10,
+                marginTop: 10,
+              }}
+            >
+              <label>
+                Material option name
+                <input
+                  name="materialOptionName"
+                  defaultValue="Material"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Gloss option name
+                <input
+                  name="glossOptionName"
+                  defaultValue="Gloss"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Side-lid option name
+                <input
+                  name="sideLidOptionName"
+                  defaultValue="Side Lid + application"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Side-lid option value
+                <input
+                  name="sideLidOptionValue"
+                  defaultValue="yes"
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+            <label style={{ display: "block", marginTop: 10 }}>
+              Recipe notes
+              <textarea
+                name="recipeNotes"
+                placeholder="Example: For jars, side + lid are always included. Side-lid label is only included when variant option is yes."
+                style={{ ...inputStyle, minHeight: 76 }}
+              />
+            </label>
+          </section>
+
+          <button type="submit" style={primaryButtonStyle}>
+            Save tier rule
+          </button>
         </Form>
 
-        <section style={{ border: "1px solid #ddd", borderRadius: 14, padding: 20, background: "#fff" }}>
+        <section
+          style={{
+            border: "1px solid #ddd",
+            borderRadius: 14,
+            padding: 20,
+            background: "#fff",
+          }}
+        >
           <h2 style={{ marginTop: 0 }}>Saved rules</h2>
           {!groups.length ? <p>No tier rules saved yet.</p> : null}
           <div style={{ display: "grid", gap: 14 }}>
             {groups.map(({ key, group }) => {
               const first = group[0];
               return (
-                <article key={key} style={{ border: "1px solid #e2e2e2", borderRadius: 12, padding: 14 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <article
+                  key={key}
+                  style={{
+                    border: "1px solid #e2e2e2",
+                    borderRadius: 12,
+                    padding: 14,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      flexWrap: "wrap",
+                    }}
+                  >
                     <div>
                       <h3 style={{ margin: "0 0 4px" }}>{first.title}</h3>
                       <p style={{ margin: 0, color: "#666" }}>
-                        Scope: <strong>{first.scopeType}</strong> · Target: <strong>{first.scopeTarget}</strong> · Mode: <strong>{first.discountType === "fixed_price" ? "Fixed unit price" : "Percentage discount"}</strong>
+                        Scope: <strong>{first.scopeType}</strong> · Target:{" "}
+                        <strong>{first.scopeTarget}</strong> · Mode:{" "}
+                        <strong>
+                          {first.discountType === "fixed_price"
+                            ? "Fixed unit price"
+                            : "Percentage discount"}
+                        </strong>
                       </p>
                       <p style={{ margin: "4px 0 0", color: "#666" }}>
-                        Guardrails: min margin {first.settings.minMarginPct ?? 0}% · min unit {money(first.minUnitPrice)} · rounding ${first.settings.rounding || "0.05"}
+                        Guardrails: min margin{" "}
+                        {first.settings.minMarginPct ?? 0}% · min unit{" "}
+                        {money(first.minUnitPrice)} · rounding $
+                        {first.settings.rounding || "0.05"}
                       </p>
+                      {first.settings.recipe ? (
+                        <p style={{ margin: "4px 0 0", color: "#2563eb" }}>
+                          Recipe: {first.settings.recipe.family || "custom"} ·
+                          Side{" "}
+                          {first.settings.recipe.baseLabels?.side?.width || 0} x{" "}
+                          {first.settings.recipe.baseLabels?.side?.height || 0}{" "}
+                          · Lid{" "}
+                          {first.settings.recipe.baseLabels?.lid?.width || 0} x{" "}
+                          {first.settings.recipe.baseLabels?.lid?.height || 0} ·
+                          Side-lid{" "}
+                          {first.settings.recipe.optionalLabels?.sideLid
+                            ?.width || 0}{" "}
+                          x{" "}
+                          {first.settings.recipe.optionalLabels?.sideLid
+                            ?.height || 0}
+                        </p>
+                      ) : null}
                     </div>
                     <Form method="post">
                       <input type="hidden" name="intent" value="delete" />
                       <input type="hidden" name="title" value={first.title} />
-                      <input type="hidden" name="scopeType" value={first.scopeType} />
-                      <input type="hidden" name="scopeTarget" value={first.scopeTarget} />
-                      <button type="submit" style={dangerButtonStyle}>Delete</button>
+                      <input
+                        type="hidden"
+                        name="scopeType"
+                        value={first.scopeType}
+                      />
+                      <input
+                        type="hidden"
+                        name="scopeTarget"
+                        value={first.scopeTarget}
+                      />
+                      <button type="submit" style={dangerButtonStyle}>
+                        Delete
+                      </button>
                     </Form>
                   </div>
 
-                  <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 12 }}>
+                  <table
+                    style={{
+                      width: "100%",
+                      borderCollapse: "collapse",
+                      marginTop: 12,
+                    }}
+                  >
                     <thead>
                       <tr>
                         <th style={thStyle}>Min qty</th>
@@ -375,14 +1080,37 @@ export default function ErpPricingRulesRoute() {
         </section>
       </section>
 
-      <section style={{ marginTop: 20, border: "1px solid #ddd", borderRadius: 14, padding: 20, background: "#fafafa" }}>
+      <section
+        style={{
+          marginTop: 20,
+          border: "1px solid #ddd",
+          borderRadius: 14,
+          padding: 20,
+          background: "#fafafa",
+        }}
+      >
         <h2 style={{ marginTop: 0 }}>Build roadmap</h2>
         <ol style={{ lineHeight: 1.7 }}>
-          <li><strong>v1.0:</strong> Save global, collection, product, and variant tier rules. This page.</li>
-          <li><strong>v1.1:</strong> Add product/collection selector and preview affected variants.</li>
-          <li><strong>v1.2:</strong> Generate safe tier prices from Cost Calculator backend costs.</li>
-          <li><strong>v1.3:</strong> Store tier tables for product page and cart display.</li>
-          <li><strong>v2.0:</strong> Shopify Discount Function checkout enforcement.</li>
+          <li>
+            <strong>v1.0:</strong> Save global, collection, product, and variant
+            tier rules. This page.
+          </li>
+          <li>
+            <strong>v1.1:</strong> Add Shopify product/collection search and
+            attach production recipe metadata. This page.
+          </li>
+          <li>
+            <strong>v1.2:</strong> Preview affected variants and generate safe
+            tier prices from Cost Calculator backend costs.
+          </li>
+          <li>
+            <strong>v1.3:</strong> Store tier tables for product page and cart
+            display.
+          </li>
+          <li>
+            <strong>v2.0:</strong> Shopify Discount Function checkout
+            enforcement.
+          </li>
         </ol>
       </section>
     </main>
@@ -410,6 +1138,16 @@ const primaryButtonStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
+const secondaryButtonStyle: React.CSSProperties = {
+  padding: "10px 14px",
+  border: "1px solid #111827",
+  borderRadius: 8,
+  background: "white",
+  color: "#111827",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
 const dangerButtonStyle: React.CSSProperties = {
   padding: "8px 10px",
   border: "1px solid #b91c1c",
@@ -420,5 +1158,12 @@ const dangerButtonStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const thStyle: React.CSSProperties = { textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" };
-const tdStyle: React.CSSProperties = { borderBottom: "1px solid #eee", padding: "8px" };
+const thStyle: React.CSSProperties = {
+  textAlign: "left",
+  borderBottom: "1px solid #ddd",
+  padding: "8px",
+};
+const tdStyle: React.CSSProperties = {
+  borderBottom: "1px solid #eee",
+  padding: "8px",
+};
