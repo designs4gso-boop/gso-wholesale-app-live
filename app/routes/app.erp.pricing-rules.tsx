@@ -1,8 +1,9 @@
 import { Form, Link, useActionData, useLoaderData } from "react-router";
+import { useState } from "react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const VERSION = "Tier Rule Manager v1.1";
+const VERSION = "Tier Rule Manager v1.2";
 const DEFAULT_TIERS = [100, 250, 500, 1000, 2500, 5000, 10000];
 const SCOPE_OPTIONS = ["global", "collection", "product", "variant"] as const;
 const MODE_OPTIONS = ["percent_off", "fixed_price"] as const;
@@ -332,40 +333,61 @@ export async function action({ request }: { request: Request }) {
           : scopeType === "collection"
             ? 50
             : 100;
+    const recipeFamily = String(form.get("recipeFamily") || "stock_bag").trim();
+    const frontLabelWidth = numberValue(form.get("frontLabelWidth"), numberValue(form.get("sideLabelWidth"), 0));
+    const frontLabelHeight = numberValue(form.get("frontLabelHeight"), numberValue(form.get("sideLabelHeight"), 0));
+    const backLabelWidth = numberValue(form.get("backLabelWidth"), numberValue(form.get("lidLabelWidth"), 0));
+    const backLabelHeight = numberValue(form.get("backLabelHeight"), numberValue(form.get("lidLabelHeight"), 0));
     const recipe = {
-      family: String(form.get("recipeFamily") || "").trim(),
+      family: recipeFamily,
+      labelMode:
+        recipeFamily === "stock_bag" || recipeFamily === "bag_label_set"
+          ? "double_sided_bag"
+          : recipeFamily === "jar"
+            ? "jar_side_lid"
+            : recipeFamily === "sticker_label"
+              ? "single_label"
+              : "custom",
+      stockBag: {
+        doubleSided: true,
+        front: {
+          width: frontLabelWidth,
+          height: frontLabelHeight,
+          required: recipeFamily === "stock_bag" || recipeFamily === "bag_label_set",
+        },
+        back: {
+          width: backLabelWidth || frontLabelWidth,
+          height: backLabelHeight || frontLabelHeight,
+          required: recipeFamily === "stock_bag" || recipeFamily === "bag_label_set",
+        },
+        blankItemRule: String(form.get("blankItemRule") || "4x5 sticker bag / stock bag color variant").trim(),
+        applicationType: String(form.get("applicationType") || "Apply label to flat bag/pouch").trim(),
+      },
       baseLabels: {
         side: {
-          width: numberValue(form.get("sideLabelWidth"), 0),
-          height: numberValue(form.get("sideLabelHeight"), 0),
-          required: String(form.get("includeSideLabel") || "on") === "on",
+          width: recipeFamily === "jar" ? numberValue(form.get("sideLabelWidth"), 0) : frontLabelWidth,
+          height: recipeFamily === "jar" ? numberValue(form.get("sideLabelHeight"), 0) : frontLabelHeight,
+          required: true,
         },
         lid: {
-          width: numberValue(form.get("lidLabelWidth"), 0),
-          height: numberValue(form.get("lidLabelHeight"), 0),
-          required: String(form.get("includeLidLabel") || "on") === "on",
+          width: recipeFamily === "jar" ? numberValue(form.get("lidLabelWidth"), 0) : backLabelWidth,
+          height: recipeFamily === "jar" ? numberValue(form.get("lidLabelHeight"), 0) : backLabelHeight,
+          required: recipeFamily === "jar",
         },
       },
       optionalLabels: {
         sideLid: {
           width: numberValue(form.get("sideLidLabelWidth"), 0),
           height: numberValue(form.get("sideLidLabelHeight"), 0),
-          enabledByOption: String(
-            form.get("sideLidOptionName") || "Side Lid + application",
-          ).trim(),
-          enabledByValue: String(
-            form.get("sideLidOptionValue") || "yes",
-          ).trim(),
+          enabledByOption: String(form.get("sideLidOptionName") || "Side Lid + application").trim(),
+          enabledByValue: String(form.get("sideLidOptionValue") || "yes").trim(),
         },
       },
       variantMappings: {
-        materialOptionName: String(
-          form.get("materialOptionName") || "Material",
-        ).trim(),
+        materialOptionName: String(form.get("materialOptionName") || "Material").trim(),
         glossOptionName: String(form.get("glossOptionName") || "Gloss").trim(),
-        applicationOptionName: String(
-          form.get("applicationOptionName") || "Side Lid + application",
-        ).trim(),
+        bagColorOptionName: String(form.get("bagColorOptionName") || "Bag Color").trim(),
+        applicationOptionName: String(form.get("applicationOptionName") || "Side Lid + application").trim(),
       },
       notes: String(form.get("recipeNotes") || "").trim(),
     };
@@ -450,6 +472,10 @@ export default function ErpPricingRulesRoute() {
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const groups = groupRules(rules as TierRuleRow[]);
+  const [recipeFamily, setRecipeFamily] = useState("stock_bag");
+  const isBagRecipe = recipeFamily === "stock_bag" || recipeFamily === "bag_label_set";
+  const isJarRecipe = recipeFamily === "jar";
+  const isStickerRecipe = recipeFamily === "sticker_label";
 
   return (
     <main
@@ -828,134 +854,116 @@ export default function ErpPricingRulesRoute() {
             </p>
             <label style={{ display: "block", marginTop: 10 }}>
               Recipe family
-              <select name="recipeFamily" defaultValue="jar" style={inputStyle}>
-                <option value="stock_bag">Stock bag</option>
+              <select
+                name="recipeFamily"
+                value={recipeFamily}
+                onChange={(event) => setRecipeFamily(event.currentTarget.value)}
+                style={inputStyle}
+              >
+                <option value="stock_bag">Stock/sticker bag - double sided</option>
+                <option value="bag_label_set">Bag + label set - double sided</option>
                 <option value="jar">Jar / lid label set</option>
-                <option value="bag_label_set">Bag + label set</option>
                 <option value="dtp_bag">DTP bag</option>
                 <option value="box">Box</option>
                 <option value="sticker_label">Sticker / label only</option>
                 <option value="custom">Custom</option>
               </select>
             </label>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 10,
-                marginTop: 10,
-              }}
-            >
-              <label>
-                Side label width
-                <input
-                  name="sideLabelWidth"
-                  type="number"
-                  step="0.001"
-                  placeholder="ex: 7.2"
-                  style={inputStyle}
-                />
+
+            {isBagRecipe ? (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ padding: 10, borderRadius: 10, background: "#ecfdf5", border: "1px solid #bbf7d0", marginBottom: 10 }}>
+                  <strong>Bag recipe:</strong> applies to 4x5 sticker bags and Stock Bags. This recipe is double-sided by default and calculates front label + back label, material/ink/gloss for both sides, blank bag color, and flat-bag application labor.
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <label>
+                    Front label width
+                    <input name="frontLabelWidth" type="number" step="0.001" defaultValue="4" style={inputStyle} />
+                  </label>
+                  <label>
+                    Front label height
+                    <input name="frontLabelHeight" type="number" step="0.001" defaultValue="5" style={inputStyle} />
+                  </label>
+                  <label>
+                    Back label width
+                    <input name="backLabelWidth" type="number" step="0.001" defaultValue="4" style={inputStyle} />
+                  </label>
+                  <label>
+                    Back label height
+                    <input name="backLabelHeight" type="number" step="0.001" defaultValue="5" style={inputStyle} />
+                  </label>
+                  <label>
+                    Material option name
+                    <input name="materialOptionName" defaultValue="Material" style={inputStyle} />
+                  </label>
+                  <label>
+                    Gloss option name
+                    <input name="glossOptionName" defaultValue="Gloss" style={inputStyle} />
+                  </label>
+                  <label>
+                    Bag color option name
+                    <input name="bagColorOptionName" defaultValue="Bag Color" style={inputStyle} />
+                  </label>
+                  <label>
+                    Application type
+                    <input name="applicationType" defaultValue="Apply label to flat bag/pouch" style={inputStyle} />
+                  </label>
+                </div>
+                <label style={{ display: "block", marginTop: 10 }}>
+                  Blank item rule
+                  <input name="blankItemRule" defaultValue="4x5 sticker bag / stock bag color variant" style={inputStyle} />
+                </label>
+                <label style={{ display: "block", marginTop: 10 }}>
+                  Recipe notes
+                  <textarea name="recipeNotes" defaultValue="Stock/sticker bag collection rule. Always double-sided: front label + back label. Material, Gloss, and Bag Color are Shopify variant options. No jar lid or side-lid fields apply." style={{ ...inputStyle, minHeight: 76 }} />
+                </label>
+              </div>
+            ) : null}
+
+            {isJarRecipe ? (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ padding: 10, borderRadius: 10, background: "#fff7ed", border: "1px solid #fed7aa", marginBottom: 10 }}>
+                  <strong>Jar recipe:</strong> side label and lid label are always included. Side-lid label is only added when the mapped Shopify option/value is selected.
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <label>Side label width<input name="sideLabelWidth" type="number" step="0.001" placeholder="ex: 7.2" style={inputStyle} /></label>
+                  <label>Side label height<input name="sideLabelHeight" type="number" step="0.001" placeholder="ex: 3.2" style={inputStyle} /></label>
+                  <label>Lid label width<input name="lidLabelWidth" type="number" step="0.001" placeholder="ex: 2" style={inputStyle} /></label>
+                  <label>Lid label height<input name="lidLabelHeight" type="number" step="0.001" placeholder="ex: 2" style={inputStyle} /></label>
+                  <label>Side-lid label width<input name="sideLidLabelWidth" type="number" step="0.001" placeholder="optional" style={inputStyle} /></label>
+                  <label>Side-lid label height<input name="sideLidLabelHeight" type="number" step="0.001" placeholder="optional" style={inputStyle} /></label>
+                  <label>Material option name<input name="materialOptionName" defaultValue="Material" style={inputStyle} /></label>
+                  <label>Gloss option name<input name="glossOptionName" defaultValue="Gloss" style={inputStyle} /></label>
+                  <label>Side-lid option name<input name="sideLidOptionName" defaultValue="Side Lid + application" style={inputStyle} /></label>
+                  <label>Side-lid option value<input name="sideLidOptionValue" defaultValue="yes" style={inputStyle} /></label>
+                </div>
+                <label style={{ display: "block", marginTop: 10 }}>
+                  Recipe notes
+                  <textarea name="recipeNotes" placeholder="Example: For jars, side + lid are always included. Side-lid label is only included when variant option is yes." style={{ ...inputStyle, minHeight: 76 }} />
+                </label>
+              </div>
+            ) : null}
+
+            {isStickerRecipe ? (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ padding: 10, borderRadius: 10, background: "#f8fafc", border: "1px solid #cbd5e1", marginBottom: 10 }}>
+                  <strong>Sticker recipe:</strong> one printed label/sticker only. No blank bag, jar, lid, or application item is included unless later overridden.
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <label>Label width<input name="frontLabelWidth" type="number" step="0.001" placeholder="ex: 3" style={inputStyle} /></label>
+                  <label>Label height<input name="frontLabelHeight" type="number" step="0.001" placeholder="ex: 3" style={inputStyle} /></label>
+                  <label>Material option name<input name="materialOptionName" defaultValue="Material" style={inputStyle} /></label>
+                  <label>Gloss option name<input name="glossOptionName" defaultValue="Gloss" style={inputStyle} /></label>
+                </div>
+              </div>
+            ) : null}
+
+            {!isBagRecipe && !isJarRecipe && !isStickerRecipe ? (
+              <label style={{ display: "block", marginTop: 10 }}>
+                Recipe notes
+                <textarea name="recipeNotes" placeholder="Describe what this recipe includes. More recipe-specific fields will be added for DTP bags, boxes, and custom products in the next build." style={{ ...inputStyle, minHeight: 90 }} />
               </label>
-              <label>
-                Side label height
-                <input
-                  name="sideLabelHeight"
-                  type="number"
-                  step="0.001"
-                  placeholder="ex: 3.2"
-                  style={inputStyle}
-                />
-              </label>
-              <label>
-                Lid label width
-                <input
-                  name="lidLabelWidth"
-                  type="number"
-                  step="0.001"
-                  placeholder="ex: 2"
-                  style={inputStyle}
-                />
-              </label>
-              <label>
-                Lid label height
-                <input
-                  name="lidLabelHeight"
-                  type="number"
-                  step="0.001"
-                  placeholder="ex: 2"
-                  style={inputStyle}
-                />
-              </label>
-              <label>
-                Side-lid label width
-                <input
-                  name="sideLidLabelWidth"
-                  type="number"
-                  step="0.001"
-                  placeholder="optional"
-                  style={inputStyle}
-                />
-              </label>
-              <label>
-                Side-lid label height
-                <input
-                  name="sideLidLabelHeight"
-                  type="number"
-                  step="0.001"
-                  placeholder="optional"
-                  style={inputStyle}
-                />
-              </label>
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 10,
-                marginTop: 10,
-              }}
-            >
-              <label>
-                Material option name
-                <input
-                  name="materialOptionName"
-                  defaultValue="Material"
-                  style={inputStyle}
-                />
-              </label>
-              <label>
-                Gloss option name
-                <input
-                  name="glossOptionName"
-                  defaultValue="Gloss"
-                  style={inputStyle}
-                />
-              </label>
-              <label>
-                Side-lid option name
-                <input
-                  name="sideLidOptionName"
-                  defaultValue="Side Lid + application"
-                  style={inputStyle}
-                />
-              </label>
-              <label>
-                Side-lid option value
-                <input
-                  name="sideLidOptionValue"
-                  defaultValue="yes"
-                  style={inputStyle}
-                />
-              </label>
-            </div>
-            <label style={{ display: "block", marginTop: 10 }}>
-              Recipe notes
-              <textarea
-                name="recipeNotes"
-                placeholder="Example: For jars, side + lid are always included. Side-lid label is only included when variant option is yes."
-                style={{ ...inputStyle, minHeight: 76 }}
-              />
-            </label>
+            ) : null}
           </section>
 
           <button type="submit" style={primaryButtonStyle}>
@@ -1013,18 +1021,9 @@ export default function ErpPricingRulesRoute() {
                       {first.settings.recipe ? (
                         <p style={{ margin: "4px 0 0", color: "#2563eb" }}>
                           Recipe: {first.settings.recipe.family || "custom"} ·
-                          Side{" "}
-                          {first.settings.recipe.baseLabels?.side?.width || 0} x{" "}
-                          {first.settings.recipe.baseLabels?.side?.height || 0}{" "}
-                          · Lid{" "}
-                          {first.settings.recipe.baseLabels?.lid?.width || 0} x{" "}
-                          {first.settings.recipe.baseLabels?.lid?.height || 0} ·
-                          Side-lid{" "}
-                          {first.settings.recipe.optionalLabels?.sideLid
-                            ?.width || 0}{" "}
-                          x{" "}
-                          {first.settings.recipe.optionalLabels?.sideLid
-                            ?.height || 0}
+                          {first.settings.recipe.labelMode === "double_sided_bag"
+                            ? `Front ${first.settings.recipe.stockBag?.front?.width || 0} x ${first.settings.recipe.stockBag?.front?.height || 0} · Back ${first.settings.recipe.stockBag?.back?.width || 0} x ${first.settings.recipe.stockBag?.back?.height || 0} · Bag color option ${first.settings.recipe.variantMappings?.bagColorOptionName || "Bag Color"}`
+                            : `Side ${first.settings.recipe.baseLabels?.side?.width || 0} x ${first.settings.recipe.baseLabels?.side?.height || 0} · Lid ${first.settings.recipe.baseLabels?.lid?.width || 0} x ${first.settings.recipe.baseLabels?.lid?.height || 0} · Side-lid ${first.settings.recipe.optionalLabels?.sideLid?.width || 0} x ${first.settings.recipe.optionalLabels?.sideLid?.height || 0}`}
                         </p>
                       ) : null}
                     </div>
@@ -1100,16 +1099,16 @@ export default function ErpPricingRulesRoute() {
             attach production recipe metadata. This page.
           </li>
           <li>
-            <strong>v1.2:</strong> Preview affected variants and generate safe
-            tier prices from Cost Calculator backend costs.
+            <strong>v1.2:</strong> Recipe-specific setup fields for stock/sticker bags, jars, and stickers. This page.
           </li>
           <li>
-            <strong>v1.3:</strong> Store tier tables for product page and cart
-            display.
+            <strong>v1.3:</strong> Preview affected variants and generate safe tier prices from Cost Calculator backend costs.
           </li>
           <li>
-            <strong>v2.0:</strong> Shopify Discount Function checkout
-            enforcement.
+            <strong>v1.4:</strong> Store tier tables for product page and cart display.
+          </li>
+          <li>
+            <strong>v2.0:</strong> Shopify Discount Function checkout enforcement.
           </li>
         </ol>
       </section>
