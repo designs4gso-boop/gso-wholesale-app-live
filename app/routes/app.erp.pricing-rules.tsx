@@ -3,7 +3,7 @@ import { useState } from "react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const VERSION = "Tier Rule Manager v1.3";
+const VERSION = "Tier Rule Manager v1.4";
 const DEFAULT_TIERS = [100, 250, 500, 1000, 2500, 5000, 10000];
 const SCOPE_OPTIONS = ["global", "collection", "product", "variant"] as const;
 const MODE_OPTIONS = ["cost_margin", "percent_off", "fixed_price", "manual_cost_margin"] as const;
@@ -23,6 +23,10 @@ type TierRuleRow = {
   settings: {
     minMarginPct?: number;
     minOrderTotal?: number;
+    minOrderQty?: number;
+    quantityIncrement?: number;
+    defaultQuantity?: number;
+    casePackQty?: number;
     rounding?: string;
     mode?: string;
     recipe?: any;
@@ -49,6 +53,10 @@ function intValue(value: FormDataEntryValue | null, fallback = 0) {
 function settingString(values: {
   minMarginPct: number;
   minOrderTotal: number;
+  minOrderQty: number;
+  quantityIncrement: number;
+  defaultQuantity: number;
+  casePackQty: number;
   rounding: string;
   mode: string;
   recipe?: any;
@@ -56,7 +64,7 @@ function settingString(values: {
   const recipePart = values.recipe
     ? `|recipe:${encodeURIComponent(JSON.stringify(values.recipe))}`
     : "";
-  return `tier_settings|mode:${values.mode}|margin:${values.minMarginPct}|round:${values.rounding}|minTotal:${values.minOrderTotal}${recipePart}`;
+  return `tier_settings|mode:${values.mode}|margin:${values.minMarginPct}|round:${values.rounding}|minTotal:${values.minOrderTotal}|minQty:${values.minOrderQty}|increment:${values.quantityIncrement}|defaultQty:${values.defaultQuantity}|casePack:${values.casePackQty}${recipePart}`;
 }
 
 function parseSettings(value: string | null | undefined) {
@@ -66,6 +74,10 @@ function parseSettings(value: string | null | undefined) {
     const [key, val] = part.split(":");
     if (key === "margin") settings.minMarginPct = Number(val || 0);
     if (key === "minTotal") settings.minOrderTotal = Number(val || 0);
+    if (key === "minQty") settings.minOrderQty = Number(val || 0);
+    if (key === "increment") settings.quantityIncrement = Number(val || 0);
+    if (key === "defaultQty") settings.defaultQuantity = Number(val || 0);
+    if (key === "casePack") settings.casePackQty = Number(val || 0);
     if (key === "round") settings.rounding = val || "0.05";
     if (key === "mode") settings.mode = val || "percent_off";
     if (key === "recipe") {
@@ -326,6 +338,10 @@ export async function action({ request }: { request: Request }) {
     const minMarginPct = numberValue(form.get("minMarginPct"), 50);
     const minOrderTotal = numberValue(form.get("minOrderTotal"), 0);
     const minUnitPrice = numberValue(form.get("minUnitPrice"), 0);
+    const minOrderQty = intValue(form.get("minOrderQty"), DEFAULT_TIERS[0] || 0);
+    const quantityIncrement = intValue(form.get("quantityIncrement"), 1);
+    const defaultQuantity = intValue(form.get("defaultQuantity"), minOrderQty || DEFAULT_TIERS[0] || 0);
+    const casePackQty = intValue(form.get("casePackQty"), 0);
     const rounding = String(form.get("rounding") || "0.05");
     const active = String(form.get("active") || "on") === "on";
     const fields = scopeFields(scopeType, scopeTarget);
@@ -398,6 +414,10 @@ export async function action({ request }: { request: Request }) {
     const settings = settingString({
       minMarginPct,
       minOrderTotal,
+      minOrderQty,
+      quantityIncrement,
+      defaultQuantity,
+      casePackQty,
       rounding,
       mode,
       recipe,
@@ -789,6 +809,73 @@ export default function ErpPricingRulesRoute() {
             </label>
           </div>
 
+          <section
+            style={{
+              marginTop: 12,
+              padding: 12,
+              border: "1px solid #dbeafe",
+              background: "#eff6ff",
+              borderRadius: 12,
+            }}
+          >
+            <h3 style={{ margin: "0 0 6px" }}>Quantity rules</h3>
+            <p style={{ margin: "0 0 10px", color: "#475569", fontSize: 13 }}>
+              These replace scattered Shopify min-quantity metafields. Storefront quantity boxes, carts, tier previews, and checkout enforcement should all use these values.
+            </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 10,
+              }}
+            >
+              <label>
+                Minimum order qty
+                <input
+                  name="minOrderQty"
+                  type="number"
+                  step="1"
+                  min="0"
+                  defaultValue="100"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Quantity increment
+                <input
+                  name="quantityIncrement"
+                  type="number"
+                  step="1"
+                  min="1"
+                  defaultValue="1"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Default quantity
+                <input
+                  name="defaultQuantity"
+                  type="number"
+                  step="1"
+                  min="0"
+                  defaultValue="100"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Case pack / box qty
+                <input
+                  name="casePackQty"
+                  type="number"
+                  step="1"
+                  min="0"
+                  defaultValue="0"
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+          </section>
+
           <label style={{ display: "block", marginTop: 12 }}>
             Rounding rule
             <select name="rounding" defaultValue="0.05" style={inputStyle}>
@@ -1067,6 +1154,9 @@ export default function ErpPricingRulesRoute() {
                         {money(first.minUnitPrice)} · rounding $
                         {first.settings.rounding || "0.05"}
                       </p>
+                      <p style={{ margin: "4px 0 0", color: "#666" }}>
+                        Qty rules: MOQ {Number(first.settings.minOrderQty || 0).toLocaleString()} · increment {Number(first.settings.quantityIncrement || 1).toLocaleString()} · default {Number(first.settings.defaultQuantity || first.settings.minOrderQty || 0).toLocaleString()} · case pack {Number(first.settings.casePackQty || 0).toLocaleString()}
+                      </p>
                       {first.settings.recipe ? (
                         <p style={{ margin: "4px 0 0", color: "#2563eb" }}>
                           Recipe: {first.settings.recipe.family || "custom"} ·
@@ -1151,10 +1241,13 @@ export default function ErpPricingRulesRoute() {
             <strong>v1.2:</strong> Recipe-specific setup fields for stock/sticker bags, jars, and stickers. This page.
           </li>
           <li>
-            <strong>v1.3:</strong> Preview affected variants and generate safe tier prices from Cost Calculator backend costs.
+            <strong>v1.3:</strong> Flexible pricing methods: cost-based margin, % off, manual cost + margin, or fixed price.
           </li>
           <li>
-            <strong>v1.4:</strong> Store tier tables for product page and cart display.
+            <strong>v1.4:</strong> MOQ, quantity increment, default quantity, and case-pack rules attached to pricing rules.
+          </li>
+          <li>
+            <strong>v1.5:</strong> Preview affected variants and generate safe tier prices from Cost Calculator backend costs.
           </li>
           <li>
             <strong>v2.0:</strong> Shopify Discount Function checkout enforcement.
