@@ -3,7 +3,7 @@ import { useState } from "react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const VERSION = "Tier Rule Manager v1.4";
+const VERSION = "Tier Rule Manager v1.5";
 const DEFAULT_TIERS = [100, 250, 500, 1000, 2500, 5000, 10000];
 const SCOPE_OPTIONS = ["global", "collection", "product", "variant"] as const;
 const MODE_OPTIONS = ["cost_margin", "percent_off", "fixed_price", "manual_cost_margin"] as const;
@@ -513,6 +513,7 @@ export default function ErpPricingRulesRoute() {
   const actionData = useActionData<typeof action>();
   const groups = groupRules(rules as TierRuleRow[]);
   const [recipeFamily, setRecipeFamily] = useState("stock_bag");
+  const [pricingMode, setPricingMode] = useState("cost_margin");
   const isBagRecipe = recipeFamily === "stock_bag" || recipeFamily === "bag_label_set";
   const isJarRecipe = recipeFamily === "jar";
   const isStickerRecipe = recipeFamily === "sticker_label";
@@ -547,9 +548,7 @@ export default function ErpPricingRulesRoute() {
         <h1 style={{ margin: 0 }}>Tier Rule Manager</h1>
         <p style={{ maxWidth: 900, lineHeight: 1.5 }}>
           Build tier rules connected to existing Shopify products and
-          collections. v1.1 pulls Shopify targets into the setup, stores
-          label-size recipe data, variant option mappings, and flexible pricing
-          methods so tier pricing can become automatic later.
+          collections. v1.5 keeps the setup staff-friendly by only showing the fields needed for the selected pricing method, while storing recipe, quantity, and safety rules for pricing automation.
         </p>
         {actionData?.message ? (
           <div
@@ -756,7 +755,8 @@ export default function ErpPricingRulesRoute() {
             Pricing method
             <select
               name="pricingMode"
-              defaultValue="cost_margin"
+              value={pricingMode}
+              onChange={(event) => setPricingMode(event.currentTarget.value)}
               style={inputStyle}
             >
               <option value="cost_margin">Cost-based margin % by tier</option>
@@ -765,49 +765,65 @@ export default function ErpPricingRulesRoute() {
               <option value="fixed_price">Manual fixed unit price</option>
             </select>
           </label>
-          <p style={{ margin: "6px 0 0", color: "#666", fontSize: 13 }}>
-            Cost-based margin uses the recipe/backend cost for each variant. % off uses the Shopify/base price. Manual cost is for products not fully mapped yet. Fixed price is an override.
-          </p>
+          <div style={{ marginTop: 8, padding: 10, borderRadius: 10, background: "#f8fafc", border: "1px solid #e2e8f0", color: "#475569", fontSize: 13, lineHeight: 1.45 }}>
+            {pricingMode === "cost_margin" ? "Use this for production pricing. The app calculates each variant cost, then applies the margin target for each tier." : null}
+            {pricingMode === "percent_off" ? "Use this when Shopify/base prices are already trusted and you only want quantity discounts." : null}
+            {pricingMode === "manual_cost_margin" ? "Use this when the real backend cost is not mapped yet. Enter a manual unit cost and margin for each tier." : null}
+            {pricingMode === "fixed_price" ? "Use this to force a specific unit price by tier. The app can still warn later if a fixed price is below safe cost." : null}
+          </div>
 
-          <div
+          <section
             style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gap: 10,
               marginTop: 12,
+              padding: 12,
+              border: "1px solid #fde68a",
+              background: "#fffbeb",
+              borderRadius: 12,
             }}
           >
-            <label>
-              Min margin %
-              <input
-                name="minMarginPct"
-                type="number"
-                step="0.01"
-                defaultValue="50"
-                style={inputStyle}
-              />
-            </label>
-            <label>
-              Min unit price
-              <input
-                name="minUnitPrice"
-                type="number"
-                step="0.01"
-                defaultValue="0"
-                style={inputStyle}
-              />
-            </label>
-            <label>
-              Min order total
-              <input
-                name="minOrderTotal"
-                type="number"
-                step="0.01"
-                defaultValue="0"
-                style={inputStyle}
-              />
-            </label>
-          </div>
+            <h3 style={{ margin: "0 0 6px" }}>Safety rules</h3>
+            <p style={{ margin: "0 0 10px", color: "#92400e", fontSize: 13, lineHeight: 1.45 }}>
+              These are guardrails. Minimum margin protects profit, minimum unit price is an absolute floor, and minimum order total prevents tiny orders from going below your shop minimum.
+            </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr 1fr",
+                gap: 10,
+              }}
+            >
+              <label>
+                Minimum margin %
+                <input
+                  name="minMarginPct"
+                  type="number"
+                  step="0.01"
+                  defaultValue="50"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Minimum unit price
+                <input
+                  name="minUnitPrice"
+                  type="number"
+                  step="0.01"
+                  defaultValue="0"
+                  style={inputStyle}
+                />
+              </label>
+              <label>
+                Minimum order total
+                <input
+                  name="minOrderTotal"
+                  type="number"
+                  step="0.01"
+                  defaultValue="0"
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+          </section>
 
           <section
             style={{
@@ -900,70 +916,98 @@ export default function ErpPricingRulesRoute() {
 
           <h3>Tier rows</h3>
           <p style={{ marginTop: 0, color: "#666", fontSize: 13 }}>
-            Fill the column that matches the selected pricing method. The extra columns stay available as future override/reference fields.
+            Only the fields for the selected pricing method are shown. The app still saves the right backend fields for the preview, storefront pricing, and checkout discount function.
           </p>
           <div style={{ display: "grid", gap: 8 }}>
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "72px 1fr 1fr 1fr 1fr",
+                gridTemplateColumns:
+                  pricingMode === "manual_cost_margin"
+                    ? "72px 1fr 1fr"
+                    : "72px 1fr",
                 gap: 8,
                 fontWeight: 700,
               }}
             >
               <span>Qty</span>
-              <span>Margin %</span>
-              <span>% off</span>
-              <span>Manual cost</span>
-              <span>Fixed price</span>
+              {pricingMode === "cost_margin" ? <span>Margin %</span> : null}
+              {pricingMode === "percent_off" ? <span>% off</span> : null}
+              {pricingMode === "manual_cost_margin" ? (
+                <>
+                  <span>Manual unit cost</span>
+                  <span>Margin %</span>
+                </>
+              ) : null}
+              {pricingMode === "fixed_price" ? <span>Fixed unit price</span> : null}
             </div>
             {DEFAULT_TIERS.map((qty, index) => {
               const defaultMargins = [60, 55, 50, 47, 45, 45, 45];
               const defaultDiscounts = [0, 5, 8, 12, 16, 20, 24];
+              const gridTemplateColumns =
+                pricingMode === "manual_cost_margin" ? "72px 1fr 1fr" : "72px 1fr";
               return (
-              <div
-                key={qty}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "72px 1fr 1fr 1fr 1fr",
-                  gap: 8,
-                }}
-              >
-                <input
-                  value={qty}
-                  readOnly
-                  style={{ ...inputStyle, background: "#f8f8f8" }}
-                />
-                <input
-                  name={`margin_${qty}`}
-                  type="number"
-                  step="0.01"
-                  defaultValue={defaultMargins[index] || 45}
-                  style={inputStyle}
-                />
-                <input
-                  name={`discount_${qty}`}
-                  type="number"
-                  step="0.01"
-                  defaultValue={defaultDiscounts[index] || 0}
-                  style={inputStyle}
-                />
-                <input
-                  name={`manualCost_${qty}`}
-                  type="number"
-                  step="0.01"
-                  placeholder="optional"
-                  style={inputStyle}
-                />
-                <input
-                  name={`fixed_${qty}`}
-                  type="number"
-                  step="0.01"
-                  placeholder="optional"
-                  style={inputStyle}
-                />
-              </div>
-            )})}
+                <div
+                  key={qty}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns,
+                    gap: 8,
+                  }}
+                >
+                  <input
+                    value={qty}
+                    readOnly
+                    style={{ ...inputStyle, background: "#f8f8f8" }}
+                  />
+                  {pricingMode === "cost_margin" ? (
+                    <input
+                      name={`margin_${qty}`}
+                      type="number"
+                      step="0.01"
+                      defaultValue={defaultMargins[index] || 45}
+                      style={inputStyle}
+                    />
+                  ) : null}
+                  {pricingMode === "percent_off" ? (
+                    <input
+                      name={`discount_${qty}`}
+                      type="number"
+                      step="0.01"
+                      defaultValue={defaultDiscounts[index] || 0}
+                      style={inputStyle}
+                    />
+                  ) : null}
+                  {pricingMode === "manual_cost_margin" ? (
+                    <>
+                      <input
+                        name={`manualCost_${qty}`}
+                        type="number"
+                        step="0.01"
+                        placeholder="ex: 0.72"
+                        style={inputStyle}
+                      />
+                      <input
+                        name={`margin_${qty}`}
+                        type="number"
+                        step="0.01"
+                        defaultValue={defaultMargins[index] || 45}
+                        style={inputStyle}
+                      />
+                    </>
+                  ) : null}
+                  {pricingMode === "fixed_price" ? (
+                    <input
+                      name={`fixed_${qty}`}
+                      type="number"
+                      step="0.01"
+                      placeholder="ex: 1.60"
+                      style={inputStyle}
+                    />
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
 
           <section
@@ -1247,7 +1291,10 @@ export default function ErpPricingRulesRoute() {
             <strong>v1.4:</strong> MOQ, quantity increment, default quantity, and case-pack rules attached to pricing rules.
           </li>
           <li>
-            <strong>v1.5:</strong> Preview affected variants and generate safe tier prices from Cost Calculator backend costs.
+            <strong>v1.5:</strong> Clean staff setup UI: pricing-method-specific tier fields, Safety rules, and Quantity rules.
+          </li>
+          <li>
+            <strong>v1.6:</strong> Preview affected variants and generate safe tier prices from Cost Calculator backend costs.
           </li>
           <li>
             <strong>v2.0:</strong> Shopify Discount Function checkout enforcement.
