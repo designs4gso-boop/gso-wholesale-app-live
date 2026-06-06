@@ -3,10 +3,30 @@ import { useState } from "react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const VERSION = "Tier Rule Manager v1.5";
+const VERSION = "Tier Rule Manager v1.6";
 const DEFAULT_TIERS = [100, 250, 500, 1000, 2500, 5000, 10000];
 const SCOPE_OPTIONS = ["global", "collection", "product", "variant"] as const;
 const MODE_OPTIONS = ["cost_margin", "percent_off", "fixed_price", "manual_cost_margin"] as const;
+
+type TierPreview = {
+  key: string;
+  title: string;
+  scopeType: string;
+  scopeTarget: string;
+  status: string;
+  productCount: number;
+  variantCount: number;
+  rows: Array<{
+    productTitle: string;
+    variantTitle: string;
+    basePrice: number;
+    material: string;
+    gloss: string;
+    bagColor: string;
+    estimatedUnitCost: number;
+    tierPrices: Array<{ qty: number; price: number; marginPct: number; warning?: string }>;
+  }>;
+};
 
 type TierRuleRow = {
   id: string;
@@ -130,6 +150,210 @@ function tierRowLabel(row: TierRuleRow) {
   }
   if (row.discountType === "cost_margin") return `${Number(row.percentOff || 0).toFixed(2)}% margin`;
   return `${Number(row.percentOff || 0).toFixed(2)}% off`;
+}
+
+
+function getSelectedOption(variant: any, optionName: string) {
+  const wanted = String(optionName || "").trim().toLowerCase();
+  return (
+    (variant?.selectedOptions || []).find(
+      (option: any) => String(option.name || "").trim().toLowerCase() === wanted,
+    )?.value || ""
+  );
+}
+
+function ceilTo(value: number, increment: any) {
+  const step = Number(increment || 0.05) || 0.05;
+  return Math.ceil((Number(value || 0) - 0.000001) / step) * step;
+}
+
+function grossMargin(price: number, cost: number) {
+  if (!price) return 0;
+  return ((price - cost) / price) * 100;
+}
+
+function priceFromMargin(cost: number, marginPct: number) {
+  const margin = Math.min(Math.max(Number(marginPct || 0), 0), 95) / 100;
+  return cost / (1 - margin);
+}
+
+function materialCostSqft(material: string) {
+  const value = String(material || "").toLowerCase();
+  if (value.includes("holo")) return 0.72;
+  if (value.includes("gloss")) return 0.31;
+  return 0.31;
+}
+
+function glossPasses(gloss: string) {
+  const value = String(gloss || "").toLowerCase();
+  if (value.includes("4")) return 4;
+  if (value.includes("3")) return 3;
+  if (value.includes("2")) return 2;
+  if (value.includes("spot") || value.includes("1")) return 1;
+  return 0;
+}
+
+function blankBagCost(color: string) {
+  const value = String(color || "").toLowerCase();
+  if (value.includes("holo")) return 0.16;
+  return 0.09;
+}
+
+function estimateStockBagUnitCost(variant: any, recipe: any, qty: number) {
+  const materialOption = recipe?.variantMappings?.materialOptionName || "Material";
+  const glossOption = recipe?.variantMappings?.glossOptionName || "Gloss";
+  const colorOption = recipe?.variantMappings?.bagColorOptionName || "Bag Color";
+  const material = getSelectedOption(variant, materialOption) || "Matte";
+  const gloss = getSelectedOption(variant, glossOption) || "none";
+  const bagColor = getSelectedOption(variant, colorOption) || "White";
+  const front = recipe?.stockBag?.front || {};
+  const back = recipe?.stockBag?.back || front;
+  const frontSqIn = Number(front.width || 0) * Number(front.height || 0);
+  const backSqIn = Number(back.width || 0) * Number(back.height || 0);
+  const baseSqft = (frontSqIn + backSqIn) / 144;
+  const wasteSqft = baseSqft * 1.1;
+  const mediaCost = wasteSqft * materialCostSqft(material);
+  const cmykCost = wasteSqft * 0.18;
+  const whiteCost = String(material).toLowerCase().includes("holo") ? wasteSqft * 0.18 : 0;
+  const glossCost = wasteSqft * glossPasses(gloss) * 0.19;
+  const applicationSeconds = 20;
+  const laborCost = (applicationSeconds / 3600) * 25;
+  const setupCost = (10 / 60) * 25 / Math.max(Number(qty || 1), 1);
+  const machineSetupCost = (10 / 60) * 8 / Math.max(Number(qty || 1), 1);
+  const blankCost = blankBagCost(bagColor);
+  const estimatedUnitCost = mediaCost + cmykCost + whiteCost + glossCost + laborCost + setupCost + machineSetupCost + blankCost;
+  return {
+    estimatedUnitCost,
+    material,
+    gloss,
+    bagColor,
+    details: { baseSqft, wasteSqft, mediaCost, cmykCost, whiteCost, glossCost, laborCost, setupCost, machineSetupCost, blankCost },
+  };
+}
+
+function generatedTierPrice(row: TierRuleRow, unitCost: number, basePrice: number) {
+  const hardMinMargin = Number(row.settings.minMarginPct || 0);
+  const safePrice = priceFromMargin(unitCost, hardMinMargin);
+  const minUnitPrice = Number(row.minUnitPrice || 0);
+  const minOrderTotalUnit = Number(row.settings.minOrderTotal || 0) > 0 ? Number(row.settings.minOrderTotal || 0) / Math.max(row.minQty, 1) : 0;
+  let methodPrice = safePrice;
+  if (row.discountType === "cost_margin") methodPrice = priceFromMargin(unitCost, Number(row.percentOff || hardMinMargin));
+  if (row.discountType === "percent_off") methodPrice = basePrice * (1 - Number(row.percentOff || 0) / 100);
+  if (row.discountType === "manual_cost_margin") methodPrice = priceFromMargin(Number(row.sellPrice || unitCost), Number(row.percentOff || hardMinMargin));
+  if (row.discountType === "fixed_price") methodPrice = Number(row.sellPrice || 0);
+  const beforeRound = Math.max(methodPrice, safePrice, minUnitPrice, minOrderTotalUnit);
+  const price = ceilTo(beforeRound, row.settings.rounding || 0.05);
+  const warning = methodPrice < safePrice ? "Raised to safety margin" : undefined;
+  return { price, marginPct: grossMargin(price, unitCost), warning };
+}
+
+async function fetchPreviewProducts(admin: any, first: TierRuleRow) {
+  if (first.scopeType === "collection" && String(first.scopeTarget || "").startsWith("gid://")) {
+    const response = await admin.graphql(
+      `#graphql
+        query TierRulePreviewCollection($id: ID!) {
+          collection(id: $id) {
+            id
+            title
+            handle
+            products(first: 8) {
+              edges {
+                node {
+                  id
+                  title
+                  handle
+                  totalVariants
+                  variants(first: 20) {
+                    edges { node { id title sku price selectedOptions { name value } } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      { variables: { id: first.scopeTarget } },
+    );
+    const payload = await response.json();
+    if (payload?.errors?.length) throw new Error(payload.errors.map((error: any) => error.message).join(", "));
+    return (payload?.data?.collection?.products?.edges || []).map((edge: any) => edge.node);
+  }
+
+  if (first.scopeType === "product" && String(first.scopeTarget || "").startsWith("gid://")) {
+    const response = await admin.graphql(
+      `#graphql
+        query TierRulePreviewProduct($id: ID!) {
+          product(id: $id) {
+            id
+            title
+            handle
+            totalVariants
+            variants(first: 50) {
+              edges { node { id title sku price selectedOptions { name value } } }
+            }
+          }
+        }
+      `,
+      { variables: { id: first.scopeTarget } },
+    );
+    const payload = await response.json();
+    if (payload?.errors?.length) throw new Error(payload.errors.map((error: any) => error.message).join(", "));
+    return payload?.data?.product ? [payload.data.product] : [];
+  }
+
+  return [];
+}
+
+async function buildTierPreviews(admin: any, rules: TierRuleRow[]): Promise<TierPreview[]> {
+  const grouped = groupRules(rules);
+  const previews: TierPreview[] = [];
+  for (const { key, group } of grouped.slice(0, 6)) {
+    const first = group[0];
+    const recipe = first.settings.recipe;
+    if (!recipe) {
+      previews.push({ key, title: first.title, scopeType: first.scopeType, scopeTarget: first.scopeTarget, status: "No recipe saved yet.", productCount: 0, variantCount: 0, rows: [] });
+      continue;
+    }
+    if (recipe.labelMode !== "double_sided_bag") {
+      previews.push({ key, title: first.title, scopeType: first.scopeType, scopeTarget: first.scopeTarget, status: "Preview v1.6 currently calculates stock/sticker bag recipes first.", productCount: 0, variantCount: 0, rows: [] });
+      continue;
+    }
+    const products = await fetchPreviewProducts(admin, first);
+    const rows: TierPreview["rows"] = [];
+    for (const product of products.slice(0, 5)) {
+      const variants = (product.variants?.edges || []).map((edge: any) => edge.node).concat(Array.isArray(product.variants) ? product.variants : []);
+      for (const variant of variants.slice(0, 8)) {
+        const basePrice = Number(variant.price || 0);
+        const firstTierQty = group[0]?.minQty || 100;
+        const estimate = estimateStockBagUnitCost(variant, recipe, firstTierQty);
+        const tierPrices = group.map((tier) => {
+          const costAtTier = estimateStockBagUnitCost(variant, recipe, tier.minQty).estimatedUnitCost;
+          return { qty: tier.minQty, ...generatedTierPrice(tier, costAtTier, basePrice) };
+        });
+        rows.push({
+          productTitle: product.title,
+          variantTitle: variant.title,
+          basePrice,
+          material: estimate.material,
+          gloss: estimate.gloss,
+          bagColor: estimate.bagColor,
+          estimatedUnitCost: estimate.estimatedUnitCost,
+          tierPrices,
+        });
+      }
+    }
+    previews.push({
+      key,
+      title: first.title,
+      scopeType: first.scopeType,
+      scopeTarget: first.scopeTarget,
+      status: rows.length ? "Preview generated from saved recipe and current Shopify variants." : "No preview variants found yet.",
+      productCount: products.length,
+      variantCount: rows.length,
+      rows,
+    });
+  }
+  return previews;
 }
 
 async function searchShopifyProducts(admin: any, query: string) {
@@ -288,7 +512,9 @@ export async function loader({ request }: { request: Request }) {
       : await searchShopifyCollections(admin, targetSearch)
     : [];
 
-  return { version: VERSION, rules, targetSearch, targetType, targetOptions };
+  const previews = await buildTierPreviews(admin, rules);
+
+  return { version: VERSION, rules, targetSearch, targetType, targetOptions, previews };
 }
 
 export async function action({ request }: { request: Request }) {
@@ -508,7 +734,7 @@ function groupRules(rows: TierRuleRow[]) {
 }
 
 export default function ErpPricingRulesRoute() {
-  const { version, rules, targetSearch, targetType, targetOptions } =
+  const { version, rules, targetSearch, targetType, targetOptions, previews } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const groups = groupRules(rules as TierRuleRow[]);
@@ -548,7 +774,7 @@ export default function ErpPricingRulesRoute() {
         <h1 style={{ margin: 0 }}>Tier Rule Manager</h1>
         <p style={{ maxWidth: 900, lineHeight: 1.5 }}>
           Build tier rules connected to existing Shopify products and
-          collections. v1.5 keeps the setup staff-friendly by only showing the fields needed for the selected pricing method, while storing recipe, quantity, and safety rules for pricing automation.
+          collections. v1.6 adds a safe preview that reads saved recipe data and current Shopify variants to generate sample tier prices before anything is published.
         </p>
         {actionData?.message ? (
           <div
@@ -1268,6 +1494,79 @@ export default function ErpPricingRulesRoute() {
           border: "1px solid #ddd",
           borderRadius: 14,
           padding: 20,
+          background: "#fff",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Preview generated tier prices</h2>
+        <p style={{ color: "#666", lineHeight: 1.5 }}>
+          Preview-only. This does not update Shopify prices and does not publish storefront pricing yet. v1.6 uses the saved recipe, current Shopify variants, hard safety margin, quantity rules, and rounding to estimate safe tier prices.
+        </p>
+        {!previews?.length ? <p>No saved rules to preview yet.</p> : null}
+        <div style={{ display: "grid", gap: 16 }}>
+          {(previews || []).map((preview: TierPreview) => (
+            <article key={preview.key} style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <h3 style={{ margin: "0 0 4px" }}>{preview.title}</h3>
+                  <p style={{ margin: 0, color: "#666" }}>
+                    {preview.scopeType} · {preview.productCount} preview products · {preview.variantCount} preview variants
+                  </p>
+                  <p style={{ margin: "4px 0 0", color: "#475569" }}>{preview.status}</p>
+                </div>
+                <span style={{ padding: "6px 10px", borderRadius: 999, background: "#eff6ff", color: "#1d4ed8", height: "fit-content" }}>Preview only</span>
+              </div>
+              {preview.rows.length ? (
+                <div style={{ marginTop: 12, overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 920 }}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Product / variant</th>
+                        <th style={thStyle}>Options</th>
+                        <th style={thStyle}>Base</th>
+                        <th style={thStyle}>Est. cost</th>
+                        <th style={thStyle}>Generated tier prices</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.rows.slice(0, 20).map((row, index) => (
+                        <tr key={`${row.productTitle}-${row.variantTitle}-${index}`}>
+                          <td style={tdStyle}>
+                            <strong>{row.productTitle}</strong>
+                            <div style={{ color: "#666", fontSize: 12 }}>{row.variantTitle}</div>
+                          </td>
+                          <td style={tdStyle}>
+                            <div>Material: {row.material || "-"}</div>
+                            <div>Gloss: {row.gloss || "-"}</div>
+                            <div>Bag color: {row.bagColor || "-"}</div>
+                          </td>
+                          <td style={tdStyle}>{money(row.basePrice)}</td>
+                          <td style={tdStyle}>{money(row.estimatedUnitCost)}</td>
+                          <td style={tdStyle}>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              {row.tierPrices.map((tier) => (
+                                <span key={tier.qty} title={`${tier.marginPct.toFixed(1)}% margin${tier.warning ? ` · ${tier.warning}` : ""}`} style={{ border: "1px solid #dbeafe", background: tier.warning ? "#fff7ed" : "#eff6ff", borderRadius: 999, padding: "4px 8px", whiteSpace: "nowrap" }}>
+                                  {tier.qty.toLocaleString()}: {money(tier.price)}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section
+        style={{
+          marginTop: 20,
+          border: "1px solid #ddd",
+          borderRadius: 14,
+          padding: 20,
           background: "#fafafa",
         }}
       >
@@ -1294,7 +1593,10 @@ export default function ErpPricingRulesRoute() {
             <strong>v1.5:</strong> Clean staff setup UI: pricing-method-specific tier fields, Safety rules, and Quantity rules.
           </li>
           <li>
-            <strong>v1.6:</strong> Preview affected variants and generate safe tier prices from Cost Calculator backend costs.
+            <strong>v1.6:</strong> Preview affected variants and generate safe tier prices from recipe/backend cost assumptions. This page.
+          </li>
+          <li>
+            <strong>v1.7:</strong> Save generated tier tables for storefront product-page and cart display.
           </li>
           <li>
             <strong>v2.0:</strong> Shopify Discount Function checkout enforcement.
