@@ -3,10 +3,10 @@ import { useState } from "react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const VERSION = "Tier Rule Manager v1.2";
+const VERSION = "Tier Rule Manager v1.3";
 const DEFAULT_TIERS = [100, 250, 500, 1000, 2500, 5000, 10000];
 const SCOPE_OPTIONS = ["global", "collection", "product", "variant"] as const;
-const MODE_OPTIONS = ["percent_off", "fixed_price"] as const;
+const MODE_OPTIONS = ["cost_margin", "percent_off", "fixed_price", "manual_cost_margin"] as const;
 
 type TierRuleRow = {
   id: string;
@@ -113,6 +113,10 @@ function scopeLabel(rule: any) {
 
 function tierRowLabel(row: TierRuleRow) {
   if (row.discountType === "fixed_price") return `${money(row.sellPrice)} each`;
+  if (row.discountType === "manual_cost_margin") {
+    return `${money(row.sellPrice)} cost + ${Number(row.percentOff || 0).toFixed(2)}% margin`;
+  }
+  if (row.discountType === "cost_margin") return `${Number(row.percentOff || 0).toFixed(2)}% margin`;
   return `${Number(row.percentOff || 0).toFixed(2)}% off`;
 }
 
@@ -315,10 +319,10 @@ export async function action({ request }: { request: Request }) {
       String(form.get("title") || "").trim() || "Untitled tier rule";
     const scopeType = String(form.get("scopeType") || "global").trim();
     const scopeTarget = String(form.get("scopeTarget") || "").trim();
-    const mode =
-      String(form.get("pricingMode") || "percent_off") === "fixed_price"
-        ? "fixed_price"
-        : "percent_off";
+    const requestedMode = String(form.get("pricingMode") || "cost_margin").trim();
+    const mode = MODE_OPTIONS.includes(requestedMode as any)
+      ? requestedMode
+      : "cost_margin";
     const minMarginPct = numberValue(form.get("minMarginPct"), 50);
     const minOrderTotal = numberValue(form.get("minOrderTotal"), 0);
     const minUnitPrice = numberValue(form.get("minUnitPrice"), 0);
@@ -402,10 +406,16 @@ export async function action({ request }: { request: Request }) {
     const tierRows = DEFAULT_TIERS.map((qty) => {
       const discountPct = numberValue(form.get(`discount_${qty}`), 0);
       const fixedPrice = numberValue(form.get(`fixed_${qty}`), 0);
-      return { qty, discountPct, fixedPrice };
-    }).filter(
-      (tier) => tier.qty > 0 && (mode === "percent_off" || tier.fixedPrice > 0),
-    );
+      const marginPct = numberValue(form.get(`margin_${qty}`), minMarginPct);
+      const manualCost = numberValue(form.get(`manualCost_${qty}`), 0);
+      return { qty, discountPct, fixedPrice, marginPct, manualCost };
+    }).filter((tier) => {
+      if (tier.qty <= 0) return false;
+      if (mode === "fixed_price") return tier.fixedPrice > 0;
+      if (mode === "manual_cost_margin") return tier.manualCost > 0 && tier.marginPct > 0;
+      if (mode === "cost_margin") return tier.marginPct > 0;
+      return true;
+    });
 
     if (!tierRows.length) {
       return {
@@ -436,8 +446,18 @@ export async function action({ request }: { request: Request }) {
         sku: settings,
         minQty: tier.qty,
         discountType: mode,
-        sellPrice: mode === "fixed_price" ? tier.fixedPrice : null,
-        percentOff: mode === "percent_off" ? tier.discountPct : null,
+        sellPrice:
+          mode === "fixed_price"
+            ? tier.fixedPrice
+            : mode === "manual_cost_margin"
+              ? tier.manualCost
+              : null,
+        percentOff:
+          mode === "percent_off"
+            ? tier.discountPct
+            : mode === "cost_margin" || mode === "manual_cost_margin"
+              ? tier.marginPct
+              : null,
         unitCost: minUnitPrice || null,
         active,
         priority,
@@ -508,8 +528,8 @@ export default function ErpPricingRulesRoute() {
         <p style={{ maxWidth: 900, lineHeight: 1.5 }}>
           Build tier rules connected to existing Shopify products and
           collections. v1.1 pulls Shopify targets into the setup, stores
-          label-size recipe data, and saves variant option mappings so tier
-          pricing can become automatic later.
+          label-size recipe data, variant option mappings, and flexible pricing
+          methods so tier pricing can become automatic later.
         </p>
         {actionData?.message ? (
           <div
@@ -713,16 +733,21 @@ export default function ErpPricingRulesRoute() {
           </label>
 
           <label style={{ display: "block", marginTop: 12 }}>
-            Pricing mode
+            Pricing method
             <select
               name="pricingMode"
-              defaultValue="percent_off"
+              defaultValue="cost_margin"
               style={inputStyle}
             >
-              <option value="percent_off">Percentage discount tiers</option>
-              <option value="fixed_price">Fixed unit price tiers</option>
+              <option value="cost_margin">Cost-based margin % by tier</option>
+              <option value="percent_off">Shopify/base price % off by tier</option>
+              <option value="manual_cost_margin">Manual unit cost + margin %</option>
+              <option value="fixed_price">Manual fixed unit price</option>
             </select>
           </label>
+          <p style={{ margin: "6px 0 0", color: "#666", fontSize: 13 }}>
+            Cost-based margin uses the recipe/backend cost for each variant. % off uses the Shopify/base price. Manual cost is for products not fully mapped yet. Fixed price is an override.
+          </p>
 
           <div
             style={{
@@ -787,25 +812,33 @@ export default function ErpPricingRulesRoute() {
           </label>
 
           <h3>Tier rows</h3>
+          <p style={{ marginTop: 0, color: "#666", fontSize: 13 }}>
+            Fill the column that matches the selected pricing method. The extra columns stay available as future override/reference fields.
+          </p>
           <div style={{ display: "grid", gap: 8 }}>
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "80px 1fr 1fr",
+                gridTemplateColumns: "72px 1fr 1fr 1fr 1fr",
                 gap: 8,
                 fontWeight: 700,
               }}
             >
               <span>Qty</span>
+              <span>Margin %</span>
               <span>% off</span>
+              <span>Manual cost</span>
               <span>Fixed price</span>
             </div>
-            {DEFAULT_TIERS.map((qty, index) => (
+            {DEFAULT_TIERS.map((qty, index) => {
+              const defaultMargins = [60, 55, 50, 47, 45, 45, 45];
+              const defaultDiscounts = [0, 5, 8, 12, 16, 20, 24];
+              return (
               <div
                 key={qty}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "80px 1fr 1fr",
+                  gridTemplateColumns: "72px 1fr 1fr 1fr 1fr",
                   gap: 8,
                 }}
               >
@@ -815,12 +848,24 @@ export default function ErpPricingRulesRoute() {
                   style={{ ...inputStyle, background: "#f8f8f8" }}
                 />
                 <input
+                  name={`margin_${qty}`}
+                  type="number"
+                  step="0.01"
+                  defaultValue={defaultMargins[index] || 45}
+                  style={inputStyle}
+                />
+                <input
                   name={`discount_${qty}`}
                   type="number"
                   step="0.01"
-                  defaultValue={
-                    index === 0 ? 0 : [5, 8, 12, 16, 20, 24][index - 1] || 0
-                  }
+                  defaultValue={defaultDiscounts[index] || 0}
+                  style={inputStyle}
+                />
+                <input
+                  name={`manualCost_${qty}`}
+                  type="number"
+                  step="0.01"
+                  placeholder="optional"
                   style={inputStyle}
                 />
                 <input
@@ -831,7 +876,7 @@ export default function ErpPricingRulesRoute() {
                   style={inputStyle}
                 />
               </div>
-            ))}
+            )})}
           </div>
 
           <section
@@ -1008,8 +1053,12 @@ export default function ErpPricingRulesRoute() {
                         <strong>{first.scopeTarget}</strong> · Mode:{" "}
                         <strong>
                           {first.discountType === "fixed_price"
-                            ? "Fixed unit price"
-                            : "Percentage discount"}
+                            ? "Manual fixed unit price"
+                            : first.discountType === "manual_cost_margin"
+                              ? "Manual unit cost + margin"
+                              : first.discountType === "cost_margin"
+                                ? "Cost-based margin"
+                                : "Percentage discount"}
                         </strong>
                       </p>
                       <p style={{ margin: "4px 0 0", color: "#666" }}>
