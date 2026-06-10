@@ -43,3 +43,10 @@ Hotfix 2 verification:
 - Commit hotfix
 - Merge to main
 - Confirm /app/erp/configurator loads
+
+Patch 3 verification:
+- Run npm run build
+- Commit mapping page
+- Merge to main after build passes
+- Open /app/erp/configurator-mapping
+- Save product mapping for the 5 pilot products

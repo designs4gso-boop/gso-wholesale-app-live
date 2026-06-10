@@ -103,3 +103,27 @@ Notes:
 - No schema changes.
 - No database changes.
 - No Shopify theme changes.
+
+## Patch 3 - Shopify product mapping screen
+
+Purpose:
+Add an ERP screen for mapping the 5 pilot configurator products to Shopify products and base variants.
+
+Files changed:
+- app/routes/app.erp.configurator-mapping.tsx
+- app/routes.ts
+- app/routes/app.tsx
+
+What it adds:
+- /app/erp/configurator-mapping
+- Shopify Product GID field
+- Shopify Variant GID field
+- Shopify Handle field
+- Base SKU field
+- Active toggle
+- Mapping status indicators
+
+Still not done:
+- Storefront configurator block
+- Shopify line item property submission
+- Order webhook configurator processing

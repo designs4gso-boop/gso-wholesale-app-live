@@ -20,6 +20,7 @@ export default [
     route("erp/cost-calculator", "routes/app.erp.cost-calculator.tsx"),
     route("erp/pricing-rules", "routes/app.erp.pricing-rules.tsx"),
     route("erp/configurator", "routes/app.erp.configurator.tsx"),
+    route("erp/configurator-mapping", "routes/app.erp.configurator-mapping.tsx"),
     route("create-order", "routes/app.create-order.tsx"),
     route("erp/materials", "routes/app.erp.materials.tsx"),
     route("erp/machines", "routes/app.erp.machines.tsx"),
@@ -55,3 +56,4 @@ export default [
   route("app/create-wholesale-discount", "routes/app.create-wholesale-discount.tsx"),
   route("webhooks/orders_paid", "routes/webhooks.orders_paid.tsx"),
 ] satisfies RouteConfig;
+
