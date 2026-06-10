@@ -625,7 +625,7 @@ export default function GsoConfigurator() {
                   <td>{row.productionFinish}</td>
                   <td>{money(row.costEach)}</td>
                   {QTY_RANGES.map((range) => (
-                    <td key={range.label}>{row.prices[range.label] ? money(row.prices[range.label]) : "-"}</td>
+                    <td key={range.label}>{matrixPrice(row, range) !== null ? money(matrixPrice(row, range)) : "-"}</td>
                   ))}
                 </tr>
               ))}
@@ -872,4 +872,5 @@ ol {
   }
 }
 `;
+
 

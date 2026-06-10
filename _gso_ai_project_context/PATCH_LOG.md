@@ -64,3 +64,16 @@ Notes:
 - No Shopify theme changes.
 - No order sync changes.
 - Calculator logic was already working from database rules.
+
+## Patch 2.2 - Robust final tier matrix display
+
+Purpose:
+Make the pricing matrix display the final 1921-2560+ tier even if the stored database rule key is 1921+, 1921-2560+, or matched by min quantity.
+
+Files changed:
+- app/routes/app.erp.configurator.tsx
+
+Notes:
+- No schema changes.
+- No Shopify theme changes.
+- No order sync changes.

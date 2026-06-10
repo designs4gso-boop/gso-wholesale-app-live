@@ -23,3 +23,9 @@ Patch 2.1 verification:
 - Commit range label fix
 - Merge to main
 - Confirm 1921-2560+ column shows prices
+
+Patch 2.2 verification:
+- Run npm run build
+- Commit final tier display fix
+- Merge to main
+- Confirm final pricing matrix column shows prices
