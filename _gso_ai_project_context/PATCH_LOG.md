@@ -50,3 +50,17 @@ Still not done:
 - Shopify line item properties
 - Order paid webhook configurator processing
 - Production job creation from configured order
+
+## Patch 2.1 - Pricing matrix range label fix
+
+Purpose:
+Fix the final database pricing matrix display column so the 1921-2560+ tier displays prices instead of "-".
+
+Files changed:
+- app/routes/app.erp.configurator.tsx
+
+Notes:
+- No database schema changes.
+- No Shopify theme changes.
+- No order sync changes.
+- Calculator logic was already working from database rules.

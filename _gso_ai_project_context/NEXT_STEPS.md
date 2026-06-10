@@ -17,3 +17,9 @@ Patch 2 next verification:
 - Push branch
 - Merge to main after successful local build
 - Render will run npx prisma db push and deploy schema/models
+
+Patch 2.1 verification:
+- Run npm run build
+- Commit range label fix
+- Merge to main
+- Confirm 1921-2560+ column shows prices
