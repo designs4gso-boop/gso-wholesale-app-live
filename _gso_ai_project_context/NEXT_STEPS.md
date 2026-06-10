@@ -29,3 +29,10 @@ Patch 2.2 verification:
 - Commit final tier display fix
 - Merge to main
 - Confirm final pricing matrix column shows prices
+
+Hotfix verification:
+- Run npm run build
+- Commit hotfix
+- Merge to main
+- Confirm configurator page loads
+- Confirm final pricing column displays prices

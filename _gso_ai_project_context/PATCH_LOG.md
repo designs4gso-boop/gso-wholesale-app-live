@@ -77,3 +77,16 @@ Notes:
 - No schema changes.
 - No Shopify theme changes.
 - No order sync changes.
+
+## Hotfix - Add missing matrixPrice helper
+
+Purpose:
+Fix live configurator page error: ReferenceError matrixPrice is not defined.
+
+Files changed:
+- app/routes/app.erp.configurator.tsx
+
+Notes:
+- No schema changes.
+- No database changes.
+- No Shopify theme changes.
