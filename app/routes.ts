@@ -1,4 +1,4 @@
-import { type RouteConfig, index, route } from "@react-router/dev/routes";
+﻿import { type RouteConfig, index, route } from "@react-router/dev/routes";
 
 export default [
   index("routes/_index.tsx"),
@@ -19,6 +19,7 @@ export default [
     route("erp/product-costs", "routes/app.erp.product-costs.tsx"),
     route("erp/cost-calculator", "routes/app.erp.cost-calculator.tsx"),
     route("erp/pricing-rules", "routes/app.erp.pricing-rules.tsx"),
+    route("erp/configurator", "routes/app.erp.configurator.tsx"),
     route("create-order", "routes/app.create-order.tsx"),
     route("erp/materials", "routes/app.erp.materials.tsx"),
     route("erp/machines", "routes/app.erp.machines.tsx"),

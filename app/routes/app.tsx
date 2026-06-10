@@ -1,4 +1,4 @@
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+﻿import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
@@ -29,6 +29,7 @@ export default function App() {
       <s-link href="/app/erp/print-intake">Print Intake</s-link>
       <s-link href="/app/erp/cost-calculator">Cost Calculator</s-link>
       <s-link href="/app/erp/pricing-rules">Pricing Rules</s-link>
+      <s-link href="/app/erp/configurator">Configurator</s-link>
       <s-link href="/app/erp/product-setup">Product Setup</s-link>
       <s-link href="/app/erp/vendor-cost-book">Vendor Cost Book</s-link>
       <s-link href="/app/erp/settings">Admin Settings</s-link>
@@ -46,4 +47,5 @@ export function ErrorBoundary() {
 export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
+
 
