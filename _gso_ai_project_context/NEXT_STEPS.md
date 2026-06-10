@@ -9,3 +9,11 @@
 7. Send Material, Finish, Bag Color, Quantity, ERP Product ID, and ERP Config ID as Shopify line item properties.
 8. Update order paid webhook to read configurator line item properties.
 9. Create ERP production job with cost/margin snapshot.
+
+Patch 2 next verification:
+- Run npx prisma generate
+- Run npm run build
+- Commit to gso-configurator-db-rules
+- Push branch
+- Merge to main after successful local build
+- Render will run npx prisma db push and deploy schema/models

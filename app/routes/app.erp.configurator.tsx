@@ -1,6 +1,8 @@
-﻿import { Form, useLoaderData } from "react-router";
+﻿import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
+import { db } from "../db.server";
 
+const PRODUCT_TYPE = "stock_bag_4x5";
 const MIN_QTY = 64;
 
 const PILOT_PRODUCTS = [
@@ -43,10 +45,10 @@ const QTY_RANGES = [
   { label: "257-640", min: 257, max: 640 },
   { label: "641-1280", min: 641, max: 1280 },
   { label: "1281-1920", min: 1281, max: 1920 },
-  { label: "1921-2560+", min: 1921, max: null },
+  { label: "1921-2560+", min: 1921, max: null as number | null },
 ];
 
-const PRICING_ROWS = [
+const FALLBACK_PRICING_ROWS = [
   {
     material: "Matte",
     finish: "No Spot Gloss",
@@ -138,34 +140,196 @@ function textParam(url: URL, key: string, fallback: string) {
   return raw && raw.trim() ? raw.trim() : fallback;
 }
 
-function findRangeIndex(qty: number) {
-  return QTY_RANGES.findIndex((range) => {
-    if (qty < range.min) return false;
-    if (range.max === null) return true;
-    return qty <= range.max;
-  });
+function findRange(qty: number) {
+  return (
+    QTY_RANGES.find((range) => {
+      if (qty < range.min) return false;
+      if (range.max === null) return true;
+      return qty <= range.max;
+    }) || QTY_RANGES[0]
+  );
 }
 
-function calculate(material: string, finish: string, qty: number) {
+function findRangeIndex(qty: number) {
+  return Math.max(
+    QTY_RANGES.findIndex((range) => {
+      if (qty < range.min) return false;
+      if (range.max === null) return true;
+      return qty <= range.max;
+    }),
+    0,
+  );
+}
+
+function fallbackRuleFor(material: string, finish: string, qty: number) {
   const safeQty = Math.max(qty, MIN_QTY);
-  const rangeIndex = Math.max(findRangeIndex(safeQty), 0);
+  const rangeIndex = findRangeIndex(safeQty);
   const row =
-    PRICING_ROWS.find(
+    FALLBACK_PRICING_ROWS.find(
       (item) =>
         item.material.toLowerCase() === material.toLowerCase() &&
         item.finish.toLowerCase() === finish.toLowerCase(),
-    ) || PRICING_ROWS[0];
+    ) || FALLBACK_PRICING_ROWS[0];
 
-  const priceEach = row.prices[rangeIndex] || row.prices[row.prices.length - 1];
-  const costEach = row.costEach;
+  return {
+    material: row.material,
+    finish: row.finish,
+    productionFinish: row.productionFinish,
+    sides: "Double Sided",
+    minQty: QTY_RANGES[rangeIndex].min,
+    maxQty: QTY_RANGES[rangeIndex].max,
+    priceEach: row.prices[rangeIndex] || row.prices[row.prices.length - 1],
+    costEach: row.costEach,
+    source: "fallback",
+  };
+}
+
+async function resetPilotData(shop: string) {
+  await db.configuratorPricingRule.deleteMany({
+    where: { shop, productType: PRODUCT_TYPE },
+  });
+  await db.configuratorOption.deleteMany({
+    where: { shop, productType: PRODUCT_TYPE },
+  });
+
+  await db.configuratorProduct.createMany({
+    data: PILOT_PRODUCTS.map((title) => ({
+      shop,
+      title,
+      productType: PRODUCT_TYPE,
+      defaultSides: "Double Sided",
+      minQuantity: MIN_QTY,
+      pilot: true,
+      active: true,
+      notes: "5-product stock bag configurator pilot",
+    })),
+    skipDuplicates: true,
+  });
+
+  const optionRows = [
+    ...MATERIALS.map((value, index) => ({
+      shop,
+      productType: PRODUCT_TYPE,
+      group: "Material",
+      value,
+      label: value,
+      sortOrder: index + 1,
+      active: true,
+    })),
+    ...FINISHES.map((value, index) => ({
+      shop,
+      productType: PRODUCT_TYPE,
+      group: "Finish",
+      value,
+      label: value,
+      sortOrder: index + 1,
+      active: true,
+    })),
+    ...BAG_COLORS.map((value, index) => ({
+      shop,
+      productType: PRODUCT_TYPE,
+      group: "Bag Color",
+      value,
+      label: value,
+      sortOrder: index + 1,
+      active: true,
+    })),
+  ];
+
+  await db.configuratorOption.createMany({
+    data: optionRows,
+    skipDuplicates: true,
+  });
+
+  const pricingRows = FALLBACK_PRICING_ROWS.flatMap((row) =>
+    QTY_RANGES.map((range, index) => ({
+      shop,
+      productType: PRODUCT_TYPE,
+      material: row.material,
+      finish: row.finish,
+      productionFinish: row.productionFinish,
+      sides: "Double Sided",
+      minQty: range.min,
+      maxQty: range.max,
+      priceEach: row.prices[index] || row.prices[row.prices.length - 1],
+      costEach: row.costEach,
+      active: true,
+      priority: 100,
+      notes: "Seeded from GSO 4x5 stock bag pilot pricing sheet",
+    })),
+  );
+
+  await db.configuratorPricingRule.createMany({
+    data: pricingRows,
+    skipDuplicates: true,
+  });
+
+  return {
+    products: PILOT_PRODUCTS.length,
+    options: optionRows.length,
+    pricingRules: pricingRows.length,
+  };
+}
+
+async function ensurePilotData(shop: string) {
+  const [productCount, optionCount, pricingRuleCount] = await Promise.all([
+    db.configuratorProduct.count({ where: { shop, productType: PRODUCT_TYPE } }),
+    db.configuratorOption.count({ where: { shop, productType: PRODUCT_TYPE } }),
+    db.configuratorPricingRule.count({ where: { shop, productType: PRODUCT_TYPE } }),
+  ]);
+
+  if (productCount === 0 || optionCount === 0 || pricingRuleCount === 0) {
+    await resetPilotData(shop);
+  }
+}
+
+async function getDbPricingRule(shop: string, material: string, finish: string, qty: number) {
+  const safeQty = Math.max(qty, MIN_QTY);
+
+  const rule = await db.configuratorPricingRule.findFirst({
+    where: {
+      shop,
+      productType: PRODUCT_TYPE,
+      active: true,
+      material,
+      finish,
+      minQty: { lte: safeQty },
+      OR: [{ maxQty: null }, { maxQty: { gte: safeQty } }],
+    },
+    orderBy: [{ priority: "asc" }, { minQty: "desc" }],
+  });
+
+  if (!rule) {
+    return fallbackRuleFor(material, finish, safeQty);
+  }
+
+  return {
+    material: rule.material,
+    finish: rule.finish,
+    productionFinish: rule.productionFinish,
+    sides: rule.sides,
+    minQty: rule.minQty,
+    maxQty: rule.maxQty,
+    priceEach: rule.priceEach,
+    costEach: rule.costEach,
+    source: "database",
+  };
+}
+
+async function calculate(shop: string, material: string, finish: string, qty: number) {
+  const safeQty = Math.max(qty, MIN_QTY);
+  const rule = await getDbPricingRule(shop, material, finish, safeQty);
+  const range = findRange(safeQty);
+  const priceEach = Number(rule.priceEach || 0);
+  const costEach = Number(rule.costEach || 0);
   const profitEach = priceEach - costEach;
   const marginPct = priceEach > 0 ? (profitEach / priceEach) * 100 : 0;
 
   return {
     qty: safeQty,
     requestedQty: qty,
-    range: QTY_RANGES[rangeIndex],
-    row,
+    range,
+    rule,
     priceEach,
     costEach,
     profitEach,
@@ -176,17 +340,77 @@ function calculate(material: string, finish: string, qty: number) {
   };
 }
 
+function rangeLabel(rule: { minQty: number; maxQty: number | null }) {
+  return rule.maxQty ? `${rule.minQty}-${rule.maxQty}` : `${rule.minQty}+`;
+}
+
+function buildPricingMatrix(rules: any[]) {
+  const grouped = new Map<string, any>();
+
+  for (const rule of rules) {
+    const key = `${rule.material}|||${rule.finish}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        material: rule.material,
+        finish: rule.finish,
+        productionFinish: rule.productionFinish,
+        costEach: rule.costEach,
+        prices: {},
+      });
+    }
+
+    grouped.get(key).prices[rangeLabel(rule)] = rule.priceEach;
+  }
+
+  return Array.from(grouped.values());
+}
+
+export async function action({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") || "");
+
+  if (intent === "resetPilotData") {
+    const result = await resetPilotData(session.shop);
+    return {
+      ok: true,
+      message: `Pilot rules reset: ${result.products} products, ${result.options} options, ${result.pricingRules} pricing rules.`,
+    };
+  }
+
+  return { ok: false, message: "No action taken." };
+}
+
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
-  const url = new URL(request.url);
+  await ensurePilotData(session.shop);
 
+  const url = new URL(request.url);
   const selectedProduct = textParam(url, "product", PILOT_PRODUCTS[0]);
   const material = textParam(url, "material", "Matte");
   const finish = textParam(url, "finish", "No Spot Gloss");
   const bagColor = textParam(url, "bagColor", "White");
   const qty = intParam(url, "qty", 64);
 
-  const result = calculate(material, finish, qty);
+  const [products, options, pricingRules, result] = await Promise.all([
+    db.configuratorProduct.findMany({
+      where: { shop: session.shop, productType: PRODUCT_TYPE, active: true },
+      orderBy: [{ pilot: "desc" }, { title: "asc" }],
+    }),
+    db.configuratorOption.findMany({
+      where: { shop: session.shop, productType: PRODUCT_TYPE, active: true },
+      orderBy: [{ group: "asc" }, { sortOrder: "asc" }],
+    }),
+    db.configuratorPricingRule.findMany({
+      where: { shop: session.shop, productType: PRODUCT_TYPE, active: true },
+      orderBy: [{ material: "asc" }, { finish: "asc" }, { minQty: "asc" }],
+    }),
+    calculate(session.shop, material, finish, qty),
+  ]);
+
+  const materialOptions = options.filter((option) => option.group === "Material").map((option) => option.value);
+  const finishOptions = options.filter((option) => option.group === "Finish").map((option) => option.value);
+  const bagColorOptions = options.filter((option) => option.group === "Bag Color").map((option) => option.value);
 
   return {
     shop: session.shop,
@@ -196,12 +420,28 @@ export async function loader({ request }: { request: Request }) {
     bagColor,
     qty,
     result,
+    products,
+    pricingRules,
+    pricingMatrix: buildPricingMatrix(pricingRules),
+    options: {
+      materials: materialOptions.length ? materialOptions : MATERIALS,
+      finishes: finishOptions.length ? finishOptions : FINISHES,
+      bagColors: bagColorOptions.length ? bagColorOptions : BAG_COLORS,
+    },
+    counts: {
+      products: products.length,
+      options: options.length,
+      pricingRules: pricingRules.length,
+    },
   };
 }
 
 export default function GsoConfigurator() {
   const data = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
   const result = data.result;
+  const isSubmitting = navigation.state !== "idle";
 
   return (
     <div className="gso-page">
@@ -212,32 +452,56 @@ export default function GsoConfigurator() {
           <p className="eyebrow">GSO ERP Pilot</p>
           <h1>Product Configurator</h1>
           <p>
-            Pilot calculator for moving stock bags away from Shopify variant overload.
-            Shopify will keep 1 product and 1 base variant. ERP controls pricing,
-            costs, margins, and production rules.
+            Database-backed pilot for moving stock bags away from Shopify variant overload.
+            Shopify keeps 1 product and 1 base variant. ERP controls pricing, costs,
+            margins, option rules, and production logic.
           </p>
         </div>
         <div className="hero-card">
           <strong>Activation</strong>
           <span>Live theme later</span>
           <span>Only products tagged configurator-pilot</span>
+          <span>Pricing source: {result.rule.source}</span>
+        </div>
+      </div>
+
+      {actionData?.message ? (
+        <div className={actionData.ok ? "notice success" : "notice warning"}>{actionData.message}</div>
+      ) : null}
+
+      <div className="grid three">
+        <div className="card stat">
+          <span>Configurator Products</span>
+          <strong>{data.counts.products}</strong>
+        </div>
+        <div className="card stat">
+          <span>Option Values</span>
+          <strong>{data.counts.options}</strong>
+        </div>
+        <div className="card stat">
+          <span>Pricing Rules</span>
+          <strong>{data.counts.pricingRules}</strong>
         </div>
       </div>
 
       <div className="grid two">
         <div className="card">
-          <h2>Test Calculator</h2>
-          <p className="muted">
-            Customer-facing options: Material, Finish, Bag Color, and Quantity.
-            Sides are hidden and defaulted to Double Sided.
-          </p>
+          <div className="card-head">
+            <div>
+              <h2>Test Calculator</h2>
+              <p className="muted">
+                Customer-facing options: Material, Finish, Bag Color, and Quantity.
+                Sides are hidden and defaulted to Double Sided.
+              </p>
+            </div>
+          </div>
 
           <Form method="get" className="form-grid">
             <label>
               Product
               <select name="product" defaultValue={data.selectedProduct}>
-                {PILOT_PRODUCTS.map((product) => (
-                  <option key={product} value={product}>{product}</option>
+                {data.products.map((product: any) => (
+                  <option key={product.id} value={product.title}>{product.title}</option>
                 ))}
               </select>
             </label>
@@ -245,7 +509,7 @@ export default function GsoConfigurator() {
             <label>
               Material
               <select name="material" defaultValue={data.material}>
-                {MATERIALS.map((material) => (
+                {data.options.materials.map((material: string) => (
                   <option key={material} value={material}>{material}</option>
                 ))}
               </select>
@@ -254,7 +518,7 @@ export default function GsoConfigurator() {
             <label>
               Finish
               <select name="finish" defaultValue={data.finish}>
-                {FINISHES.map((finish) => (
+                {data.options.finishes.map((finish: string) => (
                   <option key={finish} value={finish}>{finish}</option>
                 ))}
               </select>
@@ -263,7 +527,7 @@ export default function GsoConfigurator() {
             <label>
               Bag Color
               <select name="bagColor" defaultValue={data.bagColor}>
-                {BAG_COLORS.map((color) => (
+                {data.options.bagColors.map((color: string) => (
                   <option key={color} value={color}>{color}</option>
                 ))}
               </select>
@@ -278,6 +542,15 @@ export default function GsoConfigurator() {
               <button type="submit">Calculate</button>
             </div>
           </Form>
+
+          <div className="admin-actions">
+            <Form method="post">
+              <input type="hidden" name="intent" value="resetPilotData" />
+              <button className="secondary" type="submit" disabled={isSubmitting}>
+                {isSubmitting ? "Working..." : "Reset pilot database rules"}
+              </button>
+            </Form>
+          </div>
         </div>
 
         <div className="card result-card">
@@ -301,10 +574,11 @@ export default function GsoConfigurator() {
             <p><b>Product:</b> {data.selectedProduct}</p>
             <p><b>Material:</b> {data.material}</p>
             <p><b>Finish:</b> {data.finish}</p>
-            <p><b>Production Finish:</b> {result.row.productionFinish}</p>
+            <p><b>Production Finish:</b> {result.rule.productionFinish}</p>
             <p><b>Bag Color:</b> {data.bagColor}</p>
-            <p><b>Sides:</b> Double Sided hidden/default</p>
+            <p><b>Sides:</b> {result.rule.sides} hidden/default</p>
             <p><b>Minimum Quantity:</b> 64</p>
+            <p><b>Pricing Source:</b> {result.rule.source}</p>
           </div>
         </div>
       </div>
@@ -312,20 +586,22 @@ export default function GsoConfigurator() {
       <div className="card">
         <h2>5-Product Pilot</h2>
         <div className="pilot-list">
-          {PILOT_PRODUCTS.map((product) => (
-            <div key={product} className="pilot-item">
-              <strong>{product}</strong>
+          {data.products.map((product: any) => (
+            <div key={product.id} className="pilot-item">
+              <strong>{product.title}</strong>
               <span>Needs Shopify tag: configurator-pilot</span>
+              <span>Min Qty: {product.minQuantity}</span>
+              <span>Sides: {product.defaultSides}</span>
             </div>
           ))}
         </div>
       </div>
 
       <div className="card">
-        <h2>Pricing Matrix Loaded For 4x5 Stock Bags</h2>
+        <h2>Database Pricing Matrix For 4x5 Stock Bags</h2>
         <p className="muted">
-          These rules match the pilot pricing sheet structure: 64 minimum quantity,
-          range-based pricing, double-sided default, and ERP-controlled cost/margin preview.
+          These rules are now stored in Prisma/PostgreSQL. The calculator reads database rules first
+          and only falls back to hardcoded pilot rules if the database has no matching rule.
         </p>
 
         <div className="table-wrap">
@@ -334,6 +610,7 @@ export default function GsoConfigurator() {
               <tr>
                 <th>Material</th>
                 <th>Finish</th>
+                <th>Production Finish</th>
                 <th>Cost Each</th>
                 {QTY_RANGES.map((range) => (
                   <th key={range.label}>{range.label}</th>
@@ -341,13 +618,14 @@ export default function GsoConfigurator() {
               </tr>
             </thead>
             <tbody>
-              {PRICING_ROWS.map((row) => (
+              {data.pricingMatrix.map((row: any) => (
                 <tr key={row.material + row.finish}>
                   <td>{row.material}</td>
                   <td>{row.finish}</td>
+                  <td>{row.productionFinish}</td>
                   <td>{money(row.costEach)}</td>
-                  {row.prices.map((price, index) => (
-                    <td key={index}>{money(price)}</td>
+                  {QTY_RANGES.map((range) => (
+                    <td key={range.label}>{row.prices[range.label] ? money(row.prices[range.label]) : "-"}</td>
                   ))}
                 </tr>
               ))}
@@ -359,10 +637,9 @@ export default function GsoConfigurator() {
       <div className="card">
         <h2>Next Patch After This Works</h2>
         <ol>
-          <li>Save configurator pricing rules into Prisma instead of hardcoded pilot rows.</li>
           <li>Add Shopify product mapping for the 5 pilot products.</li>
           <li>Create storefront configurator block for products tagged configurator-pilot.</li>
-          <li>Send Material, Finish, Bag Color, Quantity, and ERP Config ID as line item properties.</li>
+          <li>Send Material, Finish, Bag Color, Quantity, ERP Product ID, and ERP Config ID as line item properties.</li>
           <li>Update order paid webhook to create production jobs from selected properties.</li>
         </ol>
       </div>
@@ -418,6 +695,11 @@ const styles = `
   grid-template-columns: 1fr 1fr;
   gap: 18px;
 }
+.grid.three {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+}
 .card {
   background: white;
   border: 1px solid #dfe3e8;
@@ -428,6 +710,21 @@ const styles = `
 }
 .card h2 {
   margin-top: 0;
+}
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.stat span {
+  display: block;
+  color: #6d7175;
+  font-size: 13px;
+}
+.stat strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 28px;
 }
 .muted {
   color: #6d7175;
@@ -464,6 +761,20 @@ button {
   font-weight: 700;
   cursor: pointer;
 }
+button.secondary {
+  background: #f6f6f7;
+  color: #111827;
+  border: 1px solid #c9cccf;
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.admin-actions {
+  margin-top: 16px;
+  border-top: 1px solid #e1e3e5;
+  padding-top: 16px;
+}
 .metric-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -494,13 +805,22 @@ button {
 .summary p {
   margin: 6px 0;
 }
-.warning {
-  background: #fff4e5;
-  border: 1px solid #ffb84d;
-  color: #7a4b00;
+.warning,
+.notice {
   padding: 10px;
   border-radius: 10px;
   margin-bottom: 12px;
+}
+.warning,
+.notice.warning {
+  background: #fff4e5;
+  border: 1px solid #ffb84d;
+  color: #7a4b00;
+}
+.notice.success {
+  background: #ecfdf3;
+  border: 1px solid #86efac;
+  color: #14532d;
 }
 .pilot-list {
   display: grid;
@@ -544,6 +864,7 @@ ol {
 @media (max-width: 900px) {
   .hero,
   .grid.two,
+  .grid.three,
   .pilot-list,
   .form-grid {
     grid-template-columns: 1fr;

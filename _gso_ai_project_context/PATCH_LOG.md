@@ -25,3 +25,28 @@ Not done yet:
 - No Shopify storefront theme changes yet
 - No order webhook configurator processing yet
 - No full product migration yet
+
+## Patch 2 - Database-backed configurator rules
+
+Purpose:
+Move the pilot configurator from hardcoded-only pricing to Prisma/PostgreSQL-backed rules.
+
+Files changed:
+- prisma/schema.prisma
+- app/routes/app.erp.configurator.tsx
+
+What it adds:
+- ConfiguratorProduct model
+- ConfiguratorOption model
+- ConfiguratorPricingRule model
+- Automatic pilot data seeding
+- Database-first pricing calculation
+- Reset pilot database rules button
+- Pricing source indicator: database/fallback
+
+Still not done:
+- Shopify storefront product page configurator
+- Shopify product mapping
+- Shopify line item properties
+- Order paid webhook configurator processing
+- Production job creation from configured order

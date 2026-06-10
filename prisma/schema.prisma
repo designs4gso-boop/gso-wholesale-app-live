@@ -1369,3 +1369,70 @@ model MarginReviewSetting {
 
   @@index([shop])
 }
+
+model ConfiguratorProduct {
+  id                String   @id @default(cuid())
+  shop              String
+  title             String
+  productType       String   @default("stock_bag_4x5")
+  shopifyProductGid String?
+  shopifyVariantGid String?
+  shopifyHandle     String?
+  sku               String?
+  defaultSides      String   @default("Double Sided")
+  minQuantity       Int      @default(64)
+  pilot             Boolean  @default(false)
+  active            Boolean  @default(true)
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([shop, title])
+  @@index([shop, productType])
+  @@index([shop, active])
+  @@index([shop, pilot])
+  @@index([shopifyProductGid])
+  @@index([shopifyVariantGid])
+}
+
+model ConfiguratorOption {
+  id          String   @id @default(cuid())
+  shop        String
+  productType String   @default("stock_bag_4x5")
+  group       String
+  value       String
+  label       String?
+  sortOrder   Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, productType, group, value])
+  @@index([shop, productType, group])
+  @@index([shop, active])
+}
+
+model ConfiguratorPricingRule {
+  id               String   @id @default(cuid())
+  shop             String
+  productType      String   @default("stock_bag_4x5")
+  material         String
+  finish           String
+  productionFinish String
+  sides            String   @default("Double Sided")
+  minQty           Int
+  maxQty           Int?
+  priceEach        Float
+  costEach         Float
+  active           Boolean  @default(true)
+  priority         Int      @default(100)
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([shop, productType, material, finish, sides, minQty, maxQty])
+  @@index([shop, productType])
+  @@index([shop, active])
+  @@index([shop, material, finish])
+  @@index([shop, minQty, maxQty])
+}
