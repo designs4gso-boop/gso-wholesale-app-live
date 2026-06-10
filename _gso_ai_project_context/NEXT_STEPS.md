@@ -36,3 +36,10 @@ Hotfix verification:
 - Merge to main
 - Confirm configurator page loads
 - Confirm final pricing column displays prices
+
+Hotfix 2 verification:
+- Run npm run build
+- Confirm build passes
+- Commit hotfix
+- Merge to main
+- Confirm /app/erp/configurator loads

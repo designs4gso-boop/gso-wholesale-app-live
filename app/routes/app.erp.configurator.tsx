@@ -365,6 +365,25 @@ function buildPricingMatrix(rules: any[]) {
   return Array.from(grouped.values());
 }
 
+
+function matrixPrice(row: any, range: { label: string; min: number; max: number | null }) {
+  const fallbackLabel = range.max ? `${range.min}-${range.max}` : `${range.min}+`;
+  const openEndedLabel = `${range.min}+`;
+
+  if (row.prices[range.label] !== undefined && row.prices[range.label] !== null) {
+    return row.prices[range.label];
+  }
+
+  if (row.prices[fallbackLabel] !== undefined && row.prices[fallbackLabel] !== null) {
+    return row.prices[fallbackLabel];
+  }
+
+  if (row.prices[openEndedLabel] !== undefined && row.prices[openEndedLabel] !== null) {
+    return row.prices[openEndedLabel];
+  }
+
+  return null;
+}
 export async function action({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -872,6 +891,7 @@ ol {
   }
 }
 `;
+
 
 
 
