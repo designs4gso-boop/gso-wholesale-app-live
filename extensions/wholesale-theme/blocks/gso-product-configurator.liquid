@@ -5,30 +5,10 @@
   "javascript": "gso-product-configurator.js",
   "stylesheet": "gso-product-configurator.css",
   "settings": [
-    {
-      "type": "text",
-      "id": "eyebrow",
-      "label": "Eyebrow",
-      "default": "GSO Custom Stock Bag"
-    },
-    {
-      "type": "text",
-      "id": "heading",
-      "label": "Heading",
-      "default": "Build Your Bag"
-    },
-    {
-      "type": "textarea",
-      "id": "subheading",
-      "label": "Subheading",
-      "default": "Choose your material, finish, bag color, and quantity."
-    },
-    {
-      "type": "number",
-      "id": "minimum_quantity",
-      "label": "Minimum quantity",
-      "default": 64
-    },
+    { "type": "text", "id": "eyebrow", "label": "Eyebrow", "default": "GSO Custom Stock Bag" },
+    { "type": "text", "id": "heading", "label": "Heading", "default": "Build Your Bag" },
+    { "type": "textarea", "id": "subheading", "label": "Subheading", "default": "Choose your material, finish, bag color, and quantity." },
+    { "type": "number", "id": "minimum_quantity", "label": "Minimum quantity", "default": 64 },
     {
       "type": "select",
       "id": "layout",
@@ -40,87 +20,21 @@
         { "value": "minimal", "label": "Minimal" }
       ]
     },
-    {
-      "type": "color",
-      "id": "background_color",
-      "label": "Card background",
-      "default": "#120004"
-    },
-    {
-      "type": "color",
-      "id": "text_color",
-      "label": "Text color",
-      "default": "#ffffff"
-    },
-    {
-      "type": "color",
-      "id": "muted_text_color",
-      "label": "Muted text color",
-      "default": "#d8cfd1"
-    },
-    {
-      "type": "color",
-      "id": "accent_color",
-      "label": "Accent color",
-      "default": "#ff1f1f"
-    },
-    {
-      "type": "color",
-      "id": "border_color",
-      "label": "Border color",
-      "default": "#ff1f1f"
-    },
-    {
-      "type": "color",
-      "id": "field_background",
-      "label": "Dropdown background",
-      "default": "#050505"
-    },
-    {
-      "type": "color",
-      "id": "field_text_color",
-      "label": "Dropdown text color",
-      "default": "#ffffff"
-    },
-    {
-      "type": "color",
-      "id": "result_background",
-      "label": "Result box background",
-      "default": "#1b080b"
-    },
-    {
-      "type": "range",
-      "id": "border_radius",
-      "label": "Border radius",
-      "min": 0,
-      "max": 32,
-      "step": 2,
-      "default": 16
-    },
-    {
-      "type": "checkbox",
-      "id": "show_price_each",
-      "label": "Show price each",
-      "default": true
-    },
-    {
-      "type": "checkbox",
-      "id": "show_order_total",
-      "label": "Show order total",
-      "default": true
-    },
-    {
-      "type": "checkbox",
-      "id": "show_matched_tier",
-      "label": "Show matched tier",
-      "default": true
-    },
-    {
-      "type": "checkbox",
-      "id": "show_profit_data",
-      "label": "Show internal profit/cost data",
-      "default": false
-    }
+    { "type": "color", "id": "background_color", "label": "Card background", "default": "#120004" },
+    { "type": "color", "id": "text_color", "label": "Text color", "default": "#ffffff" },
+    { "type": "color", "id": "muted_text_color", "label": "Muted text color", "default": "#d8cfd1" },
+    { "type": "color", "id": "accent_color", "label": "Accent color", "default": "#ff1f1f" },
+    { "type": "color", "id": "border_color", "label": "Border color", "default": "#ff1f1f" },
+    { "type": "color", "id": "field_background", "label": "Dropdown background", "default": "#050505" },
+    { "type": "color", "id": "field_text_color", "label": "Dropdown text color", "default": "#ffffff" },
+    { "type": "color", "id": "result_background", "label": "Result box background", "default": "#1b080b" },
+    { "type": "range", "id": "border_radius", "label": "Border radius", "min": 0, "max": 32, "step": 2, "default": 16 },
+
+    { "type": "checkbox", "id": "show_price_each", "label": "Show price per unit", "default": true },
+    { "type": "checkbox", "id": "show_order_total", "label": "Show order total", "default": false },
+    { "type": "checkbox", "id": "show_matched_tier", "label": "Show matched tier", "default": false },
+    { "type": "checkbox", "id": "show_price_breaks", "label": "Show price break chart", "default": true },
+    { "type": "checkbox", "id": "show_profit_data", "label": "Show internal profit/cost data", "default": false }
   ]
 }
 {% endschema %}
@@ -139,6 +53,7 @@
   data-show-price-each="{{ block.settings.show_price_each }}"
   data-show-order-total="{{ block.settings.show_order_total }}"
   data-show-matched-tier="{{ block.settings.show_matched_tier }}"
+  data-show-price-breaks="{{ block.settings.show_price_breaks }}"
   data-show-profit-data="{{ block.settings.show_profit_data }}"
   style="
     --gso-card-bg: {{ block.settings.background_color }};
@@ -153,17 +68,11 @@
   "
 >
   <div class="gso-configurator__inner">
-    <div class="gso-configurator__header">
-      <div>
-        <p class="gso-configurator__eyebrow">{{ block.settings.eyebrow }}</p>
-        <h3 class="gso-configurator__title">{{ block.settings.heading }}</h3>
-        <p class="gso-configurator__subheading">{{ block.settings.subheading }}</p>
-      </div>
-    </div>
+    <p class="gso-configurator__eyebrow">{{ block.settings.eyebrow }}</p>
+    <h3 class="gso-configurator__title">{{ block.settings.heading }}</h3>
+    <p class="gso-configurator__subheading">{{ block.settings.subheading }}</p>
 
-    <div class="gso-configurator__loading">
-      Loading custom bag options...
-    </div>
+    <div class="gso-configurator__loading">Loading custom bag options...</div>
 
     <div class="gso-configurator__app" hidden>
       <div class="gso-configurator__fields">
@@ -188,10 +97,10 @@
         </label>
       </div>
 
-      <div class="gso-configurator__results">
+      <div class="gso-configurator__summary">
         <div class="gso-configurator__result" data-gso-result="priceEachBox">
-          <span>Price Each</span>
-          <strong data-gso-result="priceEach">-</strong>
+          <span>Price Per Unit</span>
+          <strong><span data-gso-result="priceEach">-</span> <small>each</small></strong>
         </div>
 
         <div class="gso-configurator__result" data-gso-result="orderTotalBox">
@@ -203,29 +112,27 @@
           <span>Matched Tier</span>
           <strong data-gso-result="matchedTier">-</strong>
         </div>
-
-        <div class="gso-configurator__result gso-configurator__result--internal" data-gso-result="costEachBox">
-          <span>Cost Each</span>
-          <strong data-gso-result="costEach">-</strong>
-        </div>
-
-        <div class="gso-configurator__result gso-configurator__result--internal" data-gso-result="marginBox">
-          <span>Margin</span>
-          <strong data-gso-result="margin">-</strong>
-        </div>
       </div>
 
       <div class="gso-configurator__notice" data-gso-result="notice">
         Sides are set to Double Sided. Minimum order is {{ block.settings.minimum_quantity }} units.
+      </div>
+
+      <div class="gso-configurator__breaks" data-gso-result="priceBreaksBox" hidden>
+        <div class="gso-configurator__breaks-title">Price Breaks</div>
+        <div class="gso-configurator__breaks-table" data-gso-result="priceBreaks"></div>
+      </div>
+
+      <div class="gso-configurator__internal" data-gso-result="internalBox" hidden>
+        <div>Cost Each: <strong data-gso-result="costEach">-</strong></div>
+        <div>Margin: <strong data-gso-result="margin">-</strong></div>
       </div>
     </div>
 
     <div class="gso-configurator__error" hidden></div>
 
     <noscript>
-      <div class="gso-configurator__error">
-        Enable JavaScript to use the GSO product configurator.
-      </div>
+      <div class="gso-configurator__error">Enable JavaScript to use the GSO product configurator.</div>
     </noscript>
   </div>
 </div>

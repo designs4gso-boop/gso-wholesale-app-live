@@ -72,14 +72,7 @@ export async function loader({ request }: { request: Request }) {
   const quantity = Math.max(numberValue(url.searchParams.get("quantity"), MIN_QTY), MIN_QTY);
 
   if (!shop || (!handle && !productGid)) {
-    return jsonResponse(
-      {
-        ok: false,
-        active: false,
-        message: "Missing shop or product identifier.",
-      },
-      { headers: corsHeaders() }
-    );
+    return jsonResponse({ ok: false, active: false, message: "Missing shop or product identifier." });
   }
 
   const product = await db.configuratorProduct.findFirst({
@@ -95,31 +88,20 @@ export async function loader({ request }: { request: Request }) {
   });
 
   if (!product) {
-    return jsonResponse(
-      {
-        ok: true,
-        active: false,
-        message: "No ERP configurator product found for this Shopify product.",
-      },
-      { headers: corsHeaders() }
-    );
+    return jsonResponse({
+      ok: true,
+      active: false,
+      message: "No ERP configurator product found for this Shopify product.",
+    });
   }
 
   const [options, rules] = await Promise.all([
     db.configuratorOption.findMany({
-      where: {
-        shop,
-        productType: PRODUCT_TYPE,
-        active: true,
-      },
+      where: { shop, productType: PRODUCT_TYPE, active: true },
       orderBy: [{ group: "asc" }, { sortOrder: "asc" }],
     }),
     db.configuratorPricingRule.findMany({
-      where: {
-        shop,
-        productType: PRODUCT_TYPE,
-        active: true,
-      },
+      where: { shop, productType: PRODUCT_TYPE, active: true },
       orderBy: [{ material: "asc" }, { finish: "asc" }, { minQty: "asc" }],
     }),
   ]);
@@ -142,6 +124,20 @@ export async function loader({ request }: { request: Request }) {
 
   const rule = findMatchingRule(rules, selectedMaterial, selectedFinish, quantity);
 
+  const priceBreaks = rules
+    .filter((priceRule) => {
+      const materialOk = String(priceRule.material || "").toLowerCase() === selectedMaterial.toLowerCase();
+      const finishOk = String(priceRule.finish || "").toLowerCase() === selectedFinish.toLowerCase();
+      return materialOk && finishOk && priceRule.active !== false;
+    })
+    .sort((a, b) => Number(a.minQty || 0) - Number(b.minQty || 0))
+    .map((priceRule) => ({
+      range: rangeLabel(priceRule),
+      minQty: Number(priceRule.minQty || 0),
+      maxQty: priceRule.maxQty == null ? null : Number(priceRule.maxQty),
+      priceEach: money(priceRule.priceEach),
+    }));
+
   const priceEach = money(rule?.priceEach ?? 0);
   const costEach = money(rule?.costEach ?? 0);
   const orderTotal = money(priceEach * quantity);
@@ -149,45 +145,38 @@ export async function loader({ request }: { request: Request }) {
   const totalProfit = money(orderTotal - totalCost);
   const margin = orderTotal > 0 ? money((totalProfit / orderTotal) * 100) : 0;
 
-  return jsonResponse(
-    {
-      ok: true,
-      active: true,
-      product: {
-        id: product.id,
-        title: product.title,
-        shopifyProductGid: product.shopifyProductGid,
-        shopifyVariantGid: product.shopifyVariantGid,
-        handle: product.shopifyHandle,
-        sku: product.sku,
-        minQuantity: product.minQuantity || MIN_QTY,
-        defaultSides: product.defaultSides || "Double Sided",
-      },
-      options: {
-        materials,
-        finishes,
-        bagColors,
-      },
-      selected: {
-        material: selectedMaterial,
-        finish: selectedFinish,
-        bagColor: selectedBagColor,
-        quantity,
-        sides: "Double Sided",
-      },
-      pricing: {
-        matched: Boolean(rule),
-        matchedRange: rangeLabel(rule),
-        productionFinish: rule?.productionFinish || selectedFinish,
-        priceEach,
-        costEach,
-        orderTotal,
-        totalCost,
-        totalProfit,
-        margin,
-      },
+  return jsonResponse({
+    ok: true,
+    active: true,
+    product: {
+      id: product.id,
+      title: product.title,
+      shopifyProductGid: product.shopifyProductGid,
+      shopifyVariantGid: product.shopifyVariantGid,
+      handle: product.shopifyHandle,
+      sku: product.sku,
+      minQuantity: product.minQuantity || MIN_QTY,
+      defaultSides: product.defaultSides || "Double Sided",
     },
-    { headers: corsHeaders() }
-  );
+    options: { materials, finishes, bagColors },
+    selected: {
+      material: selectedMaterial,
+      finish: selectedFinish,
+      bagColor: selectedBagColor,
+      quantity,
+      sides: "Double Sided",
+    },
+    pricing: {
+      matched: Boolean(rule),
+      matchedRange: rangeLabel(rule),
+      productionFinish: rule?.productionFinish || selectedFinish,
+      priceEach,
+      costEach,
+      orderTotal,
+      totalCost,
+      totalProfit,
+      margin,
+      priceBreaks,
+    },
+  });
 }
-
