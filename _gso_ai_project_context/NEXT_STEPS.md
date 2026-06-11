@@ -85,3 +85,13 @@ Sync trim hotfix verification:
 - Open /app/erp/configurator-sync
 - Preview with stock-bags, configurator-pilot, Stock Bag
 - If zero, preview with Product Type blank
+
+Collection ID sync verification:
+- Run npm run build
+- Deploy to Render
+- Open /app/erp/configurator-sync
+- Use Collection ID 302046380097
+- Required tag configurator-pilot
+- Product Type Stock Bag
+- Preview products
+- Check Sync Debug counts

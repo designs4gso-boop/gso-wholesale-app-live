@@ -53,7 +53,7 @@ async function fetchShopifyProducts({
   shopifyProductType: string;
   limit: number;
 }) {
-  const queryText = buildShopifyProductSearch(requiredTag);
+  const queryText = buildShopifyProductSearch(collectionHandle);
   const maxToFetch = Math.max(1, Math.min(limit || 50, 250));
   const products: ShopifyProductPreview[] = [];
   let after: string | null = null;
@@ -119,6 +119,8 @@ async function fetchShopifyProducts({
 
     const json = await response.json();
     const edges = json?.data?.products?.edges || [];
+
+    rawFetchedCount += edges.length;
 
     for (const edge of edges) {
       const node = edge.node;
@@ -411,7 +413,7 @@ export default function ConfiguratorSync() {
           <div>
             <h2>Sync Settings</h2>
             <p className="muted">
-              For the 5-product pilot, use collection handle <b>stock-bags</b> and required tag <b>configurator-pilot</b>.
+              For the 5-product pilot, use collection ID <b>302046380097</b> or handle <b>stock-bags</b>, with required tag <b>configurator-pilot</b>. Collection ID is more reliable.
               Later, remove or change the tag to sync the full catalog.
             </p>
           </div>
@@ -420,8 +422,8 @@ export default function ConfiguratorSync() {
 
         <Form method="post" className="form-grid">
           <label>
-            Shopify Collection Handle
-            <input name="collectionHandle" defaultValue={defaults.collectionHandle} placeholder="stock-bags" />
+            Shopify Collection Handle or ID
+            <input name="collectionHandle" defaultValue={defaults.collectionHandle} placeholder="stock-bags or 302046380097" />
           </label>
 
           <label>
@@ -711,6 +713,30 @@ td small {
 ol {
   margin-bottom: 0;
 }
+.debug-card {
+  border-color: #93c5fd;
+}
+.debug-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.debug-grid div {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 12px;
+}
+.debug-grid span {
+  display: block;
+  color: #1d4ed8;
+  font-size: 12px;
+}
+.debug-grid strong {
+  display: block;
+  margin-top: 4px;
+  word-break: break-word;
+}
 @media (max-width: 900px) {
   .hero,
   .card-head,
@@ -726,5 +752,6 @@ ol {
   }
 }
 `;
+
 
 

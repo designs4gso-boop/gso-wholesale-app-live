@@ -221,3 +221,21 @@ Notes:
 - No schema changes.
 - No database changes.
 - No storefront changes.
+
+## Hotfix - Configurator sync collection ID search
+
+Purpose:
+Fix sync preview returning zero products by querying Shopify with collection_id first, then filtering required tag and product type inside ERP.
+
+Files changed:
+- app/routes/app.erp.configurator-sync.tsx
+
+What changed:
+- Collection field can accept stock-bags or numeric collection ID.
+- If numeric ID is provided, Shopify query uses collection_id.
+- Required tag is now filtered inside ERP.
+- Product type is filtered inside ERP.
+- Added sync debug panel showing raw Shopify returned count and filter counts.
+
+Pilot collection:
+- Stock Bags collection ID: 302046380097
