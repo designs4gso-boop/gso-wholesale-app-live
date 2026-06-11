@@ -104,3 +104,13 @@ Direct collection sync verification:
 - Tag configurator-pilot
 - Product Type Stock Bag
 - Preview products
+
+Storefront configurator pilot verification:
+- Run npm run build
+- Deploy to Render
+- Deploy/push Shopify theme extension
+- Add GSO Product Configurator block to product template
+- Test on configurator-pilot product
+- Confirm Material, Finish, Bag Color, Quantity load
+- Confirm price updates
+- Add to cart and confirm line item properties

@@ -1,0 +1,114 @@
+﻿.gso-configurator {
+  border: 1px solid #dfe3e8;
+  border-radius: 18px;
+  padding: 18px;
+  margin: 18px 0;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+
+.gso-configurator__header {
+  margin-bottom: 14px;
+}
+
+.gso-configurator__eyebrow {
+  margin: 0 0 4px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: #312e81;
+}
+
+.gso-configurator h3 {
+  margin: 0 0 4px;
+  font-size: 24px;
+}
+
+.gso-configurator__header p:last-child {
+  margin: 0;
+  color: #6d7175;
+}
+
+.gso-configurator__loading {
+  padding: 12px;
+  border-radius: 12px;
+  background: #f6f6f7;
+  color: #6d7175;
+}
+
+.gso-configurator__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.gso-configurator label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.gso-configurator select,
+.gso-configurator input {
+  min-height: 44px;
+  border: 1px solid #c9cccf;
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: #fff;
+  font-size: 15px;
+  width: 100%;
+}
+
+.gso-configurator__price-box {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.gso-configurator__price-box div {
+  border: 1px solid #dfe3e8;
+  border-radius: 14px;
+  background: #f6f6f7;
+  padding: 12px;
+}
+
+.gso-configurator__price-box span {
+  display: block;
+  font-size: 12px;
+  color: #6d7175;
+}
+
+.gso-configurator__price-box strong {
+  display: block;
+  font-size: 20px;
+  margin-top: 4px;
+}
+
+.gso-configurator__note {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 13px;
+}
+
+.gso-configurator__error {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+@media (max-width: 749px) {
+  .gso-configurator__grid,
+  .gso-configurator__price-box {
+    grid-template-columns: 1fr;
+  }
+}

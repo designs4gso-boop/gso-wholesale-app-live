@@ -1,0 +1,182 @@
+﻿import { json } from "react-router";
+import { db } from "../db.server";
+import { MIN_QTY, PRODUCT_TYPE } from "../lib/configurator-pricing";
+
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Cache-Control": "no-store",
+  };
+}
+
+function clean(value: string | null | undefined) {
+  return String(value ?? "").trim();
+}
+
+function numberValue(value: string | null | undefined, fallback: number) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function money(value: any) {
+  const num = Number(value ?? 0);
+  return Math.round(num * 100) / 100;
+}
+
+function uniqueValues(items: string[]) {
+  return Array.from(new Set(items.filter(Boolean)));
+}
+
+function findMatchingRule(rules: any[], material: string, finish: string, quantity: number) {
+  return (
+    rules.find((rule) => {
+      const materialOk = String(rule.material || "").toLowerCase() === material.toLowerCase();
+      const finishOk = String(rule.finish || "").toLowerCase() === finish.toLowerCase();
+      const minOk = quantity >= Number(rule.minQty || 0);
+      const maxOk = rule.maxQty == null || quantity <= Number(rule.maxQty);
+      return materialOk && finishOk && minOk && maxOk && rule.active !== false;
+    }) || null
+  );
+}
+
+function rangeLabel(rule: any) {
+  if (!rule) return "";
+  return rule.maxQty == null ? `${rule.minQty}+` : `${rule.minQty}-${rule.maxQty}`;
+}
+
+export async function loader({ request }: { request: Request }) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders() });
+  }
+
+  const url = new URL(request.url);
+
+  const shop = clean(url.searchParams.get("shop"));
+  const handle = clean(url.searchParams.get("handle"));
+  const productGid = clean(url.searchParams.get("productGid"));
+  const material = clean(url.searchParams.get("material"));
+  const finish = clean(url.searchParams.get("finish"));
+  const bagColor = clean(url.searchParams.get("bagColor"));
+  const quantity = Math.max(numberValue(url.searchParams.get("quantity"), MIN_QTY), MIN_QTY);
+
+  if (!shop || (!handle && !productGid)) {
+    return json(
+      {
+        ok: false,
+        active: false,
+        message: "Missing shop or product identifier.",
+      },
+      { headers: corsHeaders() }
+    );
+  }
+
+  const product = await db.configuratorProduct.findFirst({
+    where: {
+      shop,
+      productType: PRODUCT_TYPE,
+      active: true,
+      OR: [
+        productGid ? { shopifyProductGid: productGid } : undefined,
+        handle ? { shopifyHandle: handle } : undefined,
+      ].filter(Boolean) as any,
+    },
+  });
+
+  if (!product) {
+    return json(
+      {
+        ok: true,
+        active: false,
+        message: "No ERP configurator product found for this Shopify product.",
+      },
+      { headers: corsHeaders() }
+    );
+  }
+
+  const [options, rules] = await Promise.all([
+    db.configuratorOption.findMany({
+      where: {
+        shop,
+        productType: PRODUCT_TYPE,
+        active: true,
+      },
+      orderBy: [{ group: "asc" }, { sortOrder: "asc" }],
+    }),
+    db.configuratorPricingRule.findMany({
+      where: {
+        shop,
+        productType: PRODUCT_TYPE,
+        active: true,
+      },
+      orderBy: [{ material: "asc" }, { finish: "asc" }, { minQty: "asc" }],
+    }),
+  ]);
+
+  const materials = uniqueValues(
+    options.filter((option) => option.group === "material").map((option) => option.label || option.value)
+  );
+
+  const finishes = uniqueValues(
+    options.filter((option) => option.group === "finish").map((option) => option.label || option.value)
+  );
+
+  const bagColors = uniqueValues(
+    options.filter((option) => option.group === "bagColor").map((option) => option.label || option.value)
+  );
+
+  const selectedMaterial = material || materials[0] || "Matte";
+  const selectedFinish = finish || finishes[0] || "No Spot Gloss";
+  const selectedBagColor = bagColor || bagColors[0] || "White";
+
+  const rule = findMatchingRule(rules, selectedMaterial, selectedFinish, quantity);
+
+  const priceEach = money(rule?.priceEach ?? 0);
+  const costEach = money(rule?.costEach ?? 0);
+  const orderTotal = money(priceEach * quantity);
+  const totalCost = money(costEach * quantity);
+  const totalProfit = money(orderTotal - totalCost);
+  const margin = orderTotal > 0 ? money((totalProfit / orderTotal) * 100) : 0;
+
+  return json(
+    {
+      ok: true,
+      active: true,
+      product: {
+        id: product.id,
+        title: product.title,
+        shopifyProductGid: product.shopifyProductGid,
+        shopifyVariantGid: product.shopifyVariantGid,
+        handle: product.shopifyHandle,
+        sku: product.sku,
+        minQuantity: product.minQuantity || MIN_QTY,
+        defaultSides: product.defaultSides || "Double Sided",
+      },
+      options: {
+        materials,
+        finishes,
+        bagColors,
+      },
+      selected: {
+        material: selectedMaterial,
+        finish: selectedFinish,
+        bagColor: selectedBagColor,
+        quantity,
+        sides: "Double Sided",
+      },
+      pricing: {
+        matched: Boolean(rule),
+        matchedRange: rangeLabel(rule),
+        productionFinish: rule?.productionFinish || selectedFinish,
+        priceEach,
+        costEach,
+        orderTotal,
+        totalCost,
+        totalProfit,
+        margin,
+      },
+    },
+    { headers: corsHeaders() }
+  );
+}

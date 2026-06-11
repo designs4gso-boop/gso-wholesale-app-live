@@ -253,3 +253,29 @@ What changed:
 - Filters required tag and product type inside ERP.
 - Adds debug panel showing raw Shopify products returned, tag matches, product type matches, and final matches.
 - Uses Stock Bags collection ID as default.
+
+## Patch - Storefront product configurator pilot
+
+Purpose:
+Add customer-facing GSO Product Configurator theme app block for configurator-pilot products.
+
+Files changed:
+- app/routes/apps.wholesale-lite.configurator.ts
+- app/routes.ts
+- extensions/wholesale-theme/blocks/gso-product-configurator.liquid
+- extensions/wholesale-theme/assets/gso-product-configurator.js
+- extensions/wholesale-theme/assets/gso-product-configurator.css
+
+What it adds:
+- Public app proxy endpoint /apps/wholesale-lite/configurator
+- Reads synced ConfiguratorProduct by shop + handle/product GID
+- Pulls Material, Finish, Bag Color options from ERP
+- Calculates price from ConfiguratorPricingRule
+- Shows Price Each, Order Total, Matched Tier
+- Adds line item properties for ERP/order sync
+- Only renders block for products tagged configurator-pilot
+
+Notes:
+- Pilot only.
+- Does not remove Shopify variants yet.
+- Does not alter order webhook yet.

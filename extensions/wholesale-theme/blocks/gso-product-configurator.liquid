@@ -1,0 +1,136 @@
+﻿{% comment %}
+  GSO Product Configurator
+  Pilot storefront configurator for products tagged configurator-pilot.
+  Uses ERP app proxy endpoint /apps/wholesale-lite/configurator.
+{% endcomment %}
+
+{% assign gso_has_configurator_tag = false %}
+{% for tag in product.tags %}
+  {% assign down_tag = tag | downcase %}
+  {% if down_tag == 'configurator-pilot' %}
+    {% assign gso_has_configurator_tag = true %}
+  {% endif %}
+{% endfor %}
+
+{% if gso_has_configurator_tag %}
+  {{ 'gso-product-configurator.css' | asset_url | stylesheet_tag }}
+
+  <div
+    class="gso-configurator"
+    data-gso-configurator
+    data-shop="{{ shop.permanent_domain }}"
+    data-product-id="{{ product.id }}"
+    data-product-gid="gid://shopify/Product/{{ product.id }}"
+    data-product-handle="{{ product.handle }}"
+    data-product-title="{{ product.title | escape }}"
+    data-product-url="{{ product.url }}"
+    data-min-quantity="{{ block.settings.minimum_quantity }}"
+  >
+    <div class="gso-configurator__header">
+      <p class="gso-configurator__eyebrow">{{ block.settings.eyebrow }}</p>
+      <h3>{{ block.settings.heading }}</h3>
+      <p>{{ block.settings.subheading }}</p>
+    </div>
+
+    <div class="gso-configurator__loading" data-gso-loading>
+      Loading GSO options...
+    </div>
+
+    <div class="gso-configurator__body" data-gso-body hidden>
+      <div class="gso-configurator__grid">
+        <label>
+          Material
+          <select data-gso-material name="properties[Material]"></select>
+        </label>
+
+        <label>
+          Finish
+          <select data-gso-finish name="properties[Finish]"></select>
+        </label>
+
+        <label>
+          Bag Color
+          <select data-gso-bag-color name="properties[Bag Color]"></select>
+        </label>
+
+        <label>
+          Quantity
+          <input
+            data-gso-quantity
+            type="number"
+            min="{{ block.settings.minimum_quantity }}"
+            step="1"
+            value="{{ block.settings.minimum_quantity }}"
+            name="quantity"
+          >
+        </label>
+      </div>
+
+      <div class="gso-configurator__price-box">
+        <div>
+          <span>Price Each</span>
+          <strong data-gso-price-each>$0.00</strong>
+        </div>
+        <div>
+          <span>Order Total</span>
+          <strong data-gso-order-total>$0.00</strong>
+        </div>
+        <div>
+          <span>Matched Tier</span>
+          <strong data-gso-tier>-</strong>
+        </div>
+      </div>
+
+      <div class="gso-configurator__note">
+        Sides are set to <strong>Double Sided</strong>. Minimum order is <strong>{{ block.settings.minimum_quantity }}</strong> units.
+      </div>
+
+      <div class="gso-configurator__error" data-gso-error hidden></div>
+
+      <input type="hidden" data-gso-prop-configurator name="properties[_GSO Configurator]" value="true">
+      <input type="hidden" data-gso-prop-erp-product-id name="properties[_GSO ERP Product ID]" value="">
+      <input type="hidden" data-gso-prop-shopify-product-gid name="properties[_GSO Shopify Product GID]" value="">
+      <input type="hidden" data-gso-prop-shopify-variant-gid name="properties[_GSO Shopify Variant GID]" value="">
+      <input type="hidden" data-gso-prop-sides name="properties[Sides]" value="Double Sided">
+      <input type="hidden" data-gso-prop-price-each name="properties[Price Each]" value="">
+      <input type="hidden" data-gso-prop-cost-each name="properties[_Cost Each]" value="">
+      <input type="hidden" data-gso-prop-tier name="properties[Matched Tier]" value="">
+      <input type="hidden" data-gso-prop-production-finish name="properties[_Production Finish]" value="">
+    </div>
+  </div>
+
+  <script src="{{ 'gso-product-configurator.js' | asset_url }}" defer></script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "GSO Product Configurator",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "eyebrow",
+      "label": "Eyebrow",
+      "default": "GSO Custom Stock Bag"
+    },
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Build Your Bag"
+    },
+    {
+      "type": "text",
+      "id": "subheading",
+      "label": "Subheading",
+      "default": "Choose your material, finish, bag color, and quantity."
+    },
+    {
+      "type": "number",
+      "id": "minimum_quantity",
+      "label": "Minimum quantity",
+      "default": 64
+    }
+  ]
+}
+{% endschema %}

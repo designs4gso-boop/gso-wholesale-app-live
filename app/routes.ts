@@ -51,11 +51,13 @@ export default [
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
   route("apps/wholesale-lite/pricing", "routes/apps.wholesale-lite.pricing.ts"),
+  route("apps/wholesale-lite/configurator", "routes/apps.wholesale-lite.configurator.ts"),
   route("apps/wholesale-lite/validate", "routes/apps.wholesale-lite.validate.ts"),
   route("quote/:id", "routes/quote.$id.tsx"),
   route("webhooks/app/uninstalled", "routes/webhooks.app.uninstalled.ts"),
   route("app/create-wholesale-discount", "routes/app.create-wholesale-discount.tsx"),
   route("webhooks/orders_paid", "routes/webhooks.orders_paid.tsx"),
 ] satisfies RouteConfig;
+
 
 
