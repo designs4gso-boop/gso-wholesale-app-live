@@ -1,111 +1,9 @@
-﻿{% comment %}
-  GSO Product Configurator
-  Pilot storefront configurator for products tagged configurator-pilot.
-  Uses ERP app proxy endpoint /apps/wholesale-lite/configurator.
-{% endcomment %}
-
-{% assign gso_has_configurator_tag = false %}
-{% for tag in product.tags %}
-  {% assign down_tag = tag | downcase %}
-  {% if down_tag == 'configurator-pilot' %}
-    {% assign gso_has_configurator_tag = true %}
-  {% endif %}
-{% endfor %}
-
-{% if gso_has_configurator_tag %}
-  {{ 'gso-product-configurator.css' | asset_url | stylesheet_tag }}
-
-  <div
-    class="gso-configurator"
-    data-gso-configurator
-    data-shop="{{ shop.permanent_domain }}"
-    data-product-id="{{ product.id }}"
-    data-product-gid="gid://shopify/Product/{{ product.id }}"
-    data-product-handle="{{ product.handle }}"
-    data-product-title="{{ product.title | escape }}"
-    data-product-url="{{ product.url }}"
-    data-min-quantity="{{ block.settings.minimum_quantity }}"
-  >
-    <div class="gso-configurator__header">
-      <p class="gso-configurator__eyebrow">{{ block.settings.eyebrow }}</p>
-      <h3>{{ block.settings.heading }}</h3>
-      <p>{{ block.settings.subheading }}</p>
-    </div>
-
-    <div class="gso-configurator__loading" data-gso-loading>
-      Loading GSO options...
-    </div>
-
-    <div class="gso-configurator__body" data-gso-body hidden>
-      <div class="gso-configurator__grid">
-        <label>
-          Material
-          <select data-gso-material name="properties[Material]"></select>
-        </label>
-
-        <label>
-          Finish
-          <select data-gso-finish name="properties[Finish]"></select>
-        </label>
-
-        <label>
-          Bag Color
-          <select data-gso-bag-color name="properties[Bag Color]"></select>
-        </label>
-
-        <label>
-          Quantity
-          <input
-            data-gso-quantity
-            type="number"
-            min="{{ block.settings.minimum_quantity }}"
-            step="1"
-            value="{{ block.settings.minimum_quantity }}"
-            name="quantity"
-          >
-        </label>
-      </div>
-
-      <div class="gso-configurator__price-box">
-        <div>
-          <span>Price Each</span>
-          <strong data-gso-price-each>$0.00</strong>
-        </div>
-        <div>
-          <span>Order Total</span>
-          <strong data-gso-order-total>$0.00</strong>
-        </div>
-        <div>
-          <span>Matched Tier</span>
-          <strong data-gso-tier>-</strong>
-        </div>
-      </div>
-
-      <div class="gso-configurator__note">
-        Sides are set to <strong>Double Sided</strong>. Minimum order is <strong>{{ block.settings.minimum_quantity }}</strong> units.
-      </div>
-
-      <div class="gso-configurator__error" data-gso-error hidden></div>
-
-      <input type="hidden" data-gso-prop-configurator name="properties[_GSO Configurator]" value="true">
-      <input type="hidden" data-gso-prop-erp-product-id name="properties[_GSO ERP Product ID]" value="">
-      <input type="hidden" data-gso-prop-shopify-product-gid name="properties[_GSO Shopify Product GID]" value="">
-      <input type="hidden" data-gso-prop-shopify-variant-gid name="properties[_GSO Shopify Variant GID]" value="">
-      <input type="hidden" data-gso-prop-sides name="properties[Sides]" value="Double Sided">
-      <input type="hidden" data-gso-prop-price-each name="properties[Price Each]" value="">
-      <input type="hidden" data-gso-prop-cost-each name="properties[_Cost Each]" value="">
-      <input type="hidden" data-gso-prop-tier name="properties[Matched Tier]" value="">
-      <input type="hidden" data-gso-prop-production-finish name="properties[_Production Finish]" value="">
-    </div>
-  </div>
-
-  <script src="{{ 'gso-product-configurator.js' | asset_url }}" defer></script>
-{% endif %}
-
-{% schema %}
+﻿{% schema %}
 {
   "name": "GSO Product Configurator",
   "target": "section",
+  "javascript": "gso-product-configurator.js",
+  "stylesheet": "gso-product-configurator.css",
   "settings": [
     {
       "type": "text",
@@ -120,7 +18,7 @@
       "default": "Build Your Bag"
     },
     {
-      "type": "text",
+      "type": "textarea",
       "id": "subheading",
       "label": "Subheading",
       "default": "Choose your material, finish, bag color, and quantity."
@@ -130,7 +28,204 @@
       "id": "minimum_quantity",
       "label": "Minimum quantity",
       "default": 64
+    },
+    {
+      "type": "select",
+      "id": "layout",
+      "label": "Layout style",
+      "default": "card",
+      "options": [
+        { "value": "card", "label": "Card" },
+        { "value": "compact", "label": "Compact" },
+        { "value": "minimal", "label": "Minimal" }
+      ]
+    },
+    {
+      "type": "color",
+      "id": "background_color",
+      "label": "Card background",
+      "default": "#120004"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text color",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "muted_text_color",
+      "label": "Muted text color",
+      "default": "#d8cfd1"
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Accent color",
+      "default": "#ff1f1f"
+    },
+    {
+      "type": "color",
+      "id": "border_color",
+      "label": "Border color",
+      "default": "#ff1f1f"
+    },
+    {
+      "type": "color",
+      "id": "field_background",
+      "label": "Dropdown background",
+      "default": "#050505"
+    },
+    {
+      "type": "color",
+      "id": "field_text_color",
+      "label": "Dropdown text color",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "result_background",
+      "label": "Result box background",
+      "default": "#1b080b"
+    },
+    {
+      "type": "range",
+      "id": "border_radius",
+      "label": "Border radius",
+      "min": 0,
+      "max": 32,
+      "step": 2,
+      "default": 16
+    },
+    {
+      "type": "checkbox",
+      "id": "show_price_each",
+      "label": "Show price each",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_order_total",
+      "label": "Show order total",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_matched_tier",
+      "label": "Show matched tier",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_profit_data",
+      "label": "Show internal profit/cost data",
+      "default": false
     }
   ]
 }
 {% endschema %}
+
+{% assign selected_variant = product.selected_or_first_available_variant %}
+
+<div
+  class="gso-configurator gso-configurator--{{ block.settings.layout }}"
+  {{ block.shopify_attributes }}
+  data-configurator-proxy="/apps/wholesale-lite/configurator"
+  data-shop="{{ shop.permanent_domain | escape }}"
+  data-product-handle="{{ product.handle | escape }}"
+  data-product-gid="gid://shopify/Product/{{ product.id }}"
+  data-base-variant-gid="gid://shopify/ProductVariant/{{ selected_variant.id }}"
+  data-minimum-quantity="{{ block.settings.minimum_quantity }}"
+  data-show-price-each="{{ block.settings.show_price_each }}"
+  data-show-order-total="{{ block.settings.show_order_total }}"
+  data-show-matched-tier="{{ block.settings.show_matched_tier }}"
+  data-show-profit-data="{{ block.settings.show_profit_data }}"
+  style="
+    --gso-card-bg: {{ block.settings.background_color }};
+    --gso-text: {{ block.settings.text_color }};
+    --gso-muted: {{ block.settings.muted_text_color }};
+    --gso-accent: {{ block.settings.accent_color }};
+    --gso-border: {{ block.settings.border_color }};
+    --gso-field-bg: {{ block.settings.field_background }};
+    --gso-field-text: {{ block.settings.field_text_color }};
+    --gso-result-bg: {{ block.settings.result_background }};
+    --gso-radius: {{ block.settings.border_radius }}px;
+  "
+>
+  <div class="gso-configurator__inner">
+    <div class="gso-configurator__header">
+      <div>
+        <p class="gso-configurator__eyebrow">{{ block.settings.eyebrow }}</p>
+        <h3 class="gso-configurator__title">{{ block.settings.heading }}</h3>
+        <p class="gso-configurator__subheading">{{ block.settings.subheading }}</p>
+      </div>
+    </div>
+
+    <div class="gso-configurator__loading">
+      Loading custom bag options...
+    </div>
+
+    <div class="gso-configurator__app" hidden>
+      <div class="gso-configurator__fields">
+        <label class="gso-configurator__field">
+          <span>Material</span>
+          <select data-gso-field="material"></select>
+        </label>
+
+        <label class="gso-configurator__field">
+          <span>Finish</span>
+          <select data-gso-field="finish"></select>
+        </label>
+
+        <label class="gso-configurator__field">
+          <span>Bag Color</span>
+          <select data-gso-field="bagColor"></select>
+        </label>
+
+        <label class="gso-configurator__field">
+          <span>Quantity</span>
+          <input data-gso-field="quantity" type="number" min="{{ block.settings.minimum_quantity }}" step="1" value="{{ block.settings.minimum_quantity }}">
+        </label>
+      </div>
+
+      <div class="gso-configurator__results">
+        <div class="gso-configurator__result" data-gso-result="priceEachBox">
+          <span>Price Each</span>
+          <strong data-gso-result="priceEach">-</strong>
+        </div>
+
+        <div class="gso-configurator__result" data-gso-result="orderTotalBox">
+          <span>Order Total</span>
+          <strong data-gso-result="orderTotal">-</strong>
+        </div>
+
+        <div class="gso-configurator__result" data-gso-result="matchedTierBox">
+          <span>Matched Tier</span>
+          <strong data-gso-result="matchedTier">-</strong>
+        </div>
+
+        <div class="gso-configurator__result gso-configurator__result--internal" data-gso-result="costEachBox">
+          <span>Cost Each</span>
+          <strong data-gso-result="costEach">-</strong>
+        </div>
+
+        <div class="gso-configurator__result gso-configurator__result--internal" data-gso-result="marginBox">
+          <span>Margin</span>
+          <strong data-gso-result="margin">-</strong>
+        </div>
+      </div>
+
+      <div class="gso-configurator__notice" data-gso-result="notice">
+        Sides are set to Double Sided. Minimum order is {{ block.settings.minimum_quantity }} units.
+      </div>
+    </div>
+
+    <div class="gso-configurator__error" hidden></div>
+
+    <noscript>
+      <div class="gso-configurator__error">
+        Enable JavaScript to use the GSO product configurator.
+      </div>
+    </noscript>
+  </div>
+</div>

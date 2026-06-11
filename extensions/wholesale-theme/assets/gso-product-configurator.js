@@ -1,169 +1,263 @@
 ﻿(function () {
   function money(value) {
-    var num = Number(value || 0);
-    return "$" + num.toFixed(2);
+    var number = Number(value || 0);
+    return "$" + number.toFixed(2);
   }
 
-  function optionList(select, values, selectedValue) {
-    select.innerHTML = "";
-    (values || []).forEach(function (value) {
-      var option = document.createElement("option");
-      option.value = value;
-      option.textContent = value;
-      if (value === selectedValue) option.selected = true;
-      select.appendChild(option);
-    });
+  function clean(value) {
+    return String(value || "").trim();
   }
 
-  function closestProductForm(el) {
-    return el.closest("form[action*='/cart/add']") || document.querySelector("form[action*='/cart/add']");
+  function gidToNumericId(gid) {
+    var parts = String(gid || "").split("/");
+    return parts[parts.length - 1] || "";
   }
 
-  function ensureInsideProductForm(root) {
-    var form = closestProductForm(root);
-    if (!form) return;
+  function optionHtml(values, selected) {
+    return (values || []).map(function (value) {
+      var safeValue = String(value || "");
+      var isSelected = safeValue === selected ? " selected" : "";
+      return '<option value="' + escapeHtml(safeValue) + '"' + isSelected + ">" + escapeHtml(safeValue) + "</option>";
+    }).join("");
+  }
 
-    var hiddenInputs = root.querySelectorAll("input[type='hidden'][name^='properties'], select[name^='properties']");
-    hiddenInputs.forEach(function (input) {
-      if (!form.contains(input)) {
-        form.appendChild(input);
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function findProductForm(root) {
+    return (
+      root.closest("product-info")?.querySelector('form[action*="/cart/add"]') ||
+      root.closest("section")?.querySelector('form[action*="/cart/add"]') ||
+      document.querySelector('form[action*="/cart/add"]')
+    );
+  }
+
+  function ensureHidden(form, name) {
+    var input = form.querySelector('input[name="' + name + '"]');
+    if (!input) {
+      input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      form.appendChild(input);
+    }
+    return input;
+  }
+
+  function syncCartForm(root, state, payload) {
+    var form = findProductForm(root);
+    if (!form || !payload || !payload.active) return;
+
+    var baseVariantGid =
+      payload.product && payload.product.shopifyVariantGid
+        ? payload.product.shopifyVariantGid
+        : root.getAttribute("data-base-variant-gid");
+
+    var baseVariantId = gidToNumericId(baseVariantGid);
+    if (baseVariantId) {
+      var idInput = form.querySelector('input[name="id"], select[name="id"]');
+      if (idInput) {
+        idInput.value = baseVariantId;
+        idInput.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        ensureHidden(form, "id").value = baseVariantId;
       }
-    });
-  }
-
-  function setHidden(root, selector, value) {
-    var el = root.querySelector(selector);
-    if (el) el.value = value == null ? "" : String(value);
-  }
-
-  function getEndpoint(root) {
-    var shop = root.dataset.shop;
-    var handle = root.dataset.productHandle;
-    var productGid = root.dataset.productGid;
-    var material = root.querySelector("[data-gso-material]")?.value || "";
-    var finish = root.querySelector("[data-gso-finish]")?.value || "";
-    var bagColor = root.querySelector("[data-gso-bag-color]")?.value || "";
-    var minQty = Number(root.dataset.minQuantity || 64);
-    var qtyInput = root.querySelector("[data-gso-quantity]");
-    var quantity = Math.max(Number(qtyInput?.value || minQty), minQty);
-
-    if (qtyInput && Number(qtyInput.value || 0) < minQty) {
-      qtyInput.value = String(minQty);
     }
 
-    var params = new URLSearchParams();
-    params.set("shop", shop);
-    params.set("handle", handle);
-    params.set("productGid", productGid);
-    params.set("material", material);
-    params.set("finish", finish);
-    params.set("bagColor", bagColor);
-    params.set("quantity", String(quantity));
-
-    return "/apps/wholesale-lite/configurator?" + params.toString();
-  }
-
-  async function loadConfig(root, firstLoad) {
-    var loading = root.querySelector("[data-gso-loading]");
-    var body = root.querySelector("[data-gso-body]");
-    var errorBox = root.querySelector("[data-gso-error]");
-
-    if (firstLoad && loading) loading.hidden = false;
-    if (errorBox) {
-      errorBox.hidden = true;
-      errorBox.textContent = "";
+    var qtyInput = form.querySelector('input[name="quantity"]');
+    if (qtyInput) {
+      qtyInput.value = String(state.quantity);
+      qtyInput.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      ensureHidden(form, "quantity").value = String(state.quantity);
     }
 
-    try {
-      var response = await fetch(getEndpoint(root), {
-        method: "GET",
-        credentials: "same-origin",
-        headers: { "Accept": "application/json" }
-      });
+    ensureHidden(form, "properties[Material]").value = state.material;
+    ensureHidden(form, "properties[Finish]").value = state.finish;
+    ensureHidden(form, "properties[Bag Color]").value = state.bagColor;
+    ensureHidden(form, "properties[Sides]").value = "Double Sided";
+    ensureHidden(form, "properties[ERP Product ID]").value = payload.product.id || "";
+    ensureHidden(form, "properties[ERP Product Type]").value = "4x5 Stock Bag";
+    ensureHidden(form, "properties[ERP Price Each]").value = money(payload.pricing.priceEach);
+    ensureHidden(form, "properties[ERP Matched Tier]").value = payload.pricing.matchedRange || "";
+    ensureHidden(form, "properties[_gso_configurator]").value = "true";
+  }
 
-      var data = await response.json();
+  function initRoot(root) {
+    if (!root || root.getAttribute("data-gso-ready") === "true") return;
+    root.setAttribute("data-gso-ready", "true");
 
-      if (!data.ok || !data.active) {
-        if (loading) loading.textContent = data.message || "Configurator unavailable for this product.";
+    var proxy = root.getAttribute("data-configurator-proxy") || "/apps/wholesale-lite/configurator";
+    var shop = clean(root.getAttribute("data-shop"));
+    var handle = clean(root.getAttribute("data-product-handle"));
+    var productGid = clean(root.getAttribute("data-product-gid"));
+    var minQty = Math.max(parseInt(root.getAttribute("data-minimum-quantity") || "64", 10) || 64, 1);
+
+    var loading = root.querySelector(".gso-configurator__loading");
+    var app = root.querySelector(".gso-configurator__app");
+    var error = root.querySelector(".gso-configurator__error");
+
+    var materialEl = root.querySelector('[data-gso-field="material"]');
+    var finishEl = root.querySelector('[data-gso-field="finish"]');
+    var bagColorEl = root.querySelector('[data-gso-field="bagColor"]');
+    var quantityEl = root.querySelector('[data-gso-field="quantity"]');
+
+    var state = {
+      material: "",
+      finish: "",
+      bagColor: "",
+      quantity: minQty
+    };
+
+    var lastPayload = null;
+    var firstRender = true;
+
+    quantityEl.min = String(minQty);
+    quantityEl.value = String(minQty);
+
+    function setText(key, value) {
+      var el = root.querySelector('[data-gso-result="' + key + '"]');
+      if (el) el.textContent = value;
+    }
+
+    function setVisible(key, visible) {
+      var el = root.querySelector('[data-gso-result="' + key + '"]');
+      if (el) el.hidden = !visible;
+    }
+
+    function showError(message) {
+      if (loading) loading.hidden = true;
+      if (app) app.hidden = true;
+      if (error) {
+        error.hidden = false;
+        error.textContent = message || "Unable to load product configurator.";
+      }
+    }
+
+    function buildUrl() {
+      var params = new URLSearchParams();
+      if (shop) params.set("shop", shop);
+      if (handle) params.set("handle", handle);
+      if (productGid) params.set("productGid", productGid);
+      if (state.material) params.set("material", state.material);
+      if (state.finish) params.set("finish", state.finish);
+      if (state.bagColor) params.set("bagColor", state.bagColor);
+      params.set("quantity", String(state.quantity || minQty));
+      return proxy + "?" + params.toString();
+    }
+
+    function render(payload) {
+      lastPayload = payload;
+
+      if (!payload || !payload.ok || !payload.active) {
+        showError((payload && payload.message) || "This product is not connected to the GSO configurator yet.");
         return;
       }
 
-      var materialSelect = root.querySelector("[data-gso-material]");
-      var finishSelect = root.querySelector("[data-gso-finish]");
-      var bagColorSelect = root.querySelector("[data-gso-bag-color]");
-      var qtyInput = root.querySelector("[data-gso-quantity]");
+      var options = payload.options || {};
+      var selected = payload.selected || {};
+      var pricing = payload.pricing || {};
+      var product = payload.product || {};
 
-      if (firstLoad) {
-        optionList(materialSelect, data.options.materials, data.selected.material);
-        optionList(finishSelect, data.options.finishes, data.selected.finish);
-        optionList(bagColorSelect, data.options.bagColors, data.selected.bagColor);
+      state.material = selected.material || state.material || (options.materials && options.materials[0]) || "";
+      state.finish = selected.finish || state.finish || (options.finishes && options.finishes[0]) || "";
+      state.bagColor = selected.bagColor || state.bagColor || (options.bagColors && options.bagColors[0]) || "";
+      state.quantity = Math.max(parseInt(selected.quantity || quantityEl.value || minQty, 10) || minQty, Number(product.minQuantity || minQty));
+
+      materialEl.innerHTML = optionHtml(options.materials || [], state.material);
+      finishEl.innerHTML = optionHtml(options.finishes || [], state.finish);
+      bagColorEl.innerHTML = optionHtml(options.bagColors || [], state.bagColor);
+      quantityEl.value = String(state.quantity);
+      quantityEl.min = String(product.minQuantity || minQty);
+
+      setVisible("priceEachBox", root.getAttribute("data-show-price-each") !== "false");
+      setVisible("orderTotalBox", root.getAttribute("data-show-order-total") !== "false");
+      setVisible("matchedTierBox", root.getAttribute("data-show-matched-tier") !== "false");
+
+      var showInternal = root.getAttribute("data-show-profit-data") === "true";
+      root.querySelectorAll(".gso-configurator__result--internal").forEach(function (el) {
+        el.hidden = !showInternal;
+      });
+
+      setText("priceEach", money(pricing.priceEach));
+      setText("orderTotal", money(pricing.orderTotal));
+      setText("matchedTier", pricing.matchedRange || "No match");
+      setText("costEach", money(pricing.costEach));
+      setText("margin", Number(pricing.margin || 0).toFixed(1) + "%");
+
+      var notice = root.querySelector('[data-gso-result="notice"]');
+      if (notice) {
+        notice.textContent =
+          "Sides are set to " +
+          (product.defaultSides || "Double Sided") +
+          ". Minimum order is " +
+          (product.minQuantity || minQty) +
+          " units.";
       }
-
-      if (qtyInput) {
-        qtyInput.min = String(data.product.minQuantity || 64);
-        if (Number(qtyInput.value || 0) < Number(qtyInput.min)) qtyInput.value = qtyInput.min;
-      }
-
-      root.querySelector("[data-gso-price-each]").textContent = money(data.pricing.priceEach);
-      root.querySelector("[data-gso-order-total]").textContent = money(data.pricing.orderTotal);
-      root.querySelector("[data-gso-tier]").textContent = data.pricing.matchedRange || "-";
-
-      setHidden(root, "[data-gso-prop-erp-product-id]", data.product.id);
-      setHidden(root, "[data-gso-prop-shopify-product-gid]", data.product.shopifyProductGid);
-      setHidden(root, "[data-gso-prop-shopify-variant-gid]", data.product.shopifyVariantGid);
-      setHidden(root, "[data-gso-prop-price-each]", data.pricing.priceEach);
-      setHidden(root, "[data-gso-prop-cost-each]", data.pricing.costEach);
-      setHidden(root, "[data-gso-prop-tier]", data.pricing.matchedRange);
-      setHidden(root, "[data-gso-prop-production-finish]", data.pricing.productionFinish);
-
-      ensureInsideProductForm(root);
 
       if (loading) loading.hidden = true;
-      if (body) body.hidden = false;
+      if (error) error.hidden = true;
+      if (app) app.hidden = false;
 
-      if (!data.pricing.matched && errorBox) {
-        errorBox.hidden = false;
-        errorBox.textContent = "No pricing rule matched this combination. Please choose another option.";
+      syncCartForm(root, state, payload);
+
+      if (firstRender) {
+        firstRender = false;
+        root.dispatchEvent(new CustomEvent("gso:configurator:ready", { bubbles: true, detail: payload }));
       }
-    } catch (error) {
-      if (errorBox) {
-        errorBox.hidden = false;
-        errorBox.textContent = "GSO configurator error. Please refresh or contact us.";
-      }
-      if (loading) loading.hidden = true;
-      console.error("GSO configurator error", error);
     }
+
+    function fetchAndRender() {
+      if (loading && firstRender) loading.hidden = false;
+
+      fetch(buildUrl(), { credentials: "same-origin" })
+        .then(function (response) {
+          return response.json();
+        })
+        .then(function (payload) {
+          render(payload);
+        })
+        .catch(function (err) {
+          console.error("GSO configurator error:", err);
+          showError("Unable to load GSO configurator pricing.");
+        });
+    }
+
+    function updateFromFields() {
+      state.material = materialEl.value || state.material;
+      state.finish = finishEl.value || state.finish;
+      state.bagColor = bagColorEl.value || state.bagColor;
+      state.quantity = Math.max(parseInt(quantityEl.value || String(minQty), 10) || minQty, minQty);
+      fetchAndRender();
+    }
+
+    materialEl.addEventListener("change", updateFromFields);
+    finishEl.addEventListener("change", updateFromFields);
+    bagColorEl.addEventListener("change", updateFromFields);
+    quantityEl.addEventListener("input", updateFromFields);
+    quantityEl.addEventListener("change", updateFromFields);
+
+    var form = findProductForm(root);
+    if (form) {
+      form.addEventListener("submit", function () {
+        if (lastPayload) syncCartForm(root, state, lastPayload);
+      });
+    }
+
+    fetchAndRender();
   }
 
-  function init(root) {
-    var material = root.querySelector("[data-gso-material]");
-    var finish = root.querySelector("[data-gso-finish]");
-    var bagColor = root.querySelector("[data-gso-bag-color]");
-    var quantity = root.querySelector("[data-gso-quantity]");
-
-    loadConfig(root, true);
-
-    [material, finish, bagColor, quantity].forEach(function (el) {
-      if (!el) return;
-      el.addEventListener("change", function () {
-        loadConfig(root, false);
-      });
-      el.addEventListener("input", function () {
-        clearTimeout(root._gsoTimer);
-        root._gsoTimer = setTimeout(function () {
-          loadConfig(root, false);
-        }, 250);
-      });
-    });
-
-    document.addEventListener("submit", function (event) {
-      var form = event.target;
-      if (!form || !form.matches("form[action*='/cart/add']")) return;
-      ensureInsideProductForm(root);
-    }, true);
+  function initAll() {
+    document.querySelectorAll(".gso-configurator").forEach(initRoot);
   }
 
-  document.addEventListener("DOMContentLoaded", function () {
-    document.querySelectorAll("[data-gso-configurator]").forEach(init);
-  });
+  document.addEventListener("DOMContentLoaded", initAll);
+  document.addEventListener("shopify:section:load", initAll);
+  document.addEventListener("shopify:block:select", initAll);
+  window.GSOProductConfiguratorInit = initAll;
 })();
