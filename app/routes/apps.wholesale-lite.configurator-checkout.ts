@@ -58,9 +58,6 @@ async function shopifyGraphql(shop: string, query: string, variables: any) {
   const session = await db.session.findFirst({
     where: {
       shop,
-      accessToken: {
-        not: null,
-      },
     },
     orderBy: {
       id: "asc",
@@ -318,3 +315,4 @@ export async function action({ request }: { request: Request }) {
     );
   }
 }
+
