@@ -118,12 +118,13 @@ function init(r){
     if(btn){btn.disabled=false;if(btn.tagName==="INPUT")btn.value=oldText;else btn.textContent=oldText}
   })
 }
-var f=form(r); if(f)f.addEventListener("submit",function(ev){ev.preventDefault();if(last)sync(r,st,last);checkout()});
+var f=form(r); if(f)f.addEventListener("submit",function(ev){ev.preventDefault();ev.stopPropagation();if(ev.stopImmediatePropagation)ev.stopImmediatePropagation();if(last)sync(r,st,last);checkout()},true);
  go()
 }
 function all(){document.querySelectorAll(".gso-configurator").forEach(init)}
 document.addEventListener("DOMContentLoaded",all);document.addEventListener("shopify:section:load",all);document.addEventListener("shopify:block:select",all);window.GSOProductConfiguratorInit=all;
 })();
+
 
 
 
