@@ -19,27 +19,19 @@ type ShopifyProductPreview = {
   alreadyInErp: boolean;
 };
 
-function cleanText(value: FormDataEntryValue | null, fallback = "") {
-  const text = String(value || "").trim();
+function cleanText(value: FormDataEntryValue | null | undefined, fallback = "") {
+  const text = String(value ?? "").trim();
   return text.length ? text : fallback;
 }
 
-function escapeSearchValue(value: string) {
-  return value.replace(/"/g, '\\"');
+function escapeSearchValue(value: string | null | undefined) {
+  return String(value ?? "").replace(/"/g, '\\"');
 }
 
-function buildShopifyProductSearch(requiredTag: string, shopifyProductType: string) {
-  const parts: string[] = [];
-
-  if (requiredTag.trim()) {
-    parts.push(`tag:${escapeSearchValue(requiredTag.trim())}`);
-  }
-
-  if (shopifyProductType.trim()) {
-    parts.push(`product_type:"${escapeSearchValue(shopifyProductType.trim())}"`);
-  }
-
-  return parts.join(" AND ");
+function buildShopifyProductSearch(requiredTag: string | null | undefined) {
+  const tag = String(requiredTag ?? "").trim();
+  if (!tag) return "";
+  return `tag:${escapeSearchValue(tag)}`;
 }
 
 function hasMatchingCollection(product: ShopifyProductPreview, collectionHandle: string) {
@@ -734,4 +726,5 @@ ol {
   }
 }
 `;
+
 

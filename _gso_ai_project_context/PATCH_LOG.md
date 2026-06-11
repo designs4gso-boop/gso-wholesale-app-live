@@ -201,3 +201,23 @@ What changed:
 Notes:
 - No database schema changes.
 - No storefront theme changes.
+
+## Hotfix - Configurator sync trim safety
+
+Purpose:
+Fix sync preview app error caused by undefined value being passed into buildShopifyProductSearch and trim().
+
+Files changed:
+- app/routes/app.erp.configurator-sync.tsx
+
+What changed:
+- cleanText now handles undefined safely
+- escapeSearchValue now handles undefined safely
+- buildShopifyProductSearch now handles undefined safely
+- textMatches now handles undefined safely
+- hasMatchingCollection now handles undefined safely
+
+Notes:
+- No schema changes.
+- No database changes.
+- No storefront changes.

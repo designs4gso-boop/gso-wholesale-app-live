@@ -78,3 +78,10 @@ Sync search hotfix verification:
 - Open /app/erp/configurator-sync
 - Preview with collection stock-bags, tag configurator-pilot, product type Stock Bag
 - If zero, preview again with Product Type blank
+
+Sync trim hotfix verification:
+- Run npm run build
+- Deploy to Render
+- Open /app/erp/configurator-sync
+- Preview with stock-bags, configurator-pilot, Stock Bag
+- If zero, preview with Product Type blank
