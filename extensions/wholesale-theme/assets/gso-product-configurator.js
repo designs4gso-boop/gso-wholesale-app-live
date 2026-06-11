@@ -22,7 +22,36 @@ function sync(r,s,p){
  hid(f,"properties[ERP Matched Tier]").value=(p.pricing&&p.pricing.matchedRange)||"";
  hid(f,"properties[_gso_configurator]").value="true";
 }
+function styles(){
+ if(document.getElementById("gso-configurator-runtime-styles"))return;
+ var s=document.createElement("style");
+ s.id="gso-configurator-runtime-styles";
+ s.textContent=[
+  ".gso-configurator select{",
+  " color:var(--gso-config-text,#fff)!important;",
+  " background:var(--gso-config-field-bg,#050505)!important;",
+  " -webkit-text-fill-color:var(--gso-config-text,#fff)!important;",
+  " opacity:1!important;",
+  " visibility:visible!important;",
+  " appearance:auto!important;",
+  "}",
+  ".gso-configurator select option{",
+  " color:#111!important;",
+  " background:#fff!important;",
+  " -webkit-text-fill-color:#111!important;",
+  "}",
+  ".gso-configurator input{",
+  " color:var(--gso-config-text,#fff)!important;",
+  " background:var(--gso-config-field-bg,#050505)!important;",
+  " -webkit-text-fill-color:var(--gso-config-text,#fff)!important;",
+  " opacity:1!important;",
+  "}",
+  ".gso-configurator [hidden]{display:none!important;}"
+ ].join("");
+ document.head.appendChild(s);
+}
 function init(r){
+ styles();
  if(!r||r.dataset.gsoReady==="true")return; r.dataset.gsoReady="true";
  var min=Math.max(parseInt(r.dataset.minimumQuantity||"64",10)||64,1), st={material:"",finish:"",bagColor:"",quantity:min}, last=null, first=true;
  var els={load:q(r,".gso-configurator__loading"),app:q(r,".gso-configurator__app"),err:q(r,".gso-configurator__error"),mat:q(r,'[data-gso-field="material"]'),fin:q(r,'[data-gso-field="finish"]'),col:q(r,'[data-gso-field="bagColor"]'),qty:q(r,'[data-gso-field="quantity"]')};
@@ -65,3 +94,4 @@ function init(r){
 function all(){document.querySelectorAll(".gso-configurator").forEach(init)}
 document.addEventListener("DOMContentLoaded",all);document.addEventListener("shopify:section:load",all);document.addEventListener("shopify:block:select",all);window.GSOProductConfiguratorInit=all;
 })();
+
