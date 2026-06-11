@@ -1,4 +1,4 @@
-﻿(function(){
+(function(){
 function q(r,s){return r.querySelector(s)}
 function m(v){return "$"+Number(v||0).toFixed(2)}
 function c(v){return String(v||"").trim()}
@@ -94,6 +94,7 @@ function init(r){
 function all(){document.querySelectorAll(".gso-configurator").forEach(init)}
 document.addEventListener("DOMContentLoaded",all);document.addEventListener("shopify:section:load",all);document.addEventListener("shopify:block:select",all);window.GSOProductConfiguratorInit=all;
 })();
+
 
 
 
