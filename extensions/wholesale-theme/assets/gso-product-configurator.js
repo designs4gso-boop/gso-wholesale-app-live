@@ -15,11 +15,11 @@ function sync(r,s,p){
  hid(f,"properties[Material]").value=s.material;
  hid(f,"properties[Finish]").value=s.finish;
  hid(f,"properties[Bag Color]").value=s.bagColor;
- hid(f,"properties[Sides]").value=(p.product&&p.product.defaultSides)||"Double Sided";
- hid(f,"properties[ERP Product ID]").value=(p.product&&p.product.id)||"";
- hid(f,"properties[ERP Product Type]").value="4x5 Stock Bag";
- hid(f,"properties[ERP Price Each]").value=m(p.pricing&&p.pricing.priceEach);
- hid(f,"properties[ERP Matched Tier]").value=(p.pricing&&p.pricing.matchedRange)||"";
+ hid(f,"properties[_GSO Sides]").value=(p.product&&p.product.defaultSides)||"Double Sided";
+ hid(f,"properties[_GSO ERP Product ID]").value=(p.product&&p.product.id)||"";
+ hid(f,"properties[_GSO ERP Product Type]").value="4x5 Stock Bag";
+ hid(f,"properties[_GSO Price Each]").value=m(p.pricing&&p.pricing.priceEach);
+ hid(f,"properties[_GSO Matched Tier]").value=(p.pricing&&p.pricing.matchedRange)||"";
  hid(f,"properties[_gso_configurator]").value="true";
 }
 function styles(){
@@ -94,5 +94,6 @@ function init(r){
 function all(){document.querySelectorAll(".gso-configurator").forEach(init)}
 document.addEventListener("DOMContentLoaded",all);document.addEventListener("shopify:section:load",all);document.addEventListener("shopify:block:select",all);window.GSOProductConfiguratorInit=all;
 })();
+
 
 
