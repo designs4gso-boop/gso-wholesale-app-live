@@ -235,7 +235,6 @@ async function calculate(shop: string, material: string, finish: string, qty: nu
 
 function rangeLabel(rule: { minQty: number; maxQty: number | null }) {
   return rangeLabelFromRule(rule);
-}-${rule.maxQty}` : `${rule.minQty}+`;
 }
 
 function buildPricingMatrix(rules: any[]) {
@@ -767,6 +766,7 @@ ol {
   }
 }
 `;
+
 
 
 

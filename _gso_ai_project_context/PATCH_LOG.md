@@ -147,3 +147,17 @@ What changed:
 - Renamed mapping UI to Manual Mapping / Exceptions if present
 - Documented the long-term architecture
 - Confirmed configurator should call ERP pricing long-term instead of duplicating pricing
+
+## Hotfix - Cleanup syntax issue in configurator route
+
+Purpose:
+Fix build error caused by a leftover corrupted rangeLabel line from the cleanup refactor.
+
+Files changed:
+- app/routes/app.erp.configurator.tsx
+
+Notes:
+- No schema changes.
+- No database changes.
+- No Shopify theme changes.
+- Fixes Render build failure.

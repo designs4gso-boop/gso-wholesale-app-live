@@ -56,3 +56,10 @@ Cleanup verification:
 - Confirm configurator page still loads
 - Confirm pricing matrix still displays
 - Next patch should be Shopify collection/tag sync, not manual product mapping
+
+Cleanup syntax hotfix verification:
+- Run npm run build
+- Commit hotfix
+- Merge to main
+- Confirm Render deploy succeeds
+- Confirm /app/erp/configurator loads
