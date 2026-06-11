@@ -95,3 +95,4 @@ function all(){document.querySelectorAll(".gso-configurator").forEach(init)}
 document.addEventListener("DOMContentLoaded",all);document.addEventListener("shopify:section:load",all);document.addEventListener("shopify:block:select",all);window.GSOProductConfiguratorInit=all;
 })();
 
+
