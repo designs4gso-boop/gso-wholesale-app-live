@@ -1,4 +1,4 @@
-﻿export const PRODUCT_TYPE = "stock_bag_4x5";
+export const PRODUCT_TYPE = "stock_bag_4x5";
 export const PRODUCT_TYPE_LABEL = "4x5 Stock Bag";
 export const MIN_QTY = 64;
 
@@ -114,7 +114,7 @@ export const FALLBACK_PRICING_ROWS: FallbackPricingRow[] = [
     finish: "2X Spot Gloss",
     productionFinish: "Holo + White + 2X Spot Gloss",
     costEach: 1.03,
-    prices: [2.15, 2.05, 1.95, 1.85, 1.75],
+    prices: [2.30, 2.20, 2.10, 2.00, 1.90],
   },
   {
     material: "Holographic",
@@ -156,3 +156,4 @@ export function matrixPrice(row: any, range: QtyRange) {
 
   return null;
 }
+
