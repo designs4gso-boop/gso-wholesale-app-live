@@ -183,3 +183,21 @@ Notes:
 - Collection handle is post-filtered from the product collections list.
 - Required tag is used in the Shopify product search query.
 - Storefront theme remains untouched.
+
+## Hotfix - Loosen configurator sync Shopify search
+
+Purpose:
+Fix product sync preview returning zero products even when pilot products have the configurator-pilot tag.
+
+Files changed:
+- app/routes/app.erp.configurator-sync.tsx
+
+What changed:
+- Shopify query now searches by required tag only.
+- Product type is filtered inside ERP after products are returned.
+- Collection matching is more flexible and checks handle, title, and title-as-handle.
+- Added no-results tip for testing blank Product Type.
+
+Notes:
+- No database schema changes.
+- No storefront theme changes.

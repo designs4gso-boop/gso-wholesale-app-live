@@ -61,7 +61,7 @@ async function fetchShopifyProducts({
   shopifyProductType: string;
   limit: number;
 }) {
-  const queryText = buildShopifyProductSearch(requiredTag, shopifyProductType);
+  const queryText = buildShopifyProductSearch(requiredTag);
   const maxToFetch = Math.max(1, Math.min(limit || 50, 250));
   const products: ShopifyProductPreview[] = [];
   let after: string | null = null;
@@ -734,3 +734,4 @@ ol {
   }
 }
 `;
+
