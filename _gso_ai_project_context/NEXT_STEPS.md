@@ -50,3 +50,9 @@ Patch 3 verification:
 - Merge to main after build passes
 - Open /app/erp/configurator-mapping
 - Save product mapping for the 5 pilot products
+
+Cleanup verification:
+- Run npm run build
+- Confirm configurator page still loads
+- Confirm pricing matrix still displays
+- Next patch should be Shopify collection/tag sync, not manual product mapping

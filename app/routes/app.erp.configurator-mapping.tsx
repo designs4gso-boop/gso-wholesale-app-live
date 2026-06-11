@@ -108,9 +108,9 @@ export default function ConfiguratorMapping() {
       <div className="hero">
         <div>
           <p className="eyebrow">GSO ERP Pilot</p>
-          <h1>Shopify Product Mapping</h1>
+          <h1>Manual Mapping / Exceptions</h1>
           <p>
-            Connect each ERP configurator product to the matching Shopify product and base variant.
+            Fallback screen for manually fixing unusual Shopify product mappings. Collection/tag sync will be the main workflow for large catalogs.
             This keeps Shopify lightweight while ERP owns pricing, cost, margin, and production rules.
           </p>
         </div>
@@ -129,9 +129,9 @@ export default function ConfiguratorMapping() {
       <div className="card">
         <div className="card-head">
           <div>
-            <h2>5-Product Pilot Mapping</h2>
+            <h2>Manual Pilot Mapping / Exceptions</h2>
             <p className="muted">
-              Use the Shopify product ID, variant ID, handle, and SKU for each pilot product.
+              Use this only for exceptions or manual corrections. The next sync workflow will map products by Shopify collection and tag.
               You can paste either the full Shopify GID or just the numeric ID.
             </p>
           </div>
@@ -423,3 +423,4 @@ button:disabled {
   }
 }
 `;
+

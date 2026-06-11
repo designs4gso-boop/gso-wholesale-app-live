@@ -30,7 +30,7 @@ export default function App() {
       <s-link href="/app/erp/cost-calculator">Cost Calculator</s-link>
       <s-link href="/app/erp/pricing-rules">Pricing Rules</s-link>
       <s-link href="/app/erp/configurator">Configurator</s-link>
-      <s-link href="/app/erp/configurator-mapping">Configurator Mapping</s-link>
+      <s-link href="/app/erp/configurator-mapping">Manual Mapping</s-link>
       <s-link href="/app/erp/product-setup">Product Setup</s-link>
       <s-link href="/app/erp/vendor-cost-book">Vendor Cost Book</s-link>
       <s-link href="/app/erp/settings">Admin Settings</s-link>
@@ -48,6 +48,7 @@ export function ErrorBoundary() {
 export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
+
 
 
 

@@ -127,3 +127,23 @@ Still not done:
 - Storefront configurator block
 - Shopify line item property submission
 - Order webhook configurator processing
+
+## Cleanup Patch - Configurator architecture cleanup
+
+Purpose:
+Prevent the configurator from becoming a duplicate pricing system before adding collection sync or storefront changes.
+
+Files changed:
+- app/lib/configurator-pricing.ts
+- app/routes/app.erp.configurator.tsx
+- app/routes/app.erp.configurator-mapping.tsx if present
+- app/routes/app.tsx if nav label present
+- _gso_ai_project_context/ARCHITECTURE.md
+- _gso_ai_project_context/PATCH_LOG.md
+- _gso_ai_project_context/NEXT_STEPS.md
+
+What changed:
+- Moved pilot constants and helper logic into app/lib/configurator-pricing.ts
+- Renamed mapping UI to Manual Mapping / Exceptions if present
+- Documented the long-term architecture
+- Confirmed configurator should call ERP pricing long-term instead of duplicating pricing
