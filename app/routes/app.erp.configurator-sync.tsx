@@ -15,7 +15,6 @@ type ShopifyProductPreview = {
   baseVariantTitle: string | null;
   collections: { id: string; handle: string; title: string }[];
   imageUrl: string | null;
-  matchedCollection: boolean;
   alreadyInErp: boolean;
 };
 
@@ -24,143 +23,173 @@ function cleanText(value: FormDataEntryValue | null | undefined, fallback = "") 
   return text.length ? text : fallback;
 }
 
-function escapeSearchValue(value: string | null | undefined) {
-  return String(value ?? "").replace(/"/g, '\\"');
+function digitsOnly(value: string | null | undefined) {
+  return String(value ?? "").replace(/[^0-9]/g, "");
 }
 
-function buildShopifyProductSearch(requiredTag: string | null | undefined) {
-  const tag = String(requiredTag ?? "").trim();
-  if (!tag) return "";
-  return `tag:${escapeSearchValue(tag)}`;
+function collectionGid(value: string | null | undefined) {
+  const digits = digitsOnly(value);
+  if (!digits) return null;
+  return `gid://shopify/Collection/${digits}`;
 }
 
-function hasMatchingCollection(product: ShopifyProductPreview, collectionHandle: string) {
-  const handle = collectionHandle.trim().toLowerCase();
-  if (!handle) return true;
-  return product.collections.some((collection) => collection.handle.toLowerCase() === handle);
+function tagMatches(tags: string[] | null | undefined, requiredTag: string | null | undefined) {
+  const target = String(requiredTag ?? "").trim().toLowerCase();
+  if (!target) return true;
+  return (tags || []).some((tag) => String(tag ?? "").trim().toLowerCase() === target);
 }
 
-async function fetchShopifyProducts({
+function textMatches(value: string | null | undefined, expected: string | null | undefined) {
+  const cleanExpected = String(expected ?? "").trim().toLowerCase();
+  if (!cleanExpected) return true;
+  return String(value ?? "").trim().toLowerCase() === cleanExpected;
+}
+
+function normalizeProduct(node: any): ShopifyProductPreview {
+  const baseVariant = node.variants?.edges?.[0]?.node || null;
+
+  const collections =
+    node.collections?.edges?.map((edge: any) => ({
+      id: edge.node.id,
+      handle: edge.node.handle,
+      title: edge.node.title,
+    })) || [];
+
+  return {
+    id: node.id,
+    title: node.title,
+    handle: node.handle,
+    productType: node.productType || "",
+    status: node.status || "",
+    tags: node.tags || [],
+    baseVariantId: baseVariant?.id || null,
+    baseVariantSku: baseVariant?.sku || null,
+    baseVariantTitle: baseVariant?.title || null,
+    collections,
+    imageUrl: node.featuredMedia?.preview?.image?.url || null,
+    alreadyInErp: false,
+  };
+}
+
+async function fetchProductsFromCollection({
   admin,
-  requiredTag,
-  collectionHandle,
-  shopifyProductType,
+  collectionInput,
   limit,
 }: {
   admin: any;
-  requiredTag: string;
-  collectionHandle: string;
-  shopifyProductType: string;
+  collectionInput: string;
   limit: number;
 }) {
-  const queryText = buildShopifyProductSearch(collectionHandle);
-  const maxToFetch = Math.max(1, Math.min(limit || 50, 250));
+  const gid = collectionGid(collectionInput);
   const products: ShopifyProductPreview[] = [];
   let after: string | null = null;
 
+  const debug = {
+    mode: gid ? "collection_id" : "no_collection_id",
+    collectionGid: gid || "",
+    rawFetchedCount: 0,
+    tagMatchedCount: 0,
+    productTypeMatchedCount: 0,
+    finalMatchedCount: 0,
+    error: "",
+  };
+
+  if (!gid) {
+    debug.error = "Collection must be a numeric Shopify collection ID for this direct collection sync.";
+    return { products, debug };
+  }
+
   const graphqlQuery = `#graphql
-    query ConfiguratorSyncProducts($first: Int!, $after: String, $query: String!) {
-      products(first: $first, after: $after, query: $query) {
-        edges {
-          cursor
-          node {
-            id
-            title
-            handle
-            productType
-            status
-            tags
-            featuredMedia {
-              preview {
-                image {
-                  url
+    query ConfiguratorCollectionProducts($id: ID!, $first: Int!, $after: String) {
+      collection(id: $id) {
+        id
+        title
+        handle
+        products(first: $first, after: $after) {
+          edges {
+            cursor
+            node {
+              id
+              title
+              handle
+              productType
+              status
+              tags
+              featuredMedia {
+                preview {
+                  image {
+                    url
+                  }
                 }
               }
-            }
-            variants(first: 1) {
-              edges {
-                node {
-                  id
-                  sku
-                  title
+              variants(first: 1) {
+                edges {
+                  node {
+                    id
+                    sku
+                    title
+                  }
                 }
               }
-            }
-            collections(first: 20) {
-              edges {
-                node {
-                  id
-                  handle
-                  title
+              collections(first: 20) {
+                edges {
+                  node {
+                    id
+                    handle
+                    title
+                  }
                 }
               }
             }
           }
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     }
   `;
 
+  const maxToFetch = Math.max(1, Math.min(limit || 50, 250));
+
   while (products.length < maxToFetch) {
-    const remaining = maxToFetch - products.length;
-    const first = Math.min(50, remaining);
+    const first = Math.min(50, maxToFetch - products.length);
 
     const response = await admin.graphql(graphqlQuery, {
       variables: {
+        id: gid,
         first,
         after,
-        query: queryText,
       },
     });
 
     const json = await response.json();
-    const edges = json?.data?.products?.edges || [];
 
-    rawFetchedCount += edges.length;
-
-    for (const edge of edges) {
-      const node = edge.node;
-      const baseVariant = node.variants?.edges?.[0]?.node || null;
-      const collections =
-        node.collections?.edges?.map((collectionEdge: any) => ({
-          id: collectionEdge.node.id,
-          handle: collectionEdge.node.handle,
-          title: collectionEdge.node.title,
-        })) || [];
-
-      const product: ShopifyProductPreview = {
-        id: node.id,
-        title: node.title,
-        handle: node.handle,
-        productType: node.productType || "",
-        status: node.status || "",
-        tags: node.tags || [],
-        baseVariantId: baseVariant?.id || null,
-        baseVariantSku: baseVariant?.sku || null,
-        baseVariantTitle: baseVariant?.title || null,
-        collections,
-        imageUrl: node.featuredMedia?.preview?.image?.url || null,
-        matchedCollection: false,
-        alreadyInErp: false,
-      };
-
-      product.matchedCollection = hasMatchingCollection(product, collectionHandle);
-
-      if (product.matchedCollection) {
-        products.push(product);
-      }
+    if (json?.errors?.length) {
+      debug.error = JSON.stringify(json.errors);
+      break;
     }
 
-    const pageInfo = json?.data?.products?.pageInfo;
+    const collection = json?.data?.collection;
+    if (!collection) {
+      debug.error = `No Shopify collection found for ${gid}`;
+      break;
+    }
+
+    const edges = collection.products?.edges || [];
+    debug.rawFetchedCount += edges.length;
+
+    for (const edge of edges) {
+      products.push(normalizeProduct(edge.node));
+    }
+
+    const pageInfo = collection.products?.pageInfo;
     if (!pageInfo?.hasNextPage || !pageInfo?.endCursor) break;
     after = pageInfo.endCursor;
   }
 
-  return products;
+  return { products, debug };
 }
 
 async function markExistingProducts(shop: string, products: ShopifyProductPreview[]) {
@@ -195,12 +224,12 @@ async function syncProductsToErp({
   shop,
   products,
   requiredTag,
-  collectionHandle,
+  collectionInput,
 }: {
   shop: string;
   products: ShopifyProductPreview[];
   requiredTag: string;
-  collectionHandle: string;
+  collectionInput: string;
 }) {
   let created = 0;
   let updated = 0;
@@ -223,8 +252,8 @@ async function syncProductsToErp({
     });
 
     const notes = [
-      `Synced from Shopify configurator sync.`,
-      collectionHandle ? `Collection handle: ${collectionHandle}` : null,
+      "Synced from Shopify direct collection sync.",
+      `Collection input: ${collectionInput}`,
       requiredTag ? `Required tag: ${requiredTag}` : null,
       `Shopify status: ${product.status}`,
       product.collections.length
@@ -234,39 +263,31 @@ async function syncProductsToErp({
       .filter(Boolean)
       .join("\n");
 
+    const data = {
+      title: product.title,
+      shopifyProductGid: product.id,
+      shopifyVariantGid: product.baseVariantId,
+      shopifyHandle: product.handle,
+      sku: product.baseVariantSku,
+      productType: PRODUCT_TYPE,
+      defaultSides: "Double Sided",
+      minQuantity: MIN_QTY,
+      pilot: requiredTag === "configurator-pilot" || product.tags.includes("configurator-pilot"),
+      active: true,
+      notes,
+    };
+
     if (existing) {
       await db.configuratorProduct.update({
         where: { id: existing.id },
-        data: {
-          title: product.title,
-          shopifyProductGid: product.id,
-          shopifyVariantGid: product.baseVariantId,
-          shopifyHandle: product.handle,
-          sku: product.baseVariantSku,
-          productType: PRODUCT_TYPE,
-          defaultSides: "Double Sided",
-          minQuantity: MIN_QTY,
-          pilot: requiredTag === "configurator-pilot" || product.tags.includes("configurator-pilot"),
-          active: true,
-          notes,
-        },
+        data,
       });
       updated += 1;
     } else {
       await db.configuratorProduct.create({
         data: {
           shop,
-          title: product.title,
-          shopifyProductGid: product.id,
-          shopifyVariantGid: product.baseVariantId,
-          shopifyHandle: product.handle,
-          sku: product.baseVariantSku,
-          productType: PRODUCT_TYPE,
-          defaultSides: "Double Sided",
-          minQuantity: MIN_QTY,
-          pilot: requiredTag === "configurator-pilot" || product.tags.includes("configurator-pilot"),
-          active: true,
-          notes,
+          ...data,
         },
       });
       created += 1;
@@ -305,32 +326,43 @@ export async function action({ request }: { request: Request }) {
   const formData = await request.formData();
 
   const intent = cleanText(formData.get("intent"));
-  const collectionHandle = cleanText(formData.get("collectionHandle"), "stock-bags");
+  const collectionInput = cleanText(formData.get("collectionInput"), "302046380097");
   const requiredTag = cleanText(formData.get("requiredTag"), "configurator-pilot");
   const shopifyProductType = cleanText(formData.get("shopifyProductType"), "Stock Bag");
   const limitRaw = parseInt(cleanText(formData.get("limit"), "50"), 10);
   const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
 
-  const fetchedProducts = await fetchShopifyProducts({
+  const fetchedResult = await fetchProductsFromCollection({
     admin,
-    requiredTag,
-    collectionHandle,
-    shopifyProductType,
+    collectionInput,
     limit,
   });
 
-  const products = await markExistingProducts(session.shop, fetchedProducts);
+  const filteredProducts = fetchedResult.products.filter((product) => {
+    const matchedTag = tagMatches(product.tags, requiredTag);
+    const matchedProductType = textMatches(product.productType, shopifyProductType);
+
+    if (matchedTag) fetchedResult.debug.tagMatchedCount += 1;
+    if (matchedProductType) fetchedResult.debug.productTypeMatchedCount += 1;
+
+    return matchedTag && matchedProductType;
+  });
+
+  fetchedResult.debug.finalMatchedCount = filteredProducts.length;
+
+  const products = await markExistingProducts(session.shop, filteredProducts);
 
   if (intent === "preview") {
     return {
       ok: true,
       intent,
       message: `Preview found ${products.length} matching Shopify products.`,
-      collectionHandle,
+      collectionInput,
       requiredTag,
       shopifyProductType,
       limit,
       products,
+      debug: fetchedResult.debug,
       syncResult: null,
     };
   }
@@ -340,18 +372,19 @@ export async function action({ request }: { request: Request }) {
       shop: session.shop,
       products,
       requiredTag,
-      collectionHandle,
+      collectionInput,
     });
 
     return {
       ok: true,
       intent,
       message: `Sync complete: ${syncResult.created} created, ${syncResult.updated} updated, ${syncResult.skipped} skipped.`,
-      collectionHandle,
+      collectionInput,
       requiredTag,
       shopifyProductType,
       limit,
       products,
+      debug: fetchedResult.debug,
       syncResult,
     };
   }
@@ -360,23 +393,24 @@ export async function action({ request }: { request: Request }) {
     ok: false,
     intent,
     message: "No action taken.",
-    collectionHandle,
+    collectionInput,
     requiredTag,
     shopifyProductType,
     limit,
     products: [],
+    debug: null,
     syncResult: null,
   };
 }
 
 export default function ConfiguratorSync() {
-  const data = useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
+  const data = useLoaderData<any>();
+  const actionData = useActionData<any>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
 
   const defaults = {
-    collectionHandle: actionData?.collectionHandle || "stock-bags",
+    collectionInput: actionData?.collectionInput || "302046380097",
     requiredTag: actionData?.requiredTag || "configurator-pilot",
     shopifyProductType: actionData?.shopifyProductType || "Stock Bag",
     limit: actionData?.limit || 50,
@@ -391,8 +425,8 @@ export default function ConfiguratorSync() {
           <p className="eyebrow">GSO ERP Configurator</p>
           <h1>Shopify Collection / Tag Sync</h1>
           <p>
-            Sync Shopify products into ERP configurator records by collection handle, product type,
-            and required tag. This replaces manual product mapping for large catalogs.
+            Sync Shopify products into ERP configurator records by direct collection ID, then filter by tag
+            and product type inside ERP. This replaces manual product mapping for large catalogs.
           </p>
         </div>
         <div className="hero-card">
@@ -408,13 +442,28 @@ export default function ConfiguratorSync() {
         <div className={actionData.ok ? "notice success" : "notice warning"}>{actionData.message}</div>
       ) : null}
 
+      {actionData?.debug ? (
+        <div className="card debug-card">
+          <h2>Sync Debug</h2>
+          <div className="debug-grid">
+            <div><span>Mode</span><strong>{actionData.debug.mode}</strong></div>
+            <div><span>Collection GID</span><strong>{actionData.debug.collectionGid || "-"}</strong></div>
+            <div><span>Raw Shopify Products Returned</span><strong>{actionData.debug.rawFetchedCount}</strong></div>
+            <div><span>Tag Matched</span><strong>{actionData.debug.tagMatchedCount}</strong></div>
+            <div><span>Product Type Matched</span><strong>{actionData.debug.productTypeMatchedCount}</strong></div>
+            <div><span>Final Matched</span><strong>{actionData.debug.finalMatchedCount}</strong></div>
+          </div>
+          {actionData.debug.error ? <p className="error-text">{actionData.debug.error}</p> : null}
+        </div>
+      ) : null}
+
       <div className="card">
         <div className="card-head">
           <div>
             <h2>Sync Settings</h2>
             <p className="muted">
-              For the 5-product pilot, use collection ID <b>302046380097</b> or handle <b>stock-bags</b>, with required tag <b>configurator-pilot</b>. Collection ID is more reliable.
-              Later, remove or change the tag to sync the full catalog.
+              For the 5-product pilot, use Stock Bags collection ID <b>302046380097</b>, required tag{" "}
+              <b>configurator-pilot</b>, and product type <b>Stock Bag</b>.
             </p>
           </div>
           <a className="link-button" href="/app/erp/configurator">Back to Configurator</a>
@@ -422,8 +471,8 @@ export default function ConfiguratorSync() {
 
         <Form method="post" className="form-grid">
           <label>
-            Shopify Collection Handle or ID
-            <input name="collectionHandle" defaultValue={defaults.collectionHandle} placeholder="stock-bags or 302046380097" />
+            Shopify Collection ID
+            <input name="collectionInput" defaultValue={defaults.collectionInput} placeholder="302046380097" />
           </label>
 
           <label>
@@ -464,10 +513,6 @@ export default function ConfiguratorSync() {
       {actionData?.products?.length ? (
         <div className="card">
           <h2>Matched Shopify Products</h2>
-          <p className="muted">
-            These products matched the sync filters and collection post-filter. Review the base variant and SKU before syncing.
-          </p>
-
           <div className="table-wrap">
             <table>
               <thead>
@@ -510,8 +555,8 @@ export default function ConfiguratorSync() {
         <div className="card">
           <h2>No products matched</h2>
           <p className="muted">
-            Check the collection handle, required tag, and Shopify product type. For pilot testing,
-            make sure the selected products are in the Stock Bags collection and tagged configurator-pilot.
+            Check the Sync Debug box above. If Raw Shopify Products Returned is above 0 but Final Matched is 0,
+            the blocker is either the required tag or product type filter.
           </p>
         </div>
       ) : null}
@@ -530,228 +575,46 @@ export default function ConfiguratorSync() {
 }
 
 const styles = `
-.gso-page {
-  padding: 24px;
-  max-width: 1280px;
-  margin: 0 auto;
-  color: #202223;
-}
-.hero {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 24px;
-  border-radius: 18px;
-  background: linear-gradient(135deg, #111827, #312e81);
-  color: white;
-  margin-bottom: 20px;
-}
-.hero h1 {
-  margin: 0 0 8px;
-  font-size: 34px;
-}
-.hero p {
-  max-width: 760px;
-  margin: 0;
-  color: #e5e7eb;
-}
-.eyebrow {
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  font-size: 12px;
-  font-weight: 700;
-  margin-bottom: 8px !important;
-}
-.hero-card {
-  min-width: 280px;
-  background: rgba(255,255,255,0.12);
-  border: 1px solid rgba(255,255,255,0.2);
-  border-radius: 14px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.card {
-  background: white;
-  border: 1px solid #dfe3e8;
-  border-radius: 16px;
-  padding: 20px;
-  margin-bottom: 18px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-}
-.card h2 {
-  margin-top: 0;
-}
-.card-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-}
-.muted {
-  color: #6d7175;
-}
-.notice {
-  padding: 10px;
-  border-radius: 10px;
-  margin-bottom: 12px;
-}
-.notice.warning {
-  background: #fff4e5;
-  border: 1px solid #ffb84d;
-  color: #7a4b00;
-}
-.notice.success {
-  background: #ecfdf3;
-  border: 1px solid #86efac;
-  color: #14532d;
-}
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-weight: 650;
-}
-input {
-  min-height: 42px;
-  border: 1px solid #c9cccf;
-  border-radius: 10px;
-  padding: 8px 10px;
-  font-size: 14px;
-}
-.button-row {
-  grid-column: span 2;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-button,
-.link-button {
-  min-height: 42px;
-  border: none;
-  border-radius: 10px;
-  padding: 10px 16px;
-  background: #111827;
-  color: white;
-  font-weight: 700;
-  cursor: pointer;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-}
-button.secondary {
-  background: #f6f6f7;
-  color: #111827;
-  border: 1px solid #c9cccf;
-}
-button:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.grid.four {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 18px;
-}
-.stat span {
-  display: block;
-  color: #6d7175;
-  font-size: 13px;
-}
-.stat strong {
-  display: block;
-  margin-top: 4px;
-  font-size: 28px;
-}
-.table-wrap {
-  overflow-x: auto;
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-th, td {
-  border-bottom: 1px solid #e1e3e5;
-  padding: 10px;
-  text-align: left;
-  vertical-align: top;
-  white-space: nowrap;
-}
-th {
-  background: #f6f6f7;
-}
-td small {
-  display: block;
-  color: #6d7175;
-  margin-top: 4px;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.pill {
-  border-radius: 999px;
-  padding: 5px 8px;
-  font-size: 12px;
-  font-weight: 700;
-}
-.pill.good {
-  background: #ecfdf3;
-  color: #14532d;
-  border: 1px solid #86efac;
-}
-.pill.needs {
-  background: #fff4e5;
-  color: #7a4b00;
-  border: 1px solid #ffb84d;
-}
-ol {
-  margin-bottom: 0;
-}
-.debug-card {
-  border-color: #93c5fd;
-}
-.debug-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-.debug-grid div {
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  border-radius: 12px;
-  padding: 12px;
-}
-.debug-grid span {
-  display: block;
-  color: #1d4ed8;
-  font-size: 12px;
-}
-.debug-grid strong {
-  display: block;
-  margin-top: 4px;
-  word-break: break-word;
-}
+.gso-page { padding: 24px; max-width: 1280px; margin: 0 auto; color: #202223; }
+.hero { display: flex; justify-content: space-between; gap: 20px; padding: 24px; border-radius: 18px; background: linear-gradient(135deg, #111827, #312e81); color: white; margin-bottom: 20px; }
+.hero h1 { margin: 0 0 8px; font-size: 34px; }
+.hero p { max-width: 760px; margin: 0; color: #e5e7eb; }
+.eyebrow { text-transform: uppercase; letter-spacing: 0.12em; font-size: 12px; font-weight: 700; margin-bottom: 8px !important; }
+.hero-card { min-width: 280px; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+.card { background: white; border: 1px solid #dfe3e8; border-radius: 16px; padding: 20px; margin-bottom: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.card h2 { margin-top: 0; }
+.card-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.muted { color: #6d7175; }
+.notice { padding: 10px; border-radius: 10px; margin-bottom: 12px; }
+.notice.warning { background: #fff4e5; border: 1px solid #ffb84d; color: #7a4b00; }
+.notice.success { background: #ecfdf3; border: 1px solid #86efac; color: #14532d; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+label { display: flex; flex-direction: column; gap: 6px; font-weight: 650; }
+input { min-height: 42px; border: 1px solid #c9cccf; border-radius: 10px; padding: 8px 10px; font-size: 14px; }
+.button-row { grid-column: span 2; display: flex; gap: 10px; align-items: center; }
+button, .link-button { min-height: 42px; border: none; border-radius: 10px; padding: 10px 16px; background: #111827; color: white; font-weight: 700; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; }
+button.secondary { background: #f6f6f7; color: #111827; border: 1px solid #c9cccf; }
+button:disabled { opacity: 0.6; cursor: default; }
+.grid.four { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+.stat span { display: block; color: #6d7175; font-size: 13px; }
+.stat strong { display: block; margin-top: 4px; font-size: 28px; }
+.debug-card { border-color: #93c5fd; }
+.debug-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.debug-grid div { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 12px; }
+.debug-grid span { display: block; color: #1d4ed8; font-size: 12px; }
+.debug-grid strong { display: block; margin-top: 4px; word-break: break-word; }
+.error-text { color: #b91c1c; background: #fee2e2; border: 1px solid #fecaca; padding: 10px; border-radius: 10px; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border-bottom: 1px solid #e1e3e5; padding: 10px; text-align: left; vertical-align: top; white-space: nowrap; }
+th { background: #f6f6f7; }
+td small { display: block; color: #6d7175; margin-top: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.pill { border-radius: 999px; padding: 5px 8px; font-size: 12px; font-weight: 700; }
+.pill.good { background: #ecfdf3; color: #14532d; border: 1px solid #86efac; }
+.pill.needs { background: #fff4e5; color: #7a4b00; border: 1px solid #ffb84d; }
+ol { margin-bottom: 0; }
 @media (max-width: 900px) {
-  .hero,
-  .card-head,
-  .form-grid,
-  .grid.four {
-    grid-template-columns: 1fr;
-    display: grid;
-  }
-  .button-row {
-    grid-column: span 1;
-    align-items: stretch;
-    flex-direction: column;
-  }
+  .hero, .card-head, .form-grid, .grid.four, .debug-grid { grid-template-columns: 1fr; display: grid; }
+  .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
-
-
-

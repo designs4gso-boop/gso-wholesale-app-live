@@ -239,3 +239,17 @@ What changed:
 
 Pilot collection:
 - Stock Bags collection ID: 302046380097
+
+## Hotfix - Direct Shopify collection product sync
+
+Purpose:
+Replace configurator sync page with direct Shopify collection ID product fetch because tag/product search returned zero even when tags were present.
+
+Files changed:
+- app/routes/app.erp.configurator-sync.tsx
+
+What changed:
+- Fetches products from collection(id: gid://shopify/Collection/302046380097).
+- Filters required tag and product type inside ERP.
+- Adds debug panel showing raw Shopify products returned, tag matches, product type matches, and final matches.
+- Uses Stock Bags collection ID as default.

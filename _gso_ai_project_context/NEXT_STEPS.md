@@ -95,3 +95,12 @@ Collection ID sync verification:
 - Product Type Stock Bag
 - Preview products
 - Check Sync Debug counts
+
+Direct collection sync verification:
+- Run npm run build
+- Deploy to Render
+- Open /app/erp/configurator-sync
+- Use Collection ID 302046380097
+- Tag configurator-pilot
+- Product Type Stock Bag
+- Preview products
