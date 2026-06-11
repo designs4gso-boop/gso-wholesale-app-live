@@ -1,4 +1,4 @@
-﻿import { type RouteConfig, index, route } from "@react-router/dev/routes";
+import { type RouteConfig, index, route } from "@react-router/dev/routes";
 
 export default [
   index("routes/_index.tsx"),
@@ -56,8 +56,10 @@ export default [
   route("quote/:id", "routes/quote.$id.tsx"),
   route("webhooks/app/uninstalled", "routes/webhooks.app.uninstalled.ts"),
   route("app/create-wholesale-discount", "routes/app.create-wholesale-discount.tsx"),
+  route("app/create-configurator-cart-transform", "routes/app.create-configurator-cart-transform.tsx"),
   route("webhooks/orders_paid", "routes/webhooks.orders_paid.tsx"),
 ] satisfies RouteConfig;
+
 
 
 
