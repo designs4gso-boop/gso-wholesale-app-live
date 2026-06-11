@@ -33,7 +33,6 @@ export const loader = async ({ request }: { request: Request }) => {
             cartTransform {
               id
               functionId
-              functionHandle
               blockOnFailure
             }
             userErrors {
@@ -75,3 +74,4 @@ export const loader = async ({ request }: { request: Request }) => {
     );
   }
 };
+
