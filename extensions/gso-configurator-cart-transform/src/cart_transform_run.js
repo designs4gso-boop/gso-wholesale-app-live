@@ -13,16 +13,18 @@ const NO_CHANGES = {
 };
 
 function attr(line, key) {
-  if (key === "_gso_configurator") return line.attribute?.value || "";
-  if (key === "ERP Price Each") return line.erpPriceEach?.value || "";
-  if (key === "ERP Matched Tier") return line.erpMatchedTier?.value || "";
+  if (key === "_gso_configurator") return line.gsoConfigurator?.value || "";
+  if (key === "_GSO ERP Price Each") return line.gsoErpPriceEach?.value || "";
+  if (key === "_GSO ERP Matched Tier") return line.gsoErpMatchedTier?.value || "";
   return "";
 }
 
 function money(value) {
   const clean = String(value || "").replace(/[^0-9.]/g, "");
   const number = Number(clean);
+
   if (!Number.isFinite(number) || number <= 0) return null;
+
   return number.toFixed(2);
 }
 
@@ -35,7 +37,7 @@ export function cartTransformRun(input) {
 
   for (const line of input.cart.lines || []) {
     const isGsoConfigured = attr(line, "_gso_configurator") === "true";
-    const priceEach = money(attr(line, "ERP Price Each"));
+    const priceEach = money(attr(line, "_GSO ERP Price Each"));
 
     if (!isGsoConfigured || !priceEach) continue;
 

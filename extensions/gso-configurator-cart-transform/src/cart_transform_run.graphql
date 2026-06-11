@@ -3,34 +3,42 @@ query CartTransformRunInput {
     lines {
       id
       quantity
-      attribute(key: "_gso_configurator") {
+
+      gsoConfigurator: attribute(key: "_gso_configurator") {
         key
         value
       }
-      erpPriceEach: attribute(key: "ERP Price Each") {
+
+      gsoErpPriceEach: attribute(key: "_GSO ERP Price Each") {
         key
         value
       }
-      erpMatchedTier: attribute(key: "ERP Matched Tier") {
+
+      gsoErpMatchedTier: attribute(key: "_GSO ERP Matched Tier") {
         key
         value
       }
+
       material: attribute(key: "Material") {
         key
         value
       }
+
       finish: attribute(key: "Finish") {
         key
         value
       }
+
       bagColor: attribute(key: "Bag Color") {
         key
         value
       }
+
       sides: attribute(key: "Sides") {
         key
         value
       }
+
       merchandise {
         ... on ProductVariant {
           id
