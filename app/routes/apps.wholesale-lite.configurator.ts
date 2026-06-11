@@ -36,7 +36,25 @@ function money(value: any) {
 }
 
 function uniqueValues(items: string[]) {
-  return Array.from(new Set(items.filter(Boolean)));
+  return Array.from(
+    new Set(
+      items
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function optionGroupName(value: string) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+function optionMatches(option: any, names: string[]) {
+  const group = optionGroupName(option.group);
+  return names.map(optionGroupName).includes(group);
 }
 
 function findMatchingRule(rules: any[], material: string, finish: string, quantity: number) {
@@ -106,17 +124,47 @@ export async function loader({ request }: { request: Request }) {
     }),
   ]);
 
-  const materials = uniqueValues(
-    options.filter((option) => option.group === "material").map((option) => option.label || option.value)
+    const optionMaterials = uniqueValues(
+    options
+      .filter((option) => optionMatches(option, ["material", "materials"]))
+      .map((option) => option.label || option.value)
   );
 
-  const finishes = uniqueValues(
-    options.filter((option) => option.group === "finish").map((option) => option.label || option.value)
+  const optionFinishes = uniqueValues(
+    options
+      .filter((option) => optionMatches(option, ["finish", "finishes", "spotGloss", "gloss"]))
+      .map((option) => option.label || option.value)
   );
 
-  const bagColors = uniqueValues(
-    options.filter((option) => option.group === "bagColor").map((option) => option.label || option.value)
+  const optionBagColors = uniqueValues(
+    options
+      .filter((option) => optionMatches(option, ["bagColor", "bag color", "color", "colors"]))
+      .map((option) => option.label || option.value)
   );
+
+  const ruleMaterials = uniqueValues(rules.map((rule) => rule.material));
+  const ruleFinishes = uniqueValues(rules.map((rule) => rule.finish));
+
+  const defaultBagColors = [
+    "White",
+    "Blue",
+    "Red",
+    "Pink",
+    "Orange",
+    "Green",
+    "Gold-Holo",
+    "Silver-Holo",
+    "Purple-Holo",
+    "Teal",
+    "Black",
+    "Light Pink",
+    "Light Purple",
+    "Clear",
+  ];
+
+  const materials = optionMaterials.length ? optionMaterials : ruleMaterials;
+  const finishes = optionFinishes.length ? optionFinishes : ruleFinishes;
+  const bagColors = optionBagColors.length ? optionBagColors : defaultBagColors;
 
   const selectedMaterial = material || materials[0] || "Matte";
   const selectedFinish = finish || finishes[0] || "No Spot Gloss";
@@ -180,3 +228,4 @@ export async function loader({ request }: { request: Request }) {
     },
   });
 }
+
