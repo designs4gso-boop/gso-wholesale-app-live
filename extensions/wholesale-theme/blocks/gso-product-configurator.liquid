@@ -1,4 +1,4 @@
-﻿{% schema %}
+{% schema %}
 {
   "name": "GSO Product Configurator",
   "target": "section",
@@ -45,6 +45,8 @@
   class="gso-configurator gso-configurator--{{ block.settings.layout }}"
   {{ block.shopify_attributes }}
   data-configurator-proxy="/apps/wholesale-lite/configurator"
+  data-checkout-proxy="/apps/wholesale-lite/configurator-checkout"
+  data-customer-email="{% if customer %}{{ customer.email | escape }}{% endif %}"
   data-shop="{{ shop.permanent_domain | escape }}"
   data-product-handle="{{ product.handle | escape }}"
   data-product-gid="gid://shopify/Product/{{ product.id }}"
@@ -136,3 +138,4 @@
     </noscript>
   </div>
 </div>
+

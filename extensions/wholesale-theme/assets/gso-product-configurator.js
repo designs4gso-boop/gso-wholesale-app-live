@@ -88,12 +88,43 @@ function init(r){
  function go(){if(els.load&&first)els.load.hidden=false;fetch(url(),{credentials:"same-origin"}).then(function(x){return x.json()}).then(render).catch(function(){fail("Unable to load GSO configurator pricing.")})}
  function upd(){st.material=els.mat.value||st.material;st.finish=els.fin.value||st.finish;st.bagColor=els.col.value||st.bagColor;st.quantity=Math.max(parseInt(els.qty.value||min,10)||min,min);go()}
  ["change","input"].forEach(function(ev){els.qty.addEventListener(ev,upd)}); els.mat.addEventListener("change",upd); els.fin.addEventListener("change",upd); els.col.addEventListener("change",upd);
- var f=form(r); if(f)f.addEventListener("submit",function(){if(last)sync(r,st,last)});
+ function checkout(){
+  if(!last||!last.ok||!last.active){alert("GSO configurator is not ready yet.");return}
+  var f=form(r);
+  var btn=f?f.querySelector('button[type="submit"],button[name="add"],input[type="submit"]'):null;
+  var oldText=btn?(btn.tagName==="INPUT"?btn.value:btn.textContent):"";
+  if(btn){btn.disabled=true;if(btn.tagName==="INPUT")btn.value="Creating checkout...";else btn.textContent="Creating checkout..."}
+  var proxy=r.dataset.checkoutProxy||"/apps/wholesale-lite/configurator-checkout";
+  var body={
+    shop:r.dataset.shop||"",
+    handle:r.dataset.productHandle||"",
+    productGid:r.dataset.productGid||"",
+    material:st.material||"",
+    finish:st.finish||"",
+    bagColor:st.bagColor||"",
+    quantity:st.quantity||min
+  };
+  if(c(r.dataset.customerEmail))body.email=c(r.dataset.customerEmail);
+  fetch(proxy,{
+    method:"POST",
+    credentials:"same-origin",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body)
+  }).then(function(x){return x.json()}).then(function(x){
+    if(!x||!x.ok||!x.invoiceUrl){throw new Error((x&&x.error)||"Unable to create checkout.")}
+    window.location.href=x.invoiceUrl;
+  }).catch(function(err){
+    alert(err&&err.message?err.message:"Unable to create checkout.");
+    if(btn){btn.disabled=false;if(btn.tagName==="INPUT")btn.value=oldText;else btn.textContent=oldText}
+  })
+}
+var f=form(r); if(f)f.addEventListener("submit",function(ev){ev.preventDefault();if(last)sync(r,st,last);checkout()});
  go()
 }
 function all(){document.querySelectorAll(".gso-configurator").forEach(init)}
 document.addEventListener("DOMContentLoaded",all);document.addEventListener("shopify:section:load",all);document.addEventListener("shopify:block:select",all);window.GSOProductConfiguratorInit=all;
 })();
+
 
 
 
