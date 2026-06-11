@@ -63,3 +63,11 @@ Cleanup syntax hotfix verification:
 - Merge to main
 - Confirm Render deploy succeeds
 - Confirm /app/erp/configurator loads
+
+Collection sync verification:
+- Run npm run build
+- Commit collection sync page
+- Merge to main after build passes
+- Open /app/erp/configurator-sync
+- Preview Stock Bags + configurator-pilot products
+- Sync pilot products into ERP

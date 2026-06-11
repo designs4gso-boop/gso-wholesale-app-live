@@ -161,3 +161,25 @@ Notes:
 - No database changes.
 - No Shopify theme changes.
 - Fixes Render build failure.
+
+## Patch - Shopify collection/tag configurator sync
+
+Purpose:
+Add scalable product sync so thousands of Shopify products do not need manual mapping.
+
+Files changed:
+- app/routes/app.erp.configurator-sync.tsx
+- app/routes.ts
+- app/routes/app.tsx
+
+What it adds:
+- /app/erp/configurator-sync
+- Preview products by Shopify tag/product type/collection handle
+- Sync matched products into ConfiguratorProduct
+- Auto-save Shopify Product GID, base Variant GID, handle, SKU
+- Apply product type stock_bag_4x5, min qty 64, default sides Double Sided
+
+Notes:
+- Collection handle is post-filtered from the product collections list.
+- Required tag is used in the Shopify product search query.
+- Storefront theme remains untouched.
