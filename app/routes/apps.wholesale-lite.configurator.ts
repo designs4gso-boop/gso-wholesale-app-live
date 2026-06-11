@@ -1,5 +1,4 @@
-﻿import { json } from "react-router";
-import { db } from "../db.server";
+﻿import { db } from "../db.server";
 import { MIN_QTY, PRODUCT_TYPE } from "../lib/configurator-pricing";
 
 function corsHeaders() {
@@ -9,6 +8,17 @@ function corsHeaders() {
     "Access-Control-Allow-Headers": "Content-Type",
     "Cache-Control": "no-store",
   };
+}
+
+function jsonResponse(data: unknown, init: ResponseInit = {}) {
+  return new Response(JSON.stringify(data), {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...corsHeaders(),
+      ...(init.headers || {}),
+    },
+  });
 }
 
 function clean(value: string | null | undefined) {
@@ -62,7 +72,7 @@ export async function loader({ request }: { request: Request }) {
   const quantity = Math.max(numberValue(url.searchParams.get("quantity"), MIN_QTY), MIN_QTY);
 
   if (!shop || (!handle && !productGid)) {
-    return json(
+    return jsonResponse(
       {
         ok: false,
         active: false,
@@ -85,7 +95,7 @@ export async function loader({ request }: { request: Request }) {
   });
 
   if (!product) {
-    return json(
+    return jsonResponse(
       {
         ok: true,
         active: false,
@@ -139,7 +149,7 @@ export async function loader({ request }: { request: Request }) {
   const totalProfit = money(orderTotal - totalCost);
   const margin = orderTotal > 0 ? money((totalProfit / orderTotal) * 100) : 0;
 
-  return json(
+  return jsonResponse(
     {
       ok: true,
       active: true,
@@ -180,3 +190,4 @@ export async function loader({ request }: { request: Request }) {
     { headers: corsHeaders() }
   );
 }
+

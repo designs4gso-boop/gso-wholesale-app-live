@@ -279,3 +279,16 @@ Notes:
 - Pilot only.
 - Does not remove Shopify variants yet.
 - Does not alter order webhook yet.
+
+## Hotfix - Storefront configurator JSON response
+
+Purpose:
+Fix Render deploy failure caused by importing json from react-router. This app version does not export json from react-router.
+
+Files changed:
+- app/routes/apps.wholesale-lite.configurator.ts
+
+What changed:
+- Removed import { json } from react-router.
+- Added jsonResponse helper using native Response.
+- Replaced return json(...) with return jsonResponse(...).

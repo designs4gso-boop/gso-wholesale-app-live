@@ -114,3 +114,9 @@ Storefront configurator pilot verification:
 - Confirm Material, Finish, Bag Color, Quantity load
 - Confirm price updates
 - Add to cart and confirm line item properties
+
+Storefront configurator JSON hotfix verification:
+- Run npm run build
+- Commit and push main
+- Confirm Render deploy goes live
+- Then deploy Shopify theme extension
