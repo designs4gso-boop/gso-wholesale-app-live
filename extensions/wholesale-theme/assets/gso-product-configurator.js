@@ -70,7 +70,16 @@ function init(r){
   if(!box||!body)return; box.hidden=!(on&&rows&&rows.length);
   body.innerHTML=(rows||[]).map(function(x){return'<div><span>'+e(x.range)+'</span><strong>'+m(x.priceEach)+' each</strong></div>'}).join("")
  }
- function render(p){
+ function labelButton(){
+  var f=form(r);
+  var btn=f?f.querySelector('button[type="submit"],button[name="add"],input[type="submit"]'):null;
+  if(btn){
+    if(btn.tagName==="INPUT")btn.value="Checkout";
+    else btn.textContent="Checkout";
+    btn.setAttribute("aria-label","Checkout");
+  }
+}
+function render(p){
   last=p; if(!p||!p.ok||!p.active){fail((p&&p.message)||"This product is not connected to the GSO configurator yet.");return}
   var o=p.options||{}, sel=p.selected||{}, pr=p.pricing||{}, prod=p.product||{};
   st.material=sel.material||st.material||(o.materials||[])[0]||"";
@@ -83,7 +92,7 @@ function init(r){
   var n=q(r,'[data-gso-result="notice"]'); if(n)n.textContent="Sides are set to "+(prod.defaultSides||"Double Sided")+". Minimum order is "+(prod.minQuantity||min)+" units.";
   breaks(pr.priceBreaks||[]);
   if(els.load)els.load.hidden=true; if(els.err)els.err.hidden=true; if(els.app)els.app.hidden=false;
-  sync(r,st,p); if(first){first=false;r.dispatchEvent(new CustomEvent("gso:configurator:ready",{bubbles:true,detail:p}))}
+  sync(r,st,p); labelButton(); if(first){first=false;r.dispatchEvent(new CustomEvent("gso:configurator:ready",{bubbles:true,detail:p}))}
  }
  function go(){if(els.load&&first)els.load.hidden=false;fetch(url(),{credentials:"same-origin"}).then(function(x){return x.json()}).then(render).catch(function(){fail("Unable to load GSO configurator pricing.")})}
  function upd(){st.material=els.mat.value||st.material;st.finish=els.fin.value||st.finish;st.bagColor=els.col.value||st.bagColor;st.quantity=Math.max(parseInt(els.qty.value||min,10)||min,min);go()}
@@ -124,6 +133,7 @@ var f=form(r); if(f)f.addEventListener("submit",function(ev){ev.preventDefault()
 function all(){document.querySelectorAll(".gso-configurator").forEach(init)}
 document.addEventListener("DOMContentLoaded",all);document.addEventListener("shopify:section:load",all);document.addEventListener("shopify:block:select",all);window.GSOProductConfiguratorInit=all;
 })();
+
 
 
 
