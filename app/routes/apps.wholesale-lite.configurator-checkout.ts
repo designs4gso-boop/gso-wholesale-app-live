@@ -203,8 +203,9 @@ export async function action({ request }: { request: Request }) {
       );
     }
 
-    const lineTitle = product.title || "Configured Stock Bag";
+    const baseTitle = product.title || "Configured Stock Bag";
     const optionSummary = `${material} / ${finish} / ${bagColor}`;
+    const lineTitle = `${baseTitle} - ${optionSummary}`;
 
     const draftRes = await shopifyGraphql(
       shop,
@@ -230,7 +231,6 @@ export async function action({ request }: { request: Request }) {
           lineItems: [
             {
               title: lineTitle,
-              variantTitle: optionSummary,
               sku: product.sku || "",
               quantity,
               originalUnitPrice: String(priceEach.toFixed(2)),
@@ -315,4 +315,5 @@ export async function action({ request }: { request: Request }) {
     );
   }
 }
+
 
