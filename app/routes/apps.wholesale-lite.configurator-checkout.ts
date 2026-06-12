@@ -226,7 +226,7 @@ export async function action({ request }: { request: Request }) {
       {
         input: {
           email: email || undefined,
-          note: `Created from GSO Product Configurator. ERP Product ID: ${product.id}. Shopify Product GID: ${product.shopifyProductGid || ""}. Shopify Variant GID: ${product.shopifyVariantGid || ""}.`,
+          note: "Created from GSO Product Configurator.",
           tags: ["GSO Configurator", "Stock Bag"],
           lineItems: [
             {
@@ -312,6 +312,7 @@ export async function action({ request }: { request: Request }) {
     );
   }
 }
+
 
 
 
