@@ -239,11 +239,7 @@ export async function action({ request }: { request: Request }) {
                 { key: "Finish", value: finish },
                 { key: "Production Finish", value: String(rule.productionFinish || finish) },
                 { key: "Bag Color", value: bagColor },
-                { key: "Sides", value: "Double Sided" },
-                { key: "ERP Price Each", value: `$${priceEach.toFixed(2)}` },
-                { key: "ERP Matched Tier", value: matchedRange },
-                { key: "ERP Order Total", value: `$${orderTotal.toFixed(2)}` },
-              ],
+                { key: "Sides", value: "Double Sided" },              ],
             },
           ],
         },
@@ -312,6 +308,7 @@ export async function action({ request }: { request: Request }) {
     );
   }
 }
+
 
 
 
