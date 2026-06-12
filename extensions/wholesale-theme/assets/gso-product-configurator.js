@@ -77,7 +77,7 @@ function ensureCart(){
  b.type="button";
  b.className="gso-cart-fab";
  b.id="gso-cart-fab";
- b.innerHTML='GSO Cart <span data-gso-cart-count>0</span>';
+ b.innerHTML='Cart <span data-gso-cart-count>0</span>';
  b.addEventListener("click",openCart);
 
  var backdrop=document.createElement("div");
@@ -431,4 +431,5 @@ document.addEventListener("shopify:section:load",all);
 document.addEventListener("shopify:block:select",all);
 window.GSOProductConfiguratorInit=all;
 })();
+
 
