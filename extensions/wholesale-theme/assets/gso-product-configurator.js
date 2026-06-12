@@ -91,7 +91,7 @@ function ensureCart(){
  drawer.setAttribute("aria-hidden","true");
  drawer.innerHTML=[
   '<div class="gso-cart-head">',
-    '<h3 class="gso-cart-title">Your GSO Cart</h3>',
+    '<h3 class="gso-cart-title">YOUR CART</h3>',
     '<button type="button" class="gso-cart-close" data-gso-cart-close aria-label="Close cart">×</button>',
   '</div>',
   '<div class="gso-cart-body" data-gso-cart-items></div>',
@@ -147,7 +147,7 @@ function renderCart(){
  if(btn)btn.disabled=!items.length;
 
  if(!items.length){
-  body.innerHTML='<div class="gso-cart-empty">Your GSO cart is empty.</div>';
+  body.innerHTML='<div class="gso-cart-empty">YOUR CART is empty.</div>';
   return;
  }
 
@@ -310,9 +310,9 @@ function init(r){
   if(!f)return;
   var btn=f.querySelector('button[type="submit"],button[name="add"],input[type="submit"]');
   if(btn){
-   if(btn.tagName==="INPUT")btn.value="Add to GSO Cart";
-   else btn.textContent="Add to GSO Cart";
-   btn.setAttribute("aria-label","Add to GSO Cart");
+   if(btn.tagName==="INPUT")btn.value="Add to Cart";
+   else btn.textContent="Add to Cart";
+   btn.setAttribute("aria-label","Add to Cart");
   }
  }
 
@@ -431,3 +431,4 @@ document.addEventListener("shopify:section:load",all);
 document.addEventListener("shopify:block:select",all);
 window.GSOProductConfiguratorInit=all;
 })();
+
