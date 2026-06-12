@@ -115,54 +115,17 @@ export async function action({ request }: { request: Request }) {
   try {
     const body = await request.json();
 
-    const shop = clean(body.shop);
-    const handle = clean(body.handle);
-    const productGid = clean(body.productGid);
-    const material = clean(body.material);
-    const finish = clean(body.finish);
-    const bagColor = clean(body.bagColor);
-    const email = clean(body.email);
-    const quantity = Math.max(numberValue(body.quantity, MIN_QTY), MIN_QTY);
+    const incomingItems = Array.isArray(body.items) && body.items.length ? body.items : [body];
+    const shop = clean(body.shop || incomingItems[0]?.shop);
+    const email = clean(body.email || incomingItems[0]?.email);
 
-    if (!shop || (!handle && !productGid)) {
+    if (!shop) {
       return jsonResponse(
         {
           ok: false,
-          error: "Missing shop or product identifier.",
+          error: "Missing shop.",
         },
         { status: 400 },
-      );
-    }
-
-    if (!material || !finish || !bagColor) {
-      return jsonResponse(
-        {
-          ok: false,
-          error: "Missing material, finish, or bag color.",
-        },
-        { status: 400 },
-      );
-    }
-
-    const product = await db.configuratorProduct.findFirst({
-      where: {
-        shop,
-        productType: PRODUCT_TYPE,
-        active: true,
-        OR: [
-          productGid ? { shopifyProductGid: productGid } : undefined,
-          handle ? { shopifyHandle: handle } : undefined,
-        ].filter(Boolean) as any,
-      },
-    });
-
-    if (!product) {
-      return jsonResponse(
-        {
-          ok: false,
-          error: "No active ERP configurator product found for this Shopify product.",
-        },
-        { status: 404 },
       );
     }
 
@@ -175,37 +138,163 @@ export async function action({ request }: { request: Request }) {
       orderBy: [{ material: "asc" }, { finish: "asc" }, { minQty: "asc" }],
     });
 
-    const rule = findMatchingRule(rules, material, finish, quantity);
+    const lineItems: any[] = [];
+    const itemSummaries: any[] = [];
+    let cartTotal = 0;
 
-    if (!rule) {
+    for (const rawItem of incomingItems) {
+      const handle = clean(rawItem.handle);
+      const productGid = clean(rawItem.productGid || rawItem.shopifyProductGid);
+      const material = clean(rawItem.material);
+      const finish = clean(rawItem.finish);
+      const bagColor = clean(rawItem.bagColor);
+      const quantity = Math.max(numberValue(rawItem.quantity, MIN_QTY), MIN_QTY);
+
+      if (!handle && !productGid) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "Missing product identifier on one cart item.",
+            item: rawItem,
+          },
+          { status: 400 },
+        );
+      }
+
+      if (!material || !finish || !bagColor) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "Missing material, finish, or bag color on one cart item.",
+            item: rawItem,
+          },
+          { status: 400 },
+        );
+      }
+
+      const product = await db.configuratorProduct.findFirst({
+        where: {
+          shop,
+          productType: PRODUCT_TYPE,
+          active: true,
+          OR: [
+            productGid ? { shopifyProductGid: productGid } : undefined,
+            handle ? { shopifyHandle: handle } : undefined,
+          ].filter(Boolean) as any,
+        },
+      });
+
+      if (!product) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "No active ERP configurator product found for one cart item.",
+            item: {
+              handle,
+              productGid,
+              material,
+              finish,
+              bagColor,
+              quantity,
+            },
+          },
+          { status: 404 },
+        );
+      }
+
+      const rule = findMatchingRule(rules, material, finish, quantity);
+
+      if (!rule) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "No matching ERP pricing rule found for one cart item.",
+            item: {
+              title: product.title,
+              handle,
+              material,
+              finish,
+              bagColor,
+              quantity,
+            },
+          },
+          { status: 400 },
+        );
+      }
+
+      const priceEach = money(rule.priceEach);
+      const orderTotal = money(priceEach * quantity);
+      const matchedRange = rangeLabel(rule);
+
+      if (!priceEach || priceEach <= 0) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "ERP price is missing or invalid for one cart item.",
+            item: {
+              title: product.title,
+              handle,
+              material,
+              finish,
+              bagColor,
+              quantity,
+            },
+          },
+          { status: 400 },
+        );
+      }
+
+      cartTotal = money(cartTotal + orderTotal);
+
+      const baseTitle = product.title || clean(rawItem.title) || "Configured Stock Bag";
+      const optionSummary = `${material} / ${finish} / ${bagColor}`;
+      const lineTitle = `${baseTitle} - ${optionSummary}`;
+
+      lineItems.push({
+        title: lineTitle,
+        sku: product.sku || "",
+        quantity,
+        originalUnitPrice: String(priceEach.toFixed(2)),
+        customAttributes: [
+          { key: "Material", value: material },
+          { key: "Finish", value: finish },
+          { key: "Production Finish", value: String(rule.productionFinish || finish) },
+          { key: "Bag Color", value: bagColor },
+          { key: "Sides", value: "Double Sided" },
+        ],
+      });
+
+      itemSummaries.push({
+        product: {
+          id: product.id,
+          title: product.title,
+          handle: product.shopifyHandle,
+          sku: product.sku,
+        },
+        selected: {
+          material,
+          finish,
+          bagColor,
+          sides: "Double Sided",
+        },
+        pricing: {
+          priceEach,
+          quantity,
+          orderTotal,
+          matchedRange,
+        },
+      });
+    }
+
+    if (!lineItems.length) {
       return jsonResponse(
         {
           ok: false,
-          error: "No matching ERP pricing rule found.",
-          selected: { material, finish, bagColor, quantity },
+          error: "No valid cart items were found.",
         },
         { status: 400 },
       );
     }
-
-    const priceEach = money(rule.priceEach);
-    const orderTotal = money(priceEach * quantity);
-    const matchedRange = rangeLabel(rule);
-
-    if (!priceEach || priceEach <= 0) {
-      return jsonResponse(
-        {
-          ok: false,
-          error: "ERP price is missing or invalid.",
-          selected: { material, finish, bagColor, quantity },
-        },
-        { status: 400 },
-      );
-    }
-
-    const baseTitle = product.title || "Configured Stock Bag";
-    const optionSummary = `${material} / ${finish} / ${bagColor}`;
-    const lineTitle = `${baseTitle} - ${optionSummary}`;
 
     const draftRes = await shopifyGraphql(
       shop,
@@ -226,22 +315,9 @@ export async function action({ request }: { request: Request }) {
       {
         input: {
           email: email || undefined,
-          note: "Created from GSO Product Configurator.",
+          note: `Created from GSO Product Configurator. Items: ${lineItems.length}.`,
           tags: ["GSO Configurator", "Stock Bag"],
-          lineItems: [
-            {
-              title: lineTitle,
-              sku: product.sku || "",
-              quantity,
-              originalUnitPrice: String(priceEach.toFixed(2)),
-              customAttributes: [
-                { key: "Material", value: material },
-                { key: "Finish", value: finish },
-                { key: "Production Finish", value: String(rule.productionFinish || finish) },
-                { key: "Bag Color", value: bagColor },
-                { key: "Sides", value: "Double Sided" },              ],
-            },
-          ],
+          lineItems,
         },
       },
     );
@@ -278,24 +354,9 @@ export async function action({ request }: { request: Request }) {
       ok: true,
       invoiceUrl: draftOrder?.invoiceUrl,
       draftOrderId: draftOrder?.id,
-      pricing: {
-        priceEach,
-        quantity,
-        orderTotal,
-        matchedRange,
-      },
-      selected: {
-        material,
-        finish,
-        bagColor,
-        sides: "Double Sided",
-      },
-      product: {
-        id: product.id,
-        title: product.title,
-        handle: product.shopifyHandle,
-        sku: product.sku,
-      },
+      itemCount: lineItems.length,
+      cartTotal,
+      items: itemSummaries,
     });
   } catch (error: any) {
     return jsonResponse(
@@ -308,8 +369,3 @@ export async function action({ request }: { request: Request }) {
     );
   }
 }
-
-
-
-
-
