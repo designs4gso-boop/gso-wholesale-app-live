@@ -1,5 +1,5 @@
 import { db } from "../db.server";
-import { MIN_QTY, PRODUCT_TYPE } from "../lib/configurator-pricing";
+import { MIN_QTY } from "../lib/configurator-pricing";
 
 const SHOPIFY_API_VERSION = "2025-10";
 
@@ -56,12 +56,8 @@ function findMatchingRule(rules: any[], material: string, finish: string, quanti
 
 async function shopifyGraphql(shop: string, query: string, variables: any) {
   const session = await db.session.findFirst({
-    where: {
-      shop,
-    },
-    orderBy: {
-      id: "asc",
-    },
+    where: { shop },
+    orderBy: { id: "asc" },
   });
 
   if (!session?.accessToken) {
@@ -129,18 +125,10 @@ export async function action({ request }: { request: Request }) {
       );
     }
 
-    const rules = await db.configuratorPricingRule.findMany({
-      where: {
-        shop,
-        productType: PRODUCT_TYPE,
-        active: true,
-      },
-      orderBy: [{ material: "asc" }, { finish: "asc" }, { minQty: "asc" }],
-    });
-
     const lineItems: any[] = [];
     const itemSummaries: any[] = [];
     let cartTotal = 0;
+    const productTypes = new Set<string>();
 
     for (const rawItem of incomingItems) {
       const handle = clean(rawItem.handle);
@@ -148,7 +136,6 @@ export async function action({ request }: { request: Request }) {
       const material = clean(rawItem.material);
       const finish = clean(rawItem.finish);
       const bagColor = clean(rawItem.bagColor);
-      const quantity = Math.max(numberValue(rawItem.quantity, MIN_QTY), MIN_QTY);
 
       if (!handle && !productGid) {
         return jsonResponse(
@@ -175,7 +162,6 @@ export async function action({ request }: { request: Request }) {
       const product = await db.configuratorProduct.findFirst({
         where: {
           shop,
-          productType: PRODUCT_TYPE,
           active: true,
           OR: [
             productGid ? { shopifyProductGid: productGid } : undefined,
@@ -195,12 +181,26 @@ export async function action({ request }: { request: Request }) {
               material,
               finish,
               bagColor,
-              quantity,
             },
           },
           { status: 404 },
         );
       }
+
+      const productType = product.productType || "stock_bag_4x5";
+      const minQuantity = Number(product.minQuantity || MIN_QTY);
+      const quantity = Math.max(numberValue(rawItem.quantity, minQuantity), minQuantity);
+
+      productTypes.add(productType);
+
+      const rules = await db.configuratorPricingRule.findMany({
+        where: {
+          shop,
+          productType,
+          active: true,
+        },
+        orderBy: [{ material: "asc" }, { finish: "asc" }, { minQty: "asc" }],
+      });
 
       const rule = findMatchingRule(rules, material, finish, quantity);
 
@@ -211,6 +211,7 @@ export async function action({ request }: { request: Request }) {
             error: "No matching ERP pricing rule found for one cart item.",
             item: {
               title: product.title,
+              productType,
               handle,
               material,
               finish,
@@ -233,6 +234,7 @@ export async function action({ request }: { request: Request }) {
             error: "ERP price is missing or invalid for one cart item.",
             item: {
               title: product.title,
+              productType,
               handle,
               material,
               finish,
@@ -246,7 +248,7 @@ export async function action({ request }: { request: Request }) {
 
       cartTotal = money(cartTotal + orderTotal);
 
-      const baseTitle = product.title || clean(rawItem.title) || "Configured Stock Bag";
+      const baseTitle = product.title || clean(rawItem.title) || "Configured Product";
       const optionSummary = `${material} / ${finish} / ${bagColor}`;
       const lineTitle = `${baseTitle} - ${optionSummary}`;
 
@@ -260,7 +262,7 @@ export async function action({ request }: { request: Request }) {
           { key: "Finish", value: finish },
           { key: "Production Finish", value: String(rule.productionFinish || finish) },
           { key: "Bag Color", value: bagColor },
-          { key: "Sides", value: "Double Sided" },
+          { key: "Sides", value: String(product.defaultSides || "Double Sided") },
         ],
       });
 
@@ -268,6 +270,7 @@ export async function action({ request }: { request: Request }) {
         product: {
           id: product.id,
           title: product.title,
+          productType,
           handle: product.shopifyHandle,
           sku: product.sku,
         },
@@ -275,7 +278,7 @@ export async function action({ request }: { request: Request }) {
           material,
           finish,
           bagColor,
-          sides: "Double Sided",
+          sides: product.defaultSides || "Double Sided",
         },
         pricing: {
           priceEach,
@@ -315,8 +318,8 @@ export async function action({ request }: { request: Request }) {
       {
         input: {
           email: email || undefined,
-          note: `Created from GSO Product Configurator. Items: ${lineItems.length}.`,
-          tags: ["GSO Configurator", "Stock Bag"],
+          note: `Created from GSO Product Configurator. Items: ${lineItems.length}. Product types: ${Array.from(productTypes).join(", ")}.`,
+          tags: ["GSO Configurator", ...Array.from(productTypes)],
           lineItems,
         },
       },
@@ -356,6 +359,7 @@ export async function action({ request }: { request: Request }) {
       draftOrderId: draftOrder?.id,
       itemCount: lineItems.length,
       cartTotal,
+      productTypes: Array.from(productTypes),
       items: itemSummaries,
     });
   } catch (error: any) {

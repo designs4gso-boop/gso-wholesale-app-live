@@ -1,5 +1,5 @@
-﻿import { db } from "../db.server";
-import { MIN_QTY, PRODUCT_TYPE } from "../lib/configurator-pricing";
+import { db } from "../db.server";
+import { MIN_QTY } from "../lib/configurator-pricing";
 
 function corsHeaders() {
   return {
@@ -40,8 +40,8 @@ function uniqueValues(items: string[]) {
     new Set(
       items
         .map((item) => String(item || "").trim())
-        .filter(Boolean)
-    )
+        .filter(Boolean),
+    ),
   );
 }
 
@@ -74,6 +74,12 @@ function rangeLabel(rule: any) {
   return rule.maxQty == null ? `${rule.minQty}+` : `${rule.minQty}-${rule.maxQty}`;
 }
 
+function humanProductType(value: string) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 export async function loader({ request }: { request: Request }) {
   if (request.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders() });
@@ -87,7 +93,6 @@ export async function loader({ request }: { request: Request }) {
   const material = clean(url.searchParams.get("material"));
   const finish = clean(url.searchParams.get("finish"));
   const bagColor = clean(url.searchParams.get("bagColor"));
-  const quantity = Math.max(numberValue(url.searchParams.get("quantity"), MIN_QTY), MIN_QTY);
 
   if (!shop || (!handle && !productGid)) {
     return jsonResponse({ ok: false, active: false, message: "Missing shop or product identifier." });
@@ -96,7 +101,6 @@ export async function loader({ request }: { request: Request }) {
   const product = await db.configuratorProduct.findFirst({
     where: {
       shop,
-      productType: PRODUCT_TYPE,
       active: true,
       OR: [
         productGid ? { shopifyProductGid: productGid } : undefined,
@@ -113,33 +117,37 @@ export async function loader({ request }: { request: Request }) {
     });
   }
 
+  const productType = product.productType || "stock_bag_4x5";
+  const minQuantity = Number(product.minQuantity || MIN_QTY);
+  const quantity = Math.max(numberValue(url.searchParams.get("quantity"), minQuantity), minQuantity);
+
   const [options, rules] = await Promise.all([
     db.configuratorOption.findMany({
-      where: { shop, productType: PRODUCT_TYPE, active: true },
+      where: { shop, productType, active: true },
       orderBy: [{ group: "asc" }, { sortOrder: "asc" }],
     }),
     db.configuratorPricingRule.findMany({
-      where: { shop, productType: PRODUCT_TYPE, active: true },
+      where: { shop, productType, active: true },
       orderBy: [{ material: "asc" }, { finish: "asc" }, { minQty: "asc" }],
     }),
   ]);
 
-    const optionMaterials = uniqueValues(
+  const optionMaterials = uniqueValues(
     options
       .filter((option) => optionMatches(option, ["material", "materials"]))
-      .map((option) => option.label || option.value)
+      .map((option) => option.label || option.value),
   );
 
   const optionFinishes = uniqueValues(
     options
       .filter((option) => optionMatches(option, ["finish", "finishes", "spotGloss", "gloss"]))
-      .map((option) => option.label || option.value)
+      .map((option) => option.label || option.value),
   );
 
   const optionBagColors = uniqueValues(
     options
       .filter((option) => optionMatches(option, ["bagColor", "bag color", "color", "colors"]))
-      .map((option) => option.label || option.value)
+      .map((option) => option.label || option.value),
   );
 
   const ruleMaterials = uniqueValues(rules.map((rule) => rule.material));
@@ -196,14 +204,17 @@ export async function loader({ request }: { request: Request }) {
   return jsonResponse({
     ok: true,
     active: true,
+    productType,
+    productTypeLabel: humanProductType(productType),
     product: {
       id: product.id,
       title: product.title,
+      productType,
       shopifyProductGid: product.shopifyProductGid,
       shopifyVariantGid: product.shopifyVariantGid,
       handle: product.shopifyHandle,
       sku: product.sku,
-      minQuantity: product.minQuantity || MIN_QTY,
+      minQuantity,
       defaultSides: product.defaultSides || "Double Sided",
     },
     options: { materials, finishes, bagColors },
@@ -212,7 +223,7 @@ export async function loader({ request }: { request: Request }) {
       finish: selectedFinish,
       bagColor: selectedBagColor,
       quantity,
-      sides: "Double Sided",
+      sides: product.defaultSides || "Double Sided",
     },
     pricing: {
       matched: Boolean(rule),
@@ -228,4 +239,3 @@ export async function loader({ request }: { request: Request }) {
     },
   });
 }
-
