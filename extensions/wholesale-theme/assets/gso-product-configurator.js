@@ -257,7 +257,7 @@ function sync(r,s,p){
 
 function styles(){ensureCartStyles()}
 
-function init(r){
+function init(r){document.body.classList.add("gso-configurator-hide-dynamic-checkout");
  styles();
  ensureCart();
 
@@ -431,5 +431,7 @@ document.addEventListener("shopify:section:load",all);
 document.addEventListener("shopify:block:select",all);
 window.GSOProductConfiguratorInit=all;
 })();
+
+
 
 
