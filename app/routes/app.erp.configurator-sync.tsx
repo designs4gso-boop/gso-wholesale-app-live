@@ -573,8 +573,7 @@ export default function ConfiguratorSync() {
           <div>
             <h2>Sync Settings</h2>
             <p className="muted">
-              For the 5-product pilot, use Stock Bags collection ID <b>302046380097</b>, required tag{" "}
-              <b>configurator-pilot</b>, and product type <b>Stock Bag</b>.
+              Use this read-only preview first to verify stock bag pipeline readiness before syncing into ERP. Default rollout settings are Stock Bags collection ID <b>302046380097</b>, required tag{" "}<b>configurator-pilot</b>, and Shopify product type <b>Stock Bag</b>.
             </p>
           </div>
           <a className="link-button" href="/app/erp/configurator">Back to Configurator</a>
@@ -748,6 +747,7 @@ ol { margin-bottom: 0; }
   .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
+
 
 
 
