@@ -325,10 +325,11 @@ export default function StockBagMigrationReport() {
         <Link to="/app/erp/configurator-audit" style={linkButtonStyle}>Back to Configurator Audit</Link>
       </section>
 
-      <section style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20 }}>
-        <Link to="/app/erp/configurator-sync" style={linkButtonStyle}>Back to Configurator Sync</Link>
-        <Link to="/app/erp/configurator-audit" style={linkButtonStyle}>Back to Configurator Audit</Link>
-      </section>
+
+
+
+
+
 
       <section style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: 16, marginBottom: 20 }}>
         <Form method="post" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12, alignItems: "end" }}>
@@ -512,6 +513,8 @@ function Th({ children }: { children: React.ReactNode }) {
 function Td({ children, colSpan }: { children: React.ReactNode; colSpan?: number }) {
   return <td colSpan={colSpan} style={{ padding: "12px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>{children}</td>;
 }
+
+
 
 
 

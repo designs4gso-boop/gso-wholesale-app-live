@@ -597,7 +597,7 @@ export default function ConfiguratorSync() {
 
           <label>
             Max Products To Scan
-            <input name="limit" type="number" min="1" max="250" defaultValue={defaults.limit} />
+            <input name="limit" type="number" min="1" max="2000" defaultValue={defaults.limit} />
           </label>
 
           <div className="button-row">
@@ -747,6 +747,8 @@ ol { margin-bottom: 0; }
   .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
+
+
 
 
 
