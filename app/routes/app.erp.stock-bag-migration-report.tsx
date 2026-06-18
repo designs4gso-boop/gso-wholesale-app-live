@@ -1,4 +1,5 @@
-import { Form, useActionData, useNavigation } from "react-router";
+import { Form, Link, useActionData, useNavigation } from "react-router";
+import { useMemo, useState } from "react";
 import { authenticate } from "../shopify.server";
 
 const DEFAULT_COLLECTION_ID = "302046380097";
@@ -278,6 +279,25 @@ export default function StockBagMigrationReport() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  const filteredRows = useMemo(() => {
+    const rows = actionData?.rows || [];
+
+    if (statusFilter === "ready") {
+      return rows.filter((product: any) => product.readiness.ready);
+    }
+
+    if (statusFilter === "pending") {
+      return rows.filter((product: any) => product.readiness.label === "Pending Shopify Cleanup");
+    }
+
+    if (statusFilter === "needs_setup") {
+      return rows.filter((product: any) => product.readiness.label === "Needs Setup");
+    }
+
+    return rows;
+  }, [actionData, statusFilter]);
 
   const defaults = {
     collectionInput: actionData?.collectionInput || DEFAULT_COLLECTION_ID,
@@ -298,6 +318,16 @@ export default function StockBagMigrationReport() {
 
       <section style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 14, padding: 16, marginBottom: 20 }}>
         <strong>Safety rule:</strong> this page only previews Shopify product readiness. It does not create, update, delete, sync, or map products.
+      </section>
+
+      <section style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20 }}>
+        <Link to="/app/erp/configurator-sync" style={linkButtonStyle}>Back to Configurator Sync</Link>
+        <Link to="/app/erp/configurator-audit" style={linkButtonStyle}>Back to Configurator Audit</Link>
+      </section>
+
+      <section style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20 }}>
+        <Link to="/app/erp/configurator-sync" style={linkButtonStyle}>Back to Configurator Sync</Link>
+        <Link to="/app/erp/configurator-audit" style={linkButtonStyle}>Back to Configurator Audit</Link>
       </section>
 
       <section style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: 16, marginBottom: 20 }}>
@@ -328,6 +358,16 @@ export default function StockBagMigrationReport() {
 
       {actionData ? (
         <>
+          {actionData.totals.pendingShopifyCleanup > 0 || actionData.totals.notReady > 0 ? (
+            <section style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 14, padding: 16, marginBottom: 20 }}>
+              <strong>Do not run ERP sync yet.</strong> This scan found products still using old Shopify variant/options structure or missing readiness requirements.
+            </section>
+          ) : (
+            <section style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 14, padding: 16, marginBottom: 20 }}>
+              <strong>Pipeline looks ready for ERP sync.</strong> All scanned products passed the read-only readiness checks.
+            </section>
+          )}
+
           <section style={{ background: "white", border: "1px solid #bfdbfe", borderRadius: 14, padding: 16, marginBottom: 20 }}>
             <h2 style={{ marginTop: 0 }}>Migration Readiness Summary</h2>
             {actionData.debug.error ? <p style={{ color: "#b91c1c" }}>{actionData.debug.error}</p> : null}
@@ -352,8 +392,22 @@ export default function StockBagMigrationReport() {
           </section>
 
           <section style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, overflow: "hidden" }}>
-            <div style={{ padding: 16, borderBottom: "1px solid #e5e7eb" }}>
-              <h2 style={{ margin: 0 }}>Scanned Products</h2>
+            <div style={{ padding: 16, borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Scanned Products</h2>
+                <p style={{ margin: "4px 0 0", color: "#64748b" }}>
+                  Showing {filteredRows.length} of {actionData.rows.length} scanned products.
+                </p>
+              </div>
+              <label style={{ display: "grid", gap: 6, minWidth: 220 }}>
+                Status Filter
+                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} style={inputStyle}>
+                  <option value="all">Show All</option>
+                  <option value="ready">Ready Only</option>
+                  <option value="pending">Pending Cleanup Only</option>
+                  <option value="needs_setup">Needs Setup Only</option>
+                </select>
+              </label>
             </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -370,7 +424,7 @@ export default function StockBagMigrationReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {actionData.rows.length ? actionData.rows.map((product: any) => (
+                  {filteredRows.length ? filteredRows.map((product: any) => (
                     <tr key={product.id || product.handle || product.title} style={{ borderTop: "1px solid #e5e7eb" }}>
                       <Td><Badge label={product.readiness.label} ready={product.readiness.ready} /></Td>
                       <Td>
@@ -386,7 +440,7 @@ export default function StockBagMigrationReport() {
                     </tr>
                   )) : (
                     <tr>
-                      <Td colSpan={8}>No products scanned.</Td>
+                      <Td colSpan={8}>No products match this filter.</Td>
                     </tr>
                   )}
                 </tbody>
@@ -411,6 +465,17 @@ const buttonStyle = {
   border: 0,
   background: "#111827",
   color: "white",
+  fontWeight: 800,
+};
+
+const linkButtonStyle = {
+  display: "inline-flex",
+  padding: "10px 14px",
+  borderRadius: 8,
+  border: "1px solid #cbd5e1",
+  textDecoration: "none",
+  color: "#111827",
+  background: "white",
   fontWeight: 800,
 };
 
@@ -447,3 +512,6 @@ function Th({ children }: { children: React.ReactNode }) {
 function Td({ children, colSpan }: { children: React.ReactNode; colSpan?: number }) {
   return <td colSpan={colSpan} style={{ padding: "12px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>{children}</td>;
 }
+
+
+
