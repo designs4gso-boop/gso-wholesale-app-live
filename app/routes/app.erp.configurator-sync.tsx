@@ -94,7 +94,7 @@ function assessPipelineReadiness(
   }
 
   if (Number(product.totalVariants || 0) !== 1) {
-    issues.push(`Multiple variants still present (${product.totalVariants || 0})`);
+    issues.push(`Variant count must be exactly 1; detected ${product.totalVariants || 0}`);
   }
 
   if (!product.baseVariantId) {
@@ -111,7 +111,7 @@ function assessPipelineReadiness(
 
   if (issues.length) {
     return {
-      label: issues.some((issue) => issue.includes("Multiple variants") || issue.includes("Old Shopify options"))
+      label: issues.some((issue) => issue.includes("Multiple variants") || issue.includes("Variant count") || issue.includes("Old Shopify options"))
         ? "Pending Shopify Cleanup"
         : "Needs Setup",
       tone: "warning",
@@ -128,7 +128,10 @@ function assessPipelineReadiness(
   };
 }
 function normalizeProduct(node: any): ShopifyProductPreview {
-  const baseVariant = node.variants?.edges?.[0]?.node || null;
+  const variantEdges = node.variants?.edges || [];
+  const baseVariant = variantEdges[0]?.node || null;
+  const detectedVariantCount =
+    Number(node.totalVariants || 0) > 0 ? Number(node.totalVariants || 0) : variantEdges.length;
 
   const collections =
     node.collections?.edges?.map((edge: any) => ({
@@ -204,7 +207,7 @@ async function fetchProductsFromCollection({
                   }
                 }
               }
-              variants(first: 1) {
+              variants(first: 5) {
                 edges {
                   node {
                     id
@@ -728,5 +731,6 @@ ol { margin-bottom: 0; }
   .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
+
 
 
