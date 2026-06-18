@@ -93,8 +93,16 @@ function assessPipelineReadiness(
     issues.push("Missing Stock Bags collection");
   }
 
-  if (Number(product.totalVariants || 0) !== 1) {
+  const hasUsableDefaultVariant =
+    !!product.baseVariantId &&
+    String(product.baseVariantTitle || "").trim().toLowerCase() === "default title";
+
+  if (Number(product.totalVariants || 0) > 1) {
     issues.push(`Variant count must be exactly 1; detected ${product.totalVariants || 0}`);
+  }
+
+  if (Number(product.totalVariants || 0) === 0 && !hasUsableDefaultVariant) {
+    issues.push("Missing usable default variant");
   }
 
   if (!product.baseVariantId) {
@@ -657,7 +665,7 @@ export default function ConfiguratorSync() {
                     </td>
                     <td>{product.handle || "Missing"}</td>
                     <td>{product.productType || "-"}</td>
-                    <td>{product.totalVariants}</td>
+                    <td>{product.totalVariants || (product.baseVariantId ? 1 : 0)}</td>
                     <td>
                       {product.options?.length
                         ? product.options.map((option) => `${option.name}: ${option.values.join(", ")}`).join(" | ")
@@ -739,6 +747,7 @@ ol { margin-bottom: 0; }
   .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
+
 
 
 
