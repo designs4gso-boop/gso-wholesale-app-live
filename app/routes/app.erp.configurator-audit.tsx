@@ -1,5 +1,5 @@
 import { json, type LoaderFunctionArgs } from "@remix-run/node";
-import { Link, useLoaderData } from "@remix-run/react";
+import { Link, useLoaderData } from "react-router";
 import { db } from "../db.server";
 
 function norm(value: unknown) {
@@ -137,13 +137,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     pricingRules: pricingRules.length,
   };
 
-  return json({
+  return new Response(JSON.stringify({
     rows,
     totals,
     productTypes,
     productTypeFilter,
-  });
-}
+  }), { headers: { "Content-Type": "application/json" } });}
 
 export default function ConfiguratorAudit() {
   const { rows, totals, productTypes, productTypeFilter } = useLoaderData<typeof loader>();
@@ -364,3 +363,5 @@ function Td({ children, colSpan }: { children: React.ReactNode; colSpan?: number
     </td>
   );
 }
+
+
