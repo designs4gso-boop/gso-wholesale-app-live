@@ -131,7 +131,15 @@ function normalizeProduct(node: any): ShopifyProductPreview {
   const variantEdges = node.variants?.edges || [];
   const baseVariant = variantEdges[0]?.node || null;
   const detectedVariantCount =
-    Number(node.totalVariants || 0) > 0 ? Number(node.totalVariants || 0) : variantEdges.length;
+    Number(node.variantsCount?.count || 0) > 0
+      ? Number(node.variantsCount.count)
+      : Number(node.totalVariants || 0) > 0
+        ? Number(node.totalVariants)
+        : variantEdges.length > 0
+          ? variantEdges.length
+          : baseVariant?.id
+            ? 1
+            : 0;
 
   const collections =
     node.collections?.edges?.map((edge: any) => ({
@@ -731,6 +739,7 @@ ol { margin-bottom: 0; }
   .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
+
 
 
 
