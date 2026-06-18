@@ -1,4 +1,4 @@
-﻿import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
 import { MIN_QTY, PRODUCT_TYPE, PRODUCT_TYPE_LABEL } from "../lib/configurator-pricing";
@@ -45,6 +45,88 @@ function textMatches(value: string | null | undefined, expected: string | null |
   return String(value ?? "").trim().toLowerCase() === cleanExpected;
 }
 
+function assessPipelineReadiness(
+  product: {
+    handle: string;
+    productType: string;
+    status: string;
+    tags: string[];
+    totalVariants: number;
+    options: { name: string; values: string[] }[];
+    baseVariantId: string | null;
+    baseVariantTitle: string | null;
+    collections: { id: string; handle: string; title: string }[];
+  },
+  requiredTag: string,
+  shopifyProductType: string,
+  collectionInput: string,
+) {
+  const issues: string[] = [];
+  const oldOptionNames = ["sided", "side", "material", "bag color", "color", "finish", "gloss", "spot gloss", "quantity"];
+  const expectedCollectionGid = collectionGid(collectionInput);
+  const optionNames = (product.options || []).map((option) => String(option.name || "").trim());
+  const normalizedOptionNames = optionNames.map((name) => name.toLowerCase());
+  const hasOldOptions = normalizedOptionNames.some((name) => oldOptionNames.includes(name));
+  const hasOnlyDefaultTitleOption =
+    optionNames.length === 0 ||
+    (optionNames.length === 1 &&
+      normalizedOptionNames[0] === "title" &&
+      String(product.baseVariantTitle || "").trim().toLowerCase() === "default title");
+
+  if (String(product.status || "").trim().toUpperCase() !== "ACTIVE") {
+    issues.push("Product not ACTIVE");
+  }
+
+  if (!String(product.handle || "").trim()) {
+    issues.push("Missing handle");
+  }
+
+  if (!textMatches(product.productType, shopifyProductType)) {
+    issues.push("Wrong product type");
+  }
+
+  if (!tagMatches(product.tags, requiredTag)) {
+    issues.push(`Missing tag ${requiredTag}`);
+  }
+
+  if (expectedCollectionGid && !(product.collections || []).some((collection) => collection.id === expectedCollectionGid)) {
+    issues.push("Missing Stock Bags collection");
+  }
+
+  if (Number(product.totalVariants || 0) !== 1) {
+    issues.push(`Multiple variants still present (${product.totalVariants || 0})`);
+  }
+
+  if (!product.baseVariantId) {
+    issues.push("Missing default variant GID");
+  }
+
+  if (hasOldOptions) {
+    issues.push(`Old Shopify options still present: ${optionNames.join(", ")}`);
+  }
+
+  if (!hasOnlyDefaultTitleOption) {
+    issues.push(`Option is not Title / Default Title: ${optionNames.join(", ") || "none"}`);
+  }
+
+  if (issues.length) {
+    return {
+      label: issues.some((issue) => issue.includes("Multiple variants") || issue.includes("Old Shopify options"))
+        ? "Pending Shopify Cleanup"
+        : "Needs Setup",
+      tone: "warning",
+      details: issues.join("; "),
+      ready: false,
+    };
+  }
+
+  return {
+    label: "Ready for ERP Sync",
+    tone: "success",
+    details: "Active, tagged, single default variant, and ERP-compatible.",
+    ready: true,
+  };
+}
 function normalizeProduct(node: any): ShopifyProductPreview {
   const baseVariant = node.variants?.edges?.[0]?.node || null;
 
@@ -350,7 +432,16 @@ export async function action({ request }: { request: Request }) {
 
   fetchedResult.debug.finalMatchedCount = filteredProducts.length;
 
-  const products = await markExistingProducts(session.shop, filteredProducts);
+  const products = (await markExistingProducts(session.shop, filteredProducts)).map((product) => {
+    const readiness = assessPipelineReadiness(product, requiredTag, shopifyProductType, collectionInput);
+    return {
+      ...product,
+      readinessLabel: readiness.label,
+      readinessTone: readiness.tone,
+      readinessDetails: readiness.details,
+      erpReady: readiness.ready,
+    };
+  });
 
   if (intent === "preview") {
     return {
@@ -452,6 +543,7 @@ export default function ConfiguratorSync() {
             <div><span>Tag Matched</span><strong>{actionData.debug.tagMatchedCount}</strong></div>
             <div><span>Product Type Matched</span><strong>{actionData.debug.productTypeMatchedCount}</strong></div>
             <div><span>Final Matched</span><strong>{actionData.debug.finalMatchedCount}</strong></div>
+            <div><span>ERP Ready</span><strong>{actionData.products?.filter((product: any) => product.erpReady).length || 0}</strong></div>
           </div>
           {actionData.debug.error ? <p className="error-text">{actionData.debug.error}</p> : null}
         </div>
@@ -618,3 +710,4 @@ ol { margin-bottom: 0; }
   .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
+
