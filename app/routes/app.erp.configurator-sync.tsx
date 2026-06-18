@@ -605,17 +605,24 @@ export default function ConfiguratorSync() {
       {actionData?.products?.length ? (
         <div className="card">
           <h2>Matched Shopify Products</h2>
+          <p className="muted">
+            Products should only be synced into ERP when Pipeline Check says <b>Ready for ERP Sync</b>.
+            If a product says Pending Shopify Cleanup, let the stock bag pipeline finish or rerun cleanup for that product.
+          </p>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Status</th>
+                  <th>ERP Status</th>
+                  <th>Pipeline Check</th>
                   <th>Product</th>
                   <th>Handle</th>
                   <th>Product Type</th>
-                  <th>Tags</th>
+                  <th>Variants</th>
+                  <th>Options</th>
                   <th>Base Variant</th>
                   <th>SKU</th>
+                  <th>Tags</th>
                   <th>Collections</th>
                 </tr>
               </thead>
@@ -628,22 +635,33 @@ export default function ConfiguratorSync() {
                       </span>
                     </td>
                     <td>
+                      <span className={product.erpReady ? "pill good" : "pill needs"}>
+                        {product.readinessLabel || "Not checked"}
+                      </span>
+                      <small>{product.readinessDetails || "-"}</small>
+                    </td>
+                    <td>
                       <strong>{product.title}</strong>
                       <small>{product.id}</small>
                     </td>
-                    <td>{product.handle}</td>
+                    <td>{product.handle || "Missing"}</td>
                     <td>{product.productType || "-"}</td>
-                    <td>{product.tags.join(", ") || "-"}</td>
+                    <td>{product.totalVariants}</td>
+                    <td>
+                      {product.options?.length
+                        ? product.options.map((option) => `${option.name}: ${option.values.join(", ")}`).join(" | ")
+                        : "-"}
+                    </td>
                     <td>{product.baseVariantTitle || "Missing"}</td>
                     <td>{product.baseVariantSku || "-"}</td>
+                    <td>{product.tags.join(", ") || "-"}</td>
                     <td>{product.collections.map((collection) => collection.handle).join(", ") || "-"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
-      ) : actionData ? (
+        </div>      ) : actionData ? (
         <div className="card">
           <h2>No products matched</h2>
           <p className="muted">
@@ -710,4 +728,5 @@ ol { margin-bottom: 0; }
   .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
+
 
