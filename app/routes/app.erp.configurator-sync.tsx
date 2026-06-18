@@ -554,7 +554,7 @@ export default function ConfiguratorSync() {
 
       {actionData?.debug ? (
         <div className="card debug-card">
-          <h2>Sync Debug</h2>
+          <h2>Pipeline Verification Report</h2>
           <div className="debug-grid">
             <div><span>Mode</span><strong>{actionData.debug.mode}</strong></div>
             <div><span>Collection GID</span><strong>{actionData.debug.collectionGid || "-"}</strong></div>
@@ -625,8 +625,9 @@ export default function ConfiguratorSync() {
         <div className="card">
           <h2>Matched Shopify Products</h2>
           <p className="muted">
-            Products should only be synced into ERP when Pipeline Check says <b>Ready for ERP Sync</b>.
-            If a product says Pending Shopify Cleanup, let the stock bag pipeline finish or rerun cleanup for that product.
+            Products should only be synced into ERP after the full stock bag pipeline finishes and Pipeline Check says{" "}
+            <b>Ready for ERP Sync</b>. If a product says <b>Pending Shopify Cleanup</b> or <b>Needs Setup</b>,
+            do not sync it yet; let the pipeline finish or fix the listed readiness issue first.
           </p>
           <div className="table-wrap">
             <table>
@@ -747,6 +748,7 @@ ol { margin-bottom: 0; }
   .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
+
 
 
 
