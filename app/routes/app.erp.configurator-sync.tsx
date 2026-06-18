@@ -252,7 +252,7 @@ async function fetchProductsFromCollection({
     }
   `;
 
-  const maxToFetch = Math.max(1, Math.min(limit || 50, 250));
+  const maxToFetch = Math.max(1, Math.min(limit || 50, 2000));
 
   while (products.length < maxToFetch) {
     const first = Math.min(50, maxToFetch - products.length);
@@ -747,6 +747,7 @@ ol { margin-bottom: 0; }
   .button-row { grid-column: span 1; align-items: stretch; flex-direction: column; }
 }
 `;
+
 
 
 
