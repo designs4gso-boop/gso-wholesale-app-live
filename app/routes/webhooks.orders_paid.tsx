@@ -185,7 +185,6 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
 
     const item = {
       productTitle,
-      title: productTitle,
       variantTitle,
       sku: clean(line.sku) || null,
       quantity,
@@ -223,7 +222,7 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
       ...item,
       itemTicket: itemTicketFor(jobTicket, index),
       ripJobName: itemTicketFor(jobTicket, index),
-      suggestedFileName: suggestedFileNameForItem(jobTicket, item, index),
+      suggestedFileName: suggestedFileNameForItem(jobTicket, { productTitle: item.productTitle, productionFinish: line.productionFinish || productionFinish, finish: line.finish || finish, bagColor: line.bagColor || bagColor, quantity: item.quantity }, index),
     };
   });
 
@@ -297,3 +296,4 @@ export const action = async ({ request }: { request: Request }) => {
 
   return new Response(result.reason || "OK", { status: 200 });
 };
+
