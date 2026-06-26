@@ -5,6 +5,13 @@ const db = new PrismaClient();
 
 const shop = process.env.SHOP || "942075-2.myshopify.com";
 
+function validImageUrl(value) {
+  const url = String(value || "").trim();
+  if (!url || url === "PASTE_SHOPIFY_IMAGE_URL_HERE") return "";
+  if (!/^https?:\/\//i.test(url)) return "";
+  return url;
+}
+
 const defaultChecklist = [
   { section: "prepress", label: "Artwork received / linked", sortOrder: 10 },
   { section: "prepress", label: "Dieline / size confirmed", sortOrder: 20 },
@@ -103,7 +110,7 @@ async function main() {
       sku: "",
       shopifyProductGid: "gid://shopify/Product/TEST",
       shopifyVariantGid: "gid://shopify/ProductVariant/TEST",
-      productImageUrl: process.env.SIMULATOR_PRODUCT_IMAGE_URL || "",
+      productImageUrl: validImageUrl(process.env.SIMULATOR_PRODUCT_IMAGE_URL),
     },
     {
       productTitle: "Ritz Vanilla Cupcake",
@@ -117,7 +124,7 @@ async function main() {
       sku: "",
       shopifyProductGid: "gid://shopify/Product/TEST",
       shopifyVariantGid: "gid://shopify/ProductVariant/TEST",
-      productImageUrl: process.env.SIMULATOR_PRODUCT_IMAGE_URL || "",
+      productImageUrl: validImageUrl(process.env.SIMULATOR_PRODUCT_IMAGE_URL),
     },
   ];
 
@@ -194,6 +201,7 @@ async function main() {
       status: "new",
       priority: "normal",
       internalNotes: `TEST JOB created from simulated paid Shopify configurator order ${orderName}.`,
+      productImageUrl: mappedItems.find((item) => item.productImageUrl)?.productImageUrl || null,
       items: {
         create: mappedItems.map((item) => ({
           shop,
@@ -230,5 +238,6 @@ main()
   .finally(async () => {
     await db.$disconnect();
   });
+
 
 

@@ -63,6 +63,13 @@ function summarizeFinalActualCosts(job: any) {
   return { revenue, estimatedCost, printCost, materialCost, laborCost, packingCost, shippingCost, outsourceCost, otherCost, reprintCost, finalTotal, finalProfit, finalMargin, variance: finalTotal - estimatedCost, materialSummary };
 }
 
+function validImageUrl(value: any) {
+  const url = String(value || "").trim();
+  if (!url || url === "PASTE_SHOPIFY_IMAGE_URL_HERE") return "";
+  if (!/^https?:\/\//i.test(url)) return "";
+  return url;
+}
+
 function safeDate(value: any) {
   if (!value) return "Not set";
   const date = new Date(value);
@@ -102,7 +109,7 @@ export async function loader({ request, params }: { request: Request; params: an
 
 export default function PrintProductionJob() {
   const { job } = useLoaderData<any>();
-  const productImage = job.productImageUrl || job.items?.find((item: any) => item.productImageUrl)?.productImageUrl;
+  const productImage = validImageUrl(job.productImageUrl) || validImageUrl(job.items?.find((item: any) => validImageUrl(item.productImageUrl))?.productImageUrl);
   const totalRevenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const totalCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
   const finalCosts = summarizeFinalActualCosts(job);
@@ -182,7 +189,7 @@ export default function PrintProductionJob() {
             <tbody>
               {(job.items || []).map((item: any) => (
                 <tr key={item.id}>
-                  <td>{item.productImageUrl ? <img className="item-thumb" src={item.productImageUrl} alt={item.productTitle || "Item"} /> : <span className="muted">No image</span>}</td>
+                  <td>{validImageUrl(item.productImageUrl) ? <img className="item-thumb" src={validImageUrl(item.productImageUrl)} alt={item.productTitle || "Item"} /> : <span className="muted">No image</span>}</td>
                   <td>{item.itemTicket || "Not assigned"}<br />{item.ripJobName || item.itemTicket || ""}</td>
                   <td>{item.productTitle}<br /><small>{item.suggestedFileName || ""}</small></td>
                   <td>{item.variantTitle || ""}<br />{item.sku || ""}</td>
@@ -262,4 +269,5 @@ export default function PrintProductionJob() {
     </div>
   );
 }
+
 
