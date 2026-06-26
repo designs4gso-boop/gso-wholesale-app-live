@@ -86,42 +86,49 @@ export const FALLBACK_PRICING_ROWS: FallbackPricingRow[] = [
     finish: "3X Spot Gloss",
     productionFinish: "Matte + 3X Spot Gloss",
     costEach: 1.02,
-    prices: [2.80, 2.60, 2.40, 2.20, 2.05],
+    prices: [2.55, 2.35, 2.15, 1.95, 1.85],
+  },
+  {
+    material: "Matte",
+    finish: "4X Spot Gloss",
+    productionFinish: "Matte + 4X Spot Gloss",
+    costEach: 1.21,
+    prices: [2.80, 2.60, 2.40, 2.20, 2.00],
   },
   {
     material: "Holographic",
     finish: "No Spot Gloss",
     productionFinish: "Holographic Vinyl + CMYK + White",
     costEach: 0.88,
-    prices: [1.80, 1.65, 1.50, 1.35, 1.25],
+    prices: [1.85, 1.75, 1.65, 1.55, 1.45],
   },
   {
     material: "Holographic",
     finish: "1X Spot Gloss",
     productionFinish: "Holo + White + 1X Spot Gloss",
     costEach: 1.03,
-    prices: [2.25, 2.05, 1.90, 1.75, 1.60],
+    prices: [2.25, 2.10, 1.95, 1.85, 1.75],
   },
   {
     material: "Holographic",
     finish: "2X Spot Gloss",
     productionFinish: "Holo + White + 2X Spot Gloss",
     costEach: 1.03,
-    prices: [2.40, 2.20, 2.05, 1.90, 1.75],
+    prices: [2.40, 2.20, 2.05, 1.95, 1.85],
   },
   {
     material: "Holographic",
     finish: "3X Spot Gloss",
     productionFinish: "Holo + White + 3X Spot Gloss",
     costEach: 1.18,
-    prices: [2.55, 2.35, 2.15, 1.95, 1.85],
+    prices: [2.80, 2.60, 2.40, 2.20, 2.05],
   },
   {
     material: "Holographic",
     finish: "4X Spot Gloss",
     productionFinish: "Holo + White + 4X Spot Gloss",
     costEach: 1.18,
-    prices: [2.85, 2.65, 2.45, 2.25, 2.05],
+    prices: [2.85, 2.65, 2.45, 2.25, 2.10],
   },
 ];
 
@@ -149,5 +156,6 @@ export function matrixPrice(row: any, range: QtyRange) {
 
   return null;
 }
+
 
 
