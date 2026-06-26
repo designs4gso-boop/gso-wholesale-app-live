@@ -10,6 +10,7 @@ const VARIANT_FETCH_LIMIT = 100;
 const GROUP_ROW_PREVIEW_LIMIT = 0;
 const INSPECT_ROW_LIMIT = 75;
 const ALLOWED_EXCEPTION_MARKER = "[ALLOWED_SHOPIFY_LINK_EXCEPTION]";
+const CONFIGURATOR_STOCK_BAG_PRODUCT_TYPE = "stock_bag_4x5";
 
 const STICKER_BAG_RULE_PRESET = {
   name: "Sticker Bag Variant Rules",
@@ -802,6 +803,162 @@ function Badge({ children, tone = "neutral" }: { children: any; tone?: "green" |
 }
 
 
+
+async function loadStockBagBaseLinkState(shop: string, recipeId: string) {
+  const prisma: any = db;
+
+  const products = await prisma.configuratorProduct.findMany({
+    where: {
+      shop,
+      active: true,
+      productType: CONFIGURATOR_STOCK_BAG_PRODUCT_TYPE,
+      shopifyProductGid: { not: null },
+      shopifyVariantGid: { not: null },
+    },
+    select: {
+      id: true,
+      title: true,
+      sku: true,
+      shopifyHandle: true,
+      shopifyProductGid: true,
+      shopifyVariantGid: true,
+    },
+    orderBy: { title: "asc" },
+  });
+
+  const productGids = Array.from(new Set(products.map((product: any) => product.shopifyProductGid).filter(Boolean)));
+
+  const rules = productGids.length
+    ? await prisma.recipeVariantRule.findMany({
+        where: {
+          shop,
+          recipeId,
+          shopifyProductGid: { in: productGids },
+        },
+        select: {
+          id: true,
+          shopifyProductGid: true,
+          shopifyVariantGid: true,
+          active: true,
+        },
+      })
+    : [];
+
+  const targetVariantByProduct = new Map<string, string>();
+  const exactKeys = new Set<string>();
+
+  for (const product of products) {
+    targetVariantByProduct.set(product.shopifyProductGid, product.shopifyVariantGid);
+    exactKeys.add(`${product.shopifyProductGid}|||${product.shopifyVariantGid}`);
+  }
+
+  const activeRules = (rules || []).filter((rule: any) => rule.active !== false);
+
+  const exactMappedKeys = new Set(
+    activeRules
+      .filter((rule: any) => exactKeys.has(`${rule.shopifyProductGid}|||${rule.shopifyVariantGid}`))
+      .map((rule: any) => `${rule.shopifyProductGid}|||${rule.shopifyVariantGid}`)
+  );
+
+  const missingProducts = products.filter(
+    (product: any) => !exactMappedKeys.has(`${product.shopifyProductGid}|||${product.shopifyVariantGid}`)
+  );
+
+  const staleActiveRules = activeRules.filter((rule: any) => {
+    const targetVariantGid = targetVariantByProduct.get(rule.shopifyProductGid || "");
+    return targetVariantGid && rule.shopifyVariantGid && rule.shopifyVariantGid !== targetVariantGid;
+  });
+
+  const legacyProductOnlyRules = activeRules.filter((rule: any) => {
+    const targetVariantGid = targetVariantByProduct.get(rule.shopifyProductGid || "");
+    return targetVariantGid && !rule.shopifyVariantGid;
+  });
+
+  return {
+    products,
+    rules,
+    activeRules,
+    exactMappedKeys,
+    missingProducts,
+    staleActiveRules,
+    legacyProductOnlyRules,
+    summary: {
+      configuratorProducts: products.length,
+      exactBaseVariantMapped: exactMappedKeys.size,
+      missingExactBaseVariantMapping: missingProducts.length,
+      activeRulesForStockBagProducts: activeRules.length,
+      staleActiveVariantRules: staleActiveRules.length,
+      legacyProductOnlyRules: legacyProductOnlyRules.length,
+    },
+  };
+}
+
+async function createMissingStockBagBaseLinks(shop: string, recipeId: string) {
+  const prisma: any = db;
+  const state = await loadStockBagBaseLinkState(shop, recipeId);
+
+  let created = 0;
+
+  for (const product of state.missingProducts) {
+    const existing = await prisma.recipeVariantRule.findFirst({
+      where: {
+        shop,
+        recipeId,
+        shopifyProductGid: product.shopifyProductGid,
+        shopifyVariantGid: product.shopifyVariantGid,
+      },
+      orderBy: [{ active: "desc" }, { updatedAt: "desc" }, { createdAt: "desc" }],
+    });
+
+    const data = {
+      name: `${product.title} Default Title`,
+      shopifyProductGid: product.shopifyProductGid,
+      shopifyVariantGid: product.shopifyVariantGid,
+      shopifyVariantTitle: "Default Title",
+      sku: product.sku || "",
+      sideMode: "double_same",
+      bagColor: null,
+      frontMediaOptionId: null,
+      backMediaMode: "same_as_front",
+      backMediaOptionId: null,
+      useFrontZone: true,
+      useBackZone: true,
+      active: true,
+      notes: "Stock Bag Configurator base variant mapping. Source: ConfiguratorProduct. Customer options, pricing, quantity, and sides are handled by the ERP configurator, not Shopify variants.",
+    };
+
+    if (existing) {
+      if (existing.active === false) {
+        await prisma.recipeVariantRule.update({ where: { id: existing.id }, data });
+      }
+      continue;
+    }
+
+    await prisma.recipeVariantRule.create({
+      data: {
+        shop,
+        recipeId,
+        ...data,
+      },
+    });
+
+    created += 1;
+  }
+
+  const after = await loadStockBagBaseLinkState(shop, recipeId);
+
+  return {
+    created,
+    before: state.summary,
+    after: after.summary,
+    sampleMissing: after.missingProducts.slice(0, 15).map((product: any) => ({
+      title: product.title,
+      handle: product.shopifyHandle,
+      productGid: product.shopifyProductGid,
+      variantGid: product.shopifyVariantGid,
+    })),
+  };
+}
 async function writeShopifyLinkSyncLog(prisma: any, data: any) {
   try {
     if (!prisma?.shopifyLinkSyncLog?.create) return;
@@ -1124,6 +1281,69 @@ export async function action({ request }: { request: Request }) {
       });
     }
 
+    if (intent === "auditStockBagBaseLinks" || intent === "mapStockBagBaseLinks") {
+      const recipeId = String(formData.get("recipeId") || "");
+      if (!recipeId) return Response.json({ ok: false, message: "Choose the stock bag recipe first." }, { status: 400 });
+
+      const recipe = await prisma.productRecipe.findFirst({ where: { shop, id: recipeId } });
+      if (!recipe) return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
+
+      if (intent === "auditStockBagBaseLinks") {
+        const state = await loadStockBagBaseLinkState(shop, recipeId);
+        return Response.json({
+          ok: true,
+          intent,
+          message: `Stock bag base-link audit complete: ${state.summary.exactBaseVariantMapped} exact mapped, ${state.summary.missingExactBaseVariantMapping} missing.`,
+          stockBagBaseLinkAudit: {
+            recipeId,
+            recipeName: recipe.name,
+            ...state.summary,
+            sampleMissing: state.missingProducts.slice(0, 15).map((product: any) => ({
+              title: product.title,
+              handle: product.shopifyHandle,
+              productGid: product.shopifyProductGid,
+              variantGid: product.shopifyVariantGid,
+            })),
+          },
+        });
+      }
+
+      const result = await createMissingStockBagBaseLinks(shop, recipeId);
+
+      await writeShopifyLinkSyncLog(prisma, {
+        shop,
+        recipeId,
+        recipeName: recipe.name,
+        sourceType: "configurator",
+        sourceName: "Stock Bag Configurator Products",
+        sourceGid: CONFIGURATOR_STOCK_BAG_PRODUCT_TYPE,
+        action: "mapStockBagBaseLinks",
+        products: result.after.configuratorProducts,
+        variants: result.after.exactBaseVariantMapped,
+        created: result.created,
+        updated: 0,
+        skipped: result.after.exactBaseVariantMapped - result.created,
+        scanned: result.after.configuratorProducts,
+        needsReview: 0,
+        hasNextPage: false,
+        ok: true,
+        message: "Mapped missing stock bag configurator base variants.",
+      });
+
+      return Response.json({
+        ok: true,
+        intent,
+        message: `Mapped stock bag base variants: ${result.created} created. Missing after: ${result.after.missingExactBaseVariantMapping}.`,
+        stockBagBaseLinkAudit: {
+          recipeId,
+          recipeName: recipe.name,
+          created: result.created,
+          before: result.before,
+          ...result.after,
+          sampleMissing: result.sampleMissing,
+        },
+      });
+    }
     if (intent === "cleanRecipeMappings") {
       const recipeId = String(formData.get("recipeId") || "");
       if (!recipeId) return Response.json({ ok: false, message: "Missing recipe." }, { status: 400 });
@@ -1746,3 +1966,4 @@ export default function ShopifyLinksPage() {
   </section>
 </main>;
 }
+
