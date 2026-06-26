@@ -103,7 +103,7 @@ async function main() {
       sku: "",
       shopifyProductGid: "gid://shopify/Product/TEST",
       shopifyVariantGid: "gid://shopify/ProductVariant/TEST",
-      productImageUrl: "",
+      productImageUrl: process.env.SIMULATOR_PRODUCT_IMAGE_URL || "",
     },
     {
       productTitle: "Ritz Vanilla Cupcake",
@@ -117,7 +117,7 @@ async function main() {
       sku: "",
       shopifyProductGid: "gid://shopify/Product/TEST",
       shopifyVariantGid: "gid://shopify/ProductVariant/TEST",
-      productImageUrl: "",
+      productImageUrl: process.env.SIMULATOR_PRODUCT_IMAGE_URL || "",
     },
   ];
 
@@ -230,4 +230,5 @@ main()
   .finally(async () => {
     await db.$disconnect();
   });
+
 

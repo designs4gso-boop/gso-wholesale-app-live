@@ -1,4 +1,4 @@
-import { db } from "../db.server";
+﻿import { db } from "../db.server";
 import { MIN_QTY } from "../lib/configurator-pricing";
 
 const SHOPIFY_API_VERSION = "2025-10";
@@ -136,6 +136,7 @@ export async function action({ request }: { request: Request }) {
       const material = clean(rawItem.material);
       const finish = clean(rawItem.finish);
       const bagColor = clean(rawItem.bagColor);
+      const productImageUrl = clean(rawItem.image || rawItem.productImageUrl || rawItem.imageUrl);
 
       if (!handle && !productGid) {
         return jsonResponse(
@@ -263,6 +264,7 @@ export async function action({ request }: { request: Request }) {
           { key: "Production Finish", value: String(rule.productionFinish || finish) },
           { key: "Bag Color", value: bagColor },
           { key: "Sides", value: String(product.defaultSides || "Double Sided") },
+          { key: "_GSO Product Image", value: productImageUrl },
         ],
       });
 
@@ -273,6 +275,7 @@ export async function action({ request }: { request: Request }) {
           productType,
           handle: product.shopifyHandle,
           sku: product.sku,
+          productImageUrl,
         },
         selected: {
           material,
@@ -373,3 +376,4 @@ export async function action({ request }: { request: Request }) {
     );
   }
 }
+

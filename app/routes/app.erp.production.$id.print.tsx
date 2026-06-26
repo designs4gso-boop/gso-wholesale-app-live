@@ -1,4 +1,4 @@
-import { useLoaderData } from "react-router";
+﻿import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -122,6 +122,7 @@ export default function PrintProductionJob() {
           th, td { border: 1px solid #888; padding: 8px; text-align: left; vertical-align: top; }
           th { background: #eee; }
           img.product { width: 160px; height: 160px; object-fit: cover; border: 1px solid #999; border-radius: 8px; }
+          img.item-thumb { width: 78px; height: 78px; object-fit: cover; border: 1px solid #999; border-radius: 8px; background: #f7f7f7; }
           .muted { color: #555; }
           .checkline { margin: 8px 0; }
           @media print { .no-print { display: none; } body { margin: 12px; } }
@@ -168,6 +169,7 @@ export default function PrintProductionJob() {
           <table>
             <thead>
               <tr>
+                <th>Image</th>
                 <th>Ticket / RIP Name</th>
                 <th>Product</th>
                 <th>Variant / SKU</th>
@@ -180,6 +182,7 @@ export default function PrintProductionJob() {
             <tbody>
               {(job.items || []).map((item: any) => (
                 <tr key={item.id}>
+                  <td>{item.productImageUrl ? <img className="item-thumb" src={item.productImageUrl} alt={item.productTitle || "Item"} /> : <span className="muted">No image</span>}</td>
                   <td>{item.itemTicket || "Not assigned"}<br />{item.ripJobName || item.itemTicket || ""}</td>
                   <td>{item.productTitle}<br /><small>{item.suggestedFileName || ""}</small></td>
                   <td>{item.variantTitle || ""}<br />{item.sku || ""}</td>
@@ -259,3 +262,4 @@ export default function PrintProductionJob() {
     </div>
   );
 }
+

@@ -192,7 +192,11 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
       unitCost: 0,
       shopifyProductGid: gid("Product", line.product_id),
       shopifyVariantGid: gid("ProductVariant", line.variant_id),
-      productImageUrl: clean(line.image?.src || line.variant?.image?.src || "") || null,
+      productImageUrl:
+        getLineProperty(line, "_GSO Product Image") ||
+        getLineProperty(line, "Product Image") ||
+        clean(line.image?.src || line.image?.url || line.variant?.image?.src || line.variant?.image?.url || "") ||
+        null,
       selectedFinish: productionFinish,
       selectedAddOns: JSON.stringify({
         material,
@@ -226,7 +230,12 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
     };
   });
 
-  const firstImage = clean(firstLine.image?.src || firstLine.variant?.image?.src || "") || mappedItems.find((item) => item.productImageUrl)?.productImageUrl || null;
+  const firstImage =
+    getLineProperty(firstLine, "_GSO Product Image") ||
+    getLineProperty(firstLine, "Product Image") ||
+    clean(firstLine.image?.src || firstLine.image?.url || firstLine.variant?.image?.src || firstLine.variant?.image?.url || "") ||
+    mappedItems.find((item) => item.productImageUrl)?.productImageUrl ||
+    null;
 
   const job = await db.productionJob.create({
     data: {
@@ -296,4 +305,5 @@ export const action = async ({ request }: { request: Request }) => {
 
   return new Response(result.reason || "OK", { status: 200 });
 };
+
 
