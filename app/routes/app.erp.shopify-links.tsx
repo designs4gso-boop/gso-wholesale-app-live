@@ -1478,87 +1478,6 @@ export default function ShopifyLinksPage() {
       <p className="muted"><strong>Safe workflow:</strong> link source â†’ sync small batch â†’ verify health â†’ use auto-sync â†’ review exceptions â†’ move to Margin Review.</p>
     </section>
 
-    <section className="card wide" style={{ border: "2px solid #22c55e" }}>
-      <h2>Stock Bag Configurator Base Variant Mapping</h2>
-      <p className="muted">
-        Use this for the new stock bag configurator rollout only. This maps each ERP ConfiguratorProduct to its one Shopify Default Title base variant.
-        It does not touch Shopify products, variants, options, prices, or handles.
-      </p>
-
-      <div className="grid two">
-        <Form method="post" className="stacked">
-          <input type="hidden" name="intent" value="auditStockBagBaseLinks" />
-          <label>Stock bag recipe
-            <select name="recipeId" required defaultValue="">
-              <option value="" disabled>Choose recipe</option>
-              {recipes.map((recipe: any) => (
-                <option key={recipe.id} value={recipe.id}>
-                  {recipe.name} · {recipe.productFamily || recipe.productTypeProfile?.name || "Recipe"}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="submit" className="secondary">Audit stock bag base links</button>
-        </Form>
-
-        <Form
-          method="post"
-          className="stacked"
-          onSubmit={(event) => {
-            if (!confirm("Create missing Stock Bag Configurator base-variant mappings? This only writes ERP RecipeVariantRule rows and does not touch Shopify.")) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <input type="hidden" name="intent" value="mapStockBagBaseLinks" />
-          <label>Stock bag recipe
-            <select name="recipeId" required defaultValue="">
-              <option value="" disabled>Choose recipe</option>
-              {recipes.map((recipe: any) => (
-                <option key={recipe.id} value={recipe.id}>
-                  {recipe.name} · {recipe.productFamily || recipe.productTypeProfile?.name || "Recipe"}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="submit">Map missing base variants</button>
-        </Form>
-      </div>
-
-      {actionData?.stockBagBaseLinkAudit ? (
-        <div className="summary-box" style={{ marginTop: 12 }}>
-          <h3>Stock bag base-link audit result</h3>
-          <div className="pill-row">
-            <Badge tone="neutral">Recipe: {actionData.stockBagBaseLinkAudit.recipeName}</Badge>
-            <Badge tone="green">Configurator products: {actionData.stockBagBaseLinkAudit.configuratorProducts}</Badge>
-            <Badge tone={actionData.stockBagBaseLinkAudit.missingExactBaseVariantMapping ? "yellow" : "green"}>
-              Missing exact base links: {actionData.stockBagBaseLinkAudit.missingExactBaseVariantMapping}
-            </Badge>
-            <Badge tone="green">Exact mapped: {actionData.stockBagBaseLinkAudit.exactBaseVariantMapped}</Badge>
-            <Badge tone={actionData.stockBagBaseLinkAudit.staleActiveVariantRules ? "yellow" : "green"}>
-              Stale old active rules: {actionData.stockBagBaseLinkAudit.staleActiveVariantRules}
-            </Badge>
-            <Badge tone="neutral">Legacy product-only rules: {actionData.stockBagBaseLinkAudit.legacyProductOnlyRules}</Badge>
-            {actionData.stockBagBaseLinkAudit.created !== undefined ? (
-              <Badge tone="green">Created: {actionData.stockBagBaseLinkAudit.created}</Badge>
-            ) : null}
-          </div>
-
-          {actionData.stockBagBaseLinkAudit.sampleMissing?.length ? (
-            <div>
-              <h4>Sample missing after action</h4>
-              <ul>
-                {actionData.stockBagBaseLinkAudit.sampleMissing.map((product: any) => (
-                  <li key={product.variantGid}>{product.title} · {product.handle}</li>
-                ))}
-              </ul>
-            </div>
-          ) : (
-            <p className="muted">No missing exact base-variant mappings in the sample.</p>
-          )}
-        </div>
-      ) : null}
-    </section>
     <SyncLogPanel actionData={actionData} />
 
     <PersistentSyncHistoryPanel logs={syncHistory} />
@@ -2047,6 +1966,5 @@ export default function ShopifyLinksPage() {
   </section>
 </main>;
 }
-
 
 
