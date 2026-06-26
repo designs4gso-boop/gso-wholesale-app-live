@@ -314,6 +314,26 @@ function parseJson(value: any) {
   }
 }
 
+function configFromItem(item: any) {
+  const selected = parseJson(item.selectedAddOns) || {};
+  const variantParts = String(item.variantTitle || "")
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return {
+    material: selected.material || variantParts[0] || "",
+    finish: selected.finish || variantParts[1] || "",
+    productionFinish: selected.productionFinish || item.selectedFinish || "",
+    bagColor: selected.bagColor || variantParts[2] || "",
+    sides: selected.sides || "",
+  };
+}
+
+function lineTotalForItem(item: any) {
+  return Number(item.quantity || 0) * Number(item.unitPrice || 0);
+}
+
 function firstImageFromQuoteItem(item: any) {
   const costSnapshot = parseJson(item.costSnapshot);
   const priceSnapshot = parseJson(item.priceSnapshot);
@@ -1286,7 +1306,16 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
                 <BlockStack gap="050">
                   <Text as="p" fontWeight="bold">{item.productTitle}</Text>
                   <Text as="p" tone="subdued">Variant: {item.variantTitle || "None"} | SKU: {item.sku || "None"}</Text>
-                  <Text as="p">Qty: {item.quantity} | Finish/Add-ons: {item.selectedFinish || item.selectedAddOns || "None"}</Text>
+                  {(() => {
+                    const config = configFromItem(item);
+                    return (
+                      <BlockStack gap="050">
+                        <Text as="p">Qty: {item.quantity} | Unit: ${money(item.unitPrice)} | Total: ${money(lineTotalForItem(item))}</Text>
+                        <Text as="p">Material: {config.material || "N/A"} | Finish: {config.finish || "N/A"} | Bag Color: {config.bagColor || "N/A"}</Text>
+                        <Text as="p">Production Finish: {config.productionFinish || "N/A"} | Sides: {config.sides || "N/A"}</Text>
+                      </BlockStack>
+                    );
+                  })()}
                   {item.recipeName ? <Text as="p" tone="subdued">Recipe: {item.recipeName}</Text> : null}
                   <Text as="p" tone="subdued">Item ticket: {item.itemTicket || "Not assigned yet"}</Text>
                   <Text as="p" tone="subdued">Print file name: {item.suggestedFileName || "Not assigned yet"}</Text>

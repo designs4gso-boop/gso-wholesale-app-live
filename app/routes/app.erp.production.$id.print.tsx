@@ -70,6 +70,35 @@ function validImageUrl(value: any) {
   return url;
 }
 
+function parseJson(value: any) {
+  if (!value) return null;
+  try {
+    return typeof value === "string" ? JSON.parse(value) : value;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function configFromItem(item: any) {
+  const selected = parseJson(item.selectedAddOns) || {};
+  const variantParts = String(item.variantTitle || "")
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return {
+    material: selected.material || variantParts[0] || "",
+    finish: selected.finish || variantParts[1] || "",
+    productionFinish: selected.productionFinish || item.selectedFinish || "",
+    bagColor: selected.bagColor || variantParts[2] || "",
+    sides: selected.sides || "",
+  };
+}
+
+function lineTotalForItem(item: any) {
+  return Number(item.quantity || 0) * Number(item.unitPrice || 0);
+}
+
 function safeDate(value: any) {
   if (!value) return "Not set";
   const date = new Date(value);
@@ -181,7 +210,7 @@ export default function PrintProductionJob() {
                 <th>Product</th>
                 <th>Variant / SKU</th>
                 <th>Qty</th>
-                <th>Finish / Add-ons</th>
+                <th>Configuration / Price</th>
                 <th>Recipe</th>
                 <th>Notes</th>
               </tr>
@@ -194,7 +223,22 @@ export default function PrintProductionJob() {
                   <td>{item.productTitle}<br /><small>{item.suggestedFileName || ""}</small></td>
                   <td>{item.variantTitle || ""}<br />{item.sku || ""}</td>
                   <td>{item.quantity}</td>
-                  <td>{item.selectedFinish || item.selectedAddOns || ""}</td>
+                  <td>
+                    {(() => {
+                      const config = configFromItem(item);
+                      return (
+                        <div>
+                          <strong>Material:</strong> {config.material || "N/A"}<br />
+                          <strong>Finish:</strong> {config.finish || "N/A"}<br />
+                          <strong>Production:</strong> {config.productionFinish || "N/A"}<br />
+                          <strong>Color:</strong> {config.bagColor || "N/A"}<br />
+                          <strong>Sides:</strong> {config.sides || "N/A"}<br />
+                          <strong>Unit:</strong> ${money(item.unitPrice)}<br />
+                          <strong>Total:</strong> ${money(lineTotalForItem(item))}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td>{item.recipeName || item.recipeId || ""}</td>
                   <td>{item.productionNotes || ""}</td>
                 </tr>
