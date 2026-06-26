@@ -1501,15 +1501,7 @@ export default function ShopifyLinksPage() {
           <button type="submit" className="secondary">Audit stock bag base links</button>
         </Form>
 
-        <Form
-          method="post"
-          className="stacked"
-          onSubmit={(event) => {
-            if (!confirm("Create missing Stock Bag Configurator base-variant mappings? This only writes ERP RecipeVariantRule rows and does not touch Shopify.")) {
-              event.preventDefault();
-            }
-          }}
-        >
+        <Form method="post" className="stacked">
           <input type="hidden" name="intent" value="mapStockBagBaseLinks" />
           <label>Stock bag recipe
             <select name="recipeId" required defaultValue="">
@@ -1521,7 +1513,7 @@ export default function ShopifyLinksPage() {
               ))}
             </select>
           </label>
-          <button type="submit">Map missing base variants</button>
+          <button type="submit">CONFIRM: Create missing base-variant mappings</button>
         </Form>
       </div>
 
@@ -2047,6 +2039,7 @@ export default function ShopifyLinksPage() {
   </section>
 </main>;
 }
+
 
 
 
