@@ -28,6 +28,7 @@ Shop:
   git status
   git diff --stat
 - Use clear commit messages.
+- If unsure, stop and ask.
 
 ## Current state
 Stock bag configurator is already live and working.
@@ -59,12 +60,9 @@ Do not include jar_5oz_clear in storefront/customer flow yet. It is cost-only/pl
 
 ## Next build goals
 1. Verify jar admin calculator output.
-2. Make jar selections safe:
-   - Material: Matte, Holographic
-   - Finish: No Spot Gloss, 1X, 2X, 3X, 4X where allowed
-   - Label Set: Side + Lid, and Miron-only Side + Lid + Lid Side
+2. Make jar selections safe.
 3. Connect jar quote/configurator output to cart/line item properties later.
 4. Update paid order webhook later so jar label zones flow into production job notes.
 
 ## Caution
-If unsure, stop and ask. Do not guess database schema fields. Inspect Prisma schema first.
+Do not guess database schema fields. Inspect Prisma schema first.
