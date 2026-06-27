@@ -30,6 +30,14 @@ function numberValue(value: string | null | undefined, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function isJarProductType(productType: string): boolean {
+  return productType.startsWith("jar_");
+}
+
+function productFamilyForType(productType: string): "Jars" | "Stock Bags" {
+  return isJarProductType(productType) ? "Jars" : "Stock Bags";
+}
+
 function money(value: any) {
   const num = Number(value ?? 0);
   return Math.round(num * 100) / 100;
@@ -55,6 +63,11 @@ function optionGroupName(value: string) {
 function optionMatches(option: any, names: string[]) {
   const group = optionGroupName(option.group);
   return names.map(optionGroupName).includes(group);
+}
+
+function optionValue(options: string[], requested: string) {
+  if (!requested) return "";
+  return options.find((option) => option.toLowerCase() === requested.toLowerCase()) || "";
 }
 
 function findMatchingRule(rules: any[], material: string, finish: string, quantity: number) {
@@ -93,6 +106,11 @@ export async function loader({ request }: { request: Request }) {
   const material = clean(url.searchParams.get("material"));
   const finish = clean(url.searchParams.get("finish"));
   const bagColor = clean(url.searchParams.get("bagColor"));
+  const labelSet = clean(
+    url.searchParams.get("labelSet") ||
+      url.searchParams.get("label_set") ||
+      url.searchParams.get("labelset"),
+  );
 
   if (!shop || (!handle && !productGid)) {
     return jsonResponse({ ok: false, active: false, message: "Missing shop or product identifier." });
@@ -118,6 +136,8 @@ export async function loader({ request }: { request: Request }) {
   }
 
   const productType = product.productType || "stock_bag_4x5";
+  const isJar = isJarProductType(productType);
+  const productFamily = productFamilyForType(productType);
   const minQuantity = Number(product.minQuantity || MIN_QTY);
   const quantity = Math.max(numberValue(url.searchParams.get("quantity"), minQuantity), minQuantity);
 
@@ -150,6 +170,12 @@ export async function loader({ request }: { request: Request }) {
       .map((option) => option.label || option.value),
   );
 
+  const optionLabelSets = uniqueValues(
+    options
+      .filter((option) => optionMatches(option, ["Label Set", "labelSet", "label set", "label_set"]))
+      .map((option) => option.label || option.value),
+  );
+
   const ruleMaterials = uniqueValues(rules.map((rule) => rule.material));
   const ruleFinishes = uniqueValues(rules.map((rule) => rule.finish));
 
@@ -173,10 +199,14 @@ export async function loader({ request }: { request: Request }) {
   const materials = optionMaterials.length ? optionMaterials : ruleMaterials;
   const finishes = optionFinishes.length ? optionFinishes : ruleFinishes;
   const bagColors = optionBagColors.length ? optionBagColors : defaultBagColors;
+  const labelSets = optionLabelSets;
 
   const selectedMaterial = material || materials[0] || "Matte";
   const selectedFinish = finish || finishes[0] || "No Spot Gloss";
-  const selectedBagColor = bagColor || bagColors[0] || "White";
+  const selectedBagColor = isJar ? "" : bagColor || bagColors[0] || "White";
+  const requestedLabelSet = optionValue(labelSets, labelSet) || (!labelSets.length ? labelSet : "");
+  const selectedLabelSet = isJar ? requestedLabelSet || labelSets[0] || "Side + Lid" : "";
+  const selectedSides = isJar ? "" : product.defaultSides || "Double Sided";
 
   const rule = findMatchingRule(rules, selectedMaterial, selectedFinish, quantity);
 
@@ -206,10 +236,12 @@ export async function loader({ request }: { request: Request }) {
     active: true,
     productType,
     productTypeLabel: humanProductType(productType),
+    productFamily,
     product: {
       id: product.id,
       title: product.title,
       productType,
+      productFamily,
       shopifyProductGid: product.shopifyProductGid,
       shopifyVariantGid: product.shopifyVariantGid,
       handle: product.shopifyHandle,
@@ -217,13 +249,14 @@ export async function loader({ request }: { request: Request }) {
       minQuantity,
       defaultSides: product.defaultSides || "Double Sided",
     },
-    options: { materials, finishes, bagColors },
+    options: { materials, finishes, bagColors, labelSets },
     selected: {
       material: selectedMaterial,
       finish: selectedFinish,
       bagColor: selectedBagColor,
+      labelSet: selectedLabelSet,
       quantity,
-      sides: product.defaultSides || "Double Sided",
+      sides: selectedSides,
     },
     pricing: {
       matched: Boolean(rule),
