@@ -68,7 +68,8 @@ function suggestedFileNameForItem(jobTicket: string, item: any, index: number) {
   const ticket = itemTicketFor(jobTicket, index);
   const product = normalizeFilePart(item.productTitle || item.title || "PRODUCT");
   const finish = normalizeFilePart(item.productionFinish || item.finish || "FINISH");
-  const color = normalizeFilePart(item.bagColor || "COLOR");
+  const isJar = isJarFamily(item.productFamily) || String(item.productType || "").startsWith("jar_");
+  const color = normalizeFilePart(isJar ? item.labelSet || "LABEL" : item.bagColor || "COLOR");
   const qty = Number(item.quantity || 1);
 
   return `${ticket}_${product}_${finish}_${color}_QTY${qty}`;
@@ -107,11 +108,33 @@ function getLineProperty(line: any, name: string) {
   return "";
 }
 
+function isJarFamily(value: any) {
+  const family = clean(value).toLowerCase();
+  return family === "jars" || family === "jar";
+}
+
+function lineProductFamily(line: any) {
+  return getLineProperty(line, "Product Family");
+}
+
+function lineProductType(line: any) {
+  return getLineProperty(line, "Product Type");
+}
+
+function lineLabelSet(line: any) {
+  return getLineProperty(line, "Label Set");
+}
+
 function isConfiguratorLine(line: any) {
+  const material = getLineProperty(line, "Material");
+  const finish = getLineProperty(line, "Finish");
+  const bagColor = getLineProperty(line, "Bag Color");
+  const productFamily = lineProductFamily(line);
+  const labelSet = lineLabelSet(line);
+
   return Boolean(
-    getLineProperty(line, "Material") &&
-    getLineProperty(line, "Finish") &&
-    getLineProperty(line, "Bag Color"),
+    (material && finish && bagColor) ||
+      (isJarFamily(productFamily) && material && finish && labelSet),
   );
 }
 
@@ -158,25 +181,73 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
   const company = companyName(order);
 
   const mappedItems = configuredLines.map((line: any, index: number) => {
+    const productFamily = lineProductFamily(line);
+    const productType = lineProductType(line);
     const material = getLineProperty(line, "Material");
     const finish = getLineProperty(line, "Finish");
     const productionFinish = getLineProperty(line, "Production Finish") || finish;
     const bagColor = getLineProperty(line, "Bag Color");
+    const labelSet = lineLabelSet(line);
     const sides = getLineProperty(line, "Sides") || "Double Sided";
+    const isJar = isJarFamily(productFamily) || productType.startsWith("jar_");
     const quantity = Number(line.quantity || 1);
     const unitPrice = money(line.price || line.originalUnitPrice || line.original_unit_price || 0);
     const productTitle = lineProductTitle(line);
-    const variantTitle = `${material} / ${finish} / ${bagColor}`;
+    const variantTitle = isJar
+      ? `${material} / ${finish} / ${labelSet}`
+      : `${material} / ${finish} / ${bagColor}`;
+    const selectedAddOns = isJar
+      ? {
+          productFamily,
+          productType,
+          material,
+          finish,
+          productionFinish,
+          labelSet,
+        }
+      : {
+          productFamily,
+          productType,
+          material,
+          finish,
+          productionFinish,
+          bagColor,
+          sides,
+        };
+    const materialSummary = isJar
+      ? `Product Family: ${productFamily} | Product Type: ${productType} | Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Label Set: ${labelSet}`
+      : `Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Bag Color: ${bagColor} | Sides: ${sides}`;
+    const productionNotes = isJar
+      ? [
+          `Shopify order: ${quoteNumber}`,
+          `Product Family: ${productFamily}`,
+          `Product Type: ${productType}`,
+          `Material: ${material}`,
+          `Finish: ${finish}`,
+          `Production Finish: ${productionFinish}`,
+          `Label Set: ${labelSet}`,
+        ].join("\n")
+      : [
+          `Shopify order: ${quoteNumber}`,
+          `Material: ${material}`,
+          `Finish: ${finish}`,
+          `Production Finish: ${productionFinish}`,
+          `Bag Color: ${bagColor}`,
+          `Sides: ${sides}`,
+        ].join("\n");
 
     const priceSnapshot = {
       source: "shopify_order_paid_webhook",
       orderId,
       orderName: quoteNumber,
       lineItemId: line.id || null,
+      productFamily,
+      productType,
       material,
       finish,
       productionFinish,
       bagColor,
+      labelSet,
       sides,
       quantity,
       unitPrice,
@@ -198,27 +269,14 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
         clean(line.image?.src || line.image?.url || line.variant?.image?.src || line.variant?.image?.url || "") ||
         null,
       selectedFinish: productionFinish,
-      selectedAddOns: JSON.stringify({
-        material,
-        finish,
-        productionFinish,
-        bagColor,
-        sides,
-      }),
-      materialSummary: `Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Bag Color: ${bagColor} | Sides: ${sides}`,
+      selectedAddOns: JSON.stringify(selectedAddOns),
+      materialSummary,
       priceSnapshot: JSON.stringify(priceSnapshot),
       costSnapshot: JSON.stringify({
         source: "pending_cost_book_mapping",
         note: "Customer price captured from Shopify order. Internal cost will be mapped from Material Center / Cost Book later.",
       }),
-      productionNotes: [
-        `Shopify order: ${quoteNumber}`,
-        `Material: ${material}`,
-        `Finish: ${finish}`,
-        `Production Finish: ${productionFinish}`,
-        `Bag Color: ${bagColor}`,
-        `Sides: ${sides}`,
-      ].join("\n"),
+      productionNotes,
       sortOrder: index + 1,
     };
 
@@ -226,7 +284,7 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
       ...item,
       itemTicket: itemTicketFor(jobTicket, index),
       ripJobName: itemTicketFor(jobTicket, index),
-      suggestedFileName: suggestedFileNameForItem(jobTicket, { productTitle: item.productTitle, productionFinish: line.productionFinish || productionFinish, finish: line.finish || finish, bagColor: line.bagColor || bagColor, quantity: item.quantity }, index),
+      suggestedFileName: suggestedFileNameForItem(jobTicket, { productTitle: item.productTitle, productFamily, productType, productionFinish: line.productionFinish || productionFinish, finish: line.finish || finish, bagColor: line.bagColor || bagColor, labelSet: line.labelSet || labelSet, quantity: item.quantity }, index),
     };
   });
 
