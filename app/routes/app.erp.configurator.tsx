@@ -9,10 +9,29 @@ import {
   MIN_QTY,
   PILOT_PRODUCTS,
   PRODUCT_TYPE,
+  PRODUCT_TYPE_LABEL,
   QTY_RANGES,
-  matrixPrice,
   rangeLabelFromRule,
 } from "../lib/configurator-pricing";
+
+const STOCK_PRODUCT_TYPE = PRODUCT_TYPE;
+
+const JAR_PRODUCT_TYPES = [
+  "jar_50ml",
+  "jar_100ml_tall",
+  "jar_100ml_wide",
+  "jar_150ml",
+  "jar_250ml",
+  "jar_3oz_clear",
+  "jar_3oz_black_white",
+  "jar_4oz_clear",
+  "jar_4oz_black_white",
+];
+
+const FAMILY_LABELS: Record<string, string> = {
+  stock_bags: "Stock Bags",
+  jars: "Jars",
+};
 
 function money(value: number) {
   return "$" + Number(value || 0).toFixed(2);
@@ -33,17 +52,17 @@ function textParam(url: URL, key: string, fallback: string) {
   return raw && raw.trim() ? raw.trim() : fallback;
 }
 
-function findRange(qty: number) {
-  return (
-    QTY_RANGES.find((range) => {
-      if (qty < range.min) return false;
-      if (range.max === null) return true;
-      return qty <= range.max;
-    }) || QTY_RANGES[0]
-  );
+function uniqueValues(rows: any[], group: string) {
+  return rows
+    .filter((option) => option.group === group && option.active)
+    .sort((a, b) => {
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      return String(a.value).localeCompare(String(b.value));
+    })
+    .map((option) => option.value);
 }
 
-function findRangeIndex(qty: number) {
+function fallbackRangeIndex(qty: number) {
   return Math.max(
     QTY_RANGES.findIndex((range) => {
       if (qty < range.min) return false;
@@ -56,7 +75,7 @@ function findRangeIndex(qty: number) {
 
 function fallbackRuleFor(material: string, finish: string, qty: number) {
   const safeQty = Math.max(qty, MIN_QTY);
-  const rangeIndex = findRangeIndex(safeQty);
+  const rangeIndex = fallbackRangeIndex(safeQty);
   const row =
     FALLBACK_PRICING_ROWS.find(
       (item) =>
@@ -77,19 +96,98 @@ function fallbackRuleFor(material: string, finish: string, qty: number) {
   };
 }
 
+function rangeLabel(rule: { minQty: number; maxQty: number | null }) {
+  return rangeLabelFromRule(rule);
+}
+
+function buildRangeColumns(rules: any[]) {
+  const map = new Map<string, { label: string; minQty: number; maxQty: number | null }>();
+
+  for (const rule of rules) {
+    const label = rangeLabel(rule);
+    if (!map.has(label)) {
+      map.set(label, {
+        label,
+        minQty: rule.minQty,
+        maxQty: rule.maxQty,
+      });
+    }
+  }
+
+  const rows = Array.from(map.values()).sort((a, b) => a.minQty - b.minQty);
+
+  if (rows.length) return rows;
+
+  return QTY_RANGES.map((range) => ({
+    label: range.label,
+    minQty: range.min,
+    maxQty: range.max,
+  }));
+}
+
+function buildPricingMatrix(rules: any[]) {
+  const grouped = new Map<string, any>();
+
+  for (const rule of rules) {
+    const key = `${rule.material}|||${rule.finish}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        material: rule.material,
+        finish: rule.finish,
+        productionFinish: rule.productionFinish,
+        costEach: rule.costEach,
+        prices: {},
+      });
+    }
+
+    grouped.get(key).prices[rangeLabel(rule)] = rule.priceEach;
+  }
+
+  return Array.from(grouped.values());
+}
+
+function matrixPrice(row: any, range: { label: string; minQty: number; maxQty: number | null }) {
+  const fallbackLabel = range.maxQty ? `${range.minQty}-${range.maxQty}` : `${range.minQty}+`;
+  const openEndedLabel = `${range.minQty}+`;
+
+  if (row.prices[range.label] !== undefined && row.prices[range.label] !== null) return row.prices[range.label];
+  if (row.prices[fallbackLabel] !== undefined && row.prices[fallbackLabel] !== null) return row.prices[fallbackLabel];
+  if (row.prices[openEndedLabel] !== undefined && row.prices[openEndedLabel] !== null) return row.prices[openEndedLabel];
+
+  return null;
+}
+
+function productTypeForFamily(productFamily: string, requestedProductType: string) {
+  if (productFamily === "jars") {
+    return JAR_PRODUCT_TYPES.includes(requestedProductType) ? requestedProductType : "jar_50ml";
+  }
+
+  return STOCK_PRODUCT_TYPE;
+}
+
+function minQtyForProduct(productType: string, profile: any | null) {
+  if (productType === STOCK_PRODUCT_TYPE) return MIN_QTY;
+  return Number(profile?.minQuantity || 128);
+}
+
+function defaultQtyForProduct(productType: string, profile: any | null) {
+  if (productType === STOCK_PRODUCT_TYPE) return MIN_QTY;
+  return Number(profile?.defaultQuantity || profile?.minQuantity || 128);
+}
+
 async function resetPilotData(shop: string) {
   await db.configuratorPricingRule.deleteMany({
-    where: { shop, productType: PRODUCT_TYPE },
+    where: { shop, productType: STOCK_PRODUCT_TYPE },
   });
   await db.configuratorOption.deleteMany({
-    where: { shop, productType: PRODUCT_TYPE },
+    where: { shop, productType: STOCK_PRODUCT_TYPE },
   });
 
   await db.configuratorProduct.createMany({
     data: PILOT_PRODUCTS.map((title) => ({
       shop,
       title,
-      productType: PRODUCT_TYPE,
+      productType: STOCK_PRODUCT_TYPE,
       defaultSides: "Double Sided",
       minQuantity: MIN_QTY,
       pilot: true,
@@ -102,7 +200,7 @@ async function resetPilotData(shop: string) {
   const optionRows = [
     ...MATERIALS.map((value, index) => ({
       shop,
-      productType: PRODUCT_TYPE,
+      productType: STOCK_PRODUCT_TYPE,
       group: "Material",
       value,
       label: value,
@@ -111,7 +209,7 @@ async function resetPilotData(shop: string) {
     })),
     ...FINISHES.map((value, index) => ({
       shop,
-      productType: PRODUCT_TYPE,
+      productType: STOCK_PRODUCT_TYPE,
       group: "Finish",
       value,
       label: value,
@@ -120,7 +218,7 @@ async function resetPilotData(shop: string) {
     })),
     ...BAG_COLORS.map((value, index) => ({
       shop,
-      productType: PRODUCT_TYPE,
+      productType: STOCK_PRODUCT_TYPE,
       group: "Bag Color",
       value,
       label: value,
@@ -137,7 +235,7 @@ async function resetPilotData(shop: string) {
   const pricingRows = FALLBACK_PRICING_ROWS.flatMap((row) =>
     QTY_RANGES.map((range, index) => ({
       shop,
-      productType: PRODUCT_TYPE,
+      productType: STOCK_PRODUCT_TYPE,
       material: row.material,
       finish: row.finish,
       productionFinish: row.productionFinish,
@@ -164,11 +262,11 @@ async function resetPilotData(shop: string) {
   };
 }
 
-async function ensurePilotData(shop: string) {
+async function ensureStockPilotData(shop: string) {
   const [productCount, optionCount, pricingRuleCount] = await Promise.all([
-    db.configuratorProduct.count({ where: { shop, productType: PRODUCT_TYPE } }),
-    db.configuratorOption.count({ where: { shop, productType: PRODUCT_TYPE } }),
-    db.configuratorPricingRule.count({ where: { shop, productType: PRODUCT_TYPE } }),
+    db.configuratorProduct.count({ where: { shop, productType: STOCK_PRODUCT_TYPE } }),
+    db.configuratorOption.count({ where: { shop, productType: STOCK_PRODUCT_TYPE } }),
+    db.configuratorPricingRule.count({ where: { shop, productType: STOCK_PRODUCT_TYPE } }),
   ]);
 
   if (productCount === 0 || optionCount === 0 || pricingRuleCount === 0) {
@@ -176,13 +274,13 @@ async function ensurePilotData(shop: string) {
   }
 }
 
-async function getDbPricingRule(shop: string, material: string, finish: string, qty: number) {
-  const safeQty = Math.max(qty, MIN_QTY);
+async function getDbPricingRule(shop: string, productType: string, material: string, finish: string, qty: number, minQty: number) {
+  const safeQty = Math.max(qty, minQty);
 
   const rule = await db.configuratorPricingRule.findFirst({
     where: {
       shop,
-      productType: PRODUCT_TYPE,
+      productType,
       active: true,
       material,
       finish,
@@ -192,8 +290,22 @@ async function getDbPricingRule(shop: string, material: string, finish: string, 
     orderBy: [{ priority: "asc" }, { minQty: "desc" }],
   });
 
-  if (!rule) {
+  if (!rule && productType === STOCK_PRODUCT_TYPE) {
     return fallbackRuleFor(material, finish, safeQty);
+  }
+
+  if (!rule) {
+    return {
+      material,
+      finish,
+      productionFinish: finish,
+      sides: productType.startsWith("jar_") ? "Jar Label Set" : "Double Sided",
+      minQty,
+      maxQty: null,
+      priceEach: 0,
+      costEach: 0,
+      source: "missing",
+    };
   }
 
   return {
@@ -209,10 +321,9 @@ async function getDbPricingRule(shop: string, material: string, finish: string, 
   };
 }
 
-async function calculate(shop: string, material: string, finish: string, qty: number) {
-  const safeQty = Math.max(qty, MIN_QTY);
-  const rule = await getDbPricingRule(shop, material, finish, safeQty);
-  const range = findRange(safeQty);
+async function calculate(shop: string, productType: string, material: string, finish: string, qty: number, minQty: number) {
+  const safeQty = Math.max(qty, minQty);
+  const rule = await getDbPricingRule(shop, productType, material, finish, safeQty, minQty);
   const priceEach = Number(rule.priceEach || 0);
   const costEach = Number(rule.costEach || 0);
   const profitEach = priceEach - costEach;
@@ -221,7 +332,7 @@ async function calculate(shop: string, material: string, finish: string, qty: nu
   return {
     qty: safeQty,
     requestedQty: qty,
-    range,
+    range: { label: rangeLabel(rule), minQty: rule.minQty, maxQty: rule.maxQty },
     rule,
     priceEach,
     costEach,
@@ -233,32 +344,6 @@ async function calculate(shop: string, material: string, finish: string, qty: nu
   };
 }
 
-function rangeLabel(rule: { minQty: number; maxQty: number | null }) {
-  return rangeLabelFromRule(rule);
-}
-
-function buildPricingMatrix(rules: any[]) {
-  const grouped = new Map<string, any>();
-
-  for (const rule of rules) {
-    const key = `${rule.material}|||${rule.finish}`;
-    if (!grouped.has(key)) {
-      grouped.set(key, {
-        material: rule.material,
-        finish: rule.finish,
-        productionFinish: rule.productionFinish,
-        costEach: rule.costEach,
-        prices: {},
-      });
-    }
-
-    grouped.get(key).prices[rangeLabel(rule)] = rule.priceEach;
-  }
-
-  return Array.from(grouped.values());
-}
-
-
 export async function action({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -268,7 +353,7 @@ export async function action({ request }: { request: Request }) {
     const result = await resetPilotData(session.shop);
     return {
       ok: true,
-      message: `Pilot rules reset: ${result.products} products, ${result.options} options, ${result.pricingRules} pricing rules.`,
+      message: `Stock bag pilot rules reset: ${result.products} products, ${result.options} options, ${result.pricingRules} pricing rules.`,
     };
   }
 
@@ -277,53 +362,91 @@ export async function action({ request }: { request: Request }) {
 
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
-  await ensurePilotData(session.shop);
+  await ensureStockPilotData(session.shop);
 
   const url = new URL(request.url);
+  const productFamily = textParam(url, "productFamily", "stock_bags");
+  const safeFamily = productFamily === "jars" ? "jars" : "stock_bags";
+  const requestedProductType = textParam(url, "productType", STOCK_PRODUCT_TYPE);
+  const productType = productTypeForFamily(safeFamily, requestedProductType);
+
+  const profile = await db.productTypeProfile.findFirst({
+    where: {
+      shop: session.shop,
+      key: productType,
+      active: true,
+    },
+  });
+
+  const minQty = minQtyForProduct(productType, profile);
+  const defaultQty = defaultQtyForProduct(productType, profile);
+
   const selectedProduct = textParam(url, "product", PILOT_PRODUCTS[0]);
   const material = textParam(url, "material", "Matte");
   const finish = textParam(url, "finish", "No Spot Gloss");
   const bagColor = textParam(url, "bagColor", "White");
-  const qty = intParam(url, "qty", 64);
+  const labelSet = textParam(url, "labelSet", "Side + Lid");
+  const qty = intParam(url, "qty", defaultQty);
 
-  const [products, options, pricingRules, result] = await Promise.all([
+  const [stockProducts, jarProfiles, options, pricingRules, result] = await Promise.all([
     db.configuratorProduct.findMany({
-      where: { shop: session.shop, productType: PRODUCT_TYPE, active: true },
+      where: { shop: session.shop, productType: STOCK_PRODUCT_TYPE, active: true },
       orderBy: [{ pilot: "desc" }, { title: "asc" }],
     }),
+    db.productTypeProfile.findMany({
+      where: {
+        shop: session.shop,
+        key: { in: JAR_PRODUCT_TYPES },
+        active: true,
+      },
+      orderBy: [{ key: "asc" }],
+    }),
     db.configuratorOption.findMany({
-      where: { shop: session.shop, productType: PRODUCT_TYPE, active: true },
+      where: { shop: session.shop, productType, active: true },
       orderBy: [{ group: "asc" }, { sortOrder: "asc" }],
     }),
     db.configuratorPricingRule.findMany({
-      where: { shop: session.shop, productType: PRODUCT_TYPE, active: true },
+      where: { shop: session.shop, productType, active: true },
       orderBy: [{ material: "asc" }, { finish: "asc" }, { minQty: "asc" }],
     }),
-    calculate(session.shop, material, finish, qty),
+    calculate(session.shop, productType, material, finish, qty, minQty),
   ]);
 
-  const materialOptions = options.filter((option) => option.group === "Material").map((option) => option.value);
-  const finishOptions = options.filter((option) => option.group === "Finish").map((option) => option.value);
-  const bagColorOptions = options.filter((option) => option.group === "Bag Color").map((option) => option.value);
+  const materialOptions = uniqueValues(options, "Material");
+  const finishOptions = uniqueValues(options, "Finish");
+  const bagColorOptions = uniqueValues(options, "Bag Color");
+  const quantityOptions = uniqueValues(options, "Quantity");
+  const labelSetOptions = uniqueValues(options, "Label Set");
+  const rangeColumns = buildRangeColumns(pricingRules);
 
   return {
     shop: session.shop,
+    productFamily: safeFamily,
+    productFamilyLabel: FAMILY_LABELS[safeFamily],
+    productType,
+    productTypeLabel: profile?.name || PRODUCT_TYPE_LABEL,
     selectedProduct,
     material,
     finish,
     bagColor,
+    labelSet,
     qty,
+    minQty,
     result,
-    products,
+    stockProducts,
+    jarProfiles,
     pricingRules,
+    rangeColumns,
     pricingMatrix: buildPricingMatrix(pricingRules),
     options: {
       materials: materialOptions.length ? materialOptions : MATERIALS,
       finishes: finishOptions.length ? finishOptions : FINISHES,
       bagColors: bagColorOptions.length ? bagColorOptions : BAG_COLORS,
+      quantities: quantityOptions,
+      labelSets: labelSetOptions,
     },
     counts: {
-      products: products.length,
+      products: safeFamily === "jars" ? jarProfiles.length : stockProducts.length,
       options: options.length,
       pricingRules: pricingRules.length,
     },
@@ -336,6 +459,7 @@ export default function GsoConfigurator() {
   const navigation = useNavigation();
   const result = data.result;
   const isSubmitting = navigation.state !== "idle";
+  const isJar = data.productFamily === "jars";
 
   return (
     <div className="gso-page">
@@ -343,19 +467,19 @@ export default function GsoConfigurator() {
 
       <div className="hero">
         <div>
-          <p className="eyebrow">GSO ERP Pilot</p>
+          <p className="eyebrow">GSO ERP Configurator</p>
           <h1>Product Configurator</h1>
           <p>
-            Database-backed pilot for moving stock bags away from Shopify variant overload.
-            Shopify keeps 1 product and 1 base variant. ERP controls pricing, costs,
+            Database-backed configurator for Stock Bags and Applied Label Jars.
+            Shopify can keep simple products while ERP controls pricing, costs,
             margins, option rules, and production logic.
           </p>
         </div>
         <div className="hero-card">
-          <strong>Activation</strong>
-          <span>Live theme later</span>
-          <span>Only products tagged configurator-pilot</span>
+          <strong>{data.productFamilyLabel}</strong>
+          <span>Product type: {data.productType}</span>
           <span>Pricing source: {result.rule.source}</span>
+          <span>Min Qty: {data.minQty}</span>
         </div>
       </div>
 
@@ -363,9 +487,14 @@ export default function GsoConfigurator() {
         <div className={actionData.ok ? "notice success" : "notice warning"}>{actionData.message}</div>
       ) : null}
 
+      <div className="family-tabs">
+        <a className={data.productFamily === "stock_bags" ? "active" : ""} href="/app/erp/configurator?productFamily=stock_bags">Stock Bags</a>
+        <a className={data.productFamily === "jars" ? "active" : ""} href="/app/erp/configurator?productFamily=jars">Jars</a>
+      </div>
+
       <div className="grid three">
         <div className="card stat">
-          <span>Configurator Products</span>
+          <span>{isJar ? "Jar Profiles" : "Configurator Products"}</span>
           <strong>{data.counts.products}</strong>
         </div>
         <div className="card stat">
@@ -382,23 +511,37 @@ export default function GsoConfigurator() {
         <div className="card">
           <div className="card-head">
             <div>
-              <h2>Test Calculator</h2>
+              <h2>{isJar ? "Jar Test Calculator" : "Stock Bag Test Calculator"}</h2>
               <p className="muted">
-                Customer-facing options: Material, Finish, Bag Color, and Quantity.
-                Sides are hidden and defaulted to Double Sided.
+                {isJar
+                  ? "Customer-facing options: Jar Size, Material, Finish, Label Set, and Quantity."
+                  : "Customer-facing options: Product, Material, Finish, Bag Color, and Quantity. Sides are hidden and defaulted to Double Sided."}
               </p>
             </div>
           </div>
 
           <Form method="get" className="form-grid">
-            <label>
-              Product
-              <select name="product" defaultValue={data.selectedProduct}>
-                {data.products.map((product: any) => (
-                  <option key={product.id} value={product.title}>{product.title}</option>
-                ))}
-              </select>
-            </label>
+            <input type="hidden" name="productFamily" value={data.productFamily} />
+
+            {isJar ? (
+              <label>
+                Jar Size
+                <select name="productType" defaultValue={data.productType}>
+                  {data.jarProfiles.map((profile: any) => (
+                    <option key={profile.key} value={profile.key}>{profile.name}</option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label>
+                Product
+                <select name="product" defaultValue={data.selectedProduct}>
+                  {data.stockProducts.map((product: any) => (
+                    <option key={product.id} value={product.title}>{product.title}</option>
+                  ))}
+                </select>
+              </label>
+            )}
 
             <label>
               Material
@@ -418,18 +561,37 @@ export default function GsoConfigurator() {
               </select>
             </label>
 
-            <label>
-              Bag Color
-              <select name="bagColor" defaultValue={data.bagColor}>
-                {data.options.bagColors.map((color: string) => (
-                  <option key={color} value={color}>{color}</option>
-                ))}
-              </select>
-            </label>
+            {isJar ? (
+              <label>
+                Label Set
+                <select name="labelSet" defaultValue={data.labelSet}>
+                  {data.options.labelSets.map((labelSet: string) => (
+                    <option key={labelSet} value={labelSet}>{labelSet}</option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label>
+                Bag Color
+                <select name="bagColor" defaultValue={data.bagColor}>
+                  {data.options.bagColors.map((color: string) => (
+                    <option key={color} value={color}>{color}</option>
+                  ))}
+                </select>
+              </label>
+            )}
 
             <label>
               Quantity
-              <input name="qty" type="number" min={MIN_QTY} step="1" defaultValue={data.qty} />
+              {isJar && data.options.quantities.length ? (
+                <select name="qty" defaultValue={String(data.qty)}>
+                  {data.options.quantities.map((qty: string) => (
+                    <option key={qty} value={qty}>{qty === "2500" ? "2500+" : qty}</option>
+                  ))}
+                </select>
+              ) : (
+                <input name="qty" type="number" min={data.minQty} step="1" defaultValue={data.qty} />
+              )}
             </label>
 
             <div className="button-row">
@@ -437,20 +599,26 @@ export default function GsoConfigurator() {
             </div>
           </Form>
 
-          <div className="admin-actions">
-            <Form method="post">
-              <input type="hidden" name="intent" value="resetPilotData" />
-              <button className="secondary" type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Working..." : "Reset pilot database rules"}
-              </button>
-            </Form>
-          </div>
+          {!isJar ? (
+            <div className="admin-actions">
+              <Form method="post">
+                <input type="hidden" name="intent" value="resetPilotData" />
+                <button className="secondary" type="submit" disabled={isSubmitting}>
+                  {isSubmitting ? "Working..." : "Reset stock bag pilot database rules"}
+                </button>
+              </Form>
+            </div>
+          ) : null}
         </div>
 
         <div className="card result-card">
           <h2>ERP Result</h2>
-          {result.requestedQty < MIN_QTY ? (
-            <div className="warning">Quantity was under 64, so ERP priced it at the 64 minimum.</div>
+          {result.requestedQty < data.minQty ? (
+            <div className="warning">Quantity was under {data.minQty}, so ERP priced it at the {data.minQty} minimum.</div>
+          ) : null}
+
+          {result.rule.source === "missing" ? (
+            <div className="warning">No pricing rule matched this option combo yet.</div>
           ) : null}
 
           <div className="metric-grid">
@@ -465,37 +633,48 @@ export default function GsoConfigurator() {
           </div>
 
           <div className="summary">
-            <p><b>Product:</b> {data.selectedProduct}</p>
+            <p><b>Family:</b> {data.productFamilyLabel}</p>
+            <p><b>Product Type:</b> {data.productTypeLabel}</p>
+            {!isJar ? <p><b>Product:</b> {data.selectedProduct}</p> : null}
             <p><b>Material:</b> {data.material}</p>
             <p><b>Finish:</b> {data.finish}</p>
             <p><b>Production Finish:</b> {result.rule.productionFinish}</p>
-            <p><b>Bag Color:</b> {data.bagColor}</p>
-            <p><b>Sides:</b> {result.rule.sides} hidden/default</p>
-            <p><b>Minimum Quantity:</b> 64</p>
+            {isJar ? <p><b>Label Set:</b> {data.labelSet}</p> : <p><b>Bag Color:</b> {data.bagColor}</p>}
+            <p><b>Sides / Mode:</b> {result.rule.sides}</p>
+            <p><b>Minimum Quantity:</b> {data.minQty}</p>
             <p><b>Pricing Source:</b> {result.rule.source}</p>
           </div>
         </div>
       </div>
 
       <div className="card">
-        <h2>5-Product Pilot</h2>
+        <h2>{isJar ? "Jar Product Profiles" : "Stock Bag Pilot Products"}</h2>
         <div className="pilot-list">
-          {data.products.map((product: any) => (
-            <div key={product.id} className="pilot-item">
-              <strong>{product.title}</strong>
-              <span>Needs Shopify tag: configurator-pilot</span>
-              <span>Min Qty: {product.minQuantity}</span>
-              <span>Sides: {product.defaultSides}</span>
-            </div>
-          ))}
+          {isJar
+            ? data.jarProfiles.map((profile: any) => (
+                <div key={profile.key} className="pilot-item">
+                  <strong>{profile.name}</strong>
+                  <span>Key: {profile.key}</span>
+                  <span>Min Qty: {profile.minQuantity}</span>
+                  <span>Tiers: {profile.tierBreakpoints || "-"}</span>
+                </div>
+              ))
+            : data.stockProducts.map((product: any) => (
+                <div key={product.id} className="pilot-item">
+                  <strong>{product.title}</strong>
+                  <span>Needs Shopify tag: configurator-pilot</span>
+                  <span>Min Qty: {product.minQuantity}</span>
+                  <span>Sides: {product.defaultSides}</span>
+                </div>
+              ))}
         </div>
       </div>
 
       <div className="card">
-        <h2>Database Pricing Matrix For 4x5 Stock Bags</h2>
+        <h2>Database Pricing Matrix For {isJar ? data.productTypeLabel : "4x5 Stock Bags"}</h2>
         <p className="muted">
-          These rules are now stored in Prisma/PostgreSQL. The calculator reads database rules first
-          and only falls back to hardcoded pilot rules if the database has no matching rule.
+          These rules are stored in Prisma/PostgreSQL. The calculator reads database rules first
+          and only falls back to hardcoded pilot rules for stock bags if the database has no matching rule.
         </p>
 
         <div className="table-wrap">
@@ -506,7 +685,7 @@ export default function GsoConfigurator() {
                 <th>Finish</th>
                 <th>Production Finish</th>
                 <th>Cost Each</th>
-                {QTY_RANGES.map((range) => (
+                {data.rangeColumns.map((range: any) => (
                   <th key={range.label}>{range.label}</th>
                 ))}
               </tr>
@@ -518,7 +697,7 @@ export default function GsoConfigurator() {
                   <td>{row.finish}</td>
                   <td>{row.productionFinish}</td>
                   <td>{money(row.costEach)}</td>
-                  {QTY_RANGES.map((range) => (
+                  {data.rangeColumns.map((range: any) => (
                     <td key={range.label}>{matrixPrice(row, range) !== null ? money(matrixPrice(row, range)) : "-"}</td>
                   ))}
                 </tr>
@@ -531,10 +710,9 @@ export default function GsoConfigurator() {
       <div className="card">
         <h2>Next Patch After This Works</h2>
         <ol>
-          <li>Add Shopify product mapping for the 5 pilot products.</li>
-          <li>Create storefront configurator block for products tagged configurator-pilot.</li>
-          <li>Send Material, Finish, Bag Color, Quantity, ERP Product ID, and ERP Config ID as line item properties.</li>
-          <li>Update order paid webhook to create production jobs from selected properties.</li>
+          <li>Connect jar quote/configurator output to storefront/cart properties.</li>
+          <li>Make paid order webhook map jar label zones into production job item notes.</li>
+          <li>Add Shopify product mapping for jar products when ready.</li>
         </ol>
       </div>
     </div>
@@ -559,181 +737,188 @@ const styles = `
   margin-bottom: 20px;
 }
 .hero h1 {
-  margin: 0 0 8px;
+  margin: 6px 0 8px;
   font-size: 34px;
 }
-.hero p {
-  max-width: 760px;
-  margin: 0;
-  color: #e5e7eb;
-}
 .eyebrow {
+  margin: 0;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-size: 12px;
-  font-weight: 700;
-  margin-bottom: 8px !important;
+  opacity: 0.8;
 }
 .hero-card {
-  min-width: 230px;
-  background: rgba(255,255,255,0.12);
-  border: 1px solid rgba(255,255,255,0.2);
-  border-radius: 14px;
+  min-width: 240px;
+  display: grid;
+  gap: 8px;
+  align-content: center;
   padding: 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.hero-card span {
+  font-size: 13px;
+  opacity: 0.92;
+}
+.family-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.family-tabs a {
+  text-decoration: none;
+  color: #202223;
+  border: 1px solid #d1d5db;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: #fff;
+}
+.family-tabs a.active {
+  color: #fff;
+  background: #312e81;
+  border-color: #312e81;
+}
+.grid {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 18px;
 }
 .grid.two {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 .grid.three {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .card {
-  background: white;
+  background: #ffffff;
   border: 1px solid #dfe3e8;
   border-radius: 16px;
-  padding: 20px;
-  margin-bottom: 18px;
+  padding: 18px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 .card h2 {
-  margin-top: 0;
+  margin: 0 0 10px;
 }
 .card-head {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+}
+.muted {
+  color: #6b7280;
+  margin-top: 0;
 }
 .stat span {
   display: block;
-  color: #6d7175;
+  color: #6b7280;
   font-size: 13px;
 }
 .stat strong {
   display: block;
-  margin-top: 4px;
-  font-size: 28px;
-}
-.muted {
-  color: #6d7175;
+  margin-top: 6px;
+  font-size: 30px;
 }
 .form-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 label {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 6px;
-  font-weight: 650;
+  font-weight: 600;
+  font-size: 13px;
 }
-input, select {
-  min-height: 42px;
+select,
+input {
+  width: 100%;
+  padding: 10px;
   border: 1px solid #c9cccf;
   border-radius: 10px;
-  padding: 8px 10px;
-  font-size: 14px;
+  font: inherit;
 }
 .button-row {
   display: flex;
   align-items: end;
 }
-button {
-  min-height: 42px;
-  border: none;
+button,
+.secondary {
+  border: 0;
   border-radius: 10px;
-  padding: 10px 16px;
-  background: #111827;
-  color: white;
+  padding: 11px 16px;
   font-weight: 700;
   cursor: pointer;
+  background: #111827;
+  color: #fff;
 }
-button.secondary {
-  background: #f6f6f7;
+.secondary {
+  background: #f3f4f6;
   color: #111827;
-  border: 1px solid #c9cccf;
-}
-button:disabled {
-  opacity: 0.6;
-  cursor: default;
+  border: 1px solid #d1d5db;
 }
 .admin-actions {
   margin-top: 16px;
-  border-top: 1px solid #e1e3e5;
-  padding-top: 16px;
+}
+.notice {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+}
+.notice.success {
+  background: #ecfdf5;
+  color: #065f46;
+}
+.notice.warning,
+.warning {
+  background: #fffbeb;
+  color: #92400e;
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 12px;
 }
 .metric-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 .metric-grid div {
-  background: #f6f6f7;
-  border: 1px solid #e1e3e5;
-  border-radius: 12px;
   padding: 12px;
+  border-radius: 12px;
+  background: #f9fafb;
 }
 .metric-grid span {
   display: block;
-  color: #6d7175;
+  color: #6b7280;
   font-size: 12px;
 }
 .metric-grid strong {
   display: block;
   margin-top: 4px;
-  font-size: 22px;
+  font-size: 20px;
 }
 .summary {
-  margin-top: 16px;
-  background: #f9fafb;
-  border-radius: 12px;
-  padding: 12px;
+  margin-top: 14px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 12px;
 }
 .summary p {
   margin: 6px 0;
 }
-.warning,
-.notice {
-  padding: 10px;
-  border-radius: 10px;
-  margin-bottom: 12px;
-}
-.warning,
-.notice.warning {
-  background: #fff4e5;
-  border: 1px solid #ffb84d;
-  color: #7a4b00;
-}
-.notice.success {
-  background: #ecfdf3;
-  border: 1px solid #86efac;
-  color: #14532d;
-}
 .pilot-list {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 .pilot-item {
-  border: 1px solid #dfe3e8;
-  border-radius: 12px;
+  display: grid;
+  gap: 4px;
   padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
   background: #f9fafb;
 }
-.pilot-item strong,
 .pilot-item span {
-  display: block;
-}
-.pilot-item span {
-  margin-top: 6px;
-  color: #6d7175;
+  color: #6b7280;
   font-size: 12px;
 }
 .table-wrap {
@@ -743,17 +928,18 @@ table {
   width: 100%;
   border-collapse: collapse;
 }
-th, td {
-  border-bottom: 1px solid #e1e3e5;
+th,
+td {
+  border-bottom: 1px solid #e5e7eb;
   padding: 10px;
   text-align: left;
   white-space: nowrap;
 }
 th {
-  background: #f6f6f7;
-}
-ol {
-  margin-bottom: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
 }
 @media (max-width: 900px) {
   .hero,
@@ -766,9 +952,3 @@ ol {
   }
 }
 `;
-
-
-
-
-
-
