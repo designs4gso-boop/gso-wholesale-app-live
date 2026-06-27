@@ -173,7 +173,22 @@ export async function loader({ request }: { request: Request }) {
   const isJar = isJarProductType(productType);
   const hasJarColorVariants = isColorVariantJarProductType(baseProductType);
   const productFamily = productFamilyForType(productType);
-  const minQuantity = Number(product.minQuantity || MIN_QTY);
+  const effectiveProductIdentity = [
+    product.shopifyProductGid ? { shopifyProductGid: product.shopifyProductGid } : undefined,
+    product.shopifyHandle ? { shopifyHandle: product.shopifyHandle } : undefined,
+  ].filter(Boolean) as any;
+  const effectiveProduct =
+    productType !== baseProductType && effectiveProductIdentity.length
+      ? (await db.configuratorProduct.findFirst({
+          where: {
+            shop,
+            active: true,
+            productType,
+            OR: effectiveProductIdentity,
+          },
+        })) || product
+      : product;
+  const minQuantity = Number(effectiveProduct.minQuantity || MIN_QTY);
   const quantity = Math.max(numberValue(url.searchParams.get("quantity"), minQuantity), minQuantity);
 
   const [options, rules] = await Promise.all([
@@ -243,7 +258,7 @@ export async function loader({ request }: { request: Request }) {
   const selectedJarColor = hasJarColorVariants ? jarColor : "";
   const requestedLabelSet = optionValue(labelSets, labelSet) || (!labelSets.length ? labelSet : "");
   const selectedLabelSet = isJar ? requestedLabelSet || labelSets[0] || "Side + Lid" : "";
-  const selectedSides = isJar ? "" : product.defaultSides || "Double Sided";
+  const selectedSides = isJar ? "" : effectiveProduct.defaultSides || "Double Sided";
 
   const rule = findMatchingRule(rules, selectedMaterial, selectedFinish, quantity);
 
@@ -275,16 +290,16 @@ export async function loader({ request }: { request: Request }) {
     productTypeLabel: humanProductType(productType),
     productFamily,
     product: {
-      id: product.id,
-      title: product.title,
+      id: effectiveProduct.id,
+      title: effectiveProduct.title,
       productType,
       productFamily,
-      shopifyProductGid: product.shopifyProductGid,
-      shopifyVariantGid: product.shopifyVariantGid,
-      handle: product.shopifyHandle,
-      sku: product.sku,
+      shopifyProductGid: effectiveProduct.shopifyProductGid,
+      shopifyVariantGid: effectiveProduct.shopifyVariantGid,
+      handle: effectiveProduct.shopifyHandle,
+      sku: effectiveProduct.sku,
       minQuantity,
-      defaultSides: product.defaultSides || "Double Sided",
+      defaultSides: effectiveProduct.defaultSides || "Double Sided",
     },
     options: { materials, finishes, bagColors, jarColors, labelSets },
     selected: {
