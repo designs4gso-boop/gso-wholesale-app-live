@@ -1,4 +1,4 @@
-﻿import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
 import {
@@ -530,8 +530,8 @@ export default function GsoConfigurator() {
       ) : null}
 
       <div className="family-tabs">
-        <a className={data.productFamily === "stock_bags" ? "active" : ""} href="/app/erp/configurator?productFamily=stock_bags">Stock Bags</a>
-        <a className={data.productFamily === "jars" ? "active" : ""} href="/app/erp/configurator?productFamily=jars">Jars</a>
+        <Link className={data.productFamily === "stock_bags" ? "active" : ""} to="/app/erp/configurator?productFamily=stock_bags">Stock Bags</Link>
+        <Link className={data.productFamily === "jars" ? "active" : ""} to="/app/erp/configurator?productFamily=jars">Jars</Link>
       </div>
 
       <div className="grid three">
@@ -994,3 +994,4 @@ th {
   }
 }
 `;
+
