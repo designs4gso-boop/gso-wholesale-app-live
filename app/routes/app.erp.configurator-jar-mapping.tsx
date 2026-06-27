@@ -72,7 +72,7 @@ export async function action({ request }: { request: Request }) {
   const shopifyVariantGid = normalizeGid(formData.get("shopifyVariantGid"), "ProductVariant");
   const sku = nullableText(formData.get("sku"));
   const notes = nullableText(formData.get("notes"));
-  const active = cleanText(formData.get("active")) !== "false";
+  const active = formData.getAll("active").map((value) => cleanText(value)).includes("true");
 
   if (!isAllowedJarProductType(productType)) {
     return { ok: false, message: "Select an active jar product type. 5oz clear is excluded from storefront mapping." };
@@ -418,3 +418,4 @@ th {
   }
 }
 `;
+
