@@ -23,6 +23,7 @@ export default [
     route("erp/configurator-sync", "routes/app.erp.configurator-sync.tsx"),
     route("erp/stock-bag-migration-report", "routes/app.erp.stock-bag-migration-report.tsx"),
     route("erp/configurator-mapping", "routes/app.erp.configurator-mapping.tsx"),
+    route("erp/configurator-jar-mapping", "routes/app.erp.configurator-jar-mapping.tsx"),
     route("erp/configurator-audit", "routes/app.erp.configurator-audit.tsx"),
     route("create-order", "routes/app.create-order.tsx"),
     route("erp/materials", "routes/app.erp.materials.tsx"),
@@ -62,6 +63,7 @@ export default [
   route("app/create-configurator-cart-transform", "routes/app.create-configurator-cart-transform.tsx"),
   route("webhooks/orders_paid", "routes/webhooks.orders_paid.tsx"),
 ] satisfies RouteConfig;
+
 
 
 
