@@ -41,6 +41,35 @@ function isJarProductType(productType: string): boolean {
   return productType.startsWith("jar_");
 }
 
+function normalizeJarColor(value: any): "Clear" | "Black" | "White" | "" {
+  const color = clean(value).toLowerCase();
+  if (color === "clear") return "Clear";
+  if (color === "black") return "Black";
+  if (color === "white") return "White";
+  return "";
+}
+
+function isColorVariantJarProductType(productType: string): boolean {
+  return [
+    "jar_3oz_clear",
+    "jar_3oz_black_white",
+    "jar_4oz_clear",
+    "jar_4oz_black_white",
+  ].includes(productType);
+}
+
+function resolveJarVariantProductType(productType: string, jarColor: "Clear" | "Black" | "White" | ""): string {
+  if (productType === "jar_3oz_clear" || productType === "jar_3oz_black_white") {
+    return jarColor === "Black" || jarColor === "White" ? "jar_3oz_black_white" : "jar_3oz_clear";
+  }
+
+  if (productType === "jar_4oz_clear" || productType === "jar_4oz_black_white") {
+    return jarColor === "Black" || jarColor === "White" ? "jar_4oz_black_white" : "jar_4oz_clear";
+  }
+
+  return productType;
+}
+
 function productFamilyForType(productType: string): "Jars" | "Stock Bags" {
   return isJarProductType(productType) ? "Jars" : "Stock Bags";
 }
@@ -144,6 +173,7 @@ export async function action({ request }: { request: Request }) {
       const material = clean(rawItem.material);
       const finish = clean(rawItem.finish);
       const bagColor = clean(rawItem.bagColor);
+      const rawJarColor = rawItem.jarColor || rawItem.jar_color || rawItem.color;
       const labelSet = clean(rawItem.labelSet || rawItem.label_set || rawItem.labelset);
       const productImageUrl = clean(rawItem.image || rawItem.productImageUrl || rawItem.imageUrl);
 
@@ -186,13 +216,33 @@ export async function action({ request }: { request: Request }) {
         );
       }
 
-      const productType = product.productType || "stock_bag_4x5";
+      const baseProductType = product.productType || "stock_bag_4x5";
+      const baseUsesJarColor = isColorVariantJarProductType(baseProductType);
+      const normalizedJarColor = normalizeJarColor(rawJarColor);
+      const selectedJarColor = isJarProductType(baseProductType) && baseUsesJarColor ? normalizedJarColor || "Clear" : "";
+      const productType = resolveJarVariantProductType(baseProductType, selectedJarColor);
+      const effectiveProductIdentity = [
+        product.shopifyProductGid ? { shopifyProductGid: product.shopifyProductGid } : undefined,
+        product.shopifyHandle ? { shopifyHandle: product.shopifyHandle } : undefined,
+      ].filter(Boolean) as any;
+      const effectiveProduct =
+        productType !== baseProductType && effectiveProductIdentity.length
+          ? (await db.configuratorProduct.findFirst({
+              where: {
+                shop,
+                active: true,
+                productType,
+                OR: effectiveProductIdentity,
+              },
+            })) || product
+          : product;
       const isJar = isJarProductType(productType);
+      const usesJarColor = isColorVariantJarProductType(productType);
       const productFamily = productFamilyForType(productType);
       const selectedBagColor = isJar ? "" : bagColor;
       const selectedLabelSet = isJar ? labelSet || "Side + Lid" : "";
-      const defaultSides = product.defaultSides || "Double Sided";
-      const minQuantity = Number(product.minQuantity || MIN_QTY);
+      const defaultSides = effectiveProduct.defaultSides || "Double Sided";
+      const minQuantity = Number(effectiveProduct.minQuantity || MIN_QTY);
       const quantity = Math.max(numberValue(rawItem.quantity, minQuantity), minQuantity);
 
       if (isJar) {
@@ -236,12 +286,13 @@ export async function action({ request }: { request: Request }) {
             ok: false,
             error: "No matching ERP pricing rule found for one cart item.",
             item: {
-              title: product.title,
+              title: effectiveProduct.title,
               productType,
               handle,
               material,
               finish,
               bagColor: selectedBagColor,
+              jarColor: selectedJarColor,
               labelSet: selectedLabelSet,
               quantity,
             },
@@ -260,12 +311,13 @@ export async function action({ request }: { request: Request }) {
             ok: false,
             error: "ERP price is missing or invalid for one cart item.",
             item: {
-              title: product.title,
+              title: effectiveProduct.title,
               productType,
               handle,
               material,
               finish,
               bagColor: selectedBagColor,
+              jarColor: selectedJarColor,
               labelSet: selectedLabelSet,
               quantity,
             },
@@ -276,9 +328,9 @@ export async function action({ request }: { request: Request }) {
 
       cartTotal = money(cartTotal + orderTotal);
 
-      const baseTitle = product.title || clean(rawItem.title) || "Configured Product";
+      const baseTitle = effectiveProduct.title || clean(rawItem.title) || "Configured Product";
       const optionSummary = isJar
-        ? `${material} / ${finish} / ${selectedLabelSet}`
+        ? [selectedJarColor, material, finish, selectedLabelSet].filter(Boolean).join(" / ")
         : `${material} / ${finish} / ${selectedBagColor}`;
       const lineTitle = `${baseTitle} - ${optionSummary}`;
       const customAttributes = [
@@ -288,7 +340,10 @@ export async function action({ request }: { request: Request }) {
         { key: "Finish", value: finish },
         { key: "Production Finish", value: String(rule.productionFinish || finish) },
         ...(isJar
-          ? [{ key: "Label Set", value: selectedLabelSet }]
+          ? [
+              ...(usesJarColor ? [{ key: "Jar Color", value: selectedJarColor }] : []),
+              { key: "Label Set", value: selectedLabelSet },
+            ]
           : [
               { key: "Bag Color", value: selectedBagColor },
               { key: "Sides", value: String(defaultSides) },
@@ -298,7 +353,7 @@ export async function action({ request }: { request: Request }) {
 
       lineItems.push({
         title: lineTitle,
-        sku: product.sku || "",
+        sku: effectiveProduct.sku || "",
         quantity,
         originalUnitPrice: String(priceEach.toFixed(2)),
         customAttributes,
@@ -306,17 +361,18 @@ export async function action({ request }: { request: Request }) {
 
       itemSummaries.push({
         product: {
-          id: product.id,
-          title: product.title,
+          id: effectiveProduct.id,
+          title: effectiveProduct.title,
           productType,
-          handle: product.shopifyHandle,
-          sku: product.sku,
+          handle: effectiveProduct.shopifyHandle,
+          sku: effectiveProduct.sku,
           productImageUrl,
         },
         selected: {
           material,
           finish,
           bagColor: selectedBagColor,
+          jarColor: selectedJarColor,
           labelSet: selectedLabelSet,
           sides: isJar ? "" : defaultSides,
         },
@@ -325,6 +381,7 @@ export async function action({ request }: { request: Request }) {
           quantity,
           orderTotal,
           matchedRange,
+          jarColor: selectedJarColor,
         },
       });
     }

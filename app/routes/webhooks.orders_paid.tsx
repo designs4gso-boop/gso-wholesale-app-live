@@ -72,6 +72,11 @@ function suggestedFileNameForItem(jobTicket: string, item: any, index: number) {
   const color = normalizeFilePart(isJar ? item.labelSet || "LABEL" : item.bagColor || "COLOR");
   const qty = Number(item.quantity || 1);
 
+  if (isJar && item.jarColor) {
+    const jarColor = normalizeFilePart(item.jarColor);
+    return `${ticket}_${product}_${finish}_${jarColor}_${color}_QTY${qty}`;
+  }
+
   return `${ticket}_${product}_${finish}_${color}_QTY${qty}`;
 }
 
@@ -123,6 +128,10 @@ function lineProductType(line: any) {
 
 function lineLabelSet(line: any) {
   return getLineProperty(line, "Label Set");
+}
+
+function lineJarColor(line: any) {
+  return getLineProperty(line, "Jar Color");
 }
 
 function isConfiguratorLine(line: any) {
@@ -188,13 +197,14 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
     const productionFinish = getLineProperty(line, "Production Finish") || finish;
     const bagColor = getLineProperty(line, "Bag Color");
     const labelSet = lineLabelSet(line);
+    const jarColor = lineJarColor(line);
     const sides = getLineProperty(line, "Sides") || "Double Sided";
     const isJar = isJarFamily(productFamily) || productType.startsWith("jar_");
     const quantity = Number(line.quantity || 1);
     const unitPrice = money(line.price || line.originalUnitPrice || line.original_unit_price || 0);
     const productTitle = lineProductTitle(line);
     const variantTitle = isJar
-      ? `${material} / ${finish} / ${labelSet}`
+      ? [jarColor, material, finish, labelSet].filter(Boolean).join(" / ")
       : `${material} / ${finish} / ${bagColor}`;
     const selectedAddOns = isJar
       ? {
@@ -203,6 +213,7 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
           material,
           finish,
           productionFinish,
+          ...(jarColor ? { jarColor } : {}),
           labelSet,
         }
       : {
@@ -215,7 +226,15 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
           sides,
         };
     const materialSummary = isJar
-      ? `Product Family: ${productFamily} | Product Type: ${productType} | Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Label Set: ${labelSet}`
+      ? [
+          `Product Family: ${productFamily}`,
+          `Product Type: ${productType}`,
+          `Material: ${material}`,
+          `Finish: ${finish}`,
+          `Production Finish: ${productionFinish}`,
+          ...(jarColor ? [`Jar Color: ${jarColor}`] : []),
+          `Label Set: ${labelSet}`,
+        ].join(" | ")
       : `Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Bag Color: ${bagColor} | Sides: ${sides}`;
     const productionNotes = isJar
       ? [
@@ -225,6 +244,7 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
           `Material: ${material}`,
           `Finish: ${finish}`,
           `Production Finish: ${productionFinish}`,
+          ...(jarColor ? [`Jar Color: ${jarColor}`] : []),
           `Label Set: ${labelSet}`,
         ].join("\n")
       : [
@@ -247,6 +267,7 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
       finish,
       productionFinish,
       bagColor,
+      ...(jarColor ? { jarColor } : {}),
       labelSet,
       sides,
       quantity,
@@ -284,7 +305,7 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
       ...item,
       itemTicket: itemTicketFor(jobTicket, index),
       ripJobName: itemTicketFor(jobTicket, index),
-      suggestedFileName: suggestedFileNameForItem(jobTicket, { productTitle: item.productTitle, productFamily, productType, productionFinish: line.productionFinish || productionFinish, finish: line.finish || finish, bagColor: line.bagColor || bagColor, labelSet: line.labelSet || labelSet, quantity: item.quantity }, index),
+      suggestedFileName: suggestedFileNameForItem(jobTicket, { productTitle: item.productTitle, productFamily, productType, productionFinish: line.productionFinish || productionFinish, finish: line.finish || finish, bagColor: line.bagColor || bagColor, jarColor: line.jarColor || jarColor, labelSet: line.labelSet || labelSet, quantity: item.quantity }, index),
     };
   });
 
