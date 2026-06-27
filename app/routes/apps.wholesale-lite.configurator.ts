@@ -34,6 +34,34 @@ function isJarProductType(productType: string): boolean {
   return productType.startsWith("jar_");
 }
 
+function normalizeJarColor(value: string | null | undefined): "Clear" | "Black" | "White" {
+  const color = clean(value).toLowerCase();
+  if (color === "black") return "Black";
+  if (color === "white") return "White";
+  return "Clear";
+}
+
+function isColorVariantJarProductType(productType: string): boolean {
+  return [
+    "jar_3oz_clear",
+    "jar_3oz_black_white",
+    "jar_4oz_clear",
+    "jar_4oz_black_white",
+  ].includes(productType);
+}
+
+function resolveJarVariantProductType(productType: string, jarColor: "Clear" | "Black" | "White"): string {
+  if (productType === "jar_3oz_clear" || productType === "jar_3oz_black_white") {
+    return jarColor === "Clear" ? "jar_3oz_clear" : "jar_3oz_black_white";
+  }
+
+  if (productType === "jar_4oz_clear" || productType === "jar_4oz_black_white") {
+    return jarColor === "Clear" ? "jar_4oz_clear" : "jar_4oz_black_white";
+  }
+
+  return productType;
+}
+
 function productFamilyForType(productType: string): "Jars" | "Stock Bags" {
   return isJarProductType(productType) ? "Jars" : "Stock Bags";
 }
@@ -106,6 +134,11 @@ export async function loader({ request }: { request: Request }) {
   const material = clean(url.searchParams.get("material"));
   const finish = clean(url.searchParams.get("finish"));
   const bagColor = clean(url.searchParams.get("bagColor"));
+  const jarColor = normalizeJarColor(
+    url.searchParams.get("jarColor") ||
+      url.searchParams.get("jar_color") ||
+      url.searchParams.get("color"),
+  );
   const labelSet = clean(
     url.searchParams.get("labelSet") ||
       url.searchParams.get("label_set") ||
@@ -135,8 +168,10 @@ export async function loader({ request }: { request: Request }) {
     });
   }
 
-  const productType = product.productType || "stock_bag_4x5";
+  const baseProductType = product.productType || "stock_bag_4x5";
+  const productType = resolveJarVariantProductType(baseProductType, jarColor);
   const isJar = isJarProductType(productType);
+  const hasJarColorVariants = isColorVariantJarProductType(baseProductType);
   const productFamily = productFamilyForType(productType);
   const minQuantity = Number(product.minQuantity || MIN_QTY);
   const quantity = Math.max(numberValue(url.searchParams.get("quantity"), minQuantity), minQuantity);
@@ -199,11 +234,13 @@ export async function loader({ request }: { request: Request }) {
   const materials = optionMaterials.length ? optionMaterials : ruleMaterials;
   const finishes = optionFinishes.length ? optionFinishes : ruleFinishes;
   const bagColors = optionBagColors.length ? optionBagColors : defaultBagColors;
+  const jarColors = hasJarColorVariants ? ["Clear", "Black", "White"] : [];
   const labelSets = optionLabelSets;
 
   const selectedMaterial = material || materials[0] || "Matte";
   const selectedFinish = finish || finishes[0] || "No Spot Gloss";
   const selectedBagColor = isJar ? "" : bagColor || bagColors[0] || "White";
+  const selectedJarColor = hasJarColorVariants ? jarColor : "";
   const requestedLabelSet = optionValue(labelSets, labelSet) || (!labelSets.length ? labelSet : "");
   const selectedLabelSet = isJar ? requestedLabelSet || labelSets[0] || "Side + Lid" : "";
   const selectedSides = isJar ? "" : product.defaultSides || "Double Sided";
@@ -249,11 +286,12 @@ export async function loader({ request }: { request: Request }) {
       minQuantity,
       defaultSides: product.defaultSides || "Double Sided",
     },
-    options: { materials, finishes, bagColors, labelSets },
+    options: { materials, finishes, bagColors, jarColors, labelSets },
     selected: {
       material: selectedMaterial,
       finish: selectedFinish,
       bagColor: selectedBagColor,
+      jarColor: selectedJarColor,
       labelSet: selectedLabelSet,
       quantity,
       sides: selectedSides,

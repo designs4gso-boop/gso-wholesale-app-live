@@ -161,6 +161,24 @@ export default function ConfiguratorJarMapping() {
         <div className={actionData.ok ? "notice success" : "notice warning"}>{actionData.message}</div>
       ) : null}
 
+      <div className="card guidance">
+        <h2>Jar Color Mapping Notes</h2>
+        <ul>
+          <li>Miron jars do not use a customer-facing Jar Color option.</li>
+          <li>3oz and 4oz jars use Jar Color options: Clear, Black, White.</li>
+          <li>Clear maps to the clear ERP product type.</li>
+          <li>Black and White map to the black_white ERP product type.</li>
+          <li>
+            The same Shopify handle can be reused for 3oz Clear and 3oz Black/White mappings when the ERP titles are
+            unique.
+          </li>
+          <li>
+            The same Shopify handle can be reused for 4oz Clear and 4oz Black/White mappings when the ERP titles are
+            unique.
+          </li>
+        </ul>
+      </div>
+
       <div className="card">
         <h2>Create or Update Jar Mapping</h2>
         <Form method="post" className="form-grid">
@@ -346,6 +364,14 @@ button:disabled {
 .card h2 {
   margin: 0 0 14px;
   font-size: 20px;
+}
+.guidance ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #4a4f54;
+}
+.guidance li + li {
+  margin-top: 6px;
 }
 .form-grid {
   display: grid;
