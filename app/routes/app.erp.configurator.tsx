@@ -62,6 +62,17 @@ function uniqueValues(rows: any[], group: string) {
     .map((option) => option.value);
 }
 
+function coerceOption(requested: string, validOptions: string[], fallback: string, wasMissing = false) {
+  if (wasMissing) return validOptions[0] || fallback;
+  if (validOptions.includes(requested)) return requested;
+  return validOptions[0] || fallback;
+}
+
+function intFromText(value: string, fallback: number) {
+  const parsed = parseInt(String(value || ""), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function fallbackRangeIndex(qty: number) {
   return Math.max(
     QTY_RANGES.findIndex((range) => {
@@ -382,13 +393,18 @@ export async function loader({ request }: { request: Request }) {
   const defaultQty = defaultQtyForProduct(productType, profile);
 
   const selectedProduct = textParam(url, "product", PILOT_PRODUCTS[0]);
-  const material = textParam(url, "material", "Matte");
-  const finish = textParam(url, "finish", "No Spot Gloss");
-  const bagColor = textParam(url, "bagColor", "White");
-  const labelSet = textParam(url, "labelSet", "Side + Lid");
-  const qty = intParam(url, "qty", defaultQty);
+  const rawMaterial = url.searchParams.get("material");
+  const rawFinish = url.searchParams.get("finish");
+  const rawBagColor = url.searchParams.get("bagColor");
+  const rawLabelSet = url.searchParams.get("labelSet");
+  const rawQty = url.searchParams.get("qty");
+  const requestedMaterial = textParam(url, "material", "Matte");
+  const requestedFinish = textParam(url, "finish", "No Spot Gloss");
+  const requestedBagColor = textParam(url, "bagColor", "White");
+  const requestedLabelSet = textParam(url, "labelSet", "Side + Lid");
+  const requestedQty = intParam(url, "qty", defaultQty);
 
-  const [stockProducts, jarProfiles, options, pricingRules, result] = await Promise.all([
+  const [stockProducts, jarProfiles, options, pricingRules] = await Promise.all([
     db.configuratorProduct.findMany({
       where: { shop: session.shop, productType: STOCK_PRODUCT_TYPE, active: true },
       orderBy: [{ pilot: "desc" }, { title: "asc" }],
@@ -409,7 +425,6 @@ export async function loader({ request }: { request: Request }) {
       where: { shop: session.shop, productType, active: true },
       orderBy: [{ material: "asc" }, { finish: "asc" }, { minQty: "asc" }],
     }),
-    calculate(session.shop, productType, material, finish, qty, minQty),
   ]);
 
   const materialOptions = uniqueValues(options, "Material");
@@ -417,6 +432,28 @@ export async function loader({ request }: { request: Request }) {
   const bagColorOptions = uniqueValues(options, "Bag Color");
   const quantityOptions = uniqueValues(options, "Quantity");
   const labelSetOptions = uniqueValues(options, "Label Set");
+
+  const material = coerceOption(requestedMaterial, materialOptions, "Matte", !rawMaterial?.trim());
+  const finish = coerceOption(requestedFinish, finishOptions, "No Spot Gloss", !rawFinish?.trim());
+  const bagColor = safeFamily === "jars"
+    ? requestedBagColor
+    : coerceOption(requestedBagColor, bagColorOptions, "White", !rawBagColor?.trim());
+  const labelSet = coerceOption(requestedLabelSet, labelSetOptions, "Side + Lid", !rawLabelSet?.trim());
+  const jarQtyFallback = quantityOptions.length ? intFromText(quantityOptions[0], defaultQty) : defaultQty;
+  const jarRequestedQtyValid = Boolean(rawQty?.trim()) && quantityOptions.includes(String(requestedQty));
+  const jarQty = jarRequestedQtyValid ? requestedQty : jarQtyFallback;
+  const qty = Math.max(safeFamily === "jars" ? jarQty : requestedQty, minQty);
+  const selectionCorrected =
+    material !== requestedMaterial ||
+    finish !== requestedFinish ||
+    (safeFamily !== "jars" && bagColor !== requestedBagColor) ||
+    labelSet !== requestedLabelSet ||
+    qty !== requestedQty ||
+    (safeFamily === "jars" && !jarRequestedQtyValid);
+  const notice = selectionCorrected
+    ? "Some selections were adjusted to match available options for this product."
+    : "";
+  const result = await calculate(session.shop, productType, material, finish, qty, minQty);
   const rangeColumns = buildRangeColumns(pricingRules);
 
   return {
@@ -432,6 +469,7 @@ export async function loader({ request }: { request: Request }) {
     labelSet,
     qty,
     minQty,
+    notice,
     result,
     stockProducts,
     jarProfiles,
@@ -485,6 +523,10 @@ export default function GsoConfigurator() {
 
       {actionData?.message ? (
         <div className={actionData.ok ? "notice success" : "notice warning"}>{actionData.message}</div>
+      ) : null}
+
+      {data.notice ? (
+        <div className="notice warning">{data.notice}</div>
       ) : null}
 
       <div className="family-tabs">
