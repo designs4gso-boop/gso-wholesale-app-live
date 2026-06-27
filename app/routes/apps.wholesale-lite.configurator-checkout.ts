@@ -37,6 +37,14 @@ function numberValue(value: any, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function isJarProductType(productType: string): boolean {
+  return productType.startsWith("jar_");
+}
+
+function productFamilyForType(productType: string): "Jars" | "Stock Bags" {
+  return isJarProductType(productType) ? "Jars" : "Stock Bags";
+}
+
 function rangeLabel(rule: any) {
   if (!rule) return "";
   return rule.maxQty == null ? `${rule.minQty}+` : `${rule.minQty}-${rule.maxQty}`;
@@ -136,6 +144,7 @@ export async function action({ request }: { request: Request }) {
       const material = clean(rawItem.material);
       const finish = clean(rawItem.finish);
       const bagColor = clean(rawItem.bagColor);
+      const labelSet = clean(rawItem.labelSet || rawItem.label_set || rawItem.labelset);
       const productImageUrl = clean(rawItem.image || rawItem.productImageUrl || rawItem.imageUrl);
 
       if (!handle && !productGid) {
@@ -143,17 +152,6 @@ export async function action({ request }: { request: Request }) {
           {
             ok: false,
             error: "Missing product identifier on one cart item.",
-            item: rawItem,
-          },
-          { status: 400 },
-        );
-      }
-
-      if (!material || !finish || !bagColor) {
-        return jsonResponse(
-          {
-            ok: false,
-            error: "Missing material, finish, or bag color on one cart item.",
             item: rawItem,
           },
           { status: 400 },
@@ -189,8 +187,35 @@ export async function action({ request }: { request: Request }) {
       }
 
       const productType = product.productType || "stock_bag_4x5";
+      const isJar = isJarProductType(productType);
+      const productFamily = productFamilyForType(productType);
+      const selectedBagColor = isJar ? "" : bagColor;
+      const selectedLabelSet = isJar ? labelSet || "Side + Lid" : "";
+      const defaultSides = product.defaultSides || "Double Sided";
       const minQuantity = Number(product.minQuantity || MIN_QTY);
       const quantity = Math.max(numberValue(rawItem.quantity, minQuantity), minQuantity);
+
+      if (isJar) {
+        if (!material || !finish || !selectedLabelSet) {
+          return jsonResponse(
+            {
+              ok: false,
+              error: "Missing material, finish, or label set on one jar cart item.",
+              item: rawItem,
+            },
+            { status: 400 },
+          );
+        }
+      } else if (!material || !finish || !selectedBagColor) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "Missing material, finish, or bag color on one stock bag cart item.",
+            item: rawItem,
+          },
+          { status: 400 },
+        );
+      }
 
       productTypes.add(productType);
 
@@ -216,7 +241,8 @@ export async function action({ request }: { request: Request }) {
               handle,
               material,
               finish,
-              bagColor,
+              bagColor: selectedBagColor,
+              labelSet: selectedLabelSet,
               quantity,
             },
           },
@@ -239,7 +265,8 @@ export async function action({ request }: { request: Request }) {
               handle,
               material,
               finish,
-              bagColor,
+              bagColor: selectedBagColor,
+              labelSet: selectedLabelSet,
               quantity,
             },
           },
@@ -250,22 +277,31 @@ export async function action({ request }: { request: Request }) {
       cartTotal = money(cartTotal + orderTotal);
 
       const baseTitle = product.title || clean(rawItem.title) || "Configured Product";
-      const optionSummary = `${material} / ${finish} / ${bagColor}`;
+      const optionSummary = isJar
+        ? `${material} / ${finish} / ${selectedLabelSet}`
+        : `${material} / ${finish} / ${selectedBagColor}`;
       const lineTitle = `${baseTitle} - ${optionSummary}`;
+      const customAttributes = [
+        { key: "Product Family", value: productFamily },
+        { key: "Product Type", value: productType },
+        { key: "Material", value: material },
+        { key: "Finish", value: finish },
+        { key: "Production Finish", value: String(rule.productionFinish || finish) },
+        ...(isJar
+          ? [{ key: "Label Set", value: selectedLabelSet }]
+          : [
+              { key: "Bag Color", value: selectedBagColor },
+              { key: "Sides", value: String(defaultSides) },
+            ]),
+        { key: "_GSO Product Image", value: productImageUrl },
+      ];
 
       lineItems.push({
         title: lineTitle,
         sku: product.sku || "",
         quantity,
         originalUnitPrice: String(priceEach.toFixed(2)),
-        customAttributes: [
-          { key: "Material", value: material },
-          { key: "Finish", value: finish },
-          { key: "Production Finish", value: String(rule.productionFinish || finish) },
-          { key: "Bag Color", value: bagColor },
-          { key: "Sides", value: String(product.defaultSides || "Double Sided") },
-          { key: "_GSO Product Image", value: productImageUrl },
-        ],
+        customAttributes,
       });
 
       itemSummaries.push({
@@ -280,8 +316,9 @@ export async function action({ request }: { request: Request }) {
         selected: {
           material,
           finish,
-          bagColor,
-          sides: product.defaultSides || "Double Sided",
+          bagColor: selectedBagColor,
+          labelSet: selectedLabelSet,
+          sides: isJar ? "" : defaultSides,
         },
         pricing: {
           priceEach,
