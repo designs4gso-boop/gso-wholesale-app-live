@@ -67,6 +67,7 @@ export default function AppHome() {
               </InlineStack>
               <InlineStack gap="300" wrap>
                 <Button variant="primary" onClick={() => navigate("/app/erp/setup-wizard")}>Open Setup Wizard</Button>
+                <Button onClick={() => navigate("/app/erp/pricing-health")}>Pricing Health</Button>
                 <Button onClick={() => navigate("/app/erp/admin-settings")}>Admin Settings</Button>
                 <Button onClick={() => navigate("/app/erp/configurator-audit")}>Configurator Audit</Button>
               </InlineStack>
@@ -111,6 +112,7 @@ export default function AppHome() {
               <Button onClick={() => navigate("/app/erp/product-setup")}>Product Setup</Button>
               <Button onClick={() => navigate("/app/erp/shopify-links")}>Shopify Links</Button>
               <Button onClick={() => navigate("/app/erp/pricing-rules")}>Pricing Rules</Button>
+              <Button onClick={() => navigate("/app/erp/pricing-health")}>Pricing Health</Button>
               <Button onClick={() => navigate("/app/erp/materials")}>Materials</Button>
               <Button onClick={() => navigate("/app/erp/machines")}>Machines</Button>
               <Button onClick={() => navigate("/app/erp/vendors")}>Vendors</Button>

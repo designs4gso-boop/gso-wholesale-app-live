@@ -152,6 +152,7 @@ export async function loader({ request }: { request: Request }) {
       ],
       links: [
         { label: "Pricing Rules", url: "/app/erp/pricing-rules" },
+        { label: "Pricing Health", url: "/app/erp/pricing-health" },
         { label: "Margin Review", url: "/app/erp/margin-review" },
       ],
     },
@@ -200,6 +201,7 @@ export async function loader({ request }: { request: Request }) {
       counts: [`${priceApprovalRecords} price approval record(s)`, `${jobsWithActualCosts} job(s) with actual costs`],
       links: [
         { label: "Reports Dashboard", url: "/app/erp/reports-dashboard" },
+        { label: "Pricing Health", url: "/app/erp/pricing-health" },
         { label: "Margin Review", url: "/app/erp/margin-review" },
         { label: "Print Logs", url: "/app/erp/print-logs" },
         { label: "RIP Imports", url: "/app/erp/rip-imports" },

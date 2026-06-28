@@ -30,6 +30,7 @@ export default function App() {
         <s-link href="/app/erp/print-intake">Print Intake</s-link>
         <s-link href="/app/erp/cost-calculator">Cost Calculator</s-link>
         <s-link href="/app/erp/pricing-rules">Pricing Rules</s-link>
+        <s-link href="/app/erp/pricing-health">Pricing Health</s-link>
         <s-link href="/app/erp/configurator">Configurator</s-link>
         <s-link href="/app/erp/configurator-jar-mapping">Jar Mapping</s-link>
         <s-link href="/app/erp/configurator-sync">Configurator Sync</s-link>
