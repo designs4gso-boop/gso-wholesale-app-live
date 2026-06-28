@@ -21,6 +21,64 @@ function bestArtwork(job: any) {
   return job.artworkUrl || job.files?.find((file: any) => file.fileType === "artwork")?.fileUrl || "";
 }
 
+function parseJson(value: any) {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
+  }
+}
+
+function configFromItem(item: any) {
+  const selected = parseJson(item.selectedAddOns) || {};
+  const summary = String(item.materialSummary || item.productionNotes || "");
+  const variantParts = String(item.variantTitle || "")
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const productFamily = String(selected.productFamily || "");
+  const productType = String(selected.productType || "");
+  const isJar =
+    productFamily.toLowerCase() === "jars" ||
+    productType.startsWith("jar_") ||
+    String(item.sku || "").toUpperCase().startsWith("JAR-");
+
+  const summaryValue = (label: string) => {
+    const match = summary.match(new RegExp(`${label}:\\s*([^|\\n]+)`, "i"));
+    return match?.[1]?.trim() || "";
+  };
+
+  return {
+    isJar,
+    material: selected.material || summaryValue("Material") || variantParts[0] || "",
+    finish: selected.finish || summaryValue("Finish") || variantParts[1] || item.selectedFinish || "",
+    bagColor: selected.bagColor || summaryValue("Bag Color") || variantParts[2] || "",
+    sides: selected.sides || summaryValue("Sides") || "",
+    jarColor: selected.jarColor || summaryValue("Jar Color") || "",
+    labelSet: selected.labelSet || summaryValue("Label Set") || "",
+  };
+}
+
+function configRows(config: ReturnType<typeof configFromItem>) {
+  const rows = config.isJar
+    ? [
+        ["Material", config.material],
+        ["Finish", config.finish],
+        ["Jar Color", config.jarColor],
+        ["Label Set", config.labelSet],
+      ]
+    : [
+        ["Material", config.material],
+        ["Finish", config.finish],
+        ["Bag Color", config.bagColor],
+        ["Sides", config.sides],
+      ];
+
+  return rows.filter(([, value]) => value);
+}
+
 async function createEvent(shop: string, jobId: string, eventType: string, message: string) {
   return db.productionJobEvent.create({ data: { shop, jobId, eventType, message } });
 }
@@ -223,16 +281,23 @@ export default function StandardGsoProofSheet() {
               </tr>
             </thead>
             <tbody>
-              {(job.items || []).map((item: any) => (
-                <tr key={item.id}>
-                  <td>{item.itemTicket || "Not assigned"}<br /><small>{item.ripJobName || item.itemTicket || ""}</small></td>
-                  <td>{item.productTitle}<br /><small>{item.suggestedFileName || ""}</small></td>
-                  <td>{item.variantTitle || ""}<br />{item.sku || ""}</td>
-                  <td>{item.quantity}</td>
-                  <td>{item.selectedFinish || item.selectedAddOns || ""}</td>
-                  <td>{item.recipeName || item.recipeId || ""}</td>
-                </tr>
-              ))}
+              {(job.items || []).map((item: any) => {
+                const rows = configRows(configFromItem(item));
+                return (
+                  <tr key={item.id}>
+                    <td>{item.itemTicket || "Not assigned"}<br /><small>{item.ripJobName || item.itemTicket || ""}</small></td>
+                    <td>{item.productTitle}<br /><small>{item.suggestedFileName || ""}</small></td>
+                    <td>{item.variantTitle || ""}<br />{item.sku || ""}</td>
+                    <td>{item.quantity}</td>
+                    <td>
+                      {rows.length ? rows.map(([label, value]) => (
+                        <div key={label}><strong>{label}:</strong> {value}</div>
+                      )) : item.selectedFinish || ""}
+                    </td>
+                    <td>{item.recipeName || item.recipeId || ""}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
