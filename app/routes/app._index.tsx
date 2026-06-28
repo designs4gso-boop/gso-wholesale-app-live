@@ -92,6 +92,7 @@ export default function AppHome() {
 
               <InlineStack gap="300" wrap>
                 <Button variant="primary" onClick={() => navigate("/app/erp/product-setup")}>1. Product Setup</Button>
+                <Button onClick={() => navigate("/app/erp/products/new")}>Add Product Plan</Button>
                 <Button onClick={() => navigate("/app/erp/shopify-links")}>2. Shopify Links</Button>
                 <Button onClick={() => navigate("/app/erp/configurator")}>3. Configurator</Button>
                 <Button onClick={() => navigate("/app/quotes")}>4. Quotes / CRM</Button>
@@ -109,6 +110,7 @@ export default function AppHome() {
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">Admin setup pages</Text>
+              <Button variant="primary" onClick={() => navigate("/app/erp/products/new")}>Add Product / Product Builder</Button>
               <Button onClick={() => navigate("/app/erp/product-setup")}>Product Setup</Button>
               <Button onClick={() => navigate("/app/erp/shopify-links")}>Shopify Links</Button>
               <Button onClick={() => navigate("/app/erp/pricing-rules")}>Pricing Rules</Button>

@@ -139,7 +139,10 @@ export async function loader({ request }: { request: Request }) {
       status: productTypeProfiles > 0 && productRecipes > 0 ? "Ready" : "Needs review",
       explanation: "Product profiles and recipes define what can be priced, quoted, and produced.",
       counts: [`${productTypeProfiles} active profile(s)`, `${productRecipes} active recipe(s)`],
-      links: [{ label: "Product Setup", url: "/app/erp/product-setup" }],
+      links: [
+        { label: "Product Builder", url: "/app/erp/products/new" },
+        { label: "Product Setup", url: "/app/erp/product-setup" },
+      ],
     },
     {
       name: "Pricing Rules",

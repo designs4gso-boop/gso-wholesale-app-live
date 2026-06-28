@@ -409,12 +409,14 @@ export default function PricingHealth() {
   const filtered = data.filteredConfiguratorRows !== data.totalConfiguratorRows || data.filters.q;
 
   const configuratorFixLinks = [
+    { label: "Product Builder", url: "/app/erp/products/new" },
     { label: "Configurator", url: "/app/erp/configurator" },
     { label: "Manual Mapping", url: "/app/erp/configurator-mapping" },
     { label: "Jar Mapping", url: "/app/erp/configurator-jar-mapping" },
     { label: "Shopify Links", url: "/app/erp/shopify-links" },
   ];
   const recipeFixLinks = [
+    { label: "Product Builder", url: "/app/erp/products/new" },
     { label: "Product Setup", url: "/app/erp/product-setup" },
     { label: "Materials", url: "/app/erp/materials" },
     { label: "Vendors", url: "/app/erp/vendors" },

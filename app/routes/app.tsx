@@ -36,6 +36,7 @@ export default function App() {
         <s-link href="/app/erp/configurator-sync">Configurator Sync</s-link>
         <s-link href="/app/erp/configurator-mapping">Manual Mapping</s-link>
         <s-link href="/app/erp/configurator-audit">Configurator Audit</s-link>
+        <s-link href="/app/erp/products/new">Add Product</s-link>
         <s-link href="/app/erp/product-setup">Product Setup</s-link>
         <s-link href="/app/erp/shopify-links">Shopify Links</s-link>
         <s-link href="/app/erp/materials">Materials</s-link>
