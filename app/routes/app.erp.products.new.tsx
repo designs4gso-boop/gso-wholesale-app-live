@@ -9,19 +9,43 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
+import { useState } from "react";
 import { Form, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
 const FAMILIES = [
-  { label: "Stock Bags", value: "stock-bags" },
-  { label: "Jars", value: "jars" },
-  { label: "Labels", value: "labels" },
-  { label: "Boxes", value: "boxes" },
-  { label: "DTP Pouches", value: "dtp-pouches" },
-  { label: "Apparel", value: "apparel" },
-  { label: "Other", value: "other" },
+  { label: "Blank Jars", value: "blank-jars" },
+  { label: "Stickers & Labels", value: "stickers-labels" },
+  { label: "Banners", value: "banners" },
+  { label: "Other / Future", value: "other-future" },
 ];
+
+const SUBTYPES: Record<string, { label: string; value: string }[]> = {
+  "blank-jars": [
+    { label: "50ml Miron Jars", value: "50ml-miron-jars" },
+    { label: "100ml Tall Miron Jars", value: "100ml-tall-miron-jars" },
+    { label: "100ml Wide Miron Jars", value: "100ml-wide-miron-jars" },
+    { label: "150ml Miron Jars", value: "150ml-miron-jars" },
+    { label: "250ml Miron Jars", value: "250ml-miron-jars" },
+    { label: "3oz Jars", value: "3oz-jars" },
+    { label: "4oz Jars", value: "4oz-jars" },
+  ],
+  "stickers-labels": [
+    { label: "Die Cut Stickers", value: "die-cut-stickers" },
+    { label: "Normal Stickers", value: "normal-stickers" },
+    { label: "Roll Labels", value: "roll-labels" },
+    { label: "Sheet Labels", value: "sheet-labels" },
+  ],
+  banners: [
+    { label: "Standard Banners", value: "standard-banners" },
+    { label: "Custom Size Banners", value: "custom-size-banners" },
+    { label: "Outdoor Banners", value: "outdoor-banners" },
+  ],
+  "other-future": [
+    { label: "Future Product", value: "future-product" },
+  ],
+};
 
 const PRICING_MODES = [
   { label: "Storefront configurator", value: "storefront-configurator" },
@@ -60,7 +84,15 @@ function normalizeGid(value: string) {
 }
 
 function familyLabel(value: string) {
-  return FAMILIES.find((family) => family.value === value)?.label || "Other";
+  return FAMILIES.find((family) => family.value === value)?.label || "Other / Future";
+}
+
+function subtypeOptions(family: string) {
+  return SUBTYPES[family] || SUBTYPES["other-future"];
+}
+
+function subtypeLabel(family: string, value: string) {
+  return subtypeOptions(family).find((subtype) => subtype.value === value)?.label || "Not selected";
 }
 
 function parseTiers(value: string) {
@@ -71,22 +103,32 @@ function parseTiers(value: string) {
     .sort((a, b) => a - b);
 }
 
-function isStorefrontFamily(family: string) {
-  return family === "stock-bags" || family === "jars";
-}
-
 function recommendedAuthority(family: string, pricingMode: string) {
-  if (isStorefrontFamily(family) && pricingMode === "storefront-configurator") {
+  if (family === "blank-jars") {
+    if (pricingMode === "storefront-configurator") {
+      return {
+        label: "ProductRecipe / vendor cost tiers first; storefront configurator later if intentionally enabled",
+        reason: "Blank jars should be costed from vendor/source tiers first. Storefront configurator records should only be added when the product is ready for customer ordering.",
+      };
+    }
+
     return {
-      label: "ConfiguratorProduct + ConfiguratorOption + ConfiguratorPricingRule",
-      reason: "Stock bag and jar storefront pricing is controlled by configurator records before checkout.",
+      label: "ProductRecipe + vendor/source cost tiers",
+      reason: "Blank jar pricing should start from jar vendor cost, packout, handling, quantity tiers, and target margin.",
     };
   }
 
-  if (pricingMode === "erp-recipe" || ["labels", "boxes", "dtp-pouches", "apparel"].includes(family)) {
+  if (family === "stickers-labels") {
     return {
-      label: "ProductRecipe + RecipeTier + cost inputs",
-      reason: "ERP/quote products use recipe tiers, materials, vendor costs, and margin review.",
+      label: "ProductRecipe + material/machine/cutting/labor cost",
+      reason: "Sticker and label pricing should be built from size, material, ink, finish, cutting time, setup, waste, packout, and margin.",
+    };
+  }
+
+  if (family === "banners") {
+    return {
+      label: "ProductRecipe + sqft material/machine/finishing cost",
+      reason: "Banner pricing should be built from square footage, banner material, ink, machine time, hem/grommet finishing, setup, waste, packout, and margin.",
     };
   }
 
@@ -98,8 +140,8 @@ function recommendedAuthority(family: string, pricingMode: string) {
   }
 
   return {
-    label: "Choose pricing mode to determine authority",
-    reason: "Select storefront configurator, ERP recipe, or wholesale display before creating records.",
+    label: "Setup plan only",
+    reason: "Choose a supported family and pricing mode before creating ERP or Shopify records.",
   };
 }
 
@@ -131,13 +173,90 @@ function inputStyle() {
   return { minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 };
 }
 
+function familyFields(family: string) {
+  if (family === "stickers-labels") {
+    return {
+      widthLabel: "Width inches",
+      heightLabel: "Height inches",
+      materialLabel: "Material",
+      finishLabel: "Finish",
+      extraLabel: "Cut type",
+      extraName: "cutType",
+      extraPlaceholder: "Die cut, kiss cut, square cut",
+    };
+  }
+
+  if (family === "banners") {
+    return {
+      widthLabel: "Width feet",
+      heightLabel: "Height feet",
+      materialLabel: "Material",
+      finishLabel: "Finishing",
+      extraLabel: "Indoor / outdoor",
+      extraName: "environment",
+      extraPlaceholder: "Indoor, outdoor, outdoor heavy duty",
+    };
+  }
+
+  if (family === "blank-jars") {
+    return {
+      widthLabel: "Width",
+      heightLabel: "Height",
+      materialLabel: "Jar size / type",
+      finishLabel: "Vendor / source cost mode",
+      extraLabel: "Jar color if applicable",
+      extraName: "jarColor",
+      extraPlaceholder: "Clear, Black, White, or Miron",
+    };
+  }
+
+  return {
+    widthLabel: "Width",
+    heightLabel: "Height",
+    materialLabel: "Material",
+    finishLabel: "Finish",
+    extraLabel: "Planning detail",
+    extraName: "cutType",
+    extraPlaceholder: "Optional planning detail",
+  };
+}
+
+function costGuidance(family: string) {
+  if (family === "stickers-labels") {
+    return {
+      title: "Sticker Cost Model",
+      items: ["material sqft/in2", "ink", "laminate/finish", "cutting time", "setup/prepress", "waste", "packout", "margin/markup"],
+    };
+  }
+
+  if (family === "banners") {
+    return {
+      title: "Banner Cost Model",
+      items: ["banner material sqft", "ink sqft", "machine time", "hem/grommet finishing", "setup/prepress", "waste", "packout", "margin/markup"],
+    };
+  }
+
+  if (family === "blank-jars") {
+    return {
+      title: "Blank Jar Cost Model",
+      items: ["jar vendor cost", "packout/supplies", "handling/labor if needed", "target margin/markup", "quantity tiers"],
+    };
+  }
+
+  return {
+    title: "Future Product Cost Model",
+    items: ["product family", "cost source", "quantity tiers", "margin/markup", "manual setup review"],
+  };
+}
+
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const url = new URL(request.url);
 
   const params = {
-    family: safeChoice(clean(url.searchParams.get("family"), "stock-bags"), FAMILIES, "stock-bags"),
+    family: safeChoice(clean(url.searchParams.get("family"), "blank-jars"), FAMILIES, "blank-jars"),
+    subtype: "",
     title: clean(url.searchParams.get("title")),
     productType: clean(url.searchParams.get("productType")),
     sku: clean(url.searchParams.get("sku")),
@@ -148,7 +267,16 @@ export async function loader({ request }: { request: Request }) {
     targetMargin: clean(url.searchParams.get("targetMargin")),
     markup: clean(url.searchParams.get("markup")),
     tiers: clean(url.searchParams.get("tiers")),
+    width: clean(url.searchParams.get("width")),
+    height: clean(url.searchParams.get("height")),
+    material: clean(url.searchParams.get("material")),
+    finish: clean(url.searchParams.get("finish")),
+    cutType: clean(url.searchParams.get("cutType")),
+    finishing: clean(url.searchParams.get("finishing")),
+    environment: clean(url.searchParams.get("environment")),
+    jarColor: clean(url.searchParams.get("jarColor")),
   };
+  params.subtype = safeChoice(clean(url.searchParams.get("subtype"), subtypeOptions(params.family)[0]?.value || ""), subtypeOptions(params.family), subtypeOptions(params.family)[0]?.value || "");
 
   const shopifyProductGid = normalizeGid(params.shopifyHandle);
   const tiers = parseTiers(params.tiers);
@@ -207,7 +335,10 @@ export async function loader({ request }: { request: Request }) {
   const authority = recommendedAuthority(params.family, params.pricingMode);
   const isStorefront = params.pricingMode === "storefront-configurator";
   const warnings = [
-    params.costSource === "unknown" ? "Select a cost source before creating pricing." : null,
+    params.costSource === "unknown" && params.family !== "blank-jars" ? "Select a cost source before creating pricing." : null,
+    params.family === "stickers-labels" && (!parseNumber(params.width) || !parseNumber(params.height)) ? "Sticker and label products need width and height in inches for cost planning." : null,
+    params.family === "banners" && (!parseNumber(params.width) || !parseNumber(params.height)) ? "Banner products need width and height in feet so square-foot cost can be planned." : null,
+    params.family === "blank-jars" && params.costSource === "unknown" ? "Blank jars need a vendor/source cost mode before pricing." : null,
     !params.targetMargin && !params.markup ? "Add target margin or markup before setting sell prices." : null,
     !tiers.length ? "Add quantity tiers before building tiered pricing." : null,
     !parseNumber(params.moq) ? "Add MOQ/default quantity." : null,
@@ -270,7 +401,12 @@ export default function ProductBuilderPlan() {
   const data = useLoaderData<typeof loader>();
   const { params } = data;
   const isStorefront = data.params.pricingMode === "storefront-configurator";
-  const requiredRecords = isStorefront
+  const useConfiguratorRecords = isStorefront && params.family !== "blank-jars";
+  const [formFamily, setFormFamily] = useState(params.family);
+  const [formSubtype, setFormSubtype] = useState(params.subtype);
+  const dynamicFields = familyFields(formFamily);
+  const guidance = costGuidance(formFamily);
+  const requiredRecords = useConfiguratorRecords
     ? [
         "ProductTypeProfile if a new product type is needed",
         "ConfiguratorProduct",
@@ -311,6 +447,9 @@ export default function ProductBuilderPlan() {
               <Text as="p" tone="subdued">
                 This page is read-only. It creates a setup plan and duplicate checks before any ERP or Shopify records are created.
               </Text>
+              <Text as="p" tone="subdued">
+                4x5 stock bags and other packaging products are already handled separately. This builder scope is currently limited to blank jars, stickers/labels, and banners.
+              </Text>
               <InlineStack gap="200" wrap>
                 <Badge tone="success">No writes</Badge>
                 <Badge tone="success">No Shopify Admin calls</Badge>
@@ -328,8 +467,22 @@ export default function ProductBuilderPlan() {
               <Form method="get">
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
                   <Field label="Product family">
-                    <select name="family" defaultValue={params.family} style={inputStyle()}>
+                    <select
+                      name="family"
+                      value={formFamily}
+                      onChange={(event) => {
+                        const nextFamily = event.currentTarget.value;
+                        setFormFamily(nextFamily);
+                        setFormSubtype(subtypeOptions(nextFamily)[0]?.value || "");
+                      }}
+                      style={inputStyle()}
+                    >
                       {FAMILIES.map((family) => <option key={family.value} value={family.value}>{family.label}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Product subtype">
+                    <select name="subtype" value={formSubtype} onChange={(event) => setFormSubtype(event.currentTarget.value)} style={inputStyle()}>
+                      {subtypeOptions(formFamily).map((subtype) => <option key={subtype.value} value={subtype.value}>{subtype.label}</option>)}
                     </select>
                   </Field>
                   <Field label="Product title">
@@ -366,6 +519,25 @@ export default function ProductBuilderPlan() {
                   <Field label="Quantity tiers">
                     <input name="tiers" defaultValue={params.tiers} placeholder="64,128,256,640,1280" style={inputStyle()} />
                   </Field>
+                  {formFamily !== "blank-jars" ? (
+                    <>
+                      <Field label={dynamicFields.widthLabel}>
+                        <input name="width" type="number" step="0.01" min="0" defaultValue={params.width} placeholder={formFamily === "banners" ? "3" : "2"} style={inputStyle()} />
+                      </Field>
+                      <Field label={dynamicFields.heightLabel}>
+                        <input name="height" type="number" step="0.01" min="0" defaultValue={params.height} placeholder={formFamily === "banners" ? "8" : "3"} style={inputStyle()} />
+                      </Field>
+                    </>
+                  ) : null}
+                  <Field label={dynamicFields.materialLabel}>
+                    <input name="material" defaultValue={params.material} placeholder={formFamily === "blank-jars" ? "100ml Tall Miron" : "Vinyl, BOPP, banner vinyl"} style={inputStyle()} />
+                  </Field>
+                  <Field label={dynamicFields.finishLabel}>
+                    <input name={formFamily === "banners" ? "finishing" : "finish"} defaultValue={formFamily === "banners" ? params.finishing : params.finish} placeholder={formFamily === "banners" ? "Hem + grommets" : "Matte, gloss, laminate"} style={inputStyle()} />
+                  </Field>
+                  <Field label={dynamicFields.extraLabel}>
+                    <input name={dynamicFields.extraName} defaultValue={(params as any)[dynamicFields.extraName] || ""} placeholder={dynamicFields.extraPlaceholder} style={inputStyle()} />
+                  </Field>
                   <div style={{ display: "flex", alignItems: "end", gap: 8 }}>
                     <Button submit variant="primary">Preview Plan</Button>
                     <Button url="/app/erp/products/new">Clear</Button>
@@ -389,6 +561,7 @@ export default function ProductBuilderPlan() {
               <Text as="p"><strong>Product type key:</strong> {params.productType || "Not entered"}</Text>
               <Text as="p"><strong>SKU:</strong> {params.sku || "Not entered"}</Text>
               <Text as="p"><strong>Family:</strong> {familyLabel(params.family)}</Text>
+              <Text as="p"><strong>Subtype:</strong> {subtypeLabel(params.family, params.subtype)}</Text>
               <Divider />
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16 }}>
                 <DuplicateList title="ProductTypeProfile" rows={data.duplicates.profiles} render={(row) => `${row.key} - ${row.name} (${row.active ? "active" : "inactive"})`} />
@@ -434,7 +607,21 @@ export default function ProductBuilderPlan() {
                 <Badge>Markup: {params.markup || "Not set"}</Badge>
                 <Badge>MOQ: {params.moq || "Not set"}</Badge>
               </InlineStack>
+              <InlineStack gap="200" wrap>
+                {params.family !== "blank-jars" ? <Badge>Size: {params.width || "?"} x {params.height || "?"} {params.family === "banners" ? "ft" : "in"}</Badge> : null}
+                <Badge>Material/type: {params.material || "Not set"}</Badge>
+                <Badge>Finish: {params.family === "banners" ? params.finishing || "Not set" : params.finish || "Not set"}</Badge>
+                {params.cutType ? <Badge>Cut: {params.cutType}</Badge> : null}
+                {params.environment ? <Badge>Use: {params.environment}</Badge> : null}
+                {params.jarColor ? <Badge>Jar color: {params.jarColor}</Badge> : null}
+              </InlineStack>
               <Text as="p"><strong>Quantity tiers:</strong> {data.tiers.length ? data.tiers.join(", ") : "None parsed"}</Text>
+              <BlockStack gap="200">
+                <Text as="h3" variant="headingSm">{guidance.title}</Text>
+                <InlineStack gap="200" wrap>
+                  {guidance.items.map((item) => <Badge key={item}>{item}</Badge>)}
+                </InlineStack>
+              </BlockStack>
               {data.warnings.length ? (
                 <BlockStack gap="100">
                   <Text as="h3" variant="headingSm">Warnings</Text>
