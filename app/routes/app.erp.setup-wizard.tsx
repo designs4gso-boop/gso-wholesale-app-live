@@ -33,6 +33,28 @@ function isReady(status: Status) {
   return status === "Ready";
 }
 
+function reportingStatus(priceApprovalRecords: number, jobsWithActualCosts: number, productionJobs: number): Status {
+  if (jobsWithActualCosts > 0) return "Ready";
+  if (priceApprovalRecords > 0 || productionJobs > 0) return "Partial";
+  return "Needs review";
+}
+
+function reportingExplanation(priceApprovalRecords: number, jobsWithActualCosts: number) {
+  if (priceApprovalRecords > 0 && jobsWithActualCosts === 0) {
+    return "Margin review records exist, but actual-cost reporting needs completed jobs with logged actual costs.";
+  }
+
+  return "Reports become more useful once jobs have actual costs or margin review records.";
+}
+
+function suggestedNextAction(nextStep: Step | null) {
+  if (!nextStep) return "All core setup sections look ready for final launch review.";
+  if (nextStep.name === "Reporting & Margin Review" && nextStep.status === "Partial") {
+    return "Storefront and production setup look ready. Next, log actual production costs or import print logs so reporting can validate real margins.";
+  }
+  return `Review ${nextStep.name}`;
+}
+
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
@@ -173,22 +195,26 @@ export async function loader({ request }: { request: Request }) {
     },
     {
       name: "Reporting & Margin Review",
-      status: jobsWithActualCosts > 0 || priceApprovalRecords > 0 ? "Ready" : productionJobs > 0 ? "Partial" : "Needs review",
-      explanation: "Reports become more useful once jobs have actual costs or margin review records.",
+      status: reportingStatus(priceApprovalRecords, jobsWithActualCosts, productionJobs),
+      explanation: reportingExplanation(priceApprovalRecords, jobsWithActualCosts),
       counts: [`${priceApprovalRecords} price approval record(s)`, `${jobsWithActualCosts} job(s) with actual costs`],
       links: [
         { label: "Reports Dashboard", url: "/app/erp/reports-dashboard" },
         { label: "Margin Review", url: "/app/erp/margin-review" },
+        { label: "Print Logs", url: "/app/erp/print-logs" },
+        { label: "RIP Imports", url: "/app/erp/rip-imports" },
       ],
     },
   ];
 
   const readySteps = steps.filter((step) => isReady(step.status)).length;
+  const partialSteps = steps.filter((step) => step.status === "Partial").length;
   const progress = Math.round((readySteps / steps.length) * 100);
   const needsReviewSteps = steps.length - readySteps;
   const nextStep = steps.find((step) => !isReady(step.status)) || null;
+  const nextAction = suggestedNextAction(nextStep);
 
-  return Response.json({ shop, steps, readySteps, needsReviewSteps, progress, nextStep });
+  return Response.json({ shop, steps, readySteps, partialSteps, needsReviewSteps, progress, nextStep, nextAction });
 }
 
 function StepCard({ step }: { step: Step }) {
@@ -262,13 +288,19 @@ export default function SetupWizard() {
                   <Text as="p" tone="subdued">Needs review</Text>
                   <Text as="p" variant="heading2xl">{data.needsReviewSteps}</Text>
                 </BlockStack>
+                <BlockStack gap="100">
+                  <Text as="p" tone="subdued">Partial</Text>
+                  <Text as="p" variant="heading2xl">{data.partialSteps}</Text>
+                </BlockStack>
               </InlineStack>
               <div style={{ height: 10, borderRadius: 999, background: "#e5e7eb", overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${data.progress}%`, background: "#008060" }} />
               </div>
               <Text as="p">
-                Suggested next action:{" "}
-                <strong>{data.nextStep ? `Review ${data.nextStep.name}` : "All core setup sections look ready for launch review."}</strong>
+                Suggested next action: <strong>{data.nextAction}</strong>
+              </Text>
+              <Text as="p" tone="subdued">
+                This wizard is read-only. It checks setup records and guides next steps; it does not change pricing, products, or production data.
               </Text>
             </BlockStack>
           </Card>
