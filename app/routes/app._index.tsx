@@ -55,6 +55,27 @@ export default function AppHome() {
       <Layout>
         <Layout.Section>
           <Card>
+            <BlockStack gap="300">
+              <InlineStack align="space-between" blockAlign="center">
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingMd">Setup Wizard / System Readiness</Text>
+                  <Text as="p" tone="subdued">
+                    Check existing ERP setup records and jump to the next setup area without changing data.
+                  </Text>
+                </BlockStack>
+                <Badge tone="attention">Read-only</Badge>
+              </InlineStack>
+              <InlineStack gap="300" wrap>
+                <Button variant="primary" onClick={() => navigate("/app/erp/setup-wizard")}>Open Setup Wizard</Button>
+                <Button onClick={() => navigate("/app/erp/admin-settings")}>Admin Settings</Button>
+                <Button onClick={() => navigate("/app/erp/configurator-audit")}>Configurator Audit</Button>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
                 <BlockStack gap="100">
