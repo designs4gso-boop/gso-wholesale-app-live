@@ -534,6 +534,13 @@ export default function GsoConfigurator() {
         <Link className={data.productFamily === "jars" ? "active" : ""} to="/app/erp/configurator?productFamily=jars">Jars</Link>
       </div>
 
+      <div className="family-tabs">
+        <Link to="/app/erp/configurator-jar-mapping">Jar Mapping</Link>
+        <Link to="/app/erp/configurator-sync">Sync</Link>
+        <Link to="/app/erp/configurator-mapping">Manual Mapping</Link>
+        <Link to="/app/erp/configurator-audit">Audit</Link>
+      </div>
+
       <div className="grid three">
         <div className="card stat">
           <span>{isJar ? "Jar Profiles" : "Configurator Products"}</span>
