@@ -9,11 +9,13 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
-import { useLoaderData, useNavigate } from "react-router";
+import { Form, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
 type Health = "Healthy" | "Missing pricing" | "Missing costs" | "Missing mapping" | "Needs review" | "Partial";
+type HealthFilter = "all" | "healthy" | "missing-pricing" | "missing-costs" | "missing-mapping" | "partial";
+type FamilyFilter = "all" | "jars" | "stock-bags" | "other";
 
 function pct(value: any) {
   return `${Number(value || 0).toFixed(1)}%`;
@@ -25,10 +27,43 @@ function healthTone(health: Health) {
   return "warning";
 }
 
+function healthFromFilter(filter: HealthFilter): Health | null {
+  if (filter === "healthy") return "Healthy";
+  if (filter === "missing-pricing") return "Missing pricing";
+  if (filter === "missing-costs") return "Missing costs";
+  if (filter === "missing-mapping") return "Missing mapping";
+  if (filter === "partial") return "Partial";
+  return null;
+}
+
 function familyForProductType(productType: string) {
   if (productType.startsWith("jar_")) return "Jars";
   if (productType.startsWith("stock_bag")) return "Stock Bags";
   return "Configurator";
+}
+
+function matchesFamily(row: any, family: FamilyFilter) {
+  const productType = String(row.productType || "").toLowerCase();
+  const productFamily = String(row.productFamily || "").toLowerCase();
+  const isJar = productType.includes("jar") || productFamily.includes("jar");
+  const isStockBag = productType.includes("stock_bag") || productFamily.includes("stock bag");
+
+  if (family === "jars") return isJar;
+  if (family === "stock-bags") return isStockBag;
+  if (family === "other") return !isJar && !isStockBag;
+  return true;
+}
+
+function safeHealthFilter(value: string | null): HealthFilter {
+  if (["healthy", "missing-pricing", "missing-costs", "missing-mapping", "partial"].includes(value || "")) {
+    return value as HealthFilter;
+  }
+  return "all";
+}
+
+function safeFamilyFilter(value: string | null): FamilyFilter {
+  if (["jars", "stock-bags", "other"].includes(value || "")) return value as FamilyFilter;
+  return "all";
 }
 
 function authorityForRecipe(recipe: any) {
@@ -95,6 +130,12 @@ function minRuleQty(rules: any[], fallback: number) {
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+  const url = new URL(request.url);
+  const filters = {
+    q: (url.searchParams.get("q") || "").trim(),
+    health: safeHealthFilter(url.searchParams.get("health")),
+    family: safeFamilyFilter(url.searchParams.get("family")),
+  };
 
   const [
     allConfiguratorProducts,
@@ -192,7 +233,7 @@ export async function loader({ request }: { request: Request }) {
     optionsByType.set(option.productType, (optionsByType.get(option.productType) || 0) + 1);
   }
 
-  const configuratorRows = allConfiguratorProducts.slice(0, 100).map((product) => {
+  const allConfiguratorRows = allConfiguratorProducts.map((product) => {
     const rules = rulesByType.get(product.productType) || [];
     const optionCount = optionsByType.get(product.productType) || 0;
     return {
@@ -209,6 +250,17 @@ export async function loader({ request }: { request: Request }) {
       health: configHealth(product, optionCount, rules),
     };
   });
+  const selectedHealth = healthFromFilter(filters.health);
+  const q = filters.q.toLowerCase();
+  const filteredConfiguratorRows = allConfiguratorRows.filter((row) => {
+    const matchesSearch =
+      !q ||
+      row.title.toLowerCase().includes(q) ||
+      row.productType.toLowerCase().includes(q) ||
+      row.productFamily.toLowerCase().includes(q);
+    return matchesSearch && matchesFamily(row, filters.family) && (!selectedHealth || row.health === selectedHealth);
+  });
+  const configuratorRows = filteredConfiguratorRows.slice(0, 100);
 
   const missingConfiguratorPricing = allConfiguratorProducts.filter((product) => !(rulesByType.get(product.productType) || []).length).length;
   const recipeRows = activeRecipes.map((recipe) => ({
@@ -238,7 +290,15 @@ export async function loader({ request }: { request: Request }) {
     jobsWithActualCosts,
   };
 
-  return Response.json({ shop, summary, configuratorRows, recipeRows });
+  return Response.json({
+    shop,
+    summary,
+    filters,
+    totalConfiguratorRows: allConfiguratorRows.length,
+    filteredConfiguratorRows: filteredConfiguratorRows.length,
+    configuratorRows,
+    recipeRows,
+  });
 }
 
 function SummaryCard({ label, value, help }: { label: string; value: string | number; help: string }) {
@@ -266,12 +326,24 @@ function FixLinks({ links }: { links: { label: string; url: string }[] }) {
   );
 }
 
+function FilterLink({ label, params }: { label: string; params: Record<string, string> }) {
+  const navigate = useNavigate();
+  return (
+    <Button size="slim" onClick={() => navigate(`/app/erp/pricing-health?${new URLSearchParams(params).toString()}`)}>
+      {label}
+    </Button>
+  );
+}
+
 const cellStyle = { padding: 10, borderBottom: "1px solid #e5e7eb", verticalAlign: "top" as const };
 const headerStyle = { ...cellStyle, background: "#f6f6f7", fontWeight: 700 };
+const productCellStyle = { ...cellStyle, minWidth: 260 };
+const actionCellStyle = { ...cellStyle, minWidth: 230 };
 
 export default function PricingHealth() {
   const data = useLoaderData<typeof loader>();
   const summary = data.summary;
+  const filtered = data.filteredConfiguratorRows !== data.totalConfiguratorRows || data.filters.q;
 
   const configuratorFixLinks = [
     { label: "Configurator", url: "/app/erp/configurator" },
@@ -345,29 +417,78 @@ export default function PricingHealth() {
           <Card>
             <BlockStack gap="300">
               <InlineStack align="space-between" blockAlign="center">
-                <Text as="h2" variant="headingMd">Configurator Product Health</Text>
-                <Badge>Showing first {data.configuratorRows.length}</Badge>
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingMd">Configurator Product Health</Text>
+                  <Text as="p" tone="subdued">
+                    Showing {data.configuratorRows.length} of {data.totalConfiguratorRows} configurator products
+                    {filtered ? " matching current filters" : ""}
+                  </Text>
+                </BlockStack>
+                <Badge>{data.filteredConfiguratorRows} match(es)</Badge>
               </InlineStack>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
+              <Form method="get">
+                <BlockStack gap="300">
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 2fr) minmax(180px, 1fr) minmax(180px, 1fr) auto", gap: 12, alignItems: "end" }}>
+                    <label style={{ display: "grid", gap: 6 }}>
+                      <Text as="span" tone="subdued">Search</Text>
+                      <input
+                        name="q"
+                        defaultValue={data.filters.q}
+                        placeholder="Title, product type, or family"
+                        style={{ minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 }}
+                      />
+                    </label>
+                    <label style={{ display: "grid", gap: 6 }}>
+                      <Text as="span" tone="subdued">Health</Text>
+                      <select name="health" defaultValue={data.filters.health} style={{ minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 }}>
+                        <option value="all">All</option>
+                        <option value="healthy">Healthy</option>
+                        <option value="missing-pricing">Missing pricing</option>
+                        <option value="missing-costs">Missing costs</option>
+                        <option value="missing-mapping">Missing mapping</option>
+                        <option value="partial">Partial</option>
+                      </select>
+                    </label>
+                    <label style={{ display: "grid", gap: 6 }}>
+                      <Text as="span" tone="subdued">Family</Text>
+                      <select name="family" defaultValue={data.filters.family} style={{ minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 }}>
+                        <option value="all">All</option>
+                        <option value="jars">Jars</option>
+                        <option value="stock-bags">Stock Bags</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </label>
+                    <Button submit variant="primary">Apply</Button>
+                  </div>
+                  <InlineStack gap="100" wrap>
+                    <FilterLink label="All" params={{ health: "all", family: "all" }} />
+                    <FilterLink label="Healthy" params={{ health: "healthy", family: "all" }} />
+                    <FilterLink label="Needs Review" params={{ health: "partial", family: "all" }} />
+                    <FilterLink label="Jars" params={{ health: "all", family: "jars" }} />
+                    <FilterLink label="Stock Bags" params={{ health: "all", family: "stock-bags" }} />
+                  </InlineStack>
+                </BlockStack>
+              </Form>
+              <div style={{ overflowX: "auto", paddingBottom: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1320, tableLayout: "fixed" }}>
                   <thead>
                     <tr>
-                      <th style={headerStyle}>Product</th>
-                      <th style={headerStyle}>Type / Family</th>
+                      <th style={{ ...headerStyle, width: 280 }}>Product</th>
+                      <th style={{ ...headerStyle, width: 180 }}>Type / Family</th>
                       <th style={headerStyle}>Mapping</th>
                       <th style={headerStyle}>Options</th>
                       <th style={headerStyle}>Pricing rules</th>
                       <th style={headerStyle}>Min qty</th>
                       <th style={headerStyle}>Cost source</th>
                       <th style={headerStyle}>Est. margin</th>
-                      <th style={headerStyle}>Health</th>
-                      <th style={headerStyle}>Fix links</th>
+                      <th style={{ ...headerStyle, width: 130 }}>Health</th>
+                      <th style={{ ...headerStyle, width: 240 }}>Fix links</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.configuratorRows.map((row: any) => (
                       <tr key={row.id}>
-                        <td style={cellStyle}><strong>{row.title}</strong></td>
+                        <td style={productCellStyle}><strong>{row.title}</strong></td>
                         <td style={cellStyle}>{row.productType}<br /><Text as="span" tone="subdued">{row.productFamily}</Text></td>
                         <td style={cellStyle}>{row.mappingLabel}</td>
                         <td style={cellStyle}>{row.optionCount}</td>
@@ -376,9 +497,14 @@ export default function PricingHealth() {
                         <td style={cellStyle}>{row.costSource}</td>
                         <td style={cellStyle}>{row.estimatedMargin == null ? "N/A" : pct(row.estimatedMargin)}</td>
                         <td style={cellStyle}><Badge tone={healthTone(row.health) as any}>{row.health}</Badge></td>
-                        <td style={cellStyle}><FixLinks links={configuratorFixLinks} /></td>
+                        <td style={actionCellStyle}><FixLinks links={configuratorFixLinks} /></td>
                       </tr>
                     ))}
+                    {!data.configuratorRows.length ? (
+                      <tr>
+                        <td colSpan={10} style={cellStyle}>No configurator products match the current filters.</td>
+                      </tr>
+                    ) : null}
                   </tbody>
                 </table>
               </div>
@@ -393,11 +519,11 @@ export default function PricingHealth() {
                 <Text as="h2" variant="headingMd">Product Recipe Health</Text>
                 <Badge>Showing first {data.recipeRows.length}</Badge>
               </InlineStack>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1050 }}>
+              <div style={{ overflowX: "auto", paddingBottom: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1220, tableLayout: "fixed" }}>
                   <thead>
                     <tr>
-                      <th style={headerStyle}>Recipe</th>
+                      <th style={{ ...headerStyle, width: 260 }}>Recipe</th>
                       <th style={headerStyle}>Type / Family</th>
                       <th style={headerStyle}>Authority</th>
                       <th style={headerStyle}>Tiers</th>
@@ -405,8 +531,8 @@ export default function PricingHealth() {
                       <th style={headerStyle}>Variant rules</th>
                       <th style={headerStyle}>Cost review</th>
                       <th style={headerStyle}>Vendor source</th>
-                      <th style={headerStyle}>Health</th>
-                      <th style={headerStyle}>Fix links</th>
+                      <th style={{ ...headerStyle, width: 130 }}>Health</th>
+                      <th style={{ ...headerStyle, width: 230 }}>Fix links</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -421,7 +547,7 @@ export default function PricingHealth() {
                         <td style={cellStyle}>{row.costReviewNeeded ? "Needs review" : "Clear"}</td>
                         <td style={cellStyle}>{row.vendorCostSource}</td>
                         <td style={cellStyle}><Badge tone={healthTone(row.health) as any}>{row.health}</Badge></td>
-                        <td style={cellStyle}><FixLinks links={recipeFixLinks} /></td>
+                        <td style={actionCellStyle}><FixLinks links={recipeFixLinks} /></td>
                       </tr>
                     ))}
                   </tbody>
