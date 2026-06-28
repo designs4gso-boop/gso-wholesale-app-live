@@ -9,7 +9,8 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
-import { Form, useLoaderData, useNavigate } from "react-router";
+import { useRef } from "react";
+import { Form, useLoaderData, useNavigate, useSubmit } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -335,6 +336,68 @@ function FilterLink({ label, params }: { label: string; params: Record<string, s
   );
 }
 
+function ConfiguratorFilters({ filters }: { filters: { q: string; health: HealthFilter; family: FamilyFilter } }) {
+  const submit = useSubmit();
+  const formRef = useRef<HTMLFormElement>(null);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function submitFilters() {
+    if (formRef.current) submit(formRef.current, { method: "get" });
+  }
+
+  function debounceSearch() {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(submitFilters, 500);
+  }
+
+  return (
+    <Form method="get" ref={formRef}>
+      <BlockStack gap="300">
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 2fr) minmax(180px, 1fr) minmax(180px, 1fr) auto", gap: 12, alignItems: "end" }}>
+          <label style={{ display: "grid", gap: 6 }}>
+            <Text as="span" tone="subdued">Search</Text>
+            <input
+              name="q"
+              defaultValue={filters.q}
+              onChange={debounceSearch}
+              placeholder="Title, product type, or family"
+              style={{ minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 }}
+            />
+          </label>
+          <label style={{ display: "grid", gap: 6 }}>
+            <Text as="span" tone="subdued">Health</Text>
+            <select name="health" defaultValue={filters.health} onChange={submitFilters} style={{ minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 }}>
+              <option value="all">All</option>
+              <option value="healthy">Healthy</option>
+              <option value="missing-pricing">Missing pricing</option>
+              <option value="missing-costs">Missing costs</option>
+              <option value="missing-mapping">Missing mapping</option>
+              <option value="partial">Partial</option>
+            </select>
+          </label>
+          <label style={{ display: "grid", gap: 6 }}>
+            <Text as="span" tone="subdued">Family</Text>
+            <select name="family" defaultValue={filters.family} onChange={submitFilters} style={{ minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 }}>
+              <option value="all">All</option>
+              <option value="jars">Jars</option>
+              <option value="stock-bags">Stock Bags</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <Button url="/app/erp/pricing-health">Clear Filters</Button>
+        </div>
+        <InlineStack gap="100" wrap>
+          <FilterLink label="All" params={{ health: "all", family: "all" }} />
+          <FilterLink label="Healthy" params={{ health: "healthy", family: "all" }} />
+          <FilterLink label="Needs Review" params={{ health: "partial", family: "all" }} />
+          <FilterLink label="Jars" params={{ health: "all", family: "jars" }} />
+          <FilterLink label="Stock Bags" params={{ health: "all", family: "stock-bags" }} />
+        </InlineStack>
+      </BlockStack>
+    </Form>
+  );
+}
+
 const cellStyle = { padding: 10, borderBottom: "1px solid #e5e7eb", verticalAlign: "top" as const };
 const headerStyle = { ...cellStyle, background: "#f6f6f7", fontWeight: 700 };
 const productCellStyle = { ...cellStyle, minWidth: 260 };
@@ -426,49 +489,7 @@ export default function PricingHealth() {
                 </BlockStack>
                 <Badge>{data.filteredConfiguratorRows} match(es)</Badge>
               </InlineStack>
-              <Form method="get">
-                <BlockStack gap="300">
-                  <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 2fr) minmax(180px, 1fr) minmax(180px, 1fr) auto", gap: 12, alignItems: "end" }}>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <Text as="span" tone="subdued">Search</Text>
-                      <input
-                        name="q"
-                        defaultValue={data.filters.q}
-                        placeholder="Title, product type, or family"
-                        style={{ minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 }}
-                      />
-                    </label>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <Text as="span" tone="subdued">Health</Text>
-                      <select name="health" defaultValue={data.filters.health} style={{ minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 }}>
-                        <option value="all">All</option>
-                        <option value="healthy">Healthy</option>
-                        <option value="missing-pricing">Missing pricing</option>
-                        <option value="missing-costs">Missing costs</option>
-                        <option value="missing-mapping">Missing mapping</option>
-                        <option value="partial">Partial</option>
-                      </select>
-                    </label>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <Text as="span" tone="subdued">Family</Text>
-                      <select name="family" defaultValue={data.filters.family} style={{ minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 }}>
-                        <option value="all">All</option>
-                        <option value="jars">Jars</option>
-                        <option value="stock-bags">Stock Bags</option>
-                        <option value="other">Other</option>
-                      </select>
-                    </label>
-                    <Button submit variant="primary">Apply</Button>
-                  </div>
-                  <InlineStack gap="100" wrap>
-                    <FilterLink label="All" params={{ health: "all", family: "all" }} />
-                    <FilterLink label="Healthy" params={{ health: "healthy", family: "all" }} />
-                    <FilterLink label="Needs Review" params={{ health: "partial", family: "all" }} />
-                    <FilterLink label="Jars" params={{ health: "all", family: "jars" }} />
-                    <FilterLink label="Stock Bags" params={{ health: "all", family: "stock-bags" }} />
-                  </InlineStack>
-                </BlockStack>
-              </Form>
+              <ConfiguratorFilters filters={data.filters} />
               <div style={{ overflowX: "auto", paddingBottom: 8 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1320, tableLayout: "fixed" }}>
                   <thead>
