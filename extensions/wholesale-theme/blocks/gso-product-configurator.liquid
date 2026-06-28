@@ -71,8 +71,8 @@
 >
   <div class="gso-configurator__inner">
     <p class="gso-configurator__eyebrow">{{ block.settings.eyebrow }}</p>
-    <h3 class="gso-configurator__title">{{ block.settings.heading }}</h3>
-    <p class="gso-configurator__subheading">{{ block.settings.subheading }}</p>
+    <h3 class="gso-configurator__title" data-gso-copy="heading">{{ block.settings.heading }}</h3>
+    <p class="gso-configurator__subheading" data-gso-copy="subheading">{{ block.settings.subheading }}</p>
 
     <div class="gso-configurator__loading">Loading custom bag options...</div>
 
@@ -91,6 +91,16 @@
         <label class="gso-configurator__field">
           <span>Bag Color</span>
           <select data-gso-field="bagColor"></select>
+        </label>
+
+        <label class="gso-configurator__field" data-gso-field-row="labelSet" hidden>
+          <span>Label Set</span>
+          <select data-gso-field="labelSet"></select>
+        </label>
+
+        <label class="gso-configurator__field" data-gso-field-row="jarColor" hidden>
+          <span>Jar Color</span>
+          <select data-gso-field="jarColor"></select>
         </label>
 
         <label class="gso-configurator__field">
@@ -119,6 +129,10 @@
       <div class="gso-configurator__notice" data-gso-result="notice">
         Sides are set to Double Sided. Minimum order is {{ block.settings.minimum_quantity }} units.
       </div>
+
+      <button type="button" class="gso-configurator__add" data-gso-add-to-cart>
+        Add to Cart
+      </button>
 
       <div class="gso-configurator__breaks" data-gso-result="priceBreaksBox" hidden>
         <div class="gso-configurator__breaks-title">Price Breaks</div>
