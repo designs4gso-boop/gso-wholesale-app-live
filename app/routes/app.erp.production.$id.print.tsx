@@ -81,17 +81,35 @@ function parseJson(value: any) {
 
 function configFromItem(item: any) {
   const selected = parseJson(item.selectedAddOns) || {};
+  const materialSummary = String(item.materialSummary || item.productionNotes || "");
   const variantParts = String(item.variantTitle || "")
     .split("/")
     .map((part) => part.trim())
     .filter(Boolean);
+  const productType = String(selected.productType || "");
+  const productFamily = String(selected.productFamily || "");
+  const isJar =
+    productFamily.toLowerCase() === "jars" ||
+    productType.startsWith("jar_") ||
+    String(item.sku || "").toUpperCase().startsWith("JAR-") ||
+    /Product Family:\s*Jars/i.test(materialSummary);
+
+  const summaryValue = (label: string) => {
+    const match = materialSummary.match(new RegExp(`${label}:\\s*([^|\\n]+)`, "i"));
+    return match?.[1]?.trim() || "";
+  };
 
   return {
+    isJar,
+    productFamily,
+    productType,
     material: selected.material || variantParts[0] || "",
     finish: selected.finish || variantParts[1] || "",
     productionFinish: selected.productionFinish || item.selectedFinish || "",
     bagColor: selected.bagColor || variantParts[2] || "",
     sides: selected.sides || "",
+    jarColor: selected.jarColor || summaryValue("Jar Color") || "",
+    labelSet: selected.labelSet || summaryValue("Label Set") || "",
   };
 }
 
@@ -230,9 +248,19 @@ export default function PrintProductionJob() {
                         <div>
                           <strong>Material:</strong> {config.material || "N/A"}<br />
                           <strong>Finish:</strong> {config.finish || "N/A"}<br />
-                          <strong>Production:</strong> {config.productionFinish || "N/A"}<br />
-                          <strong>Color:</strong> {config.bagColor || "N/A"}<br />
-                          <strong>Sides:</strong> {config.sides || "N/A"}<br />
+                          {config.isJar ? (
+                            <>
+                              <strong>Label Set:</strong> {config.labelSet || "N/A"}<br />
+                              {config.jarColor ? <><strong>Jar Color:</strong> {config.jarColor}<br /></> : null}
+                              <strong>Production:</strong> {config.productionFinish || "N/A"}<br />
+                            </>
+                          ) : (
+                            <>
+                              <strong>Production:</strong> {config.productionFinish || "N/A"}<br />
+                              <strong>Bag Color:</strong> {config.bagColor || "N/A"}<br />
+                              <strong>Sides:</strong> {config.sides || "N/A"}<br />
+                            </>
+                          )}
                           <strong>Unit:</strong> ${money(item.unitPrice)}<br />
                           <strong>Total:</strong> ${money(lineTotalForItem(item))}
                         </div>
