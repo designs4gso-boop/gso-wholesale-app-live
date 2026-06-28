@@ -10,70 +10,45 @@ import {
   Text,
 } from "@shopify/polaris";
 import { useState } from "react";
-import { Form, useLoaderData, useNavigate } from "react-router";
+import { Form, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const FAMILIES = [
-  { label: "Blank Jars", value: "blank-jars" },
-  { label: "Stickers & Labels", value: "stickers-labels" },
-  { label: "Banners", value: "banners" },
-  { label: "Other / Future", value: "other-future" },
+const WIZARD_MODES = [
+  { value: "existing-family", label: "Add product from existing family/template" },
+  { value: "related-label", label: "Create related label/sticker product from existing Shopify product" },
+  { value: "new-family", label: "Create new product family" },
+  { value: "link-existing-shopify", label: "Link existing Shopify product to ERP" },
 ];
 
-const SUBTYPES: Record<string, { label: string; value: string }[]> = {
-  "blank-jars": [
-    { label: "50ml Miron Jars", value: "50ml-miron-jars" },
-    { label: "100ml Tall Miron Jars", value: "100ml-tall-miron-jars" },
-    { label: "100ml Wide Miron Jars", value: "100ml-wide-miron-jars" },
-    { label: "150ml Miron Jars", value: "150ml-miron-jars" },
-    { label: "250ml Miron Jars", value: "250ml-miron-jars" },
-    { label: "3oz Jars", value: "3oz-jars" },
-    { label: "4oz Jars", value: "4oz-jars" },
-  ],
-  "stickers-labels": [
-    { label: "Die Cut Stickers", value: "die-cut-stickers" },
-    { label: "Normal Stickers", value: "normal-stickers" },
-    { label: "Roll Labels", value: "roll-labels" },
-    { label: "Sheet Labels", value: "sheet-labels" },
-  ],
-  banners: [
-    { label: "Standard Banners", value: "standard-banners" },
-    { label: "Custom Size Banners", value: "custom-size-banners" },
-    { label: "Outdoor Banners", value: "outdoor-banners" },
-  ],
-  "other-future": [
-    { label: "Future Product", value: "future-product" },
-  ],
-};
-
-const PRICING_MODES = [
-  { label: "Storefront configurator", value: "storefront-configurator" },
-  { label: "ERP recipe", value: "erp-recipe" },
-  { label: "Wholesale display", value: "wholesale-display" },
-  { label: "Unknown", value: "unknown" },
+const SHOPIFY_SETUPS = [
+  { value: "existing-shopify", label: "Existing Shopify product" },
+  { value: "create-shopify-draft-later", label: "Create Shopify draft product later" },
+  { value: "simple-product", label: "Simple product" },
+  { value: "shopify-variants", label: "Shopify variants" },
+  { value: "gso-configurator-options", label: "GSO configurator options" },
 ];
 
-const COST_SOURCES = [
-  { label: "Materials + machines", value: "materials-machines" },
-  { label: "Vendor cost", value: "vendor-cost" },
-  { label: "Vendor cost book", value: "vendor-cost-book" },
-  { label: "Outsourced", value: "outsourced" },
-  { label: "Unknown", value: "unknown" },
+const LABEL_MODES = [
+  { value: "none", label: "No related label product" },
+  { value: "label-only", label: "Label-only product" },
+  { value: "label-application", label: "Label + application option" },
+  { value: "finished-package", label: "Finished product/package" },
 ];
+
+const APPLICATION_MODES = ["None", "Hand apply", "Machine apply", "Outsourced apply"];
+const BASE_ITEM_SOURCES = ["GSO supplies", "Customer supplies", "Vendor/outsource supplies"];
+const LABEL_ZONES = ["Side", "Lid", "Front", "Back", "Full wrap", "Custom"];
+const NEW_FAMILY_PRICING = ["auto_margin", "fixed_price", "markup_over_cost", "manual_review"];
+const UNIT_OPTIONS = ["each", "sqft", "sqin", "linear_ft", "roll", "sheet"];
 
 function clean(value: string | null, fallback = "") {
   const text = String(value || "").trim();
   return text || fallback;
 }
 
-function parseNumber(value: string, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function safeChoice(value: string, allowed: { value: string }[], fallback: string) {
-  return allowed.some((item) => item.value === value) ? value : fallback;
+function safeChoice(value: string, options: { value: string }[], fallback: string) {
+  return options.some((option) => option.value === value) ? value : fallback;
 }
 
 function normalizeGid(value: string) {
@@ -81,18 +56,6 @@ function normalizeGid(value: string) {
   if (text.startsWith("gid://shopify/")) return text;
   const digitsOnly = text.replace(/[^0-9]/g, "");
   return digitsOnly ? `gid://shopify/Product/${digitsOnly}` : "";
-}
-
-function familyLabel(value: string) {
-  return FAMILIES.find((family) => family.value === value)?.label || "Other / Future";
-}
-
-function subtypeOptions(family: string) {
-  return SUBTYPES[family] || SUBTYPES["other-future"];
-}
-
-function subtypeLabel(family: string, value: string) {
-  return subtypeOptions(family).find((subtype) => subtype.value === value)?.label || "Not selected";
 }
 
 function parseTiers(value: string) {
@@ -103,61 +66,82 @@ function parseTiers(value: string) {
     .sort((a, b) => a - b);
 }
 
-function recommendedAuthority(family: string, pricingMode: string) {
-  if (family === "blank-jars") {
-    if (pricingMode === "storefront-configurator") {
-      return {
-        label: "ProductRecipe / vendor cost tiers first; storefront configurator later if intentionally enabled",
-        reason: "Blank jars should be costed from vendor/source tiers first. Storefront configurator records should only be added when the product is ready for customer ordering.",
-      };
-    }
+function intValue(value: string, fallback = 0) {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
+function inferKind(profile: any) {
+  const text = `${profile?.calculatorKind || ""} ${profile?.key || ""} ${profile?.name || ""}`.toLowerCase();
+  if (text.includes("jar")) return "Jars";
+  if (text.includes("banner")) return "Banners";
+  if (text.includes("label") || text.includes("sticker")) return text.includes("bag") ? "Sticker Bags" : "Labels / Stickers";
+  if (text.includes("box")) return "Boxes";
+  if (text.includes("dtp") || text.includes("pouch")) return "DTP / Pouches";
+  if (text.includes("source") || text.includes("outsourc")) return "Sourced";
+  return "General";
+}
+
+function termsForKind(kind: string) {
+  if (kind === "Jars") return ["jar"];
+  if (kind === "Banners") return ["banner"];
+  if (kind === "Labels / Stickers" || kind === "Sticker Bags") return ["label", "sticker", "roll"];
+  if (kind === "Boxes") return ["box"];
+  if (kind === "DTP / Pouches") return ["dtp", "pouch", "bag"];
+  return [];
+}
+
+function recommendedAuthority(params: any, selectedKind: string) {
+  if (params.shopifySetup === "gso-configurator-options") {
     return {
-      label: "ProductRecipe + vendor/source cost tiers",
-      reason: "Blank jar pricing should start from jar vendor cost, packout, handling, quantity tiers, and target margin.",
+      label: "GSO configurator records",
+      detail: "Use ConfiguratorProduct, ConfiguratorOption, and ConfiguratorPricingRule when customer choices affect price, quantity tiers, material, finish, jar color, or other options.",
     };
   }
-
-  if (family === "stickers-labels") {
+  if (params.wizardMode === "related-label") {
     return {
-      label: "ProductRecipe + material/machine/cutting/labor cost",
-      reason: "Sticker and label pricing should be built from size, material, ink, finish, cutting time, setup, waste, packout, and margin.",
+      label: "Recipe cost engine for related label product",
+      detail: "Use ProductRecipe with material, machine, label-zone, application labor, and margin inputs. The related label should usually be its own Shopify product linked to the base item.",
     };
   }
-
-  if (family === "banners") {
+  if (params.wizardMode === "new-family") {
     return {
-      label: "ProductRecipe + sqft material/machine/finishing cost",
-      reason: "Banner pricing should be built from square footage, banner material, ink, machine time, hem/grommet finishing, setup, waste, packout, and margin.",
+      label: "New family/template planning",
+      detail: "Plan the ProductTypeProfile and first ProductRecipe, then review cost components before any ERP records are created.",
     };
   }
-
-  if (pricingMode === "wholesale-display") {
+  if (params.wizardMode === "link-existing-shopify") {
     return {
-      label: "WholesaleRule / ShopSettings",
-      reason: "Wholesale display rules are separate from configurator and recipe pricing.",
+      label: "ERP mapping first",
+      detail: "Map the existing Shopify product to a recipe or configurator product before changing pricing or production behavior.",
     };
   }
-
   return {
-    label: "Setup plan only",
-    reason: "Choose a supported family and pricing mode before creating ERP or Shopify records.",
+    label: "Family/template recipe pricing",
+    detail: `${selectedKind || "The selected family"} should inherit ProductRecipe and RecipeTier patterns unless the product is intentionally promoted to GSO configurator options.`,
   };
 }
 
-function statusForPlan(params: any, duplicateCount: number, warnings: string[]) {
-  if (!params.title && !params.productType && !params.sku) return "Needs identity";
+function statusFor(params: any, duplicateCount: number, warnings: string[]) {
   if (duplicateCount > 0) return "Duplicate risk";
-  if (params.pricingMode === "unknown") return "Needs pricing mode";
-  if (params.costSource === "unknown") return "Needs cost source";
-  if (warnings.length) return "Ready to plan";
-  return "Ready for manual setup";
+  if (warnings.some((warning) => warning.includes("cost") || warning.includes("margin") || warning.includes("tier"))) return "Needs cost setup";
+  if (warnings.some((warning) => warning.includes("Shopify"))) return "Needs Shopify mapping";
+  if (warnings.length) return "Needs more info";
+  return "Ready for ERP draft planning";
 }
 
 function statusTone(status: string) {
-  if (status === "Ready for manual setup") return "success";
-  if (status === "Ready to plan") return "attention";
-  return "warning";
+  if (status === "Ready for ERP draft planning") return "success";
+  if (status === "Duplicate risk") return "warning";
+  return "attention";
+}
+
+function inputStyle() {
+  return { minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4, width: "100%" };
+}
+
+function fieldGrid(columns = 3) {
+  return { display: "grid", gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gap: 12 };
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -169,216 +153,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function inputStyle() {
-  return { minHeight: 36, padding: "6px 10px", border: "1px solid #8c9196", borderRadius: 4 };
-}
-
-function familyFields(family: string) {
-  if (family === "stickers-labels") {
-    return {
-      widthLabel: "Width inches",
-      heightLabel: "Height inches",
-      materialLabel: "Material",
-      finishLabel: "Finish",
-      extraLabel: "Cut type",
-      extraName: "cutType",
-      extraPlaceholder: "Die cut, kiss cut, square cut",
-    };
-  }
-
-  if (family === "banners") {
-    return {
-      widthLabel: "Width feet",
-      heightLabel: "Height feet",
-      materialLabel: "Material",
-      finishLabel: "Finishing",
-      extraLabel: "Indoor / outdoor",
-      extraName: "environment",
-      extraPlaceholder: "Indoor, outdoor, outdoor heavy duty",
-    };
-  }
-
-  if (family === "blank-jars") {
-    return {
-      widthLabel: "Width",
-      heightLabel: "Height",
-      materialLabel: "Jar size / type",
-      finishLabel: "Vendor / source cost mode",
-      extraLabel: "Jar color if applicable",
-      extraName: "jarColor",
-      extraPlaceholder: "Clear, Black, White, or Miron",
-    };
-  }
-
-  return {
-    widthLabel: "Width",
-    heightLabel: "Height",
-    materialLabel: "Material",
-    finishLabel: "Finish",
-    extraLabel: "Planning detail",
-    extraName: "cutType",
-    extraPlaceholder: "Optional planning detail",
-  };
-}
-
-function costGuidance(family: string) {
-  if (family === "stickers-labels") {
-    return {
-      title: "Sticker Cost Model",
-      items: ["material sqft/in2", "ink", "laminate/finish", "cutting time", "setup/prepress", "waste", "packout", "margin/markup"],
-    };
-  }
-
-  if (family === "banners") {
-    return {
-      title: "Banner Cost Model",
-      items: ["banner material sqft", "ink sqft", "machine time", "hem/grommet finishing", "setup/prepress", "waste", "packout", "margin/markup"],
-    };
-  }
-
-  if (family === "blank-jars") {
-    return {
-      title: "Blank Jar Cost Model",
-      items: ["jar vendor cost", "packout/supplies", "handling/labor if needed", "target margin/markup", "quantity tiers"],
-    };
-  }
-
-  return {
-    title: "Future Product Cost Model",
-    items: ["product family", "cost source", "quantity tiers", "margin/markup", "manual setup review"],
-  };
-}
-
-export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
-  const url = new URL(request.url);
-
-  const params = {
-    family: safeChoice(clean(url.searchParams.get("family"), "blank-jars"), FAMILIES, "blank-jars"),
-    subtype: "",
-    title: clean(url.searchParams.get("title")),
-    productType: clean(url.searchParams.get("productType")),
-    sku: clean(url.searchParams.get("sku")),
-    shopifyHandle: clean(url.searchParams.get("shopifyHandle")),
-    moq: clean(url.searchParams.get("moq")),
-    pricingMode: safeChoice(clean(url.searchParams.get("pricingMode"), "unknown"), PRICING_MODES, "unknown"),
-    costSource: safeChoice(clean(url.searchParams.get("costSource"), "unknown"), COST_SOURCES, "unknown"),
-    targetMargin: clean(url.searchParams.get("targetMargin")),
-    markup: clean(url.searchParams.get("markup")),
-    tiers: clean(url.searchParams.get("tiers")),
-    width: clean(url.searchParams.get("width")),
-    height: clean(url.searchParams.get("height")),
-    material: clean(url.searchParams.get("material")),
-    finish: clean(url.searchParams.get("finish")),
-    cutType: clean(url.searchParams.get("cutType")),
-    finishing: clean(url.searchParams.get("finishing")),
-    environment: clean(url.searchParams.get("environment")),
-    jarColor: clean(url.searchParams.get("jarColor")),
-  };
-  params.subtype = safeChoice(clean(url.searchParams.get("subtype"), subtypeOptions(params.family)[0]?.value || ""), subtypeOptions(params.family), subtypeOptions(params.family)[0]?.value || "");
-
-  const shopifyProductGid = normalizeGid(params.shopifyHandle);
-  const tiers = parseTiers(params.tiers);
-  const hasInput = Boolean(params.title || params.productType || params.sku || params.shopifyHandle);
-
-  const profileOr: any[] = [];
-  if (params.productType) profileOr.push({ key: params.productType });
-  if (params.title) profileOr.push({ name: { equals: params.title, mode: "insensitive" } });
-
-  const recipeOr: any[] = [];
-  if (params.title) recipeOr.push({ name: { equals: params.title, mode: "insensitive" } });
-  if (params.productType) recipeOr.push({ productType: params.productType });
-  if (params.sku) recipeOr.push({ sku: params.sku });
-
-  const configuratorOr: any[] = [];
-  if (params.title) configuratorOr.push({ title: { equals: params.title, mode: "insensitive" } });
-  if (params.productType) configuratorOr.push({ productType: params.productType });
-  if (params.shopifyHandle) configuratorOr.push({ shopifyHandle: params.shopifyHandle });
-  if (shopifyProductGid) configuratorOr.push({ shopifyProductGid });
-
-  const variantRuleOr: any[] = [];
-  if (params.sku) variantRuleOr.push({ sku: params.sku });
-  if (shopifyProductGid) variantRuleOr.push({ shopifyProductGid });
-
-  const [profiles, recipes, configuratorProducts, variantRules] = await Promise.all([
-    profileOr.length
-      ? db.productTypeProfile.findMany({
-          where: { shop, OR: profileOr },
-          select: { id: true, key: true, name: true, active: true },
-          take: 10,
-        })
-      : Promise.resolve([]),
-    recipeOr.length
-      ? db.productRecipe.findMany({
-          where: { shop, OR: recipeOr },
-          select: { id: true, name: true, sku: true, productType: true, productFamily: true, active: true },
-          take: 10,
-        })
-      : Promise.resolve([]),
-    configuratorOr.length
-      ? db.configuratorProduct.findMany({
-          where: { shop, OR: configuratorOr },
-          select: { id: true, title: true, productType: true, shopifyHandle: true, shopifyProductGid: true, active: true },
-          take: 10,
-        })
-      : Promise.resolve([]),
-    variantRuleOr.length
-      ? db.recipeVariantRule.findMany({
-          where: { shop, OR: variantRuleOr },
-          select: { id: true, name: true, sku: true, shopifyProductGid: true, shopifyVariantGid: true, active: true },
-          take: 10,
-        })
-      : Promise.resolve([]),
-  ]);
-
-  const authority = recommendedAuthority(params.family, params.pricingMode);
-  const isStorefront = params.pricingMode === "storefront-configurator";
-  const warnings = [
-    params.costSource === "unknown" && params.family !== "blank-jars" ? "Select a cost source before creating pricing." : null,
-    params.family === "stickers-labels" && (!parseNumber(params.width) || !parseNumber(params.height)) ? "Sticker and label products need width and height in inches for cost planning." : null,
-    params.family === "banners" && (!parseNumber(params.width) || !parseNumber(params.height)) ? "Banner products need width and height in feet so square-foot cost can be planned." : null,
-    params.family === "blank-jars" && params.costSource === "unknown" ? "Blank jars need a vendor/source cost mode before pricing." : null,
-    !params.targetMargin && !params.markup ? "Add target margin or markup before setting sell prices." : null,
-    !tiers.length ? "Add quantity tiers before building tiered pricing." : null,
-    !parseNumber(params.moq) ? "Add MOQ/default quantity." : null,
-    isStorefront && !params.shopifyHandle ? "Storefront products need a Shopify handle or Product GID before launch." : null,
-  ].filter(Boolean);
-
-  const duplicateCount = profiles.length + recipes.length + configuratorProducts.length + variantRules.length;
-  const status = statusForPlan(params, duplicateCount, warnings);
-
-  return Response.json({
-    shop,
-    params,
-    hasInput,
-    tiers,
-    authority,
-    warnings,
-    status,
-    duplicates: {
-      profiles,
-      recipes,
-      configuratorProducts,
-      variantRules,
-      checked: {
-        productTypeProfile: profileOr.length > 0,
-        productRecipe: recipeOr.length > 0,
-        configuratorProduct: configuratorOr.length > 0,
-        recipeVariantRule: variantRuleOr.length > 0,
-      },
-    },
-  });
-}
-
-function LinkButtons({ links }: { links: { label: string; url: string }[] }) {
-  const navigate = useNavigate();
+function StepHeader({ number, title, help }: { number: number; title: string; help?: string }) {
   return (
-    <InlineStack gap="200" wrap>
-      {links.map((link) => (
-        <Button key={link.url} onClick={() => navigate(link.url)}>{link.label}</Button>
-      ))}
-    </InlineStack>
+    <BlockStack gap="100">
+      <InlineStack gap="200" blockAlign="center">
+        <Badge>{`Step ${number}`}</Badge>
+        <Text as="h2" variant="headingMd">{title}</Text>
+      </InlineStack>
+      {help ? <Text as="p" tone="subdued">{help}</Text> : null}
+    </BlockStack>
   );
 }
 
@@ -397,254 +180,543 @@ function DuplicateList({ title, rows, render }: { title: string; rows: any[]; re
   );
 }
 
+function RecipeSummary({ recipes }: { recipes: any[] }) {
+  if (!recipes.length) return <Text as="p" tone="subdued">No example recipes found for this template yet.</Text>;
+  return (
+    <BlockStack gap="100">
+      {recipes.slice(0, 3).map((recipe) => (
+        <Text as="p" key={recipe.id}>
+          {recipe.name} · {recipe._count.tiers} tier(s), {recipe._count.materials} material row(s), {recipe._count.labelZones} label zone(s)
+        </Text>
+      ))}
+    </BlockStack>
+  );
+}
+
+export async function loader({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const url = new URL(request.url);
+
+  const params = {
+    wizardMode: safeChoice(clean(url.searchParams.get("wizardMode"), "existing-family"), WIZARD_MODES, "existing-family"),
+    templateId: clean(url.searchParams.get("templateId")),
+    title: clean(url.searchParams.get("title")),
+    productType: clean(url.searchParams.get("productType")),
+    sku: clean(url.searchParams.get("sku")),
+    shopifyHandle: clean(url.searchParams.get("shopifyHandle")),
+    moq: clean(url.searchParams.get("moq")),
+    tiers: clean(url.searchParams.get("tiers")),
+    targetMargin: clean(url.searchParams.get("targetMargin")),
+    markup: clean(url.searchParams.get("markup")),
+    shopifySetup: safeChoice(clean(url.searchParams.get("shopifySetup"), "existing-shopify"), SHOPIFY_SETUPS, "existing-shopify"),
+    variantOption1Name: clean(url.searchParams.get("variantOption1Name")),
+    variantOption1Values: clean(url.searchParams.get("variantOption1Values")),
+    variantOption2Name: clean(url.searchParams.get("variantOption2Name")),
+    variantOption2Values: clean(url.searchParams.get("variantOption2Values")),
+    variantOption3Name: clean(url.searchParams.get("variantOption3Name")),
+    variantOption3Values: clean(url.searchParams.get("variantOption3Values")),
+    labelMode: safeChoice(clean(url.searchParams.get("labelMode"), "none"), LABEL_MODES, "none"),
+    baseProduct: clean(url.searchParams.get("baseProduct")),
+    labelName: clean(url.searchParams.get("labelName")),
+    labelZones: url.searchParams.getAll("labelZones").map((value) => String(value)),
+    applicationMode: clean(url.searchParams.get("applicationMode"), "None"),
+    baseItemSource: clean(url.searchParams.get("baseItemSource"), "GSO supplies"),
+    width: clean(url.searchParams.get("width")),
+    height: clean(url.searchParams.get("height")),
+    material: clean(url.searchParams.get("material")),
+    finish: clean(url.searchParams.get("finish")),
+    cutType: clean(url.searchParams.get("cutType")),
+    bannerFinishing: clean(url.searchParams.get("bannerFinishing")),
+    newFamilyName: clean(url.searchParams.get("newFamilyName")),
+    newFamilyKey: clean(url.searchParams.get("newFamilyKey")),
+    newPricingMethod: clean(url.searchParams.get("newPricingMethod"), "auto_margin"),
+    unitOfMeasure: clean(url.searchParams.get("unitOfMeasure"), "each"),
+    costComponents: clean(url.searchParams.get("costComponents")),
+  };
+
+  const templates = await db.productTypeProfile.findMany({
+    where: { shop, active: true },
+    select: {
+      id: true,
+      key: true,
+      name: true,
+      calculatorKind: true,
+      minQuantity: true,
+      defaultQuantity: true,
+      tierBreakpoints: true,
+      defaultMarginPct: true,
+      pricingMethod: true,
+      productionMode: true,
+      _count: { select: { recipes: true } },
+    },
+    orderBy: [{ name: "asc" }],
+    take: 100,
+  });
+
+  const selectedTemplate = templates.find((template) => template.id === params.templateId) || templates[0] || null;
+  const selectedKind = selectedTemplate ? inferKind(selectedTemplate) : "";
+  const selectedTemplateId = selectedTemplate?.id || "";
+  const shopifyProductGid = normalizeGid(params.shopifyHandle);
+  const tiers = parseTiers(params.tiers || selectedTemplate?.tierBreakpoints || "");
+  const hasInput = Boolean(params.title || params.productType || params.sku || params.shopifyHandle || params.newFamilyName);
+
+  const profileOr: any[] = [];
+  if (params.productType) profileOr.push({ key: params.productType });
+  if (params.title) profileOr.push({ name: { equals: params.title, mode: "insensitive" } });
+  if (params.newFamilyKey) profileOr.push({ key: params.newFamilyKey });
+  if (params.newFamilyName) profileOr.push({ name: { equals: params.newFamilyName, mode: "insensitive" } });
+
+  const recipeOr: any[] = [];
+  if (params.title) recipeOr.push({ name: { equals: params.title, mode: "insensitive" } });
+  if (params.productType) recipeOr.push({ productType: params.productType });
+  if (params.sku) recipeOr.push({ sku: params.sku });
+
+  const configuratorOr: any[] = [];
+  if (params.title) configuratorOr.push({ title: { equals: params.title, mode: "insensitive" } });
+  if (params.productType) configuratorOr.push({ productType: params.productType });
+  if (params.shopifyHandle) configuratorOr.push({ shopifyHandle: params.shopifyHandle });
+  if (shopifyProductGid) configuratorOr.push({ shopifyProductGid });
+
+  const variantRuleOr: any[] = [];
+  if (params.sku) variantRuleOr.push({ sku: params.sku });
+  if (shopifyProductGid) variantRuleOr.push({ shopifyProductGid });
+
+  const relatedRecipeWhere = selectedTemplate
+    ? {
+        shop,
+        active: true,
+        OR: [
+          { productTypeProfileId: selectedTemplate.id },
+          { productType: selectedTemplate.key },
+        ],
+      }
+    : { shop, active: true, id: "__none__" };
+
+  const terms = termsForKind(selectedKind);
+  const materialWhere: any = { shop, active: true };
+  if (terms.length) {
+    materialWhere.OR = terms.flatMap((term) => [
+      { name: { contains: term, mode: "insensitive" } },
+      { materialType: { contains: term, mode: "insensitive" } },
+      { productFamilies: { contains: term, mode: "insensitive" } },
+    ]);
+  }
+
+  const vendorWhere: any = { shop, status: "active" };
+  if (terms.length) {
+    vendorWhere.OR = terms.flatMap((term) => [
+      { itemName: { contains: term, mode: "insensitive" } },
+      { itemType: { contains: term, mode: "insensitive" } },
+      { vendorName: { contains: term, mode: "insensitive" } },
+    ]);
+  }
+
+  const [
+    relatedRecipeCount,
+    relatedRecipes,
+    materialCount,
+    machineCount,
+    vendorCostCount,
+    configuratorOptionCount,
+    configuratorRuleCount,
+    duplicateProfiles,
+    duplicateRecipes,
+    duplicateConfiguratorProducts,
+    duplicateVariantRules,
+  ] = await Promise.all([
+    db.productRecipe.count({ where: relatedRecipeWhere }),
+    db.productRecipe.findMany({
+      where: relatedRecipeWhere,
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        productType: true,
+        productFamily: true,
+        _count: { select: { tiers: true, materials: true, labelZones: true, machineRules: true, variantRules: true } },
+      },
+      orderBy: [{ updatedAt: "desc" }],
+      take: 3,
+    }),
+    db.material.count({ where: materialWhere }),
+    db.machine.count({ where: { shop, active: true } }),
+    db.vendorCostBookItem.count({ where: vendorWhere }),
+    selectedTemplate ? db.configuratorOption.count({ where: { shop, active: true, productType: selectedTemplate.key } }) : Promise.resolve(0),
+    selectedTemplate ? db.configuratorPricingRule.count({ where: { shop, active: true, productType: selectedTemplate.key } }) : Promise.resolve(0),
+    profileOr.length
+      ? db.productTypeProfile.findMany({ where: { shop, OR: profileOr }, select: { id: true, key: true, name: true, active: true }, take: 10 })
+      : Promise.resolve([]),
+    recipeOr.length
+      ? db.productRecipe.findMany({ where: { shop, OR: recipeOr }, select: { id: true, name: true, sku: true, productType: true, productFamily: true, active: true }, take: 10 })
+      : Promise.resolve([]),
+    configuratorOr.length
+      ? db.configuratorProduct.findMany({ where: { shop, OR: configuratorOr }, select: { id: true, title: true, productType: true, shopifyHandle: true, shopifyProductGid: true, active: true }, take: 10 })
+      : Promise.resolve([]),
+    variantRuleOr.length
+      ? db.recipeVariantRule.findMany({ where: { shop, OR: variantRuleOr }, select: { id: true, name: true, sku: true, shopifyProductGid: true, shopifyVariantGid: true, active: true }, take: 10 })
+      : Promise.resolve([]),
+  ]);
+
+  const duplicateCount = duplicateProfiles.length + duplicateRecipes.length + duplicateConfiguratorProducts.length + duplicateVariantRules.length;
+  const authority = recommendedAuthority(params, selectedKind);
+  const relatedLabelSelected = params.labelMode !== "none" || params.wizardMode === "related-label";
+  const warnings = [
+    params.wizardMode !== "new-family" && !selectedTemplate ? "Choose a family/template before planning ERP records." : null,
+    params.wizardMode === "new-family" && !params.newFamilyName ? "Add a new family name." : null,
+    params.wizardMode === "new-family" && !params.newFamilyKey ? "Add a new family key." : null,
+    !params.title && params.wizardMode !== "new-family" ? "Add the new product name." : null,
+    !params.sku && !params.productType && params.wizardMode !== "new-family" ? "Add a SKU or product key." : null,
+    !intValue(params.moq, selectedTemplate?.minQuantity || 0) ? "Add MOQ/default quantity." : null,
+    !tiers.length ? "Add quantity tiers." : null,
+    !params.targetMargin && !params.markup && params.wizardMode !== "link-existing-shopify" ? "Add target margin or markup for pricing review." : null,
+    params.shopifySetup === "existing-shopify" && !params.shopifyHandle ? "Enter a Shopify handle or product GID for existing Shopify setup." : null,
+    params.shopifySetup === "shopify-variants" && !params.variantOption1Name ? "Add at least one Shopify variant option name." : null,
+    relatedLabelSelected && !params.baseProduct ? "Add the base Shopify product title, handle, or GID for the related label plan." : null,
+    relatedLabelSelected && !params.labelName ? "Add the related label product name." : null,
+    selectedKind === "Labels / Stickers" && (!params.width || !params.height) ? "Add label/sticker width and height for cost planning." : null,
+    selectedKind === "Banners" && (!params.width || !params.height) ? "Add banner width and height for square-foot cost planning." : null,
+    materialCount === 0 ? "No matching material cost inputs found for this template kind." : null,
+  ].filter(Boolean);
+
+  const status = statusFor(params, duplicateCount, warnings as string[]);
+
+  return Response.json({
+    shop,
+    params,
+    templates,
+    selectedTemplate,
+    selectedTemplateId,
+    selectedKind,
+    relatedRecipeCount,
+    relatedRecipes,
+    tiers,
+    hasInput,
+    authority,
+    costFoundation: {
+      materialCount,
+      machineCount,
+      vendorCostCount,
+      configuratorOptionCount,
+      configuratorRuleCount,
+    },
+    warnings,
+    status,
+    duplicates: {
+      profiles: duplicateProfiles,
+      recipes: duplicateRecipes,
+      configuratorProducts: duplicateConfiguratorProducts,
+      variantRules: duplicateVariantRules,
+    },
+  });
+}
+
 export default function ProductBuilderPlan() {
   const data = useLoaderData<typeof loader>();
   const { params } = data;
-  const isStorefront = data.params.pricingMode === "storefront-configurator";
-  const useConfiguratorRecords = isStorefront && params.family !== "blank-jars";
-  const [formFamily, setFormFamily] = useState(params.family);
-  const [formSubtype, setFormSubtype] = useState(params.subtype);
-  const dynamicFields = familyFields(formFamily);
-  const guidance = costGuidance(formFamily);
-  const requiredRecords = useConfiguratorRecords
-    ? [
-        "ProductTypeProfile if a new product type is needed",
-        "ConfiguratorProduct",
-        "ConfiguratorOption",
-        "ConfiguratorPricingRule",
-        "Shopify product handle/GID mapping",
-        "Storefront test",
-        "Production test",
-      ]
-    : [
-        "ProductTypeProfile",
-        "ProductRecipe",
-        "RecipeTier",
-        "RecipeMaterial or vendor cost source",
-        "RecipeVariantRule / Shopify Link if mapped",
-        "Margin review",
-        "Production test",
-      ];
+  const [wizardMode, setWizardMode] = useState(params.wizardMode);
+  const [shopifySetup, setShopifySetup] = useState(params.shopifySetup);
+  const [labelMode, setLabelMode] = useState(params.labelMode);
+  const groupedTemplates = data.templates.reduce((groups: Record<string, any[]>, template: any) => {
+    const kind = inferKind(template);
+    groups[kind] = groups[kind] || [];
+    groups[kind].push(template);
+    return groups;
+  }, {});
+
+  const relatedLabelActive = wizardMode === "related-label" || labelMode !== "none";
+  const duplicateCount = data.duplicates.profiles.length + data.duplicates.recipes.length + data.duplicates.configuratorProducts.length + data.duplicates.variantRules.length;
+  const erpRecords = wizardMode === "new-family"
+    ? ["Product family/template", "First product recipe", "Quantity tiers", "Material/vendor/machine cost inputs", "Pricing health review"]
+    : shopifySetup === "gso-configurator-options"
+      ? ["Configurator product", "Configurator options", "Configurator pricing rules", "Shopify mapping", "Storefront test", "Production test"]
+      : relatedLabelActive
+        ? ["Related label product recipe", "Label zones", "Material and machine cost rows", "Application labor rule", "Shopify link or mapping"]
+        : ["Product recipe", "Recipe tiers", "Material/vendor cost source", "Machine or production route", "Shopify link if needed"];
+
+  const shopifyRecords = shopifySetup === "existing-shopify"
+    ? ["Use existing Shopify product", "Map handle/Product GID", "Sync variants only if needed"]
+    : shopifySetup === "create-shopify-draft-later"
+      ? ["Draft Shopify product later", "Review title, SKU, and variants before publish"]
+      : shopifySetup === "shopify-variants"
+        ? ["Shopify product", "Variant options and values", "ERP variant mapping"]
+        : shopifySetup === "gso-configurator-options"
+          ? ["Shopify product shell", "Theme app block", "GSO configurator mapping"]
+          : ["Simple Shopify product", "SKU/handle mapping"];
 
   const links = [
+    { label: "Cost Calculator", url: "/app/erp/cost-calculator" },
     { label: "Product Setup", url: "/app/erp/product-setup" },
-    { label: "Configurator", url: "/app/erp/configurator" },
-    { label: "Manual Mapping", url: "/app/erp/configurator-mapping" },
-    { label: "Jar Mapping", url: "/app/erp/configurator-jar-mapping" },
-    { label: "Shopify Links", url: "/app/erp/shopify-links" },
     { label: "Materials", url: "/app/erp/materials" },
+    { label: "Machines", url: "/app/erp/machines" },
     { label: "Vendors", url: "/app/erp/vendors" },
+    { label: "Vendor Cost Book", url: "/app/erp/vendor-cost-book" },
     { label: "Pricing Health", url: "/app/erp/pricing-health" },
-    { label: "Margin Review", url: "/app/erp/margin-review" },
+    { label: "Shopify Links", url: "/app/erp/shopify-links" },
+    { label: "Configurator Mapping", url: "/app/erp/configurator-mapping" },
   ];
 
   return (
-    <Page title="Product Builder" subtitle="Add New Product Plan">
-      <Layout>
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <Text as="p" tone="subdued">
-                This page is read-only. It creates a setup plan and duplicate checks before any ERP or Shopify records are created.
-              </Text>
-              <Text as="p" tone="subdued">
-                4x5 stock bags and other packaging products are already handled separately. This builder scope is currently limited to blank jars, stickers/labels, and banners.
-              </Text>
-              <InlineStack gap="200" wrap>
-                <Badge tone="success">No writes</Badge>
-                <Badge tone="success">No Shopify Admin calls</Badge>
-                <Badge tone={statusTone(data.status) as any}>{data.status}</Badge>
-                <Badge>Shop: {data.shop}</Badge>
-              </InlineStack>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+    <Page title="Product Builder" subtitle="New Product Wizard">
+      <Form method="get">
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <Text as="p" tone="subdued">
+                  This wizard is read-only right now. It helps plan ERP setup, pricing, Shopify options, and related products before anything is created.
+                </Text>
+                <InlineStack gap="200" wrap>
+                  <Badge tone="success">No writes</Badge>
+                  <Badge tone="success">No Shopify Admin calls</Badge>
+                  <Badge tone={statusTone(data.status) as any}>{data.status}</Badge>
+                  <Badge>Shop: {data.shop}</Badge>
+                </InlineStack>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
 
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Plan Inputs</Text>
-              <Form method="get">
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
-                  <Field label="Product family">
-                    <select
-                      name="family"
-                      value={formFamily}
-                      onChange={(event) => {
-                        const nextFamily = event.currentTarget.value;
-                        setFormFamily(nextFamily);
-                        setFormSubtype(subtypeOptions(nextFamily)[0]?.value || "");
-                      }}
-                      style={inputStyle()}
-                    >
-                      {FAMILIES.map((family) => <option key={family.value} value={family.value}>{family.label}</option>)}
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <StepHeader number={1} title="Choose what you are doing" />
+                <div style={fieldGrid(2)}>
+                  {WIZARD_MODES.map((mode) => (
+                    <label key={mode.value} style={{ border: "1px solid #d9dde6", borderRadius: 8, padding: 12, display: "flex", gap: 8 }}>
+                      <input type="radio" name="wizardMode" value={mode.value} checked={wizardMode === mode.value} onChange={() => setWizardMode(mode.value)} />
+                      <span>{mode.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <StepHeader
+                  number={2}
+                  title="Choose family/template"
+                  help="This product will inherit the setup pattern from this family/template."
+                />
+                {wizardMode === "new-family" ? (
+                  <div style={fieldGrid(2)}>
+                    <Field label="New family name"><input name="newFamilyName" defaultValue={params.newFamilyName} placeholder="Banners" style={inputStyle()} /></Field>
+                    <Field label="New family key"><input name="newFamilyKey" defaultValue={params.newFamilyKey} placeholder="banners" style={inputStyle()} /></Field>
+                    <Field label="Pricing method">
+                      <select name="newPricingMethod" defaultValue={params.newPricingMethod} style={inputStyle()}>
+                        {NEW_FAMILY_PRICING.map((method) => <option key={method} value={method}>{method}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Unit of measure">
+                      <select name="unitOfMeasure" defaultValue={params.unitOfMeasure} style={inputStyle()}>
+                        {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Needed cost components">
+                      <input name="costComponents" defaultValue={params.costComponents} placeholder="material, ink, machine time, finishing, packout" style={inputStyle()} />
+                    </Field>
+                    <Text as="p" tone="subdued">Planning only. This will not create a family/template yet.</Text>
+                  </div>
+                ) : (
+                  <BlockStack gap="300">
+                    <Field label="Existing family/template">
+                      <select name="templateId" defaultValue={data.selectedTemplateId} style={inputStyle()}>
+                        {Object.entries(groupedTemplates).map(([kind, templates]: any) => (
+                          <optgroup key={kind} label={kind}>
+                            {templates.map((template: any) => (
+                              <option key={template.id} value={template.id}>{template.name} ({template.key})</option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </Field>
+                    {data.selectedTemplate ? (
+                      <div style={fieldGrid(2)}>
+                        <BlockStack gap="100">
+                          <Text as="h3" variant="headingSm">{data.selectedTemplate.name}</Text>
+                          <Text as="p">Key: {data.selectedTemplate.key}</Text>
+                          <Text as="p">Calculator kind: {data.selectedTemplate.calculatorKind || data.selectedKind}</Text>
+                          <Text as="p">MOQ/default: {data.selectedTemplate.minQuantity} / {data.selectedTemplate.defaultQuantity}</Text>
+                        </BlockStack>
+                        <BlockStack gap="100">
+                          <Text as="p">Tier breakpoints: {data.selectedTemplate.tierBreakpoints || "Not set"}</Text>
+                          <Text as="p">Default margin: {Number(data.selectedTemplate.defaultMarginPct || 0).toFixed(1)}%</Text>
+                          <Text as="p">Pricing method: {data.selectedTemplate.pricingMethod}</Text>
+                          <Text as="p">Related recipes: {data.relatedRecipeCount}</Text>
+                        </BlockStack>
+                      </div>
+                    ) : <Text as="p" tone="subdued">No active family templates found.</Text>}
+                    <RecipeSummary recipes={data.relatedRecipes} />
+                  </BlockStack>
+                )}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <StepHeader number={3} title="Choose Shopify setup" />
+                <div style={fieldGrid(2)}>
+                  <Field label="Shopify setup">
+                    <select name="shopifySetup" value={shopifySetup} onChange={(event) => setShopifySetup(event.currentTarget.value)} style={inputStyle()}>
+                      {SHOPIFY_SETUPS.map((setup) => <option key={setup.value} value={setup.value}>{setup.label}</option>)}
                     </select>
-                  </Field>
-                  <Field label="Product subtype">
-                    <select name="subtype" value={formSubtype} onChange={(event) => setFormSubtype(event.currentTarget.value)} style={inputStyle()}>
-                      {subtypeOptions(formFamily).map((subtype) => <option key={subtype.value} value={subtype.value}>{subtype.label}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Product title">
-                    <input name="title" defaultValue={params.title} placeholder="3oz Black Jar Labels" style={inputStyle()} />
-                  </Field>
-                  <Field label="Product type key">
-                    <input name="productType" defaultValue={params.productType} placeholder="jar_3oz_black_white" style={inputStyle()} />
-                  </Field>
-                  <Field label="SKU">
-                    <input name="sku" defaultValue={params.sku} placeholder="JAR-3OZ-BW-LABEL" style={inputStyle()} />
                   </Field>
                   <Field label="Shopify handle/GID">
                     <input name="shopifyHandle" defaultValue={params.shopifyHandle} placeholder="shopify-handle or gid://shopify/Product/..." style={inputStyle()} />
                   </Field>
-                  <Field label="MOQ / default quantity">
-                    <input name="moq" type="number" min="1" defaultValue={params.moq} placeholder="128" style={inputStyle()} />
-                  </Field>
-                  <Field label="Pricing mode">
-                    <select name="pricingMode" defaultValue={params.pricingMode} style={inputStyle()}>
-                      {PRICING_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Cost source">
-                    <select name="costSource" defaultValue={params.costSource} style={inputStyle()}>
-                      {COST_SOURCES.map((source) => <option key={source.value} value={source.value}>{source.label}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Target margin %">
-                    <input name="targetMargin" type="number" step="0.01" defaultValue={params.targetMargin} placeholder="40" style={inputStyle()} />
-                  </Field>
-                  <Field label="Markup %">
-                    <input name="markup" type="number" step="0.01" defaultValue={params.markup} placeholder="80" style={inputStyle()} />
-                  </Field>
-                  <Field label="Quantity tiers">
-                    <input name="tiers" defaultValue={params.tiers} placeholder="64,128,256,640,1280" style={inputStyle()} />
-                  </Field>
-                  {formFamily !== "blank-jars" ? (
-                    <>
-                      <Field label={dynamicFields.widthLabel}>
-                        <input name="width" type="number" step="0.01" min="0" defaultValue={params.width} placeholder={formFamily === "banners" ? "3" : "2"} style={inputStyle()} />
-                      </Field>
-                      <Field label={dynamicFields.heightLabel}>
-                        <input name="height" type="number" step="0.01" min="0" defaultValue={params.height} placeholder={formFamily === "banners" ? "8" : "3"} style={inputStyle()} />
-                      </Field>
-                    </>
-                  ) : null}
-                  <Field label={dynamicFields.materialLabel}>
-                    <input name="material" defaultValue={params.material} placeholder={formFamily === "blank-jars" ? "100ml Tall Miron" : "Vinyl, BOPP, banner vinyl"} style={inputStyle()} />
-                  </Field>
-                  <Field label={dynamicFields.finishLabel}>
-                    <input name={formFamily === "banners" ? "finishing" : "finish"} defaultValue={formFamily === "banners" ? params.finishing : params.finish} placeholder={formFamily === "banners" ? "Hem + grommets" : "Matte, gloss, laminate"} style={inputStyle()} />
-                  </Field>
-                  <Field label={dynamicFields.extraLabel}>
-                    <input name={dynamicFields.extraName} defaultValue={(params as any)[dynamicFields.extraName] || ""} placeholder={dynamicFields.extraPlaceholder} style={inputStyle()} />
-                  </Field>
-                  <div style={{ display: "flex", alignItems: "end", gap: 8 }}>
-                    <Button submit variant="primary">Preview Plan</Button>
-                    <Button url="/app/erp/products/new">Clear</Button>
-                  </div>
                 </div>
-              </Form>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+                {shopifySetup === "shopify-variants" ? (
+                  <div style={fieldGrid(3)}>
+                    <Field label="Variant option 1 name"><input name="variantOption1Name" defaultValue={params.variantOption1Name} placeholder="Size" style={inputStyle()} /></Field>
+                    <Field label="Variant option 1 values"><input name="variantOption1Values" defaultValue={params.variantOption1Values} placeholder="Small, Medium, Large" style={inputStyle()} /></Field>
+                    <Field label="Variant option 2 name"><input name="variantOption2Name" defaultValue={params.variantOption2Name} placeholder="Color" style={inputStyle()} /></Field>
+                    <Field label="Variant option 2 values"><input name="variantOption2Values" defaultValue={params.variantOption2Values} placeholder="Clear, Black, White" style={inputStyle()} /></Field>
+                    <Field label="Variant option 3 name"><input name="variantOption3Name" defaultValue={params.variantOption3Name} placeholder="Finish" style={inputStyle()} /></Field>
+                    <Field label="Variant option 3 values"><input name="variantOption3Values" defaultValue={params.variantOption3Values} placeholder="Matte, Gloss" style={inputStyle()} /></Field>
+                  </div>
+                ) : null}
+                <Text as="p" tone="subdued">
+                  Use Shopify variants for simple customer choices. Use GSO configurator options for complex pricing like dimensions, material, finish, or quantity.
+                </Text>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
 
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <InlineStack align="space-between" blockAlign="center">
-                <Text as="h2" variant="headingMd">Product Identity</Text>
-                <Badge tone={data.duplicates.profiles.length || data.duplicates.recipes.length || data.duplicates.configuratorProducts.length || data.duplicates.variantRules.length ? "warning" : "success"}>
-                  {data.hasInput ? "Duplicate check complete" : "Enter identity to check"}
-                </Badge>
-              </InlineStack>
-              <Text as="p"><strong>Title:</strong> {params.title || "Not entered"}</Text>
-              <Text as="p"><strong>Product type key:</strong> {params.productType || "Not entered"}</Text>
-              <Text as="p"><strong>SKU:</strong> {params.sku || "Not entered"}</Text>
-              <Text as="p"><strong>Family:</strong> {familyLabel(params.family)}</Text>
-              <Text as="p"><strong>Subtype:</strong> {subtypeLabel(params.family, params.subtype)}</Text>
-              <Divider />
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16 }}>
-                <DuplicateList title="ProductTypeProfile" rows={data.duplicates.profiles} render={(row) => `${row.key} - ${row.name} (${row.active ? "active" : "inactive"})`} />
-                <DuplicateList title="ProductRecipe" rows={data.duplicates.recipes} render={(row) => `${row.name} / ${row.productType} / ${row.sku || "no SKU"} (${row.active ? "active" : "inactive"})`} />
-                <DuplicateList title="ConfiguratorProduct" rows={data.duplicates.configuratorProducts} render={(row) => `${row.title} / ${row.productType} / ${row.shopifyHandle || row.shopifyProductGid || "no Shopify mapping"} (${row.active ? "active" : "inactive"})`} />
-                <DuplicateList title="RecipeVariantRule" rows={data.duplicates.variantRules} render={(row) => `${row.name} / ${row.sku || "no SKU"} / ${row.shopifyProductGid || "no Product GID"} (${row.active ? "active" : "inactive"})`} />
-              </div>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <StepHeader number={4} title="Choose related label options" />
+                <Field label="Related label option">
+                  <select name="labelMode" value={labelMode} onChange={(event) => setLabelMode(event.currentTarget.value)} style={inputStyle()}>
+                    {LABEL_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+                  </select>
+                </Field>
+                {relatedLabelActive ? (
+                  <BlockStack gap="300">
+                    <Text as="p" tone="subdued">Related label products should usually be separate Shopify products linked to the base item.</Text>
+                    <div style={fieldGrid(3)}>
+                      <Field label="Existing base product title/handle/GID"><input name="baseProduct" defaultValue={params.baseProduct} placeholder="Base jar, package, or product" style={inputStyle()} /></Field>
+                      <Field label="Label product name"><input name="labelName" defaultValue={params.labelName} placeholder="100ml Tall Jar Label Set" style={inputStyle()} /></Field>
+                      <Field label="Application mode">
+                        <select name="applicationMode" defaultValue={params.applicationMode} style={inputStyle()}>
+                          {APPLICATION_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Base item source">
+                        <select name="baseItemSource" defaultValue={params.baseItemSource} style={inputStyle()}>
+                          {BASE_ITEM_SOURCES.map((source) => <option key={source} value={source}>{source}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Label zones/options">
+                        <select name="labelZones" multiple defaultValue={params.labelZones.length ? params.labelZones : ["Side"]} style={{ ...inputStyle(), minHeight: 104 }}>
+                          {LABEL_ZONES.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+                        </select>
+                      </Field>
+                    </div>
+                  </BlockStack>
+                ) : <Text as="p" tone="subdued">No related label product will be planned unless this is changed.</Text>}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
 
-        <Layout.Section variant="oneThird">
-          <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Pricing Authority</Text>
-              <Badge tone={params.pricingMode === "unknown" ? "warning" : "success"}>{params.pricingMode === "unknown" ? "Needs pricing mode" : "Ready to plan"}</Badge>
-              <Text as="p"><strong>{data.authority.label}</strong></Text>
-              <Text as="p" tone="subdued">{data.authority.reason}</Text>
-              <Button url="/app/erp/pricing-health">Open Pricing Health</Button>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Required Records Checklist</Text>
-              <ul style={{ margin: 0, paddingLeft: 20 }}>
-                {requiredRecords.map((item) => <li key={item}>{item}</li>)}
-              </ul>
-              <Text as="p" tone="subdued">This planner does not create these records. Use the linked tools after reviewing duplicates and cost assumptions.</Text>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Cost And Margin Plan</Text>
-              <InlineStack gap="200" wrap>
-                <Badge>Cost source: {params.costSource}</Badge>
-                <Badge>Target margin: {params.targetMargin || "Not set"}</Badge>
-                <Badge>Markup: {params.markup || "Not set"}</Badge>
-                <Badge>MOQ: {params.moq || "Not set"}</Badge>
-              </InlineStack>
-              <InlineStack gap="200" wrap>
-                {params.family !== "blank-jars" ? <Badge>Size: {params.width || "?"} x {params.height || "?"} {params.family === "banners" ? "ft" : "in"}</Badge> : null}
-                <Badge>Material/type: {params.material || "Not set"}</Badge>
-                <Badge>Finish: {params.family === "banners" ? params.finishing || "Not set" : params.finish || "Not set"}</Badge>
-                {params.cutType ? <Badge>Cut: {params.cutType}</Badge> : null}
-                {params.environment ? <Badge>Use: {params.environment}</Badge> : null}
-                {params.jarColor ? <Badge>Jar color: {params.jarColor}</Badge> : null}
-              </InlineStack>
-              <Text as="p"><strong>Quantity tiers:</strong> {data.tiers.length ? data.tiers.join(", ") : "None parsed"}</Text>
-              <BlockStack gap="200">
-                <Text as="h3" variant="headingSm">{guidance.title}</Text>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <StepHeader number={5} title="Cost/pricing plan" />
+                <Text as="p"><strong>{data.authority.label}</strong></Text>
+                <Text as="p" tone="subdued">{data.authority.detail}</Text>
+                <div style={fieldGrid(3)}>
+                  <Field label="Product name"><input name="title" defaultValue={params.title} placeholder="New product name" style={inputStyle()} /></Field>
+                  <Field label="SKU / product key"><input name="sku" defaultValue={params.sku} placeholder="SKU-123" style={inputStyle()} /></Field>
+                  <Field label="ERP product type key"><input name="productType" defaultValue={params.productType} placeholder="product_type_key" style={inputStyle()} /></Field>
+                  <Field label="MOQ / default quantity"><input name="moq" type="number" min="1" defaultValue={params.moq || data.selectedTemplate?.minQuantity || ""} style={inputStyle()} /></Field>
+                  <Field label="Quantity tiers"><input name="tiers" defaultValue={params.tiers || data.selectedTemplate?.tierBreakpoints || ""} placeholder="64,128,256,640" style={inputStyle()} /></Field>
+                  <Field label="Target margin %"><input name="targetMargin" type="number" step="0.01" defaultValue={params.targetMargin || data.selectedTemplate?.defaultMarginPct || ""} style={inputStyle()} /></Field>
+                  <Field label="Markup %"><input name="markup" type="number" step="0.01" defaultValue={params.markup} style={inputStyle()} /></Field>
+                  <Field label="Width"><input name="width" defaultValue={params.width} placeholder="Needed for labels/banners" style={inputStyle()} /></Field>
+                  <Field label="Height"><input name="height" defaultValue={params.height} placeholder="Needed for labels/banners" style={inputStyle()} /></Field>
+                  <Field label="Material"><input name="material" defaultValue={params.material} placeholder="Material or blank item" style={inputStyle()} /></Field>
+                  <Field label="Finish"><input name="finish" defaultValue={params.finish} placeholder="Matte, gloss, laminate" style={inputStyle()} /></Field>
+                  <Field label="Cut/finishing"><input name="cutType" defaultValue={params.cutType || params.bannerFinishing} placeholder="Die cut, hem/grommets, trim" style={inputStyle()} /></Field>
+                </div>
                 <InlineStack gap="200" wrap>
-                  {guidance.items.map((item) => <Badge key={item}>{item}</Badge>)}
+                  <Badge>Materials: {data.costFoundation.materialCount}</Badge>
+                  <Badge>Machines: {data.costFoundation.machineCount}</Badge>
+                  <Badge>Vendor cost items: {data.costFoundation.vendorCostCount}</Badge>
+                  <Badge>Configurator options: {data.costFoundation.configuratorOptionCount}</Badge>
+                  <Badge>Configurator rules: {data.costFoundation.configuratorRuleCount}</Badge>
+                </InlineStack>
+                <InlineStack gap="200" wrap>
+                  {links.map((link) => <Button key={link.url} url={link.url}>{link.label}</Button>)}
                 </InlineStack>
               </BlockStack>
-              {data.warnings.length ? (
-                <BlockStack gap="100">
-                  <Text as="h3" variant="headingSm">Warnings</Text>
-                  {data.warnings.map((warning: string) => <Badge key={warning} tone="warning">{warning}</Badge>)}
-                </BlockStack>
-              ) : (
-                <Badge tone="success">No planning warnings</Badge>
-              )}
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+            </Card>
+          </Layout.Section>
 
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Fix / Action Links</Text>
-              <LinkButtons links={links} />
-              <Divider />
-              <Text as="p" tone="subdued">Next version can create ERP recipe drafts after this plan is reviewed.</Text>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-      </Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <StepHeader number={6} title="Review" />
+                <InlineStack gap="200" wrap>
+                  <Badge tone={statusTone(data.status) as any}>{data.status}</Badge>
+                  <Badge tone={duplicateCount ? "warning" : "success"}>{duplicateCount ? `${duplicateCount} duplicate match(es)` : "No duplicate matches"}</Badge>
+                </InlineStack>
+                <div style={fieldGrid(2)}>
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">ERP records needed</Text>
+                    <ul style={{ margin: 0, paddingLeft: 20 }}>{erpRecords.map((record) => <li key={record}>{record}</li>)}</ul>
+                  </BlockStack>
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">Shopify records needed</Text>
+                    <ul style={{ margin: 0, paddingLeft: 20 }}>{shopifyRecords.map((record) => <li key={record}>{record}</li>)}</ul>
+                  </BlockStack>
+                </div>
+                {data.warnings.length ? (
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">Missing setup</Text>
+                    {data.warnings.map((warning: string) => <Badge key={warning} tone="warning">{warning}</Badge>)}
+                  </BlockStack>
+                ) : <Badge tone="success">No missing setup warnings</Badge>}
+                {duplicateCount ? (
+                  <Text as="p" tone="subdued">Duplicate warnings are shown in Advanced ERP checks below. Review them before creating records in a future version.</Text>
+                ) : null}
+                <InlineStack gap="200" wrap>
+                  <Button submit variant="primary">Preview Plan</Button>
+                  <Button url="/app/erp/products/new">Clear</Button>
+                  <Button disabled>Create ERP Draft — coming next</Button>
+                  <Button disabled>Create Shopify Draft Product — coming later</Button>
+                  {relatedLabelActive ? <Button disabled>Create Related Label Product — coming later</Button> : null}
+                </InlineStack>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+
+          <Layout.Section>
+            <Card>
+              <details>
+                <summary style={{ cursor: "pointer", fontWeight: 700 }}>Advanced ERP checks</summary>
+                <div style={{ marginTop: 16 }}>
+                  <BlockStack gap="300">
+                    <Text as="p" tone="subdued">
+                      Technical duplicate checks are read-only. They search existing ERP templates, recipes, configurator products, and Shopify mapping rows.
+                    </Text>
+                    <div style={fieldGrid(2)}>
+                      <DuplicateList title="Product family/template matches" rows={data.duplicates.profiles} render={(row) => `${row.key} - ${row.name} (${row.active ? "active" : "inactive"})`} />
+                      <DuplicateList title="Recipe matches" rows={data.duplicates.recipes} render={(row) => `${row.name} / ${row.productType} / ${row.sku || "no SKU"} (${row.active ? "active" : "inactive"})`} />
+                      <DuplicateList title="Configurator product matches" rows={data.duplicates.configuratorProducts} render={(row) => `${row.title} / ${row.productType} / ${row.shopifyHandle || row.shopifyProductGid || "no Shopify mapping"} (${row.active ? "active" : "inactive"})`} />
+                      <DuplicateList title="Shopify variant mapping matches" rows={data.duplicates.variantRules} render={(row) => `${row.name} / ${row.sku || "no SKU"} / ${row.shopifyProductGid || "no Product GID"} (${row.active ? "active" : "inactive"})`} />
+                    </div>
+                  </BlockStack>
+                </div>
+              </details>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Form>
     </Page>
   );
 }
