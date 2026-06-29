@@ -289,6 +289,19 @@ function DuplicateList({ title, rows, render }: { title: string; rows: any[]; re
   );
 }
 
+function readinessSentence(status: string, warnings: string[], duplicateCount: number) {
+  if (duplicateCount > 0) return "Duplicate risk found. Review Advanced ERP checks before creating anything.";
+  if (status === "Ready for ERP draft planning") return "This plan looks ready for an ERP draft, but Shopify creation will come later.";
+  if (warnings.length) {
+    const missing = warnings
+      .slice(0, 3)
+      .map((warning) => warning.replace(/\.$/, "").toLowerCase())
+      .join(", ");
+    return `This product is not ready yet because it is missing or needs review: ${missing}.`;
+  }
+  return "This plan needs more review before any records are created.";
+}
+
 function RecipeSummary({ recipes }: { recipes: any[] }) {
   if (!recipes.length) return <Text as="p" tone="subdued">No example recipes found for this template yet.</Text>;
   return (
@@ -338,6 +351,17 @@ export async function loader({ request }: { request: Request }) {
     finish: clean(url.searchParams.get("finish")),
     cutType: clean(url.searchParams.get("cutType")),
     bannerFinishing: clean(url.searchParams.get("bannerFinishing")),
+    costSource: clean(url.searchParams.get("costSource")),
+    jarSize: clean(url.searchParams.get("jarSize")),
+    jarColors: clean(url.searchParams.get("jarColors")),
+    blankCost: clean(url.searchParams.get("blankCost")),
+    labelPrintMaterial: clean(url.searchParams.get("labelPrintMaterial")),
+    applicationNote: clean(url.searchParams.get("applicationNote")),
+    sizeShape: clean(url.searchParams.get("sizeShape")),
+    boardMaterial: clean(url.searchParams.get("boardMaterial")),
+    machineRoute: clean(url.searchParams.get("machineRoute")),
+    vendorSource: clean(url.searchParams.get("vendorSource")),
+    tierNote: clean(url.searchParams.get("tierNote")),
     newFamilyName: clean(url.searchParams.get("newFamilyName")),
     newFamilyKey: clean(url.searchParams.get("newFamilyKey")),
     newPricingMethod: clean(url.searchParams.get("newPricingMethod"), "auto_margin"),
@@ -577,6 +601,126 @@ export default function ProductBuilderPlan() {
     { label: "Configurator Mapping", url: "/app/erp/configurator-mapping" },
   ];
 
+  const readinessText = readinessSentence(data.status, data.warnings as string[], duplicateCount);
+  const willCreateLater = [
+    "1 inactive ProductRecipe",
+    "Copied RecipeTier rows from the selected example/template if available",
+    "Product name, SKU/key, MOQ, and margin fields",
+    "Cost review flag or equivalent review status if the model supports it",
+  ];
+  const willNotCreateYet = [
+    "No Shopify product",
+    "No live storefront product",
+    "No ConfiguratorProduct",
+    "No ConfiguratorPricingRule",
+    "No material/vendor/machine records",
+    "No production jobs",
+    "No live price changes",
+  ];
+
+  const costSetupFields = (() => {
+    if (params.productFamily === "jars") {
+      return (
+        <div style={fieldGrid(2)}>
+          <Field label="Vendor/source jar cost"><input name="costSource" defaultValue={params.costSource} placeholder="Vendor tier, landed cost, or cost book item" style={inputStyle()} /></Field>
+          <Field label="Jar size/type"><input name="jarSize" defaultValue={params.jarSize} placeholder="100ml tall, 3oz, 4oz" style={inputStyle()} /></Field>
+          <Field label="Jar color/options"><input name="jarColors" defaultValue={params.jarColors} placeholder="Clear, Black, White, or none" style={inputStyle()} /></Field>
+          <Field label="Label zones/options">
+            <select name="labelZones" multiple defaultValue={params.labelZones.length ? params.labelZones : ["Side", "Lid"]} style={{ ...inputStyle(), minHeight: 104 }}>
+              {LABEL_ZONES.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+            </select>
+          </Field>
+        </div>
+      );
+    }
+    if (params.productFamily === "sticker-bags") {
+      return (
+        <div style={fieldGrid(2)}>
+          <Field label="Blank bag cost/source"><input name="blankCost" defaultValue={params.blankCost} placeholder="Blank bag vendor or internal cost" style={inputStyle()} /></Field>
+          <Field label="Label/print material"><input name="labelPrintMaterial" defaultValue={params.labelPrintMaterial || params.material} placeholder="Label stock, print media, or film" style={inputStyle()} /></Field>
+          <Field label="Finish"><input name="finish" defaultValue={params.finish} placeholder="Matte, gloss, laminate" style={inputStyle()} /></Field>
+          <Field label="Application/labor note"><input name="applicationNote" defaultValue={params.applicationNote} placeholder="Hand apply, machine apply, outsource" style={inputStyle()} /></Field>
+        </div>
+      );
+    }
+    if (params.productFamily === "dtp-pouches") {
+      return (
+        <div style={fieldGrid(2)}>
+          <Field label="Pouch material or sourced cost"><input name="costSource" defaultValue={params.costSource || params.material} placeholder="Pouch material, blank, or vendor cost" style={inputStyle()} /></Field>
+          <Field label="Size/shape"><input name="sizeShape" defaultValue={params.sizeShape} placeholder="Stock size, custom shape, gusset, zipper" style={inputStyle()} /></Field>
+          <Field label="Finish"><input name="finish" defaultValue={params.finish} placeholder="Matte, gloss, soft touch" style={inputStyle()} /></Field>
+          <Field label="MOQ/tier note"><input name="tierNote" defaultValue={params.tierNote} placeholder="MOQ limits, tier breaks, setup notes" style={inputStyle()} /></Field>
+        </div>
+      );
+    }
+    if (params.productFamily === "boxes") {
+      return (
+        <div style={fieldGrid(2)}>
+          <Field label="Board/material"><input name="boardMaterial" defaultValue={params.boardMaterial || params.material} placeholder="Board, corrugate, stock" style={inputStyle()} /></Field>
+          <Field label="Size"><input name="sizeShape" defaultValue={params.sizeShape} placeholder="L x W x H or dieline size" style={inputStyle()} /></Field>
+          <Field label="Finish"><input name="finish" defaultValue={params.finish} placeholder="Coating, laminate, varnish" style={inputStyle()} /></Field>
+          <Field label="Cut/assembly/finishing"><input name="cutType" defaultValue={params.cutType} placeholder="Die cut, score, glue, assemble" style={inputStyle()} /></Field>
+        </div>
+      );
+    }
+    if (params.productFamily === "labels-stickers") {
+      return (
+        <div style={fieldGrid(2)}>
+          <Field label="Width inches"><input name="width" defaultValue={params.width} placeholder="3" style={inputStyle()} /></Field>
+          <Field label="Height inches"><input name="height" defaultValue={params.height} placeholder="2" style={inputStyle()} /></Field>
+          <Field label="Material"><input name="material" defaultValue={params.material} placeholder="Vinyl, paper, clear, roll stock" style={inputStyle()} /></Field>
+          <Field label="Finish"><input name="finish" defaultValue={params.finish} placeholder="Matte, gloss, laminate" style={inputStyle()} /></Field>
+          <Field label="Cut type"><input name="cutType" defaultValue={params.cutType} placeholder="Die cut, kiss cut, sheet, roll" style={inputStyle()} /></Field>
+        </div>
+      );
+    }
+    if (params.productFamily === "banners") {
+      return (
+        <div style={fieldGrid(2)}>
+          <Field label="Width feet"><input name="width" defaultValue={params.width} placeholder="4" style={inputStyle()} /></Field>
+          <Field label="Height feet"><input name="height" defaultValue={params.height} placeholder="8" style={inputStyle()} /></Field>
+          <Field label="Banner material"><input name="material" defaultValue={params.material} placeholder="13oz vinyl, mesh, fabric" style={inputStyle()} /></Field>
+          <Field label="Printer/machine route"><input name="machineRoute" defaultValue={params.machineRoute} placeholder="Mimaki, Roland, outsource" style={inputStyle()} /></Field>
+          <Field label="Finishing, hem/grommets"><input name="bannerFinishing" defaultValue={params.bannerFinishing || params.cutType} placeholder="Hem, grommets, pole pocket" style={inputStyle()} /></Field>
+        </div>
+      );
+    }
+    if (params.productFamily === "apparel-dtf") {
+      return (
+        <div style={fieldGrid(2)}>
+          <Field label="Blank garment/source"><input name="blankCost" defaultValue={params.blankCost} placeholder="Garment vendor, blank cost, or SKU" style={inputStyle()} /></Field>
+          <Field label="Transfer/print material"><input name="labelPrintMaterial" defaultValue={params.labelPrintMaterial || params.material} placeholder="DTF transfer, vinyl, ink" style={inputStyle()} /></Field>
+          <Field label="Size/color variant note"><input name="sizeShape" defaultValue={params.sizeShape} placeholder="Sizes, colors, garment variants" style={inputStyle()} /></Field>
+          <Field label="Application labor"><input name="applicationNote" defaultValue={params.applicationNote} placeholder="Press time, placement, setup" style={inputStyle()} /></Field>
+        </div>
+      );
+    }
+    if (params.productFamily === "sourced-blank-resale") {
+      return (
+        <div style={fieldGrid(2)}>
+          <Field label="Vendor/source item cost"><input name="costSource" defaultValue={params.costSource} placeholder="Unit cost, landed cost, or cost book tier" style={inputStyle()} /></Field>
+          <Field label="Vendor/source"><input name="vendorSource" defaultValue={params.vendorSource} placeholder="Vendor, manufacturer, supplier" style={inputStyle()} /></Field>
+          <Field label="MOQ/cost tier note"><input name="tierNote" defaultValue={params.tierNote} placeholder="Vendor MOQ, case pack, cost tiers" style={inputStyle()} /></Field>
+        </div>
+      );
+    }
+    return (
+      <div style={fieldGrid(2)}>
+        <Field label="Pricing method">
+          <select name="newPricingMethod" defaultValue={params.newPricingMethod} style={inputStyle()}>
+            {NEW_FAMILY_PRICING.map((method) => <option key={method} value={method}>{method}</option>)}
+          </select>
+        </Field>
+        <Field label="Unit of measure">
+          <select name="unitOfMeasure" defaultValue={params.unitOfMeasure} style={inputStyle()}>
+            {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+          </select>
+        </Field>
+        <Field label="Needed cost components"><input name="costComponents" defaultValue={params.costComponents} placeholder="material, labor, machine, vendor cost, finishing" style={inputStyle()} /></Field>
+      </div>
+    );
+  })();
+
   return (
     <Page title="Product Builder" subtitle="New Product Wizard">
       <Form method="get">
@@ -776,9 +920,7 @@ export default function ProductBuilderPlan() {
           <Layout.Section>
             <Card>
               <BlockStack gap="300">
-                <StepHeader number={5} title="Cost/pricing plan" />
-                <Text as="p"><strong>{data.authority.label}</strong></Text>
-                <Text as="p" tone="subdued">{data.authority.detail}</Text>
+                <StepHeader number={5} title="Product details" />
                 <div style={fieldGrid(3)}>
                   <Field label="Product name"><input name="title" defaultValue={params.title} placeholder="New product name" style={inputStyle()} /></Field>
                   <Field label="SKU / product key"><input name="sku" defaultValue={params.sku} placeholder="SKU-123" style={inputStyle()} /></Field>
@@ -787,12 +929,18 @@ export default function ProductBuilderPlan() {
                   <Field label="Quantity tiers"><input name="tiers" defaultValue={params.tiers || data.selectedTemplate?.tierBreakpoints || ""} placeholder="64,128,256,640" style={inputStyle()} /></Field>
                   <Field label="Target margin %"><input name="targetMargin" type="number" step="0.01" defaultValue={params.targetMargin || data.selectedTemplate?.defaultMarginPct || ""} style={inputStyle()} /></Field>
                   <Field label="Markup %"><input name="markup" type="number" step="0.01" defaultValue={params.markup} style={inputStyle()} /></Field>
-                  <Field label="Width"><input name="width" defaultValue={params.width} placeholder="Needed for labels/banners" style={inputStyle()} /></Field>
-                  <Field label="Height"><input name="height" defaultValue={params.height} placeholder="Needed for labels/banners" style={inputStyle()} /></Field>
-                  <Field label="Material"><input name="material" defaultValue={params.material} placeholder="Material or blank item" style={inputStyle()} /></Field>
-                  <Field label="Finish"><input name="finish" defaultValue={params.finish} placeholder="Matte, gloss, laminate" style={inputStyle()} /></Field>
-                  <Field label="Cut/finishing"><input name="cutType" defaultValue={params.cutType || params.bannerFinishing} placeholder="Die cut, hem/grommets, trim" style={inputStyle()} /></Field>
                 </div>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <StepHeader number={6} title="Cost setup" />
+                <Text as="p"><strong>{data.authority.label}</strong></Text>
+                <Text as="p" tone="subdued">{data.authority.detail}</Text>
+                {costSetupFields}
                 <InlineStack gap="200" wrap>
                   <Badge>Materials: {data.costFoundation.materialCount}</Badge>
                   <Badge>Machines: {data.costFoundation.machineCount}</Badge>
@@ -810,13 +958,14 @@ export default function ProductBuilderPlan() {
           <Layout.Section>
             <Card>
               <BlockStack gap="300">
-                <StepHeader number={6} title="Review" />
+                <StepHeader number={7} title="Review" />
                 <InlineStack gap="200" wrap>
                   <Badge tone={statusTone(data.status) as any}>{data.status}</Badge>
                   <Badge>Family selected: {data.productFamilyLabel}</Badge>
                   {data.selectedTemplate ? <Badge>Copy setup from: {data.selectedTemplate.name}</Badge> : null}
                   <Badge tone={duplicateCount ? "warning" : "success"}>{duplicateCount ? `${duplicateCount} duplicate match(es)` : "No duplicate matches"}</Badge>
                 </InlineStack>
+                <Text as="p">{readinessText}</Text>
                 <div style={fieldGrid(2)}>
                   <BlockStack gap="100">
                     <Text as="h3" variant="headingSm">ERP records needed</Text>
@@ -825,6 +974,17 @@ export default function ProductBuilderPlan() {
                   <BlockStack gap="100">
                     <Text as="h3" variant="headingSm">Shopify records needed</Text>
                     <ul style={{ margin: 0, paddingLeft: 20 }}>{shopifyRecords.map((record) => <li key={record}>{record}</li>)}</ul>
+                  </BlockStack>
+                </div>
+                <div style={fieldGrid(2)}>
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">What will be created later</Text>
+                    <Text as="p" tone="subdued">When Create ERP Draft is enabled, it should create a reviewed draft only.</Text>
+                    <ul style={{ margin: 0, paddingLeft: 20 }}>{willCreateLater.map((record) => <li key={record}>{record}</li>)}</ul>
+                  </BlockStack>
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">What will NOT be created yet</Text>
+                    <ul style={{ margin: 0, paddingLeft: 20 }}>{willNotCreateYet.map((record) => <li key={record}>{record}</li>)}</ul>
                   </BlockStack>
                 </div>
                 {data.warnings.length ? (
