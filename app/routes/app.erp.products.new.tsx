@@ -10,7 +10,7 @@ import {
   Text,
 } from "@shopify/polaris";
 import { useState } from "react";
-import { Form, useLoaderData } from "react-router";
+import { Form, redirect, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -124,6 +124,12 @@ function clean(value: string | null, fallback = "") {
   return text || fallback;
 }
 
+function formText(formData: FormData, key: string, fallback = "") {
+  const value = formData.get(key);
+  const text = String(value || "").trim();
+  return text || fallback;
+}
+
 function safeChoice(value: string, options: { value: string }[], fallback: string) {
   return options.some((option) => option.value === value) ? value : fallback;
 }
@@ -154,6 +160,23 @@ function parseTiers(value: string) {
 function intValue(value: string, fallback = 0) {
   const parsed = parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function positiveInt(value: string, fallback = 1) {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : Math.max(1, fallback);
+}
+
+function numberValue(value: string, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function slugify(value: string) {
+  return String(value || "product")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "product";
 }
 
 function inferKind(profile: any) {
@@ -198,6 +221,37 @@ function termsForFamily(value: string) {
   if (value === "apparel-dtf") return ["apparel", "dtf", "garment"];
   if (value === "sourced-blank-resale") return ["source", "vendor", "blank"];
   return [];
+}
+
+function parseTemplateTiers(value: string, fallbackMargin: number) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((tier) => ({
+          minQty: positiveInt(String(tier?.minQty || tier?.min || 0), 0),
+          maxQty: tier?.maxQty || tier?.max ? positiveInt(String(tier.maxQty || tier.max), 0) : null,
+          marginPct: tier?.marginPct == null ? fallbackMargin : numberValue(String(tier.marginPct), fallbackMargin),
+          fixedPrice: tier?.fixedPrice == null ? null : numberValue(String(tier.fixedPrice), 0),
+          notes: "Copied from product family template.",
+        }))
+        .filter((tier) => tier.minQty > 0);
+    }
+  } catch (_error) {
+    return [];
+  }
+  return [];
+}
+
+function tiersFromBreakpoints(value: string, marginPct: number) {
+  return parseTiers(value).map((minQty, index, rows) => ({
+    minQty,
+    maxQty: rows[index + 1] ? rows[index + 1] - 1 : null,
+    marginPct,
+    fixedPrice: null,
+    notes: "Created from Product Builder quantity tiers.",
+  }));
 }
 
 function recommendedAuthority(params: any, selectedKind: string) {
@@ -313,6 +367,161 @@ function RecipeSummary({ recipes }: { recipes: any[] }) {
       ))}
     </BlockStack>
   );
+}
+
+export async function action({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const formData = await request.formData();
+  const intent = formText(formData, "intent");
+
+  if (intent !== "createErpDraft") {
+    return Response.json({ ok: false, message: "Unsupported Product Builder action." }, { status: 400 });
+  }
+
+  const name = formText(formData, "title");
+  const sku = formText(formData, "sku");
+  const explicitProductType = formText(formData, "productType");
+  const templateId = formText(formData, "templateId");
+  const productFamily = safeChoice(formText(formData, "productFamily"), PRODUCT_FAMILIES, "custom-other");
+  const shopifyProductGid = normalizeGid(formText(formData, "shopifyHandle"));
+  const errors: string[] = [];
+
+  if (!name) errors.push("Product name is required.");
+  if (!sku && !explicitProductType) errors.push("Add either a SKU/product key or an ERP product type key.");
+
+  const selectedTemplate = templateId
+    ? await db.productTypeProfile.findFirst({
+        where: { shop, id: templateId, active: true },
+        select: {
+          id: true,
+          key: true,
+          name: true,
+          productionMode: true,
+          minQuantity: true,
+          defaultQuantity: true,
+          defaultMarginPct: true,
+          tierBreakpoints: true,
+          tierTemplate: true,
+        },
+      })
+    : null;
+
+  if (templateId && !selectedTemplate) {
+    errors.push("Selected copy-from example was not found for this shop.");
+  }
+
+  const moq = positiveInt(formText(formData, "moq"), selectedTemplate?.minQuantity || selectedTemplate?.defaultQuantity || 1);
+  const targetMargin = numberValue(formText(formData, "targetMargin"), Number(selectedTemplate?.defaultMarginPct || 40));
+  numberValue(formText(formData, "markup"), 0);
+  const productType = explicitProductType || selectedTemplate?.key || slugify(name);
+
+  const duplicateChecks: Promise<any>[] = [];
+  if (sku) {
+    duplicateChecks.push(db.productRecipe.findFirst({ where: { shop, sku }, select: { id: true, name: true, sku: true } }));
+  } else {
+    duplicateChecks.push(Promise.resolve(null));
+  }
+  if (explicitProductType) {
+    duplicateChecks.push(db.productRecipe.findFirst({ where: { shop, productType: explicitProductType }, select: { id: true, name: true, productType: true } }));
+  } else {
+    duplicateChecks.push(Promise.resolve(null));
+  }
+  if (name) {
+    duplicateChecks.push(db.productRecipe.findFirst({ where: { shop, name: { equals: name, mode: "insensitive" } }, select: { id: true, name: true } }));
+  } else {
+    duplicateChecks.push(Promise.resolve(null));
+  }
+  if (shopifyProductGid) {
+    duplicateChecks.push(db.productRecipe.findFirst({ where: { shop, productGid: shopifyProductGid }, select: { id: true, name: true, productGid: true } }));
+    duplicateChecks.push(db.configuratorProduct.findFirst({ where: { shop, shopifyProductGid }, select: { id: true, title: true, shopifyProductGid: true } }));
+    duplicateChecks.push(db.recipeVariantRule.findFirst({ where: { shop, shopifyProductGid }, select: { id: true, name: true, shopifyProductGid: true } }));
+  }
+
+  const [skuDuplicate, productTypeDuplicate, nameDuplicate, recipeGidDuplicate, configuratorGidDuplicate, variantRuleGidDuplicate] = await Promise.all(duplicateChecks);
+  if (skuDuplicate) errors.push(`A ProductRecipe already uses SKU ${sku}.`);
+  if (productTypeDuplicate) errors.push(`A ProductRecipe already uses ERP product type ${explicitProductType}.`);
+  if (nameDuplicate) errors.push(`A ProductRecipe already uses the name ${name}.`);
+  if (recipeGidDuplicate || configuratorGidDuplicate || variantRuleGidDuplicate) errors.push("That Shopify Product GID is already mapped in ERP.");
+
+  if (errors.length) {
+    return Response.json({ ok: false, message: "ERP draft was not created.", errors }, { status: 400 });
+  }
+
+  const exampleRecipe = selectedTemplate
+    ? await db.productRecipe.findFirst({
+        where: {
+          shop,
+          active: true,
+          OR: [
+            { productTypeProfileId: selectedTemplate.id },
+            { productType: selectedTemplate.key },
+          ],
+        },
+        select: {
+          id: true,
+          tiers: {
+            orderBy: { minQty: "asc" },
+            select: { minQty: true, maxQty: true, marginPct: true, fixedPrice: true, notes: true },
+          },
+        },
+      })
+    : null;
+
+  const sourceTiers = exampleRecipe?.tiers?.length
+    ? exampleRecipe.tiers.map((tier) => ({
+        minQty: tier.minQty,
+        maxQty: tier.maxQty,
+        marginPct: tier.marginPct,
+        fixedPrice: tier.fixedPrice,
+        notes: tier.notes || "Copied from Product Builder example recipe.",
+      }))
+    : parseTemplateTiers(String(selectedTemplate?.tierTemplate || ""), targetMargin).length
+      ? parseTemplateTiers(String(selectedTemplate?.tierTemplate || ""), targetMargin)
+      : tiersFromBreakpoints(formText(formData, "tiers") || String(selectedTemplate?.tierBreakpoints || ""), targetMargin);
+
+  const recipe = await db.$transaction(async (tx) => {
+    const draft = await tx.productRecipe.create({
+      data: {
+        shop,
+        name,
+        sku: sku || null,
+        productType,
+        productFamily: familyLabel(productFamily),
+        productTypeProfileId: selectedTemplate?.id || null,
+        pricingTemplateMode: "template",
+        productionMode: selectedTemplate?.productionMode || "in_house",
+        minQuantity: moq,
+        defaultQuantity: moq,
+        targetMarginPct: targetMargin,
+        notes: "Created by Product Builder as inactive ERP draft. Review costs, materials, tiers, and Shopify mapping before activation.",
+        active: false,
+        useInQuotes: false,
+        costReviewNeeded: true,
+        costReviewReasons: "Draft created from Product Builder. Complete cost setup before activating.",
+        costReviewSource: "product_builder",
+      },
+      select: { id: true },
+    });
+
+    if (sourceTiers.length) {
+      await tx.recipeTier.createMany({
+        data: sourceTiers.map((tier) => ({
+          shop,
+          recipeId: draft.id,
+          minQty: tier.minQty,
+          maxQty: tier.maxQty,
+          marginPct: tier.marginPct,
+          fixedPrice: tier.fixedPrice,
+          notes: tier.notes,
+        })),
+      });
+    }
+
+    return draft;
+  });
+
+  return redirect(`/app/erp/product-setup?recipeStatus=archived&recipeId=${recipe.id}`);
 }
 
 export async function loader({ request }: { request: Request }) {
@@ -558,6 +767,7 @@ export async function loader({ request }: { request: Request }) {
 
 export default function ProductBuilderPlan() {
   const data = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>() as any;
   const { params } = data;
   const [wizardMode, setWizardMode] = useState(params.wizardMode);
   const [shopifySetup, setShopifySetup] = useState(params.shopifySetup);
@@ -571,6 +781,7 @@ export default function ProductBuilderPlan() {
 
   const relatedLabelActive = wizardMode === "related-label" || labelMode !== "none";
   const duplicateCount = data.duplicates.profiles.length + data.duplicates.recipes.length + data.duplicates.configuratorProducts.length + data.duplicates.variantRules.length;
+  const canCreateDraft = Boolean(params.title && (params.sku || params.productType));
   const erpRecords = wizardMode === "new-family"
     ? ["Product family/template", "First product recipe", "Quantity tiers", "Material/vendor/machine cost inputs", "Pricing health review"]
     : shopifySetup === "gso-configurator-options"
@@ -737,6 +948,18 @@ export default function ProductBuilderPlan() {
                   <Badge tone={statusTone(data.status) as any}>{data.status}</Badge>
                   <Badge>Shop: {data.shop}</Badge>
                 </InlineStack>
+                {actionData && !actionData.ok ? (
+                  <div style={{ border: "1px solid #e0b3b2", background: "#fff4f4", borderRadius: 8, padding: 12 }}>
+                    <BlockStack gap="100">
+                      <Text as="p" tone="critical">{actionData.message || "ERP draft was not created."}</Text>
+                      {Array.isArray(actionData.errors) && actionData.errors.length ? (
+                        <ul style={{ margin: 0, paddingLeft: 20 }}>
+                          {actionData.errors.map((error: string) => <li key={error}>{error}</li>)}
+                        </ul>
+                      ) : null}
+                    </BlockStack>
+                  </div>
+                ) : null}
               </BlockStack>
             </Card>
           </Layout.Section>
@@ -999,7 +1222,25 @@ export default function ProductBuilderPlan() {
                 <InlineStack gap="200" wrap>
                   <Button submit variant="primary">Preview Plan</Button>
                   <Button url="/app/erp/products/new">Clear</Button>
-                  <Button disabled>Create ERP Draft — coming next</Button>
+                  <button
+                    type="submit"
+                    name="intent"
+                    value="createErpDraft"
+                    formMethod="post"
+                    disabled={!canCreateDraft}
+                    style={{
+                      minHeight: 36,
+                      padding: "7px 14px",
+                      borderRadius: 8,
+                      border: "1px solid #1f6f43",
+                      background: canCreateDraft ? "#008060" : "#f1f2f3",
+                      color: canCreateDraft ? "#ffffff" : "#6d7175",
+                      cursor: canCreateDraft ? "pointer" : "not-allowed",
+                      fontWeight: 600,
+                    }}
+                  >
+                    Create ERP Draft
+                  </button>
                   <Button disabled>Create Shopify Draft Product — coming later</Button>
                   {relatedLabelActive ? <Button disabled>Create Related Label Product — coming later</Button> : null}
                 </InlineStack>
