@@ -42,6 +42,83 @@ const LABEL_ZONES = ["Side", "Lid", "Front", "Back", "Full wrap", "Custom"];
 const NEW_FAMILY_PRICING = ["auto_margin", "fixed_price", "markup_over_cost", "manual_review"];
 const UNIT_OPTIONS = ["each", "sqft", "sqin", "linear_ft", "roll", "sheet"];
 
+const PRODUCT_FAMILIES = [
+  {
+    value: "jars",
+    label: "Jars",
+    summary: [
+      "Uses vendor/source jar cost",
+      "Can support label zones like side, lid, or side + lid",
+      "Can support jar color, material, and finish options",
+      "Usually copies tiers and margin from an existing jar setup",
+    ],
+  },
+  {
+    value: "sticker-bags",
+    label: "Sticker Bags",
+    summary: [
+      "Uses blank bag cost plus label, print, and application logic",
+      "Can support material, finish, and quantity options",
+    ],
+  },
+  {
+    value: "dtp-pouches",
+    label: "DTP Pouches",
+    summary: [
+      "Uses pouch material, printing, finishing, or sourced cost logic",
+      "Can support stock or custom shape and MOQ tiers",
+    ],
+  },
+  {
+    value: "boxes",
+    label: "Boxes",
+    summary: [
+      "Uses board, material, print, finish, cut, and assembly logic",
+      "Can support size, finish, and quantity tiers",
+    ],
+  },
+  {
+    value: "labels-stickers",
+    label: "Labels / Stickers",
+    summary: [
+      "Uses material, ink, machine, cut, and labor logic",
+      "Can support dimensions, finish, cut type, and tiers",
+    ],
+  },
+  {
+    value: "banners",
+    label: "Banners",
+    summary: [
+      "Uses square-foot material, printer/machine, and finishing labor",
+      "Can support Mimaki/Roland routing, hem/grommets, and indoor/outdoor setup",
+    ],
+  },
+  {
+    value: "apparel-dtf",
+    label: "Apparel / DTF",
+    summary: [
+      "Uses blank garment or transfer cost plus print/application labor",
+      "Can support size, color, and garment variants",
+    ],
+  },
+  {
+    value: "sourced-blank-resale",
+    label: "Sourced / Blank Resale",
+    summary: [
+      "Uses vendor/source item cost plus markup",
+      "Can support MOQ and cost tiers",
+    ],
+  },
+  {
+    value: "custom-other",
+    label: "Custom / Other",
+    summary: [
+      "Planning-only custom family",
+      "Choose pricing method and cost components later",
+    ],
+  },
+];
+
 function clean(value: string | null, fallback = "") {
   const text = String(value || "").trim();
   return text || fallback;
@@ -49,6 +126,14 @@ function clean(value: string | null, fallback = "") {
 
 function safeChoice(value: string, options: { value: string }[], fallback: string) {
   return options.some((option) => option.value === value) ? value : fallback;
+}
+
+function familyLabel(value: string) {
+  return PRODUCT_FAMILIES.find((family) => family.value === value)?.label || "Custom / Other";
+}
+
+function familySummary(value: string) {
+  return PRODUCT_FAMILIES.find((family) => family.value === value)?.summary || PRODUCT_FAMILIES[PRODUCT_FAMILIES.length - 1].summary;
 }
 
 function normalizeGid(value: string) {
@@ -82,12 +167,36 @@ function inferKind(profile: any) {
   return "General";
 }
 
+function familyForProfile(profile: any) {
+  const text = `${profile?.calculatorKind || ""} ${profile?.key || ""} ${profile?.name || ""}`.toLowerCase();
+  if (text.includes("jar")) return "jars";
+  if (text.includes("banner")) return "banners";
+  if (text.includes("dtf") || text.includes("apparel") || text.includes("garment")) return "apparel-dtf";
+  if (text.includes("box")) return "boxes";
+  if (text.includes("dtp") || text.includes("pouch")) return "dtp-pouches";
+  if (text.includes("source") || text.includes("outsourc") || text.includes("resale")) return "sourced-blank-resale";
+  if (text.includes("label") || text.includes("sticker")) return text.includes("bag") ? "sticker-bags" : "labels-stickers";
+  return "custom-other";
+}
+
 function termsForKind(kind: string) {
   if (kind === "Jars") return ["jar"];
   if (kind === "Banners") return ["banner"];
   if (kind === "Labels / Stickers" || kind === "Sticker Bags") return ["label", "sticker", "roll"];
   if (kind === "Boxes") return ["box"];
   if (kind === "DTP / Pouches") return ["dtp", "pouch", "bag"];
+  return [];
+}
+
+function termsForFamily(value: string) {
+  if (value === "jars") return ["jar"];
+  if (value === "banners") return ["banner"];
+  if (value === "labels-stickers") return ["label", "sticker", "roll"];
+  if (value === "sticker-bags") return ["sticker", "label", "bag"];
+  if (value === "boxes") return ["box"];
+  if (value === "dtp-pouches") return ["dtp", "pouch"];
+  if (value === "apparel-dtf") return ["apparel", "dtf", "garment"];
+  if (value === "sourced-blank-resale") return ["source", "vendor", "blank"];
   return [];
 }
 
@@ -200,6 +309,7 @@ export async function loader({ request }: { request: Request }) {
 
   const params = {
     wizardMode: safeChoice(clean(url.searchParams.get("wizardMode"), "existing-family"), WIZARD_MODES, "existing-family"),
+    productFamily: clean(url.searchParams.get("productFamily")),
     templateId: clean(url.searchParams.get("templateId")),
     title: clean(url.searchParams.get("title")),
     productType: clean(url.searchParams.get("productType")),
@@ -254,9 +364,16 @@ export async function loader({ request }: { request: Request }) {
     take: 100,
   });
 
-  const selectedTemplate = templates.find((template) => template.id === params.templateId) || templates[0] || null;
+  const requestedTemplate = templates.find((template) => template.id === params.templateId) || null;
+  const productFamily = safeChoice(params.productFamily, PRODUCT_FAMILIES, requestedTemplate ? familyForProfile(requestedTemplate) : "jars");
+  const exampleTemplates = templates.filter((template) => familyForProfile(template) === productFamily);
+  const selectedTemplate =
+    (requestedTemplate && familyForProfile(requestedTemplate) === productFamily ? requestedTemplate : null) ||
+    exampleTemplates[0] ||
+    null;
   const selectedKind = selectedTemplate ? inferKind(selectedTemplate) : "";
   const selectedTemplateId = selectedTemplate?.id || "";
+  params.productFamily = productFamily;
   const shopifyProductGid = normalizeGid(params.shopifyHandle);
   const tiers = parseTiers(params.tiers || selectedTemplate?.tierBreakpoints || "");
   const hasInput = Boolean(params.title || params.productType || params.sku || params.shopifyHandle || params.newFamilyName);
@@ -293,7 +410,7 @@ export async function loader({ request }: { request: Request }) {
       }
     : { shop, active: true, id: "__none__" };
 
-  const terms = termsForKind(selectedKind);
+  const terms = termsForFamily(productFamily).length ? termsForFamily(productFamily) : termsForKind(selectedKind);
   const materialWhere: any = { shop, active: true };
   if (terms.length) {
     materialWhere.OR = terms.flatMap((term) => [
@@ -359,7 +476,7 @@ export async function loader({ request }: { request: Request }) {
   ]);
 
   const duplicateCount = duplicateProfiles.length + duplicateRecipes.length + duplicateConfiguratorProducts.length + duplicateVariantRules.length;
-  const authority = recommendedAuthority(params, selectedKind);
+  const authority = recommendedAuthority(params, familyLabel(productFamily));
   const relatedLabelSelected = params.labelMode !== "none" || params.wizardMode === "related-label";
   const warnings = [
     params.wizardMode !== "new-family" && !selectedTemplate ? "Choose a family/template before planning ERP records." : null,
@@ -374,8 +491,8 @@ export async function loader({ request }: { request: Request }) {
     params.shopifySetup === "shopify-variants" && !params.variantOption1Name ? "Add at least one Shopify variant option name." : null,
     relatedLabelSelected && !params.baseProduct ? "Add the base Shopify product title, handle, or GID for the related label plan." : null,
     relatedLabelSelected && !params.labelName ? "Add the related label product name." : null,
-    selectedKind === "Labels / Stickers" && (!params.width || !params.height) ? "Add label/sticker width and height for cost planning." : null,
-    selectedKind === "Banners" && (!params.width || !params.height) ? "Add banner width and height for square-foot cost planning." : null,
+    productFamily === "labels-stickers" && (!params.width || !params.height) ? "Add label/sticker width and height for cost planning." : null,
+    productFamily === "banners" && (!params.width || !params.height) ? "Add banner width and height for square-foot cost planning." : null,
     materialCount === 0 ? "No matching material cost inputs found for this template kind." : null,
   ].filter(Boolean);
 
@@ -384,6 +501,10 @@ export async function loader({ request }: { request: Request }) {
   return Response.json({
     shop,
     params,
+    productFamilies: PRODUCT_FAMILIES,
+    productFamilyLabel: familyLabel(productFamily),
+    productFamilySummary: familySummary(productFamily),
+    exampleTemplates,
     templates,
     selectedTemplate,
     selectedTemplateId,
@@ -418,7 +539,7 @@ export default function ProductBuilderPlan() {
   const [shopifySetup, setShopifySetup] = useState(params.shopifySetup);
   const [labelMode, setLabelMode] = useState(params.labelMode);
   const groupedTemplates = data.templates.reduce((groups: Record<string, any[]>, template: any) => {
-    const kind = inferKind(template);
+    const kind = familyLabel(familyForProfile(template));
     groups[kind] = groups[kind] || [];
     groups[kind].push(template);
     return groups;
@@ -497,8 +618,8 @@ export default function ProductBuilderPlan() {
               <BlockStack gap="300">
                 <StepHeader
                   number={2}
-                  title="Choose family/template"
-                  help="This product will inherit the setup pattern from this family/template."
+                  title="Choose product family"
+                  help="Choose the broad product family first. Individual sizes or similar products are only used as examples to copy setup from."
                 />
                 {wizardMode === "new-family" ? (
                   <div style={fieldGrid(2)}>
@@ -521,8 +642,37 @@ export default function ProductBuilderPlan() {
                   </div>
                 ) : (
                   <BlockStack gap="300">
-                    <Field label="Existing family/template">
-                      <select name="templateId" defaultValue={data.selectedTemplateId} style={inputStyle()}>
+                    <div style={fieldGrid(2)}>
+                      <Field label="Product family">
+                        <select name="productFamily" defaultValue={params.productFamily} style={inputStyle()}>
+                          {data.productFamilies.map((family: any) => <option key={family.value} value={family.value}>{family.label}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Copy setup from example">
+                        <select name="templateId" defaultValue={data.selectedTemplateId} style={inputStyle()}>
+                          <option value="">No example selected yet</option>
+                          {data.exampleTemplates.length ? data.exampleTemplates.map((template: any) => (
+                            <option key={template.id} value={template.id}>{template.name} ({template.key})</option>
+                          )) : data.templates.map((template: any) => (
+                            <option key={template.id} value={template.id}>{template.name} ({template.key})</option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                    <BlockStack gap="100">
+                      <Text as="h3" variant="headingSm">{data.productFamilyLabel}</Text>
+                      <ul style={{ margin: 0, paddingLeft: 20 }}>
+                        {data.productFamilySummary.map((line: string) => <li key={line}>{line}</li>)}
+                      </ul>
+                    </BlockStack>
+                    {data.exampleTemplates.length ? null : (
+                      <Text as="p" tone="subdued">
+                        No matching example setups were found for this broad family yet. You can still plan the product, or use Product Setup to create the first reusable example later.
+                      </Text>
+                    )}
+                    <details>
+                      <summary style={{ cursor: "pointer", fontWeight: 700 }}>View all existing example setups</summary>
+                      <select aria-label="All example setups" disabled style={{ ...inputStyle(), marginTop: 12 }}>
                         {Object.entries(groupedTemplates).map(([kind, templates]: any) => (
                           <optgroup key={kind} label={kind}>
                             {templates.map((template: any) => (
@@ -531,12 +681,12 @@ export default function ProductBuilderPlan() {
                           </optgroup>
                         ))}
                       </select>
-                    </Field>
+                    </details>
                     {data.selectedTemplate ? (
                       <div style={fieldGrid(2)}>
                         <BlockStack gap="100">
-                          <Text as="h3" variant="headingSm">{data.selectedTemplate.name}</Text>
-                          <Text as="p">Key: {data.selectedTemplate.key}</Text>
+                          <Text as="h3" variant="headingSm">Example setup: {data.selectedTemplate.name}</Text>
+                          <Text as="p">Internal key: {data.selectedTemplate.key}</Text>
                           <Text as="p">Calculator kind: {data.selectedTemplate.calculatorKind || data.selectedKind}</Text>
                           <Text as="p">MOQ/default: {data.selectedTemplate.minQuantity} / {data.selectedTemplate.defaultQuantity}</Text>
                         </BlockStack>
@@ -663,6 +813,8 @@ export default function ProductBuilderPlan() {
                 <StepHeader number={6} title="Review" />
                 <InlineStack gap="200" wrap>
                   <Badge tone={statusTone(data.status) as any}>{data.status}</Badge>
+                  <Badge>Family selected: {data.productFamilyLabel}</Badge>
+                  {data.selectedTemplate ? <Badge>Copy setup from: {data.selectedTemplate.name}</Badge> : null}
                   <Badge tone={duplicateCount ? "warning" : "success"}>{duplicateCount ? `${duplicateCount} duplicate match(es)` : "No duplicate matches"}</Badge>
                 </InlineStack>
                 <div style={fieldGrid(2)}>
