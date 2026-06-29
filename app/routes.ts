@@ -61,6 +61,7 @@ export default [
   route("apps/wholesale-lite/configurator-checkout", "routes/apps.wholesale-lite.configurator-checkout.ts"),
   route("apps/wholesale-lite/validate", "routes/apps.wholesale-lite.validate.ts"),
   route("quote/:id", "routes/quote.$id.tsx"),
+  route("webhooks/compliance", "routes/webhooks.compliance.ts"),
   route("webhooks/app/uninstalled", "routes/webhooks.app.uninstalled.ts"),
   route("app/create-wholesale-discount", "routes/app.create-wholesale-discount.tsx"),
   route("app/create-configurator-cart-transform", "routes/app.create-configurator-cart-transform.tsx"),
