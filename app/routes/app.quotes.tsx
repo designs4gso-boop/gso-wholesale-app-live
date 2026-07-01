@@ -471,7 +471,7 @@ async function getQuotes(shop: string) {
 
 async function getRecipeSummaries(shop: string) {
   return db.productRecipe.findMany({
-    where: { shop, active: true },
+    where: { shop, active: true, useInQuotes: true, costReviewNeeded: false },
     orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
     include: {
       productTypeProfile: true,
@@ -872,7 +872,7 @@ async function resolveShopifyImageByIds(admin: any, productGid?: string | null, 
 async function priceRecipeLine(shop: string, payload: any, admin?: any) {
   const quantity = Math.max(1, Math.floor(safeNumber(payload.quantity, 1)));
   const recipe = await db.productRecipe.findFirst({
-    where: { id: payload.recipeId, shop, active: true },
+    where: { id: payload.recipeId, shop, active: true, useInQuotes: true, costReviewNeeded: false },
     include: {
       tiers: { orderBy: { minQty: "asc" } },
       materials: { include: { material: true } },
