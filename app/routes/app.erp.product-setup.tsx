@@ -1446,6 +1446,11 @@ function PageStyles() {
     th { color:#374151; background:#f9fafb; }
     details { border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px 12px; margin-top: 10px; }
     summary { cursor: pointer; font-weight: 800; }
+    .draft-handoff-panel { margin: 12px 0; padding: 14px; border: 1px solid #bfdbfe; background: #eff6ff; border-radius: 12px; }
+    .draft-handoff-panel h3 { margin: 0 0 8px; color: #1e3a8a; }
+    .draft-handoff-panel p { margin: 7px 0; }
+    .draft-handoff-panel ol { margin: 10px 0 0 20px; padding: 0; color: #1e3a8a; font-weight: 600; }
+    .draft-handoff-panel li { margin: 5px 0; }
     .cost-review-panel { margin: 12px 0; padding: 12px; border: 1px solid #f59e0b; background: #fffbeb; border-radius: 10px; }
     .cost-review-panel strong { color: #92400e; }
     .cost-review-panel ul { margin: 8px 0 0 18px; padding: 0; color: #92400e; font-weight: 600; }
@@ -1577,6 +1582,40 @@ export default function ProductSetupRecipeBuilder() {
       {selectedRecipe ? <div className="card">
         <h2>{selectedRecipe.name}</h2>
         <p className="muted">Full recipe details are loaded only for this one selected recipe to protect server memory.</p>
+        {!selectedRecipe.active || selectedRecipe.costReviewNeeded ? <div className="draft-handoff-panel">
+          <h3>ERP Draft Handoff</h3>
+          <div className="button-row">
+            <span className="badge">Draft</span>
+            {!selectedRecipe.active ? <span className="badge red">Inactive</span> : null}
+            <span className="badge red">Not live</span>
+            <span className="badge yellow">Not quote-ready</span>
+            <span className="badge yellow">Not agent-ready</span>
+            {selectedRecipe.costReviewNeeded ? <span className="badge yellow">Cost Review Needed</span> : null}
+          </div>
+          <p>
+            This is an internal ERP draft. It is not live, has not created a Shopify product, has not created storefront configurator pricing,
+            and is not ready for customer quoting or future sales agents.
+          </p>
+          <p className="muted">
+            Review cost, pricing, production setup, and Shopify mapping before activating this recipe or allowing sales/agent use.
+          </p>
+          <ol>
+            <li>Review product name, SKU, family, and internal product type key.</li>
+            <li>Add or confirm material/vendor costs.</li>
+            <li>Add label zones if this product uses labels.</li>
+            <li>Review quantity tiers and MOQ.</li>
+            <li>Add machine/production route if needed.</li>
+            <li>Add Shopify mapping only when this product is ready to sell online.</li>
+            <li>Run Pricing Health / margin review.</li>
+            <li>Confirm quote rules before sales or agent use.</li>
+            <li>Activate only after review is complete.</li>
+          </ol>
+          <div className="button-row">
+            <Link className="button secondary" to="/app/erp/pricing-health">Pricing Health</Link>
+            <Link className="button secondary" to="/app/erp/margin-review">Margin Review</Link>
+            <Link className="button secondary" to="/app/erp/shopify-links">Shopify Links</Link>
+          </div>
+        </div> : null}
         {selectedRecipe.costReviewNeeded ? <div className="cost-review-panel">
           <strong>Cost Review Needed</strong>
           <p className="muted">Fix these recipe setup issues before approving price changes or updating Shopify.</p>
