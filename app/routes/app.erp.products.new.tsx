@@ -187,6 +187,14 @@ function familySalesRules(value: string) {
   return PRODUCT_FAMILIES.find((family) => family.value === value)?.salesRules || PRODUCT_FAMILIES[PRODUCT_FAMILIES.length - 1].salesRules;
 }
 
+function officialMoqForFamily(value: string): number | null {
+  if (value === "jars") return 128;
+  if (value === "sticker-bags") return 100;
+  if (value === "dtp-pouches") return 1000;
+  if (value === "boxes") return 1000;
+  return null;
+}
+
 function normalizeGid(value: string) {
   const text = value.trim();
   if (text.startsWith("gid://shopify/")) return text;
@@ -456,7 +464,8 @@ export async function action({ request }: { request: Request }) {
     errors.push("Selected copy-from example was not found for this shop.");
   }
 
-  const moq = positiveInt(formText(formData, "moq"), selectedTemplate?.minQuantity || selectedTemplate?.defaultQuantity || 1);
+  const officialMoq = officialMoqForFamily(productFamily);
+  const moq = positiveInt(formText(formData, "moq"), officialMoq || selectedTemplate?.minQuantity || selectedTemplate?.defaultQuantity || 1);
   const targetMargin = numberValue(formText(formData, "targetMargin"), Number(selectedTemplate?.defaultMarginPct || 40));
   numberValue(formText(formData, "markup"), 0);
   const productType = explicitProductType || selectedTemplate?.key || slugify(name);
@@ -756,6 +765,8 @@ export async function loader({ request }: { request: Request }) {
   const duplicateCount = duplicateProfiles.length + duplicateRecipes.length + duplicateConfiguratorProducts.length + duplicateVariantRules.length;
   const authority = recommendedAuthority(params, familyLabel(productFamily));
   const relatedLabelSelected = params.labelMode !== "none" || params.wizardMode === "related-label";
+  const officialMoq = officialMoqForFamily(productFamily);
+  const defaultMoq = params.moq || String(officialMoq || selectedTemplate?.minQuantity || selectedTemplate?.defaultQuantity || "");
   const warnings = [
     params.wizardMode !== "new-family" && !selectedTemplate ? "Choose a family/template before planning ERP records." : null,
     params.wizardMode === "new-family" && !params.newFamilyName ? "Add a new family name." : null,
@@ -783,6 +794,8 @@ export async function loader({ request }: { request: Request }) {
     productFamilyLabel: familyLabel(productFamily),
     productFamilySummary: familySummary(productFamily),
     productFamilySalesRules: familySalesRules(productFamily),
+    officialMoq,
+    defaultMoq,
     exampleTemplates,
     templates,
     selectedTemplate,
@@ -1201,7 +1214,10 @@ export default function ProductBuilderPlan() {
                   <Field label="Product name"><input name="title" defaultValue={params.title} placeholder="New product name" style={inputStyle()} /></Field>
                   <Field label="SKU / product key"><input name="sku" defaultValue={params.sku} placeholder="SKU-123" style={inputStyle()} /></Field>
                   <Field label="ERP product type key"><input name="productType" defaultValue={params.productType} placeholder="product_type_key" style={inputStyle()} /></Field>
-                  <Field label="MOQ / default quantity"><input name="moq" type="number" min="1" defaultValue={params.moq || data.selectedTemplate?.minQuantity || ""} style={inputStyle()} /></Field>
+                  <Field label="MOQ / default quantity">
+                    <input name="moq" type="number" min="1" defaultValue={data.defaultMoq} style={inputStyle()} />
+                    <Text as="p" tone="subdued">Defaults to the official family MOQ when set. Staff can override only if approved.</Text>
+                  </Field>
                   <Field label="Quantity tiers"><input name="tiers" defaultValue={params.tiers || data.selectedTemplate?.tierBreakpoints || ""} placeholder="64,128,256,640" style={inputStyle()} /></Field>
                   <Field label="Target margin %"><input name="targetMargin" type="number" step="0.01" defaultValue={params.targetMargin || data.selectedTemplate?.defaultMarginPct || ""} style={inputStyle()} /></Field>
                   <Field label="Markup %"><input name="markup" type="number" step="0.01" defaultValue={params.markup} style={inputStyle()} /></Field>
