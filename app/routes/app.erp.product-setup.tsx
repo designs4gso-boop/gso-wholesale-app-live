@@ -2,7 +2,20 @@ import { Form, Link, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-const PRODUCT_FAMILIES = ["Labels", "Sticker Bags", "DTP Bags", "Boxes", "DTF / Apparel"];
+const PRODUCT_FAMILIES = [
+  "Jars",
+  "Sticker Bags",
+  "DTP Pouches",
+  "Boxes",
+  "Labels / Stickers",
+  "Banners",
+  "Apparel / DTF",
+  "Sourced / Blank Resale",
+  "Custom / Other",
+  "Labels",
+  "DTP Bags",
+  "DTF / Apparel",
+];
 const PRODUCTION_MODES = ["in_house", "outsourced", "hybrid"];
 const UNIT_OPTIONS = ["each", "sqft", "sqin", "ml", "hour"];
 
@@ -763,13 +776,17 @@ export async function action({ request }: { request: Request }) {
   if (intent === "updateRecipe") {
     const recipeId = String(formData.get("recipeId") || "");
     const machineId = String(formData.get("machineId") || "") || null;
+    const existingRecipe = await db.productRecipe.findFirst({
+      where: { shop, id: recipeId },
+      select: { productType: true },
+    });
     await db.productRecipe.updateMany({
       where: { shop, id: recipeId },
       data: {
         name: String(formData.get("name") || "Product Recipe"),
         sku: String(formData.get("sku") || "") || null,
         productFamily: String(formData.get("productFamily") || "Labels"),
-        productType: slugify(String(formData.get("productFamily") || "Labels")),
+        productType: String(formData.get("productType") || existingRecipe?.productType || "label"),
         productTypeProfileId: String(formData.get("templateId") || "") || null,
         pricingTemplateMode: String(formData.get("pricingTemplateMode") || "template"),
         productionMode: String(formData.get("productionMode") || "in_house"),
