@@ -61,6 +61,67 @@ function shortDateTime(value: any) {
   return date.toLocaleString();
 }
 
+function salesRulesForFamily(family: string): string[] {
+  const text = String(family || "").toLowerCase();
+  if (text.includes("jar")) {
+    return [
+      "Official MOQ: 128",
+      "Quote-ready after recipe/cost review",
+      "Sales/agent use only after Product Setup marks recipe Use in Quotes / CRM",
+    ];
+  }
+  if (text.includes("sticker") && text.includes("bag")) {
+    return [
+      "Official MOQ: 100",
+      "Quote prep allowed",
+      "Staff review required before firm quote/order",
+    ];
+  }
+  if (text.includes("dtp") || text.includes("pouch")) {
+    return [
+      "Official MOQ: 1,000",
+      "Manual review required",
+      "Do not allow agent firm pricing yet",
+    ];
+  }
+  if (text.includes("box")) {
+    return [
+      "Official MOQ: 1,000+",
+      "Manual review required",
+      "Do not allow agent firm pricing yet",
+    ];
+  }
+  if (text.includes("label") || text.includes("sticker")) {
+    return [
+      "Quote prep allowed",
+      "Review dimensions, material, finish, cut type, and margin before approval",
+      "Good first product family for sales intake/quote prep",
+    ];
+  }
+  if (text.includes("banner")) {
+    return [
+      "Quote prep allowed",
+      "Review square footage, material, finishing, and margin before approval",
+    ];
+  }
+  if (text.includes("apparel") || text.includes("dtf")) {
+    return [
+      "Quote prep allowed",
+      "Review blank garment/transfer cost, size/color variants, labor, and margin before approval",
+    ];
+  }
+  if (text.includes("sourced") || text.includes("resale") || text.includes("blank")) {
+    return [
+      "Vendor MOQ / case pack controls",
+      "Manual review required",
+    ];
+  }
+  return [
+    "Intake only",
+    "Manual review required before quote",
+  ];
+}
+
 
 function parseTiers(value: any) {
   if (!value) return [];
@@ -1709,6 +1770,14 @@ export default function ProductSetupRecipeBuilder() {
             <p><span className="badge">Variant rules: {(selectedRecipe.variantRules || []).length}</span></p>
             <p><span className="badge">Tiers: {(selectedRecipe.tiers || []).length}</span></p>
             <p className="muted">Deep editing for zones/material rows will be restored in a separate optimized editor if needed. This page is now protected from all-at-once memory crashes.</p>
+          </div>
+
+          <div className="card">
+            <h3>Sales rules / MOQ source of truth</h3>
+            <p className="muted">Staff and future agent-safe workflows should follow these rules before quoting or marking a recipe Use in Quotes / CRM.</p>
+            <ul>
+              {salesRulesForFamily(selectedRecipe.productFamily || selectedRecipe.productType).map((rule) => <li key={rule}>{rule}</li>)}
+            </ul>
           </div>
         </div>
 
