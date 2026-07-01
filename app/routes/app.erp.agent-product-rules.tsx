@@ -3,8 +3,10 @@ import { authenticate } from "../shopify.server";
 
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const pretty = url.searchParams.get("pretty") === "1";
 
-  return Response.json({
+  const payload = {
     ok: true,
     version: "2026-07-01-phase-4b",
     mode: "read_only",
@@ -34,5 +36,16 @@ export async function loader({ request }: { request: Request }) {
       "product activation",
     ],
     families: allProductFamilySalesRules(),
-  });
+  };
+
+  if (pretty) {
+    return new Response(JSON.stringify(payload, null, 2), {
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  return Response.json(payload, { headers: { "Cache-Control": "no-store" } });
 }
