@@ -819,8 +819,43 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (intent === "restoreRecipe") {
-    await db.productRecipe.updateMany({ where: { shop, id: String(formData.get("recipeId") || "") }, data: { active: true } });
-    return Response.json({ ok: true, message: "Product recipe restored." });
+    const recipeId = String(formData.get("recipeId") || "");
+    const recipe = await db.productRecipe.findFirst({
+      where: { shop, id: recipeId },
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        productFamily: true,
+        productType: true,
+        targetMarginPct: true,
+        costReviewNeeded: true,
+        tiers: { select: { id: true }, take: 1 },
+      },
+    });
+
+    if (!recipe) {
+      return Response.json({ ok: false, message: "Recipe cannot be activated because it was not found." }, { status: 404 });
+    }
+
+    const missingReasons = [];
+    if (recipe.costReviewNeeded) missingReasons.push("finish cost review");
+    if (!String(recipe.name || "").trim()) missingReasons.push("add product name");
+    if (!String(recipe.sku || "").trim()) missingReasons.push("add SKU");
+    if (!String(recipe.productFamily || "").trim()) missingReasons.push("add product family");
+    if (!String(recipe.productType || "").trim()) missingReasons.push("add internal product type key");
+    if (!Number.isFinite(Number(recipe.targetMarginPct)) || Number(recipe.targetMarginPct) <= 0) missingReasons.push("set target margin");
+    if (!recipe.tiers?.length) missingReasons.push("add quantity tiers");
+
+    if (missingReasons.length) {
+      return Response.json({
+        ok: false,
+        message: `Recipe cannot be activated yet. Please ${missingReasons.join(", ")} first.`,
+      }, { status: 400 });
+    }
+
+    await db.productRecipe.updateMany({ where: { shop, id: recipeId }, data: { active: true } });
+    return Response.json({ ok: true, message: "Product recipe restored after activation checks." });
   }
 
   if (intent === "deleteRecipeForever") {
