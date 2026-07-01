@@ -1468,6 +1468,9 @@ function PageStyles() {
     .field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; font-weight: 700; }
     .field span { color: #3f3f46; }
     .field input, .field select, .field textarea { border: 1px solid #babfc3; border-radius: 9px; padding: 9px; font: inherit; font-weight: 400; background: white; min-height: 38px; }
+    .checkbox-field { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; font-weight: 700; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; background: #f9fafb; }
+    .checkbox-field input { margin-top: 2px; }
+    .checkbox-field span { display: block; color: #111827; }
     .wide { grid-column: 1 / -1; }
     .button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
     button, .button { border: 0; background: #111827; color: white; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; text-decoration: none; display: inline-block; }
@@ -1512,6 +1515,8 @@ export default function ProductSetupRecipeBuilder() {
   } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const recipeBaseQuery = `recipeStatus=${encodeURIComponent(recipeStatus)}&recipeSearch=${encodeURIComponent(recipeSearch)}&recipeLimit=${encodeURIComponent(String(recipeLimit))}`;
+  const selectedRecipeQuoteReady = Boolean(selectedRecipe?.active && selectedRecipe?.useInQuotes && !selectedRecipe?.costReviewNeeded);
+  const canEnableQuoteUse = Boolean(selectedRecipe?.active && !selectedRecipe?.costReviewNeeded);
 
   function recipeHref(recipeId: string) {
     return `?${recipeBaseQuery}&recipePage=${recipePage}&recipeId=${encodeURIComponent(recipeId)}`;
@@ -1617,6 +1622,7 @@ export default function ProductSetupRecipeBuilder() {
       {selectedRecipe ? <div className="card">
         <h2>{selectedRecipe.name}</h2>
         <p className="muted">Full recipe details are loaded only for this one selected recipe to protect server memory.</p>
+        {selectedRecipeQuoteReady ? <span className="badge green">Quote-ready</span> : <span className="badge yellow">Not quote-ready</span>}
         {!selectedRecipe.active || selectedRecipe.costReviewNeeded ? <div className="draft-handoff-panel">
           <h3>ERP Draft Handoff</h3>
           <div className="button-row">
@@ -1680,6 +1686,17 @@ export default function ProductSetupRecipeBuilder() {
               <NativeInput label="Setup cost" name="setupCost" type="number" step="0.01" defaultValue={selectedRecipe.setupCost || 0} />
               <NativeInput label="Packing labor seconds/unit" name="packingLaborSecondsPerUnit" type="number" step="0.01" defaultValue={selectedRecipe.packingLaborSecondsPerUnit || 0} />
               <NativeTextarea label="Notes" name="notes" defaultValue={selectedRecipe.notes || ""} />
+              {(!canEnableQuoteUse && selectedRecipe.useInQuotes) ? <input type="hidden" name="useInQuotes" value="on" /> : null}
+              <label className="checkbox-field wide">
+                <input type="checkbox" name="useInQuotes" defaultChecked={Boolean(selectedRecipe.useInQuotes)} disabled={!canEnableQuoteUse} />
+                <span>
+                  Use in Quotes / CRM
+                  <small className="muted">
+                    Only enable after cost review is clear, MOQ/tiers are reviewed, margin is approved, and this recipe should appear in Quotes / CRM.
+                  </small>
+                </span>
+              </label>
+              {!canEnableQuoteUse ? <p className="muted wide">Quote use is locked until this recipe is active and cost review is clear.</p> : null}
               <div className="wide button-row"><button type="submit">Save recipe</button></div>
             </Form>
           </div>
