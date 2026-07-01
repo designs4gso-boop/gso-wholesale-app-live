@@ -52,6 +52,11 @@ const PRODUCT_FAMILIES = [
       "Can support jar color, material, and finish options",
       "Usually copies tiers and margin from an existing jar setup",
     ],
+    salesRules: [
+      "Official MOQ: 128",
+      "Quote-ready after recipe/cost review",
+      "Sales/agent use only after Product Setup marks recipe useInQuotes",
+    ],
   },
   {
     value: "sticker-bags",
@@ -59,6 +64,11 @@ const PRODUCT_FAMILIES = [
     summary: [
       "Uses blank bag cost plus label, print, and application logic",
       "Can support material, finish, and quantity options",
+    ],
+    salesRules: [
+      "Official MOQ: 100",
+      "Quote prep allowed",
+      "Staff review required before firm quote/order",
     ],
   },
   {
@@ -68,6 +78,11 @@ const PRODUCT_FAMILIES = [
       "Uses pouch material, printing, finishing, or sourced cost logic",
       "Can support stock or custom shape and MOQ tiers",
     ],
+    salesRules: [
+      "Official MOQ: 1,000",
+      "Manual review required",
+      "Do not allow agent firm pricing yet",
+    ],
   },
   {
     value: "boxes",
@@ -75,6 +90,11 @@ const PRODUCT_FAMILIES = [
     summary: [
       "Uses board, material, print, finish, cut, and assembly logic",
       "Can support size, finish, and quantity tiers",
+    ],
+    salesRules: [
+      "Official MOQ: 1,000+",
+      "Manual review required",
+      "Do not allow agent firm pricing yet",
     ],
   },
   {
@@ -84,6 +104,11 @@ const PRODUCT_FAMILIES = [
       "Uses material, ink, machine, cut, and labor logic",
       "Can support dimensions, finish, cut type, and tiers",
     ],
+    salesRules: [
+      "Quote prep allowed",
+      "Review dimensions, material, finish, cut type, and margin before approval",
+      "Good first product family for sales intake/quote prep",
+    ],
   },
   {
     value: "banners",
@@ -91,6 +116,10 @@ const PRODUCT_FAMILIES = [
     summary: [
       "Uses square-foot material, printer/machine, and finishing labor",
       "Can support Mimaki/Roland routing, hem/grommets, and indoor/outdoor setup",
+    ],
+    salesRules: [
+      "Quote prep allowed",
+      "Review square footage, material, finishing, and margin before approval",
     ],
   },
   {
@@ -100,6 +129,10 @@ const PRODUCT_FAMILIES = [
       "Uses blank garment or transfer cost plus print/application labor",
       "Can support size, color, and garment variants",
     ],
+    salesRules: [
+      "Quote prep allowed",
+      "Review blank garment/transfer cost, size/color variants, labor, and margin before approval",
+    ],
   },
   {
     value: "sourced-blank-resale",
@@ -108,6 +141,10 @@ const PRODUCT_FAMILIES = [
       "Uses vendor/source item cost plus markup",
       "Can support MOQ and cost tiers",
     ],
+    salesRules: [
+      "Vendor MOQ / case pack controls",
+      "Manual review required",
+    ],
   },
   {
     value: "custom-other",
@@ -115,6 +152,10 @@ const PRODUCT_FAMILIES = [
     summary: [
       "Planning-only custom family",
       "Choose pricing method and cost components later",
+    ],
+    salesRules: [
+      "Intake only",
+      "Manual review required before quote",
     ],
   },
 ];
@@ -140,6 +181,10 @@ function familyLabel(value: string) {
 
 function familySummary(value: string) {
   return PRODUCT_FAMILIES.find((family) => family.value === value)?.summary || PRODUCT_FAMILIES[PRODUCT_FAMILIES.length - 1].summary;
+}
+
+function familySalesRules(value: string) {
+  return PRODUCT_FAMILIES.find((family) => family.value === value)?.salesRules || PRODUCT_FAMILIES[PRODUCT_FAMILIES.length - 1].salesRules;
 }
 
 function normalizeGid(value: string) {
@@ -737,6 +782,7 @@ export async function loader({ request }: { request: Request }) {
     productFamilies: PRODUCT_FAMILIES,
     productFamilyLabel: familyLabel(productFamily),
     productFamilySummary: familySummary(productFamily),
+    productFamilySalesRules: familySalesRules(productFamily),
     exampleTemplates,
     templates,
     selectedTemplate,
@@ -1030,6 +1076,13 @@ export default function ProductBuilderPlan() {
                       <Text as="h3" variant="headingSm">{data.productFamilyLabel}</Text>
                       <ul style={{ margin: 0, paddingLeft: 20 }}>
                         {data.productFamilySummary.map((line: string) => <li key={line}>{line}</li>)}
+                      </ul>
+                    </BlockStack>
+                    <BlockStack gap="100">
+                      <Text as="h3" variant="headingSm">Sales rules / MOQ source of truth</Text>
+                      <Text as="p" tone="subdued">Staff and future agent-safe sales workflows should use these rules before quoting.</Text>
+                      <ul style={{ margin: 0, paddingLeft: 20 }}>
+                        {data.productFamilySalesRules.map((line: string) => <li key={line}>{line}</li>)}
                       </ul>
                     </BlockStack>
                     {data.exampleTemplates.length ? null : (
