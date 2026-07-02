@@ -1355,6 +1355,104 @@ model PriceApprovalRecord {
   @@index([shop, shopifyVariantGid])
 }
 
+model AgentReviewQueueItem {
+  id   String @id @default(cuid())
+  shop String
+
+  source      String @default("agent")
+  status      String @default("new")
+  reviewLevel String @default("basic_staff_review")
+
+  customerName           String?
+  company                String?
+  email                  String?
+  phone                  String?
+  preferredContactMethod String?
+
+  productFamily      String?
+  productType        String?
+  quantity           String?
+  dimensionsOrSize   String?
+  materialOrSubstrate String?
+  finish             String?
+  deadline           String?
+  shippingCityState  String?
+
+  contact           Json?
+  productRequest    Json?
+  missingFields     Json?
+  escalationReasons Json?
+
+  customerSafeSummary    String?
+  customerSafeDraftReply String?
+  internalNotes          String?
+  recommendedStaffAction String?
+
+  originalAgentDraftSnapshot Json?
+  normalizedDraft            Json?
+  staffEditedDraft           Json?
+
+  createdBy          String  @default("agent")
+  assignedStaffId    String?
+  assignedStaffName  String?
+  assignedStaffEmail String?
+
+  reviewedBy       String?
+  reviewedAt       DateTime?
+  rejectedBy       String?
+  rejectedAt       DateTime?
+  rejectionReason  String?
+  convertedBy      String?
+  convertedAt      DateTime?
+  convertedQuoteId String?
+
+  requiresStaffApproval          Boolean @default(true)
+  canBecomeRealQuoteAutomatically Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events AgentReviewQueueEvent[]
+
+  @@index([shop])
+  @@index([shop, status])
+  @@index([shop, reviewLevel])
+  @@index([shop, source])
+  @@index([shop, assignedStaffId])
+  @@index([shop, assignedStaffEmail])
+  @@index([shop, createdAt])
+  @@index([shop, updatedAt])
+  @@index([convertedQuoteId])
+}
+
+model AgentReviewQueueEvent {
+  id          String @id @default(cuid())
+  shop        String
+  queueItemId String
+
+  eventType  String
+  actorType  String  @default("system")
+  actorId    String?
+  actorName  String?
+  actorEmail String?
+  message    String?
+
+  beforeSnapshot Json?
+  afterSnapshot  Json?
+  metadata       Json?
+
+  createdAt DateTime @default(now())
+
+  queueItem AgentReviewQueueItem @relation(fields: [queueItemId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([queueItemId])
+  @@index([shop, eventType])
+  @@index([actorType])
+  @@index([actorEmail])
+  @@index([createdAt])
+}
+
 model MarginReviewSetting {
   id                           String   @id @default(cuid())
   shop                         String
