@@ -184,6 +184,7 @@ export default function AgentReviewQueuePage() {
                         "Review level",
                         "Recommended staff action",
                         "Safety",
+                        "Details",
                       ].map((heading) => (
                         <th key={heading} style={{ borderBottom: "1px solid #dfe3e8", padding: 10, textAlign: "left" }}>
                           <Text as="span" variant="bodySm" fontWeight="semibold">
@@ -248,6 +249,9 @@ export default function AgentReviewQueuePage() {
                               {item.canBecomeRealQuoteAutomatically ? "Auto quote risk" : "No auto quote"}
                             </Badge>
                           </InlineStack>
+                        </td>
+                        <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
+                          <Button url={`/app/erp/agent-review-queue/${item.id}`}>View</Button>
                         </td>
                       </tr>
                     ))}
