@@ -2,6 +2,7 @@ import {
   Badge,
   Banner,
   BlockStack,
+  Button,
   Card,
   EmptyState,
   InlineGrid,
@@ -130,7 +131,11 @@ export default function AgentReviewQueuePage() {
   const data = useLoaderData<typeof loader>() as LoaderData;
 
   return (
-    <Page title="Agent Review Queue" subtitle={`Read-only staff queue for ${data.shop}`}>
+    <Page
+      title="Agent Review Queue"
+      subtitle={`Read-only staff queue for ${data.shop}`}
+      primaryAction={{ content: "New internal queue item", url: "/app/erp/agent-review-queue/new" }}
+    >
       <BlockStack gap="400">
         <Banner tone="info">
           <Text as="p">
@@ -160,7 +165,10 @@ export default function AgentReviewQueuePage() {
 
             {data.items.length === 0 ? (
               <EmptyState heading="No agent review queue items yet" image="">
-                <Text as="p">Agent-prepared quote drafts will appear here after staff intake is enabled.</Text>
+                <BlockStack gap="300">
+                  <Text as="p">Agent-prepared quote drafts will appear here after staff intake is enabled.</Text>
+                  <Button url="/app/erp/agent-review-queue/new">New internal queue item</Button>
+                </BlockStack>
               </EmptyState>
             ) : (
               <div style={{ overflowX: "auto" }}>
