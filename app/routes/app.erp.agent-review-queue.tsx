@@ -10,7 +10,7 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
-import { useLoaderData } from "react-router";
+import { Form, redirect, useLoaderData } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
 
@@ -45,6 +45,52 @@ type LoaderData = {
   };
 };
 
+const ACTIONS = {
+  request_missing_info: {
+    label: "Missing info",
+    eventType: "missing_info_requested",
+    message: "Staff marked queue item as missing customer information.",
+    data: { status: "missing_customer_info" },
+  },
+  mark_needs_cost_review: {
+    label: "Needs cost review",
+    eventType: "marked_needs_cost_review",
+    message: "Staff marked queue item as needing cost review.",
+    data: { status: "needs_cost_review", reviewLevel: "cost_review_required" },
+  },
+  mark_ready_to_quote: {
+    label: "Ready to quote",
+    eventType: "marked_ready_to_quote",
+    message: "Staff marked queue item as ready for staff quote prep.",
+    data: { status: "ready_to_quote" },
+  },
+  reject: {
+    label: "Reject",
+    eventType: "rejected",
+    message: "Staff rejected queue item.",
+    data: { status: "rejected" },
+  },
+  archive: {
+    label: "Archive",
+    eventType: "archived",
+    message: "Staff archived queue item.",
+    data: { status: "archived" },
+  },
+} as const;
+
+type StaffIntent = keyof typeof ACTIONS;
+
+const TRANSITIONS: Record<string, StaffIntent[]> = {
+  new: ["request_missing_info", "mark_needs_cost_review", "mark_ready_to_quote", "reject", "archive"],
+  needs_staff_review: ["request_missing_info", "mark_needs_cost_review", "mark_ready_to_quote", "reject", "archive"],
+  missing_customer_info: ["reject", "archive"],
+  needs_cost_review: ["mark_ready_to_quote", "reject", "archive"],
+  ready_to_quote: ["archive"],
+  rejected: ["archive"],
+  converted_by_staff: ["archive"],
+  archived: [],
+};
+
 function label(value: string | null | undefined) {
   return value ? value.replace(/_/g, " ") : "Not set";
 }
@@ -66,6 +112,35 @@ function statusTone(status: string) {
   return "attention";
 }
 
+function actorNameFromSession(session: any) {
+  return session.name || session.firstName || session.onlineAccessInfo?.associated_user?.first_name || null;
+}
+
+function safeItemSnapshot(item: any) {
+  return {
+    id: item.id,
+    source: item.source,
+    status: item.status,
+    reviewLevel: item.reviewLevel,
+    customerName: item.customerName,
+    company: item.company,
+    email: item.email,
+    productFamily: item.productFamily,
+    productType: item.productType,
+    quantity: item.quantity,
+    recommendedStaffAction: item.recommendedStaffAction,
+    rejectionReason: item.rejectionReason,
+    requiresStaffApproval: item.requiresStaffApproval,
+    canBecomeRealQuoteAutomatically: item.canBecomeRealQuoteAutomatically,
+    createdBy: item.createdBy,
+    updatedAt: item.updatedAt instanceof Date ? item.updatedAt.toISOString() : item.updatedAt,
+  };
+}
+
+function allowedActionsForStatus(status: string): StaffIntent[] {
+  return TRANSITIONS[status] || [];
+}
+
 function SummaryCard({ label, value }: { label: string; value: number }) {
   return (
     <Card>
@@ -79,6 +154,75 @@ function SummaryCard({ label, value }: { label: string; value: number }) {
       </BlockStack>
     </Card>
   );
+}
+
+export async function action({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") || "") as StaffIntent;
+  const itemId = String(formData.get("itemId") || "");
+
+  if (!Object.prototype.hasOwnProperty.call(ACTIONS, intent) || !itemId) {
+    return redirect("/app/erp/agent-review-queue");
+  }
+
+  const item = await db.agentReviewQueueItem.findFirst({
+    where: { id: itemId, shop: session.shop },
+  });
+
+  if (!item) {
+    return redirect("/app/erp/agent-review-queue");
+  }
+
+  if (!allowedActionsForStatus(item.status).includes(intent)) {
+    return redirect("/app/erp/agent-review-queue");
+  }
+
+  const actionConfig = ACTIONS[intent];
+  const now = new Date();
+  const actorId = (session as any).userId ? String((session as any).userId) : null;
+  const actorName = actorNameFromSession(session);
+  const actorEmail = (session as any).email || null;
+  const updateData: any = {
+    ...actionConfig.data,
+    requiresStaffApproval: true,
+    canBecomeRealQuoteAutomatically: false,
+  };
+
+  if (intent === "mark_ready_to_quote" && !item.reviewLevel) {
+    updateData.reviewLevel = "basic_staff_review";
+  }
+
+  if (intent === "reject") {
+    updateData.rejectedBy = actorEmail || actorName || "staff";
+    updateData.rejectedAt = now;
+    updateData.rejectionReason = "Rejected by staff status action.";
+  }
+
+  await db.$transaction(async (tx) => {
+    const updated = await tx.agentReviewQueueItem.update({
+      where: { id: item.id },
+      data: updateData,
+    });
+
+    await tx.agentReviewQueueEvent.create({
+      data: {
+        shop: session.shop,
+        queueItemId: item.id,
+        eventType: actionConfig.eventType,
+        actorType: "staff",
+        actorId,
+        actorName,
+        actorEmail,
+        message: actionConfig.message,
+        beforeSnapshot: safeItemSnapshot(item),
+        afterSnapshot: safeItemSnapshot(updated),
+        metadata: { phase: "6L", action: intent },
+      },
+    });
+  });
+
+  return redirect("/app/erp/agent-review-queue");
 }
 
 export async function loader({ request }: { request: Request }) {
@@ -159,7 +303,8 @@ export default function AgentReviewQueuePage() {
                 Queue items
               </Text>
               <Text as="p" tone="subdued">
-                Future staff actions will be added later. This page only reads the latest 50 queue items.
+                Staff status actions only update the review queue and write an audit event. They do not create
+                quotes, send customer messages, create Shopify orders, or start production.
               </Text>
             </BlockStack>
 
@@ -184,6 +329,7 @@ export default function AgentReviewQueuePage() {
                         "Review level",
                         "Recommended staff action",
                         "Safety",
+                        "Actions",
                       ].map((heading) => (
                         <th key={heading} style={{ borderBottom: "1px solid #dfe3e8", padding: 10, textAlign: "left" }}>
                           <Text as="span" variant="bodySm" fontWeight="semibold">
@@ -247,6 +393,24 @@ export default function AgentReviewQueuePage() {
                             <Badge tone={item.canBecomeRealQuoteAutomatically ? "critical" : "success"}>
                               {item.canBecomeRealQuoteAutomatically ? "Auto quote risk" : "No auto quote"}
                             </Badge>
+                          </InlineStack>
+                        </td>
+                        <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
+                          <InlineStack gap="100">
+                            {allowedActionsForStatus(item.status).map((intent) => (
+                              <Form method="post" key={intent}>
+                                <input type="hidden" name="intent" value={intent} />
+                                <input type="hidden" name="itemId" value={item.id} />
+                                <Button size="slim" submit>
+                                  {ACTIONS[intent].label}
+                                </Button>
+                              </Form>
+                            ))}
+                            {allowedActionsForStatus(item.status).length === 0 ? (
+                              <Text as="span" variant="bodySm" tone="subdued">
+                                No actions
+                              </Text>
+                            ) : null}
                           </InlineStack>
                         </td>
                       </tr>
