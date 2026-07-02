@@ -13,6 +13,7 @@ export default [
     route("erp/agent-intake-rules", "routes/app.erp.agent-intake-rules.tsx"),
     route("erp/agent-quote-prep-rules", "routes/app.erp.agent-quote-prep-rules.tsx"),
     route("erp/agent-quote-prep-draft-shape", "routes/app.erp.agent-quote-prep-draft-shape.tsx"),
+    route("erp/agent-review-queue-rules", "routes/app.erp.agent-review-queue-rules.tsx"),
     route("wholesale", "routes/app.wholesale.tsx"),
     route("wholesale/rules", "routes/app.wholesale.rules.tsx"),
     route("wholesale/customers", "routes/app.wholesale.customers.tsx"),
