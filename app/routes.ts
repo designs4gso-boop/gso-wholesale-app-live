@@ -61,6 +61,7 @@ export default [
   route("api/print-logs/upload", "routes/api.print-logs.upload.tsx"),
   route("api/rip-imports/upload", "routes/api.rip-imports.upload.tsx"),
   route("api/quote-rip-results/sync", "routes/api.quote-rip-results.sync.tsx"),
+  route("api/agent/intake", "routes/api.agent.intake.tsx"),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
   route("apps/wholesale-lite/pricing", "routes/apps.wholesale-lite.pricing.ts"),
