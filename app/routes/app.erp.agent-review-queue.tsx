@@ -91,6 +91,9 @@ const TRANSITIONS: Record<string, StaffIntent[]> = {
   archived: [],
 };
 
+const NOTE_REQUIRED_ACTIONS = new Set<StaffIntent>(["request_missing_info", "reject"]);
+const NOTE_MAX_LENGTH = 500;
+
 function label(value: string | null | undefined) {
   return value ? value.replace(/_/g, " ") : "Not set";
 }
@@ -114,6 +117,10 @@ function statusTone(status: string) {
 
 function actorNameFromSession(session: any) {
   return session.name || session.firstName || session.onlineAccessInfo?.associated_user?.first_name || null;
+}
+
+function cappedNote(value: FormDataEntryValue | null) {
+  return String(value || "").trim().slice(0, NOTE_MAX_LENGTH);
 }
 
 function safeItemSnapshot(item: any) {
@@ -161,8 +168,13 @@ export async function action({ request }: { request: Request }) {
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "") as StaffIntent;
   const itemId = String(formData.get("itemId") || "");
+  const note = cappedNote(formData.get("note"));
 
   if (!Object.prototype.hasOwnProperty.call(ACTIONS, intent) || !itemId) {
+    return redirect("/app/erp/agent-review-queue");
+  }
+
+  if (NOTE_REQUIRED_ACTIONS.has(intent) && !note) {
     return redirect("/app/erp/agent-review-queue");
   }
 
@@ -196,7 +208,7 @@ export async function action({ request }: { request: Request }) {
   if (intent === "reject") {
     updateData.rejectedBy = actorEmail || actorName || "staff";
     updateData.rejectedAt = now;
-    updateData.rejectionReason = "Rejected by staff status action.";
+    updateData.rejectionReason = note;
   }
 
   await db.$transaction(async (tx) => {
@@ -214,10 +226,10 @@ export async function action({ request }: { request: Request }) {
         actorId,
         actorName,
         actorEmail,
-        message: actionConfig.message,
+        message: note ? `${actionConfig.message} Note: ${note}` : actionConfig.message,
         beforeSnapshot: safeItemSnapshot(item),
         afterSnapshot: safeItemSnapshot(updated),
-        metadata: { phase: "6L", action: intent },
+        metadata: { phase: "6N", action: intent, note: note || null },
       },
     });
   });
@@ -303,8 +315,8 @@ export default function AgentReviewQueuePage() {
                 Queue items
               </Text>
               <Text as="p" tone="subdued">
-                Staff status actions only update the review queue and write an audit event. They do not create
-                quotes, send customer messages, create Shopify orders, or start production.
+                Notes and status actions only update the review queue and audit log. They do not send customer
+                messages or create quotes, Shopify orders, invoices, or production jobs.
               </Text>
             </BlockStack>
 
@@ -401,6 +413,24 @@ export default function AgentReviewQueuePage() {
                               <Form method="post" key={intent}>
                                 <input type="hidden" name="intent" value={intent} />
                                 <input type="hidden" name="itemId" value={item.id} />
+                                {NOTE_REQUIRED_ACTIONS.has(intent) ? (
+                                  <input
+                                    aria-label={intent === "reject" ? "Reject reason" : "Missing information note"}
+                                    maxLength={NOTE_MAX_LENGTH}
+                                    name="note"
+                                    placeholder={intent === "reject" ? "Reason required" : "What is missing?"}
+                                    required
+                                    style={{
+                                      border: "1px solid #c9cccf",
+                                      borderRadius: 4,
+                                      fontSize: 12,
+                                      marginBottom: 4,
+                                      maxWidth: 150,
+                                      padding: "5px 7px",
+                                      width: "100%",
+                                    }}
+                                  />
+                                ) : null}
                                 <Button size="slim" submit>
                                   {ACTIONS[intent].label}
                                 </Button>
