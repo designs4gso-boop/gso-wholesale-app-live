@@ -68,7 +68,9 @@ function boolValue(value: unknown) {
 }
 
 function positiveQuantity(value: string) {
-  const parsed = Number(value.replace(/[^0-9.]/g, ""));
+  const text = value.trim();
+  if (!/^(?:[1-9]\d*|0\.\d+|[1-9]\d*\.\d+)$/.test(text)) return false;
+  const parsed = Number(text);
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 10000000;
 }
 
@@ -382,11 +384,12 @@ export async function action({ request }: { request: Request }) {
     return json({ ok: false, error: "Invalid agent authentication." }, 401);
   }
 
-  const credential = await db.agentApiCredential.findFirst({
+  const credentials = await db.agentApiCredential.findMany({
     where: { tokenId: bearer.tokenId, isActive: true },
+    take: 2,
   });
 
-  if (!credential) {
+  if (credentials.length === 0) {
     await logSubmission({
       requestId,
       status: "rejected_auth",
@@ -399,6 +402,22 @@ export async function action({ request }: { request: Request }) {
     });
     return json({ ok: false, error: "Invalid agent authentication." }, 401);
   }
+
+  if (credentials.length > 1) {
+    await logSubmission({
+      requestId,
+      status: "rejected_auth",
+      outcome: "Ambiguous token id.",
+      errorCode: "ambiguous_token_id",
+      ipHash,
+      userAgentHash: userAgent,
+      payloadHash,
+      safeSummary: safeSummary({}),
+    });
+    return json({ ok: false, error: "Invalid agent authentication." }, 401);
+  }
+
+  const credential = credentials[0];
 
   if (credential.revokedAt) {
     await logSubmission({
