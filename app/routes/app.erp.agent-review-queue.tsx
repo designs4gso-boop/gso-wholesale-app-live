@@ -36,6 +36,8 @@ type QueueItem = {
 type LoaderData = {
   shop: string;
   items: QueueItem[];
+  activeFilter: string;
+  activeFilterLabel: string;
   auditByItemId: Record<
     string,
     {
@@ -103,6 +105,17 @@ const TRANSITIONS: Record<string, StaffIntent[]> = {
 
 const NOTE_REQUIRED_ACTIONS = new Set<StaffIntent>(["request_missing_info", "reject"]);
 const NOTE_MAX_LENGTH = 500;
+const STATUS_FILTERS = [
+  { label: "All", value: "all", href: "/app/erp/agent-review-queue" },
+  { label: "Staff review", value: "needs_staff_review", href: "/app/erp/agent-review-queue?status=needs_staff_review" },
+  { label: "Missing info", value: "missing_customer_info", href: "/app/erp/agent-review-queue?status=missing_customer_info" },
+  { label: "Cost review", value: "needs_cost_review", href: "/app/erp/agent-review-queue?status=needs_cost_review" },
+  { label: "Ready", value: "ready_to_quote", href: "/app/erp/agent-review-queue?status=ready_to_quote" },
+  { label: "Rejected", value: "rejected", href: "/app/erp/agent-review-queue?status=rejected" },
+  { label: "Archived", value: "archived", href: "/app/erp/agent-review-queue?status=archived" },
+] as const;
+
+type StatusFilter = (typeof STATUS_FILTERS)[number]["value"];
 
 function label(value: string | null | undefined) {
   return value ? value.replace(/_/g, " ") : "Not set";
@@ -166,6 +179,15 @@ function safeItemSnapshot(item: any) {
 
 function allowedActionsForStatus(status: string): StaffIntent[] {
   return TRANSITIONS[status] || [];
+}
+
+function statusFilterFromUrl(requestUrl: string): StatusFilter {
+  const status = new URL(requestUrl).searchParams.get("status") || "all";
+  return STATUS_FILTERS.some((filter) => filter.value === status) ? (status as StatusFilter) : "all";
+}
+
+function filterLabel(filterValue: string) {
+  return STATUS_FILTERS.find((filter) => filter.value === filterValue)?.label || "All";
 }
 
 function SummaryCard({ label, value }: { label: string; value: number }) {
@@ -259,9 +281,17 @@ export async function action({ request }: { request: Request }) {
 
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
+  const activeFilter = statusFilterFromUrl(request.url);
+  const where: any = { shop: session.shop };
+
+  if (activeFilter === "needs_staff_review") {
+    where.status = { in: ["new", "needs_staff_review"] };
+  } else if (activeFilter !== "all") {
+    where.status = activeFilter;
+  }
 
   const rows = await db.agentReviewQueueItem.findMany({
-    where: { shop: session.shop },
+    where,
     orderBy: { createdAt: "desc" },
     take: 50,
     select: {
@@ -335,6 +365,8 @@ export async function loader({ request }: { request: Request }) {
   return {
     shop: session.shop,
     items,
+    activeFilter,
+    activeFilterLabel: filterLabel(activeFilter),
     auditByItemId,
     summary: {
       total: items.length,
@@ -381,7 +413,35 @@ export default function AgentReviewQueuePage() {
                 Notes and status actions only update the review queue and audit log. They do not send customer
                 messages or create quotes, Shopify orders, invoices, or production jobs.
               </Text>
+              <Text as="p" tone="subdued">
+                Showing: {data.activeFilterLabel}
+              </Text>
             </BlockStack>
+
+            <InlineStack gap="150">
+              {STATUS_FILTERS.map((filter) => {
+                const active = data.activeFilter === filter.value;
+                return (
+                  <a
+                    href={filter.href}
+                    key={filter.value}
+                    style={{
+                      background: active ? "#303030" : "#ffffff",
+                      border: "1px solid #c9cccf",
+                      borderRadius: 6,
+                      color: active ? "#ffffff" : "#202223",
+                      fontSize: 13,
+                      fontWeight: active ? 600 : 400,
+                      lineHeight: "20px",
+                      padding: "5px 10px",
+                      textDecoration: "none",
+                    }}
+                  >
+                    {filter.label}
+                  </a>
+                );
+              })}
+            </InlineStack>
 
             {data.items.length === 0 ? (
               <EmptyState heading="No agent review queue items yet" image="">
