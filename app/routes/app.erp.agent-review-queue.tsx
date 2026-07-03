@@ -36,6 +36,16 @@ type QueueItem = {
 type LoaderData = {
   shop: string;
   items: QueueItem[];
+  auditByItemId: Record<
+    string,
+    {
+      eventCount: number;
+      latestEventType: string | null;
+      latestEventAt: string | null;
+      latestActor: string | null;
+      latestNote: string | null;
+    }
+  >;
   summary: {
     total: number;
     needsStaffReview: number;
@@ -121,6 +131,16 @@ function actorNameFromSession(session: any) {
 
 function cappedNote(value: FormDataEntryValue | null) {
   return String(value || "").trim().slice(0, NOTE_MAX_LENGTH);
+}
+
+function truncatedText(value: string, maxLength = 110) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+}
+
+function noteFromMetadata(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || !("note" in metadata)) return null;
+  const note = (metadata as { note?: unknown }).note;
+  return typeof note === "string" && note.trim() ? truncatedText(note.trim()) : null;
 }
 
 function safeItemSnapshot(item: any) {
@@ -269,10 +289,53 @@ export async function loader({ request }: { request: Request }) {
     createdAt: item.createdAt.toISOString(),
     updatedAt: item.updatedAt.toISOString(),
   }));
+  const itemIds = items.map((item) => item.id);
+  const auditByItemId: LoaderData["auditByItemId"] = {};
+
+  if (itemIds.length) {
+    const events = await db.agentReviewQueueEvent.findMany({
+      where: {
+        shop: session.shop,
+        queueItemId: { in: itemIds },
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        queueItemId: true,
+        eventType: true,
+        actorType: true,
+        actorName: true,
+        actorEmail: true,
+        message: true,
+        metadata: true,
+        createdAt: true,
+      },
+    });
+
+    for (const event of events) {
+      const existing = auditByItemId[event.queueItemId];
+      const latestActor = event.actorName || event.actorEmail || event.actorType || null;
+      if (!existing) {
+        auditByItemId[event.queueItemId] = {
+          eventCount: 1,
+          latestEventType: event.eventType,
+          latestEventAt: event.createdAt.toISOString(),
+          latestActor,
+          latestNote: noteFromMetadata(event.metadata),
+        };
+      } else {
+        existing.eventCount += 1;
+        if (!existing.latestNote) {
+          existing.latestNote = noteFromMetadata(event.metadata);
+        }
+      }
+    }
+  }
 
   return {
     shop: session.shop,
     items,
+    auditByItemId,
     summary: {
       total: items.length,
       needsStaffReview: items.filter((item) => ["new", "needs_staff_review"].includes(item.status)).length,
@@ -340,6 +403,7 @@ export default function AgentReviewQueuePage() {
                         "Status",
                         "Review level",
                         "Recommended staff action",
+                        "Audit",
                         "Safety",
                         "Actions",
                       ].map((heading) => (
@@ -396,6 +460,32 @@ export default function AgentReviewQueuePage() {
                           <Text as="span" variant="bodySm">
                             {item.recommendedStaffAction || "Review intake details"}
                           </Text>
+                        </td>
+                        <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
+                          {data.auditByItemId[item.id] ? (
+                            <BlockStack gap="050">
+                              <Text as="span" variant="bodySm">
+                                Last: {label(data.auditByItemId[item.id].latestEventType)}
+                              </Text>
+                              {data.auditByItemId[item.id].latestActor ? (
+                                <Text as="span" variant="bodySm" tone="subdued">
+                                  By: {data.auditByItemId[item.id].latestActor}
+                                </Text>
+                              ) : null}
+                              {data.auditByItemId[item.id].latestNote ? (
+                                <Text as="span" variant="bodySm" tone="subdued">
+                                  Note: {data.auditByItemId[item.id].latestNote}
+                                </Text>
+                              ) : null}
+                              <Text as="span" variant="bodySm" tone="subdued">
+                                Events: {data.auditByItemId[item.id].eventCount}
+                              </Text>
+                            </BlockStack>
+                          ) : (
+                            <Text as="span" variant="bodySm" tone="subdued">
+                              No events yet
+                            </Text>
+                          )}
                         </td>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
                           <InlineStack gap="100">
