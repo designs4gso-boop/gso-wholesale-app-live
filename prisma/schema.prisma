@@ -1453,6 +1453,74 @@ model AgentReviewQueueEvent {
   @@index([createdAt])
 }
 
+model AgentApiCredential {
+  id   String @id @default(cuid())
+  shop String
+
+  agentId   String
+  agentName String
+  agentEmail String?
+
+  sourceType    String
+  sourceChannel String?
+
+  tokenId        String
+  tokenHash      String
+  hmacSecretHash String?
+
+  scopes                 Json?
+  allowedProductFamilies Json?
+
+  isActive      Boolean   @default(true)
+  revokedAt     DateTime?
+  revokedReason String?
+  lastUsedAt    DateTime?
+  lastUsedIpHash String?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shop])
+  @@index([shop, isActive])
+  @@index([shop, agentId])
+  @@unique([shop, tokenId])
+}
+
+model AgentSubmissionLog {
+  id String @id @default(cuid())
+
+  shop         String?
+  credentialId String?
+  agentId      String?
+  agentName    String?
+
+  sourceChannel String?
+  externalLeadId String?
+  idempotencyKey String?
+  requestId      String?
+
+  status  String
+  outcome String?
+
+  queueItemId String?
+  errorCode   String?
+
+  ipHash        String?
+  userAgentHash String?
+  payloadHash   String?
+  safeSummary   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([shop])
+  @@index([credentialId])
+  @@index([shop, createdAt])
+  @@index([shop, sourceChannel, externalLeadId])
+  @@index([shop, idempotencyKey])
+  @@index([status, createdAt])
+}
+
 model MarginReviewSetting {
   id                           String   @id @default(cuid())
   shop                         String
