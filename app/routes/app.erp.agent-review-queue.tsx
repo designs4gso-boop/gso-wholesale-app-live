@@ -28,6 +28,7 @@ type QueueItem = {
   recommendedStaffAction: string | null;
   requiresStaffApproval: boolean;
   canBecomeRealQuoteAutomatically: boolean;
+  convertedQuoteId: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -117,6 +118,16 @@ const STATUS_FILTERS = [
 
 type StatusFilter = (typeof STATUS_FILTERS)[number]["value"];
 
+const QUOTE_RECIPE_INCLUDE = {
+  tiers: { orderBy: { minQty: "asc" as const } },
+  sourcedTiers: { orderBy: { minQty: "asc" as const } },
+  vendorProduct: {
+    include: {
+      tiers: { orderBy: { minQty: "asc" as const } },
+    },
+  },
+};
+
 function label(value: string | null | undefined) {
   return value ? value.replace(/_/g, " ") : "Not set";
 }
@@ -156,6 +167,48 @@ function noteFromMetadata(metadata: unknown) {
   return typeof note === "string" && note.trim() ? truncatedText(note.trim()) : null;
 }
 
+function textValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function jsonArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function parsePositiveQuantity(value: unknown) {
+  const text = String(value || "").trim();
+  if (!/^[1-9]\d*$/.test(text)) return null;
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function positiveNumber(value: unknown) {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function bestRange<T extends { minQty?: number | null; maxQty?: number | null }>(ranges: T[] | undefined, quantity: number) {
+  return (
+    [...(ranges || [])]
+      .filter((range) => Number(range.minQty || 0) <= quantity)
+      .sort((left, right) => Number(right.minQty || 0) - Number(left.minQty || 0))[0] || null
+  );
+}
+
+function compactTerms(values: unknown[]) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => textValue(value))
+        .filter(Boolean),
+    ),
+  ).slice(0, 8);
+}
+
 function safeItemSnapshot(item: any) {
   return {
     id: item.id,
@@ -170,6 +223,7 @@ function safeItemSnapshot(item: any) {
     quantity: item.quantity,
     recommendedStaffAction: item.recommendedStaffAction,
     rejectionReason: item.rejectionReason,
+    convertedQuoteId: item.convertedQuoteId,
     requiresStaffApproval: item.requiresStaffApproval,
     canBecomeRealQuoteAutomatically: item.canBecomeRealQuoteAutomatically,
     createdBy: item.createdBy,
@@ -205,18 +259,268 @@ function SummaryCard({ label, value }: { label: string; value: number }) {
   );
 }
 
+async function resolveQuoteReadyRecipe(shop: string, item: any) {
+  const productRequest = jsonObject(item.productRequest);
+  const terms = compactTerms([
+    item.productType,
+    item.productFamily,
+    productRequest.productType,
+    productRequest.productFamily,
+    productRequest.productFamilyKey,
+    productRequest.recipeName,
+    productRequest.sku,
+  ]);
+
+  const whereBase = {
+    shop,
+    active: true,
+    useInQuotes: true,
+    costReviewNeeded: false,
+  };
+
+  for (const term of terms) {
+    const exactMatches = await db.productRecipe.findMany({
+      where: {
+        ...whereBase,
+        OR: [
+          { id: term },
+          { sku: { equals: term, mode: "insensitive" } },
+          { productType: { equals: term, mode: "insensitive" } },
+          { name: { equals: term, mode: "insensitive" } },
+        ],
+      },
+      include: QUOTE_RECIPE_INCLUDE,
+      take: 2,
+    });
+    if (exactMatches.length > 1) return null;
+    if (exactMatches.length === 1) return exactMatches[0];
+  }
+
+  if (!terms.length) return null;
+
+  const candidates = await db.productRecipe.findMany({
+    where: {
+      ...whereBase,
+      OR: terms.flatMap((term) => [
+        { sku: { contains: term, mode: "insensitive" } },
+        { productType: { contains: term, mode: "insensitive" } },
+        { productFamily: { contains: term, mode: "insensitive" } },
+        { name: { contains: term, mode: "insensitive" } },
+      ]),
+    },
+    include: QUOTE_RECIPE_INCLUDE,
+    take: 2,
+  });
+
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function resolveRecipePricing(recipe: any, quantity: number) {
+  const recipeTier = bestRange(recipe.tiers, quantity);
+  const sourcedTier = bestRange(recipe.sourcedTiers, quantity);
+  const vendorTier = bestRange(recipe.vendorProduct?.tiers, quantity);
+  const unitPrice = positiveNumber(recipeTier?.fixedPrice) || positiveNumber(recipe.defaultSellPrice);
+  const unitCost =
+    positiveNumber(sourcedTier?.unitCost) ||
+    positiveNumber(vendorTier?.unitCost) ||
+    positiveNumber(recipe.vendorProduct?.defaultUnitCost);
+
+  if (!unitPrice || !unitCost) return null;
+
+  return {
+    unitPrice,
+    unitCost,
+    recipeTier,
+    sourcedTier,
+    vendorTier,
+  };
+}
+
+function quoteLineFromQueueItem(item: any, recipe: any, quantity: number) {
+  const productRequest = jsonObject(item.productRequest);
+  const pricing = resolveRecipePricing(recipe, quantity);
+  if (!pricing) return null;
+
+  const { recipeTier, sourcedTier, vendorTier, unitPrice, unitCost } = pricing;
+  const productName =
+    textValue(productRequest.productType) ||
+    textValue(item.productType) ||
+    textValue(recipe.name) ||
+    textValue(item.productFamily) ||
+    textValue(item.customerSafeSummary) ||
+    "Custom item";
+  const costSnapshot = {
+    source: "agent_review_queue_conversion",
+    queueItemId: item.id,
+    recipeId: recipe.id,
+    recipeName: recipe.name,
+    quantity,
+    unitCost,
+    sourcedTier: sourcedTier ? `${sourcedTier.minQty}+` : null,
+    vendorTier: vendorTier ? `${vendorTier.minQty}${vendorTier.maxQty ? `-${vendorTier.maxQty}` : "+"}` : null,
+    note: "Internal draft quote created for staff review. No Shopify order, invoice, customer message, or production job was created.",
+  };
+  const priceSnapshot = {
+    source: "agent_review_queue_conversion",
+    pricingMode: recipeTier?.fixedPrice ? "recipe_fixed_tier" : "recipe_default_sell_price",
+    unitPrice,
+    unitCost,
+    tierLabel: recipeTier ? `${recipeTier.minQty}${recipeTier.maxQty ? `-${recipeTier.maxQty}` : "+"}` : null,
+    requiresStaffApproval: true,
+  };
+
+  return {
+    productName,
+    variant: textValue(productRequest.finish) || textValue(item.finish) || null,
+    sku: recipe.sku || null,
+    quantity,
+    unitPrice,
+    unitCost,
+    notes: [
+      "Created from Agent Review Queue for internal staff quote drafting.",
+      "Pricing seeded from quote-ready recipe data.",
+      textValue(item.internalNotes) ? `Queue notes: ${textValue(item.internalNotes)}` : "",
+    ].filter(Boolean).join("\n"),
+    recipeId: recipe.id,
+    recipeName: recipe.name,
+    selectedFinish: textValue(productRequest.finish) || textValue(item.finish) || null,
+    pricingSource: "agent_review_queue_recipe",
+    tierLabel: recipeTier ? `${recipeTier.minQty}${recipeTier.maxQty ? `-${recipeTier.maxQty}` : "+"}` : null,
+    minQuantity: recipe.minQuantity || null,
+    marginPct: recipeTier?.marginPct ?? recipe.targetMarginPct ?? null,
+    costSnapshot: JSON.stringify(costSnapshot),
+    priceSnapshot: JSON.stringify(priceSnapshot),
+  };
+}
+
 export async function action({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
-  const intent = String(formData.get("intent") || "") as StaffIntent;
+  const intent = String(formData.get("intent") || "");
   const itemId = String(formData.get("itemId") || "");
   const note = cappedNote(formData.get("note"));
+  const actorId = (session as any).userId ? String((session as any).userId) : null;
+  const actorName = actorNameFromSession(session);
+  const actorEmail = (session as any).email || null;
+  const actorLabel = actorEmail || actorName || actorId || "staff";
+
+  if (intent === "create_quote_draft") {
+    if (!itemId) return redirect("/app/erp/agent-review-queue");
+
+    const item = await db.agentReviewQueueItem.findFirst({
+      where: { id: itemId, shop: session.shop },
+    });
+
+    if (!item) return redirect("/app/erp/agent-review-queue");
+    if (item.convertedQuoteId) return redirect("/app/erp/agent-review-queue");
+    if (item.status !== "ready_to_quote") return redirect("/app/erp/agent-review-queue");
+    if (item.requiresStaffApproval !== true) return redirect("/app/erp/agent-review-queue");
+    if (item.canBecomeRealQuoteAutomatically !== false) return redirect("/app/erp/agent-review-queue");
+
+    const productRequest = jsonObject(item.productRequest);
+    const quantity = parsePositiveQuantity(item.quantity || productRequest.quantity);
+    const hasCustomer = Boolean(item.customerName || item.company || item.email);
+    const hasProductContext = Boolean(item.productFamily || item.productType || Object.keys(productRequest).length);
+    const missingFields = jsonArray(item.missingFields).filter(Boolean);
+
+    if (!quantity || !hasCustomer || !hasProductContext || missingFields.length) {
+      return redirect("/app/erp/agent-review-queue");
+    }
+
+    const recipe = await resolveQuoteReadyRecipe(session.shop, item);
+    if (!recipe) return redirect("/app/erp/agent-review-queue");
+
+    const quoteLine = quoteLineFromQueueItem(item, recipe, quantity);
+    if (!quoteLine) return redirect("/app/erp/agent-review-queue");
+
+    const now = new Date();
+    await db.$transaction(async (tx) => {
+      const draftQuote = await tx.quote.create({
+        data: {
+          shop: session.shop,
+          customerName: item.customerName || null,
+          company: item.company || null,
+          email: item.email || null,
+          phone: item.phone || null,
+          status: "draft",
+          notes: [
+            `Created from Agent Review Queue item ${item.id}.`,
+            "Internal draft quote only. No Shopify order, invoice, customer message, or production job was created.",
+            item.customerSafeSummary ? `Customer-safe summary: ${item.customerSafeSummary}` : "",
+            item.internalNotes ? `Internal notes: ${item.internalNotes}` : "",
+          ].filter(Boolean).join("\n"),
+          items: {
+            create: [quoteLine],
+          },
+        },
+      });
+
+      const updated = await tx.agentReviewQueueItem.updateMany({
+        where: {
+          id: item.id,
+          shop: session.shop,
+          status: "ready_to_quote",
+          convertedQuoteId: null,
+        },
+        data: {
+          status: "converted_by_staff",
+          convertedQuoteId: draftQuote.id,
+          convertedAt: now,
+          convertedBy: actorLabel,
+          requiresStaffApproval: true,
+          canBecomeRealQuoteAutomatically: false,
+        },
+      });
+
+      if (updated.count !== 1) {
+        throw new Error("Queue item was already converted.");
+      }
+
+      await tx.agentReviewQueueEvent.create({
+        data: {
+          shop: session.shop,
+          queueItemId: item.id,
+          eventType: "converted_to_real_quote_by_staff",
+          actorType: "staff",
+          actorId,
+          actorName,
+          actorEmail,
+          message: `Staff created internal draft quote ${draftQuote.id}.`,
+          beforeSnapshot: safeItemSnapshot(item),
+          afterSnapshot: {
+            ...safeItemSnapshot(item),
+            status: "converted_by_staff",
+            convertedQuoteId: draftQuote.id,
+            convertedAt: now.toISOString(),
+            convertedBy: actorLabel,
+          },
+          metadata: {
+            phase: "8B",
+            action: "create_quote_draft",
+            quoteId: draftQuote.id,
+            priorStatus: item.status,
+            newStatus: "converted_by_staff",
+            actorId,
+            actorName,
+            actorEmail,
+            recipeId: recipe.id,
+          },
+        },
+      });
+
+      return draftQuote;
+    });
+
+    return redirect(`/app/erp/agent-review-queue?status=ready_to_quote`);
+  }
 
   if (!Object.prototype.hasOwnProperty.call(ACTIONS, intent) || !itemId) {
     return redirect("/app/erp/agent-review-queue");
   }
 
-  if (NOTE_REQUIRED_ACTIONS.has(intent) && !note) {
+  const staffIntent = intent as StaffIntent;
+
+  if (NOTE_REQUIRED_ACTIONS.has(staffIntent) && !note) {
     return redirect("/app/erp/agent-review-queue");
   }
 
@@ -228,26 +532,23 @@ export async function action({ request }: { request: Request }) {
     return redirect("/app/erp/agent-review-queue");
   }
 
-  if (!allowedActionsForStatus(item.status).includes(intent)) {
+  if (!allowedActionsForStatus(item.status).includes(staffIntent)) {
     return redirect("/app/erp/agent-review-queue");
   }
 
-  const actionConfig = ACTIONS[intent];
+  const actionConfig = ACTIONS[staffIntent];
   const now = new Date();
-  const actorId = (session as any).userId ? String((session as any).userId) : null;
-  const actorName = actorNameFromSession(session);
-  const actorEmail = (session as any).email || null;
   const updateData: any = {
     ...actionConfig.data,
     requiresStaffApproval: true,
     canBecomeRealQuoteAutomatically: false,
   };
 
-  if (intent === "mark_ready_to_quote" && !item.reviewLevel) {
+  if (staffIntent === "mark_ready_to_quote" && !item.reviewLevel) {
     updateData.reviewLevel = "basic_staff_review";
   }
 
-  if (intent === "reject") {
+  if (staffIntent === "reject") {
     updateData.rejectedBy = actorEmail || actorName || "staff";
     updateData.rejectedAt = now;
     updateData.rejectionReason = note;
@@ -271,7 +572,7 @@ export async function action({ request }: { request: Request }) {
         message: note ? `${actionConfig.message} Note: ${note}` : actionConfig.message,
         beforeSnapshot: safeItemSnapshot(item),
         afterSnapshot: safeItemSnapshot(updated),
-        metadata: { phase: "6N", action: intent, note: note || null },
+        metadata: { phase: "6N", action: staffIntent, note: note || null },
       },
     });
   });
@@ -308,6 +609,7 @@ export async function loader({ request }: { request: Request }) {
       recommendedStaffAction: true,
       requiresStaffApproval: true,
       canBecomeRealQuoteAutomatically: true,
+      convertedQuoteId: true,
       createdBy: true,
       createdAt: true,
       updatedAt: true,
@@ -559,6 +861,20 @@ export default function AgentReviewQueuePage() {
                         </td>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
                           <InlineStack gap="100">
+                            {item.convertedQuoteId ? (
+                              <Text as="span" variant="bodySm" tone="subdued">
+                                Draft quote created: {item.convertedQuoteId}
+                              </Text>
+                            ) : null}
+                            {item.status === "ready_to_quote" && !item.convertedQuoteId ? (
+                              <Form method="post">
+                                <input type="hidden" name="intent" value="create_quote_draft" />
+                                <input type="hidden" name="itemId" value={item.id} />
+                                <Button size="slim" submit>
+                                  Create draft quote
+                                </Button>
+                              </Form>
+                            ) : null}
                             {allowedActionsForStatus(item.status).map((intent) => (
                               <Form method="post" key={intent}>
                                 <input type="hidden" name="intent" value={intent} />
