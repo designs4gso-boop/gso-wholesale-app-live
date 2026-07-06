@@ -10,7 +10,7 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
-import { Form, redirect, useLoaderData } from "react-router";
+import { Form, Link, redirect, useLoaderData, useNavigate } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
 
@@ -746,12 +746,13 @@ export async function loader({ request }: { request: Request }) {
 
 export default function AgentReviewQueuePage() {
   const data = useLoaderData<typeof loader>() as LoaderData;
+  const navigate = useNavigate();
 
   return (
     <Page
       title="Agent Review Queue"
       subtitle={`Read-only staff queue for ${data.shop}`}
-      primaryAction={{ content: "New internal queue item", url: "/app/erp/agent-review-queue/new" }}
+      primaryAction={{ content: "New internal queue item", onAction: () => navigate("/app/erp/agent-review-queue/new") }}
     >
       <BlockStack gap="400">
         {data.conversionError ? (
@@ -793,8 +794,8 @@ export default function AgentReviewQueuePage() {
               {STATUS_FILTERS.map((filter) => {
                 const active = data.activeFilter === filter.value;
                 return (
-                  <a
-                    href={filter.href}
+                  <Link
+                    to={filter.href}
                     key={filter.value}
                     style={{
                       background: active ? "#303030" : "#ffffff",
@@ -809,7 +810,7 @@ export default function AgentReviewQueuePage() {
                     }}
                   >
                     {filter.label}
-                  </a>
+                  </Link>
                 );
               })}
             </InlineStack>
@@ -818,7 +819,7 @@ export default function AgentReviewQueuePage() {
               <EmptyState heading="No agent review queue items yet" image="">
                 <BlockStack gap="300">
                   <Text as="p">Agent-prepared quote drafts will appear here after staff intake is enabled.</Text>
-                  <Button url="/app/erp/agent-review-queue/new">New internal queue item</Button>
+                  <Button onClick={() => navigate("/app/erp/agent-review-queue/new")}>New internal queue item</Button>
                 </BlockStack>
               </EmptyState>
             ) : (

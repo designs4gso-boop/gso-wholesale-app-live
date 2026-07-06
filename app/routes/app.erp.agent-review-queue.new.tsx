@@ -7,7 +7,7 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
-import { Form, redirect, useActionData, useNavigation } from "react-router";
+import { Form, redirect, useActionData, useNavigation, useNavigate } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
 
@@ -218,6 +218,7 @@ export async function action({ request }: { request: Request }) {
 export default function NewAgentReviewQueueItemPage() {
   const actionData = useActionData<typeof action>() as ActionData | undefined;
   const navigation = useNavigation();
+  const navigate = useNavigate();
   const values = actionData?.values || {};
   const saving = navigation.state === "submitting";
 
@@ -225,7 +226,7 @@ export default function NewAgentReviewQueueItemPage() {
     <Page
       title="Internal Staff Queue Item"
       subtitle="Create a staff-review draft for future queue workflows"
-      backAction={{ content: "Agent Review Queue", url: "/app/erp/agent-review-queue" }}
+      backAction={{ content: "Agent Review Queue", onAction: () => navigate("/app/erp/agent-review-queue") }}
     >
       <BlockStack gap="400">
         <Banner tone="warning">
@@ -329,7 +330,7 @@ export default function NewAgentReviewQueueItemPage() {
               <Button submit variant="primary" loading={saving}>
                 Create staff review draft
               </Button>
-              <Button url="/app/erp/agent-review-queue">Cancel</Button>
+              <Button onClick={() => navigate("/app/erp/agent-review-queue")}>Cancel</Button>
             </InlineStack>
           </BlockStack>
         </Form>
