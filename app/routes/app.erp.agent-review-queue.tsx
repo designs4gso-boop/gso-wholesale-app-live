@@ -10,7 +10,7 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
-import { Form, redirect, useLoaderData } from "react-router";
+import { Form, redirect, useLoaderData, useActionData, data as dataResponse } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
 
@@ -57,6 +57,8 @@ type LoaderData = {
     rejectedOrArchived: number;
   };
 };
+
+type ActionData = { conversionError: string } | null;
 
 const ACTIONS = {
   request_missing_info: {
@@ -114,6 +116,7 @@ const STATUS_FILTERS = [
   { label: "Ready", value: "ready_to_quote", href: "/app/erp/agent-review-queue?status=ready_to_quote" },
   { label: "Rejected", value: "rejected", href: "/app/erp/agent-review-queue?status=rejected" },
   { label: "Archived", value: "archived", href: "/app/erp/agent-review-queue?status=archived" },
+  { label: "Converted", value: "converted_by_staff", href: "/app/erp/agent-review-queue?status=converted_by_staff" },
 ] as const;
 
 type StatusFilter = (typeof STATUS_FILTERS)[number]["value"];
@@ -393,6 +396,43 @@ function quoteLineFromQueueItem(item: any, recipe: any, quantity: number) {
   };
 }
 
+async function writeConversionFailedEvent(
+  item: any,
+  shop: string,
+  actorId: string | null,
+  actorName: string | null,
+  actorEmail: string | null,
+  reason: string,
+) {
+  try {
+    await db.agentReviewQueueEvent.create({
+      data: {
+        shop,
+        queueItemId: item.id,
+        eventType: "quote_draft_conversion_failed",
+        actorType: "staff",
+        actorId,
+        actorName,
+        actorEmail,
+        message: `Draft quote conversion failed: ${reason}`,
+        beforeSnapshot: safeItemSnapshot(item),
+        metadata: {
+          phase: "8B",
+          action: "create_quote_draft",
+          reason,
+          itemId: item.id,
+          itemStatus: item.status,
+          actorId,
+          actorName,
+          actorEmail,
+        },
+      },
+    });
+  } catch (_err) {
+    // Never let event write failure affect the response.
+  }
+}
+
 export async function action({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -424,14 +464,30 @@ export async function action({ request }: { request: Request }) {
     const missingFields = jsonArray(item.missingFields).filter(Boolean);
 
     if (!quantity || !hasCustomer || !hasProductContext || missingFields.length) {
-      return redirect("/app/erp/agent-review-queue");
+      const reason = !quantity
+        ? "no valid quantity"
+        : !hasCustomer
+        ? "no customer name, company, or email"
+        : !hasProductContext
+        ? "no product context"
+        : `missing required fields: ${missingFields.join(", ")}`;
+      await writeConversionFailedEvent(item, session.shop, actorId, actorName, actorEmail, reason);
+      return dataResponse({ conversionError: `Draft quote was not created: ${reason}.` });
     }
 
     const recipe = await resolveQuoteReadyRecipe(session.shop, item);
-    if (!recipe) return redirect("/app/erp/agent-review-queue");
+    if (!recipe) {
+      const reason = "no unambiguous quote-ready recipe was found for this item";
+      await writeConversionFailedEvent(item, session.shop, actorId, actorName, actorEmail, reason);
+      return dataResponse({ conversionError: "Draft quote was not created: no unambiguous quote-ready recipe was found." });
+    }
 
     const quoteLine = quoteLineFromQueueItem(item, recipe, quantity);
-    if (!quoteLine) return redirect("/app/erp/agent-review-queue");
+    if (!quoteLine) {
+      const reason = "the matched recipe is missing positive sell price or unit cost";
+      await writeConversionFailedEvent(item, session.shop, actorId, actorName, actorEmail, reason);
+      return dataResponse({ conversionError: "Draft quote was not created: the matched recipe is missing positive sell price or unit cost." });
+    }
 
     const now = new Date();
     await db.$transaction(async (tx) => {
@@ -511,7 +567,7 @@ export async function action({ request }: { request: Request }) {
       return draftQuote;
     });
 
-    return redirect(`/app/erp/agent-review-queue?status=ready_to_quote`);
+    return redirect("/app/erp/agent-review-queue?status=converted_by_staff");
   }
 
   if (!Object.prototype.hasOwnProperty.call(ACTIONS, intent) || !itemId) {
@@ -682,6 +738,7 @@ export async function loader({ request }: { request: Request }) {
 
 export default function AgentReviewQueuePage() {
   const data = useLoaderData<typeof loader>() as LoaderData;
+  const actionData = useActionData<ActionData>();
 
   return (
     <Page
@@ -690,6 +747,11 @@ export default function AgentReviewQueuePage() {
       primaryAction={{ content: "New internal queue item", url: "/app/erp/agent-review-queue/new" }}
     >
       <BlockStack gap="400">
+        {actionData?.conversionError ? (
+          <Banner tone="critical" title="Draft quote not created">
+            <Text as="p">{actionData.conversionError}</Text>
+          </Banner>
+        ) : null}
         <Banner tone="info">
           <Text as="p">
             This queue is read-only in this phase. Staff review is required before any quote, order,
