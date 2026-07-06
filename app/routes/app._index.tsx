@@ -142,6 +142,19 @@ export default function AppHome() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">Sales Agent Intake</Text>
+              <Text as="p" tone="subdued">Staff review queue for agent-submitted and manually created quote requests.</Text>
+              <InlineStack gap="300" wrap>
+                <Button variant="primary" onClick={() => navigate("/app/erp/agent-review-queue")}>Agent Review Queue</Button>
+                <Button onClick={() => navigate("/app/erp/agent-review-queue/new")}>New Internal Queue Item</Button>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
               <Text as="h2" variant="headingMd">Operations</Text>
               <InlineStack gap="300" wrap>
                 <Button onClick={() => navigate("/app/erp/production")}>Production</Button>
