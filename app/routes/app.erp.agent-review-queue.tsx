@@ -10,7 +10,7 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
-import { Form, redirect, useLoaderData, useActionData, data as dataResponse } from "react-router";
+import { Form, redirect, useLoaderData } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
 
@@ -56,9 +56,8 @@ type LoaderData = {
     needsCostReview: number;
     rejectedOrArchived: number;
   };
+  conversionError: string | null;
 };
-
-type ActionData = { conversionError: string } | null;
 
 const ACTIONS = {
   request_missing_info: {
@@ -472,21 +471,21 @@ export async function action({ request }: { request: Request }) {
         ? "no product context"
         : `missing required fields: ${missingFields.join(", ")}`;
       await writeConversionFailedEvent(item, session.shop, actorId, actorName, actorEmail, reason);
-      return dataResponse({ conversionError: `Draft quote was not created: ${reason}.` });
+      return redirect("/app/erp/agent-review-queue?conversionError=missing_fields");
     }
 
     const recipe = await resolveQuoteReadyRecipe(session.shop, item);
     if (!recipe) {
       const reason = "no unambiguous quote-ready recipe was found for this item";
       await writeConversionFailedEvent(item, session.shop, actorId, actorName, actorEmail, reason);
-      return dataResponse({ conversionError: "Draft quote was not created: no unambiguous quote-ready recipe was found." });
+      return redirect("/app/erp/agent-review-queue?conversionError=no_recipe");
     }
 
     const quoteLine = quoteLineFromQueueItem(item, recipe, quantity);
     if (!quoteLine) {
       const reason = "the matched recipe is missing positive sell price or unit cost";
       await writeConversionFailedEvent(item, session.shop, actorId, actorName, actorEmail, reason);
-      return dataResponse({ conversionError: "Draft quote was not created: the matched recipe is missing positive sell price or unit cost." });
+      return redirect("/app/erp/agent-review-queue?conversionError=no_pricing");
     }
 
     const now = new Date();
@@ -636,9 +635,17 @@ export async function action({ request }: { request: Request }) {
   return redirect("/app/erp/agent-review-queue");
 }
 
+const CONVERSION_ERROR_MESSAGES: Record<string, string> = {
+  missing_fields: "Draft quote was not created: item is missing required fields (quantity, customer, or product context).",
+  no_recipe: "Draft quote was not created: no unambiguous quote-ready recipe was found.",
+  no_pricing: "Draft quote was not created: the matched recipe is missing positive sell price or unit cost.",
+};
+
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const activeFilter = statusFilterFromUrl(request.url);
+  const conversionErrorCode = new URL(request.url).searchParams.get("conversionError") || "";
+  const conversionError = CONVERSION_ERROR_MESSAGES[conversionErrorCode] || null;
   const where: any = { shop: session.shop };
 
   if (activeFilter === "needs_staff_review") {
@@ -726,6 +733,7 @@ export async function loader({ request }: { request: Request }) {
     activeFilter,
     activeFilterLabel: filterLabel(activeFilter),
     auditByItemId,
+    conversionError,
     summary: {
       total: items.length,
       needsStaffReview: items.filter((item) => ["new", "needs_staff_review"].includes(item.status)).length,
@@ -738,7 +746,6 @@ export async function loader({ request }: { request: Request }) {
 
 export default function AgentReviewQueuePage() {
   const data = useLoaderData<typeof loader>() as LoaderData;
-  const actionData = useActionData<ActionData>();
 
   return (
     <Page
@@ -747,9 +754,9 @@ export default function AgentReviewQueuePage() {
       primaryAction={{ content: "New internal queue item", url: "/app/erp/agent-review-queue/new" }}
     >
       <BlockStack gap="400">
-        {actionData?.conversionError ? (
+        {data.conversionError ? (
           <Banner tone="critical" title="Draft quote not created">
-            <Text as="p">{actionData.conversionError}</Text>
+            <Text as="p">{data.conversionError}</Text>
           </Banner>
         ) : null}
         <Banner tone="info">
