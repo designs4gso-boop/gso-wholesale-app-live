@@ -23,6 +23,7 @@ import {
   QUOTE_RECIPE_PRICING_INCLUDE,
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
+import { lowMarginApprovalLine, quoteMarginState } from "../lib/quote-margin.server";
 
 type QuoteItemInput = {
   id?: string;
@@ -365,11 +366,13 @@ function normalizeQuote(quote: any): QuoteInput {
 }
 
 async function getQuotes(shop: string) {
-  return db.quote.findMany({
+  const quotes = await db.quote.findMany({
     where: { shop },
     orderBy: { updatedAt: "desc" },
     include: { items: true },
   });
+
+  return quotes.map((quote) => ({ ...quote, marginState: quoteMarginState(quote) }));
 }
 
 async function getRecipeSummaries(shop: string) {
@@ -774,9 +777,26 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "status") {
+    const nextStatus = String(payload.status || "");
+
+    if (nextStatus === "sent" || nextStatus === "approved") {
+      const quote = await db.quote.findFirst({
+        where: { id: payload.id, shop },
+        include: { items: true },
+      });
+
+      if (quote) {
+        const marginState = quoteMarginState(quote);
+        if (marginState.approvalRequired) {
+          const quotes = await getQuotes(shop);
+          return Response.json({ intent: "status", ok: false, error: marginState.blockMessage, quotes });
+        }
+      }
+    }
+
     await db.quote.updateMany({
       where: { id: payload.id, shop, status: { not: "paid" } },
-      data: { status: payload.status },
+      data: { status: nextStatus },
     });
 
     const quotes = await getQuotes(shop);
@@ -820,6 +840,13 @@ export async function action({ request }: { request: Request }) {
           ok: false,
           error: "This quote is on the deposit/balance track. Use the balance order instead.",
         });
+      }
+
+      {
+        const marginState = quoteMarginState(quote);
+        if (marginState.approvalRequired) {
+          return Response.json({ intent: "approveCreateOrder", ok: false, error: marginState.blockMessage });
+        }
       }
 
       const lineItems = quote.items.map((item: any) => ({
@@ -953,6 +980,13 @@ export async function action({ request }: { request: Request }) {
           ok: false,
           error: "A full payment order already exists for this quote.",
         });
+      }
+
+      {
+        const marginState = quoteMarginState(quote);
+        if (marginState.approvalRequired) {
+          return Response.json({ intent: "createDepositOrder", ok: false, error: marginState.blockMessage });
+        }
       }
 
       const quoteTotal = quote.items.reduce((sum: number, item: any) => {
@@ -1101,6 +1135,13 @@ export async function action({ request }: { request: Request }) {
         });
       }
 
+      {
+        const marginState = quoteMarginState(quote);
+        if (marginState.approvalRequired) {
+          return Response.json({ intent: "createBalanceOrder", ok: false, error: marginState.blockMessage });
+        }
+      }
+
       const depositAmount = Math.round((Number(quote.depositAmount) || 0) * 100) / 100;
       const balanceDue = Math.round((Number(quote.balanceDue) || 0) * 100) / 100;
 
@@ -1209,10 +1250,20 @@ export async function action({ request }: { request: Request }) {
 
   if (payload.intent === "sendInvoiceEmail") {
     const which = String(payload.which || "");
-    const quote = await db.quote.findFirst({ where: { id: payload.quoteId, shop } });
+    const quote = await db.quote.findFirst({
+      where: { id: payload.quoteId, shop },
+      include: { items: true },
+    });
 
     if (!quote) {
       return Response.json({ intent: "sendInvoiceEmail", ok: false, error: "Quote not found" });
+    }
+
+    {
+      const marginState = quoteMarginState(quote);
+      if (marginState.approvalRequired) {
+        return Response.json({ intent: "sendInvoiceEmail", ok: false, error: marginState.blockMessage });
+      }
     }
 
     const orderIdByWhich: Record<string, string | null> = {
@@ -1251,6 +1302,58 @@ export async function action({ request }: { request: Request }) {
     } catch (error: any) {
       return Response.json({ intent: "sendInvoiceEmail", ok: false, error: error?.message || "Invoice email failed." });
     }
+  }
+
+  if (payload.intent === "approveLowMarginQuote") {
+    const reason = String(payload.reason || "").trim().slice(0, 300);
+    const quote = await db.quote.findFirst({
+      where: { id: payload.quoteId, shop },
+      include: { items: true },
+    });
+
+    if (!quote) {
+      return Response.json({ intent: "approveLowMarginQuote", ok: false, error: "Quote not found" });
+    }
+
+    const marginState = quoteMarginState(quote);
+
+    if (!marginState.isLowMargin) {
+      return Response.json({
+        intent: "approveLowMarginQuote",
+        ok: false,
+        error: "This quote is not low-margin; no approval is needed.",
+      });
+    }
+
+    if (!reason) {
+      return Response.json({ intent: "approveLowMarginQuote", ok: false, error: "An approval reason is required." });
+    }
+
+    const actor = String(
+      (session as any).email ||
+        [(session as any).firstName, (session as any).lastName].filter(Boolean).join(" ") ||
+        "staff",
+    );
+    const approvalLine = lowMarginApprovalLine({
+      actor,
+      blendedMarginPct: marginState.blendedMarginPct,
+      lowestMarginPct: marginState.lowestMarginPct,
+      reason,
+    });
+    const existingNotes = String(quote.notes || "");
+
+    await db.quote.updateMany({
+      where: { id: quote.id, shop },
+      data: { notes: existingNotes ? `${existingNotes}\n${approvalLine}` : approvalLine },
+    });
+
+    const quotes = await getQuotes(shop);
+    return Response.json({
+      intent: "approveLowMarginQuote",
+      ok: true,
+      quotes,
+      message: "Low-margin quote approved.",
+    });
   }
 
   if (payload.intent === "save") {
@@ -1326,6 +1429,7 @@ export default function QuotesPage() {
   const [productSearch, setProductSearch] = useState("");
   const [items, setItems] = useState<QuoteItemInput[]>([emptyItem()]);
   const [lastMessage, setLastMessage] = useState("");
+  const [lowMarginReasons, setLowMarginReasons] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (fetcher.data?.quotes) setQuotes(fetcher.data.quotes);
@@ -1371,6 +1475,10 @@ export default function QuotesPage() {
 
     if (fetcher.data?.intent === "sendInvoiceEmail" && fetcher.data?.ok) {
       setLastMessage(fetcher.data.message || "Invoice email sent.");
+    }
+
+    if (fetcher.data?.intent === "approveLowMarginQuote" && fetcher.data?.ok) {
+      setLastMessage(fetcher.data.message || "Low-margin quote approved.");
     }
 
     if (
@@ -1754,6 +1862,14 @@ export default function QuotesPage() {
     );
   }
 
+  function approveLowMargin(quoteId: string) {
+    const reason = String(lowMarginReasons[quoteId] || "").trim();
+    fetcher.submit(
+      { intent: "approveLowMarginQuote", quoteId, reason },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
   function sendInvoiceEmail(quoteId: string, which: string) {
     fetcher.submit(
       { intent: "sendInvoiceEmail", quoteId, which },
@@ -2113,6 +2229,31 @@ export default function QuotesPage() {
                                   {isPaid ? <Badge tone="success">PAID - Quote locked</Badge> : null}
                                   {productionJob ? <Badge tone="success">Production: {productionJob.status}</Badge> : null}
                                   <Text as="p" tone="subdued">${quoteRevenue.toFixed(2)} | {new Date(quote.updatedAt || quote.createdAt).toLocaleString()}</Text>
+                                  {quote.marginState ? (
+                                    <Text as="p" tone="subdued">
+                                      Blended margin {Number(quote.marginState.blendedMarginPct || 0).toFixed(1)}%
+                                      {quote.marginState.lowestMarginPct != null ? ` | lowest item ${Number(quote.marginState.lowestMarginPct).toFixed(1)}%` : ""}
+                                    </Text>
+                                  ) : null}
+                                  {quote.marginState?.approvalRequired ? (
+                                    <Badge tone="critical">Low margin - approval required</Badge>
+                                  ) : null}
+                                  {quote.marginState?.isLowMargin && quote.marginState?.isApproved ? (
+                                    <Badge tone="warning">Low margin approved</Badge>
+                                  ) : null}
+                                  {quote.marginState?.approvalRequired ? (
+                                    <InlineStack gap="200">
+                                      <TextField
+                                        label="Low-margin approval reason"
+                                        labelHidden
+                                        placeholder="Approval reason (required)"
+                                        value={lowMarginReasons[quote.id] || ""}
+                                        onChange={(value) => setLowMarginReasons((current) => ({ ...current, [quote.id]: value }))}
+                                        autoComplete="off"
+                                      />
+                                      <Button tone="critical" onClick={() => approveLowMargin(quote.id)}>Approve low margin</Button>
+                                    </InlineStack>
+                                  ) : null}
                                   <Select label="Move" value={quote.status} disabled={isPaid} onChange={(value) => updateQuoteStatus(quote.id, value)} options={statuses} />
                                   <InlineStack gap="200">
                                     <Button onClick={() => loadQuote(quote)}>Open</Button>
@@ -2121,45 +2262,49 @@ export default function QuotesPage() {
                                     ) : canCreateProductionJob ? (
                                       <Button variant="primary" onClick={() => createProductionJob(quote.id)}>Create Production Job</Button>
                                     ) : null}
-                                    {quote.status === "approved" && !quote.fullOrderCreated && !quote.depositCreated && !quote.balanceCreated ? (
+                                    {!quote.marginState?.approvalRequired && quote.status === "approved" && !quote.fullOrderCreated && !quote.depositCreated && !quote.balanceCreated ? (
                                       <Button variant="primary" onClick={() => approveAndCreateOrder(quote.id)}>Create Full Payment Order</Button>
                                     ) : null}
-                                    {quote.status === "approved" && !quote.depositCreated && !quote.fullOrderCreated ? (
+                                    {!quote.marginState?.approvalRequired && quote.status === "approved" && !quote.depositCreated && !quote.fullOrderCreated ? (
                                       <Button onClick={() => createDepositOrder(quote.id, 50)}>Create 50% Deposit</Button>
                                     ) : null}
-                                    {quote.status === "deposit_paid" && quote.depositCreated && !quote.balanceCreated ? (
+                                    {!quote.marginState?.approvalRequired && quote.status === "deposit_paid" && quote.depositCreated && !quote.balanceCreated ? (
                                       <Button onClick={() => createBalanceOrder(quote.id, 50)}>Create Remaining Balance</Button>
                                     ) : null}
-                                    {quote.status === "approved" && quote.fullDraftOrderId ? (
+                                    {!quote.marginState?.approvalRequired && quote.status === "approved" && quote.fullDraftOrderId ? (
                                       <Button onClick={() => sendInvoiceEmail(quote.id, "full")}>Email full invoice</Button>
                                     ) : null}
-                                    {quote.status === "approved" && quote.depositDraftOrderId ? (
+                                    {!quote.marginState?.approvalRequired && quote.status === "approved" && quote.depositDraftOrderId ? (
                                       <Button onClick={() => sendInvoiceEmail(quote.id, "deposit")}>Email deposit invoice</Button>
                                     ) : null}
-                                    {quote.status === "deposit_paid" && quote.balanceDraftOrderId ? (
+                                    {!quote.marginState?.approvalRequired && quote.status === "deposit_paid" && quote.balanceDraftOrderId ? (
                                       <Button onClick={() => sendInvoiceEmail(quote.id, "balance")}>Email balance invoice</Button>
                                     ) : null}
                                     {!isPaid ? <Button tone="critical" onClick={() => deleteQuote(quote.id)}>Delete</Button> : null}
                                     <Button onClick={() => window.open(`https://gso-wholesale-app-live.onrender.com/quote/${quote.id}`, "_blank", "noopener,noreferrer")}>Client Portal</Button>
-                                    <Button
-                                      onClick={() => {
-                                        const url = `https://gso-wholesale-app-live.onrender.com/quote/${quote.id}`;
-                                        navigator.clipboard.writeText(url);
-                                        alert("Client portal link copied!");
-                                      }}
-                                    >
-                                      Copy Portal Link
-                                    </Button>
-                                    <Button
-                                      onClick={() => {
-                                        const url = `https://gso-wholesale-app-live.onrender.com/quote/${quote.id}`;
-                                        const subject = encodeURIComponent(`Your GSO Packaging Quote - ${quote.company || ""}`);
-                                        const body = encodeURIComponent(`Hi ${quote.customerName || "there"},\n\nYour custom packaging quote is ready.\n\nYou can view and pay here:\n${url}\n\nIf you have any questions, feel free to reach out.\n\n- GSO Packaging`);
-                                        window.open(`mailto:${quote.email}?subject=${subject}&body=${body}`);
-                                      }}
-                                    >
-                                      Email Client Portal
-                                    </Button>
+                                    {!quote.marginState?.approvalRequired ? (
+                                      <Button
+                                        onClick={() => {
+                                          const url = `https://gso-wholesale-app-live.onrender.com/quote/${quote.id}`;
+                                          navigator.clipboard.writeText(url);
+                                          alert("Client portal link copied!");
+                                        }}
+                                      >
+                                        Copy Portal Link
+                                      </Button>
+                                    ) : null}
+                                    {!quote.marginState?.approvalRequired ? (
+                                      <Button
+                                        onClick={() => {
+                                          const url = `https://gso-wholesale-app-live.onrender.com/quote/${quote.id}`;
+                                          const subject = encodeURIComponent(`Your GSO Packaging Quote - ${quote.company || ""}`);
+                                          const body = encodeURIComponent(`Hi ${quote.customerName || "there"},\n\nYour custom packaging quote is ready.\n\nYou can view and pay here:\n${url}\n\nIf you have any questions, feel free to reach out.\n\n- GSO Packaging`);
+                                          window.open(`mailto:${quote.email}?subject=${subject}&body=${body}`);
+                                        }}
+                                      >
+                                        Email Client Portal
+                                      </Button>
+                                    ) : null}
                                   </InlineStack>
                                 </BlockStack>
                               </Card>

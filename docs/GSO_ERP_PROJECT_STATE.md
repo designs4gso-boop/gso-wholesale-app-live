@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `8844984 Add product setup recipe fix tools`
-- Working tree at closeout: Patch 7B.1 (split print materials from blank items in Product Setup) pending commit
+- Latest stable commit: `bec1728 Split print materials from blank items`
+- Working tree at closeout: Patch 7C (below-40% margin approval gate) pending commit
 
 ## Golden Rule For All Agents
 
@@ -236,6 +236,18 @@ Quote recipe gates remain:
 - `addMaterial` positive-guards quantity: blank/zero/negative input saves 1, closing the `numberValue("") === 0` trap that silently zeroed a row's cost contribution. Global `numberValue` unchanged.
 - No schema, engine, or pricing-math changes; usageType remains cosmetic to engine math (unit drives the formula).
 
+## Completed Milestone: Below-40% Margin Approval Gate (Patch 7C)
+
+- New `app/lib/quote-margin.server.ts`: `LOW_MARGIN_THRESHOLD_PCT = 40`, `itemMarginPct`, `quoteMarginState` (actual margin from unitPrice/unitCost; stored marginPct is never trusted).
+- A quote is low-margin when any item has actual margin below 40%, non-positive unit price, or unknown cost (`unitCost <= 0` counts as low-margin by owner decision).
+- Server gates block low-margin unapproved quotes from: status moves to sent/approved, full payment order, deposit order, balance order, invoice email, and the legacy `/app/create-order` route.
+- New `approveLowMarginQuote` intent: staff-only, requires a reason (capped 300 chars), recomputes margin server-side, rejects non-low-margin quotes, appends an audit marker to quote notes, and has zero Shopify/order/invoice/message/production side effects.
+- Approval marker format: `[GSO] Low-margin approved by <actor> at <ISO> (threshold 40%, blended X%, lowest item Y%): <reason>` (namespaced; no collision with payment/email markers).
+- Quotes board cards show blended/lowest margins, critical "approval required" badge, warning "approved" badge, reason input + approve button; gated buttons (payment, invoice emails, portal copy/email) hide while blocked. Server gates are the real protection.
+- Every quote returned by `getQuotes` carries a server-computed `marginState`; the client never imports the margin lib.
+- Portal privacy: Patch 5 projection already excludes notes/costs/margins, verified again this patch.
+- Known upgrade deferred to the migrations baseline: replace notes-marker approval with schema-backed approval columns (approvedAt/By/Reason/Threshold) including staleness invalidation when items change after approval.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -258,14 +270,14 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 7C (per aligned roadmap; renumbered after 7B became recipe fix tools):
-Below-40% margin approval gate.
+Patch 8 (per aligned roadmap):
+Engineering baseline.
 
 Goal:
 
-- Quote approval / draft-order creation blocked server-side when blended margin is below 40% unless staff records an explicit override with a reason.
-- Override writes an audit trail (actor, margin, reason).
-- Queue conversions flag low-margin drafts in snapshots/events without blocking (drafts stay internal).
+- Prisma migrations baseline (one-time prod migrate-resolve on Render) so schema changes become deployable.
+- First automated tests (Vitest) around the pure pricing engine, quote margin state, conversion gates, and webhook payment classification.
+- Schema-backed low-margin approval columns as the first post-baseline migration.
 
 Still not allowed:
 

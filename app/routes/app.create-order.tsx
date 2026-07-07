@@ -1,5 +1,6 @@
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { quoteMarginState } from "../lib/quote-margin.server";
 
 export async function action({ request }: { request: Request }) {
   const { session, admin } = await authenticate.admin(request);
@@ -29,6 +30,11 @@ export async function action({ request }: { request: Request }) {
 
   if (quote.depositCreated || quote.balanceCreated) {
     return Response.json({ ok: false, error: "This quote is on the deposit/balance track." }, { status: 400 });
+  }
+
+  const marginState = quoteMarginState(quote);
+  if (marginState.approvalRequired) {
+    return Response.json({ ok: false, error: marginState.blockMessage }, { status: 400 });
   }
 
   const lineItems = quote.items.map((item: any) => ({
