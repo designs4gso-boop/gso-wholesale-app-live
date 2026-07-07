@@ -798,6 +798,30 @@ export async function action({ request }: { request: Request }) {
         });
       }
 
+      if (quote.status !== "approved") {
+        return Response.json({
+          intent: "approveCreateOrder",
+          ok: false,
+          error: "Quote must be Approved before creating a payment request.",
+        });
+      }
+
+      if (quote.fullOrderCreated) {
+        return Response.json({
+          intent: "approveCreateOrder",
+          ok: false,
+          error: "A full payment order already exists for this quote.",
+        });
+      }
+
+      if (quote.depositCreated || quote.balanceCreated) {
+        return Response.json({
+          intent: "approveCreateOrder",
+          ok: false,
+          error: "This quote is on the deposit/balance track. Use the balance order instead.",
+        });
+      }
+
       const lineItems = quote.items.map((item: any) => ({
         title: item.productName || "Custom print item",
         quantity: Math.max(1, Number(item.quantity) || 1),
@@ -860,9 +884,6 @@ export async function action({ request }: { request: Request }) {
       }
 
       const draftOrder = data.data?.draftOrderCreate?.draftOrder;
-      if (draftOrder?.id) {
-        await sendDraftOrderInvoice(admin, draftOrder.id);
-      }
 
       await db.quote.update({
         where: { id: quote.id },
@@ -907,6 +928,30 @@ export async function action({ request }: { request: Request }) {
           intent: "createDepositOrder",
           ok: false,
           error: "Quote not found",
+        });
+      }
+
+      if (quote.status !== "approved") {
+        return Response.json({
+          intent: "createDepositOrder",
+          ok: false,
+          error: "Quote must be Approved before creating a deposit request.",
+        });
+      }
+
+      if (quote.depositCreated) {
+        return Response.json({
+          intent: "createDepositOrder",
+          ok: false,
+          error: "A deposit order already exists for this quote.",
+        });
+      }
+
+      if (quote.fullOrderCreated) {
+        return Response.json({
+          intent: "createDepositOrder",
+          ok: false,
+          error: "A full payment order already exists for this quote.",
         });
       }
 
@@ -981,9 +1026,6 @@ export async function action({ request }: { request: Request }) {
       }
 
       const draftOrder = data.data?.draftOrderCreate?.draftOrder;
-      if (draftOrder?.id) {
-        await sendDraftOrderInvoice(admin, draftOrder.id);
-      }
 
       await db.quote.update({
         where: { id: quote.id },
@@ -1035,15 +1077,42 @@ export async function action({ request }: { request: Request }) {
         });
       }
 
-      const quoteTotal = quote.items.reduce((sum: number, item: any) => {
-        const qty = Math.max(1, Number(item.quantity) || 1);
-        const unitPrice = Number(item.unitPrice) || 0;
-        return sum + qty * unitPrice;
-      }, 0);
+      if (quote.status !== "deposit_paid") {
+        return Response.json({
+          intent: "createBalanceOrder",
+          ok: false,
+          error: "Balance order can be created only after the deposit is paid.",
+        });
+      }
 
-      const depositPercent = Number(payload.depositPercent) || 50;
-      const depositAmount = Math.round(quoteTotal * (depositPercent / 100) * 100) / 100;
-      const balanceDue = Math.round((quoteTotal - depositAmount) * 100) / 100;
+      if (!quote.depositCreated) {
+        return Response.json({
+          intent: "createBalanceOrder",
+          ok: false,
+          error: "No deposit order exists for this quote.",
+        });
+      }
+
+      if (quote.balanceCreated) {
+        return Response.json({
+          intent: "createBalanceOrder",
+          ok: false,
+          error: "A remaining balance order already exists for this quote.",
+        });
+      }
+
+      const depositAmount = Math.round((Number(quote.depositAmount) || 0) * 100) / 100;
+      const balanceDue = Math.round((Number(quote.balanceDue) || 0) * 100) / 100;
+
+      if (depositAmount <= 0 || balanceDue <= 0) {
+        return Response.json({
+          intent: "createBalanceOrder",
+          ok: false,
+          error: "Deposit record incomplete. Re-check the deposit order before creating the balance.",
+        });
+      }
+
+      const quoteTotal = Math.round((depositAmount + balanceDue) * 100) / 100;
 
       const lineItems = [
         {
@@ -1106,9 +1175,6 @@ export async function action({ request }: { request: Request }) {
       }
 
       const draftOrder = data.data?.draftOrderCreate?.draftOrder;
-      if (draftOrder?.id) {
-        await sendDraftOrderInvoice(admin, draftOrder.id);
-      }
 
       await db.quote.update({
         where: { id: quote.id },
@@ -1138,6 +1204,52 @@ export async function action({ request }: { request: Request }) {
         error: error?.message || "Unknown balance draft order error",
         graphQLErrors: error?.graphQLErrors || [],
       });
+    }
+  }
+
+  if (payload.intent === "sendInvoiceEmail") {
+    const which = String(payload.which || "");
+    const quote = await db.quote.findFirst({ where: { id: payload.quoteId, shop } });
+
+    if (!quote) {
+      return Response.json({ intent: "sendInvoiceEmail", ok: false, error: "Quote not found" });
+    }
+
+    const orderIdByWhich: Record<string, string | null> = {
+      full: quote.fullDraftOrderId,
+      deposit: quote.depositDraftOrderId,
+      balance: quote.balanceDraftOrderId,
+    };
+
+    if (!(which in orderIdByWhich)) {
+      return Response.json({ intent: "sendInvoiceEmail", ok: false, error: "Unknown invoice type." });
+    }
+
+    const draftOrderId = orderIdByWhich[which];
+    if (!draftOrderId) {
+      return Response.json({ intent: "sendInvoiceEmail", ok: false, error: "No draft order exists for this invoice type yet." });
+    }
+
+    try {
+      const data = await sendDraftOrderInvoice(admin, draftOrderId);
+      const userErrors = data?.data?.draftOrderInvoiceSend?.userErrors || [];
+
+      if (userErrors.length) {
+        return Response.json({ intent: "sendInvoiceEmail", ok: false, error: "Shopify rejected the invoice send.", userErrors });
+      }
+
+      const label = which === "full" ? "Full payment" : which === "deposit" ? "Deposit" : "Balance";
+      const auditLine = `[GSO] ${label} invoice email sent.`;
+      const existingNotes = String(quote.notes || "");
+      await db.quote.updateMany({
+        where: { id: quote.id, shop },
+        data: { notes: existingNotes ? `${existingNotes}\n${auditLine}` : auditLine },
+      });
+
+      const quotes = await getQuotes(shop);
+      return Response.json({ intent: "sendInvoiceEmail", ok: true, quotes, which, message: `${label} invoice email sent.` });
+    } catch (error: any) {
+      return Response.json({ intent: "sendInvoiceEmail", ok: false, error: error?.message || "Invoice email failed." });
     }
   }
 
@@ -1255,6 +1367,10 @@ export default function QuotesPage() {
 
     if (fetcher.data?.error && fetcher.data?.intent !== "priceRecipe") {
       setLastMessage(fetcher.data.error);
+    }
+
+    if (fetcher.data?.intent === "sendInvoiceEmail" && fetcher.data?.ok) {
+      setLastMessage(fetcher.data.message || "Invoice email sent.");
     }
 
     if (
@@ -1638,6 +1754,13 @@ export default function QuotesPage() {
     );
   }
 
+  function sendInvoiceEmail(quoteId: string, which: string) {
+    fetcher.submit(
+      { intent: "sendInvoiceEmail", quoteId, which },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
   function productionJobForQuote(quoteId: string) {
     return productionJobs.find((job: any) => job.quoteId === quoteId);
   }
@@ -1687,7 +1810,7 @@ export default function QuotesPage() {
                 <Badge tone={tone}>Margin {totals.margin.toFixed(1)}%</Badge>
               </InlineStack>
 
-              {lastMessage ? <Text as="p" tone="subdued">{lastMessage}</Text> : null}
+              {lastMessage ? <Text as="p" tone={fetcher.data?.error ? "critical" : "subdued"}>{lastMessage}</Text> : null}
 
               <InlineStack gap="300">
                 <TextField label="Customer Name" value={customerName} onChange={setCustomerName} autoComplete="off" />
@@ -1998,14 +2121,23 @@ export default function QuotesPage() {
                                     ) : canCreateProductionJob ? (
                                       <Button variant="primary" onClick={() => createProductionJob(quote.id)}>Create Production Job</Button>
                                     ) : null}
-                                    {!isPaid && !quote.depositCreated && !quote.fullOrderCreated ? (
-                                      <Button variant="primary" onClick={() => approveAndCreateOrder(quote.id)}>Approve & Create Order</Button>
+                                    {quote.status === "approved" && !quote.fullOrderCreated && !quote.depositCreated && !quote.balanceCreated ? (
+                                      <Button variant="primary" onClick={() => approveAndCreateOrder(quote.id)}>Create Full Payment Order</Button>
                                     ) : null}
-                                    {!isPaid && !quote.depositCreated && !quote.fullOrderCreated ? (
+                                    {quote.status === "approved" && !quote.depositCreated && !quote.fullOrderCreated ? (
                                       <Button onClick={() => createDepositOrder(quote.id, 50)}>Create 50% Deposit</Button>
                                     ) : null}
-                                    {!isPaid && quote.depositCreated && !quote.balanceCreated ? (
+                                    {quote.status === "deposit_paid" && quote.depositCreated && !quote.balanceCreated ? (
                                       <Button onClick={() => createBalanceOrder(quote.id, 50)}>Create Remaining Balance</Button>
+                                    ) : null}
+                                    {quote.status === "approved" && quote.fullDraftOrderId ? (
+                                      <Button onClick={() => sendInvoiceEmail(quote.id, "full")}>Email full invoice</Button>
+                                    ) : null}
+                                    {quote.status === "approved" && quote.depositDraftOrderId ? (
+                                      <Button onClick={() => sendInvoiceEmail(quote.id, "deposit")}>Email deposit invoice</Button>
+                                    ) : null}
+                                    {quote.status === "deposit_paid" && quote.balanceDraftOrderId ? (
+                                      <Button onClick={() => sendInvoiceEmail(quote.id, "balance")}>Email balance invoice</Button>
                                     ) : null}
                                     {!isPaid ? <Button tone="critical" onClick={() => deleteQuote(quote.id)}>Delete</Button> : null}
                                     <Button onClick={() => window.open(`https://gso-wholesale-app-live.onrender.com/quote/${quote.id}`, "_blank", "noopener,noreferrer")}>Client Portal</Button>

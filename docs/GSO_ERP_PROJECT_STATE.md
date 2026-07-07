@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `4adbcbe Extract shared recipe pricing engine`
-- Working tree at closeout: Patch 3 (production-after-full-payment gate) pending commit
+- Latest stable commit: `e1d3412 Require full payment before production`
+- Working tree at closeout: Patch 4 (draft-order / invoice safety) pending commit
 
 ## Golden Rule For All Agents
 
@@ -164,6 +164,18 @@ Quote recipe gates remain:
 - Opening an already-existing production job remains allowed.
 - The paid-order webhook (configurator auto-jobs from paid Shopify orders) is unchanged.
 
+## Completed Milestone: Draft Order / Invoice Safety (Patch 4)
+
+- Full payment and deposit draft orders require quote status `approved`.
+- Remaining balance draft order requires quote status `deposit_paid` plus an existing deposit order.
+- Duplicate full/deposit/balance draft orders are blocked server-side via the stored created flags.
+- Full payment and deposit/balance tracks are mutually exclusive per quote.
+- Balance order amounts come from stored `depositAmount` / `balanceDue`, never recomputed from current items.
+- Draft order creation no longer sends invoice emails automatically.
+- New `sendInvoiceEmail` intent sends Shopify invoices only on explicit staff click, is repeatable, and appends `[GSO] ... invoice email sent.` audit lines to quote notes.
+- Legacy `/app/create-order` route is gated identically and now writes the full-order flags and `Full Payment` tag (kept registered in `app/routes.ts`; delete later in a patch allowed to touch route registration).
+- Webhook classification strings (tags and note prefixes) are unchanged.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -186,15 +198,14 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 4 (per aligned roadmap):
-Quote -> Shopify draft order safety.
+Patch 5 (per aligned roadmap):
+Public quote portal customer-safe projection.
 
 Goal:
 
-- Draft order / invoice intents require quote status `approved`.
-- Duplicate-creation guards on deposit/balance/full order flags.
-- Invoice email split into an explicit separate staff action.
-- Balance amount computed from stored `depositAmount`.
+- `quote.$id.tsx` loader returns only customer-safe fields.
+- No unitCost, cost/price snapshots, margins, or internal notes in the portal response.
+- Portal payment links, totals, and paid states keep working unchanged.
 
 Still not allowed:
 

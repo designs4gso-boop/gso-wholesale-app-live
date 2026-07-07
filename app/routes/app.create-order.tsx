@@ -19,6 +19,18 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: false, error: "Quote not found" }, { status: 404 });
   }
 
+  if (quote.status !== "approved") {
+    return Response.json({ ok: false, error: "Quote must be Approved before creating a payment request." }, { status: 400 });
+  }
+
+  if (quote.fullOrderCreated) {
+    return Response.json({ ok: false, error: "A full payment order already exists for this quote." }, { status: 400 });
+  }
+
+  if (quote.depositCreated || quote.balanceCreated) {
+    return Response.json({ ok: false, error: "This quote is on the deposit/balance track." }, { status: 400 });
+  }
+
   const lineItems = quote.items.map((item: any) => ({
     title: item.productName || "Custom print item",
     variantTitle: item.variant || "",
@@ -52,7 +64,7 @@ export async function action({ request }: { request: Request }) {
         input: {
           email: quote.email || undefined,
           note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
-          tags: ["GSO Quote", "Wholesale"],
+          tags: ["GSO Quote", "Wholesale", "Full Payment"],
           lineItems,
         },
       },
@@ -72,6 +84,9 @@ export async function action({ request }: { request: Request }) {
     where: { id: quote.id },
     data: {
       status: "approved",
+      fullOrderCreated: true,
+      fullDraftOrderId: draftOrder?.id || null,
+      fullInvoiceUrl: draftOrder?.invoiceUrl || null,
     },
   });
 
