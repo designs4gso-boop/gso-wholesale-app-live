@@ -28,6 +28,7 @@ export function quoteMarginState(quote: { notes?: string | null; items?: MarginI
     sku: string | null;
     marginPct: number | null;
     unknownCost: boolean;
+    kind: "invalid_price" | "unknown_cost" | "below_threshold";
     reason: string;
   }> = [];
 
@@ -56,7 +57,8 @@ export function quoteMarginState(quote: { notes?: string | null; items?: MarginI
         sku: item?.sku || null,
         marginPct: null,
         unknownCost,
-        reason: `${name}: unit price is not positive`,
+        kind: "invalid_price",
+        reason: `${name}: invalid price (unit price is not positive)`,
       });
     } else if (unknownCost) {
       lowItems.push({
@@ -64,7 +66,8 @@ export function quoteMarginState(quote: { notes?: string | null; items?: MarginI
         sku: item?.sku || null,
         marginPct,
         unknownCost: true,
-        reason: `${name}: unit cost is unknown (0 or less), margin cannot be verified`,
+        kind: "unknown_cost",
+        reason: `${name}: unknown cost (unit cost is 0 or less), margin cannot be verified`,
       });
     } else if ((marginPct as number) < LOW_MARGIN_THRESHOLD_PCT) {
       lowItems.push({
@@ -72,6 +75,7 @@ export function quoteMarginState(quote: { notes?: string | null; items?: MarginI
         sku: item?.sku || null,
         marginPct,
         unknownCost: false,
+        kind: "below_threshold",
         reason: `${name}: margin ${(marginPct as number).toFixed(1)}% is below ${LOW_MARGIN_THRESHOLD_PCT}%`,
       });
     }
@@ -80,6 +84,19 @@ export function quoteMarginState(quote: { notes?: string | null; items?: MarginI
   const blendedMarginPct = revenue > 0 ? ((revenue - cost) / revenue) * 100 : 0;
   const isLowMargin = lowItems.length > 0;
   const isApproved = String(quote?.notes || "").includes(LOW_MARGIN_APPROVAL_MARKER);
+  const hasBelowThreshold = lowItems.some((item) => item.kind === "below_threshold");
+  const hasUnknownCost = lowItems.some((item) => item.kind === "unknown_cost" || item.unknownCost);
+  const hasInvalidPrice = lowItems.some((item) => item.kind === "invalid_price");
+
+  const approvalLabel = !isLowMargin
+    ? ""
+    : hasBelowThreshold && hasUnknownCost
+      ? "Low margin / unknown cost - approval required"
+      : hasUnknownCost && !hasBelowThreshold
+        ? "Unknown cost - approval required"
+        : hasInvalidPrice && !hasBelowThreshold
+          ? "Invalid price - approval required"
+          : "Low margin - approval required";
 
   return {
     thresholdPct: LOW_MARGIN_THRESHOLD_PCT,
@@ -89,8 +106,12 @@ export function quoteMarginState(quote: { notes?: string | null; items?: MarginI
     isLowMargin,
     isApproved,
     approvalRequired: isLowMargin && !isApproved,
+    hasBelowThreshold,
+    hasUnknownCost,
+    hasInvalidPrice,
+    approvalLabel,
     blockMessage: isLowMargin
-      ? `Low-margin approval required: ${lowItems.map((item) => item.reason).join("; ")}`
+      ? `${approvalLabel.replace(" - approval required", "")} approval required: ${lowItems.map((item) => item.reason).join("; ")}`
       : "",
   };
 }

@@ -2236,7 +2236,7 @@ export default function QuotesPage() {
                                     </Text>
                                   ) : null}
                                   {quote.marginState?.approvalRequired ? (
-                                    <Badge tone="critical">Low margin - approval required</Badge>
+                                    <Badge tone="critical">{quote.marginState.approvalLabel || "Low margin - approval required"}</Badge>
                                   ) : null}
                                   {quote.marginState?.isLowMargin && quote.marginState?.isApproved ? (
                                     <Badge tone="warning">Low margin approved</Badge>

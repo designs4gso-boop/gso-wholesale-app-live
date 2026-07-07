@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `bec1728 Split print materials from blank items`
-- Working tree at closeout: Patch 7C (below-40% margin approval gate) pending commit
+- Latest stable commit: `d17bed0 Add low margin quote approval gate`
+- Working tree at closeout: Patch 7C.1 (distinguish unknown-cost vs low-margin approval wording) pending commit
 
 ## Golden Rule For All Agents
 
@@ -247,6 +247,7 @@ Quote recipe gates remain:
 - Every quote returned by `getQuotes` carries a server-computed `marginState`; the client never imports the margin lib.
 - Portal privacy: Patch 5 projection already excludes notes/costs/margins, verified again this patch.
 - Known upgrade deferred to the migrations baseline: replace notes-marker approval with schema-backed approval columns (approvedAt/By/Reason/Threshold) including staleness invalidation when items change after approval.
+- Patch 7C.1: `quoteMarginState` now returns per-item `kind` (below_threshold / unknown_cost / invalid_price) plus `hasBelowThreshold` / `hasUnknownCost` / `hasInvalidPrice` / `approvalLabel`; badges and block messages say "Unknown cost - approval required", "Low margin - approval required", "Low margin / unknown cost - approval required", or "Invalid price - approval required" as appropriate. Gates and approval logic unchanged.
 
 ## Product Builder / Product Setup Scope
 
