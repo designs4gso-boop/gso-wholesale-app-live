@@ -442,6 +442,13 @@ async function createProductionJobFromQuote(shop: string, quoteId: string) {
   });
 
   if (!quote) throw new Error("Quote not found.");
+  if (!["paid", "production"].includes(quote.status)) {
+    throw new Error(
+      quote.status === "deposit_paid"
+        ? "Balance must be paid before production can start."
+        : "Production can start only after the quote is fully paid.",
+    );
+  }
   if (!quote.items.length) throw new Error("Quote has no items to send to production.");
 
   const jobTicket = await buildNextJobTicket(shop);
@@ -612,8 +619,12 @@ export async function action({ request }: { request: Request }) {
 
   if (intent === "createFromQuote") {
     const quoteId = String(formData.get("quoteId") || "");
-    const result = await createProductionJobFromQuote(shop, quoteId);
-    return Response.json({ ok: true, message: result.created ? "Production job created." : "Production job already exists.", jobId: result.job.id });
+    try {
+      const result = await createProductionJobFromQuote(shop, quoteId);
+      return Response.json({ ok: true, message: result.created ? "Production job created." : "Production job already exists.", jobId: result.job.id });
+    } catch (error: any) {
+      return Response.json({ ok: false, message: error?.message || "Could not create production job." });
+    }
   }
 
   if (intent === "backfillTickets") {

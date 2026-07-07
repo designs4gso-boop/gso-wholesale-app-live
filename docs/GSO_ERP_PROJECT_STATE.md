@@ -2,10 +2,10 @@
 
 ## Current Repo And Branch
 
-- Repo path: `C:\Users\golde\shopify-apps\wholesale-lite-mvp`
+- Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `e00df35 Harden agent intake auth validation`
-- Local/origin status at closeout: `HEAD` matches `origin/main`
+- Latest stable commit: `4adbcbe Extract shared recipe pricing engine`
+- Working tree at closeout: Patch 3 (production-after-full-payment gate) pending commit
 
 ## Golden Rule For All Agents
 
@@ -137,6 +137,33 @@ Quote recipe gates remain:
 - `useInQuotes: true`
 - `costReviewNeeded: false`
 
+## Completed Milestone: Quote Payment Status Flow (Patch 1)
+
+- `webhooks.orders_paid.tsx` classifies quote payments as deposit / balance / full via order tags, note text, and line-item properties.
+- Deposit payment sets `Quote.status = "deposit_paid"` and never marks the quote fully paid.
+- Balance payment marks the quote `paid` only after the deposit is confirmed paid.
+- Full payment marks the quote `paid`.
+- Unclassifiable quote payments change nothing (fail closed) and are flagged in the webhook response text.
+- Payments append `[GSO] ... invoice paid (Shopify order ...)` audit lines to `Quote.notes`.
+- Quote status list: draft, sent, approved, deposit_paid, paid, production, completed.
+
+## Completed Milestone: Shared Recipe Pricing Engine (Patch 2)
+
+- Engine lives in `app/lib/recipe-pricing.server.ts`; finish presets in `app/lib/finish-presets.ts`.
+- Exports: `QUOTE_READY_RECIPE_WHERE`, `QUOTE_RECIPE_PRICING_INCLUDE`, `priceRecipeAtQuantity`, `blockingConversionIssues`.
+- Quotes / CRM `priceRecipeLine` and Agent Review Queue conversion both price through this engine.
+- Queue conversion is fail-closed: no unambiguous recipe, non-positive unit cost or price, missing in-house inputs (width/height, materials, preferred machine), or quantity below recipe minimum = no draft quote.
+- `defaultSellPrice` and `SourcedCostTier` no longer drive queue conversion pricing.
+
+## Completed Milestone: Production After Full Payment (Patch 3)
+
+- Owner rule: production starts only after full payment, never after deposit alone.
+- Quotes / CRM offers Create Production Job only for `paid` or `production` quotes.
+- Server gates in `app.quotes.tsx` and `app.erp.production.tsx` reject job creation for draft/sent/approved/deposit_paid quotes.
+- `deposit_paid` rejection message: "Balance must be paid before production can start."
+- Opening an already-existing production job remains allowed.
+- The paid-order webhook (configurator auto-jobs from paid Shopify orders) is unchanged.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -154,31 +181,27 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 - durable rate limiting
 - credential management UI
 - real production agent credentials
-- Ready-to-Quote conversion
-- Quote Draft creation
 - mockup/approval package workflow
 - customer-facing quote sending
 
 ## Next Major Phase
 
-Phase 8A:
-Ready-to-Quote -> Quote Draft planning.
+Patch 4 (per aligned roadmap):
+Quote -> Shopify draft order safety.
 
 Goal:
-Plan a staff-only conversion from an approved Agent Review Queue item into a Quote Draft using only quote-ready recipes:
 
-- `active: true`
-- `useInQuotes: true`
-- `costReviewNeeded: false`
+- Draft order / invoice intents require quote status `approved`.
+- Duplicate-creation guards on deposit/balance/full order flags.
+- Invoice email split into an explicit separate staff action.
+- Balance amount computed from stored `depositAmount`.
 
-Phase 8 must not:
+Still not allowed:
 
-- create Shopify draft orders yet
-- send customer messages
-- start production
-- bypass staff approval
-- let external agents convert queue items
-- create final customer-facing quotes without human approval
+- external-agent quote/order/production creation
+- customer-facing sends without explicit staff action
+- production before full payment
+- bypassing recipe gates (`active`, `useInQuotes`, `costReviewNeeded: false`)
 
 ## Tool Workflow
 

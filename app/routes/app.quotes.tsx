@@ -183,6 +183,13 @@ async function createProductionJobFromQuoteInQuotes(shop: string, quoteId: strin
   });
 
   if (!quote) throw new Error("Quote not found.");
+  if (!["paid", "production"].includes(quote.status)) {
+    throw new Error(
+      quote.status === "deposit_paid"
+        ? "Balance must be paid before production can start."
+        : "Production can start only after the quote is fully paid.",
+    );
+  }
   if (!quote.items.length) throw new Error("Quote has no quote items to send to production.");
 
   const job = await db.productionJob.create({
@@ -1975,7 +1982,7 @@ export default function QuotesPage() {
                             const isPaid = quote.status === "paid";
                             const quoteRevenue = (quote.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
                             const productionJob = productionJobForQuote(quote.id);
-                            const canCreateProductionJob = ["approved", "deposit_paid", "paid", "production"].includes(quote.status);
+                            const canCreateProductionJob = ["paid", "production"].includes(quote.status);
                             return (
                               <Card key={quote.id}>
                                 <BlockStack gap="200">
