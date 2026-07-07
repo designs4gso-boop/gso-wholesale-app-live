@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `2b75b7b Separate quote order creation from invoice sending`
-- Working tree at closeout: Patch 5 (public quote portal customer-safe projection) pending commit
+- Latest stable commit: `a3a9bc0 Use customer-safe quote portal projection`
+- Working tree at closeout: Patch 6 (queue row expansion + staff recipe picker) pending commit
 
 ## Golden Rule For All Agents
 
@@ -186,6 +186,17 @@ Quote recipe gates remain:
 - Portal pages send `X-Robots-Tag: noindex, nofollow` and a robots meta tag.
 - Tokenized links and shop scoping deferred to a later schema-approved hardening patch.
 
+## Completed Milestone: Queue Row Expansion + Staff Recipe Picker (Patch 6)
+
+- Agent Review Queue rows expand inline (component state only) to show contact, request details, missing fields, escalation reasons, customer-safe summary, and internal notes.
+- Ready-to-quote rows show a required quote-ready recipe dropdown inside the existing convert form.
+- `create_quote_draft` requires `selectedRecipeId` in the POST body; silent auto-match no longer creates quotes.
+- Auto-match (`resolveQuoteReadyRecipe`) now only preselects the dropdown when exactly one match exists.
+- Selected recipe is validated server-side by id + shop + quote-ready gates before pricing.
+- Conversion events record `selectedRecipeId` and `selectionSource` (staff_selected / staff_accepted_suggestion / none).
+- All Phase 8B fail-closed gates and the shared pricing engine remain unchanged.
+- No new routes, no itemId query params, no detail-route patterns (embedded login-loop bans respected).
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -208,15 +219,14 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 6 (per aligned roadmap):
-Agent Review Queue row expansion + staff recipe picker.
+Patch 7 (per aligned roadmap):
+Below-40% margin approval gate.
 
 Goal:
 
-- Inline client-side row expansion on the queue list (no new routes, no itemId query params).
-- Staff-selectable quote-ready recipe dropdown on conversion, auto-match preselected when unambiguous.
-- Inline quantity correction before conversion.
-- Chosen recipe recorded in conversion audit events.
+- Quote approval / draft-order creation blocked server-side when blended margin is below 40% unless staff records an explicit override with a reason.
+- Override writes an audit trail (actor, margin, reason).
+- Queue conversions flag low-margin drafts in snapshots/events without blocking (drafts stay internal).
 
 Still not allowed:
 
