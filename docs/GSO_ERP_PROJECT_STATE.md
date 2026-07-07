@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `6e3953a Show agent quote conversion failure reasons`
-- Working tree at closeout: Patch 7A (Product Setup recipe readiness + test pricing) pending commit
+- Latest stable commit: `e0b7cb7 Add product setup recipe readiness checks`
+- Working tree at closeout: Patch 7A.1 (save defaultSellPrice in Product Setup) pending commit
 
 ## Golden Rule For All Agents
 
@@ -215,7 +215,7 @@ Quote recipe gates remain:
 - Enabling Use in Quotes / CRM is now server-gated: other fields save, then post-save readiness must pass or the flag stays off with exact reasons ("Saved, but Use in Quotes stayed off: ...").
 - Already-enabled recipes with blockers are never auto-disabled; they show a loud conversion-will-fail warning instead.
 - Fixed pre-existing bug: saving Recipe Details silently wiped the recipe's preferred machine rule (the form posts no `machineId`, but the intent deleted rules unconditionally). Machine rules are now rewritten only when a form actually posts `machineId`.
-- Known gap flagged (not fixed, pricing-adjacent): the Recipe Details form posts `defaultSellPrice` but `updateRecipe` never saves it.
+- defaultSellPrice save gap fixed in Patch 7A.1: `createRecipe` and `updateRecipe` now persist positive values via `positiveOrNull` and store blank/invalid/zero/negative input as null. The shared pricing engine still does not read `defaultSellPrice`, so readiness verdicts are unchanged by this field.
 
 ## Product Builder / Product Setup Scope
 

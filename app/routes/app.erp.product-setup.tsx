@@ -42,6 +42,13 @@ function intValue(value: FormDataEntryValue | null, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function positiveOrNull(value: FormDataEntryValue | null) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function zoneAreaSqft(zone: any) {
   return ((Number(zone?.widthIn || 0) * Number(zone?.heightIn || 0)) / 144) * Number(zone?.qtyPerUnit ?? zone?.quantityPerUnit ?? 1);
 }
@@ -783,6 +790,7 @@ export async function action({ request }: { request: Request }) {
         minQuantity: intValue(formData.get("minQuantity"), 64),
         defaultQuantity: intValue(formData.get("defaultQuantity"), 250),
         targetMarginPct: numberValue(formData.get("targetMarginPct"), 60),
+        defaultSellPrice: positiveOrNull(formData.get("defaultSellPrice")),
         wastePct: numberValue(formData.get("wastePct"), 15),
         setupCost: numberValue(formData.get("setupCost"), 0),
         laborMinutes: numberValue(formData.get("laborMinutes"), 0),
@@ -842,6 +850,7 @@ export async function action({ request }: { request: Request }) {
         minQuantity: intValue(formData.get("minQuantity"), 64),
         defaultQuantity: intValue(formData.get("defaultQuantity"), 250),
         targetMarginPct: numberValue(formData.get("targetMarginPct"), 60),
+        defaultSellPrice: positiveOrNull(formData.get("defaultSellPrice")),
         wastePct: numberValue(formData.get("wastePct"), 15),
         setupCost: numberValue(formData.get("setupCost"), 0),
         laborMinutes: numberValue(formData.get("laborMinutes"), 0),
