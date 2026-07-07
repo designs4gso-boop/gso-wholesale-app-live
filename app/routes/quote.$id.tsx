@@ -1,21 +1,75 @@
 import { useLoaderData } from "react-router";
 import db from "../db.server";
 
+export function headers() {
+  return { "X-Robots-Tag": "noindex, nofollow" };
+}
+
+export function meta() {
+  return [{ name: "robots", content: "noindex, nofollow" }];
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  sent: "Sent",
+  approved: "Approved",
+  deposit_paid: "Deposit received",
+  paid: "Paid",
+  production: "In production",
+  completed: "Completed",
+};
+
+function statusLabel(status: string) {
+  return STATUS_LABELS[status] || status;
+}
+
+// Public route: only this explicit customer-safe selection may ever be returned.
+// Never load or spread full Quote/QuoteItem rows here — they carry internal
+// costs, margins, snapshots, and staff/agent notes.
 export async function loader({ params }: { params: { id: string } }) {
   const quote = await db.quote.findUnique({
     where: { id: params.id },
-    include: { items: true },
+    select: {
+      id: true,
+      customerName: true,
+      company: true,
+      status: true,
+      depositCreated: true,
+      balanceCreated: true,
+      fullOrderCreated: true,
+      depositInvoiceUrl: true,
+      balanceInvoiceUrl: true,
+      fullInvoiceUrl: true,
+      items: {
+        select: {
+          id: true,
+          productName: true,
+          variant: true,
+          sku: true,
+          quantity: true,
+          unitPrice: true,
+        },
+      },
+    },
   });
 
   if (!quote) {
     throw new Response("Quote not found", { status: 404 });
   }
 
-  const total = quote.items.reduce((sum, item) => {
-    return sum + Number(item.quantity || 0) * Number(item.unitPrice || 0);
-  }, 0);
+  const items = quote.items.map((item) => ({
+    id: item.id,
+    productName: item.productName,
+    variant: item.variant,
+    sku: item.sku,
+    quantity: item.quantity,
+    unitPrice: item.unitPrice,
+    lineTotal: Number(item.quantity || 0) * Number(item.unitPrice || 0),
+  }));
 
-  return Response.json({ quote, total });
+  const total = items.reduce((sum, item) => sum + item.lineTotal, 0);
+
+  return Response.json({ quote: { ...quote, items }, total });
 }
 
 export default function QuotePortal() {
@@ -30,7 +84,7 @@ export default function QuotePortal() {
             <h1 style={styles.title}>GSO Packaging Quote</h1>
             <p style={styles.subtitle}>Custom wholesale packaging invoice portal</p>
           </div>
-          <div style={styles.badge}>{quote.status}</div>
+          <div style={styles.badge}>{statusLabel(quote.status)}</div>
         </div>
 
         <div style={styles.infoGrid}>
@@ -53,7 +107,7 @@ export default function QuotePortal() {
         <h2 style={styles.sectionTitle}>Quote Items</h2>
 
         {quote.items.map((item: any) => {
-          const lineTotal = Number(item.quantity || 0) * Number(item.unitPrice || 0);
+          const lineTotal = Number(item.lineTotal || 0);
 
           return (
             <div key={item.id} style={styles.itemCard}>

@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `e1d3412 Require full payment before production`
-- Working tree at closeout: Patch 4 (draft-order / invoice safety) pending commit
+- Latest stable commit: `2b75b7b Separate quote order creation from invoice sending`
+- Working tree at closeout: Patch 5 (public quote portal customer-safe projection) pending commit
 
 ## Golden Rule For All Agents
 
@@ -176,6 +176,16 @@ Quote recipe gates remain:
 - Legacy `/app/create-order` route is gated identically and now writes the full-order flags and `Full Payment` tag (kept registered in `app/routes.ts`; delete later in a patch allowed to touch route registration).
 - Webhook classification strings (tags and note prefixes) are unchanged.
 
+## Completed Milestone: Public Quote Portal Customer-Safe Projection (Patch 5)
+
+- `quote.$id.tsx` loader uses an explicit Prisma select allowlist; full Quote/QuoteItem rows are never loaded or returned.
+- Quote fields returned: id, customerName, company, status, created flags, invoice URLs.
+- Item fields returned: id, productName, variant, sku, quantity, unitPrice, computed lineTotal.
+- Excluded: unitCost, cost/price snapshots, margins, profit, recipe fields, pricingSource, add-on ids, quote/item notes, email, phone, depositAmount, balanceDue, draft order GIDs, artwork/proof URLs.
+- Customer-safe status labels added (deposit_paid -> "Deposit received", production -> "In production").
+- Portal pages send `X-Robots-Tag: noindex, nofollow` and a robots meta tag.
+- Tokenized links and shop scoping deferred to a later schema-approved hardening patch.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -198,14 +208,15 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 5 (per aligned roadmap):
-Public quote portal customer-safe projection.
+Patch 6 (per aligned roadmap):
+Agent Review Queue row expansion + staff recipe picker.
 
 Goal:
 
-- `quote.$id.tsx` loader returns only customer-safe fields.
-- No unitCost, cost/price snapshots, margins, or internal notes in the portal response.
-- Portal payment links, totals, and paid states keep working unchanged.
+- Inline client-side row expansion on the queue list (no new routes, no itemId query params).
+- Staff-selectable quote-ready recipe dropdown on conversion, auto-match preselected when unambiguous.
+- Inline quantity correction before conversion.
+- Chosen recipe recorded in conversion audit events.
 
 Still not allowed:
 
