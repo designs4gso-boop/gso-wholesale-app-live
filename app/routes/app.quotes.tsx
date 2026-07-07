@@ -71,6 +71,7 @@ const statuses = [
   { label: "Draft", value: "draft" },
   { label: "Sent", value: "sent" },
   { label: "Approved", value: "approved" },
+  { label: "Deposit Paid", value: "deposit_paid" },
   { label: "Paid", value: "paid" },
   { label: "In Production", value: "production" },
   { label: "Completed", value: "completed" },
@@ -2299,7 +2300,7 @@ export default function QuotesPage() {
                             const isPaid = quote.status === "paid";
                             const quoteRevenue = (quote.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
                             const productionJob = productionJobForQuote(quote.id);
-                            const canCreateProductionJob = ["approved", "paid", "production"].includes(quote.status);
+                            const canCreateProductionJob = ["approved", "deposit_paid", "paid", "production"].includes(quote.status);
                             return (
                               <Card key={quote.id}>
                                 <BlockStack gap="200">

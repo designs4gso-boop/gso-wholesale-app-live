@@ -357,6 +357,104 @@ async function createProductionJobFromConfiguratorOrder(shop: string, order: any
   return { created: true, reason: "Production job created from configurator order.", job };
 }
 
+const DEPOSIT_PAID_MARKER = "[GSO] Deposit invoice paid";
+const BALANCE_PAID_MARKER = "[GSO] Balance invoice paid";
+const FULL_PAID_MARKER = "[GSO] Full payment invoice paid";
+
+function orderTags(order: any) {
+  const raw = order?.tags;
+  const parts = Array.isArray(raw) ? raw.map((tag: any) => clean(tag)) : clean(raw).split(",");
+  return parts.map((tag: string) => tag.trim().toLowerCase()).filter(Boolean);
+}
+
+function classifyQuotePaymentOrder(order: any, note: string) {
+  const tags = orderTags(order);
+  const noteText = note.toLowerCase();
+  const lines = Array.isArray(order?.line_items) ? order.line_items : [];
+
+  const isDeposit =
+    tags.includes("deposit") ||
+    noteText.includes("deposit created from gso quote builder") ||
+    lines.some((line: any) => getLineProperty(line, "Deposit Percent") || clean(line.title).startsWith("Deposit Payment"));
+
+  const isBalance =
+    tags.includes("remaining balance") ||
+    noteText.includes("remaining balance created from gso quote builder") ||
+    lines.some((line: any) => getLineProperty(line, "Deposit Paid") || clean(line.title).startsWith("Remaining Balance"));
+
+  if (isDeposit && isBalance) return "unknown";
+  if (isDeposit) return "deposit";
+  if (isBalance) return "balance";
+
+  // "created from gso quote builder" also appears inside the deposit/balance notes,
+  // so the full-payment check must run after both of them.
+  if (tags.includes("full payment") || noteText.includes("created from gso quote builder")) return "full";
+
+  return "unknown";
+}
+
+function appendQuoteNote(notes: string | null | undefined, line: string) {
+  const existing = String(notes || "");
+  if (existing.includes(line)) return existing;
+  return existing ? `${existing}\n${line}` : line;
+}
+
+async function applyQuotePaymentFromOrder(shop: string, quoteId: string, order: any, note: string) {
+  const quote = await db.quote.findFirst({ where: { id: quoteId, shop } });
+  if (!quote) return "OK no matching quote for Quote ID";
+
+  const paymentType = classifyQuotePaymentOrder(order, note);
+  const orderLabel = orderName(order);
+  const existingNotes = String(quote.notes || "");
+  const depositAlreadyPaid =
+    quote.status === "deposit_paid" || quote.status === "paid" || existingNotes.includes(DEPOSIT_PAID_MARKER);
+  const balanceAlreadyPaid = quote.status === "paid" || existingNotes.includes(BALANCE_PAID_MARKER);
+
+  if (paymentType === "full") {
+    await db.quote.updateMany({
+      where: { id: quote.id, shop },
+      data: {
+        status: "paid",
+        notes: appendQuoteNote(quote.notes, `${FULL_PAID_MARKER} (Shopify order ${orderLabel}).`),
+      },
+    });
+    return "OK quote marked paid (full payment)";
+  }
+
+  if (paymentType === "deposit") {
+    const notes = appendQuoteNote(quote.notes, `${DEPOSIT_PAID_MARKER} (Shopify order ${orderLabel}).`);
+
+    if (balanceAlreadyPaid) {
+      await db.quote.updateMany({ where: { id: quote.id, shop }, data: { status: "paid", notes } });
+      return "OK quote marked paid (deposit and balance both paid)";
+    }
+
+    // Deposit payment must never present as full settlement, and must not pull a
+    // quote backward out of a later workflow status.
+    if (["paid", "production", "completed"].includes(quote.status)) {
+      await db.quote.updateMany({ where: { id: quote.id, shop }, data: { notes } });
+      return `OK deposit payment recorded; status ${quote.status} preserved`;
+    }
+
+    await db.quote.updateMany({ where: { id: quote.id, shop }, data: { status: "deposit_paid", notes } });
+    return "OK quote marked deposit_paid";
+  }
+
+  if (paymentType === "balance") {
+    const notes = appendQuoteNote(quote.notes, `${BALANCE_PAID_MARKER} (Shopify order ${orderLabel}).`);
+
+    if (depositAlreadyPaid) {
+      await db.quote.updateMany({ where: { id: quote.id, shop }, data: { status: "paid", notes } });
+      return "OK quote marked paid (balance paid after deposit)";
+    }
+
+    await db.quote.updateMany({ where: { id: quote.id, shop }, data: { notes } });
+    return "OK balance payment recorded; deposit not confirmed paid, status unchanged";
+  }
+
+  return "OK quote payment order not classified; status unchanged";
+}
+
 export const action = async ({ request }: { request: Request }) => {
   const { payload, shop } = await authenticate.webhook(request);
 
@@ -367,17 +465,8 @@ export const action = async ({ request }: { request: Request }) => {
   const quoteId = quoteIdMatch?.[1];
 
   if (quoteId) {
-    await db.quote.updateMany({
-      where: {
-        id: quoteId,
-        shop,
-      },
-      data: {
-        status: "paid",
-      },
-    });
-
-    return new Response("OK quote marked paid", { status: 200 });
+    const message = await applyQuotePaymentFromOrder(shop, quoteId, order, note);
+    return new Response(message, { status: 200 });
   }
 
   const result = await createProductionJobFromConfiguratorOrder(shop, order);
