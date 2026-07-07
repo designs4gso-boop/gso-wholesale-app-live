@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `d5921dc Save product setup default sell price`
-- Working tree at closeout: Patch 7B (Product Setup recipe fix tools + updateRecipe partial-update hardening) pending commit
+- Latest stable commit: `8844984 Add product setup recipe fix tools`
+- Working tree at closeout: Patch 7B.1 (split print materials from blank items in Product Setup) pending commit
 
 ## Golden Rule For All Agents
 
@@ -227,6 +227,14 @@ Quote recipe gates remain:
 - Loader adds light lists only: active machines (id+name, take 100) and active materials (display fields, take 200); memory-safe mode preserved.
 - Readiness box recomputes automatically after every fix (React Router revalidates loaders after actions).
 - Known follow-up (7C candidates): data-repair audit for recipes already damaged by the old wipe behavior; label zones / media options / vendor-product linking UI.
+
+## Completed Milestone: Print Materials vs Blank Items Split (Patch 7B.1)
+
+- Product Setup material attach is now two separate forms: "Attach printed material" (print substrates only; defaults media / qty 1 / sqft / 10% waste) and "Apply to blank item (optional)" (jars/bags/boxes/pouches; fixed usageType blank + unit each, defaults qty 1 / 0% waste).
+- Route-local classifier keyword-matches free-string `materialType` (real data includes seeded "blank_jars") with baseUnit fallback: sqft/sqin or label/dtp/laminate/banner/media/vinyl/roll hints = print; blank/jar/bag/box/pouch hints or each-based = blank item; ink/labor/machine excluded from both dropdowns.
+- Recipe materials table shows a Print media / Blank item / Other chip per row.
+- `addMaterial` positive-guards quantity: blank/zero/negative input saves 1, closing the `numberValue("") === 0` trap that silently zeroed a row's cost contribution. Global `numberValue` unchanged.
+- No schema, engine, or pricing-math changes; usageType remains cosmetic to engine math (unit drives the formula).
 
 ## Product Builder / Product Setup Scope
 

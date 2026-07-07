@@ -49,6 +49,29 @@ function positiveOrNull(value: FormDataEntryValue | null) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+// materialType is a free string in real data (e.g. seeded "blank_jars"), so the
+// print/blank split keyword-matches type hints and falls back to base unit.
+const EXCLUDED_MATERIAL_TYPE_HINT = /(ink|labor|machine)/;
+const PRINT_MATERIAL_TYPE_HINT = /(label|dtp|laminate|banner|media|vinyl|roll)/;
+const BLANK_MATERIAL_TYPE_HINT = /(blank|jar|bag|box|pouch)/;
+
+function materialKind(material: any): "print" | "blank" | "other" | "excluded" {
+  const type = String(material?.materialType || "").toLowerCase();
+  const baseUnit = String(material?.baseUnit || material?.unit || "").toLowerCase();
+
+  if (EXCLUDED_MATERIAL_TYPE_HINT.test(type)) return "excluded";
+  if (baseUnit === "sqft" || baseUnit === "sqin" || PRINT_MATERIAL_TYPE_HINT.test(type)) return "print";
+  if (BLANK_MATERIAL_TYPE_HINT.test(type) || baseUnit === "each") return "blank";
+  return "other";
+}
+
+function materialKindLabel(material: any) {
+  const kind = materialKind(material);
+  if (kind === "print") return "Print media";
+  if (kind === "blank") return "Blank item";
+  return "Other";
+}
+
 function zoneAreaSqft(zone: any) {
   return ((Number(zone?.widthIn || 0) * Number(zone?.heightIn || 0)) / 144) * Number(zone?.qtyPerUnit ?? zone?.quantityPerUnit ?? 1);
 }
@@ -673,7 +696,7 @@ export async function loader({ request }: { request: Request }) {
       where: { shop, active: true },
       orderBy: { name: "asc" },
       take: 200,
-      select: { id: true, name: true, baseUnit: true, unit: true, calculatedUnitCost: true, costPerUnit: true },
+      select: { id: true, name: true, materialType: true, baseUnit: true, unit: true, calculatedUnitCost: true, costPerUnit: true },
     }),
   ]);
 
@@ -1249,13 +1272,17 @@ export async function action({ request }: { request: Request }) {
       return Response.json({ ok: false, message: "Recipe or material was not found." }, { status: 400 });
     }
 
+    const quantityRaw = numberValue(formData.get("quantity"), 1);
+
     await db.recipeMaterial.create({
       data: {
         shop,
         recipeId,
         materialId,
         usageType: String(formData.get("usageType") || "media"),
-        quantity: numberValue(formData.get("quantity"), 1),
+        // numberValue("") is 0, so an emptied quantity field must not save a
+        // zero multiplier that silently removes this row's cost contribution.
+        quantity: quantityRaw > 0 ? quantityRaw : 1,
         unit: String(formData.get("unit") || "each"),
         wastePct: numberValue(formData.get("wastePct"), 0),
         includeWaste: String(formData.get("includeWaste") || "") === "on",
@@ -1721,6 +1748,8 @@ export default function ProductSetupRecipeBuilder() {
   const testedReadiness =
     actionData?.intent === "testRecipePrice" && actionData?.recipeId === selectedRecipe?.id ? actionData.readiness : null;
   const readiness = testedReadiness || selectedRecipeReadiness;
+  const printMaterials = materialsAvailable.filter((material: any) => materialKind(material) === "print");
+  const blankItems = materialsAvailable.filter((material: any) => materialKind(material) === "blank");
 
   function recipeHref(recipeId: string) {
     return `?${recipeBaseQuery}&recipePage=${recipePage}&recipeId=${encodeURIComponent(recipeId)}`;
@@ -1896,7 +1925,10 @@ export default function ProductSetupRecipeBuilder() {
             <thead><tr><th>Material</th><th>Usage</th><th>Qty</th><th>Unit</th><th>Waste %</th><th></th></tr></thead>
             <tbody>
               {(selectedRecipe.materials || []).map((row: any) => <tr key={row.id}>
-                <td>{row.material?.name || "Material"}</td>
+                <td>
+                  {row.material?.name || "Material"}{" "}
+                  <span className="badge">{materialKindLabel(row.material)}</span>
+                </td>
                 <td>{row.usageType}</td>
                 <td>{row.quantity}</td>
                 <td>{row.unit}</td>
@@ -1912,26 +1944,45 @@ export default function ProductSetupRecipeBuilder() {
             </tbody>
           </table> : <p className="muted">No materials attached. In-house recipes need at least one material to price.</p>}
 
-          {materialsAvailable.length ? <Form method="post" className="form-grid">
+          <h4>Attach printed material</h4>
+          {printMaterials.length ? <Form method="post" className="form-grid">
             <input type="hidden" name="intent" value="addMaterial" />
             <input type="hidden" name="recipeId" value={selectedRecipe.id} />
-            <NativeSelect label="Attach existing material" name="materialId" defaultValue={materialsAvailable[0]?.id || ""}>
-              {materialsAvailable.map((material: any) => (
+            <NativeSelect label="Printed material / substrate" name="materialId" defaultValue={printMaterials[0]?.id || ""}>
+              {printMaterials.map((material: any) => (
                 <option key={material.id} value={material.id}>
                   {material.name} ({money(material.calculatedUnitCost || material.costPerUnit)}/{material.baseUnit || material.unit || "each"})
                 </option>
               ))}
             </NativeSelect>
             <NativeSelect label="Usage type" name="usageType" defaultValue="media">
-              {["media", "laminate", "blank", "packaging", "other"].map((usage) => <option key={usage} value={usage}>{usage}</option>)}
+              {["media", "laminate", "other"].map((usage) => <option key={usage} value={usage}>{usage}</option>)}
             </NativeSelect>
             <NativeInput label="Quantity multiplier" name="quantity" type="number" step="0.01" defaultValue={1} />
             <NativeSelect label="Unit" name="unit" defaultValue="sqft">
               {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
             </NativeSelect>
+            <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue={10} />
+            <div className="wide button-row"><button type="submit">Attach printed material</button></div>
+          </Form> : <p className="muted">No print materials found. Create roll media / vinyl in Materials first.</p>}
+
+          <h4>Apply to blank item (optional)</h4>
+          {blankItems.length ? <Form method="post" className="form-grid">
+            <input type="hidden" name="intent" value="addMaterial" />
+            <input type="hidden" name="recipeId" value={selectedRecipe.id} />
+            <input type="hidden" name="usageType" value="blank" />
+            <input type="hidden" name="unit" value="each" />
+            <NativeSelect label="Blank item / application target" name="materialId" defaultValue={blankItems[0]?.id || ""}>
+              {blankItems.map((material: any) => (
+                <option key={material.id} value={material.id}>
+                  {material.name} ({money(material.calculatedUnitCost || material.costPerUnit)}/{material.baseUnit || material.unit || "each"})
+                </option>
+              ))}
+            </NativeSelect>
+            <NativeInput label="Quantity per unit" name="quantity" type="number" step="0.01" defaultValue={1} />
             <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue={0} />
-            <div className="wide button-row"><button type="submit">Attach material</button></div>
-          </Form> : <p className="muted">No active materials exist yet. Create them in Materials first.</p>}
+            <div className="wide button-row"><button type="submit">Apply blank item</button></div>
+          </Form> : <p className="muted">No blank items found. Create jars / bags / boxes in Materials first.</p>}
 
           <h3>Recipe tiers</h3>
           {(selectedRecipe.tiers || []).length ? <table>
