@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `02e9c54 Clarify unknown cost quote approvals`
-- Working tree at closeout: Patch 8A (Prisma migration baseline + first Vitest tests) pending commit
+- Latest stable commit: `945c728 Add Prisma migration baseline and tests`
+- Working tree at closeout: Patch 8B (schema-backed low-margin approval fields) pending commit
 
 ## Golden Rule For All Agents
 
@@ -259,6 +259,16 @@ Quote recipe gates remain:
 - Zero runtime behavior changes: no app/ files touched, schema untouched, no prisma command contacted any database.
 - Patch 8B (next): schema-backed low-margin approval fields as the first real migration through the proven pipeline.
 
+## Completed Milestone: Schema-Backed Low-Margin Approval (Patch 8B)
+
+- First real migration after the 8A baseline: `20260707130000_add_low_margin_approval_fields` — five nullable Quote columns (`lowMarginApprovedAt/By/Reason/ThresholdPct/Snapshot`). Generated fully offline via the two-schema diff; applied only by Render Pre-Deploy `migrate deploy`.
+- `approveLowMarginQuote` now writes the schema fields (actor, reason, threshold, item snapshot) and still appends the `[GSO] Low-margin approved ...` notes marker as human-readable history.
+- Approval resolution order in `quoteMarginState`: schema fields with value-matched snapshot (source "schema") > stale schema approval (re-blocks, `approvalStale`) > legacy notes marker when fields are empty (source "legacy_marker", transition support) > unapproved.
+- Snapshot comparison is value-based over deterministically sorted items (quote saves recreate QuoteItem rows, so ids are unstable); editing any item price/cost/quantity/line after approval re-blocks with "Items changed since approval - re-approve."
+- Board card shows "Low margin approved by <actor> on <date>" from the fields and the stale re-approve message; all Patch 7C gates consume approvalRequired/blockMessage unchanged.
+- Tests: 26 passing (6 new: schema approval, staleness, reorder-stability, legacy marker, fields-win-over-marker, snapshot shape).
+- Portal privacy: explicit select in `quote.$id.tsx` excludes the new fields automatically; verified.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -281,17 +291,15 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 8B (per aligned roadmap), only after the owner activates the 8A baseline
-(migrate resolve + Render Pre-Deploy) and one deploy proves the pipeline:
+Patch 9 (per aligned roadmap):
+Customer tier foundation.
 
-- Schema-backed low-margin approval columns on Quote:
-  `lowMarginApprovedAt DateTime?`, `lowMarginApprovedBy String?`,
-  `lowMarginApprovalReason String?`, `lowMarginApprovalThresholdPct Float?`,
-  `lowMarginApprovedSnapshot Json?`.
-- First real migration authored per docs/MIGRATIONS.md (additive only).
-- Approval logic swaps from notes-marker to columns, with staleness
-  invalidation via the item snapshot; notes markers keep appending as
-  human-readable history.
+Goal:
+
+- Tier registry: Standard, Wholesale, VIP, Distributor, House Account, Custom.
+- Canonical customer tags per tier (wholesale_approved and vip_wholesale exist; add distributor and house_account; Custom = per-customer tag).
+- Tier-scoped pricing rule mapping and function-config sync planning.
+- Schema additions (if any) authored per docs/MIGRATIONS.md offline workflow.
 
 Still not allowed:
 

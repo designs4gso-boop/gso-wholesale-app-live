@@ -166,6 +166,12 @@ model Quote {
   balanceInvoiceUrl String?
   fullInvoiceUrl    String?
 
+  lowMarginApprovedAt           DateTime?
+  lowMarginApprovedBy           String?
+  lowMarginApprovalReason       String?
+  lowMarginApprovalThresholdPct Float?
+  lowMarginApprovedSnapshot     Json?
+
   @@index([shop, status])
   @@index([shop, createdAt])
 }

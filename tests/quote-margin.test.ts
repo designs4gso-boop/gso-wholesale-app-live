@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   LOW_MARGIN_APPROVAL_MARKER,
   LOW_MARGIN_THRESHOLD_PCT,
+  buildApprovalSnapshot,
   itemMarginPct,
   lowMarginApprovalLine,
   quoteMarginState,
@@ -126,6 +127,100 @@ describe("quoteMarginState", () => {
     expect(state.blendedMarginPct).toBeCloseTo(35, 5);
     expect(state.lowestMarginPct).toBeCloseTo(20, 5);
     expect(state.hasBelowThreshold).toBe(true);
+  });
+});
+
+describe("schema-backed approval (Patch 8B)", () => {
+  function approvedQuote() {
+    const items = [
+      item({ productName: "Thin sticker", quantity: 10, unitPrice: 10, unitCost: 7 }),
+      item({ productName: "Second line", sku: "TEST-2", quantity: 5, unitPrice: 20, unitCost: 15 }),
+    ];
+    const baseState = quoteMarginState({ notes: "", items });
+    const snapshot = buildApprovalSnapshot({ items }, baseState);
+
+    return {
+      notes: "",
+      items,
+      lowMarginApprovedAt: new Date("2026-07-07T12:00:00.000Z"),
+      lowMarginApprovedBy: "owner@example.com",
+      lowMarginApprovalReason: "strategic deal",
+      lowMarginApprovalThresholdPct: LOW_MARGIN_THRESHOLD_PCT,
+      lowMarginApprovedSnapshot: snapshot,
+    };
+  }
+
+  it("treats matching schema approval as approved with schema source", () => {
+    const state = quoteMarginState(approvedQuote());
+
+    expect(state.isLowMargin).toBe(true);
+    expect(state.isApproved).toBe(true);
+    expect(state.approvalRequired).toBe(false);
+    expect(state.approvalStale).toBe(false);
+    expect(state.approvalSource).toBe("schema");
+    expect(state.approvedBy).toBe("owner@example.com");
+    expect(state.approvedAt).toBe("2026-07-07T12:00:00.000Z");
+  });
+
+  it("marks approval stale and re-blocks when item values change after approval", () => {
+    const quote = approvedQuote();
+    quote.items[0] = item({ productName: "Thin sticker", quantity: 10, unitPrice: 9, unitCost: 7 });
+
+    const state = quoteMarginState(quote);
+
+    expect(state.approvalStale).toBe(true);
+    expect(state.isApproved).toBe(false);
+    expect(state.approvalRequired).toBe(true);
+    expect(state.approvalSource).toBeNull();
+  });
+
+  it("keeps approval valid when items are only reordered", () => {
+    const quote = approvedQuote();
+    quote.items = [...quote.items].reverse();
+
+    const state = quoteMarginState(quote);
+
+    expect(state.isApproved).toBe(true);
+    expect(state.approvalStale).toBe(false);
+    expect(state.approvalSource).toBe("schema");
+  });
+
+  it("honors the legacy notes marker when schema fields are empty", () => {
+    const state = quoteMarginState({
+      notes: `${LOW_MARGIN_APPROVAL_MARKER}staff at 2026-07-01T00:00:00.000Z (threshold 40%, blended 30.0%, lowest item 30.0%): old approval`,
+      items: [item({ unitPrice: 10, unitCost: 7 })],
+    });
+
+    expect(state.isApproved).toBe(true);
+    expect(state.approvalSource).toBe("legacy_marker");
+    expect(state.approvalRequired).toBe(false);
+  });
+
+  it("lets schema fields win over the legacy marker when both exist", () => {
+    const quote = approvedQuote();
+    quote.notes = `${LOW_MARGIN_APPROVAL_MARKER}staff at old-time: legacy line`;
+    quote.items[0] = item({ productName: "Thin sticker", quantity: 10, unitPrice: 9, unitCost: 7 });
+
+    const state = quoteMarginState(quote);
+
+    // Stale schema approval blocks even though a legacy marker is present.
+    expect(state.approvalStale).toBe(true);
+    expect(state.isApproved).toBe(false);
+    expect(state.approvalRequired).toBe(true);
+  });
+
+  it("builds snapshots with threshold, blended, lowest, and normalized items", () => {
+    const items = [item({ productName: "B item" }), item({ productName: "A item" })];
+    const state = quoteMarginState({ notes: "", items });
+    const snapshot = buildApprovalSnapshot({ items }, state);
+
+    expect(snapshot.thresholdPct).toBe(LOW_MARGIN_THRESHOLD_PCT);
+    expect(snapshot.blendedMarginPct).toBe(state.blendedMarginPct);
+    expect(snapshot.lowestMarginPct).toBe(state.lowestMarginPct);
+    expect(snapshot.items.map((i) => i.productName)).toEqual(["A item", "B item"]);
+    expect(snapshot.items[0]).toHaveProperty("unitPrice");
+    expect(snapshot.items[0]).toHaveProperty("unitCost");
+    expect(snapshot.items[0]).toHaveProperty("quantity");
   });
 });
 

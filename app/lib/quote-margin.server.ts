@@ -6,11 +6,63 @@ export const LOW_MARGIN_APPROVAL_MARKER = "[GSO] Low-margin approved by ";
 
 type MarginItem = {
   productName?: string | null;
+  variant?: string | null;
   sku?: string | null;
   quantity?: number | null;
   unitPrice?: number | null;
   unitCost?: number | null;
 };
+
+type MarginQuote = {
+  notes?: string | null;
+  items?: MarginItem[] | null;
+  lowMarginApprovedAt?: Date | string | null;
+  lowMarginApprovedBy?: string | null;
+  lowMarginApprovalReason?: string | null;
+  lowMarginApprovalThresholdPct?: number | null;
+  lowMarginApprovedSnapshot?: unknown;
+};
+
+// Quote saves delete and recreate QuoteItem rows, so item ids are not stable.
+// Snapshot comparison must therefore be value-based over a deterministic order.
+export function normalizedSnapshotItems(items: MarginItem[] | null | undefined) {
+  return (items || [])
+    .map((item) => ({
+      productName: String(item?.productName || ""),
+      variant: String(item?.variant || ""),
+      sku: String(item?.sku || ""),
+      quantity: Number(item?.quantity) || 0,
+      unitPrice: Number(item?.unitPrice) || 0,
+      unitCost: Number(item?.unitCost) || 0,
+    }))
+    .sort((a, b) =>
+      `${a.productName}|${a.variant}|${a.sku}|${a.quantity}|${a.unitPrice}|${a.unitCost}`.localeCompare(
+        `${b.productName}|${b.variant}|${b.sku}|${b.quantity}|${b.unitPrice}|${b.unitCost}`,
+      ),
+    );
+}
+
+export function buildApprovalSnapshot(
+  quote: MarginQuote,
+  state: { blendedMarginPct: number; lowestMarginPct: number | null },
+) {
+  return {
+    thresholdPct: LOW_MARGIN_THRESHOLD_PCT,
+    blendedMarginPct: state.blendedMarginPct,
+    lowestMarginPct: state.lowestMarginPct,
+    items: normalizedSnapshotItems(quote.items),
+  };
+}
+
+function snapshotMatchesItems(snapshot: unknown, items: MarginItem[] | null | undefined) {
+  if (!snapshot || typeof snapshot !== "object") return false;
+  const snapshotItems = (snapshot as { items?: unknown }).items;
+  if (!Array.isArray(snapshotItems)) return false;
+  return (
+    JSON.stringify(normalizedSnapshotItems(snapshotItems as MarginItem[])) ===
+    JSON.stringify(normalizedSnapshotItems(items))
+  );
+}
 
 export function itemMarginPct(item: MarginItem) {
   const unitPrice = Number(item?.unitPrice) || 0;
@@ -21,7 +73,7 @@ export function itemMarginPct(item: MarginItem) {
 
 export type QuoteMarginState = ReturnType<typeof quoteMarginState>;
 
-export function quoteMarginState(quote: { notes?: string | null; items?: MarginItem[] | null }) {
+export function quoteMarginState(quote: MarginQuote) {
   const items = quote?.items || [];
   const lowItems: Array<{
     name: string;
@@ -83,7 +135,28 @@ export function quoteMarginState(quote: { notes?: string | null; items?: MarginI
 
   const blendedMarginPct = revenue > 0 ? ((revenue - cost) / revenue) * 100 : 0;
   const isLowMargin = lowItems.length > 0;
-  const isApproved = String(quote?.notes || "").includes(LOW_MARGIN_APPROVAL_MARKER);
+
+  // Approval resolution order: schema fields (with value-matched snapshot) win;
+  // stale schema approval blocks again; legacy notes markers are honored only
+  // when no schema approval exists (transition support).
+  const legacyMarkerApproved = String(quote?.notes || "").includes(LOW_MARGIN_APPROVAL_MARKER);
+  const hasSchemaApproval = Boolean(quote?.lowMarginApprovedAt);
+  const schemaSnapshotMatches = hasSchemaApproval && snapshotMatchesItems(quote?.lowMarginApprovedSnapshot, items);
+
+  let isApproved = false;
+  let approvalStale = false;
+  let approvalSource: "schema" | "legacy_marker" | null = null;
+
+  if (hasSchemaApproval && schemaSnapshotMatches) {
+    isApproved = true;
+    approvalSource = "schema";
+  } else if (hasSchemaApproval) {
+    approvalStale = true;
+  } else if (legacyMarkerApproved) {
+    isApproved = true;
+    approvalSource = "legacy_marker";
+  }
+
   const hasBelowThreshold = lowItems.some((item) => item.kind === "below_threshold");
   const hasUnknownCost = lowItems.some((item) => item.kind === "unknown_cost" || item.unknownCost);
   const hasInvalidPrice = lowItems.some((item) => item.kind === "invalid_price");
@@ -106,6 +179,10 @@ export function quoteMarginState(quote: { notes?: string | null; items?: MarginI
     isLowMargin,
     isApproved,
     approvalRequired: isLowMargin && !isApproved,
+    approvalStale,
+    approvalSource,
+    approvedAt: quote?.lowMarginApprovedAt ? new Date(quote.lowMarginApprovedAt as any).toISOString() : null,
+    approvedBy: quote?.lowMarginApprovedBy || null,
     hasBelowThreshold,
     hasUnknownCost,
     hasInvalidPrice,

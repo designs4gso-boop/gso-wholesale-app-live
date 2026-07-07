@@ -23,7 +23,7 @@ import {
   QUOTE_RECIPE_PRICING_INCLUDE,
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
-import { lowMarginApprovalLine, quoteMarginState } from "../lib/quote-margin.server";
+import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "../lib/quote-margin.server";
 
 type QuoteItemInput = {
   id?: string;
@@ -1340,11 +1340,19 @@ export async function action({ request }: { request: Request }) {
       lowestMarginPct: marginState.lowestMarginPct,
       reason,
     });
+    const approvalSnapshot = buildApprovalSnapshot(quote, marginState);
     const existingNotes = String(quote.notes || "");
 
     await db.quote.updateMany({
       where: { id: quote.id, shop },
-      data: { notes: existingNotes ? `${existingNotes}\n${approvalLine}` : approvalLine },
+      data: {
+        notes: existingNotes ? `${existingNotes}\n${approvalLine}` : approvalLine,
+        lowMarginApprovedAt: new Date(),
+        lowMarginApprovedBy: actor,
+        lowMarginApprovalReason: reason,
+        lowMarginApprovalThresholdPct: marginState.thresholdPct,
+        lowMarginApprovedSnapshot: approvalSnapshot,
+      },
     });
 
     const quotes = await getQuotes(shop);
@@ -2239,7 +2247,14 @@ export default function QuotesPage() {
                                     <Badge tone="critical">{quote.marginState.approvalLabel || "Low margin - approval required"}</Badge>
                                   ) : null}
                                   {quote.marginState?.isLowMargin && quote.marginState?.isApproved ? (
-                                    <Badge tone="warning">Low margin approved</Badge>
+                                    <Badge tone="warning">
+                                      {quote.marginState.approvedBy && quote.marginState.approvedAt
+                                        ? `Low margin approved by ${quote.marginState.approvedBy} on ${new Date(quote.marginState.approvedAt).toLocaleDateString()}`
+                                        : "Low margin approved"}
+                                    </Badge>
+                                  ) : null}
+                                  {quote.marginState?.approvalStale ? (
+                                    <Text as="p" tone="critical">Items changed since approval - re-approve.</Text>
                                   ) : null}
                                   {quote.marginState?.approvalRequired ? (
                                     <InlineStack gap="200">

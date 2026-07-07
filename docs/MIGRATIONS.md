@@ -60,18 +60,28 @@ data changes occurred either way.
 
 ## Future migrations (Patch 8B and beyond)
 
-1. Edit `prisma/schema.prisma` (additive changes strongly preferred).
-2. Author the migration WITHOUT touching production, either:
-   - against a local Docker Postgres: `npx prisma migrate dev --name <name>`
-     (safe only because the local URL is local), or
-   - hand-authored via diff:
-     `npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --script`
-     saved as `prisma/migrations/<timestamp>_<name>/migration.sql`.
-3. Review the SQL by hand. Additive only unless explicitly planned.
-4. Commit schema + migration together.
-5. Deploy: Render's `npx prisma migrate deploy` applies it.
-6. First planned real migration (Patch 8B): schema-backed low-margin approval
-   columns on Quote (`lowMarginApprovedAt/By/Reason/ThresholdPct/Snapshot`).
+Use the fully offline two-schema diff (no database contact of any kind).
+Do NOT use `--from-migrations` in this environment: that variant needs a
+shadow database connection to replay migrations, which we must not make
+while local `.env` points at production.
+
+1. Copy the current schema to a scratch file OUTSIDE the repo:
+   `cp prisma/schema.prisma <scratch>/schema-before-<name>.prisma`
+2. Edit `prisma/schema.prisma` (additive changes strongly preferred).
+3. Generate the migration file-to-file:
+   `npx prisma migrate diff --from-schema-datamodel <scratch>/schema-before-<name>.prisma --to-schema-datamodel prisma/schema.prisma --script > prisma/migrations/<timestamp>_<name>/migration.sql`
+4. Review the SQL by hand. Additive nullable columns only unless explicitly
+   planned. No DROP, no destructive statements.
+5. `npx prisma generate` (schema-only; regenerates the client, no DB contact).
+6. Commit schema + migration together.
+7. Deploy: Render's Pre-Deploy `npx prisma migrate deploy` applies it.
+   Never run migrate deploy manually against production.
+
+Applied real migrations:
+
+- `20260707130000_add_low_margin_approval_fields` (Patch 8B): five nullable
+  columns on Quote for schema-backed low-margin approval
+  (`lowMarginApprovedAt/By/Reason/ThresholdPct/Snapshot`).
 
 ## Testing
 
