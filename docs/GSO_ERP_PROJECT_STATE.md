@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `56daf62 Add agent review queue recipe picker`
-- Working tree at closeout: Patch 6B (exact conversion blocking reasons in queue UI) pending commit
+- Latest stable commit: `6e3953a Show agent quote conversion failure reasons`
+- Working tree at closeout: Patch 7A (Product Setup recipe readiness + test pricing) pending commit
 
 ## Golden Rule For All Agents
 
@@ -206,6 +206,17 @@ Quote recipe gates remain:
 - Conversion failure banners stay short and point staff to the row's Details.
 - Conversion gates, pricing engine, and event writes are unchanged; reasons never travel through URL params.
 
+## Completed Milestone: Product Setup Recipe Readiness + Test Pricing (Patch 7A)
+
+- Product Setup shows a Recipe readiness box for the open recipe: gate flags, pricing test (unit cost / unit price / margin / tier), exact blocking issues, non-blocking cautions, and a final verdict.
+- Readiness uses the shared engine (`priceRecipeAtQuantity` + `blockingConversionIssues`), so wording matches Agent Review Queue conversion failures exactly.
+- Default test quantity is `minQuantity || 1`; staff can test any quantity via the side-effect-free `testRecipePrice` intent (zero writes, no Shopify calls).
+- Selected-recipe loading spreads `QUOTE_RECIPE_PRICING_INCLUDE` (adds ink channels, add-ons, vendor product) while keeping existing UI relations; selected recipe only.
+- Enabling Use in Quotes / CRM is now server-gated: other fields save, then post-save readiness must pass or the flag stays off with exact reasons ("Saved, but Use in Quotes stayed off: ...").
+- Already-enabled recipes with blockers are never auto-disabled; they show a loud conversion-will-fail warning instead.
+- Fixed pre-existing bug: saving Recipe Details silently wiped the recipe's preferred machine rule (the form posts no `machineId`, but the intent deleted rules unconditionally). Machine rules are now rewritten only when a form actually posts `machineId`.
+- Known gap flagged (not fixed, pricing-adjacent): the Recipe Details form posts `defaultSellPrice` but `updateRecipe` never saves it.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -228,7 +239,7 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 7 (per aligned roadmap):
+Patch 7B (per aligned roadmap):
 Below-40% margin approval gate.
 
 Goal:

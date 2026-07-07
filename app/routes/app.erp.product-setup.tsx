@@ -2,6 +2,11 @@ import { Form, Link, useActionData, useLoaderData } from "react-router";
 import { salesRulesForFamily } from "../lib/product-family-sales-rules";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import {
+  QUOTE_RECIPE_PRICING_INCLUDE,
+  blockingConversionIssues,
+  priceRecipeAtQuantity,
+} from "../lib/recipe-pricing.server";
 
 const PRODUCT_FAMILIES = [
   "Jars",
@@ -48,6 +53,42 @@ function money(value: any) {
 function pct(value: any) {
   return `${(Number(value) || 0).toFixed(1)}%`;
 }
+// Same engine + blocking rules used by Quotes / CRM and Agent Review Queue
+// conversion, so Product Setup readiness matches those failure reasons exactly.
+function recipeReadiness(recipe: any, testQuantity: number) {
+  const minQuantity = Math.max(1, Number(recipe?.minQuantity) || 1);
+  const baseline = priceRecipeAtQuantity(recipe, minQuantity, {});
+  const recipeBlockers = blockingConversionIssues(recipe, baseline);
+
+  if (String(recipe?.productionMode || "in_house") === "outsourced" && !recipe?.vendorProduct) {
+    recipeBlockers.push("outsourced recipe has no vendor product / cost tiers attached");
+  }
+
+  const safeTestQuantity = Math.max(1, Math.floor(Number(testQuantity) || 0) || minQuantity);
+  const priced = priceRecipeAtQuantity(recipe, safeTestQuantity, {});
+
+  return {
+    minQuantity,
+    testQuantity: safeTestQuantity,
+    recipeBlockers,
+    dataReady: recipeBlockers.length === 0,
+    gate: {
+      active: Boolean(recipe?.active),
+      useInQuotes: Boolean(recipe?.useInQuotes),
+      costReviewNeeded: Boolean(recipe?.costReviewNeeded),
+    },
+    pricing: {
+      unitCost: priced.unitCost,
+      unitPrice: priced.unitPrice,
+      marginActual: priced.marginActual,
+      tierLabel: priced.tierLabel,
+      pricingSource: priced.pricingSource,
+      warnings: priced.warnings,
+      belowMinimum: safeTestQuantity < minQuantity,
+    },
+  };
+}
+
 function costReviewReasonList(recipe: any) {
   return String(recipe?.costReviewReasons || "")
     .split(/\r?\n/)
@@ -606,12 +647,11 @@ export async function loader({ request }: { request: Request }) {
       ? db.productRecipe.findFirst({
           where: selectedWhere,
           include: {
+            ...QUOTE_RECIPE_PRICING_INCLUDE,
             productTypeProfile: true,
             materials: { include: { material: true }, orderBy: { createdAt: "asc" } },
             labelZones: { include: { material: true, mediaOption: { include: { material: true } } }, orderBy: { createdAt: "asc" } },
             mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
-            tiers: { orderBy: { minQty: "asc" } },
-            machineRules: { include: { preferredMachine: true } },
             variantRules: { orderBy: [{ active: "desc" }, { name: "asc" }] },
           },
         })
@@ -620,12 +660,16 @@ export async function loader({ request }: { request: Request }) {
 
   const activeTemplates = templates.filter((template: any) => template.active);
   const recipeTotalPages = Math.max(1, Math.ceil(recipeCount / recipeLimit));
+  const selectedRecipeReadiness = selectedRecipe
+    ? recipeReadiness(selectedRecipe, Math.max(1, Number((selectedRecipe as any).minQuantity) || 1))
+    : null;
 
   return Response.json({
     templates,
     activeTemplates,
     recipes: recipeRows,
     selectedRecipe,
+    selectedRecipeReadiness,
     selectedRecipeId,
     recipeStatus,
     recipeSearch,
@@ -778,8 +822,11 @@ export async function action({ request }: { request: Request }) {
     const machineId = String(formData.get("machineId") || "") || null;
     const existingRecipe = await db.productRecipe.findFirst({
       where: { shop, id: recipeId },
-      select: { productType: true },
+      select: { productType: true, useInQuotes: true },
     });
+    const wantsUseInQuotes = String(formData.get("useInQuotes") || "") === "on";
+    const wasUseInQuotes = Boolean(existingRecipe?.useInQuotes);
+
     await db.productRecipe.updateMany({
       where: { shop, id: recipeId },
       data: {
@@ -802,15 +849,71 @@ export async function action({ request }: { request: Request }) {
         applicationLaborSecondsPerUnit: numberValue(formData.get("applicationLaborSecondsPerUnit"), 0),
         packingLaborSecondsPerUnit: numberValue(formData.get("packingLaborSecondsPerUnit"), 0),
         costReviewNeeded: String(formData.get("costReviewNeeded") || "") === "on",
-        useInQuotes: String(formData.get("useInQuotes") || "") === "on",
+        // Turning the quote flag ON is deferred until the post-save readiness
+        // check below passes; turning it off or keeping it on is applied here.
+        useInQuotes: wantsUseInQuotes && wasUseInQuotes,
         notes: String(formData.get("notes") || "") || null,
       },
     });
-    await db.recipeMachineRule.deleteMany({ where: { shop, recipeId } });
-    if (machineId) {
-      await db.recipeMachineRule.create({ data: { shop, recipeId, preferredMachineId: machineId, allowOverflow: true } });
+    // Only rewrite machine rules when the submitting form actually posts a
+    // machineId field. The Recipe Details form does not, and wiping rules on
+    // every save was silently stripping the preferred machine.
+    if (formData.has("machineId")) {
+      await db.recipeMachineRule.deleteMany({ where: { shop, recipeId } });
+      if (machineId) {
+        await db.recipeMachineRule.create({ data: { shop, recipeId, preferredMachineId: machineId, allowOverflow: true } });
+      }
     }
+
+    if (wantsUseInQuotes && !wasUseInQuotes) {
+      const updated = await db.productRecipe.findFirst({
+        where: { shop, id: recipeId },
+        include: QUOTE_RECIPE_PRICING_INCLUDE,
+      });
+
+      if (!updated) {
+        return Response.json({ ok: false, message: "Saved, but Use in Quotes stayed off: recipe was not found after save." });
+      }
+
+      const readiness = recipeReadiness(updated, Math.max(1, Number(updated.minQuantity) || 1));
+      const blockers = [...readiness.recipeBlockers];
+      if (!updated.active) blockers.push("recipe is archived / not active");
+      if (updated.costReviewNeeded) blockers.push("cost review is still flagged");
+
+      if (blockers.length) {
+        return Response.json({
+          ok: false,
+          message: `Saved, but Use in Quotes stayed off: ${blockers.join("; ")}.`,
+        });
+      }
+
+      await db.productRecipe.updateMany({ where: { shop, id: recipeId }, data: { useInQuotes: true } });
+      return Response.json({ ok: true, message: "Product recipe updated and enabled for Quotes / CRM." });
+    }
+
     return Response.json({ ok: true, message: "Product recipe updated." });
+  }
+
+  if (intent === "testRecipePrice") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const requestedQuantity = Math.max(1, Math.floor(Number(formData.get("testQuantity")) || 0));
+    const recipe = await db.productRecipe.findFirst({
+      where: { shop, id: recipeId },
+      include: QUOTE_RECIPE_PRICING_INCLUDE,
+    });
+
+    if (!recipe) {
+      return Response.json({ ok: false, message: "Recipe not found for pricing test." }, { status: 404 });
+    }
+
+    const readiness = recipeReadiness(recipe, requestedQuantity || Math.max(1, Number(recipe.minQuantity) || 1));
+    return Response.json({
+      ok: true,
+      intent: "testRecipePrice",
+      recipeId,
+      message: `Test price calculated at quantity ${readiness.testQuantity}.`,
+      readiness,
+    });
   }
 
   if (intent === "archiveRecipe") {
@@ -1502,6 +1605,7 @@ export default function ProductSetupRecipeBuilder() {
     activeTemplates = [],
     recipes = [],
     selectedRecipe = null,
+    selectedRecipeReadiness = null,
     selectedRecipeId = "",
     recipeStatus = "active",
     recipeSearch = "",
@@ -1517,6 +1621,9 @@ export default function ProductSetupRecipeBuilder() {
   const recipeBaseQuery = `recipeStatus=${encodeURIComponent(recipeStatus)}&recipeSearch=${encodeURIComponent(recipeSearch)}&recipeLimit=${encodeURIComponent(String(recipeLimit))}`;
   const selectedRecipeQuoteReady = Boolean(selectedRecipe?.active && selectedRecipe?.useInQuotes && !selectedRecipe?.costReviewNeeded);
   const canEnableQuoteUse = Boolean(selectedRecipe?.active && !selectedRecipe?.costReviewNeeded);
+  const testedReadiness =
+    actionData?.intent === "testRecipePrice" && actionData?.recipeId === selectedRecipe?.id ? actionData.readiness : null;
+  const readiness = testedReadiness || selectedRecipeReadiness;
 
   function recipeHref(recipeId: string) {
     return `?${recipeBaseQuery}&recipePage=${recipePage}&recipeId=${encodeURIComponent(recipeId)}`;
@@ -1623,6 +1730,49 @@ export default function ProductSetupRecipeBuilder() {
         <h2>{selectedRecipe.name}</h2>
         <p className="muted">Full recipe details are loaded only for this one selected recipe to protect server memory.</p>
         {selectedRecipeQuoteReady ? <span className="badge green">Quote-ready</span> : <span className="badge yellow">Not quote-ready</span>}
+
+        {readiness ? <div className="card">
+          <h3>Recipe readiness</h3>
+          <div className="button-row">
+            <span className={readiness.gate.active ? "badge green" : "badge red"}>Active: {readiness.gate.active ? "yes" : "no"}</span>
+            <span className={readiness.gate.useInQuotes ? "badge green" : "badge yellow"}>Use in Quotes / CRM: {readiness.gate.useInQuotes ? "yes" : "no"}</span>
+            <span className={readiness.gate.costReviewNeeded ? "badge yellow" : "badge green"}>Cost review needed: {readiness.gate.costReviewNeeded ? "yes" : "no"}</span>
+          </div>
+          <p>
+            Pricing test at quantity {readiness.testQuantity}
+            {readiness.pricing.belowMinimum ? ` (below recipe minimum of ${readiness.minQuantity})` : ""}:
+            {" "}unit cost {money(readiness.pricing.unitCost)} | unit price {money(readiness.pricing.unitPrice)} | margin {pct(readiness.pricing.marginActual)} | tier {readiness.pricing.tierLabel}
+          </p>
+          <Form method="post" className="button-row">
+            <input type="hidden" name="intent" value="testRecipePrice" />
+            <input type="hidden" name="recipeId" value={selectedRecipe.id} />
+            <label className="muted">
+              Test quantity{" "}
+              <input name="testQuantity" type="number" min={1} step={1} defaultValue={readiness.testQuantity} style={{ width: 100 }} />
+            </label>
+            <button type="submit">Test price</button>
+          </Form>
+          {readiness.recipeBlockers.length ? <div>
+            <strong>Blocking issues</strong>
+            <ul>
+              {readiness.recipeBlockers.map((issue: string) => <li key={issue}>{issue}</li>)}
+            </ul>
+          </div> : null}
+          {readiness.pricing.warnings.length ? <div>
+            <span className="badge yellow">Cautions (not blocking)</span>
+            <ul>
+              {readiness.pricing.warnings.map((warning: string) => <li key={warning}>{warning}</li>)}
+            </ul>
+          </div> : null}
+          {readiness.dataReady && readiness.gate.active && readiness.gate.useInQuotes && !readiness.gate.costReviewNeeded
+            ? <span className="badge green">Ready for Quotes and Agent Review Queue conversion</span>
+            : readiness.dataReady
+              ? <span className="badge yellow">Cost inputs are ready. Activate the recipe, clear cost review, and enable Use in Quotes / CRM to finish.</span>
+              : <span className="badge red">Not ready — Agent Review Queue conversion will fail. Fix the items above.</span>}
+          {readiness.gate.useInQuotes && !readiness.dataReady ? <div className="cost-review-panel">
+            <strong>Warning:</strong> This recipe is enabled for quotes, but Agent Review Queue conversion will fail: {readiness.recipeBlockers.join("; ")}.
+          </div> : null}
+        </div> : null}
         {!selectedRecipe.active || selectedRecipe.costReviewNeeded ? <div className="draft-handoff-panel">
           <h3>ERP Draft Handoff</h3>
           <div className="button-row">
