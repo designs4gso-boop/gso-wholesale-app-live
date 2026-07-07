@@ -620,7 +620,7 @@ export async function loader({ request }: { request: Request }) {
 
   const selectedWhere = selectedRecipeId ? { shop, id: selectedRecipeId } : null;
 
-  const [templates, recipeCount, recipeRows, selectedRecipe] = await Promise.all([
+  const [templates, recipeCount, recipeRows, selectedRecipe, machinesList, materialsList] = await Promise.all([
     db.productTypeProfile.findMany({
       where: { shop },
       orderBy: [{ active: "desc" }, { name: "asc" }],
@@ -663,6 +663,18 @@ export async function loader({ request }: { request: Request }) {
           },
         })
       : Promise.resolve(null),
+    db.machine.findMany({
+      where: { shop, active: true },
+      orderBy: { name: "asc" },
+      take: 100,
+      select: { id: true, name: true },
+    }),
+    db.material.findMany({
+      where: { shop, active: true },
+      orderBy: { name: "asc" },
+      take: 200,
+      select: { id: true, name: true, baseUnit: true, unit: true, calculatedUnitCost: true, costPerUnit: true },
+    }),
   ]);
 
   const activeTemplates = templates.filter((template: any) => template.active);
@@ -677,6 +689,8 @@ export async function loader({ request }: { request: Request }) {
     recipes: recipeRows,
     selectedRecipe,
     selectedRecipeReadiness,
+    machines: machinesList,
+    materialsAvailable: materialsList,
     selectedRecipeId,
     recipeStatus,
     recipeSearch,
@@ -832,38 +846,61 @@ export async function action({ request }: { request: Request }) {
       where: { shop, id: recipeId },
       select: { productType: true, useInQuotes: true },
     });
-    const wantsUseInQuotes = String(formData.get("useInQuotes") || "") === "on";
-    const wasUseInQuotes = Boolean(existingRecipe?.useInQuotes);
 
-    await db.productRecipe.updateMany({
-      where: { shop, id: recipeId },
-      data: {
-        name: String(formData.get("name") || "Product Recipe"),
-        sku: String(formData.get("sku") || "") || null,
-        productFamily: String(formData.get("productFamily") || "Labels"),
-        productType: String(formData.get("productType") || existingRecipe?.productType || "label"),
-        productTypeProfileId: String(formData.get("templateId") || "") || null,
-        pricingTemplateMode: String(formData.get("pricingTemplateMode") || "template"),
-        productionMode: String(formData.get("productionMode") || "in_house"),
-        productGid: String(formData.get("productGid") || "") || null,
-        variantGid: String(formData.get("variantGid") || "") || null,
-        minQuantity: intValue(formData.get("minQuantity"), 64),
-        defaultQuantity: intValue(formData.get("defaultQuantity"), 250),
-        targetMarginPct: numberValue(formData.get("targetMarginPct"), 60),
-        defaultSellPrice: positiveOrNull(formData.get("defaultSellPrice")),
-        wastePct: numberValue(formData.get("wastePct"), 15),
-        setupCost: numberValue(formData.get("setupCost"), 0),
-        laborMinutes: numberValue(formData.get("laborMinutes"), 0),
-        prepressMinutes: numberValue(formData.get("prepressMinutes"), 0),
-        applicationLaborSecondsPerUnit: numberValue(formData.get("applicationLaborSecondsPerUnit"), 0),
-        packingLaborSecondsPerUnit: numberValue(formData.get("packingLaborSecondsPerUnit"), 0),
-        costReviewNeeded: String(formData.get("costReviewNeeded") || "") === "on",
-        // Turning the quote flag ON is deferred until the post-save readiness
-        // check below passes; turning it off or keeping it on is applied here.
-        useInQuotes: wantsUseInQuotes && wasUseInQuotes,
-        notes: String(formData.get("notes") || "") || null,
-      },
-    });
+    if (!existingRecipe) {
+      return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
+    }
+
+    if (formData.has("machineId") && machineId) {
+      const machine = await db.machine.findFirst({ where: { shop, id: machineId }, select: { id: true } });
+      if (!machine) {
+        return Response.json({ ok: false, message: "Selected machine was not found." }, { status: 400 });
+      }
+    }
+
+    const managesQuoteFlag = formData.has("manageQuoteFlag");
+    const wantsUseInQuotes = String(formData.get("useInQuotes") || "") === "on";
+    const wasUseInQuotes = Boolean(existingRecipe.useInQuotes);
+
+    // Partial update: only fields the submitting form actually posts are
+    // written, so a save from one form can never wipe values owned by another
+    // form (template links, Shopify GIDs, cost review flag, MOQ, labor fields).
+    const data: Record<string, unknown> = {};
+    if (formData.has("name")) data.name = String(formData.get("name") || "Product Recipe");
+    if (formData.has("sku")) data.sku = String(formData.get("sku") || "") || null;
+    if (formData.has("productFamily")) data.productFamily = String(formData.get("productFamily") || "Labels");
+    if (formData.has("productType")) data.productType = String(formData.get("productType") || existingRecipe.productType || "label");
+    if (formData.has("templateId")) data.productTypeProfileId = String(formData.get("templateId") || "") || null;
+    if (formData.has("pricingTemplateMode")) data.pricingTemplateMode = String(formData.get("pricingTemplateMode") || "template");
+    if (formData.has("productionMode")) data.productionMode = String(formData.get("productionMode") || "in_house");
+    if (formData.has("productGid")) data.productGid = String(formData.get("productGid") || "") || null;
+    if (formData.has("variantGid")) data.variantGid = String(formData.get("variantGid") || "") || null;
+    if (formData.has("minQuantity")) data.minQuantity = Math.max(1, intValue(formData.get("minQuantity"), 1));
+    if (formData.has("defaultQuantity")) data.defaultQuantity = Math.max(1, intValue(formData.get("defaultQuantity"), 1));
+    if (formData.has("targetMarginPct")) data.targetMarginPct = numberValue(formData.get("targetMarginPct"), 60);
+    if (formData.has("defaultSellPrice")) data.defaultSellPrice = positiveOrNull(formData.get("defaultSellPrice"));
+    if (formData.has("widthIn")) data.widthIn = positiveOrNull(formData.get("widthIn"));
+    if (formData.has("heightIn")) data.heightIn = positiveOrNull(formData.get("heightIn"));
+    if (formData.has("wastePct")) data.wastePct = numberValue(formData.get("wastePct"), 15);
+    if (formData.has("setupCost")) data.setupCost = numberValue(formData.get("setupCost"), 0);
+    if (formData.has("laborMinutes")) data.laborMinutes = numberValue(formData.get("laborMinutes"), 0);
+    if (formData.has("prepressMinutes")) data.prepressMinutes = numberValue(formData.get("prepressMinutes"), 0);
+    if (formData.has("applicationLaborSecondsPerUnit")) data.applicationLaborSecondsPerUnit = numberValue(formData.get("applicationLaborSecondsPerUnit"), 0);
+    if (formData.has("packingLaborSecondsPerUnit")) data.packingLaborSecondsPerUnit = numberValue(formData.get("packingLaborSecondsPerUnit"), 0);
+    if (formData.has("costReviewNeeded")) data.costReviewNeeded = String(formData.get("costReviewNeeded") || "") === "on";
+    if (formData.has("notes")) data.notes = String(formData.get("notes") || "") || null;
+    if (managesQuoteFlag) {
+      // Turning the quote flag ON is deferred until the post-save readiness
+      // check below passes; turning it off or keeping it on is applied here.
+      data.useInQuotes = wantsUseInQuotes && wasUseInQuotes;
+    }
+
+    if (Object.keys(data).length) {
+      await db.productRecipe.updateMany({
+        where: { shop, id: recipeId },
+        data,
+      });
+    }
     // Only rewrite machine rules when the submitting form actually posts a
     // machineId field. The Recipe Details form does not, and wiping rules on
     // every save was silently stripping the preferred machine.
@@ -874,7 +911,7 @@ export async function action({ request }: { request: Request }) {
       }
     }
 
-    if (wantsUseInQuotes && !wasUseInQuotes) {
+    if (managesQuoteFlag && wantsUseInQuotes && !wasUseInQuotes) {
       const updated = await db.productRecipe.findFirst({
         where: { shop, id: recipeId },
         include: QUOTE_RECIPE_PRICING_INCLUDE,
@@ -1201,11 +1238,22 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (intent === "addMaterial") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const materialId = String(formData.get("materialId") || "");
+    const [recipe, material] = await Promise.all([
+      db.productRecipe.findFirst({ where: { shop, id: recipeId }, select: { id: true } }),
+      db.material.findFirst({ where: { shop, id: materialId }, select: { id: true } }),
+    ]);
+
+    if (!recipe || !material) {
+      return Response.json({ ok: false, message: "Recipe or material was not found." }, { status: 400 });
+    }
+
     await db.recipeMaterial.create({
       data: {
         shop,
-        recipeId: String(formData.get("recipeId") || ""),
-        materialId: String(formData.get("materialId") || ""),
+        recipeId,
+        materialId,
         usageType: String(formData.get("usageType") || "media"),
         quantity: numberValue(formData.get("quantity"), 1),
         unit: String(formData.get("unit") || "each"),
@@ -1516,6 +1564,44 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: true, message: `Cleanup complete: ${removedOptions} media option(s), ${removedZones} zone(s), ${duplicateRowIds.length} material row(s).` });
   }
 
+  if (intent === "addBasicTier") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const recipe = await db.productRecipe.findFirst({ where: { shop, id: recipeId }, select: { id: true } });
+    if (!recipe) {
+      return Response.json({ ok: false, message: "Recipe not found." }, { status: 404 });
+    }
+
+    const minQty = intValue(formData.get("minQty"), 0);
+    if (minQty < 1) {
+      return Response.json({ ok: false, message: "Tier needs a minimum quantity of at least 1." }, { status: 400 });
+    }
+
+    const maxQtyRaw = intValue(formData.get("maxQty"), 0);
+    const maxQty = maxQtyRaw >= minQty && maxQtyRaw > 0 ? maxQtyRaw : null;
+    const fixedPrice = positiveOrNull(formData.get("fixedPrice"));
+    const marginRaw = String(formData.get("marginPct") ?? "").trim();
+    const marginParsed = Number(marginRaw);
+    const marginPct = marginRaw && Number.isFinite(marginParsed) ? Math.min(Math.max(marginParsed, 0), 95) : null;
+
+    if (fixedPrice == null && marginPct == null) {
+      return Response.json({ ok: false, message: "Tier needs a fixed price or a margin percent." }, { status: 400 });
+    }
+
+    await db.recipeTier.create({ data: { shop, recipeId, minQty, maxQty, marginPct, fixedPrice } });
+    return Response.json({ ok: true, message: "Tier added." });
+  }
+
+  if (intent === "deleteTier") {
+    const recipeId = String(formData.get("recipeId") || "");
+    const tierId = String(formData.get("tierId") || "");
+    const deleted = await db.recipeTier.deleteMany({ where: { shop, id: tierId, recipeId } });
+    return Response.json(
+      deleted.count === 1
+        ? { ok: true, message: "Tier deleted." }
+        : { ok: false, message: "Tier not found." },
+    );
+  }
+
   if (intent === "syncTiersFromTemplate") {
     const recipeId = String(formData.get("recipeId") || "");
     const recipe = await db.productRecipe.findFirst({ where: { shop, id: recipeId }, include: { productTypeProfile: true } });
@@ -1615,6 +1701,8 @@ export default function ProductSetupRecipeBuilder() {
     recipes = [],
     selectedRecipe = null,
     selectedRecipeReadiness = null,
+    machines = [],
+    materialsAvailable = [],
     selectedRecipeId = "",
     recipeStatus = "active",
     recipeSearch = "",
@@ -1782,6 +1870,100 @@ export default function ProductSetupRecipeBuilder() {
             <strong>Warning:</strong> This recipe is enabled for quotes, but Agent Review Queue conversion will fail: {readiness.recipeBlockers.join("; ")}.
           </div> : null}
         </div> : null}
+
+        <div className="card">
+          <h3>Fix readiness blockers</h3>
+          <p className="muted">
+            Staff-only fix tools for this recipe. Saves here update only the posted fields; pricing math and quote safety gates are unchanged.
+          </p>
+
+          <Form method="post" className="form-grid">
+            <input type="hidden" name="intent" value="updateRecipe" />
+            <input type="hidden" name="recipeId" value={selectedRecipe.id} />
+            <NativeInput label="Width (in)" name="widthIn" type="number" step="0.01" defaultValue={selectedRecipe.widthIn || ""} />
+            <NativeInput label="Height (in)" name="heightIn" type="number" step="0.01" defaultValue={selectedRecipe.heightIn || ""} />
+            <NativeInput label="Minimum quantity" name="minQuantity" type="number" step="1" defaultValue={selectedRecipe.minQuantity || 1} />
+            <NativeSelect label="Preferred machine" name="machineId" defaultValue={selectedRecipe.machineRules?.[0]?.preferredMachineId || ""}>
+              <option value="">No machine selected</option>
+              {machines.map((machine: any) => <option key={machine.id} value={machine.id}>{machine.name}</option>)}
+            </NativeSelect>
+            <div className="wide button-row"><button type="submit">Save dimensions / MOQ / machine</button></div>
+          </Form>
+          {machines.length === 0 ? <p className="muted">No active machines exist yet. Create them in Machines first.</p> : null}
+
+          <h3>Recipe materials</h3>
+          {(selectedRecipe.materials || []).length ? <table>
+            <thead><tr><th>Material</th><th>Usage</th><th>Qty</th><th>Unit</th><th>Waste %</th><th></th></tr></thead>
+            <tbody>
+              {(selectedRecipe.materials || []).map((row: any) => <tr key={row.id}>
+                <td>{row.material?.name || "Material"}</td>
+                <td>{row.usageType}</td>
+                <td>{row.quantity}</td>
+                <td>{row.unit}</td>
+                <td>{row.wastePct}</td>
+                <td>
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="removeMaterial" />
+                    <input type="hidden" name="recipeMaterialId" value={row.id} />
+                    <button type="submit">Remove</button>
+                  </Form>
+                </td>
+              </tr>)}
+            </tbody>
+          </table> : <p className="muted">No materials attached. In-house recipes need at least one material to price.</p>}
+
+          {materialsAvailable.length ? <Form method="post" className="form-grid">
+            <input type="hidden" name="intent" value="addMaterial" />
+            <input type="hidden" name="recipeId" value={selectedRecipe.id} />
+            <NativeSelect label="Attach existing material" name="materialId" defaultValue={materialsAvailable[0]?.id || ""}>
+              {materialsAvailable.map((material: any) => (
+                <option key={material.id} value={material.id}>
+                  {material.name} ({money(material.calculatedUnitCost || material.costPerUnit)}/{material.baseUnit || material.unit || "each"})
+                </option>
+              ))}
+            </NativeSelect>
+            <NativeSelect label="Usage type" name="usageType" defaultValue="media">
+              {["media", "laminate", "blank", "packaging", "other"].map((usage) => <option key={usage} value={usage}>{usage}</option>)}
+            </NativeSelect>
+            <NativeInput label="Quantity multiplier" name="quantity" type="number" step="0.01" defaultValue={1} />
+            <NativeSelect label="Unit" name="unit" defaultValue="sqft">
+              {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+            </NativeSelect>
+            <NativeInput label="Waste %" name="wastePct" type="number" step="0.01" defaultValue={0} />
+            <div className="wide button-row"><button type="submit">Attach material</button></div>
+          </Form> : <p className="muted">No active materials exist yet. Create them in Materials first.</p>}
+
+          <h3>Recipe tiers</h3>
+          {(selectedRecipe.tiers || []).length ? <table>
+            <thead><tr><th>Min qty</th><th>Max qty</th><th>Margin %</th><th>Fixed price</th><th></th></tr></thead>
+            <tbody>
+              {(selectedRecipe.tiers || []).map((tier: any) => <tr key={tier.id}>
+                <td>{tier.minQty}</td>
+                <td>{tier.maxQty ?? "+"}</td>
+                <td>{tier.marginPct ?? "-"}</td>
+                <td>{tier.fixedPrice != null ? money(tier.fixedPrice) : "-"}</td>
+                <td>
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="deleteTier" />
+                    <input type="hidden" name="recipeId" value={selectedRecipe.id} />
+                    <input type="hidden" name="tierId" value={tier.id} />
+                    <button type="submit">Delete</button>
+                  </Form>
+                </td>
+              </tr>)}
+            </tbody>
+          </table> : <p className="muted">No tiers yet. Tiers are optional; margin pricing works without them.</p>}
+
+          <Form method="post" className="form-grid">
+            <input type="hidden" name="intent" value="addBasicTier" />
+            <input type="hidden" name="recipeId" value={selectedRecipe.id} />
+            <NativeInput label="Min qty" name="minQty" type="number" step="1" placeholder="128" />
+            <NativeInput label="Max qty (optional)" name="maxQty" type="number" step="1" />
+            <NativeInput label="Fixed price (optional)" name="fixedPrice" type="number" step="0.01" placeholder="1.90" />
+            <NativeInput label="Margin % (optional)" name="marginPct" type="number" step="0.1" placeholder="60" />
+            <div className="wide button-row"><button type="submit">Add tier</button></div>
+          </Form>
+        </div>
         {!selectedRecipe.active || selectedRecipe.costReviewNeeded ? <div className="draft-handoff-panel">
           <h3>ERP Draft Handoff</h3>
           <div className="button-row">
@@ -1831,6 +2013,7 @@ export default function ProductSetupRecipeBuilder() {
             <Form method="post" className="form-grid">
               <input type="hidden" name="intent" value="updateRecipe" />
               <input type="hidden" name="recipeId" value={selectedRecipe.id} />
+              <input type="hidden" name="manageQuoteFlag" value="1" />
               <NativeInput label="Recipe / product name" name="name" defaultValue={selectedRecipe.name} />
               <NativeInput label="SKU" name="sku" defaultValue={selectedRecipe.sku || ""} />
               <NativeSelect label="Product family" name="productFamily" defaultValue={selectedRecipe.productFamily || "Sticker Bags"}>

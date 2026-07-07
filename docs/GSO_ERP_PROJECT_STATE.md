@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `e0b7cb7 Add product setup recipe readiness checks`
-- Working tree at closeout: Patch 7A.1 (save defaultSellPrice in Product Setup) pending commit
+- Latest stable commit: `d5921dc Save product setup default sell price`
+- Working tree at closeout: Patch 7B (Product Setup recipe fix tools + updateRecipe partial-update hardening) pending commit
 
 ## Golden Rule For All Agents
 
@@ -217,6 +217,17 @@ Quote recipe gates remain:
 - Fixed pre-existing bug: saving Recipe Details silently wiped the recipe's preferred machine rule (the form posts no `machineId`, but the intent deleted rules unconditionally). Machine rules are now rewritten only when a form actually posts `machineId`.
 - defaultSellPrice save gap fixed in Patch 7A.1: `createRecipe` and `updateRecipe` now persist positive values via `positiveOrNull` and store blank/invalid/zero/negative input as null. The shared pricing engine still does not read `defaultSellPrice`, so readiness verdicts are unchanged by this field.
 
+## Completed Milestone: Product Setup Recipe Fix Tools (Patch 7B)
+
+- Fixed critical pre-existing bug: `updateRecipe` overwrote every non-posted field with defaults on each save, silently wiping minQuantity (to 64), defaultQuantity (to 250), labor/prepress/application fields (to 0), template link, Shopify product/variant GIDs, pricingTemplateMode, and clearing the `costReviewNeeded` safety flag. `updateRecipe` is now a partial update: only fields the submitting form posts are written.
+- `useInQuotes` is managed only by forms that post the `manageQuoteFlag` sentinel (Recipe Details form); the 7A enable-gate still runs post-save.
+- New "Fix readiness blockers" card: width/height (positiveOrNull), minimum quantity (clamped >= 1), preferred machine dropdown (shop-validated, uses the guarded RecipeMachineRule rewrite).
+- Revived material tools: attach existing material (recipe + material ownership checked) and remove material rows, using the previously orphaned intents.
+- New minimal tier tools: `addBasicTier` (min/max qty, fixed price or margin clamped 0-95, rejects when both blank) and `deleteTier` (scoped by shop + recipe). No delete-all/bulk-parse behavior.
+- Loader adds light lists only: active machines (id+name, take 100) and active materials (display fields, take 200); memory-safe mode preserved.
+- Readiness box recomputes automatically after every fix (React Router revalidates loaders after actions).
+- Known follow-up (7C candidates): data-repair audit for recipes already damaged by the old wipe behavior; label zones / media options / vendor-product linking UI.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -239,7 +250,7 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 7B (per aligned roadmap):
+Patch 7C (per aligned roadmap; renumbered after 7B became recipe fix tools):
 Below-40% margin approval gate.
 
 Goal:
