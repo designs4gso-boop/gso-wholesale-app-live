@@ -13,6 +13,12 @@ import {
 import { Form, Link, redirect, useLoaderData, useNavigate } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
+import {
+  QUOTE_READY_RECIPE_WHERE,
+  QUOTE_RECIPE_PRICING_INCLUDE,
+  blockingConversionIssues,
+  priceRecipeAtQuantity,
+} from "../lib/recipe-pricing.server";
 
 type QueueItem = {
   id: string;
@@ -120,16 +126,6 @@ const STATUS_FILTERS = [
 
 type StatusFilter = (typeof STATUS_FILTERS)[number]["value"];
 
-const QUOTE_RECIPE_INCLUDE = {
-  tiers: { orderBy: { minQty: "asc" as const } },
-  sourcedTiers: { orderBy: { minQty: "asc" as const } },
-  vendorProduct: {
-    include: {
-      tiers: { orderBy: { minQty: "asc" as const } },
-    },
-  },
-};
-
 function label(value: string | null | undefined) {
   return value ? value.replace(/_/g, " ") : "Not set";
 }
@@ -186,19 +182,6 @@ function parsePositiveQuantity(value: unknown) {
   if (!/^[1-9]\d*$/.test(text)) return null;
   const parsed = Number(text);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function positiveNumber(value: unknown) {
-  const amount = Number(value);
-  return Number.isFinite(amount) && amount > 0 ? amount : null;
-}
-
-function bestRange<T extends { minQty?: number | null; maxQty?: number | null }>(ranges: T[] | undefined, quantity: number) {
-  return (
-    [...(ranges || [])]
-      .filter((range) => Number(range.minQty || 0) <= quantity)
-      .sort((left, right) => Number(right.minQty || 0) - Number(left.minQty || 0))[0] || null
-  );
 }
 
 function compactTerms(values: unknown[]) {
@@ -275,9 +258,7 @@ async function resolveQuoteReadyRecipe(shop: string, item: any) {
 
   const whereBase = {
     shop,
-    active: true,
-    useInQuotes: true,
-    costReviewNeeded: false,
+    ...QUOTE_READY_RECIPE_WHERE,
   };
 
   for (const term of terms) {
@@ -291,7 +272,7 @@ async function resolveQuoteReadyRecipe(shop: string, item: any) {
           { name: { equals: term, mode: "insensitive" } },
         ],
       },
-      include: QUOTE_RECIPE_INCLUDE,
+      include: QUOTE_RECIPE_PRICING_INCLUDE,
       take: 2,
     });
     if (exactMatches.length > 1) return null;
@@ -310,40 +291,25 @@ async function resolveQuoteReadyRecipe(shop: string, item: any) {
         { name: { contains: term, mode: "insensitive" } },
       ]),
     },
-    include: QUOTE_RECIPE_INCLUDE,
+    include: QUOTE_RECIPE_PRICING_INCLUDE,
     take: 2,
   });
 
   return candidates.length === 1 ? candidates[0] : null;
 }
 
-function resolveRecipePricing(recipe: any, quantity: number) {
-  const recipeTier = bestRange(recipe.tiers, quantity);
-  const sourcedTier = bestRange(recipe.sourcedTiers, quantity);
-  const vendorTier = bestRange(recipe.vendorProduct?.tiers, quantity);
-  const unitPrice = positiveNumber(recipeTier?.fixedPrice) || positiveNumber(recipe.defaultSellPrice);
-  const unitCost =
-    positiveNumber(sourcedTier?.unitCost) ||
-    positiveNumber(vendorTier?.unitCost) ||
-    positiveNumber(recipe.vendorProduct?.defaultUnitCost);
-
-  if (!unitPrice || !unitCost) return null;
-
-  return {
-    unitPrice,
-    unitCost,
-    recipeTier,
-    sourcedTier,
-    vendorTier,
-  };
-}
-
 function quoteLineFromQueueItem(item: any, recipe: any, quantity: number) {
   const productRequest = jsonObject(item.productRequest);
-  const pricing = resolveRecipePricing(recipe, quantity);
-  if (!pricing) return null;
+  const finishText = textValue(productRequest.finish) || textValue(item.finish);
+  const priced = priceRecipeAtQuantity(recipe, quantity, {
+    selectedFinish: finishText.toLowerCase() || "base",
+  });
+  const blockingIssues = blockingConversionIssues(recipe, priced);
 
-  const { recipeTier, sourcedTier, vendorTier, unitPrice, unitCost } = pricing;
+  if (blockingIssues.length) {
+    return { ok: false as const, blockingIssues };
+  }
+
   const productName =
     textValue(productRequest.productType) ||
     textValue(item.productType) ||
@@ -356,42 +322,53 @@ function quoteLineFromQueueItem(item: any, recipe: any, quantity: number) {
     queueItemId: item.id,
     recipeId: recipe.id,
     recipeName: recipe.name,
-    quantity,
-    unitCost,
-    sourcedTier: sourcedTier ? `${sourcedTier.minQty}+` : null,
-    vendorTier: vendorTier ? `${vendorTier.minQty}${vendorTier.maxQty ? `-${vendorTier.maxQty}` : "+"}` : null,
+    productionMode: recipe.productionMode,
+    quantity: priced.quantity,
+    unitCost: priced.unitCost,
+    estimate: priced.estimate,
+    warnings: priced.warnings,
     note: "Internal draft quote created for staff review. No Shopify order, invoice, customer message, or production job was created.",
   };
   const priceSnapshot = {
     source: "agent_review_queue_conversion",
-    pricingMode: recipeTier?.fixedPrice ? "recipe_fixed_tier" : "recipe_default_sell_price",
-    unitPrice,
-    unitCost,
-    tierLabel: recipeTier ? `${recipeTier.minQty}${recipeTier.maxQty ? `-${recipeTier.maxQty}` : "+"}` : null,
+    pricingMode: priced.fixedPrice != null ? "recipe_fixed_tier" : "recipe_margin_tier",
+    tierLabel: priced.tierLabel,
+    marginPct: priced.marginPct,
+    fixedPrice: priced.fixedPrice,
+    unitCost: priced.unitCost,
+    unitPrice: priced.unitPrice,
+    totalCost: priced.totalCost,
+    totalPrice: priced.totalPrice,
+    profit: priced.profit,
+    marginActual: priced.marginActual,
     requiresStaffApproval: true,
   };
 
   return {
-    productName,
-    variant: textValue(productRequest.finish) || textValue(item.finish) || null,
-    sku: recipe.sku || null,
-    quantity,
-    unitPrice,
-    unitCost,
-    notes: [
-      "Created from Agent Review Queue for internal staff quote drafting.",
-      "Pricing seeded from quote-ready recipe data.",
-      textValue(item.internalNotes) ? `Queue notes: ${textValue(item.internalNotes)}` : "",
-    ].filter(Boolean).join("\n"),
-    recipeId: recipe.id,
-    recipeName: recipe.name,
-    selectedFinish: textValue(productRequest.finish) || textValue(item.finish) || null,
-    pricingSource: "agent_review_queue_recipe",
-    tierLabel: recipeTier ? `${recipeTier.minQty}${recipeTier.maxQty ? `-${recipeTier.maxQty}` : "+"}` : null,
-    minQuantity: recipe.minQuantity || null,
-    marginPct: recipeTier?.marginPct ?? recipe.targetMarginPct ?? null,
-    costSnapshot: JSON.stringify(costSnapshot),
-    priceSnapshot: JSON.stringify(priceSnapshot),
+    ok: true as const,
+    line: {
+      productName,
+      variant: finishText || null,
+      sku: recipe.sku || null,
+      quantity: priced.quantity,
+      unitPrice: priced.unitPrice,
+      unitCost: priced.unitCost,
+      notes: [
+        "Created from Agent Review Queue for internal staff quote drafting.",
+        "Pricing seeded from the shared quote-ready recipe engine.",
+        priced.warnings.length ? `Pricing warnings: ${priced.warnings.join(" ")}` : "",
+        textValue(item.internalNotes) ? `Queue notes: ${textValue(item.internalNotes)}` : "",
+      ].filter(Boolean).join("\n"),
+      recipeId: recipe.id,
+      recipeName: recipe.name,
+      selectedFinish: finishText || null,
+      pricingSource: priced.pricingSource,
+      tierLabel: priced.tierLabel,
+      minQuantity: recipe.minQuantity || null,
+      marginPct: priced.marginPct,
+      costSnapshot: JSON.stringify(costSnapshot),
+      priceSnapshot: JSON.stringify(priceSnapshot),
+    },
   };
 }
 
@@ -402,6 +379,7 @@ async function writeConversionFailedEvent(
   actorName: string | null,
   actorEmail: string | null,
   reason: string,
+  extraMetadata: Record<string, unknown> = {},
 ) {
   try {
     await db.agentReviewQueueEvent.create({
@@ -424,6 +402,7 @@ async function writeConversionFailedEvent(
           actorId,
           actorName,
           actorEmail,
+          ...extraMetadata,
         },
       },
     });
@@ -481,12 +460,17 @@ export async function action({ request }: { request: Request }) {
       return redirect("/app/erp/agent-review-queue?conversionError=no_recipe");
     }
 
-    const quoteLine = quoteLineFromQueueItem(item, recipe, quantity);
-    if (!quoteLine) {
-      const reason = "the matched recipe is missing positive sell price or unit cost";
-      await writeConversionFailedEvent(item, session.shop, actorId, actorName, actorEmail, reason);
+    const quoteLineResult = quoteLineFromQueueItem(item, recipe, quantity);
+    if (!quoteLineResult.ok) {
+      const reason = `the matched recipe is not quote-ready: ${quoteLineResult.blockingIssues.join("; ")}`;
+      await writeConversionFailedEvent(item, session.shop, actorId, actorName, actorEmail, reason, {
+        blockingIssues: quoteLineResult.blockingIssues,
+        recipeId: recipe.id,
+        recipeName: recipe.name,
+      });
       return redirect("/app/erp/agent-review-queue?conversionError=no_pricing");
     }
+    const quoteLine = quoteLineResult.line;
 
     const now = new Date();
     await db.$transaction(async (tx) => {
@@ -638,7 +622,7 @@ export async function action({ request }: { request: Request }) {
 const CONVERSION_ERROR_MESSAGES: Record<string, string> = {
   missing_fields: "Draft quote was not created: item is missing required fields (quantity, customer, or product context).",
   no_recipe: "Draft quote was not created: no unambiguous quote-ready recipe was found.",
-  no_pricing: "Draft quote was not created: the matched recipe is missing positive sell price or unit cost.",
+  no_pricing: "Draft quote was not created: the matched recipe is not quote-ready (missing cost inputs, zero price or cost, or below the recipe minimum). See the item audit events for details.",
 };
 
 export async function loader({ request }: { request: Request }) {
