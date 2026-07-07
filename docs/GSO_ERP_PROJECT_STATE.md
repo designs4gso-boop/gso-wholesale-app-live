@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `d17bed0 Add low margin quote approval gate`
-- Working tree at closeout: Patch 7C.1 (distinguish unknown-cost vs low-margin approval wording) pending commit
+- Latest stable commit: `02e9c54 Clarify unknown cost quote approvals`
+- Working tree at closeout: Patch 8A (Prisma migration baseline + first Vitest tests) pending commit
 
 ## Golden Rule For All Agents
 
@@ -249,6 +249,16 @@ Quote recipe gates remain:
 - Known upgrade deferred to the migrations baseline: replace notes-marker approval with schema-backed approval columns (approvedAt/By/Reason/Threshold) including staleness invalidation when items change after approval.
 - Patch 7C.1: `quoteMarginState` now returns per-item `kind` (below_threshold / unknown_cost / invalid_price) plus `hasBelowThreshold` / `hasUnknownCost` / `hasInvalidPrice` / `approvalLabel`; badges and block messages say "Unknown cost - approval required", "Low margin - approval required", "Low margin / unknown cost - approval required", or "Invalid price - approval required" as appropriate. Gates and approval logic unchanged.
 
+## Completed Milestone: Engineering Baseline Files (Patch 8A)
+
+- Owner-run read-only drift check against production returned "This is an empty migration." (production matches `prisma/schema.prisma`).
+- Baseline migration files added: `prisma/migrations/0_init/migration.sql` (generated from the schema only, 55 tables, no database contact) and `migration_lock.toml` (postgresql).
+- Vitest added (`npm test`): 20 passing pure unit tests over `quote-margin.server.ts` (labels, thresholds, marker detection, blended/lowest math) and `recipe-pricing.server.ts` (margin math, fixed tiers, tier selection, MOQ warning, vendor tiers, blocking issues). No database, no Shopify.
+- `docs/MIGRATIONS.md` runbook added: never-do list, owner-executed baseline activation (`migrate resolve --applied 0_init`), Render Pre-Deploy `npx prisma migrate deploy`, rollback (`--rolled-back`), and the 8B authoring workflow.
+- CRITICAL standing hazard documented: local `.env` `DATABASE_URL` currently points at production Postgres — every local prisma command must be treated as production until a local dev database is set up.
+- Zero runtime behavior changes: no app/ files touched, schema untouched, no prisma command contacted any database.
+- Patch 8B (next): schema-backed low-margin approval fields as the first real migration through the proven pipeline.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -271,14 +281,17 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 8 (per aligned roadmap):
-Engineering baseline.
+Patch 8B (per aligned roadmap), only after the owner activates the 8A baseline
+(migrate resolve + Render Pre-Deploy) and one deploy proves the pipeline:
 
-Goal:
-
-- Prisma migrations baseline (one-time prod migrate-resolve on Render) so schema changes become deployable.
-- First automated tests (Vitest) around the pure pricing engine, quote margin state, conversion gates, and webhook payment classification.
-- Schema-backed low-margin approval columns as the first post-baseline migration.
+- Schema-backed low-margin approval columns on Quote:
+  `lowMarginApprovedAt DateTime?`, `lowMarginApprovedBy String?`,
+  `lowMarginApprovalReason String?`, `lowMarginApprovalThresholdPct Float?`,
+  `lowMarginApprovedSnapshot Json?`.
+- First real migration authored per docs/MIGRATIONS.md (additive only).
+- Approval logic swaps from notes-marker to columns, with staleness
+  invalidation via the item snapshot; notes markers keep appending as
+  human-readable history.
 
 Still not allowed:
 
