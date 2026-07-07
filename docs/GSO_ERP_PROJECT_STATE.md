@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `a3a9bc0 Use customer-safe quote portal projection`
-- Working tree at closeout: Patch 6 (queue row expansion + staff recipe picker) pending commit
+- Latest stable commit: `56daf62 Add agent review queue recipe picker`
+- Working tree at closeout: Patch 6B (exact conversion blocking reasons in queue UI) pending commit
 
 ## Golden Rule For All Agents
 
@@ -196,6 +196,15 @@ Quote recipe gates remain:
 - Conversion events record `selectedRecipeId` and `selectionSource` (staff_selected / staff_accepted_suggestion / none).
 - All Phase 8B fail-closed gates and the shared pricing engine remain unchanged.
 - No new routes, no itemId query params, no detail-route patterns (embedded login-loop bans respected).
+
+## Completed Milestone: Exact Conversion Blocking Reasons (Patch 6B)
+
+- Queue loader aggregation captures the latest `quote_draft_conversion_failed` event per item from already-fetched audit events (no new queries).
+- Metadata is extracted defensively: reason, blockingIssues, selectedRecipeId, recipeName, selectionSource, actor, timestamp.
+- Audit column shows a concise `Last failure: ...` line; the Details expansion shows a full "Last conversion failure" block with blocking issues as a list.
+- Failure blocks are hidden once an item is converted.
+- Conversion failure banners stay short and point staff to the row's Details.
+- Conversion gates, pricing engine, and event writes are unchanged; reasons never travel through URL params.
 
 ## Product Builder / Product Setup Scope
 

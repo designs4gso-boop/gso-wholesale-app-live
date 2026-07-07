@@ -52,6 +52,16 @@ type QueueItem = {
   updatedAt: string;
 };
 
+type ConversionFailure = {
+  reason: string;
+  blockingIssues: string[];
+  selectedRecipeId: string | null;
+  recipeName: string | null;
+  selectionSource: string | null;
+  actor: string | null;
+  at: string;
+};
+
 type RecipeOption = {
   id: string;
   name: string;
@@ -76,6 +86,7 @@ type LoaderData = {
       latestEventAt: string | null;
       latestActor: string | null;
       latestNote: string | null;
+      conversionFailure: ConversionFailure | null;
     }
   >;
   summary: {
@@ -182,6 +193,35 @@ function cappedNote(value: FormDataEntryValue | null) {
 
 function truncatedText(value: string, maxLength = 110) {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+}
+
+function conversionFailureFromEvent(event: {
+  eventType: string;
+  actorType: string;
+  actorName: string | null;
+  actorEmail: string | null;
+  message: string | null;
+  metadata: unknown;
+  createdAt: Date;
+}): ConversionFailure {
+  const metadata = jsonObject(event.metadata);
+  const metadataReason = typeof metadata.reason === "string" ? metadata.reason.trim() : "";
+  const messageReason = String(event.message || "")
+    .replace(/^Draft quote conversion failed:\s*/i, "")
+    .trim();
+  const blockingIssues = jsonArray(metadata.blockingIssues).filter(
+    (issue): issue is string => typeof issue === "string" && issue.trim().length > 0,
+  );
+
+  return {
+    reason: metadataReason || messageReason || "Conversion failed.",
+    blockingIssues,
+    selectedRecipeId: typeof metadata.selectedRecipeId === "string" ? metadata.selectedRecipeId : null,
+    recipeName: typeof metadata.recipeName === "string" ? metadata.recipeName : null,
+    selectionSource: typeof metadata.selectionSource === "string" ? metadata.selectionSource : null,
+    actor: event.actorName || event.actorEmail || event.actorType || null,
+    at: event.createdAt.toISOString(),
+  };
 }
 
 function noteFromMetadata(metadata: unknown) {
@@ -669,8 +709,8 @@ export async function action({ request }: { request: Request }) {
 const CONVERSION_ERROR_MESSAGES: Record<string, string> = {
   missing_fields: "Draft quote was not created: item is missing required fields (quantity, customer, or product context).",
   no_recipe_selected: "Choose a quote-ready recipe first.",
-  no_recipe: "Draft quote was not created: the selected recipe was not found or is no longer quote-ready.",
-  no_pricing: "Draft quote was not created: the selected recipe is not quote-ready (missing cost inputs, zero price or cost, or below the recipe minimum). See the item audit events for details.",
+  no_recipe: "Draft quote was not created: the selected recipe was not found or is no longer quote-ready. Open Details on the row for the exact reasons.",
+  no_pricing: "Draft quote was not created: the selected recipe is not quote-ready. Open Details on the row for the exact reasons.",
 };
 
 export async function loader({ request }: { request: Request }) {
@@ -776,6 +816,8 @@ export async function loader({ request }: { request: Request }) {
     for (const event of events) {
       const existing = auditByItemId[event.queueItemId];
       const latestActor = event.actorName || event.actorEmail || event.actorType || null;
+      const conversionFailure =
+        event.eventType === "quote_draft_conversion_failed" ? conversionFailureFromEvent(event) : null;
       if (!existing) {
         auditByItemId[event.queueItemId] = {
           eventCount: 1,
@@ -783,11 +825,15 @@ export async function loader({ request }: { request: Request }) {
           latestEventAt: event.createdAt.toISOString(),
           latestActor,
           latestNote: noteFromMetadata(event.metadata),
+          conversionFailure,
         };
       } else {
         existing.eventCount += 1;
         if (!existing.latestNote) {
           existing.latestNote = noteFromMetadata(event.metadata);
+        }
+        if (!existing.conversionFailure && conversionFailure) {
+          existing.conversionFailure = conversionFailure;
         }
       }
     }
@@ -829,6 +875,50 @@ function DetailField({ label: fieldLabel, value }: { label: string; value: strin
       </Text>
       <Text as="span" variant="bodySm">
         {value || "Not set"}
+      </Text>
+    </BlockStack>
+  );
+}
+
+function ConversionFailureSummary({ failure }: { failure: ConversionFailure | null }) {
+  if (!failure) return null;
+  return (
+    <Text as="span" variant="bodySm" tone="critical">
+      Last failure: {truncatedText(failure.blockingIssues[0] || failure.reason)}
+    </Text>
+  );
+}
+
+function ConversionFailureDetails({ failure }: { failure: ConversionFailure | null }) {
+  if (!failure) return null;
+  return (
+    <BlockStack gap="100">
+      <Text as="span" variant="bodySm" fontWeight="semibold" tone="critical">
+        Last conversion failure
+      </Text>
+      <Text as="span" variant="bodySm">
+        {failure.reason}
+      </Text>
+      {failure.blockingIssues.length ? (
+        <BlockStack gap="050">
+          {failure.blockingIssues.map((issue) => (
+            <Text as="span" variant="bodySm" key={issue}>
+              • {issue}
+            </Text>
+          ))}
+        </BlockStack>
+      ) : null}
+      <Text as="span" variant="bodySm" tone="subdued">
+        {[
+          failure.recipeName ? `Recipe: ${failure.recipeName}` : "",
+          failure.selectedRecipeId ? `Recipe ID: ${failure.selectedRecipeId}` : "",
+          failure.selectionSource ? `Selection: ${failure.selectionSource.replace(/_/g, " ")}` : "",
+        ]
+          .filter(Boolean)
+          .join(" | ") || "No recipe was selected."}
+      </Text>
+      <Text as="span" variant="bodySm" tone="subdued">
+        {failure.actor ? `By ${failure.actor} at ${formatDate(failure.at)}` : formatDate(failure.at)}
       </Text>
     </BlockStack>
   );
@@ -1010,6 +1100,9 @@ export default function AgentReviewQueuePage() {
                                   Note: {data.auditByItemId[item.id].latestNote}
                                 </Text>
                               ) : null}
+                              {item.status !== "converted_by_staff" && !item.convertedQuoteId ? (
+                                <ConversionFailureSummary failure={data.auditByItemId[item.id].conversionFailure} />
+                              ) : null}
                               <Text as="span" variant="bodySm" tone="subdued">
                                 Events: {data.auditByItemId[item.id].eventCount}
                               </Text>
@@ -1140,6 +1233,9 @@ export default function AgentReviewQueuePage() {
                                 <DetailField label="Customer-safe summary" value={item.customerSafeSummary || ""} />
                                 <DetailField label="Internal notes (staff only)" value={item.internalNotes || ""} />
                               </InlineGrid>
+                              {item.status !== "converted_by_staff" && !item.convertedQuoteId ? (
+                                <ConversionFailureDetails failure={data.auditByItemId[item.id]?.conversionFailure || null} />
+                              ) : null}
                             </BlockStack>
                           </td>
                         </tr>
