@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `ec14a61 Polish agent security diagnostics`
-- Working tree at closeout: Patch 11A (Setup Wizard launch-readiness extension) pending commit
+- Latest stable commit: `ec822a8 Add setup wizard launch readiness`
+- Working tree at closeout: Patch 11B (Setup Wizard blockers vs warnings + deep readiness sample) pending commit
 
 ## Golden Rule For All Agents
 
@@ -336,6 +336,16 @@ Quote recipe gates remain:
 - Loader grew from 20 to 29 parallel lightweight queries (counts + one findFirst createdAt), all shop-scoped and indexed; memory-safe mode preserved; zero write actions; zero Shopify API calls.
 - Known pre-existing issue confirmed via stash round-trip: the wizard's useLoaderData typing produced 14 tsc errors before this patch (documented loader-typing category); build is unaffected.
 - Deferred to 11B/11C: deep per-recipe conversion-readiness scan (button-triggered, batched), Shopify API health checks, persisted checklist sign-offs (schema).
+
+## Completed Milestone: Setup Wizard Blockers vs Warnings + Deep Readiness (Patch 11B)
+
+- Every wizard step now carries a severity overlay (ready / warning / launch blocker) beside its status. Blockers: Cost Foundation missing materials or machines; Product Setup missing profiles/recipes; Quote Pipeline with zero quote-ready recipes or a deep sample passing 0/N. Everything else is at most a warning (Shopify Links / Storefront Configurator are labeled full-launch requirements, not internal-beta blockers; Agent Platform and Reporting are never blockers).
+- Header shows a Launch Blockers list (with action links) or "No launch blockers - warnings only", plus Blockers and Warnings stat tiles; the suggested next action prefers blockers.
+- Agent Platform status ladder fixed: signed-intake-tested with zero active credentials now shows Partial / Warning with "Signed intake was tested successfully; no active credential is currently issued" (the current live state) instead of Needs setup.
+- Reporting copy states explicitly that missing actual-cost jobs is a warning that matures after completed jobs, not a blocker.
+- Bounded deep readiness sample: the 10 most recently updated quote-ready recipes load with the shared pricing include and run through priceRecipeAtQuantity + blockingConversionIssues (per-recipe try/catch so the wizard cannot crash). The Quote Pipeline card shows "Deep check: X/N sampled recipe(s) fully conversion-ready" plus up to 3 failing names with their first blocking issue.
+- Launch Readiness checklist split into "Internal beta launch" (7 staff-pipeline items) and "Full customer launch adds" (Shopify mappings, storefront configurator, portal with a real customer, agent vendor onboarding, actual-cost reporting loop).
+- Cleanup: the wizard's 14 pre-existing loader-typing tsc errors are now 0 (loader data consumed per codebase convention; Step/StepCard keep real types). Still read-only: no actions, no writes, no Shopify calls.
 
 ## Product Builder / Product Setup Scope
 
