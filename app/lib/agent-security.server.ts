@@ -36,6 +36,26 @@ export function familyAllowed(allowedProductFamilies: unknown, normalizedFamily:
   return list.includes(String(normalizedFamily || "").trim().toLowerCase());
 }
 
+// Staff-facing explanations for every errorCode the intake endpoint writes to
+// AgentSubmissionLog. The completeness test pins this list to the endpoint's
+// emitted codes, so adding a code there requires documenting it here.
+export const AGENT_ERROR_CODE_EXPLANATIONS: Record<string, string> = {
+  missing_auth: "Authorization, timestamp, or signature header was missing.",
+  invalid_credential: "No active credential matches this token id.",
+  ambiguous_token_id: "More than one active credential shares this token id; revoke one of them.",
+  credential_revoked: "This credential was revoked; issue a new one to restore access.",
+  invalid_secret: "The token secret does not match the stored hash.",
+  invalid_timestamp: "Timestamp missing or stale - send unix milliseconds (seconds are also accepted).",
+  invalid_signature: 'HMAC signature mismatch - sign "timestamp.body" with the token secret, lowercase hex.',
+  missing_scope: "Credential scopes do not include intake:create.",
+  rate_limited: "Credential exceeded the 60/hour or 10/minute intake limits.",
+  invalid_json: "Request body was not valid JSON.",
+  json_object_required: "Request body must be a single JSON object.",
+  missing_required_fields: "Required intake fields missing (product family, quantity, or customer identifier).",
+  family_not_allowed: "Submitted product family is outside this credential's allowed families.",
+  internal_error: "Intake endpoint failed unexpectedly; check server logs.",
+};
+
 export function sha256Hex(value: string) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }

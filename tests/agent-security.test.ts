@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_AUTH_FAILURE_BRAKE_LIMIT,
   AGENT_AUTH_FAILURE_BRAKE_WINDOW_MINUTES,
+  AGENT_ERROR_CODE_EXPLANATIONS,
   AGENT_INTAKE_SCOPE,
   AGENT_RATE_LIMIT_BURST_PER_MINUTE,
   AGENT_RATE_LIMIT_PER_HOUR,
@@ -18,6 +19,38 @@ import {
   timingSafeEqualString,
   verifyAgentSignature,
 } from "../app/lib/agent-security.server";
+
+// Every errorCode the intake endpoint currently writes to AgentSubmissionLog.
+// If intake gains a new code, add it here AND to the explanations map.
+const INTAKE_ERROR_CODES = [
+  "ambiguous_token_id",
+  "credential_revoked",
+  "family_not_allowed",
+  "internal_error",
+  "invalid_credential",
+  "invalid_json",
+  "invalid_secret",
+  "invalid_signature",
+  "invalid_timestamp",
+  "json_object_required",
+  "missing_auth",
+  "missing_required_fields",
+  "missing_scope",
+  "rate_limited",
+];
+
+describe("AGENT_ERROR_CODE_EXPLANATIONS", () => {
+  it("has a non-empty explanation for every intake errorCode", () => {
+    for (const code of INTAKE_ERROR_CODES) {
+      expect(AGENT_ERROR_CODE_EXPLANATIONS[code], `missing explanation for ${code}`).toBeTruthy();
+      expect(AGENT_ERROR_CODE_EXPLANATIONS[code].length).toBeGreaterThan(10);
+    }
+  });
+
+  it("documents exactly the known codes (no stale or undocumented entries)", () => {
+    expect(Object.keys(AGENT_ERROR_CODE_EXPLANATIONS).sort()).toEqual([...INTAKE_ERROR_CODES].sort());
+  });
+});
 
 describe("rate limit constants", () => {
   it("matches the owner-approved values", () => {

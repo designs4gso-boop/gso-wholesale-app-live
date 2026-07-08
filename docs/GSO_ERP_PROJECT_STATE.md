@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `a80a93d Add agent security controls`
-- Working tree at closeout: Patch 10A.1 (intake auth fix: timestamp normalization + canonical signer) pending commit
+- Latest stable commit: `8f2a329 Fix agent intake auth timestamp handling`
+- Working tree at closeout: Patch 10B (agent security polish and launch readiness) pending commit
 
 ## Golden Rule For All Agents
 
@@ -313,6 +313,18 @@ Quote recipe gates remain:
 - Agent Security one-time-token banner now documents the exact wire format and points at the test script.
 - Diagnostics reminder: every rejected intake attempt's exact `errorCode` is visible in the Agent Security submissions table.
 - No weakening of HMAC/signature checks, rate limits, scope/family enforcement, or intake-only boundaries.
+
+## Completed Milestone: Agent Security Polish + Launch Readiness (Patch 10B)
+
+- LIVE SMOKE TEST PASSED after 10A.1: signed intake returned 201 accepted, exact replay returned 200 duplicate, replay guard and credential auth verified end to end against production.
+- `AGENT_ERROR_CODE_EXPLANATIONS` documents all 14 intake errorCodes; a completeness test pins the map to the endpoint's emitted codes (adding a code without documenting it fails the suite).
+- Agent Security submissions table shows a plain-language explanation under each errorCode (explanations delivered via loader data so the component never imports from a .server module).
+- Client-side submission filters (All / Accepted / Duplicates / Failures, with counts) using component state only - no URL changes.
+- Badge tones: accepted=success, duplicate=info, rejected_rate_limit=warning, other failures=critical.
+- New "How to test & integrate" card: staff testing steps (create -> one-time token -> tools/test-agent-intake.ps1 -> 201 -> 200 duplicate -> verify logs and queue) plus the full wire contract for agent vendors (endpoint, Bearer tokenId.tokenSecret, timestamp rules, HMAC formula, rate limits, replay window, family restrictions). No secrets displayed beyond the placeholder format.
+- tools/test-agent-intake.ps1 remains the official internal signer, unchanged.
+- External agents remain strictly intake-only; no behavior changes to the intake endpoint in this patch.
+- 10C candidates recorded: per-IP throttling (needs ipHash index migration), submission-log retention/pruning, per-credential rate-limit overrides, signed-request integration test harness.
 
 ## Product Builder / Product Setup Scope
 

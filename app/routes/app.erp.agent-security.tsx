@@ -10,10 +10,12 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
+import { useState } from "react";
 import { Form, useActionData, useLoaderData } from "react-router";
 
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
+import { AGENT_ERROR_CODE_EXPLANATIONS } from "../lib/agent-security.server";
 
 // Mirrors AGENT_INTAKE_SCOPE in app/lib/agent-security.server.ts. Kept as a
 // literal here because this route's component renders it, and client code
@@ -100,6 +102,9 @@ export async function loader({ request }: { request: Request }) {
 
   return Response.json({
     shop: session.shop,
+    // Delivered via loader data on purpose: the component must never import
+    // from a .server module.
+    errorExplanations: AGENT_ERROR_CODE_EXPLANATIONS,
     credentials: credentials.map((credential) => ({
       ...credential,
       revokedAt: credential.revokedAt ? credential.revokedAt.toISOString() : null,
@@ -202,9 +207,39 @@ export async function action({ request }: { request: Request }) {
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
 }
 
+function submissionTone(status: string) {
+  if (status === "accepted") return "success" as const;
+  if (status === "duplicate") return "info" as const;
+  if (status === "rejected_rate_limit") return "warning" as const;
+  return "critical" as const;
+}
+
+const SUBMISSION_FILTERS = [
+  { value: "all", label: "All" },
+  { value: "accepted", label: "Accepted" },
+  { value: "duplicate", label: "Duplicates" },
+  { value: "failures", label: "Failures" },
+] as const;
+
 export default function AgentSecurityPage() {
   const data = useLoaderData<any>();
   const actionData = useActionData<any>();
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  const isFailure = (status: string) => status !== "accepted" && status !== "duplicate";
+  const filteredSubmissions = (data.submissions || []).filter((submission: any) =>
+    statusFilter === "all"
+      ? true
+      : statusFilter === "failures"
+        ? isFailure(submission.status)
+        : submission.status === statusFilter,
+  );
+  const filterCount = (value: string) =>
+    value === "all"
+      ? data.submissions.length
+      : value === "failures"
+        ? data.submissions.filter((s: any) => isFailure(s.status)).length
+        : data.submissions.filter((s: any) => s.status === value).length;
 
   return (
     <Page
@@ -304,6 +339,37 @@ export default function AgentSecurityPage() {
                 </InlineStack>
               </BlockStack>
             </Form>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h2" variant="headingMd">
+              How to test &amp; integrate
+            </Text>
+            <BlockStack gap="150">
+              <Text as="p" fontWeight="semibold">
+                Testing a credential (staff, local machine):
+              </Text>
+              <Text as="p" variant="bodySm">
+                1. Create a credential above and copy the one-time token. 2. Run tools/test-agent-intake.ps1 and
+                paste the token when prompted. 3. Expect HTTP 201 accepted, then an automatic replay returning 200
+                duplicate. 4. Both attempts appear in Recent Submissions below. 5. The accepted lead appears in the
+                Agent Review Queue for normal staff review.
+              </Text>
+              <Text as="p" fontWeight="semibold">
+                Wire contract for agent vendors:
+              </Text>
+              <Text as="p" variant="bodySm">
+                POST https://gso-wholesale-app-live.onrender.com/api/agent/intake with JSON body (32KB max) and
+                headers: Authorization: Bearer tokenId.tokenSecret (dot separator, format gso_xxxx.xxxx);
+                X-GSO-Agent-Timestamp: unix milliseconds (seconds also accepted), within 5 minutes of server time;
+                X-GSO-Agent-Signature: lowercase hex HMAC-SHA256 over "timestamp.body" keyed with the UTF-8 token
+                secret. Include an idempotencyKey per lead. Limits: 60 requests/hour and 10/minute per credential;
+                identical accepted payloads within 10 minutes return the original item as a duplicate. Credentials
+                may be restricted to specific product families. Intake is the only permitted action.
+              </Text>
+            </BlockStack>
           </BlockStack>
         </Card>
 
@@ -435,6 +501,18 @@ export default function AgentSecurityPage() {
             <Text as="h2" variant="headingMd">
               Recent intake submissions (last 50)
             </Text>
+            <InlineStack gap="150">
+              {SUBMISSION_FILTERS.map((filter) => (
+                <Button
+                  key={filter.value}
+                  size="slim"
+                  pressed={statusFilter === filter.value}
+                  onClick={() => setStatusFilter(filter.value)}
+                >
+                  {`${filter.label} (${filterCount(filter.value)})`}
+                </Button>
+              ))}
+            </InlineStack>
             {data.submissions.length === 0 ? (
               <Text as="p" tone="subdued">
                 No intake submissions logged yet.
@@ -454,7 +532,7 @@ export default function AgentSecurityPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.submissions.map((submission: any) => (
+                    {filteredSubmissions.map((submission: any) => (
                       <tr key={submission.id}>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 8 }}>
                           <Text as="span" variant="bodySm">
@@ -467,22 +545,19 @@ export default function AgentSecurityPage() {
                           </Text>
                         </td>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 8 }}>
-                          <Badge
-                            tone={
-                              submission.status === "accepted"
-                                ? "success"
-                                : submission.status === "duplicate"
-                                  ? "info"
-                                  : "critical"
-                            }
-                          >
-                            {submission.status}
-                          </Badge>
+                          <Badge tone={submissionTone(submission.status)}>{submission.status}</Badge>
                         </td>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 8 }}>
-                          <Text as="span" variant="bodySm">
-                            {submission.errorCode || "-"}
-                          </Text>
+                          <BlockStack gap="050">
+                            <Text as="span" variant="bodySm">
+                              {submission.errorCode || "-"}
+                            </Text>
+                            {submission.errorCode && data.errorExplanations?.[submission.errorCode] ? (
+                              <Text as="span" variant="bodySm" tone="subdued">
+                                {data.errorExplanations[submission.errorCode]}
+                              </Text>
+                            ) : null}
+                          </BlockStack>
                         </td>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 8 }}>
                           <Text as="span" variant="bodySm">
