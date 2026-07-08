@@ -82,6 +82,9 @@ Applied real migrations:
 - `20260707130000_add_low_margin_approval_fields` (Patch 8B): five nullable
   columns on Quote for schema-backed low-margin approval
   (`lowMarginApprovedAt/By/Reason/ThresholdPct/Snapshot`).
+- `20260707150000_add_quote_customer_tier` (Patch 9A): `Quote.customerTier`
+  (TEXT NOT NULL DEFAULT 'standard') and `Quote.customerTierLabel` (TEXT NULL).
+  Default-backed NOT NULL add is metadata-only on Postgres; no table rewrite.
 
 ## Testing
 

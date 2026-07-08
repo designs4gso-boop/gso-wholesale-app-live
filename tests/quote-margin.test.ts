@@ -209,6 +209,23 @@ describe("schema-backed approval (Patch 8B)", () => {
     expect(state.approvalRequired).toBe(true);
   });
 
+  it("ignores customer tier fields: tier changes never affect margin state or stale approvals", () => {
+    const base = approvedQuote();
+    const asVip = { ...base, customerTier: "vip", customerTierLabel: null };
+    const asCustom = { ...base, customerTier: "custom", customerTierLabel: "Net-30 Partner" };
+
+    const baseState = quoteMarginState(base);
+    const vipState = quoteMarginState(asVip as any);
+    const customState = quoteMarginState(asCustom as any);
+
+    for (const state of [vipState, customState]) {
+      expect(state.isApproved).toBe(baseState.isApproved);
+      expect(state.approvalStale).toBe(false);
+      expect(state.approvalRequired).toBe(baseState.approvalRequired);
+      expect(state.blendedMarginPct).toBe(baseState.blendedMarginPct);
+    }
+  });
+
   it("builds snapshots with threshold, blended, lowest, and normalized items", () => {
     const items = [item({ productName: "B item" }), item({ productName: "A item" })];
     const state = quoteMarginState({ notes: "", items });

@@ -172,6 +172,9 @@ model Quote {
   lowMarginApprovalThresholdPct Float?
   lowMarginApprovedSnapshot     Json?
 
+  customerTier      String  @default("standard")
+  customerTierLabel String?
+
   @@index([shop, status])
   @@index([shop, createdAt])
 }

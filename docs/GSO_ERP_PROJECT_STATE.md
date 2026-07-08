@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `945c728 Add Prisma migration baseline and tests`
-- Working tree at closeout: Patch 8B (schema-backed low-margin approval fields) pending commit
+- Latest stable commit: `965d3c6 Add schema backed low margin approval`
+- Working tree at closeout: Patch 9A (customer tier foundation on Quote) pending commit
 
 ## Golden Rule For All Agents
 
@@ -269,6 +269,15 @@ Quote recipe gates remain:
 - Tests: 26 passing (6 new: schema approval, staleness, reorder-stability, legacy marker, fields-win-over-marker, snapshot shape).
 - Portal privacy: explicit select in `quote.$id.tsx` excludes the new fields automatically; verified.
 
+## Completed Milestone: Customer Tier Foundation (Patch 9A)
+
+- Migration `20260707150000_add_quote_customer_tier`: `Quote.customerTier String @default("standard")` + `Quote.customerTierLabel String?`. Authored offline via the two-schema diff; applied only by Render Pre-Deploy.
+- Tier registry in client-safe `app/lib/customer-tiers.ts`: standard, wholesale, vip, distributor, house_account, custom (string + validated registry by owner decision — no Prisma enum). Future per-tier config (margin floors) belongs here.
+- Quotes / CRM: editor has a Customer tier select (Custom reveals a label field, capped 80 chars); board card shows the tier badge; `save` validates server-side (unknown values become standard; label persisted only for custom).
+- Agent Review Queue untouched: the DB default stamps standard on conversion-created drafts.
+- Deliberate non-behavior (owner-locked): tier does not affect pricing, does not bypass low-margin approval, does not stale approvals (tier is not in the approval snapshot), and is not exposed on the public quote portal.
+- Tests: 34 passing (8 new: registry contents, validation, display labels, and a guard proving tier changes never alter margin state or stale schema approvals).
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -291,15 +300,12 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 9 (per aligned roadmap):
-Customer tier foundation.
+Patch 9B+ (per aligned roadmap), sequencing to be confirmed with the owner:
 
-Goal:
-
-- Tier registry: Standard, Wholesale, VIP, Distributor, House Account, Custom.
-- Canonical customer tags per tier (wholesale_approved and vip_wholesale exist; add distributor and house_account; Custom = per-customer tag).
-- Tier-scoped pricing rule mapping and function-config sync planning.
-- Schema additions (if any) authored per docs/MIGRATIONS.md offline workflow.
+- Tier-aware pricing planning: canonical Shopify customer tags per tier (wholesale_approved and vip_wholesale exist; distributor / house_account to add), tier-scoped WholesaleRule/PricingRule mapping, function-config sync.
+- Per-tier margin floors in the tier registry (replacing the flat 40% threshold) — connects tiers to the low-margin gate deliberately, not accidentally.
+- Longer-term: CustomerProfile model once quote-level tiers prove out (backfill/dedupe strategy required).
+- Alternative next track: agent platform hardening (credential management UI, intake rate limiting) per the aligned roadmap Patch 11.
 
 Still not allowed:
 

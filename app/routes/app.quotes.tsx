@@ -24,6 +24,7 @@ import {
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
 import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "../lib/quote-margin.server";
+import { CUSTOMER_TIERS, customerTierDisplayLabel, isCustomerTier } from "../lib/customer-tiers";
 
 type QuoteItemInput = {
   id?: string;
@@ -69,6 +70,8 @@ type QuoteInput = {
   company: string;
   email: string;
   phone: string;
+  customerTier: string;
+  customerTierLabel: string;
   status: string;
   notes: string;
   items: QuoteItemInput[];
@@ -329,6 +332,8 @@ function normalizeQuote(quote: any): QuoteInput {
     company: quote.company || "",
     email: quote.email || "",
     phone: quote.phone || "",
+    customerTier: isCustomerTier(quote.customerTier) ? quote.customerTier : "standard",
+    customerTierLabel: quote.customerTierLabel || "",
     status: quote.status || "draft",
     notes: quote.notes || "",
     items: (quote.items || []).map((item: any) => ({
@@ -1366,6 +1371,9 @@ export async function action({ request }: { request: Request }) {
 
   if (payload.intent === "save") {
     const quote = payload.quote as QuoteInput;
+    const customerTier = isCustomerTier(quote.customerTier) ? quote.customerTier : "standard";
+    const customerTierLabel =
+      customerTier === "custom" ? String(quote.customerTierLabel || "").trim().slice(0, 80) || null : null;
 
     if (quote.id) {
       const existingQuote = await db.quote.findFirst({ where: { id: quote.id, shop } });
@@ -1382,6 +1390,8 @@ export async function action({ request }: { request: Request }) {
             company: quote.company,
             email: quote.email,
             phone: quote.phone,
+            customerTier,
+            customerTierLabel,
             status: quote.status,
             notes: quote.notes,
           },
@@ -1399,6 +1409,8 @@ export async function action({ request }: { request: Request }) {
           company: quote.company,
           email: quote.email,
           phone: quote.phone,
+          customerTier,
+          customerTierLabel,
           status: quote.status,
           notes: quote.notes,
           items: {
@@ -1434,6 +1446,8 @@ export default function QuotesPage() {
   const [phone, setPhone] = useState("");
   const [status, setStatus] = useState("draft");
   const [notes, setNotes] = useState("");
+  const [customerTier, setCustomerTier] = useState("standard");
+  const [customerTierLabel, setCustomerTierLabel] = useState("");
   const [productSearch, setProductSearch] = useState("");
   const [items, setItems] = useState<QuoteItemInput[]>([emptyItem()]);
   const [lastMessage, setLastMessage] = useState("");
@@ -1533,6 +1547,8 @@ export default function QuotesPage() {
     setPhone("");
     setStatus("draft");
     setNotes("");
+    setCustomerTier("standard");
+    setCustomerTierLabel("");
     setItems([emptyItem()]);
     setLastMessage("");
   }
@@ -1802,6 +1818,8 @@ export default function QuotesPage() {
       company,
       email,
       phone,
+      customerTier,
+      customerTierLabel,
       status,
       notes,
       items,
@@ -1825,6 +1843,8 @@ export default function QuotesPage() {
     setPhone(normalized.phone);
     setStatus(normalized.status);
     setNotes(normalized.notes);
+    setCustomerTier(normalized.customerTier);
+    setCustomerTierLabel(normalized.customerTierLabel);
     setItems(normalized.items.length ? normalized.items : [emptyItem()]);
   }
 
@@ -1945,6 +1965,21 @@ export default function QuotesPage() {
                 <TextField label="Email" value={email} onChange={setEmail} autoComplete="off" />
                 <TextField label="Phone" value={phone} onChange={setPhone} autoComplete="off" />
                 <Select label="Status" value={status} onChange={setStatus} options={statuses} />
+                <Select
+                  label="Customer tier"
+                  value={customerTier}
+                  onChange={setCustomerTier}
+                  options={CUSTOMER_TIERS.map((tier) => ({ label: tier.label, value: tier.value }))}
+                />
+                {customerTier === "custom" ? (
+                  <TextField
+                    label="Custom tier label"
+                    value={customerTierLabel}
+                    onChange={setCustomerTierLabel}
+                    autoComplete="off"
+                    placeholder="e.g. Net-30 Partner"
+                  />
+                ) : null}
               </InlineStack>
             </BlockStack>
           </Card>
@@ -2235,6 +2270,7 @@ export default function QuotesPage() {
                                 <BlockStack gap="200">
                                   <Text as="p" fontWeight="bold">{quote.company || quote.customerName || "Unnamed Quote"}</Text>
                                   {isPaid ? <Badge tone="success">PAID - Quote locked</Badge> : null}
+                                  <Badge>{customerTierDisplayLabel(quote.customerTier, quote.customerTierLabel)}</Badge>
                                   {productionJob ? <Badge tone="success">Production: {productionJob.status}</Badge> : null}
                                   <Text as="p" tone="subdued">${quoteRevenue.toFixed(2)} | {new Date(quote.updatedAt || quote.createdAt).toLocaleString()}</Text>
                                   {quote.marginState ? (
