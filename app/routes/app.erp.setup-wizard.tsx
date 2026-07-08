@@ -12,6 +12,7 @@ import {
 import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { QUOTE_READY_RECIPE_WHERE } from "../lib/recipe-pricing.server";
 
 type Status = "Ready" | "Needs setup" | "Needs review" | "Needs first test order" | "Partial";
 
@@ -31,6 +32,19 @@ function statusTone(status: Status) {
 
 function isReady(status: Status) {
   return status === "Ready";
+}
+
+function quotePipelineStatus(quoteReadyRecipes: number, totalQuotes: number, paidQuotes: number): Status {
+  if (quoteReadyRecipes === 0) return "Needs setup";
+  if (totalQuotes === 0) return "Partial";
+  if (paidQuotes === 0) return "Needs review";
+  return "Ready";
+}
+
+function agentPlatformStatus(activeCredentials: number, hasAcceptedIntake: boolean): Status {
+  if (activeCredentials === 0) return "Needs setup";
+  if (!hasAcceptedIntake) return "Partial";
+  return "Ready";
 }
 
 function reportingStatus(priceApprovalRecords: number, jobsWithActualCosts: number, productionJobs: number): Status {
@@ -82,6 +96,15 @@ export async function loader({ request }: { request: Request }) {
     recentProductionJobs,
     priceApprovalRecords,
     jobsWithActualCosts,
+    quoteReadyRecipes,
+    totalQuotes,
+    depositPaidQuotes,
+    paidQuotes,
+    lowMarginApprovedQuotes,
+    activeAgentCredentials,
+    latestAcceptedIntake,
+    queueReadyItems,
+    queueConvertedItems,
   ] = await Promise.all([
     db.erpAdminSetting.count({ where: { shop } }),
     db.material.count({ where: { shop, active: true } }),
@@ -113,6 +136,19 @@ export async function loader({ request }: { request: Request }) {
     db.productionJob.count({ where: { shop, active: true, createdAt: { gte: recentStart } } }),
     db.priceApprovalRecord.count({ where: { shop } }),
     db.productionJob.count({ where: { shop, active: true, actualTotalCost: { gt: 0 } } }),
+    db.productRecipe.count({ where: { shop, ...QUOTE_READY_RECIPE_WHERE } }),
+    db.quote.count({ where: { shop } }),
+    db.quote.count({ where: { shop, status: "deposit_paid" } }),
+    db.quote.count({ where: { shop, status: "paid" } }),
+    db.quote.count({ where: { shop, lowMarginApprovedAt: { not: null } } }),
+    db.agentApiCredential.count({ where: { shop, isActive: true } }),
+    db.agentSubmissionLog.findFirst({
+      where: { shop, status: "accepted" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
+    db.agentReviewQueueItem.count({ where: { shop, status: "ready_to_quote" } }),
+    db.agentReviewQueueItem.count({ where: { shop, status: "converted_by_staff" } }),
   ]);
 
   const steps: Step[] = [
@@ -160,6 +196,33 @@ export async function loader({ request }: { request: Request }) {
       ],
     },
     {
+      name: "Quote Pipeline",
+      status: quotePipelineStatus(quoteReadyRecipes, totalQuotes, paidQuotes),
+      explanation:
+        "Quote-ready recipes feed Quotes / CRM and Agent Review Queue conversion. Flag-ready is not full conversion readiness - open a recipe in Product Setup for its complete readiness checklist and test pricing.",
+      counts: [
+        `${quoteReadyRecipes} quote-ready recipe(s)`,
+        `${totalQuotes} quote(s)`,
+        `${depositPaidQuotes} deposit-paid quote(s)`,
+        `${paidQuotes} paid quote(s)`,
+      ],
+      links: [
+        { label: "Product Setup", url: "/app/erp/product-setup" },
+        { label: "Quotes / CRM", url: "/app/quotes" },
+      ],
+    },
+    {
+      name: "Quote Safety Gates",
+      status: "Ready",
+      explanation:
+        "Enforced in code: below-40% margin and unknown-cost quotes require staff approval with a reason; production requires fully paid quotes; deposit/balance/full payments are classified by the paid-order webhook; order creation and invoice emails are separate staff actions; the public quote portal exposes no costs, margins, or internal notes; external agents are intake-only.",
+      counts: [
+        `${lowMarginApprovedQuotes} low-margin approval(s) recorded`,
+        `${depositPaidQuotes} quote(s) currently deposit-paid`,
+      ],
+      links: [{ label: "Quotes / CRM", url: "/app/quotes" }],
+    },
+    {
       name: "Shopify Links",
       status: mappedConfiguratorProducts > 0 || recipeVariantRules > 0 ? "Ready" : "Needs review",
       explanation: "Shopify mappings connect storefront products and variants to ERP records.",
@@ -185,6 +248,22 @@ export async function loader({ request }: { request: Request }) {
         { label: "Jar Mapping", url: "/app/erp/configurator-jar-mapping" },
         { label: "Configurator Sync", url: "/app/erp/configurator-sync" },
         { label: "Configurator Audit", url: "/app/erp/configurator-audit" },
+      ],
+    },
+    {
+      name: "Agent Platform",
+      status: agentPlatformStatus(activeAgentCredentials, Boolean(latestAcceptedIntake)),
+      explanation: latestAcceptedIntake
+        ? `External signed intake is proven. Last accepted submission: ${new Date(latestAcceptedIntake.createdAt).toLocaleString()}. External agents remain intake-only.`
+        : "Create a credential in Agent Security and run tools/test-agent-intake.ps1 to prove signed intake end to end. External agents remain intake-only.",
+      counts: [
+        `${activeAgentCredentials} active credential(s)`,
+        `${queueReadyItems} queue item(s) ready to quote`,
+        `${queueConvertedItems} queue item(s) converted`,
+      ],
+      links: [
+        { label: "Agent Security", url: "/app/erp/agent-security" },
+        { label: "Agent Review Queue", url: "/app/erp/agent-review-queue" },
       ],
     },
     {
@@ -329,9 +408,26 @@ export default function SetupWizard() {
               <Text as="p" tone="subdued">
                 A section is marked Ready when the app can find existing setup records for that area. This checklist does not create records, sync Shopify data, seed defaults, or change live production data.
               </Text>
+              <BlockStack gap="150">
+                {[
+                  "1. Product Setup: launch recipes show green readiness (dimensions, materials, preferred machine).",
+                  "2. Quote-ready recipes exist for the launch families (jars, stickers, banners, custom/other).",
+                  "3. Quote flow tested: draft, approve, create payment request, and email invoice as separate staff steps.",
+                  "4. Payment flow tested: deposit invoice paid -> deposit_paid, balance paid -> paid via the orders webhook.",
+                  "5. Production gate tested: paid quote creates a job; draft/approved/deposit-paid quotes are blocked.",
+                  "6. Agent signed intake tested: 201 accepted, replay returns 200 duplicate, lead appears in Agent Review Queue.",
+                  "7. Margin gate tested: a below-40% or unknown-cost quote blocks until approved with a reason.",
+                  "8. Portal privacy checked: public quote page shows customer-safe data only (no costs, margins, or notes).",
+                  "9. Production job from the paid quote reviewed: proof sheet, print logs, and reporting sections.",
+                ].map((item) => (
+                  <Text as="p" key={item}>
+                    {item}
+                  </Text>
+                ))}
+              </BlockStack>
               <Text as="p">
                 {data.needsReviewSteps === 0
-                  ? "All core sections have setup records. Run a final storefront, checkout, paid-order webhook, production, proof, and reporting test before treating the system as launched."
+                  ? "All sections have setup records. Work through the checklist above before treating the system as launched."
                   : `${data.needsReviewSteps} section(s) still need review before calling the system launch-ready.`}
               </Text>
             </BlockStack>

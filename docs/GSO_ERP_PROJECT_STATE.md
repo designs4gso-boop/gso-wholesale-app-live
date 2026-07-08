@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `8f2a329 Fix agent intake auth timestamp handling`
-- Working tree at closeout: Patch 10B (agent security polish and launch readiness) pending commit
+- Latest stable commit: `ec14a61 Polish agent security diagnostics`
+- Working tree at closeout: Patch 11A (Setup Wizard launch-readiness extension) pending commit
 
 ## Golden Rule For All Agents
 
@@ -325,6 +325,17 @@ Quote recipe gates remain:
 - tools/test-agent-intake.ps1 remains the official internal signer, unchanged.
 - External agents remain strictly intake-only; no behavior changes to the intake endpoint in this patch.
 - 10C candidates recorded: per-IP throttling (needs ipHash index migration), submission-log retention/pruning, per-credential rate-limit overrides, signed-request integration test harness.
+
+## Completed Milestone: Setup Wizard Launch Readiness (Patch 11A)
+
+- Extended the existing read-only Setup Wizard (which predated Phases 7-10) with three new step cards, all DB-count-only:
+  - Quote Pipeline: quote-ready recipe count (shared QUOTE_READY_RECIPE_WHERE), total / deposit-paid / paid quote counts. Status ladder: no quote-ready recipes = Needs setup; no quotes = Partial; no paid quote = Needs review; paid quote exists = Ready. Notes that flag-ready is not full conversion readiness (Product Setup readiness box is the per-recipe truth).
+  - Quote Safety Gates: always-Ready evidence card enumerating the armed gates (margin/unknown-cost approval, paid-only production, payment classification, split invoice send, portal privacy, intake-only agents) with usage counts (low-margin approvals recorded, deposit-paid quotes).
+  - Agent Platform: active credentials, latest accepted signed intake timestamp, queue ready/converted counts. Status: no credentials = Needs setup; no accepted intake = Partial; proven = Ready.
+- Launch Readiness card now carries the practical 9-step end-to-end checklist (recipes -> quote flow -> payment flow -> production gate -> signed intake -> margin gate -> portal privacy -> production/reporting review).
+- Loader grew from 20 to 29 parallel lightweight queries (counts + one findFirst createdAt), all shop-scoped and indexed; memory-safe mode preserved; zero write actions; zero Shopify API calls.
+- Known pre-existing issue confirmed via stash round-trip: the wizard's useLoaderData typing produced 14 tsc errors before this patch (documented loader-typing category); build is unaffected.
+- Deferred to 11B/11C: deep per-recipe conversion-readiness scan (button-triggered, batched), Shopify API health checks, persisted checklist sign-offs (schema).
 
 ## Product Builder / Product Setup Scope
 
