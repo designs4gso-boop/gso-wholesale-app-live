@@ -21,6 +21,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/erp/setup-wizard">Setup Wizard</s-link>
+        <s-link href="/app/erp/walkthrough">ERP Walkthrough</s-link>
         <s-link href="/app/quotes">Quotes / CRM</s-link>
         <s-link href="/app/erp/agent-review-queue">Agent Review Queue</s-link>
         <s-link href="/app/erp/agent-security">Agent Security</s-link>

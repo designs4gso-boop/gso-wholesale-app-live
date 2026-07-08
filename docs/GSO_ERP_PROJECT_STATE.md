@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `ec822a8 Add setup wizard launch readiness`
-- Working tree at closeout: Patch 11B (Setup Wizard blockers vs warnings + deep readiness sample) pending commit
+- Latest stable commit: `42d9bc3 Separate setup wizard blockers and warnings`
+- Working tree at closeout: Patch 11C (ERP Walkthrough / staff SOP page) pending commit
 
 ## Golden Rule For All Agents
 
@@ -346,6 +346,15 @@ Quote recipe gates remain:
 - Bounded deep readiness sample: the 10 most recently updated quote-ready recipes load with the shared pricing include and run through priceRecipeAtQuantity + blockingConversionIssues (per-recipe try/catch so the wizard cannot crash). The Quote Pipeline card shows "Deep check: X/N sampled recipe(s) fully conversion-ready" plus up to 3 failing names with their first blocking issue.
 - Launch Readiness checklist split into "Internal beta launch" (7 staff-pipeline items) and "Full customer launch adds" (Shopify mappings, storefront configurator, portal with a real customer, agent vendor onboarding, actual-cost reporting loop).
 - Cleanup: the wizard's 14 pre-existing loader-typing tsc errors are now 0 (loader data consumed per codebase convention; Step/StepCard keep real types). Still read-only: no actions, no writes, no Shopify calls.
+
+## Completed Milestone: ERP Walkthrough / Staff SOP (Patch 11C)
+
+- New read-only staff SOP at `/app/erp/walkthrough` (registered route + sidebar link "ERP Walkthrough" + "Open Walkthrough" secondary action on the Setup Wizard).
+- The safest page in the app by construction: loader authenticates only - no database access, no action export, no Shopify calls, no writes.
+- 13 sections covering the full internal-beta pipeline (daily flow, wizard, recipe readiness, quoting, margin/unknown-cost approval, payment requests, paid-to-production, agent security, queue-to-draft, portal privacy, reporting), a "What NOT to do" list (one-time tokens, Move-to-Paid discipline, no hand-typed approval markers, no seed/clear tools on production, developer Prisma guardrails pointer to docs/MIGRATIONS.md), and "Full customer launch additions".
+- Every section: what it is, why it matters, click path, links to existing sections (all 13 link targets verified against routes.ts), and safety callouts for the sharp edges (Save sends nothing; order creation does not email; invoice email is explicit; deposit_paid is not paid; stale approvals re-block; agents are intake-only; portal stays customer-safe).
+- Maintenance rule: when a patch changes a described flow, update the Walkthrough in the same patch.
+- Deferred to the final audit phase: printable/export version, screenshots, live-status fusion with the wizard, customer-facing help.
 
 ## Product Builder / Product Setup Scope
 

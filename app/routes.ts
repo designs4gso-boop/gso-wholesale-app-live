@@ -17,6 +17,7 @@ export default [
     route("erp/agent-review-queue", "routes/app.erp.agent-review-queue.tsx"),
     route("erp/agent-review-queue/new", "routes/app.erp.agent-review-queue.new.tsx"),
     route("erp/agent-security", "routes/app.erp.agent-security.tsx"),
+    route("erp/walkthrough", "routes/app.erp.walkthrough.tsx"),
     route("wholesale", "routes/app.wholesale.tsx"),
     route("wholesale/rules", "routes/app.wholesale.rules.tsx"),
     route("wholesale/customers", "routes/app.wholesale.customers.tsx"),

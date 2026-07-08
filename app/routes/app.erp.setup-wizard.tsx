@@ -464,7 +464,10 @@ export default function SetupWizard() {
       title="Setup Wizard"
       subtitle="System Readiness & Launch Checklist"
       primaryAction={{ content: "Go to next step", onAction: () => data.nextStep && navigate(data.nextStep.links[0].url) }}
-      secondaryActions={[{ content: "Back to Dashboard", onAction: () => navigate("/app") }]}
+      secondaryActions={[
+        { content: "Open Walkthrough", onAction: () => navigate("/app/erp/walkthrough") },
+        { content: "Back to Dashboard", onAction: () => navigate("/app") },
+      ]}
     >
       <Layout>
         <Layout.Section>
