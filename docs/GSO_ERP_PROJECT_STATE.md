@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `04346a7 Add quote customer tier foundation`
-- Working tree at closeout: Patch 9B (tier rules registry, behavior frozen) pending commit
+- Latest stable commit: `85e7428 Add tier rules registry`
+- Working tree at closeout: Patch 10A (agent platform hardening) pending commit
 
 ## Golden Rule For All Agents
 
@@ -288,6 +288,22 @@ Quote recipe gates remain:
 - Tests: 42 passing (8 new: per-tier freeze proofs, unknown-tier fallback, registry policy assertions, threshold plumbing proof at a hypothetical 35).
 - Future (explicit owner approval required per change): lowering any tier floor (e.g. distributor 35) is a one-line registry diff + test flip; tier-based target margins / discounts remain unimplemented.
 
+## Completed Milestone: Agent Platform Hardening (Patch 10A)
+
+- New staff-only Agent Security page at `/app/erp/agent-security` (registered route + nav link): list credentials, create credentials, revoke with required reason, and view the last 50 intake submission logs.
+- Credential creation is server-side only: `crypto.randomBytes` tokenId + 32-byte secret; only the sha256 `tokenHash` is stored; the raw `tokenId.tokenSecret` is shown exactly once in the creation response and never logged.
+- Revocation is one-way (`isActive false` + `revokedAt` + reason + actor). Re-enabling means issuing a new credential.
+- New credentials carry `scopes: ["intake:create"]` and optional `allowedProductFamilies` (jars / banners / labels-stickers / custom-other; none = all).
+- `/api/agent/intake` hardening (all fail-closed, contract unchanged for legitimate agents):
+  - Global auth-failure brake: 100 `rejected_auth` logs in 5 minutes -> 429, deliberately unlogged to prevent log-write amplification.
+  - Per-credential rate limits: 60/hour and 10/minute burst -> 429 with a `rejected_rate_limit` log.
+  - Scope enforcement: null scopes grandfathered (legacy); non-null scopes must include `intake:create` (`missing_scope`).
+  - Product-family enforcement per credential (`family_not_allowed`).
+  - Replay guard: same credential + same payload hash accepted within 10 minutes returns the original queue item as duplicate, closing the no-idempotency-key replay window.
+- Rate limiting is powered by existing AgentSubmissionLog counts (indexed) - zero schema changes in 10A. Per-IP throttling deferred to a 10B index-only migration.
+- External agents remain strictly intake-only: no quotes, orders, invoices, messages, production jobs, or gate bypasses.
+- Tests: 51 passing (9 new pure-helper tests: scope grandfather/deny, malformed-shape safety, family allow/deny, approved rate-limit constants). Intake integration tests deferred (require DB + signed-request harness).
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -302,9 +318,8 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Intentionally Deferred
 
-- durable rate limiting
-- credential management UI
-- real production agent credentials
+- per-IP intake throttling (needs an ipHash index migration; 10B candidate)
+- real production agent credentials (now unblocked: issue via Agent Security page)
 - mockup/approval package workflow
 - customer-facing quote sending
 

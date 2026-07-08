@@ -23,6 +23,7 @@ export default function App() {
         <s-link href="/app/erp/setup-wizard">Setup Wizard</s-link>
         <s-link href="/app/quotes">Quotes / CRM</s-link>
         <s-link href="/app/erp/agent-review-queue">Agent Review Queue</s-link>
+        <s-link href="/app/erp/agent-security">Agent Security</s-link>
         <s-link href="/app/erp/production">Production</s-link>
         <s-link href="/app/erp/reports-dashboard">Reports Dashboard</s-link>
         <s-link href="/app/erp/admin-settings">Admin Settings</s-link>

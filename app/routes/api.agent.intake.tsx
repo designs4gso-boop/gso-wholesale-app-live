@@ -2,6 +2,15 @@ import crypto from "node:crypto";
 
 import db from "../db.server";
 import { productFamilySalesRuleFor } from "../lib/product-family-sales-rules";
+import {
+  AGENT_AUTH_FAILURE_BRAKE_LIMIT,
+  AGENT_AUTH_FAILURE_BRAKE_WINDOW_MINUTES,
+  AGENT_RATE_LIMIT_BURST_PER_MINUTE,
+  AGENT_RATE_LIMIT_PER_HOUR,
+  AGENT_REPLAY_WINDOW_MINUTES,
+  credentialAllowsIntake,
+  familyAllowed,
+} from "../lib/agent-security.server";
 
 const PHASE = "7E";
 const MAX_BODY_BYTES = 32 * 1024;
@@ -304,7 +313,7 @@ function buildNormalizedDraft(payload: SafePayload, validation: ReturnType<typeo
   };
 }
 
-async function findDuplicate(shop: string, payload: SafePayload) {
+async function findDuplicate(shop: string, payload: SafePayload, credentialId: string, payloadHash: string) {
   if (payload.idempotencyKey) {
     const existing = await db.agentSubmissionLog.findFirst({
       where: {
@@ -333,6 +342,23 @@ async function findDuplicate(shop: string, payload: SafePayload) {
     });
     if (existing?.queueItemId) return existing.queueItemId;
   }
+
+  // Replay guard: the same signed body from the same credential inside the
+  // window returns the original item instead of creating a second one, even
+  // when the agent omitted an idempotency key.
+  const replayWindowStart = new Date(Date.now() - AGENT_REPLAY_WINDOW_MINUTES * 60 * 1000);
+  const replayed = await db.agentSubmissionLog.findFirst({
+    where: {
+      credentialId,
+      payloadHash,
+      status: "accepted",
+      createdAt: { gte: replayWindowStart },
+      queueItemId: { not: null },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { queueItemId: true },
+  });
+  if (replayed?.queueItemId) return replayed.queueItemId;
 
   return null;
 }
@@ -382,6 +408,17 @@ export async function action({ request }: { request: Request }) {
       safeSummary: safeSummary({}),
     });
     return json({ ok: false, error: "Invalid agent authentication." }, 401);
+  }
+
+  const brakeWindowStart = new Date(Date.now() - AGENT_AUTH_FAILURE_BRAKE_WINDOW_MINUTES * 60 * 1000);
+  const recentAuthFailures = await db.agentSubmissionLog.count({
+    where: { status: "rejected_auth", createdAt: { gte: brakeWindowStart } },
+  });
+
+  if (recentAuthFailures >= AGENT_AUTH_FAILURE_BRAKE_LIMIT) {
+    // Deliberately not logged: the failures that tripped the brake are already
+    // recorded, and logging here would let attackers grow the table unbounded.
+    return json({ ok: false, error: "Too many requests." }, 429);
   }
 
   const credentials = await db.agentApiCredential.findMany({
@@ -491,6 +528,56 @@ export async function action({ request }: { request: Request }) {
     return json({ ok: false, error: "Invalid agent authentication." }, 401);
   }
 
+  if (!credentialAllowsIntake(credential.scopes)) {
+    await logSubmission({
+      shop: credential.shop,
+      credentialId: credential.id,
+      agentId: credential.agentId,
+      agentName: credential.agentName,
+      requestId,
+      status: "rejected_auth",
+      outcome: "Credential does not have the intake:create scope.",
+      errorCode: "missing_scope",
+      ipHash,
+      userAgentHash: userAgent,
+      payloadHash,
+      safeSummary: safeSummary({}),
+    });
+    return json({ ok: false, error: "Credential not permitted for intake." }, 403);
+  }
+
+  const hourWindowStart = new Date(Date.now() - 60 * 60 * 1000);
+  const minuteWindowStart = new Date(Date.now() - 60 * 1000);
+  const [hourCount, minuteCount] = await Promise.all([
+    db.agentSubmissionLog.count({
+      where: { credentialId: credential.id, createdAt: { gte: hourWindowStart } },
+    }),
+    db.agentSubmissionLog.count({
+      where: { credentialId: credential.id, createdAt: { gte: minuteWindowStart } },
+    }),
+  ]);
+
+  if (hourCount >= AGENT_RATE_LIMIT_PER_HOUR || minuteCount >= AGENT_RATE_LIMIT_BURST_PER_MINUTE) {
+    await logSubmission({
+      shop: credential.shop,
+      credentialId: credential.id,
+      agentId: credential.agentId,
+      agentName: credential.agentName,
+      requestId,
+      status: "rejected_rate_limit",
+      outcome:
+        minuteCount >= AGENT_RATE_LIMIT_BURST_PER_MINUTE
+          ? "Per-minute burst limit reached."
+          : "Hourly rate limit reached.",
+      errorCode: "rate_limited",
+      ipHash,
+      userAgentHash: userAgent,
+      payloadHash,
+      safeSummary: safeSummary({}),
+    });
+    return json({ ok: false, error: "Rate limit reached. Try again later." }, 429);
+  }
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawBody);
@@ -566,7 +653,28 @@ export async function action({ request }: { request: Request }) {
     return json({ ok: false, error: "Required intake fields missing.", missingFields: validation.missingFields }, 400);
   }
 
-  const duplicateQueueItemId = await findDuplicate(credential.shop, payload);
+  if (!familyAllowed(credential.allowedProductFamilies, validation.normalizedFamily)) {
+    await logSubmission({
+      shop: credential.shop,
+      credentialId: credential.id,
+      agentId: credential.agentId,
+      agentName: credential.agentName,
+      sourceChannel: payload.sourceChannel || credential.sourceChannel,
+      externalLeadId: payload.externalLeadId,
+      idempotencyKey: payload.idempotencyKey,
+      requestId,
+      status: "rejected_validation",
+      outcome: "Product family is not allowed for this credential.",
+      errorCode: "family_not_allowed",
+      ipHash,
+      userAgentHash: userAgent,
+      payloadHash,
+      safeSummary: summary,
+    });
+    return json({ ok: false, error: "Product family not allowed for this credential." }, 403);
+  }
+
+  const duplicateQueueItemId = await findDuplicate(credential.shop, payload, credential.id, payloadHash);
   if (duplicateQueueItemId) {
     await logSubmission({
       shop: credential.shop,
