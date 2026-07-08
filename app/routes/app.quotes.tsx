@@ -24,7 +24,7 @@ import {
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
 import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "../lib/quote-margin.server";
-import { CUSTOMER_TIERS, customerTierDisplayLabel, isCustomerTier } from "../lib/customer-tiers";
+import { CUSTOMER_TIERS, customerTierDisplayLabel, isCustomerTier, tierRule } from "../lib/customer-tiers";
 
 type QuoteItemInput = {
   id?: string;
@@ -1341,6 +1341,7 @@ export async function action({ request }: { request: Request }) {
     );
     const approvalLine = lowMarginApprovalLine({
       actor,
+      thresholdPct: marginState.thresholdPct,
       blendedMarginPct: marginState.blendedMarginPct,
       lowestMarginPct: marginState.lowestMarginPct,
       reason,
@@ -2271,12 +2272,16 @@ export default function QuotesPage() {
                                   <Text as="p" fontWeight="bold">{quote.company || quote.customerName || "Unnamed Quote"}</Text>
                                   {isPaid ? <Badge tone="success">PAID - Quote locked</Badge> : null}
                                   <Badge>{customerTierDisplayLabel(quote.customerTier, quote.customerTierLabel)}</Badge>
+                                  {tierRule(quote.customerTier).manualTermsOnly ? (
+                                    <Badge tone="attention">Manual terms</Badge>
+                                  ) : null}
                                   {productionJob ? <Badge tone="success">Production: {productionJob.status}</Badge> : null}
                                   <Text as="p" tone="subdued">${quoteRevenue.toFixed(2)} | {new Date(quote.updatedAt || quote.createdAt).toLocaleString()}</Text>
                                   {quote.marginState ? (
                                     <Text as="p" tone="subdued">
                                       Blended margin {Number(quote.marginState.blendedMarginPct || 0).toFixed(1)}%
                                       {quote.marginState.lowestMarginPct != null ? ` | lowest item ${Number(quote.marginState.lowestMarginPct).toFixed(1)}%` : ""}
+                                      {` | floor ${Number(quote.marginState.thresholdPct || 40)}%`}
                                     </Text>
                                   ) : null}
                                   {quote.marginState?.approvalRequired ? (

@@ -130,6 +130,55 @@ describe("quoteMarginState", () => {
   });
 });
 
+describe("tier floors are behavior-frozen at 40 (Patch 9B)", () => {
+  const TIERS = ["standard", "wholesale", "vip", "distributor", "house_account", "custom"];
+
+  it("every tier blocks a 30%-margin item identically to the flat threshold", () => {
+    const base = quoteMarginState({
+      notes: "",
+      items: [item({ productName: "Thin sticker", unitPrice: 10, unitCost: 7 })],
+    });
+
+    for (const tier of TIERS) {
+      const state = quoteMarginState({
+        notes: "",
+        customerTier: tier,
+        items: [item({ productName: "Thin sticker", unitPrice: 10, unitCost: 7 })],
+      });
+
+      expect(state.thresholdPct).toBe(40);
+      expect(state.isLowMargin).toBe(base.isLowMargin);
+      expect(state.approvalRequired).toBe(base.approvalRequired);
+      expect(state.approvalLabel).toBe(base.approvalLabel);
+      expect(state.blockMessage).toBe(base.blockMessage);
+    }
+  });
+
+  it("every tier passes a 50%-margin item identically", () => {
+    for (const tier of TIERS) {
+      const state = quoteMarginState({
+        notes: "",
+        customerTier: tier,
+        items: [item({ unitPrice: 10, unitCost: 5 })],
+      });
+
+      expect(state.isLowMargin).toBe(false);
+      expect(state.approvalRequired).toBe(false);
+    }
+  });
+
+  it("falls back to the standard floor for unknown tiers", () => {
+    const state = quoteMarginState({
+      notes: "",
+      customerTier: "gold",
+      items: [item({ unitPrice: 10, unitCost: 7 })],
+    });
+
+    expect(state.thresholdPct).toBe(40);
+    expect(state.approvalRequired).toBe(true);
+  });
+});
+
 describe("schema-backed approval (Patch 8B)", () => {
   function approvedQuote() {
     const items = [
@@ -245,6 +294,7 @@ describe("lowMarginApprovalLine", () => {
   it("contains marker, actor, threshold, blended, lowest, and reason", () => {
     const line = lowMarginApprovalLine({
       actor: "owner@example.com",
+      thresholdPct: 40,
       blendedMarginPct: 33.333,
       lowestMarginPct: 21.5,
       reason: "strategic first order",
@@ -258,9 +308,22 @@ describe("lowMarginApprovalLine", () => {
     expect(line).toContain("strategic first order");
   });
 
+  it("records whatever threshold it is given, proving per-tier plumbing without shipping a divergent floor", () => {
+    const line = lowMarginApprovalLine({
+      actor: "staff",
+      thresholdPct: 35,
+      blendedMarginPct: 36,
+      lowestMarginPct: 36,
+      reason: "hypothetical distributor floor",
+    });
+
+    expect(line).toContain("threshold 35%");
+  });
+
   it("prints n/a for the lowest margin when it is unknown", () => {
     const line = lowMarginApprovalLine({
       actor: "staff",
+      thresholdPct: 40,
       blendedMarginPct: 0,
       lowestMarginPct: null,
       reason: "unknown cost approved",

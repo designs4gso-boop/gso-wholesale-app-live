@@ -4,6 +4,7 @@ import {
   CUSTOMER_TIERS,
   customerTierDisplayLabel,
   isCustomerTier,
+  tierRule,
 } from "../app/lib/customer-tiers";
 
 describe("CUSTOMER_TIERS registry", () => {
@@ -41,6 +42,31 @@ describe("isCustomerTier", () => {
     expect(isCustomerTier(undefined)).toBe(false);
     expect(isCustomerTier(42)).toBe(false);
     expect(isCustomerTier("Standard")).toBe(false);
+  });
+});
+
+describe("tier rules (Patch 9B, behavior frozen)", () => {
+  it("every tier has a margin floor of exactly 40", () => {
+    for (const tier of CUSTOMER_TIERS) {
+      expect(tier.marginFloorPct).toBe(40);
+    }
+  });
+
+  it("manualTermsOnly is true for exactly house_account and custom", () => {
+    const manualTiers = CUSTOMER_TIERS.filter((tier) => tier.manualTermsOnly).map((tier) => tier.value);
+    expect(manualTiers).toEqual(["house_account", "custom"]);
+  });
+
+  it("tierRule returns the matching rule", () => {
+    expect(tierRule("vip").value).toBe("vip");
+    expect(tierRule("house_account").manualTermsOnly).toBe(true);
+    expect(tierRule("distributor").marginFloorPct).toBe(40);
+  });
+
+  it("tierRule falls back to standard for unknown values", () => {
+    expect(tierRule("gold").value).toBe("standard");
+    expect(tierRule(null).value).toBe("standard");
+    expect(tierRule(undefined).value).toBe("standard");
   });
 });
 

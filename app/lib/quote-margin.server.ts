@@ -1,3 +1,7 @@
+import { tierRule } from "./customer-tiers";
+
+// Standard/default margin floor. Per-tier floors come from the customer-tier
+// registry; today every tier's floor equals this value (behavior frozen).
 export const LOW_MARGIN_THRESHOLD_PCT = 40;
 
 // Namespaced so it can never collide with the payment/email markers the paid
@@ -16,6 +20,7 @@ type MarginItem = {
 type MarginQuote = {
   notes?: string | null;
   items?: MarginItem[] | null;
+  customerTier?: string | null;
   lowMarginApprovedAt?: Date | string | null;
   lowMarginApprovedBy?: string | null;
   lowMarginApprovalReason?: string | null;
@@ -44,10 +49,10 @@ export function normalizedSnapshotItems(items: MarginItem[] | null | undefined) 
 
 export function buildApprovalSnapshot(
   quote: MarginQuote,
-  state: { blendedMarginPct: number; lowestMarginPct: number | null },
+  state: { thresholdPct: number; blendedMarginPct: number; lowestMarginPct: number | null },
 ) {
   return {
-    thresholdPct: LOW_MARGIN_THRESHOLD_PCT,
+    thresholdPct: state.thresholdPct,
     blendedMarginPct: state.blendedMarginPct,
     lowestMarginPct: state.lowestMarginPct,
     items: normalizedSnapshotItems(quote.items),
@@ -74,6 +79,7 @@ export function itemMarginPct(item: MarginItem) {
 export type QuoteMarginState = ReturnType<typeof quoteMarginState>;
 
 export function quoteMarginState(quote: MarginQuote) {
+  const marginFloorPct = tierRule(quote?.customerTier).marginFloorPct;
   const items = quote?.items || [];
   const lowItems: Array<{
     name: string;
@@ -121,14 +127,14 @@ export function quoteMarginState(quote: MarginQuote) {
         kind: "unknown_cost",
         reason: `${name}: unknown cost (unit cost is 0 or less), margin cannot be verified`,
       });
-    } else if ((marginPct as number) < LOW_MARGIN_THRESHOLD_PCT) {
+    } else if ((marginPct as number) < marginFloorPct) {
       lowItems.push({
         name,
         sku: item?.sku || null,
         marginPct,
         unknownCost: false,
         kind: "below_threshold",
-        reason: `${name}: margin ${(marginPct as number).toFixed(1)}% is below ${LOW_MARGIN_THRESHOLD_PCT}%`,
+        reason: `${name}: margin ${(marginPct as number).toFixed(1)}% is below ${marginFloorPct}%`,
       });
     }
   }
@@ -172,7 +178,7 @@ export function quoteMarginState(quote: MarginQuote) {
           : "Low margin - approval required";
 
   return {
-    thresholdPct: LOW_MARGIN_THRESHOLD_PCT,
+    thresholdPct: marginFloorPct,
     lowItems,
     lowestMarginPct,
     blendedMarginPct,
@@ -195,10 +201,11 @@ export function quoteMarginState(quote: MarginQuote) {
 
 export function lowMarginApprovalLine(input: {
   actor: string;
+  thresholdPct: number;
   blendedMarginPct: number;
   lowestMarginPct: number | null;
   reason: string;
 }) {
   const lowest = input.lowestMarginPct == null ? "n/a" : `${input.lowestMarginPct.toFixed(1)}%`;
-  return `${LOW_MARGIN_APPROVAL_MARKER}${input.actor} at ${new Date().toISOString()} (threshold ${LOW_MARGIN_THRESHOLD_PCT}%, blended ${input.blendedMarginPct.toFixed(1)}%, lowest item ${lowest}): ${input.reason}`;
+  return `${LOW_MARGIN_APPROVAL_MARKER}${input.actor} at ${new Date().toISOString()} (threshold ${input.thresholdPct}%, blended ${input.blendedMarginPct.toFixed(1)}%, lowest item ${lowest}): ${input.reason}`;
 }

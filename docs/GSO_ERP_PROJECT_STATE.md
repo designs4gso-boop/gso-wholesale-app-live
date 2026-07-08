@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `965d3c6 Add schema backed low margin approval`
-- Working tree at closeout: Patch 9A (customer tier foundation on Quote) pending commit
+- Latest stable commit: `04346a7 Add quote customer tier foundation`
+- Working tree at closeout: Patch 9B (tier rules registry, behavior frozen) pending commit
 
 ## Golden Rule For All Agents
 
@@ -278,6 +278,16 @@ Quote recipe gates remain:
 - Deliberate non-behavior (owner-locked): tier does not affect pricing, does not bypass low-margin approval, does not stale approvals (tier is not in the approval snapshot), and is not exposed on the public quote portal.
 - Tests: 34 passing (8 new: registry contents, validation, display labels, and a guard proving tier changes never alter margin state or stale schema approvals).
 
+## Completed Milestone: Tier Rules Registry, Behavior Frozen (Patch 9B)
+
+- `CUSTOMER_TIERS` registry now carries policy: `marginFloorPct` (40 for every tier by owner decision) and `manualTermsOnly` (true for house_account and custom). `tierRule(tier)` accessor falls back to standard. Hardcoded registry on purpose: floor changes must be reviewed code diffs, never runtime data.
+- `quoteMarginState` uses the quote's tier floor as the low-margin threshold; since all floors are 40, behavior is identical to before (proven by behavior-freeze tests across all six tiers). `LOW_MARGIN_THRESHOLD_PCT` remains exported as the standard floor.
+- Approval line and approval snapshot record the threshold actually used (`thresholdPct` parameterized end to end).
+- Quotes board: "Manual terms" badge for house_account/custom (display only — no payment/deposit/order/production bypass) and the margin line shows the tier floor.
+- No migration, no engine changes, no discount fields (deliberately absent until explicitly approved).
+- Tests: 42 passing (8 new: per-tier freeze proofs, unknown-tier fallback, registry policy assertions, threshold plumbing proof at a hypothetical 35).
+- Future (explicit owner approval required per change): lowering any tier floor (e.g. distributor 35) is a one-line registry diff + test flip; tier-based target margins / discounts remain unimplemented.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
@@ -300,12 +310,11 @@ Do not build label-only/application options for 4x5 bags unless explicitly reque
 
 ## Next Major Phase
 
-Patch 9B+ (per aligned roadmap), sequencing to be confirmed with the owner:
+Candidate tracks, sequencing to be confirmed with the owner:
 
-- Tier-aware pricing planning: canonical Shopify customer tags per tier (wholesale_approved and vip_wholesale exist; distributor / house_account to add), tier-scoped WholesaleRule/PricingRule mapping, function-config sync.
-- Per-tier margin floors in the tier registry (replacing the flat 40% threshold) — connects tiers to the low-margin gate deliberately, not accidentally.
+- Agent platform hardening (aligned roadmap Patch 11): credential management UI, intake rate limiting + lockouts, idempotency unique constraint, submission-log viewer — prerequisite for onboarding real external sales/marketing agents.
+- Tier-aware pricing activation (explicit owner approval per change): per-tier floor adjustments (one-line registry diffs), tier-scoped Shopify tag/pricing-rule mapping, function-config sync.
 - Longer-term: CustomerProfile model once quote-level tiers prove out (backfill/dedupe strategy required).
-- Alternative next track: agent platform hardening (credential management UI, intake rate limiting) per the aligned roadmap Patch 11.
 
 Still not allowed:
 
