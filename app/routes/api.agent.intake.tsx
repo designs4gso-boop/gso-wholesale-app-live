@@ -10,11 +10,15 @@ import {
   AGENT_REPLAY_WINDOW_MINUTES,
   credentialAllowsIntake,
   familyAllowed,
+  parseAgentBearer,
+  parseAgentTimestamp,
+  sha256Hex,
+  timingSafeEqualString,
+  verifyAgentSignature,
 } from "../lib/agent-security.server";
 
 const PHASE = "7E";
 const MAX_BODY_BYTES = 32 * 1024;
-const TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 
 type IntakePayload = Record<string, unknown>;
 
@@ -51,16 +55,6 @@ function json(data: unknown, status = 200) {
   });
 }
 
-function sha256Hex(value: string) {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
-
-function timingSafeEqualString(left: string, right: string) {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-
 function cleanText(value: unknown, maxLength: number) {
   if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return "";
   return String(value).trim().slice(0, maxLength);
@@ -95,34 +89,6 @@ function requestIpHash(request: Request) {
 function userAgentHash(request: Request) {
   const value = request.headers.get("user-agent") || "";
   return value ? sha256Hex(value) : null;
-}
-
-function parseBearer(request: Request) {
-  const header = request.headers.get("authorization") || "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  if (!match) return null;
-  const value = match[1].trim();
-  const dotIndex = value.indexOf(".");
-  if (dotIndex <= 0 || dotIndex === value.length - 1) return null;
-  return {
-    tokenId: value.slice(0, dotIndex),
-    tokenSecret: value.slice(dotIndex + 1),
-  };
-}
-
-function parseTimestamp(value: string) {
-  const numeric = Number(value);
-  const timestamp = Number.isFinite(numeric) ? numeric : Date.parse(value);
-  if (!Number.isFinite(timestamp)) return null;
-  return Math.abs(Date.now() - timestamp) <= TIMESTAMP_TOLERANCE_MS ? timestamp : null;
-}
-
-function verifySignature(tokenSecret: string, timestamp: string, rawBody: string, signature: string) {
-  const expected = crypto
-    .createHmac("sha256", tokenSecret)
-    .update(`${timestamp}.${rawBody}`)
-    .digest("hex");
-  return timingSafeEqualString(expected.toLowerCase(), signature.trim().toLowerCase());
 }
 
 function safeSummary(input: {
@@ -392,7 +358,7 @@ export async function action({ request }: { request: Request }) {
   }
   const payloadHash = sha256Hex(rawBody);
 
-  const bearer = parseBearer(request);
+  const bearer = parseAgentBearer(request.headers.get("authorization"));
   const timestamp = request.headers.get("x-gso-agent-timestamp") || "";
   const signature = request.headers.get("x-gso-agent-signature") || "";
 
@@ -492,7 +458,7 @@ export async function action({ request }: { request: Request }) {
     return json({ ok: false, error: "Invalid agent authentication." }, 401);
   }
 
-  if (!parseTimestamp(timestamp)) {
+  if (!parseAgentTimestamp(timestamp)) {
     await logSubmission({
       shop: credential.shop,
       credentialId: credential.id,
@@ -510,7 +476,7 @@ export async function action({ request }: { request: Request }) {
     return json({ ok: false, error: "Invalid agent authentication." }, 401);
   }
 
-  if (!verifySignature(bearer.tokenSecret, timestamp, rawBody, signature)) {
+  if (!verifyAgentSignature(bearer.tokenSecret, timestamp, rawBody, signature)) {
     await logSubmission({
       shop: credential.shop,
       credentialId: credential.id,

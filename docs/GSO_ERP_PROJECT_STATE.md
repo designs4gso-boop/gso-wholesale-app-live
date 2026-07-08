@@ -4,8 +4,8 @@
 
 - Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 - Branch: `main`
-- Latest stable commit: `85e7428 Add tier rules registry`
-- Working tree at closeout: Patch 10A (agent platform hardening) pending commit
+- Latest stable commit: `a80a93d Add agent security controls`
+- Working tree at closeout: Patch 10A.1 (intake auth fix: timestamp normalization + canonical signer) pending commit
 
 ## Golden Rule For All Agents
 
@@ -303,6 +303,16 @@ Quote recipe gates remain:
 - Rate limiting is powered by existing AgentSubmissionLog counts (indexed) - zero schema changes in 10A. Per-IP throttling deferred to a 10B index-only migration.
 - External agents remain strictly intake-only: no quotes, orders, invoices, messages, production jobs, or gate bypasses.
 - Tests: 51 passing (9 new pure-helper tests: scope grandfather/deny, malformed-shape safety, family allow/deny, approved rate-limit constants). Intake integration tests deferred (require DB + signed-request harness).
+
+## Completed Milestone: Intake Auth Fix + Canonical Signer (Patch 10A.1)
+
+- Root cause of the live 401s: the local test script sent unix SECONDS in `X-GSO-Agent-Timestamp` while the server compares millisecond time (~56-year skew -> `invalid_timestamp`); six auth failure classes share the same generic 401 body. The colon-format attempt failed at parse (dot was always the canonical separator).
+- Server fix: `parseAgentTimestamp` now normalizes unix seconds to milliseconds (values < 1e11); the +/-5 minute tolerance window is unchanged. Bearer parsing tolerates `:` as a legacy separator when no valid dot split exists; the canonical displayed format remains `tokenId.tokenSecret`.
+- Auth crypto (`sha256Hex`, `timingSafeEqualString`, `parseAgentBearer`, `parseAgentTimestamp`, `verifyAgentSignature`, `AGENT_TIMESTAMP_TOLERANCE_MS`) moved verbatim from the intake route into `app/lib/agent-security.server.ts` and covered by known-vector unit tests (61 passing total).
+- `tools/test-agent-intake.ps1` replaced with a canonical signer: one-paste token, millisecond timestamps, byte-exact UTF-8 body send, replay test, never echoes the secret.
+- Agent Security one-time-token banner now documents the exact wire format and points at the test script.
+- Diagnostics reminder: every rejected intake attempt's exact `errorCode` is visible in the Agent Security submissions table.
+- No weakening of HMAC/signature checks, rate limits, scope/family enforcement, or intake-only boundaries.
 
 ## Product Builder / Product Setup Scope
 

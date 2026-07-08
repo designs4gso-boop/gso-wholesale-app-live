@@ -241,6 +241,10 @@ export default function AgentSecurityPage() {
                 <Text as="p" tone="critical">
                   This is the only time the token is shown. It is stored only as a hash.
                 </Text>
+                <Text as="p" tone="subdued">
+                  Send it exactly as shown: Authorization: Bearer tokenId.tokenSecret (dot separator). Timestamps
+                  may be unix milliseconds or seconds. Test locally with tools/test-agent-intake.ps1.
+                </Text>
               </BlockStack>
             ) : null}
           </Banner>
