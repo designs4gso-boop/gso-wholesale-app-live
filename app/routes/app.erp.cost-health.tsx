@@ -123,6 +123,7 @@ export async function loader({ request }: { request: Request }) {
         baseUnit: true,
         costPerUnit: true,
         purchaseCost: true,
+        purchaseUnit: true,
         calculatedUnitCost: true,
         rollWidthIn: true,
         rollLengthFt: true,
@@ -179,6 +180,38 @@ export async function loader({ request }: { request: Request }) {
       orderBy: [{ active: "desc" }, { name: "asc" }],
       take: 100,
     }),
+  ]);
+
+  // 12B.1a pricing-audit inputs: all read-only counts/selects, shop-scoped.
+  const [vendorProductRows, recipesWithStoredLabor, sourcedCostTierCount, productCostCount, pricingRuleCount] = await Promise.all([
+    db.vendorProduct.findMany({
+      where: { shop, active: true },
+      select: { id: true, name: true, defaultUnitCost: true, vendorSku: true, _count: { select: { tiers: true } } },
+      take: 200,
+    }),
+    db.productRecipe.findMany({
+      where: {
+        shop,
+        active: true,
+        OR: [
+          { applicationLaborSecondsPerUnit: { gt: 0 } },
+          { packingLaborSecondsPerUnit: { gt: 0 } },
+          { prepressMinutes: { gt: 0 } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        applicationLaborSecondsPerUnit: true,
+        packingLaborSecondsPerUnit: true,
+        prepressMinutes: true,
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 50,
+    }),
+    db.sourcedCostTier.count({ where: { shop } }),
+    db.productCost.count({ where: { shop } }),
+    db.pricingRule.count({ where: { shop } }),
   ]);
 
   const issues: Issue[] = [];
@@ -287,6 +320,157 @@ export async function loader({ request }: { request: Request }) {
     }
   }
 
+  // ---- 12B.1a pricing-audit checks (read-only; from the Cost Data Source Audit) ----
+
+  for (const material of materials) {
+    if (!material.active) continue;
+    const name = material.name || "Unnamed material";
+    const purchase = num(material.purchaseCost);
+    const hasUnitCost = num(material.calculatedUnitCost) > 0 || num(material.costPerUnit) > 0;
+
+    if (purchase > 0 && !hasUnitCost) {
+      issues.push({
+        area: "Materials",
+        item: name,
+        status: "critical",
+        message: `purchaseCost fallback trap: only the whole-purchase price ($${purchase.toFixed(2)}) is saved, with no per-unit cost. The live quote engine falls back to this raw purchase price as the per-unit cost, which can massively overcost quotes. The Cost Calculator (v2.0) refuses to price it instead.`,
+        fix: "Open Materials and add the roll/volume/case details so a real per-unit cost is calculated.",
+      });
+    }
+
+    if (lower(material.purchaseUnit) === "roll" && (num(material.rollWidthIn) <= 0 || num(material.rollLengthFt) <= 0)) {
+      issues.push({
+        area: "Materials",
+        item: name,
+        status: "warning",
+        message: "Purchased by the roll but roll width and/or roll length is missing, so cost per sqft cannot be derived from the invoice price.",
+        fix: "Add roll width (in) and roll length (ft) in Materials.",
+      });
+    }
+  }
+
+  for (const machine of machines) {
+    if (!machine.active || !machineIsPrinter(machine)) continue;
+    const name = machine.name || "Unnamed machine";
+
+    if (num(machine.costPerHour) === 5) {
+      issues.push({
+        area: "Rates",
+        item: name,
+        status: "warning",
+        message: "Machine rate is exactly $5/hr — the seeded GSO preset default. The Cost Calculator meanwhile defaults to $8/hr, so the app currently disagrees with itself about machine cost.",
+        fix: "Decide the real machine recovery rate (power, maintenance, depreciation) and save it here; use the same number in the calculator.",
+      });
+    }
+
+    for (const channel of (machine.inkChannels || []).filter((c: any) => c.enabled)) {
+      const channelName = `${name} slot ${channel.slotNumber}: ${channel.inkName || channel.inkType || "unnamed ink"}`;
+      const direct = num(channel.costPerMl);
+      const cart = num(channel.cartridgeCost);
+      const cartMl = num(channel.cartridgeMl);
+
+      if (direct > 0 && cart > 0 && cartMl > 0) {
+        const derived = cart / cartMl;
+        if (derived > 0 && Math.abs(direct - derived) / derived > 0.02) {
+          issues.push({
+            area: "Ink costs",
+            item: channelName,
+            status: "warning",
+            message: `Stored cost/ml ($${direct.toFixed(4)}) no longer matches cartridge cost ÷ ml ($${derived.toFixed(4)}). The engine prefers the stored cost/ml, so a stale value silently misprices ink.`,
+            fix: "Update cost/ml (or clear it) after changing cartridge cost so both agree.",
+          });
+        }
+      }
+
+      if (cart === 190 && cartMl === 1000) {
+        issues.push({
+          area: "Ink costs",
+          item: channelName,
+          status: "warning",
+          message: "Ink cost is the seeded Mimaki estimate ($190 / 1000 ml) that the machine preset itself marks as a placeholder.",
+          fix: "Replace with the real LUS-170 invoice cost.",
+        });
+      }
+
+      if (num(channel.mlPerSqft1Pct) === 0.0075) {
+        issues.push({
+          area: "Ink costs",
+          item: channelName,
+          status: "warning",
+          message: "Ink usage rate is the seeded default (0.0075 ml/sqft per 1% coverage), not a measured value.",
+          fix: "Calibrate from RasterLink/VersaWorks job logs (planned Mimaki/Roland actual-cost import, Patch 13A).",
+        });
+      }
+    }
+  }
+
+  const tieredVendorProducts = vendorProductRows.filter((p: any) => (p._count?.tiers || 0) > 0);
+  if (tieredVendorProducts.length > 0) {
+    issues.push({
+      area: "Vendor tiers",
+      item: `${tieredVendorProducts.length} vendor product(s) with quantity cost tiers`,
+      status: "warning",
+      message: "Quantity cost tiers exist (e.g. Miron jars). The Cost Calculator (v2.0) uses them, but the live quote engine still prices in-house recipes' blank materials at the flat material cost — high-quantity quotes can overcost (e.g. 2,500 jars costed at the <250 price).",
+      fix: "Engine completeness patch (vendor-tier-aware blank costing) is deferred because it moves live quote pricing; owner must approve it separately.",
+    });
+  }
+  for (const product of vendorProductRows) {
+    if (num(product.defaultUnitCost) <= 0 && (product._count?.tiers || 0) === 0) {
+      issues.push({
+        area: "Vendor tiers",
+        item: product.name || "Unnamed vendor product",
+        status: "warning",
+        message: "Active vendor product has no default unit cost and no cost tiers, so it prices as $0.",
+        fix: "Add a unit cost or tiers via the Vendor Cost Book.",
+      });
+    }
+  }
+
+  for (const recipe of recipesWithStoredLabor) {
+    const parts = [
+      num(recipe.applicationLaborSecondsPerUnit) > 0 ? `application ${num(recipe.applicationLaborSecondsPerUnit)}s/unit` : "",
+      num(recipe.packingLaborSecondsPerUnit) > 0 ? `packing ${num(recipe.packingLaborSecondsPerUnit)}s/unit` : "",
+      num(recipe.prepressMinutes) > 0 ? `prepress ${num(recipe.prepressMinutes)} min` : "",
+    ].filter(Boolean).join(", ");
+    issues.push({
+      area: "Recipe labor",
+      item: recipe.name || "Unnamed recipe",
+      status: "warning",
+      message: `Stores labor the live quote engine does not price yet (${parts}). Quotes from this recipe exclude that labor unless it is baked into setup labor minutes.`,
+      fix: "Deferred engine completeness patch (owner approval required, since quote prices would rise). Until then, verify margins knowingly.",
+    });
+  }
+
+  if (sourcedCostTierCount > 0) {
+    issues.push({
+      area: "Legacy cost data",
+      item: `SourcedCostTier (${sourcedCostTierCount} row(s))`,
+      status: "warning",
+      message: "Seeded recipe-level sourced cost tiers exist, but nothing prices from this table since the shared engine (Patch 2) — vendor tiers on Vendor Products are the live path.",
+      fix: "No action needed for pricing; candidate for cleanup in a future schema patch.",
+    });
+  }
+
+  if (productCostCount > 0 || pricingRuleCount > 0) {
+    issues.push({
+      area: "Legacy cost data",
+      item: `ProductCost (${productCostCount}) / PricingRule (${pricingRuleCount})`,
+      status: "warning",
+      message: "Legacy cost/pricing tables have rows. The recipe pricing engine does not read them; they serve the older product-costs / pricing-rules pages.",
+      fix: "Treat the recipe engine as the source of truth for quote costing; consolidate these later with owner approval.",
+    });
+  }
+
+  issues.push({
+    area: "Calculator presets",
+    item: "Hardcoded blank-item presets",
+    status: "warning",
+    message: "The Cost Calculator still contains hardcoded blank-item costs (SAFE CARE jars/bags, soda can, and any Miron jar not yet in the database). A preset disappears automatically once a Vendor Product exists whose vendor SKU equals the preset id (the jar seed created those for Miron/SAFE CARE jars).",
+    fix: "Enter remaining presets as Vendor Products with tiers via the Vendor Cost Book, verify against invoices, then remove the presets from code.",
+  });
+
+  // ---- end 12B.1a pricing-audit checks ----
+
   const activeMaterials = materials.filter((m: any) => m.active);
   const rollMediaReady = activeMaterials.filter((m: any) => (lower(m.materialType).includes("roll") || lower(m.name).includes("roll media")) && materialCostPerSqIn(m) > 0).length;
   const inkMaterialsReady = activeMaterials.filter((m: any) => (lower(m.materialType).includes("ink") || lower(m.name).includes(" ink")) && inkCostPerMl(m) > 0).length;
@@ -392,17 +576,32 @@ export default function CostHealthRoute() {
 
       <div className="hero">
         <h1>Cost Source Health Check</h1>
-        <p>v13.1: audits materials, roll-media conversion, ink/ml setup, and printer-only ink channels. Outsourced/vendor machines are ignored, and machine slots can use matching ink material costs as a temporary bridge.</p>
+        <p>v14 (12B.1a): audits materials, roll-media conversion, ink/ml setup, and printer-only ink channels, plus the pricing-audit checks — purchaseCost fallback traps, seeded estimate ink costs, machine-rate conflicts, vendor tier coverage, unpriced recipe labor, and legacy cost tables.</p>
       </div>
 
       <div className="notice">
-        This page does not update Shopify and does not change prices. It tells us which backend cost sources are ready, which are estimates, and which must be fixed before the calculator can be trusted for real quotes.
+        This page does not update Shopify and does not change prices or data. It tells us which backend cost sources are ready, which are estimates, and which must be fixed before the calculator can be trusted for real quotes.
         <div className="nav">
           <Link to="/app/erp/materials">Open Materials</Link>
           <Link to="/app/erp/machines">Open Machine Center</Link>
           <Link to="/app/erp/product-type-routes">Open Product Type Routes</Link>
+          <Link to="/app/erp/cost-calculator">Open Cost Calculator</Link>
+          <Link to="/app/erp/vendor-cost-book">Open Vendor Cost Book</Link>
           <Link to="/app/wholesale/calculator">Open Product Cost Calculator</Link>
         </div>
+      </div>
+
+      <div className="section">
+        <h2>Cost verification facts (12B pricing audit)</h2>
+        <p>
+          <b>DB-backed does not automatically mean invoice-verified.</b> Several database costs were seeded from code constants
+          (jar/Miron costs, machine ink defaults), and jar cost data currently exists in multiple places (Cost Calculator presets,
+          Vendor Product tiers, flat Material costs, and legacy SourcedCostTier rows). To verify: check each cost below against the
+          real vendor invoice or price sheet, fix it in Materials / Machine Center / Vendor Cost Book, and use the material
+          "cost review needed" flag to track what is still unverified. Two known engine gaps are deliberately unfixed because they
+          move live quote pricing and need separate owner approval: the purchaseCost fallback, and vendor-tier-aware blank costing
+          (plus pricing the stored application/packing/prepress labor).
+        </p>
       </div>
 
       <div className="grid">
@@ -481,7 +680,7 @@ export default function CostHealthRoute() {
                 <td>{money(m.costPerHour, 2)}</td>
                 <td>{m.sqftPerHour.toFixed(2)}</td>
                 <td>
-                  {m.channels.length === 0 ? "No enabled ink channels" : m.channels.map((c) => (
+                  {m.channels.length === 0 ? "No enabled ink channels" : m.channels.map((c: any) => (
                     <div key={`${m.id}-${c.slotNumber}`}>
                       Slot {c.slotNumber}: <strong>{c.inkName || c.inkType}</strong> ({c.inkType}) — cost/ml <span className="mono">{money(c.costPerMl, 6)}</span>{c.matchedMaterialName ? <span> via {c.matchedMaterialName}</span> : null}, usage 1% <span className="mono">{c.mlPerSqft1Pct.toFixed(6)}</span>, usage 100% <span className="mono">{c.mlPerSqft100.toFixed(6)}</span>
                     </div>

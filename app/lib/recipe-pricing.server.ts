@@ -33,14 +33,22 @@ function clean(value: any) {
   return String(value || "").trim().toLowerCase();
 }
 
-function safeNumber(value: any, fallback = 0) {
+export function safeNumber(value: any, fallback = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-function percentToDivisor(marginPct: number) {
+export function percentToDivisor(marginPct: number) {
   const safeMargin = Math.min(Math.max(marginPct, 0), 95);
   return 1 - safeMargin / 100;
+}
+
+// Canonical waste model shared by the engine and the Cost Calculator:
+// waste consumes input, so usable output = input * (1 - waste%), which means
+// required input = base / (1 - waste%). 100 sqft at 10% waste = 111.11 sqft.
+export function applyWasteDivisor(baseAmount: number, wastePct: number) {
+  const divisor = Math.max(0.01, 1 - safeNumber(wastePct) / 100);
+  return safeNumber(baseAmount) / divisor;
 }
 
 function rangeLabel(row: any) {
@@ -108,8 +116,7 @@ export function calculateInHouseRecipe(recipe: any, quantity: number, selectedFi
   const sqftEach = widthIn > 0 && heightIn > 0 ? (widthIn * heightIn) / 144 : 0;
   const rawSqft = sqftEach * quantity;
   const wastePct = safeNumber(recipe.wastePct);
-  const wasteDivisor = Math.max(0.01, 1 - wastePct / 100);
-  const totalSqft = rawSqft / wasteDivisor;
+  const totalSqft = applyWasteDivisor(rawSqft, wastePct);
   const machine = recipe.machineRules?.[0]?.preferredMachine || null;
   const sqftPerHour = finish.sqftPerHour || safeNumber(machine?.sqftPerHour, 150) || 150;
   const runHours = sqftPerHour > 0 ? totalSqft / sqftPerHour : 0;

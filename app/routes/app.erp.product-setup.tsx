@@ -7,6 +7,7 @@ import {
   blockingConversionIssues,
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
+import { materialKind, materialKindLabel } from "../lib/material-classify";
 
 const PRODUCT_FAMILIES = [
   "Jars",
@@ -49,28 +50,8 @@ function positiveOrNull(value: FormDataEntryValue | null) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-// materialType is a free string in real data (e.g. seeded "blank_jars"), so the
-// print/blank split keyword-matches type hints and falls back to base unit.
-const EXCLUDED_MATERIAL_TYPE_HINT = /(ink|labor|machine)/;
-const PRINT_MATERIAL_TYPE_HINT = /(label|dtp|laminate|banner|media|vinyl|roll)/;
-const BLANK_MATERIAL_TYPE_HINT = /(blank|jar|bag|box|pouch)/;
-
-function materialKind(material: any): "print" | "blank" | "other" | "excluded" {
-  const type = String(material?.materialType || "").toLowerCase();
-  const baseUnit = String(material?.baseUnit || material?.unit || "").toLowerCase();
-
-  if (EXCLUDED_MATERIAL_TYPE_HINT.test(type)) return "excluded";
-  if (baseUnit === "sqft" || baseUnit === "sqin" || PRINT_MATERIAL_TYPE_HINT.test(type)) return "print";
-  if (BLANK_MATERIAL_TYPE_HINT.test(type) || baseUnit === "each") return "blank";
-  return "other";
-}
-
-function materialKindLabel(material: any) {
-  const kind = materialKind(material);
-  if (kind === "print") return "Print media";
-  if (kind === "blank") return "Blank item";
-  return "Other";
-}
+// Print/blank material classification now lives in app/lib/material-classify.ts
+// (shared with the Cost Calculator); the logic moved there verbatim in 12B.1a.
 
 function zoneAreaSqft(zone: any) {
   return ((Number(zone?.widthIn || 0) * Number(zone?.heightIn || 0)) / 144) * Number(zone?.qtyPerUnit ?? zone?.quantityPerUnit ?? 1);
