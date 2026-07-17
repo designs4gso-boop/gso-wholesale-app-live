@@ -105,6 +105,102 @@ export type CategoryRow = {
   fixLabel: string;
 };
 
+// ---------- Owner Cost Checklist export (13.2.1) ----------
+
+// Owner rule: only Miron jars are expected to carry quantity tiers; everything
+// else should be a flat cost unless the owner confirms otherwise.
+export function tierPolicy(vendor: unknown, name: unknown): "expected_tiered" | "expected_flat" {
+  const text = `${String(vendor ?? "")} ${String(name ?? "")}`;
+  return /miron/i.test(text) ? "expected_tiered" : "expected_flat";
+}
+
+const PLACEHOLDER_HINT = /(template|placeholder|sample|\btest\b)/i;
+const FIVE_OZ_HINT = /(jar_5oz|5\s*oz)/i;
+
+// Advisory flag only — the OWNER STATUS column records the decision.
+// 5oz jar is special-cased: CLAUDE.md declares it cost-only/placeholder.
+export function looksLikePlaceholder(name: unknown, sku: unknown, notes: unknown): boolean {
+  const text = `${String(name ?? "")} ${String(sku ?? "")} ${String(notes ?? "")}`;
+  return PLACEHOLDER_HINT.test(text) || FIVE_OZ_HINT.test(text);
+}
+
+export const PLACEHOLDER_ISSUE = "Possible placeholder — owner decide: delete, disable, or fill real cost.";
+export const UNEXPECTED_TIERS_ISSUE = "Unexpected tiers — owner says only Miron should be tiered unless confirmed.";
+export const NO_FLAT_COST_ISSUE = "No usable flat cost — enter one via Vendor Cost Book.";
+
+export const OWNER_CHECKLIST_HEADER = [
+  "category",
+  "item name",
+  "vendor",
+  "current app cost",
+  "unit",
+  "tier min qty",
+  "tier max qty",
+  "MOQ",
+  "cost source table/model",
+  "confidence",
+  "issue/warning",
+  "verify against",
+  "fix page",
+  "OWNER STATUS",
+  "OWNER NOTES",
+] as const;
+
+export type ChecklistRow = {
+  category: string;
+  itemName: string;
+  vendor: string;
+  cost: number | null;
+  unit: string;
+  tierMinQty: number | null;
+  tierMaxQty: number | null;
+  moq: number | null;
+  source: string;
+  confidence: Confidence | "n/a";
+  issue: string;
+  verify: string;
+  fixPage: string;
+};
+
+export function checklistRowToCells(row: ChecklistRow): (string | number)[] {
+  return [
+    row.category,
+    row.itemName,
+    row.vendor,
+    row.cost == null ? "" : row.cost,
+    row.unit,
+    row.tierMinQty == null ? "" : row.tierMinQty,
+    row.tierMaxQty == null ? "" : row.tierMaxQty,
+    row.moq == null ? "" : row.moq,
+    row.source,
+    row.confidence === "n/a" ? "n/a" : CONFIDENCE_LABELS[row.confidence],
+    row.issue,
+    row.verify,
+    row.fixPage,
+    "", // OWNER STATUS — blank for manual review
+    "", // OWNER NOTES — blank for manual review
+  ];
+}
+
+// The Cost Calculator's hardcoded assumptions, exported so the owner can
+// confirm each one. These are code constants, not database values.
+export const CALCULATOR_ASSUMPTION_ROWS: Array<{ itemName: string; cost: number | null; unit: string; note: string }> = [
+  { itemName: "Labor rate (calculator default)", cost: 25, unit: "per hour", note: "Confirm against payroll reality." },
+  { itemName: "Machine rate (calculator default input)", cost: 8, unit: "per hour", note: "Conflicts with the seeded $5/hr on Machines — pick one verified number." },
+  { itemName: "Ink profile: CMYK Heavy", cost: 0.5, unit: "per sqft", note: "Estimated profile; engine-computed ink at seeded defaults is ~$0.25-0.29/sqft." },
+  { itemName: "Ink profile: CMYK + White Heavy", cost: 1.0, unit: "per sqft", note: "Estimated profile." },
+  { itemName: "Ink profile: CMYK + Gloss Heavy", cost: 1.0, unit: "per sqft", note: "Estimated profile." },
+  { itemName: "Ink profile: CMYK + White + Gloss Heavy", cost: 1.5, unit: "per sqft", note: "Estimated profile." },
+  { itemName: "Ink profile: CMYK + 2X Gloss Heavy", cost: 1.5, unit: "per sqft", note: "Estimated profile." },
+  { itemName: "Ink profile: CMYK + 3X Gloss Heavy", cost: 2.0, unit: "per sqft", note: "Estimated profile." },
+  { itemName: "Ink profile: CMYK + 4X Gloss Heavy", cost: 2.5, unit: "per sqft", note: "Estimated profile." },
+  { itemName: "Application seconds (jars/bags heuristics)", cost: null, unit: "8-15 sec/unit", note: "Hardcoded per item type; stopwatch one real run." },
+  { itemName: "Cutting rules (square/contour/die-cut/weed)", cost: null, unit: "setup min + sec/unit", note: "Hardcoded rule table." },
+  { itemName: "Prepress rules (proof/repair/dieline/color)", cost: null, unit: "15-35 min", note: "Hardcoded rule table." },
+  { itemName: "Packout rules (standard/bulk/individual)", cost: null, unit: "$0.01-0.05/unit + flat", note: "Hardcoded rule table." },
+  { itemName: "Default line waste", cost: null, unit: "10 %", note: "Assumed, never measured." },
+];
+
 // ---------- Known-job replay tests (T1-T7) ----------
 
 export type ReplayTest = {

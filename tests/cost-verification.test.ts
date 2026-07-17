@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CALCULATOR_ASSUMPTION_ROWS,
   CONFIDENCE_LABELS,
+  NO_FLAT_COST_ISSUE,
+  OWNER_CHECKLIST_HEADER,
+  PLACEHOLDER_ISSUE,
   SEEDED_FINGERPRINTS,
+  UNEXPECTED_TIERS_ISSUE,
   buildReplayTests,
   calculatorPrefillUrl,
+  checklistRowToCells,
   classifyConfidence,
   hasSeededNotes,
   hasVerifiedMarker,
+  looksLikePlaceholder,
   nearlyEqual,
+  tierPolicy,
   tiersNonMonotonic,
   worstConfidence,
+  type ChecklistRow,
 } from "../app/lib/cost-verification-shared";
 
 describe("verified marker and seeded notes detection", () => {
@@ -71,6 +80,88 @@ describe("fingerprints and tier sanity", () => {
       { minQty: 1, unitCost: 2.03 },
       { minQty: 250, unitCost: 2.46 },
     ])).toBe(true);
+  });
+});
+
+describe("owner cost checklist (13.2.1)", () => {
+  it("tier policy: Miron is expected tiered, everything else expected flat", () => {
+    expect(tierPolicy("MIRON", "50ml Miron jar + lid")).toBe("expected_tiered");
+    expect(tierPolicy("", "100ml tall Miron jar")).toBe("expected_tiered");
+    expect(tierPolicy("SAFE CARE", "4oz jar - clear")).toBe("expected_flat");
+    expect(tierPolicy(null, null)).toBe("expected_flat");
+  });
+
+  it("placeholder detection catches template/placeholder/sample/test and the 5oz jar", () => {
+    expect(looksLikePlaceholder("Template recipe shell", "", "")).toBe(true);
+    expect(looksLikePlaceholder("", "", "placeholder cost only")).toBe(true);
+    expect(looksLikePlaceholder("Sample jar", "", "")).toBe(true);
+    expect(looksLikePlaceholder("Test material", "", "")).toBe(true);
+    expect(looksLikePlaceholder("5oz Clear Blank Jar", "", "")).toBe(true);
+    expect(looksLikePlaceholder("", "preset:jar_5oz_clear", "")).toBe(true);
+    expect(looksLikePlaceholder("50ml Miron jar + lid", "preset:miron-50ml", "from invoice")).toBe(false);
+    // "latest" contains "test" as a substring but not as a word.
+    expect(looksLikePlaceholder("Latest gloss media", "", "")).toBe(false);
+  });
+
+  it("issue strings match the owner's exact wording", () => {
+    expect(UNEXPECTED_TIERS_ISSUE).toBe("Unexpected tiers — owner says only Miron should be tiered unless confirmed.");
+    expect(NO_FLAT_COST_ISSUE).toBe("No usable flat cost — enter one via Vendor Cost Book.");
+    expect(PLACEHOLDER_ISSUE).toBe("Possible placeholder — owner decide: delete, disable, or fill real cost.");
+  });
+
+  it("header has the exact 15 owner columns in order", () => {
+    expect([...OWNER_CHECKLIST_HEADER]).toEqual([
+      "category", "item name", "vendor", "current app cost", "unit",
+      "tier min qty", "tier max qty", "MOQ", "cost source table/model",
+      "confidence", "issue/warning", "verify against", "fix page",
+      "OWNER STATUS", "OWNER NOTES",
+    ]);
+  });
+
+  it("rows serialize with blank OWNER STATUS / OWNER NOTES cells", () => {
+    const row: ChecklistRow = {
+      category: "Blank / vendor item (tiered)",
+      itemName: "50ml Miron jar + lid",
+      vendor: "MIRON",
+      cost: 2.46,
+      unit: "each",
+      tierMinQty: 1,
+      tierMaxQty: 249,
+      moq: 128,
+      source: "VendorProductTier",
+      confidence: "seeded",
+      issue: "",
+      verify: "Vendor invoice / price sheet (MIRON)",
+      fixPage: "Vendor Cost Book",
+    };
+    const cells = checklistRowToCells(row);
+    expect(cells).toHaveLength(OWNER_CHECKLIST_HEADER.length);
+    expect(cells[3]).toBe(2.46);
+    expect(cells[5]).toBe(1);
+    expect(cells[6]).toBe(249);
+    expect(cells[13]).toBe("");
+    expect(cells[14]).toBe("");
+    expect(cells[9]).toBe(CONFIDENCE_LABELS.seeded);
+  });
+
+  it("null cost/tier/moq cells export as empty strings, n/a confidence passes through", () => {
+    const cells = checklistRowToCells({
+      category: "Legacy tables (context)", itemName: "x", vendor: "", cost: null, unit: "",
+      tierMinQty: null, tierMaxQty: null, moq: null, source: "Legacy tables",
+      confidence: "n/a", issue: "", verify: "", fixPage: "Cost Health",
+    });
+    expect(cells[3]).toBe("");
+    expect(cells[5]).toBe("");
+    expect(cells[7]).toBe("");
+    expect(cells[9]).toBe("n/a");
+  });
+
+  it("calculator assumptions export as seeded hardcoded rows", () => {
+    expect(CALCULATOR_ASSUMPTION_ROWS.length).toBeGreaterThanOrEqual(10);
+    const labor = CALCULATOR_ASSUMPTION_ROWS.find((row) => /labor rate/i.test(row.itemName));
+    expect(labor?.cost).toBe(25);
+    const machine = CALCULATOR_ASSUMPTION_ROWS.find((row) => /machine rate/i.test(row.itemName));
+    expect(machine?.cost).toBe(8);
   });
 });
 

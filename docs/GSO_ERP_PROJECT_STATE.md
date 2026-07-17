@@ -453,6 +453,17 @@ Quote recipe gates remain:
 - New client-safe lib `app/lib/cost-verification-shared.ts` (fingerprints, confidence classifier, tier sanity check, replay builder — pure and unit-tested); DB queries are bounded loader reads. Tests: 107 -> 119 passing (12 new).
 - Deferred as planned: schema-backed verifiedAt/By/Source columns (migration batch), storing replay results, any engine/preset changes.
 
+## Completed Milestone: Owner Cost Checklist Export (Patch 13.2.1)
+
+- New "Download Owner Cost Checklist CSV" button on `/app/erp/cost-verification` (same route, no new registration; the 13.2 audit CSV remains as "Download audit CSV"). Client-side Blob download — no navigation, no writes, no Shopify.
+- One row per cost fact, 15 columns: category, item name, vendor, current app cost, unit, tier min qty, tier max qty, MOQ, cost source table/model, confidence, issue/warning, verify against, fix page, OWNER STATUS (blank), OWNER NOTES (blank).
+- Row groups: VendorProduct flat costs (one row each); VendorProductTier (one row PER TIER with min/max/MOQ); print media $/sqft; ink/coating materials per ml; blank-material flat copies (flagged "duplicate of vendor tiers" when a tiered vendor product shares the SKU); machine hourly rates; MachineInkChannel per-channel cost/ml with seeded-fingerprint flags; the Cost Calculator's hardcoded assumptions ($25/hr labor, $8/hr machine input, the seven ink profiles, application/cutting/prepress/packout heuristics, 10% default waste) as explicit seeded rows; plus context-only rows for recipes and legacy PricingRule/ProductCost/SourcedCostTier counts.
+- Owner tier rule encoded (`tierPolicy`): Miron items (vendor MIRON or name match) are expected tiered — their tier rows carry no flag; non-Miron items WITH tiers get "Unexpected tiers — owner says only Miron should be tiered unless confirmed."; non-Miron items with no usable flat cost get "No usable flat cost — enter one via Vendor Cost Book."; a Miron item with neither tiers nor cost gets its own flag.
+- Placeholder rule (`looksLikePlaceholder`): template/placeholder/sample/test (word-boundary) in name/SKU/notes, plus the 5oz jar special case (cost-only placeholder per CLAUDE.md) — issue "Possible placeholder — owner decide: delete, disable, or fill real cost." Advisory only; OWNER STATUS records the decision.
+- Loader change is read-only: materials select adds `vendor`; checklist rows are assembled server-side from data already fetched.
+- Tests: 119 -> 126 passing (7 new: tier policy, placeholder detection incl. word-boundary and 5oz cases, exact issue wording, exact 15-column header order, row serialization with blank owner cells, null-cell handling, assumption rows).
+- Next: owner runs the checklist against invoices (Miron spreadsheet compare is planned as 13.2.2 — client-side paste-and-diff against VendorProductTier rows).
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:

@@ -6,15 +6,24 @@ import { materialKind } from "../lib/material-classify";
 import { resolveMaterialUnitCost, resolvePrintMaterialCostPerSqft } from "../lib/cost-calculator.server";
 import { buildCsv } from "../lib/shopify-cost-audit-shared";
 import {
+  CALCULATOR_ASSUMPTION_ROWS,
   CONFIDENCE_LABELS,
+  NO_FLAT_COST_ISSUE,
+  OWNER_CHECKLIST_HEADER,
+  PLACEHOLDER_ISSUE,
   SEEDED_FINGERPRINTS,
+  UNEXPECTED_TIERS_ISSUE,
   buildReplayTests,
+  checklistRowToCells,
   classifyConfidence,
   hasVerifiedMarker,
+  looksLikePlaceholder,
   nearlyEqual,
+  tierPolicy,
   tiersNonMonotonic,
   worstConfidence,
   type CategoryRow,
+  type ChecklistRow,
   type Confidence,
   type ReplayTest,
   type WorkbookIssue,
@@ -42,7 +51,7 @@ export async function loader({ request }: { request: Request }) {
       select: {
         id: true, name: true, materialType: true, unit: true, baseUnit: true,
         costPerUnit: true, purchaseCost: true, purchaseUnit: true, calculatedUnitCost: true,
-        rollWidthIn: true, rollLengthFt: true, volumeMl: true, notes: true, sku: true,
+        rollWidthIn: true, rollLengthFt: true, volumeMl: true, notes: true, sku: true, vendor: true,
         costReviewNeeded: true, useInRecipes: true, updatedAt: true,
         _count: { select: { costHistory: true } },
       },
@@ -277,6 +286,222 @@ export async function loader({ request }: { request: Request }) {
 
   issues.sort((a, b) => (a.severity === b.severity ? a.area.localeCompare(b.area) : a.severity === "critical" ? -1 : 1));
 
+  // ---- Owner Cost Checklist (13.2.1): one row per cost fact, blank OWNER
+  // STATUS / OWNER NOTES columns for manual review against invoices. ----
+  const ownerChecklist: ChecklistRow[] = [];
+
+  for (const product of vendorProducts) {
+    const policy = tierPolicy(product.vendor, product.name);
+    const baseIssues: string[] = [];
+    if (looksLikePlaceholder(product.name, product.vendorSku, product.notes)) baseIssues.push(PLACEHOLDER_ISSUE);
+    const verify = `Vendor invoice / price sheet (${product.vendor || "vendor"})`;
+
+    if (product.tiers.length) {
+      if (policy === "expected_flat") baseIssues.push(UNEXPECTED_TIERS_ISSUE);
+      if (tiersNonMonotonic(product.tiers)) baseIssues.push("Tier cost rises with quantity — check for typos.");
+      for (const tier of product.tiers) {
+        ownerChecklist.push({
+          category: "Blank / vendor item (tiered)",
+          itemName: product.name,
+          vendor: product.vendor || "",
+          cost: Number(tier.unitCost) || null,
+          unit: "each",
+          tierMinQty: tier.minQty,
+          tierMaxQty: tier.maxQty,
+          moq: product.moq,
+          source: "VendorProductTier",
+          confidence: classifyConfidence({ notes: product.notes, value: Number(tier.unitCost) || null }),
+          issue: baseIssues.join("; "),
+          verify,
+          fixPage: "Vendor Cost Book",
+        });
+      }
+    } else {
+      const flat = Number(product.defaultUnitCost) || 0;
+      if (flat <= 0) {
+        baseIssues.push(policy === "expected_flat" ? NO_FLAT_COST_ISSUE : "Miron item with no tiers and no flat cost — enter the tier table.");
+      }
+      ownerChecklist.push({
+        category: "Blank / vendor item (flat)",
+        itemName: product.name,
+        vendor: product.vendor || "",
+        cost: flat > 0 ? flat : null,
+        unit: "each",
+        tierMinQty: null,
+        tierMaxQty: null,
+        moq: product.moq,
+        source: "VendorProduct.defaultUnitCost",
+        confidence: classifyConfidence({ notes: product.notes, value: flat > 0 ? flat : null }),
+        issue: baseIssues.join("; "),
+        verify,
+        fixPage: "Vendor Cost Book",
+      });
+    }
+  }
+
+  for (const material of materials) {
+    const kind = materialKind(material);
+    const isInk = /ink|coating/i.test(String(material.materialType || ""));
+    if (kind !== "print" && kind !== "blank" && !isInk) continue;
+
+    const materialIssues: string[] = [];
+    if (looksLikePlaceholder(material.name, material.sku, material.notes)) materialIssues.push(PLACEHOLDER_ISSUE);
+    if (material.costReviewNeeded) materialIssues.push("Flagged cost review needed.");
+    if (!material.useInRecipes) materialIssues.push("Hidden from recipes (useInRecipes off).");
+
+    if (isInk) {
+      const resolved = resolveMaterialUnitCost(material);
+      const perMl = resolved.unitCost > 0
+        ? resolved.unitCost
+        : Number(material.purchaseCost) > 0 && Number(material.volumeMl) > 0
+          ? Number(material.purchaseCost) / Number(material.volumeMl)
+          : 0;
+      ownerChecklist.push({
+        category: "Ink / coating material",
+        itemName: material.name,
+        vendor: material.vendor || "",
+        cost: perMl > 0 ? perMl : null,
+        unit: "ml",
+        tierMinQty: null,
+        tierMaxQty: null,
+        moq: null,
+        source: "Material (ink/coating)",
+        confidence: classifyConfidence({ notes: material.notes, value: perMl > 0 ? perMl : null }),
+        issue: materialIssues.join("; "),
+        verify: "Ink invoice (bottle/pouch cost and ml)",
+        fixPage: "Materials",
+      });
+    } else if (kind === "print") {
+      const resolved = resolvePrintMaterialCostPerSqft(material);
+      if (Number(material.purchaseCost) > 0 && resolved.unitCost <= 0) materialIssues.push("purchaseCost fallback trap — no derivable unit cost.");
+      if (String(material.purchaseUnit || "").toLowerCase() === "roll" && (!(Number(material.rollWidthIn) > 0) || !(Number(material.rollLengthFt) > 0))) {
+        materialIssues.push("Roll dimensions missing.");
+      }
+      ownerChecklist.push({
+        category: "Print media / roll material",
+        itemName: material.name,
+        vendor: material.vendor || "",
+        cost: resolved.unitCost > 0 ? resolved.unitCost : null,
+        unit: "sqft",
+        tierMinQty: null,
+        tierMaxQty: null,
+        moq: null,
+        source: "Material.calculatedUnitCost",
+        confidence: hasVerifiedMarker(material.notes) ? "verified" : resolved.unitCost <= 0 ? "missing" : material._count.costHistory > 0 ? "manual" : classifyConfidence({ notes: material.notes, value: resolved.unitCost }),
+        issue: materialIssues.join("; "),
+        verify: "Supplier invoice + roll width/length",
+        fixPage: "Materials",
+      });
+    } else {
+      const resolved = resolveMaterialUnitCost(material);
+      const duplicated = material.sku && vendorBySku.get(material.sku)?.tiers?.length
+        ? "Duplicate of vendor product tiers — vendor tiers are source of truth."
+        : "";
+      if (duplicated) materialIssues.push(duplicated);
+      ownerChecklist.push({
+        category: "Blank material (flat copy)",
+        itemName: material.name,
+        vendor: material.vendor || "",
+        cost: resolved.unitCost > 0 ? resolved.unitCost : null,
+        unit: "each",
+        tierMinQty: null,
+        tierMaxQty: null,
+        moq: null,
+        source: "Material.costPerUnit",
+        confidence: classifyConfidence({ notes: material.notes, value: resolved.unitCost > 0 ? resolved.unitCost : null }),
+        issue: materialIssues.join("; "),
+        verify: "Vendor invoice (or rely on the vendor tier rows above)",
+        fixPage: "Materials",
+      });
+    }
+  }
+
+  for (const machine of machines) {
+    const rate = Number(machine.costPerHour) || 0;
+    ownerChecklist.push({
+      category: "Machine hourly rate",
+      itemName: machine.name,
+      vendor: "",
+      cost: rate > 0 ? rate : null,
+      unit: "hour",
+      tierMinQty: null,
+      tierMaxQty: null,
+      moq: null,
+      source: "Machine.costPerHour",
+      confidence: rate <= 0 ? "missing" : nearlyEqual(rate, SEEDED_FINGERPRINTS.machineRatePerHour) ? "seeded" : "manual",
+      issue: rate <= 0 ? "No hourly cost." : nearlyEqual(rate, SEEDED_FINGERPRINTS.machineRatePerHour) ? "Seeded $5/hr — conflicts with the calculator's $8/hr default input." : "",
+      verify: "Real recovery rate (power + maintenance + depreciation)",
+      fixPage: "Machines",
+    });
+  }
+
+  for (const row of inkChannelRows) {
+    ownerChecklist.push({
+      category: "Machine ink channel",
+      itemName: `${row.machine} — slot ${row.slot}`,
+      vendor: row.machine,
+      cost: row.costPerMl > 0 ? row.costPerMl : null,
+      unit: "ml",
+      tierMinQty: null,
+      tierMaxQty: null,
+      moq: null,
+      source: "MachineInkChannel",
+      confidence: row.confidence,
+      issue: row.flags.join("; "),
+      verify: "Ink invoice (cartridge/pouch cost and ml)",
+      fixPage: "Machines",
+    });
+  }
+
+  for (const assumption of CALCULATOR_ASSUMPTION_ROWS) {
+    ownerChecklist.push({
+      category: "Calculator assumption (hardcoded)",
+      itemName: assumption.itemName,
+      vendor: "",
+      cost: assumption.cost,
+      unit: assumption.unit,
+      tierMinQty: null,
+      tierMaxQty: null,
+      moq: null,
+      source: "hardcoded — app/routes/app.erp.cost-calculator.tsx",
+      confidence: "seeded",
+      issue: assumption.note,
+      verify: "Owner confirmation / stopwatch a real run",
+      fixPage: "Cost Calculator",
+    });
+  }
+
+  ownerChecklist.push({
+    category: "Recipes (context)",
+    itemName: `${recipes.length} active recipe(s) attach blanks via RecipeMaterial`,
+    vendor: "",
+    cost: null,
+    unit: "",
+    tierMinQty: null,
+    tierMaxQty: null,
+    moq: null,
+    source: "ProductRecipe / RecipeMaterial",
+    confidence: "n/a",
+    issue: "Context only — the live engine prices attached blanks flat until the engine-completeness patch.",
+    verify: "Nothing — context",
+    fixPage: "Product Setup",
+  });
+  ownerChecklist.push({
+    category: "Legacy tables (context)",
+    itemName: `PricingRule (${pricingRuleCount}) / ProductCost (${productCostCount}) / SourcedCostTier (${sourcedCostTierCount})`,
+    vendor: "",
+    cost: null,
+    unit: "",
+    tierMinQty: null,
+    tierMaxQty: null,
+    moq: null,
+    source: "Legacy tables",
+    confidence: "n/a",
+    issue: "Context only — not source of truth; retires with the schema batch.",
+    verify: "Nothing — context",
+    fixPage: "Cost Health",
+  });
+
   return {
     summary: {
       blankReady: vendorProducts.length > 0 && !areaHasCritical("Blank items"),
@@ -300,6 +525,7 @@ export async function loader({ request }: { request: Request }) {
     printMaterialRows,
     inkChannelRows,
     replayTests,
+    ownerChecklist,
   };
 }
 
@@ -336,6 +562,19 @@ export default function CostVerificationRoute() {
     const anchor = document.createElement("a");
     anchor.href = objectUrl;
     anchor.download = "cost-verification-workbook.csv";
+    anchor.click();
+    URL.revokeObjectURL(objectUrl);
+  };
+
+  // 13.2.1: one row per cost fact with blank OWNER STATUS / OWNER NOTES
+  // columns — the sheet the owner checks off against invoices.
+  const downloadOwnerChecklist = () => {
+    const csv = buildCsv([...OWNER_CHECKLIST_HEADER], data.ownerChecklist.map(checklistRowToCells));
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = "owner-cost-checklist.csv";
     anchor.click();
     URL.revokeObjectURL(objectUrl);
   };
@@ -386,7 +625,8 @@ export default function CostVerificationRoute() {
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <h2 style={{ margin: 0, flex: 1 }}>Master cost-source table</h2>
-          <button type="button" className="no-print" onClick={downloadCsv} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 12 }}>Download CSV</button>
+          <button type="button" className="no-print" onClick={downloadOwnerChecklist} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #16a34a", background: "#f0fdf4", color: "#166534", fontWeight: 700, fontSize: 12 }}>Download Owner Cost Checklist CSV</button>
+          <button type="button" className="no-print" onClick={downloadCsv} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 12 }}>Download audit CSV</button>
           <button type="button" className="no-print" onClick={() => window.print()} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 12 }}>Print checklist</button>
         </div>
         <div style={{ overflowX: "auto", marginTop: 10 }}>
