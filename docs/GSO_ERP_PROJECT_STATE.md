@@ -473,6 +473,16 @@ Quote recipe gates remain:
 - Tests: 126 -> 132 passing (6 new: exact confirmation phrase, pinned truth numbers incl. the 100ml-tall correction and DTP table, sku-then-name matching, template exclusion, ambiguous/missing behavior, 100ml-tall drift detection with change summaries and 50ml no-op proof).
 - After the owner applies: re-download the Owner Cost Checklist to confirm Miron rows show Verified; then the T1-T7 replays become meaningful against verified data.
 
+## Completed Milestone: Blank Bag + DTP Cost Records (Patch 13.2.3)
+
+- Extends the 13.2.2 Approved Cost Updates tool with a "Will create" path: when an approved blank item has NO clean matching record, apply now CREATES the VendorProduct (same phrase gate `APPLY VERIFIED COSTS`, same server-side re-evaluation, same single transaction; nothing runs on deploy or page load).
+- Creation is limited to the four owner-approved blanks with explicit creation specs: "4x5 Blank Bag" ($0.09 flat), "4x6 Blank Bag" ($0.10 flat), "14x16 Blank Bag" ($1.00 flat), "DTP 4x5x2 Blank Pouch" (tiered 1000-2499 $0.7138 / 2500-4999 $0.4744 / 5000-7499 $0.4029 / 7500-9999 $0.3458 / 10000+ $0.3117). Field shape proven safe by the Vendor Cost Book push + jar seed: shop/name/productType/vendor/vendorSku/moq(1)/defaultUnitCost/active/notes (+ nested tier rows for the pouch). Vendor is "Vendor TBD" per owner instruction (no real vendor guessed); productTypes use existing conventions ("bag", "dtp_bag").
+- FLAT-VS-TIER DOCUMENTATION (rule I): the app does NOT require one-row tiers for flat items — calculator, Shopify Cost Audit, and the outsourced engine path all fall back to `defaultUnitCost` when no tiers exist, so the bags are created genuinely flat with zero tier rows. (Existing records that already have a single all-range tier row keep it, updated in place — 13.2.2 behavior.)
+- Created vendorSkus reuse the calculator preset ids (`preset:blank-4x5-bag`, `preset:blank-4x6-bag`, `preset:pound-bag`, `preset:dtp-4x5x2-pouch`), so the stale hardcoded calculator presets for the 4x5 and pound bags auto-hide the moment the records exist (12B.1a supersede rule) — two more code presets retire themselves.
+- Rules preserved: match by exact vendorSku then unique anchored name; one clean record with a blank cost is UPDATED not duplicated; ambiguous = no action; template/placeholder names are excluded from matching and stay manual review; DTP 4x6x2 stays do_not_update (no pricing, not activated, not verified); Miron/SAFECARE items have no creation specs (if somehow missing they stay missing_record). Verified markers appended on create/update.
+- Tests: 132 -> 139 passing (7 new via the exported `evaluateApprovedItem`: pinned creation specs incl. Vendor TBD + preset SKUs, will_create for flat bag and tiered pouch, missing_record without a spec, blank-cost record updated not duplicated, template stays manual review, 4x6x2 stays do_not_update).
+- After the owner applies: bags + pouch exist verified; the Owner Cost Checklist shows them; T3 (sticker bags) and blank-item replay tests become meaningful; remaining cost blockers shift to ink/machine/labor verification.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:

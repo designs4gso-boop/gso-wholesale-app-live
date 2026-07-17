@@ -212,6 +212,7 @@ export const APPLY_CONFIRM_PHRASE = "APPLY VERIFIED COSTS";
 export type ApprovedUpdateStatus =
   | "already_correct"
   | "will_update"
+  | "will_create"
   | "missing_record"
   | "ambiguous"
   | "manual_review"
@@ -220,6 +221,7 @@ export type ApprovedUpdateStatus =
 export const APPROVED_UPDATE_STATUS_LABELS: Record<ApprovedUpdateStatus, string> = {
   already_correct: "Already correct",
   will_update: "Will update",
+  will_create: "Will create",
   missing_record: "Missing record — manual create/review",
   ambiguous: "Ambiguous — manual review",
   manual_review: "Needs manual review",

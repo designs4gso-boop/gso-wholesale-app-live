@@ -572,6 +572,7 @@ function ConfidenceBadge({ value }: { value: Confidence }) {
 const approvedStatusStyle: Record<ApprovedUpdateStatus, React.CSSProperties> = {
   already_correct: { background: "#dcfce7", color: "#166534", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
   will_update: { background: "#fef3c7", color: "#92400e", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
+  will_create: { background: "#e0e7ff", color: "#3730a3", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
   missing_record: { background: "#fee2e2", color: "#991b1b", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
   ambiguous: { background: "#fee2e2", color: "#991b1b", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
   manual_review: { background: "#fee2e2", color: "#991b1b", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
@@ -583,7 +584,7 @@ export default function CostVerificationRoute() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const applying = navigation.state === "submitting";
-  const willUpdateCount = data.approvedUpdates.filter((row) => row.status === "will_update").length;
+  const willUpdateCount = data.approvedUpdates.filter((row) => row.status === "will_update" || row.status === "will_create").length;
 
   const downloadCsv = () => {
     const csv = buildCsv(
@@ -664,7 +665,8 @@ export default function CostVerificationRoute() {
         <p style={{ fontSize: 13, color: "#92400e", background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 10, padding: "10px 14px" }}>
           <b>Owner / advanced tool.</b> This applies the owner-approved cost truth list (2026-07-17) to ERP vendor cost records. Nothing updates on
           deploy or page load — this table is a read-only preview until you type the confirmation phrase and press Apply. Only unambiguously matched
-          rows update; missing/ambiguous/template rows are never touched. No Shopify, quote, production, recipe, or pricing-engine data is affected.
+          rows update, and "Will create" rows (13.2.3: the approved blank bags and DTP 4x5x2 pouch) are created fresh with vendor "Vendor TBD" when
+          no clean record exists. Ambiguous/template rows are never touched. No Shopify, quote, production, recipe, or pricing-engine data is affected.
         </p>
 
         {actionData ? (
@@ -705,7 +707,7 @@ export default function CostVerificationRoute() {
           <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 12 }}>
             <input type="hidden" name="intent" value="applyApprovedCosts" />
             <label style={{ fontSize: 13 }}>
-              Type <code>{APPLY_CONFIRM_PHRASE}</code> to apply {willUpdateCount} update(s)<br />
+              Type <code>{APPLY_CONFIRM_PHRASE}</code> to apply {willUpdateCount} update(s)/creation(s)<br />
               <input name="confirmPhrase" autoComplete="off" placeholder={APPLY_CONFIRM_PHRASE} style={{ padding: 10, border: "1px solid #d1d5db", borderRadius: 8, width: 280 }} />
             </label>
             <button type="submit" disabled={applying} style={{ background: applying ? "#9ca3af" : "#b45309", color: "white", border: 0, borderRadius: 10, padding: "12px 18px", fontWeight: 800 }}>

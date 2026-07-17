@@ -28,7 +28,7 @@ import {
 } from "../app/lib/cost-verification-shared";
 // Safe to import: the server lib takes the Prisma client as a parameter and
 // never constructs it (imports only the shared pure lib).
-import { APPROVED_COST_TRUTH } from "../app/lib/approved-cost-updates.server";
+import { APPROVED_COST_TRUTH, evaluateApprovedItem } from "../app/lib/approved-cost-updates.server";
 
 describe("verified marker and seeded notes detection", () => {
   it("detects the interim [VERIFIED ...] notes marker", () => {
@@ -250,6 +250,64 @@ describe("approved cost updates (13.2.2)", () => {
     ];
     expect(tiersMatchApproved(fiftySeeded, fiftyApproved)).toBe(true);
     expect(tierChangeSummary(fiftySeeded, fiftyApproved)).toEqual([]);
+  });
+});
+
+describe("blank bag + DTP creation (13.2.3)", () => {
+  const noRecords: any[] = [];
+
+  it("pins the creation specs (names, SKUs, types, Vendor TBD)", () => {
+    const specs = APPROVED_COST_TRUTH.filter((item) => item.creation).map((item) => item.creation!);
+    expect(specs.map((spec) => spec.name)).toEqual(["4x5 Blank Bag", "4x6 Blank Bag", "14x16 Blank Bag", "DTP 4x5x2 Blank Pouch"]);
+    expect(specs.every((spec) => spec.vendor === "Vendor TBD")).toBe(true);
+    expect(specs.map((spec) => spec.productType)).toEqual(["bag", "bag", "bag", "dtp_bag"]);
+    expect(specs.map((spec) => spec.vendorSku)).toEqual(["preset:blank-4x5-bag", "preset:blank-4x6-bag", "preset:pound-bag", "preset:dtp-4x5x2-pouch"]);
+    // do_not_update / manual_review items must never carry a creation spec.
+    expect(APPROVED_COST_TRUTH.filter((item) => item.policy !== "update").every((item) => !item.creation)).toBe(true);
+  });
+
+  it("missing item WITH a creation spec becomes will_create (flat bag: no tier rows)", () => {
+    const bag = APPROVED_COST_TRUTH.find((item) => item.key === "bag-4x6")!;
+    const { row } = evaluateApprovedItem(bag, noRecords);
+    expect(row.status).toBe("will_create");
+    expect(row.changes.some((change) => change.includes('create VendorProduct "4x6 Blank Bag"'))).toBe(true);
+    expect(row.changes.some((change) => change.includes("no tier rows"))).toBe(true);
+    expect(row.changes.some((change) => change.includes("verified marker"))).toBe(true);
+  });
+
+  it("missing DTP pouch becomes will_create with its 5 tier rows", () => {
+    const pouch = APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x5x2-pouch")!;
+    const { row } = evaluateApprovedItem(pouch, noRecords);
+    expect(row.status).toBe("will_create");
+    expect(row.changes.some((change) => change.includes("create 5 tier row(s)"))).toBe(true);
+  });
+
+  it("missing item WITHOUT a creation spec stays missing_record", () => {
+    const miron = APPROVED_COST_TRUTH.find((item) => item.key === "miron-50ml")!;
+    expect(miron.creation).toBeUndefined();
+    const { row } = evaluateApprovedItem(miron, noRecords);
+    expect(row.status).toBe("missing_record");
+  });
+
+  it("an existing clean record with a blank cost is updated, not duplicated", () => {
+    const bag = APPROVED_COST_TRUTH.find((item) => item.key === "bag-4x5")!;
+    const existing = [{ id: "x", name: "Blank 4x5 bag", vendor: "SAFE CARE", vendorSku: null, defaultUnitCost: 0, notes: null, tiers: [] }];
+    const { row } = evaluateApprovedItem(bag, existing as any);
+    expect(row.status).toBe("will_update");
+    expect(row.changes.some((change) => change.includes("flat cost: none ->"))).toBe(true);
+  });
+
+  it("template records still evaluate to manual review and are never creatable", () => {
+    const template = APPROVED_COST_TRUTH.find((item) => item.key === "template-4x5-stock-bag")!;
+    const existing = [{ id: "t", name: "Template - 4x5 Outsourced Stock Bag", vendor: null, vendorSku: null, defaultUnitCost: 0, notes: null, tiers: [] }];
+    const { row } = evaluateApprovedItem(template, existing as any);
+    expect(row.status).toBe("manual_review");
+  });
+
+  it("DTP 4x6x2 stays do_not_update even with no record", () => {
+    const pouch = APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x6x2-pouch")!;
+    const { row } = evaluateApprovedItem(pouch, noRecords);
+    expect(row.status).toBe("do_not_update");
   });
 });
 

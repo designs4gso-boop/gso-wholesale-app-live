@@ -32,6 +32,16 @@ type ApprovedItem = {
   flatCost?: number;
   marker?: string;
   note?: string;
+  // 13.2.3: when no clean record exists, items carrying a creation spec may be
+  // CREATED on apply. Field shape proven safe by the Vendor Cost Book push and
+  // the jar seed (shop/name/productType/vendor/vendorSku/moq/defaultUnitCost/
+  // notes/active + tier rows). Items without a spec stay "missing record".
+  creation?: {
+    name: string;
+    productType: string;
+    vendor: string;
+    vendorSku: string;
+  };
 };
 
 const RANGES: Array<[number, number | null]> = [[1, 249], [250, 499], [500, 999], [1000, 2499], [2500, null]];
@@ -53,10 +63,14 @@ export const APPROVED_COST_TRUTH: ApprovedItem[] = [
   { key: "safecare-4oz-bw", label: "4oz black/white jar", kind: "flat", policy: "update", matchVendorSkus: ["preset:4oz-jar-black-white"], matchName: /^4\s?oz.*black/i, flatCost: 0.65, marker: SAFECARE_MARKER },
   { key: "safecare-5oz-clear", label: "5oz clear jar (cost-only placeholder)", kind: "flat", policy: "update", matchVendorSkus: ["preset:5oz-jar-clear"], matchName: /^5\s?oz.*clear/i, flatCost: 0.6, marker: SAFECARE_MARKER, note: "Cost item only — stays out of storefront/quote flow per project rules; this updates its cost record, nothing else." },
 
-  // 3. Blank bags — flat cost each.
-  { key: "bag-4x5", label: "4x5 blank bag", kind: "flat", policy: "update", matchVendorSkus: ["preset:blank-4x5-bag"], matchName: /^(blank\s*)?4\s?x\s?5\b.*bag/i, flatCost: 0.09, marker: BAG_MARKER },
-  { key: "bag-4x6", label: "4x6 blank bag", kind: "flat", policy: "update", matchVendorSkus: ["preset:blank-4x6-bag"], matchName: /^(blank\s*)?4\s?x\s?6\b.*bag/i, flatCost: 0.1, marker: BAG_MARKER },
-  { key: "bag-14x16", label: "14x16 / larger blank bag", kind: "flat", policy: "update", matchVendorSkus: ["preset:pound-bag"], matchName: /(14\s?x\s?16|pound)\s*(blank\s*)?bag/i, flatCost: 1.0, marker: BAG_MARKER },
+  // 3. Blank bags — flat cost each (created flat, NOT fake multi-tier items;
+  // the Vendor Cost Book pattern does not require one-row tiers — the
+  // calculator/audit/engine paths all read defaultUnitCost for tierless items).
+  // vendorSkus reuse the calculator preset ids so the stale code presets
+  // auto-hide once these records exist (12B.1a supersede rule).
+  { key: "bag-4x5", label: "4x5 blank bag", kind: "flat", policy: "update", matchVendorSkus: ["preset:blank-4x5-bag"], matchName: /^(blank\s*)?4\s?x\s?5\b.*bag/i, flatCost: 0.09, marker: BAG_MARKER, creation: { name: "4x5 Blank Bag", productType: "bag", vendor: "Vendor TBD", vendorSku: "preset:blank-4x5-bag" } },
+  { key: "bag-4x6", label: "4x6 blank bag", kind: "flat", policy: "update", matchVendorSkus: ["preset:blank-4x6-bag"], matchName: /^(blank\s*)?4\s?x\s?6\b.*bag/i, flatCost: 0.1, marker: BAG_MARKER, creation: { name: "4x6 Blank Bag", productType: "bag", vendor: "Vendor TBD", vendorSku: "preset:blank-4x6-bag" } },
+  { key: "bag-14x16", label: "14x16 / larger blank bag", kind: "flat", policy: "update", matchVendorSkus: ["preset:pound-bag"], matchName: /(14\s?x\s?16|pound)\s*(blank\s*)?bag/i, flatCost: 1.0, marker: BAG_MARKER, creation: { name: "14x16 Blank Bag", productType: "bag", vendor: "Vendor TBD", vendorSku: "preset:pound-bag" } },
 
   // 4. DTP 4x5x2 blank pouch — tiered (owner vendor table, total ÷ pieces).
   {
@@ -70,6 +84,7 @@ export const APPROVED_COST_TRUTH: ApprovedItem[] = [
       { minQty: 10000, maxQty: null, unitCost: 0.3117 },
     ],
     marker: POUCH_MARKER,
+    creation: { name: "DTP 4x5x2 Blank Pouch", productType: "dtp_bag", vendor: "Vendor TBD", vendorSku: "preset:dtp-4x5x2-pouch" },
   },
 
   // 5. Do not update yet / manual review.
@@ -120,7 +135,8 @@ function currentSummaryOf(record: VendorProductRecord | null) {
   return Number(record.defaultUnitCost) > 0 ? `${money(Number(record.defaultUnitCost))} each (flat)` : "no cost";
 }
 
-function evaluateItem(item: ApprovedItem, vendorProducts: VendorProductRecord[]): { row: ApprovedPreviewRow; record: VendorProductRecord | null } {
+// Exported for tests: pure given (item, candidate records).
+export function evaluateApprovedItem(item: ApprovedItem, vendorProducts: VendorProductRecord[]): { row: ApprovedPreviewRow; record: VendorProductRecord | null } {
   const base = {
     key: item.key,
     label: item.label,
@@ -141,6 +157,16 @@ function evaluateItem(item: ApprovedItem, vendorProducts: VendorProductRecord[])
     return { row: { ...base, status: "ambiguous", matchedName: match.hits.map((hit) => hit.name).join(" | "), currentSummary: "multiple candidates", changes: [] }, record: null };
   }
   if (match.status === "missing" || !match.record) {
+    if (item.creation) {
+      const changes = [
+        `create VendorProduct "${item.creation.name}" (${item.creation.productType}, vendor: ${item.creation.vendor}, sku: ${item.creation.vendorSku})`,
+        ...(item.kind === "tiered" && item.tiers
+          ? [`create ${item.tiers.length} tier row(s)`]
+          : [`flat cost ${money(item.flatCost || 0)} (no tier rows)`]),
+        ...(item.marker ? ["add verified marker to notes"] : []),
+      ];
+      return { row: { ...base, status: "will_create", matchedName: null, currentSummary: "no record", changes }, record: null };
+    }
     return { row: { ...base, status: "missing_record", matchedName: null, currentSummary: "no record", changes: [] }, record: null };
   }
 
@@ -186,18 +212,20 @@ async function loadVendorProducts(dbClient: any, shop: string): Promise<VendorPr
 
 export async function previewApprovedCostUpdates(dbClient: any, shop: string): Promise<ApprovedPreviewRow[]> {
   const vendorProducts = await loadVendorProducts(dbClient, shop);
-  return APPROVED_COST_TRUTH.map((item) => evaluateItem(item, vendorProducts).row);
+  return APPROVED_COST_TRUTH.map((item) => evaluateApprovedItem(item, vendorProducts).row);
 }
 
-// Applies ONLY rows the server itself re-evaluates as will_update. Updates are
-// scoped to the matched VendorProduct + its tiers, in one transaction.
+// Applies ONLY rows the server itself re-evaluates as will_update/will_create.
+// Updates are scoped to the matched VendorProduct + its tiers; creations use
+// the field shape proven by the Vendor Cost Book / jar seed. One transaction.
 export async function applyApprovedCostUpdates(dbClient: any, shop: string) {
   const vendorProducts = await loadVendorProducts(dbClient, shop);
-  const evaluated = APPROVED_COST_TRUTH.map((item) => ({ item, ...evaluateItem(item, vendorProducts) }));
-  const toApply = evaluated.filter((entry) => entry.row.status === "will_update" && entry.record);
+  const evaluated = APPROVED_COST_TRUTH.map((item) => ({ item, ...evaluateApprovedItem(item, vendorProducts) }));
+  const toUpdate = evaluated.filter((entry) => entry.row.status === "will_update" && entry.record);
+  const toCreate = evaluated.filter((entry) => entry.row.status === "will_create" && entry.item.creation);
 
   await dbClient.$transaction(async (tx: any) => {
-    for (const { item, record } of toApply) {
+    for (const { item, record } of toUpdate) {
       if (!record) continue;
       const marker = item.marker && !hasVerifiedMarker(record.notes) ? item.marker : null;
       const notes = marker ? `${record.notes ? `${record.notes}\n` : ""}${marker}` : undefined;
@@ -228,10 +256,41 @@ export async function applyApprovedCostUpdates(dbClient: any, shop: string) {
         });
       }
     }
+
+    for (const { item } of toCreate) {
+      const creation = item.creation!;
+      const flatDefault = item.kind === "tiered" && item.tiers ? item.tiers[0].unitCost : item.flatCost || 0;
+      await tx.vendorProduct.create({
+        data: {
+          shop,
+          name: creation.name,
+          productType: creation.productType,
+          vendor: creation.vendor,
+          vendorSku: creation.vendorSku,
+          moq: 1,
+          defaultUnitCost: flatDefault,
+          active: true,
+          notes: `Created by Approved Cost Updates (13.2.3).${item.marker ? `\n${item.marker}` : ""}`,
+          ...(item.kind === "tiered" && item.tiers
+            ? {
+                tiers: {
+                  create: item.tiers.map((tier) => ({
+                    shop,
+                    minQty: tier.minQty,
+                    maxQty: tier.maxQty,
+                    unitCost: tier.unitCost,
+                    notes: "Owner-approved 2026-07-17",
+                  })),
+                },
+              }
+            : {}),
+        },
+      });
+    }
   });
 
   return {
-    applied: toApply.map((entry) => ({ key: entry.row.key, label: entry.row.label, changes: entry.row.changes })),
-    skipped: evaluated.filter((entry) => entry.row.status !== "will_update").map((entry) => ({ key: entry.row.key, status: entry.row.status })),
+    applied: [...toUpdate, ...toCreate].map((entry) => ({ key: entry.row.key, label: entry.row.label, status: entry.row.status, changes: entry.row.changes })),
+    skipped: evaluated.filter((entry) => entry.row.status !== "will_update" && entry.row.status !== "will_create").map((entry) => ({ key: entry.row.key, status: entry.row.status })),
   };
 }
