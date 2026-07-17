@@ -6,6 +6,9 @@
 
 export const DEFAULT_TOLERANCE_PCT = 5;
 export const MAX_UI_ROWS = 600;
+// Hard cap on rows returned to the client for CSV/TSV export (well beyond
+// this shop's catalog; keeps the loader payload bounded).
+export const EXPORT_ROW_CAP = 3000;
 
 function safeNumber(value: unknown, fallback = 0) {
   const numeric = Number(value);

@@ -397,6 +397,14 @@ Quote recipe gates remain:
 - Degraded banner copy updated per owner wording: "Shopify cost/COGS access is unavailable. Inventory item cost may require product cost permission / granular Shopify permissions. Products, variants, prices, SKUs, and ERP matching still work."
 - Everything else unchanged: read-only pull, no action export, no writes, no mutations, CSV/TSV export intact.
 
+## Completed Milestone: Shopify Cost Audit Pull No Longer Escapes To Login (Patch 12B.2b.2)
+
+- TRUE ROOT CAUSE of the persistent loop (scope revert in 12B.2b.1 was necessary but not sufficient): the Pull forms were plain lowercase `<form method="get">` elements and the CSV link was a raw `<a href>`. Those perform full document navigations inside the embedded iframe carrying only `pull=1&tolerancePct=...` — no shop/host/session-token context — so `authenticate.admin` at the top of the loader could not identify the session and rendered the login screen before any pull code (or its 12B.2b.1 hardening) ever ran.
+- Fix: both pull forms are now React Router `<Form method="get">` (client-side navigation; App Bridge attaches the session token to the loader fetch — the exact pattern the Cost Calculator has used loop-free since 12B.1a). The server-side `?format=csv` path and raw CSV anchor are deleted; CSV now downloads client-side via Blob from the already-loaded rows (no navigation, no extra pull), Copy TSV unchanged. Loader returns up to 3,000 rows for export (`EXPORT_ROW_CAP`); the table renders the worst 600.
+- Defense in depth: the loader's entire pull branch is wrapped in a try/catch — any escaped `Response` (301/302/303/307/308/401/403 or otherwise) or `Error` becomes the in-page banner "Shopify pull could not complete. The app stayed loaded instead of redirecting. Details: ..." (status/message only; never tokens). Combined with the 12B.2b.1 graphql-level Response catch, no redirect can leave this route from the pull path.
+- Degraded cost mode unchanged: full query with `inventoryItem.unitCost` first, automatic retry without cost fields on denial, banner if even the plain product query fails.
+- No scope changes this patch; still read-only end to end (no action export, no writes, no mutations).
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:

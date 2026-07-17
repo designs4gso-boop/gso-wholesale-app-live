@@ -1,12 +1,13 @@
 import type React from "react";
 import { useMemo, useState } from "react";
-import { Link, useLoaderData } from "react-router";
+import { Form, Link, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import {
   AUDIT_STATUS_LABELS,
   AUDIT_STATUS_RANK,
   DEFAULT_TOLERANCE_PCT,
+  EXPORT_ROW_CAP,
   MAX_UI_ROWS,
   buildCsv,
   deltaAgainstBand,
@@ -90,7 +91,6 @@ export async function loader({ request }: { request: Request }) {
   const shop = session.shop;
   const url = new URL(request.url);
   const pull = url.searchParams.get("pull") === "1";
-  const format = url.searchParams.get("format") || "";
   const tolerancePct = clampTolerance(Number(url.searchParams.get("tolerancePct") ?? DEFAULT_TOLERANCE_PCT));
 
   if (!pull) {
@@ -113,6 +113,11 @@ export async function loader({ request }: { request: Request }) {
     };
   }
 
+  // 12B.2b.2: nothing inside the pull branch may escape as a redirect. The
+  // graphql helper already converts thrown auth Responses, but this outer
+  // catch is the last line of defense — any Response or Error becomes an
+  // in-page banner and the route stays loaded.
+  try {
   const [index, pullResult] = await Promise.all([buildErpIndex(db, shop), pullShopifyCatalog(admin)]);
 
   // Match every variant, then compute engine costs only for matched quote-ready recipes.
@@ -179,16 +184,6 @@ export async function loader({ request }: { request: Request }) {
     || a.productTitle.localeCompare(b.productTitle),
   );
 
-  if (format === "csv") {
-    const csv = buildCsv(CSV_HEADER, rows.map(rowToCsvCells));
-    return new Response(csv, {
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": 'attachment; filename="shopify-cost-audit.csv"',
-      },
-    });
-  }
-
   const statusCounts: Record<string, number> = {};
   for (const row of rows) statusCounts[row.status] = (statusCounts[row.status] || 0) + 1;
 
@@ -208,10 +203,35 @@ export async function loader({ request }: { request: Request }) {
       variantsTruncatedProducts: [...new Set(pullResult.variants.filter((v) => v.variantsTruncated).map((v) => v.productTitle))].slice(0, 10),
     },
     statusCounts,
-    rowsShown: Math.min(rows.length, MAX_UI_ROWS),
     rowTotal: rows.length,
-    rows: rows.slice(0, MAX_UI_ROWS),
+    rows: rows.slice(0, EXPORT_ROW_CAP),
   };
+  } catch (error) {
+    const detail = error instanceof Response
+      ? `Shopify auth/redirect response (HTTP ${error.status}) was intercepted.`
+      : error instanceof Error
+        ? error.message
+        : "Unknown error.";
+    return {
+      pulled: true as const,
+      tolerancePct,
+      pull: {
+        ok: false,
+        error: `Shopify pull could not complete. The app stayed loaded instead of redirecting. Details: ${detail}`,
+        inventoryAccess: true,
+        inventoryAccessError: null,
+        throttled: false,
+        truncated: false,
+        pageCount: 0,
+        productCount: 0,
+        variantCount: 0,
+        variantsTruncatedProducts: [] as string[],
+      },
+      statusCounts: {} as Record<string, number>,
+      rowTotal: 0,
+      rows: [] as AuditRow[],
+    };
+  }
 }
 
 const cardStyle: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "white" };
@@ -245,6 +265,7 @@ export default function ShopifyCostAuditRoute() {
     () => (statusFilter === "all" ? rows : rows.filter((row) => row.status === statusFilter)),
     [rows, statusFilter],
   );
+  const displayRows = filteredRows.slice(0, MAX_UI_ROWS);
 
   const copyTsv = () => {
     const clean = (value: unknown) => String(value ?? "").replace(/[\t\r\n]+/g, " ");
@@ -253,6 +274,19 @@ export default function ShopifyCostAuditRoute() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     });
+  };
+
+  // Client-side download from already-loaded rows: no navigation, no extra
+  // Shopify pull, and no way to lose the embedded session (12B.2b.2).
+  const downloadCsv = () => {
+    const csv = buildCsv(CSV_HEADER, rows.map(rowToCsvCells));
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = "shopify-cost-audit.csv";
+    anchor.click();
+    URL.revokeObjectURL(objectUrl);
   };
 
   return (
@@ -290,7 +324,7 @@ export default function ShopifyCostAuditRoute() {
             (50 per page) with up to 100 variants each, then matches them against {data.context.mappedRecipeCount} Shopify-mapped recipe(s),
             {" "}{data.context.vendorProductCount} vendor product(s), {data.context.materialCount} material(s), and {data.context.configuratorCount} configurator product(s).
           </p>
-          <form method="get" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
+          <Form method="get" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
             <input type="hidden" name="pull" value="1" />
             <label style={{ fontSize: 13 }}>Tolerance %<br />
               <input name="tolerancePct" type="number" step="0.5" min="0" max="50" defaultValue={data.tolerancePct} style={{ padding: 8, border: "1px solid #d1d5db", borderRadius: 8, width: 110 }} />
@@ -298,7 +332,7 @@ export default function ShopifyCostAuditRoute() {
             <button type="submit" style={{ background: "#111827", color: "white", border: 0, borderRadius: 10, padding: "12px 18px", fontWeight: 800 }}>
               Pull from Shopify
             </button>
-          </form>
+          </Form>
         </section>
       ) : (
         <>
@@ -354,14 +388,16 @@ export default function ShopifyCostAuditRoute() {
                   </button>
                 ))}
               <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                <a href={`/app/erp/shopify-cost-audit?pull=1&format=csv&tolerancePct=${data.tolerancePct}`} style={{ fontSize: 13 }}>Download CSV (re-pulls)</a>
+                <button type="button" onClick={downloadCsv} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 12 }}>
+                  Download CSV
+                </button>
                 <button type="button" onClick={copyTsv} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 12 }}>
                   {copied ? "Copied!" : "Copy TSV"}
                 </button>
               </span>
             </div>
-            {data.rowsShown < data.rowTotal ? (
-              <div style={{ ...smallHelp, marginTop: 8 }}>Showing the worst {data.rowsShown} of {data.rowTotal} rows on screen; the CSV/TSV export includes everything.</div>
+            {displayRows.length < filteredRows.length ? (
+              <div style={{ ...smallHelp, marginTop: 8 }}>Showing the worst {displayRows.length} of {filteredRows.length} rows for this filter on screen; CSV/TSV export includes all {data.rowTotal} rows.</div>
             ) : null}
 
             <div style={{ overflowX: "auto", marginTop: 12 }}>
@@ -379,7 +415,7 @@ export default function ShopifyCostAuditRoute() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((row, idx) => (
+                  {displayRows.map((row, idx) => (
                     <tr key={`${row.inventoryItemId || row.sku || row.productTitle}-${idx}`} style={{ borderTop: "1px solid #e5e7eb" }}>
                       <td style={{ padding: 8 }}><span style={badgeStyle[statusTone(row.status)]}>{AUDIT_STATUS_LABELS[row.status]}</span></td>
                       <td style={{ padding: 8 }}>
@@ -403,7 +439,7 @@ export default function ShopifyCostAuditRoute() {
           </section>
 
           <section style={{ ...cardStyle, marginTop: 16 }}>
-            <form method="get" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
+            <Form method="get" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
               <input type="hidden" name="pull" value="1" />
               <label style={{ fontSize: 13 }}>Tolerance %<br />
                 <input name="tolerancePct" type="number" step="0.5" min="0" max="50" defaultValue={data.tolerancePct} style={{ padding: 8, border: "1px solid #d1d5db", borderRadius: 8, width: 110 }} />
@@ -412,7 +448,7 @@ export default function ShopifyCostAuditRoute() {
                 Pull again
               </button>
               <span style={smallHelp}>Pulls are never cached — every pull reads Shopify live and stores nothing.</span>
-            </form>
+            </Form>
           </section>
         </>
       )}
