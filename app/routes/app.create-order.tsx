@@ -1,105 +1,17 @@
-import { authenticate } from "../shopify.server";
-import db from "../db.server";
-import { quoteMarginState } from "../lib/quote-margin.server";
+import { redirect } from "react-router";
 
-export async function action({ request }: { request: Request }) {
-  const { session, admin } = await authenticate.admin(request);
-  const { quoteId } = await request.json();
+// Retired in Patch 13.1 (deletion pre-authorized by the Patch 4 milestone
+// note). Order creation lives exclusively in Quotes / CRM with its full set
+// of server gates. Loader AND action redirect so a stray bookmark POST can
+// never create an order or draft order from this path again.
+export async function loader() {
+  return redirect("/app/quotes");
+}
 
-  const quote = await db.quote.findFirst({
-    where: {
-      id: quoteId,
-      shop: session.shop,
-    },
-    include: {
-      items: true,
-    },
-  });
+export async function action() {
+  return redirect("/app/quotes");
+}
 
-  if (!quote) {
-    return Response.json({ ok: false, error: "Quote not found" }, { status: 404 });
-  }
-
-  if (quote.status !== "approved") {
-    return Response.json({ ok: false, error: "Quote must be Approved before creating a payment request." }, { status: 400 });
-  }
-
-  if (quote.fullOrderCreated) {
-    return Response.json({ ok: false, error: "A full payment order already exists for this quote." }, { status: 400 });
-  }
-
-  if (quote.depositCreated || quote.balanceCreated) {
-    return Response.json({ ok: false, error: "This quote is on the deposit/balance track." }, { status: 400 });
-  }
-
-  const marginState = quoteMarginState(quote);
-  if (marginState.approvalRequired) {
-    return Response.json({ ok: false, error: marginState.blockMessage }, { status: 400 });
-  }
-
-  const lineItems = quote.items.map((item: any) => ({
-    title: item.productName || "Custom print item",
-    variantTitle: item.variant || "",
-    sku: item.sku || "",
-    quantity: Number(item.quantity) || 1,
-    originalUnitPrice: String(Number(item.unitPrice) || 0),
-    customAttributes: [
-      { key: "Variant / Options", value: item.variant || "" },
-      { key: "SKU", value: item.sku || "" },
-      { key: "Notes", value: item.notes || "" },
-    ],
-  }));
-
-  const response = await admin.graphql(
-    `#graphql
-      mutation draftOrderCreate($input: DraftOrderInput!) {
-        draftOrderCreate(input: $input) {
-          draftOrder {
-            id
-            invoiceUrl
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `,
-    {
-      variables: {
-        input: {
-          email: quote.email || undefined,
-          note: `Created from GSO Quote Builder. Quote ID: ${quote.id}`,
-          tags: ["GSO Quote", "Wholesale", "Full Payment"],
-          lineItems,
-        },
-      },
-    }
-  );
-
-  const data = await response.json();
-  const errors = data.data?.draftOrderCreate?.userErrors || [];
-
-  if (errors.length) {
-    return Response.json({ ok: false, errors }, { status: 400 });
-  }
-
-  const draftOrder = data.data?.draftOrderCreate?.draftOrder;
-
-  await db.quote.update({
-    where: { id: quote.id },
-    data: {
-      status: "approved",
-      fullOrderCreated: true,
-      fullDraftOrderId: draftOrder?.id || null,
-      fullInvoiceUrl: draftOrder?.invoiceUrl || null,
-    },
-  });
-
-  return Response.json({
-    ok: true,
-    invoiceUrl: draftOrder?.invoiceUrl,
-    draftOrderId: draftOrder?.id,
-    status: "approved",
-  });
+export default function RetiredCreateOrderRoute() {
+  return null;
 }

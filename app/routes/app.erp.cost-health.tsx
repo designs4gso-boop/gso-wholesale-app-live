@@ -584,10 +584,9 @@ export default function CostHealthRoute() {
         <div className="nav">
           <Link to="/app/erp/materials">Open Materials</Link>
           <Link to="/app/erp/machines">Open Machine Center</Link>
-          <Link to="/app/erp/product-type-routes">Open Product Type Routes</Link>
+          <Link to="/app/erp/product-setup">Open Product Setup</Link>
           <Link to="/app/erp/cost-calculator">Open Cost Calculator</Link>
           <Link to="/app/erp/vendor-cost-book">Open Vendor Cost Book</Link>
-          <Link to="/app/wholesale/calculator">Open Product Cost Calculator</Link>
         </div>
       </div>
 
