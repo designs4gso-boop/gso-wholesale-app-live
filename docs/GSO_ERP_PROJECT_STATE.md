@@ -434,6 +434,14 @@ Quote recipe gates remain:
 - Side effect: deleting the orphan pages and rewriting the legacy calculator/product-costs pages removed 90 of the documented pre-existing typecheck errors (repo total 398 -> 308; zero new; net -6,502 lines of dead code).
 - Next planned: 13.2 Cost Verification Workbook (the 12B.2a plan) -> owner verification pass (invoices + T1-T7 replays) -> 13.3 engine completeness (owner-approved) -> preset deletion -> 12B.1b design groups -> Shopify publisher track.
 
+## Completed Milestone: Unconditional Legacy Redirects (Patch 13.1.1)
+
+- Problem after 13.1 deploy: `/app/wholesale/calculator`, `/app/product-costs`, and `/app/create-order` showed the Shopify login screen instead of redirecting.
+- TRUE ROOT CAUSE (not the redirect files — they contained zero auth calls): all four legacy paths were registered as CHILDREN of the `/app` layout route, and the layout's own loader calls `authenticate.admin`. On a direct visit React Router runs the parent layout loader too, so the layout's auth bounce fired before the child's redirect could matter.
+- Fix: the four registrations (`app/wholesale/calculator`, `app/product-costs`, `app/erp/product-costs`, `app/create-order`) moved OUT of the `/app` layout to top-level routes — the same proven pattern as the confirm-gated create-discount/cart-transform routes. No auth runs on the legacy URLs; they redirect unconditionally, forwarding any query params (shop/host/embedded context) so the successor page authenticates in one hop. Successors then enforce auth normally.
+- Redirect modules remain pure: no authenticate, no db, no Shopify, loader+action both redirect, default export kept for the product-costs shim.
+- Next planned: 13.2 Cost Verification Workbook.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:

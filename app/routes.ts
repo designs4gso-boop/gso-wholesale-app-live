@@ -21,13 +21,10 @@ export default [
     route("wholesale", "routes/app.wholesale.tsx"),
     route("wholesale/rules", "routes/app.wholesale.rules.tsx"),
     route("wholesale/customers", "routes/app.wholesale.customers.tsx"),
-    route("wholesale/calculator", "routes/app.wholesale.calculator.tsx"),
     route("quotes", "routes/app.quotes.tsx"),
-    route("product-costs", "routes/app.product-costs.tsx"),
     route("erp/product-setup", "routes/app.erp.product-setup.tsx"),
     route("erp/products/new", "routes/app.erp.products.new.tsx"),
     route("erp/shopify-links", "routes/app.erp.shopify-links.tsx"),
-    route("erp/product-costs", "routes/app.erp.product-costs.tsx"),
     route("erp/cost-calculator", "routes/app.erp.cost-calculator.tsx"),
     route("erp/cost-health", "routes/app.erp.cost-health.tsx"),
     route("erp/shopify-cost-audit", "routes/app.erp.shopify-cost-audit.tsx"),
@@ -38,7 +35,6 @@ export default [
     route("erp/configurator-mapping", "routes/app.erp.configurator-mapping.tsx"),
     route("erp/configurator-jar-mapping", "routes/app.erp.configurator-jar-mapping.tsx"),
     route("erp/configurator-audit", "routes/app.erp.configurator-audit.tsx"),
-    route("create-order", "routes/app.create-order.tsx"),
     route("erp/materials", "routes/app.erp.materials.tsx"),
     route("erp/machines", "routes/app.erp.machines.tsx"),
     route("erp/production", "routes/app.erp.production.tsx"),
@@ -76,6 +72,14 @@ export default [
   route("webhooks/app/uninstalled", "routes/webhooks.app.uninstalled.ts"),
   route("app/create-wholesale-discount", "routes/app.create-wholesale-discount.tsx"),
   route("app/create-configurator-cart-transform", "routes/app.create-configurator-cart-transform.tsx"),
+
+  // Patch 13.1.1: retired legacy routes live OUTSIDE the /app layout so the
+  // layout's authenticate.admin never runs for them — they redirect
+  // unconditionally to their successors (which then authenticate normally).
+  route("app/wholesale/calculator", "routes/app.wholesale.calculator.tsx"),
+  route("app/product-costs", "routes/app.product-costs.tsx"),
+  route("app/erp/product-costs", "routes/app.erp.product-costs.tsx"),
+  route("app/create-order", "routes/app.create-order.tsx"),
   route("webhooks/orders_paid", "routes/webhooks.orders_paid.tsx"),
 ] satisfies RouteConfig;
 
