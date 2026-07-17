@@ -483,6 +483,17 @@ Quote recipe gates remain:
 - Tests: 132 -> 139 passing (7 new via the exported `evaluateApprovedItem`: pinned creation specs incl. Vendor TBD + preset SKUs, will_create for flat bag and tiered pouch, missing_record without a spec, blank-cost record updated not duplicated, template stays manual review, 4x6x2 stays do_not_update).
 - After the owner applies: bags + pouch exist verified; the Owner Cost Checklist shows them; T3 (sticker bags) and blank-item replay tests become meaningful; remaining cost blockers shift to ink/machine/labor verification.
 
+## Completed Milestone: Roll Material + Ink Cost Verification (Patch 13.2.4)
+
+- Extends the Approved Cost Updates tool to two new record families with the same gate (preview-only on load, exact `APPLY VERIFIED COSTS` phrase, server-side re-evaluation, one transaction): Material rows and MachineInkChannel rows. Raw material costs only — waste, labor, machine speed, gloss layers, setup, and ink-usage profiles remain separate factors and are untouched.
+- Roll materials (unique name match, template-excluded, full-precision values stored, never pre-rounded): Poseidon matte 213/675 = $0.3156/sqft (54in x 150ft), Poseidon gloss same, Holographic 488/683.33 = $0.7141/sqft (50in x 164ft), Banner Vinyl 140/472.5 = $0.2963/sqft (54in x 105ft). Updates set purchaseCost + roll dims + calculatedUnitCost + costPerUnit (Materials-page convention), clear costReviewNeeded, append the `[VERIFIED 2026-07-17 owner-approved roll/ink cost]` marker, and write a MaterialCostHistory row (old -> new, reason "Owner-approved roll cost (13.2.4)").
+- Banner Vinyl is the only material creation (field shape proven by the Materials page create path): name "Banner Vinyl", type "banner", sqft base, roll purchase, vendor "Vendor TBD".
+- Ink materials use BRAND-GROUP matching (`material_group`): every non-template ink material row matching /mimaki/ or /roland|lg-540|eco-uv/ updates to the approved per-ml cost (Mimaki 176/1000 = $0.1760/ml; Roland 149/750 = $0.19867/ml) — works whether the DB has per-type rows or one combined row per brand. Zero rows = missing_record; ink materials are never created (machine channels are the engine's source).
+- Machine ink channels (`ink_channels` group per brand): all ENABLED CMYK/White/Gloss(Clear-named) channels of the single matching machine update costPerMl + cartridgeCost/Ml (Mimaki $176/1000ml, Roland $149/750ml); disabled and 'other' slots are skipped; two machines matching one brand = ambiguous, nothing updates. Channels have no notes field — the verified marker for them waits for the schema patch (shown as a note).
+- `evaluateApprovedItem` now takes an EvalContext {vendorProducts, materials, machines}; vendor-product behavior (13.2.2/13.2.3) is unchanged.
+- Tests: 139 -> 147 passing (8 new: full-precision cost pins incl. 213/675 exactness, Poseidon 0.2889 -> will_update with purchase details, already-correct roll with marker, Banner-Vinyl-only creation, ink group handling both row layouts, zero-row group = missing, Mimaki channel drift with disabled-slot exclusion, two-Roland ambiguity).
+- After the owner applies: rolls + ink verified; remaining seeded-cost warnings shrink to machine hourly rate, labor/application heuristics, usage-rate calibration (13A), and sell-tier re-derivation via the T1-T7 replays.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:

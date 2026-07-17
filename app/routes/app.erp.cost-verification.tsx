@@ -665,8 +665,10 @@ export default function CostVerificationRoute() {
         <p style={{ fontSize: 13, color: "#92400e", background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 10, padding: "10px 14px" }}>
           <b>Owner / advanced tool.</b> This applies the owner-approved cost truth list (2026-07-17) to ERP vendor cost records. Nothing updates on
           deploy or page load — this table is a read-only preview until you type the confirmation phrase and press Apply. Only unambiguously matched
-          rows update, and "Will create" rows (13.2.3: the approved blank bags and DTP 4x5x2 pouch) are created fresh with vendor "Vendor TBD" when
-          no clean record exists. Ambiguous/template rows are never touched. No Shopify, quote, production, recipe, or pricing-engine data is affected.
+          rows update, and "Will create" rows (13.2.3 blanks; 13.2.4 Banner Vinyl) are created fresh with vendor "Vendor TBD" when no clean record
+          exists. 13.2.4 adds roll materials (Poseidon matte/gloss, holographic, banner vinyl), ink material rows, and machine ink channels — raw
+          material costs only: waste, labor, machine speed, and ink-usage profiles are separate factors and are NOT changed here. Ambiguous/template
+          rows are never touched. No Shopify, quote, production, recipe, or pricing-engine data is affected.
         </p>
 
         {actionData ? (

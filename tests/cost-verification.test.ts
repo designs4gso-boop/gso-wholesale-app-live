@@ -28,7 +28,10 @@ import {
 } from "../app/lib/cost-verification-shared";
 // Safe to import: the server lib takes the Prisma client as a parameter and
 // never constructs it (imports only the shared pure lib).
-import { APPROVED_COST_TRUTH, evaluateApprovedItem } from "../app/lib/approved-cost-updates.server";
+import { APPROVED_COST_TRUTH, APPROVED_ROLL_COSTS, evaluateApprovedItem, type EvalContext } from "../app/lib/approved-cost-updates.server";
+
+const emptyContext: EvalContext = { vendorProducts: [], materials: [], machines: [] };
+const ctxWith = (partial: Partial<EvalContext>): EvalContext => ({ ...emptyContext, ...partial });
 
 describe("verified marker and seeded notes detection", () => {
   it("detects the interim [VERIFIED ...] notes marker", () => {
@@ -254,8 +257,6 @@ describe("approved cost updates (13.2.2)", () => {
 });
 
 describe("blank bag + DTP creation (13.2.3)", () => {
-  const noRecords: any[] = [];
-
   it("pins the creation specs (names, SKUs, types, Vendor TBD)", () => {
     const specs = APPROVED_COST_TRUTH.filter((item) => item.creation).map((item) => item.creation!);
     expect(specs.map((spec) => spec.name)).toEqual(["4x5 Blank Bag", "4x6 Blank Bag", "14x16 Blank Bag", "DTP 4x5x2 Blank Pouch"]);
@@ -268,7 +269,7 @@ describe("blank bag + DTP creation (13.2.3)", () => {
 
   it("missing item WITH a creation spec becomes will_create (flat bag: no tier rows)", () => {
     const bag = APPROVED_COST_TRUTH.find((item) => item.key === "bag-4x6")!;
-    const { row } = evaluateApprovedItem(bag, noRecords);
+    const { row } = evaluateApprovedItem(bag, emptyContext);
     expect(row.status).toBe("will_create");
     expect(row.changes.some((change) => change.includes('create VendorProduct "4x6 Blank Bag"'))).toBe(true);
     expect(row.changes.some((change) => change.includes("no tier rows"))).toBe(true);
@@ -277,7 +278,7 @@ describe("blank bag + DTP creation (13.2.3)", () => {
 
   it("missing DTP pouch becomes will_create with its 5 tier rows", () => {
     const pouch = APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x5x2-pouch")!;
-    const { row } = evaluateApprovedItem(pouch, noRecords);
+    const { row } = evaluateApprovedItem(pouch, emptyContext);
     expect(row.status).toBe("will_create");
     expect(row.changes.some((change) => change.includes("create 5 tier row(s)"))).toBe(true);
   });
@@ -285,29 +286,133 @@ describe("blank bag + DTP creation (13.2.3)", () => {
   it("missing item WITHOUT a creation spec stays missing_record", () => {
     const miron = APPROVED_COST_TRUTH.find((item) => item.key === "miron-50ml")!;
     expect(miron.creation).toBeUndefined();
-    const { row } = evaluateApprovedItem(miron, noRecords);
+    const { row } = evaluateApprovedItem(miron, emptyContext);
     expect(row.status).toBe("missing_record");
   });
 
   it("an existing clean record with a blank cost is updated, not duplicated", () => {
     const bag = APPROVED_COST_TRUTH.find((item) => item.key === "bag-4x5")!;
-    const existing = [{ id: "x", name: "Blank 4x5 bag", vendor: "SAFE CARE", vendorSku: null, defaultUnitCost: 0, notes: null, tiers: [] }];
-    const { row } = evaluateApprovedItem(bag, existing as any);
+    const context = ctxWith({ vendorProducts: [{ id: "x", name: "Blank 4x5 bag", vendor: "SAFE CARE", vendorSku: null, defaultUnitCost: 0, notes: null, tiers: [] }] as any });
+    const { row } = evaluateApprovedItem(bag, context);
     expect(row.status).toBe("will_update");
     expect(row.changes.some((change) => change.includes("flat cost: none ->"))).toBe(true);
   });
 
   it("template records still evaluate to manual review and are never creatable", () => {
     const template = APPROVED_COST_TRUTH.find((item) => item.key === "template-4x5-stock-bag")!;
-    const existing = [{ id: "t", name: "Template - 4x5 Outsourced Stock Bag", vendor: null, vendorSku: null, defaultUnitCost: 0, notes: null, tiers: [] }];
-    const { row } = evaluateApprovedItem(template, existing as any);
+    const context = ctxWith({ vendorProducts: [{ id: "t", name: "Template - 4x5 Outsourced Stock Bag", vendor: null, vendorSku: null, defaultUnitCost: 0, notes: null, tiers: [] }] as any });
+    const { row } = evaluateApprovedItem(template, context);
     expect(row.status).toBe("manual_review");
   });
 
   it("DTP 4x6x2 stays do_not_update even with no record", () => {
     const pouch = APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x6x2-pouch")!;
-    const { row } = evaluateApprovedItem(pouch, noRecords);
+    const { row } = evaluateApprovedItem(pouch, emptyContext);
     expect(row.status).toBe("do_not_update");
+  });
+});
+
+describe("roll material + ink verification (13.2.4)", () => {
+  const materialRow = (overrides: Record<string, unknown>) => ({
+    id: "m1", name: "", materialType: "", sku: null, notes: null,
+    costPerUnit: 0, calculatedUnitCost: 0, purchaseCost: 0, purchaseUnit: null,
+    rollWidthIn: null, rollLengthFt: null, volumeMl: null, baseUnit: "sqft", unit: "sqft",
+    ...overrides,
+  });
+
+  it("pins the approved full-precision costs (raw, no waste baked in)", () => {
+    expect(APPROVED_ROLL_COSTS.poseidonMattePerSqft).toBeCloseTo(0.3155555556, 9);
+    expect(APPROVED_ROLL_COSTS.poseidonMattePerSqft).toBe(213 / 675);
+    expect(APPROVED_ROLL_COSTS.holographicPerSqft).toBeCloseTo(0.7141463415, 9);
+    expect(APPROVED_ROLL_COSTS.bannerVinylPerSqft).toBeCloseTo(0.2962962963, 9);
+    expect(APPROVED_ROLL_COSTS.mimakiPerMl).toBe(0.176);
+    expect(APPROVED_ROLL_COSTS.rolandPerMl).toBeCloseTo(0.1986666667, 9);
+  });
+
+  it("Poseidon matte at the old 0.2889 cost becomes will_update with purchase details", () => {
+    const item = APPROVED_COST_TRUTH.find((entry) => entry.key === "roll-poseidon-matte")!;
+    const context = ctxWith({ materials: [materialRow({ name: "Poseidon Matte Roll Media", calculatedUnitCost: 0.2889, purchaseCost: 205 })] as any });
+    const { row, materialRecord } = evaluateApprovedItem(item, context);
+    expect(row.status).toBe("will_update");
+    expect(materialRecord).not.toBeNull();
+    expect(row.changes.some((change) => change.includes("cost/sqft"))).toBe(true);
+    expect(row.changes.some((change) => change.includes("purchase cost: $205 -> $213"))).toBe(true);
+    expect(row.changes.some((change) => change.includes("verified marker"))).toBe(true);
+  });
+
+  it("a roll already at the approved cost with marker is already_correct", () => {
+    const item = APPROVED_COST_TRUTH.find((entry) => entry.key === "roll-holographic")!;
+    const context = ctxWith({
+      materials: [materialRow({ name: "Holographic Roll Media", calculatedUnitCost: 488 / ((50 / 12) * 164), purchaseCost: 488, rollWidthIn: 50, rollLengthFt: 164, notes: "[VERIFIED 2026-07-17 owner-approved roll/ink cost]" })] as any,
+    });
+    expect(evaluateApprovedItem(item, context).row.status).toBe("already_correct");
+  });
+
+  it("missing Banner Vinyl becomes will_create (the only material creation)", () => {
+    const item = APPROVED_COST_TRUTH.find((entry) => entry.key === "roll-banner-vinyl")!;
+    const { row } = evaluateApprovedItem(item, emptyContext);
+    expect(row.status).toBe("will_create");
+    expect(row.changes.some((change) => change.includes('create Material "Banner Vinyl"'))).toBe(true);
+    const others = APPROVED_COST_TRUTH.filter((entry) => entry.target === "material" && entry.key !== "roll-banner-vinyl");
+    expect(others.every((entry) => !entry.material?.creation)).toBe(true);
+  });
+
+  it("ink material group updates a combined single row AND per-type rows layouts", () => {
+    const item = APPROVED_COST_TRUTH.find((entry) => entry.key === "ink-material-mimaki")!;
+    const combined = ctxWith({ materials: [materialRow({ name: "Mimaki Ink", materialType: "ink_coating", calculatedUnitCost: 0.1765, volumeMl: 1000 })] as any });
+    const combinedResult = evaluateApprovedItem(item, combined);
+    expect(combinedResult.row.status).toBe("will_update");
+    expect(combinedResult.materialGroup).toHaveLength(1);
+
+    const perType = ctxWith({
+      materials: [
+        materialRow({ id: "a", name: "Mimaki CMYK Ink", materialType: "ink_coating", calculatedUnitCost: 0.1765 }),
+        materialRow({ id: "b", name: "Mimaki White Ink", materialType: "ink_coating", calculatedUnitCost: 0.176 }),
+      ] as any,
+    });
+    const perTypeResult = evaluateApprovedItem(item, perType);
+    expect(perTypeResult.row.status).toBe("will_update");
+    // only the drifted row (and the marker-less exact row) need updating; both lack markers here
+    expect(perTypeResult.materialGroup.length).toBe(2);
+  });
+
+  it("ink material group with zero brand rows is missing_record, never created", () => {
+    const item = APPROVED_COST_TRUTH.find((entry) => entry.key === "ink-material-roland")!;
+    const { row } = evaluateApprovedItem(item, emptyContext);
+    expect(row.status).toBe("missing_record");
+    expect(item.material?.creation).toBeUndefined();
+  });
+
+  it("Mimaki channels at the seeded $0.19 become will_update; correct channels are already_correct", () => {
+    const item = APPROVED_COST_TRUTH.find((entry) => entry.key === "ink-channels-mimaki")!;
+    const machine = {
+      id: "mach1", name: "Mimaki UCJV300-130",
+      inkChannels: [
+        { id: "c1", slotNumber: 1, inkName: "Cyan", inkType: "cmyk", enabled: true, costPerMl: 0.19, cartridgeCost: 190, cartridgeMl: 1000 },
+        { id: "c2", slotNumber: 5, inkName: "White", inkType: "white", enabled: true, costPerMl: 0.19, cartridgeCost: 190, cartridgeMl: 1000 },
+        { id: "c3", slotNumber: 7, inkName: "Unused", inkType: "other", enabled: false, costPerMl: 0, cartridgeCost: 0, cartridgeMl: 0 },
+      ],
+    };
+    const result = evaluateApprovedItem(item, ctxWith({ machines: [machine] as any }));
+    expect(result.row.status).toBe("will_update");
+    expect(result.channelGroup[0].channels).toHaveLength(2); // disabled 'other' slot excluded
+
+    const correct = {
+      ...machine,
+      inkChannels: machine.inkChannels.map((channel) => ({ ...channel, costPerMl: 0.176, cartridgeCost: 176, cartridgeMl: 1000 })),
+    };
+    expect(evaluateApprovedItem(item, ctxWith({ machines: [correct] as any })).row.status).toBe("already_correct");
+  });
+
+  it("two machines matching one brand is ambiguous — nothing updates", () => {
+    const item = APPROVED_COST_TRUTH.find((entry) => entry.key === "ink-channels-roland")!;
+    const machines = [
+      { id: "r1", name: "Roland TrueVIS LG-540", inkChannels: [] },
+      { id: "r2", name: "Roland backup", inkChannels: [] },
+    ];
+    const { row, channelGroup } = evaluateApprovedItem(item, ctxWith({ machines: machines as any }));
+    expect(row.status).toBe("ambiguous");
+    expect(channelGroup).toHaveLength(0);
   });
 });
 
