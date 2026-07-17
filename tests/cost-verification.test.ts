@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  APPLY_CONFIRM_PHRASE,
   CALCULATOR_ASSUMPTION_ROWS,
   CONFIDENCE_LABELS,
   NO_FLAT_COST_ISSUE,
@@ -15,12 +16,19 @@ import {
   hasSeededNotes,
   hasVerifiedMarker,
   looksLikePlaceholder,
+  looksLikeTemplateRecord,
+  matchApprovedRecord,
   nearlyEqual,
+  tierChangeSummary,
   tierPolicy,
+  tiersMatchApproved,
   tiersNonMonotonic,
   worstConfidence,
   type ChecklistRow,
 } from "../app/lib/cost-verification-shared";
+// Safe to import: the server lib takes the Prisma client as a parameter and
+// never constructs it (imports only the shared pure lib).
+import { APPROVED_COST_TRUTH } from "../app/lib/approved-cost-updates.server";
 
 describe("verified marker and seeded notes detection", () => {
   it("detects the interim [VERIFIED ...] notes marker", () => {
@@ -162,6 +170,86 @@ describe("owner cost checklist (13.2.1)", () => {
     expect(labor?.cost).toBe(25);
     const machine = CALCULATOR_ASSUMPTION_ROWS.find((row) => /machine rate/i.test(row.itemName));
     expect(machine?.cost).toBe(8);
+  });
+});
+
+describe("approved cost updates (13.2.2)", () => {
+  it("confirmation phrase is exact", () => {
+    expect(APPLY_CONFIRM_PHRASE).toBe("APPLY VERIFIED COSTS");
+  });
+
+  it("pins the owner-approved truth numbers (esp. the 100ml tall correction and DTP pouch)", () => {
+    const tall = APPROVED_COST_TRUTH.find((item) => item.key === "miron-100ml-tall")!;
+    expect(tall.tiers!.map((tier) => tier.unitCost)).toEqual([2.78, 2.54, 2.31, 2.14, 1.99]);
+    const fifty = APPROVED_COST_TRUTH.find((item) => item.key === "miron-50ml")!;
+    expect(fifty.tiers!.map((tier) => tier.unitCost)).toEqual([2.46, 2.24, 2.03, 1.89, 1.74]);
+    const pouch = APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x5x2-pouch")!;
+    expect(pouch.tiers!.map((tier) => [tier.minQty, tier.unitCost])).toEqual([
+      [1000, 0.7138], [2500, 0.4744], [5000, 0.4029], [7500, 0.3458], [10000, 0.3117],
+    ]);
+    const bags = APPROVED_COST_TRUTH.filter((item) => item.key.startsWith("bag-"));
+    expect(bags.map((bag) => bag.flatCost)).toEqual([0.09, 0.1, 1.0]);
+    expect(APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x6x2-pouch")!.policy).toBe("do_not_update");
+    expect(APPROVED_COST_TRUTH.find((item) => item.key === "miron-black-metal-lids")!.policy).toBe("do_not_update");
+    expect(APPROVED_COST_TRUTH.filter((item) => item.key.startsWith("template-")).every((item) => item.policy === "manual_review")).toBe(true);
+  });
+
+  const candidates = [
+    { id: "a", name: "50ml Miron jar + lid", vendorSku: "preset:miron-50ml" },
+    { id: "b", name: "100ml tall Miron jar + lid", vendorSku: "preset:miron-100ml-tall" },
+    { id: "c", name: "Template - 4x5 Outsourced Stock Bag", vendorSku: null },
+    { id: "d", name: "Blank 4x5 bag", vendorSku: null },
+  ];
+
+  it("matches by exact vendorSku first, then unique name", () => {
+    const bySku = matchApprovedRecord({ matchVendorSkus: ["preset:miron-50ml"], matchName: /^50\s?ml.*miron/i }, candidates);
+    expect(bySku.status).toBe("matched");
+    expect(bySku.record?.id).toBe("a");
+
+    const byName = matchApprovedRecord({ matchVendorSkus: ["preset:missing"], matchName: /^100\s?ml.*tall.*miron/i }, candidates);
+    expect(byName.status).toBe("matched");
+    expect(byName.record?.id).toBe("b");
+  });
+
+  it("template records are excluded from normal matching (4x5 bag matches the real item)", () => {
+    expect(looksLikeTemplateRecord("Template - 4x5 Outsourced Stock Bag")).toBe(true);
+    expect(looksLikeTemplateRecord("Blank 4x5 bag")).toBe(false);
+    const result = matchApprovedRecord({ matchVendorSkus: [], matchName: /4\s?x\s?5\b.*bag/i }, candidates);
+    expect(result.status).toBe("matched");
+    expect(result.record?.id).toBe("d");
+  });
+
+  it("multiple hits are ambiguous, zero hits are missing", () => {
+    const ambiguous = matchApprovedRecord({ matchVendorSkus: [], matchName: /miron/i }, candidates);
+    expect(ambiguous.status).toBe("ambiguous");
+    const missing = matchApprovedRecord({ matchVendorSkus: [], matchName: /never-matches-anything/i }, candidates);
+    expect(missing.status).toBe("missing");
+  });
+
+  it("detects the 100ml tall tier drift and summarizes the changes", () => {
+    const seeded = [
+      { minQty: 1, maxQty: 249, unitCost: 2.86 },
+      { minQty: 250, maxQty: 499, unitCost: 2.63 },
+      { minQty: 500, maxQty: 999, unitCost: 2.41 },
+      { minQty: 1000, maxQty: 2499, unitCost: 2.22 },
+      { minQty: 2500, maxQty: null, unitCost: 2.07 },
+    ];
+    const approved = APPROVED_COST_TRUTH.find((item) => item.key === "miron-100ml-tall")!.tiers!;
+    expect(tiersMatchApproved(seeded, approved)).toBe(false);
+    const changes = tierChangeSummary(seeded, approved);
+    expect(changes).toHaveLength(5);
+    expect(changes[0]).toContain("$2.8600 -> $2.7800");
+
+    const fiftyApproved = APPROVED_COST_TRUTH.find((item) => item.key === "miron-50ml")!.tiers!;
+    const fiftySeeded = [
+      { minQty: 1, maxQty: 249, unitCost: 2.46 },
+      { minQty: 250, maxQty: 499, unitCost: 2.24 },
+      { minQty: 500, maxQty: 999, unitCost: 2.03 },
+      { minQty: 1000, maxQty: 2499, unitCost: 1.89 },
+      { minQty: 2500, maxQty: null, unitCost: 1.74 },
+    ];
+    expect(tiersMatchApproved(fiftySeeded, fiftyApproved)).toBe(true);
+    expect(tierChangeSummary(fiftySeeded, fiftyApproved)).toEqual([]);
   });
 });
 

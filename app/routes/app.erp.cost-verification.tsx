@@ -1,11 +1,14 @@
 import type React from "react";
-import { Link, useLoaderData } from "react-router";
+import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { materialKind } from "../lib/material-classify";
 import { resolveMaterialUnitCost, resolvePrintMaterialCostPerSqft } from "../lib/cost-calculator.server";
 import { buildCsv } from "../lib/shopify-cost-audit-shared";
+import { applyApprovedCostUpdates, previewApprovedCostUpdates } from "../lib/approved-cost-updates.server";
 import {
+  APPLY_CONFIRM_PHRASE,
+  APPROVED_UPDATE_STATUS_LABELS,
   CALCULATOR_ASSUMPTION_ROWS,
   CONFIDENCE_LABELS,
   NO_FLAT_COST_ISSUE,
@@ -22,6 +25,7 @@ import {
   tierPolicy,
   tiersNonMonotonic,
   worstConfidence,
+  type ApprovedUpdateStatus,
   type CategoryRow,
   type ChecklistRow,
   type Confidence,
@@ -39,6 +43,25 @@ const money = (value: number, digits = 2) => `$${Number(value || 0).toFixed(digi
 
 function pushIssue(issues: WorkbookIssue[], issue: WorkbookIssue) {
   issues.push(issue);
+}
+
+// 13.2.2: the ONLY write on this page. Owner-gated: requires the exact
+// confirmation phrase, re-evaluates matching server-side, and updates only
+// unambiguously matched VendorProduct/VendorProductTier rows. No Shopify, no
+// quotes, no production, no recipes, no schema.
+export async function action({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+
+  if (String(formData.get("intent")) !== "applyApprovedCosts") {
+    return { ok: false as const, error: "Unknown intent." };
+  }
+  if (String(formData.get("confirmPhrase") ?? "").trim() !== APPLY_CONFIRM_PHRASE) {
+    return { ok: false as const, error: `Confirmation phrase does not match. Type exactly: ${APPLY_CONFIRM_PHRASE}` };
+  }
+
+  const result = await applyApprovedCostUpdates(db, session.shop);
+  return { ok: true as const, applied: result.applied, skippedCount: result.skipped.length };
 }
 
 export async function loader({ request }: { request: Request }) {
@@ -526,6 +549,7 @@ export async function loader({ request }: { request: Request }) {
     inkChannelRows,
     replayTests,
     ownerChecklist,
+    approvedUpdates: await previewApprovedCostUpdates(db, shop),
   };
 }
 
@@ -545,8 +569,21 @@ function ConfidenceBadge({ value }: { value: Confidence }) {
   return <span style={confidenceStyle[value]}>{CONFIDENCE_LABELS[value]}</span>;
 }
 
+const approvedStatusStyle: Record<ApprovedUpdateStatus, React.CSSProperties> = {
+  already_correct: { background: "#dcfce7", color: "#166534", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
+  will_update: { background: "#fef3c7", color: "#92400e", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
+  missing_record: { background: "#fee2e2", color: "#991b1b", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
+  ambiguous: { background: "#fee2e2", color: "#991b1b", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
+  manual_review: { background: "#fee2e2", color: "#991b1b", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
+  do_not_update: { background: "#e5e7eb", color: "#374151", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
+};
+
 export default function CostVerificationRoute() {
   const data = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const applying = navigation.state === "submitting";
+  const willUpdateCount = data.approvedUpdates.filter((row) => row.status === "will_update").length;
 
   const downloadCsv = () => {
     const csv = buildCsv(
@@ -620,6 +657,64 @@ export default function CostVerificationRoute() {
             <span style={card.ok ? confidenceStyle.verified : confidenceStyle.seeded}>{card.ok ? "Ready" : "Needs work"}</span>
           </div>
         ))}
+      </section>
+
+      <section style={{ ...cardStyle, marginTop: 16, border: "2px solid #f59e0b" }}>
+        <h2 style={{ marginTop: 0 }}>Approved Cost Updates (owner-only)</h2>
+        <p style={{ fontSize: 13, color: "#92400e", background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 10, padding: "10px 14px" }}>
+          <b>Owner / advanced tool.</b> This applies the owner-approved cost truth list (2026-07-17) to ERP vendor cost records. Nothing updates on
+          deploy or page load — this table is a read-only preview until you type the confirmation phrase and press Apply. Only unambiguously matched
+          rows update; missing/ambiguous/template rows are never touched. No Shopify, quote, production, recipe, or pricing-engine data is affected.
+        </p>
+
+        {actionData ? (
+          actionData.ok ? (
+            <div style={{ border: "1px solid #16a34a", background: "#f0fdf4", color: "#166534", borderRadius: 10, padding: "10px 14px", fontSize: 13, marginBottom: 10 }}>
+              <b>Applied {actionData.applied.length} update(s)</b> ({actionData.skippedCount} row(s) skipped as not updatable):
+              <ul style={{ margin: "6px 0 0 18px" }}>
+                {actionData.applied.map((entry) => <li key={entry.key}><b>{entry.label}</b>: {entry.changes.join("; ")}</li>)}
+                {!actionData.applied.length ? <li>Nothing needed updating — everything already matched the approved list.</li> : null}
+              </ul>
+            </div>
+          ) : (
+            <div style={{ border: "1px solid #ef4444", background: "#fef2f2", color: "#991b1b", borderRadius: 10, padding: "10px 14px", fontSize: 13, marginBottom: 10 }}>
+              {actionData.error}
+            </div>
+          )
+        ) : null}
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={thStyle}>Item</th><th style={thStyle}>Status</th><th style={thStyle}>Current app value</th><th style={thStyle}>Approved value</th><th style={thStyle}>Changes on apply</th><th style={thStyle}>Matched record / note</th></tr></thead>
+            <tbody>
+              {data.approvedUpdates.map((row) => (
+                <tr key={row.key}>
+                  <td style={tdStyle}><b>{row.label}</b></td>
+                  <td style={tdStyle}><span style={approvedStatusStyle[row.status]}>{APPROVED_UPDATE_STATUS_LABELS[row.status]}</span></td>
+                  <td style={tdStyle}>{row.currentSummary}</td>
+                  <td style={tdStyle}>{row.approvedSummary}</td>
+                  <td style={tdStyle}>{row.changes.length ? row.changes.join("; ") : "—"}</td>
+                  <td style={tdStyle}>{row.matchedName || "—"}{row.note ? <div style={smallHelp}>{row.note}</div> : null}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {willUpdateCount > 0 ? (
+          <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 12 }}>
+            <input type="hidden" name="intent" value="applyApprovedCosts" />
+            <label style={{ fontSize: 13 }}>
+              Type <code>{APPLY_CONFIRM_PHRASE}</code> to apply {willUpdateCount} update(s)<br />
+              <input name="confirmPhrase" autoComplete="off" placeholder={APPLY_CONFIRM_PHRASE} style={{ padding: 10, border: "1px solid #d1d5db", borderRadius: 8, width: 280 }} />
+            </label>
+            <button type="submit" disabled={applying} style={{ background: applying ? "#9ca3af" : "#b45309", color: "white", border: 0, borderRadius: 10, padding: "12px 18px", fontWeight: 800 }}>
+              {applying ? "Applying..." : "Apply approved cost updates"}
+            </button>
+          </Form>
+        ) : (
+          <div style={{ ...smallHelp, marginTop: 10 }}>No rows need updating — every matched record already matches the approved list.</div>
+        )}
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>

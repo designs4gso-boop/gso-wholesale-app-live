@@ -2,6 +2,7 @@
 // fingerprints, confidence classification, replay-test definitions, and the
 // severity rules. No Prisma, no Shopify, no .server imports; the route
 // component and the tests import this file directly.
+import { normalizeSku } from "./shopify-cost-audit-shared";
 
 export type Confidence = "verified" | "manual" | "seeded" | "missing";
 
@@ -200,6 +201,96 @@ export const CALCULATOR_ASSUMPTION_ROWS: Array<{ itemName: string; cost: number 
   { itemName: "Packout rules (standard/bulk/individual)", cost: null, unit: "$0.01-0.05/unit + flat", note: "Hardcoded rule table." },
   { itemName: "Default line waste", cost: null, unit: "10 %", note: "Assumed, never measured." },
 ];
+
+// ---------- Approved Cost Updates (13.2.2) ----------
+// Pure matching/diff logic for applying the owner-approved cost truth list.
+// The truth table and db orchestration live in approved-cost-updates.server.ts;
+// everything here is client-safe and unit-tested.
+
+export const APPLY_CONFIRM_PHRASE = "APPLY VERIFIED COSTS";
+
+export type ApprovedUpdateStatus =
+  | "already_correct"
+  | "will_update"
+  | "missing_record"
+  | "ambiguous"
+  | "manual_review"
+  | "do_not_update";
+
+export const APPROVED_UPDATE_STATUS_LABELS: Record<ApprovedUpdateStatus, string> = {
+  already_correct: "Already correct",
+  will_update: "Will update",
+  missing_record: "Missing record — manual create/review",
+  ambiguous: "Ambiguous — manual review",
+  manual_review: "Needs manual review",
+  do_not_update: "Do not update (owner decision)",
+};
+
+export type ApprovedTier = { minQty: number; maxQty: number | null; unitCost: number };
+
+// Template/placeholder records must never be captured by normal item matching
+// (e.g. "Template - 4x5 Outsourced Stock Bag" must not match the 4x5 blank bag).
+export function looksLikeTemplateRecord(name: unknown) {
+  return /template|outsourced|stock\s?bag/i.test(String(name ?? ""));
+}
+
+// Safest-identifier matching: exact vendorSku first, then a unique anchored
+// name match among non-template candidates. Multiple hits = ambiguous.
+export function matchApprovedRecord<T extends { id: string; name: string | null; vendorSku: string | null }>(
+  item: { matchVendorSkus: string[]; matchName: RegExp; allowTemplates?: boolean },
+  candidates: T[],
+): { status: "matched" | "missing" | "ambiguous"; record: T | null; hits: T[] } {
+  const skuSet = new Set(item.matchVendorSkus.map((sku) => normalizeSku(sku)));
+  const pool = item.allowTemplates ? candidates : candidates.filter((c) => !looksLikeTemplateRecord(c.name));
+
+  const bySku = pool.filter((c) => c.vendorSku && skuSet.has(normalizeSku(c.vendorSku)));
+  if (bySku.length === 1) return { status: "matched", record: bySku[0], hits: bySku };
+  if (bySku.length > 1) return { status: "ambiguous", record: null, hits: bySku };
+
+  const byName = pool.filter((c) => item.matchName.test(String(c.name ?? "")));
+  if (byName.length === 1) return { status: "matched", record: byName[0], hits: byName };
+  if (byName.length > 1) return { status: "ambiguous", record: null, hits: byName };
+  return { status: "missing", record: null, hits: [] };
+}
+
+// Order-insensitive tier comparison: equal when every approved (min,max,cost)
+// row exists exactly once in the current set and counts match.
+export function tiersMatchApproved(
+  currentTiers: Array<{ minQty: number; maxQty: number | null; unitCost: number }>,
+  approvedTiers: ApprovedTier[],
+) {
+  if (currentTiers.length !== approvedTiers.length) return false;
+  const keyOf = (tier: { minQty: number; maxQty: number | null; unitCost: number }) =>
+    `${Number(tier.minQty)}|${tier.maxQty == null ? "" : Number(tier.maxQty)}|${Number(tier.unitCost).toFixed(4)}`;
+  const current = new Map<string, number>();
+  for (const tier of currentTiers) current.set(keyOf(tier), (current.get(keyOf(tier)) || 0) + 1);
+  for (const tier of approvedTiers) {
+    const key = keyOf(tier);
+    const count = current.get(key) || 0;
+    if (!count) return false;
+    current.set(key, count - 1);
+  }
+  return true;
+}
+
+export function tierChangeSummary(
+  currentTiers: Array<{ minQty: number; maxQty: number | null; unitCost: number }>,
+  approvedTiers: ApprovedTier[],
+) {
+  const label = (tier: { minQty: number; maxQty: number | null }) =>
+    tier.maxQty == null ? `${tier.minQty}+` : `${tier.minQty}-${tier.maxQty}`;
+  const currentByRange = new Map(currentTiers.map((tier) => [label(tier), Number(tier.unitCost)]));
+  const parts: string[] = [];
+  for (const tier of approvedTiers) {
+    const existing = currentByRange.get(label(tier));
+    if (existing == null) parts.push(`${label(tier)}: add $${tier.unitCost.toFixed(4)}`);
+    else if (!nearlyEqual(existing, tier.unitCost, 0.0001)) parts.push(`${label(tier)}: $${existing.toFixed(4)} -> $${tier.unitCost.toFixed(4)}`);
+  }
+  for (const tier of currentTiers) {
+    if (!approvedTiers.some((approved) => label(approved) === label(tier))) parts.push(`${label(tier)}: remove`);
+  }
+  return parts;
+}
 
 // ---------- Known-job replay tests (T1-T7) ----------
 
