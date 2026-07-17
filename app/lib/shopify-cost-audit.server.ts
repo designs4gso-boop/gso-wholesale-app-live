@@ -298,14 +298,119 @@ function moneyOrNull(value: unknown): number | null {
   return Number.isFinite(amount) ? amount : null;
 }
 
+// Runs one page and never lets an auth redirect escape: the app template's
+// graphql client throws a redirect Response on 401/403, and letting that
+// propagate out of the loader is exactly the embedded login loop this page
+// must not cause (12B.2b.1). A thrown Response becomes an access error the
+// probe can degrade on; the page then shows a banner instead of redirecting.
 async function runProductsPage(admin: any, query: string, cursor: string | null) {
-  const response = await admin.graphql(query, { variables: { cursor } });
-  const body = await response.json();
-  return { data: body?.data ?? null, errors: (body?.errors as any[]) || [] };
+  try {
+    const response = await admin.graphql(query, { variables: { cursor } });
+    const body = await response.json();
+    return { data: body?.data ?? null, errors: (body?.errors as any[]) || [] };
+  } catch (error) {
+    if (error instanceof Response) {
+      return {
+        data: null,
+        errors: [{
+          message: `Shopify rejected the request (HTTP ${error.status}) — usually a permissions/scope mismatch.`,
+          extensions: { code: "ACCESS_DENIED" },
+        }],
+      };
+    }
+    throw error;
+  }
+}
+
+type PullAttempt = {
+  accessDenied: boolean;
+  accessMessage: string | null;
+  error: string | null;
+  throttled: boolean;
+  truncated: boolean;
+  pageCount: number;
+  productCount: number;
+  variants: ShopifyVariantRecord[];
+};
+
+async function attemptPull(admin: any, includeInventory: boolean): Promise<PullAttempt> {
+  const attempt: PullAttempt = {
+    accessDenied: false,
+    accessMessage: null,
+    error: null,
+    throttled: false,
+    truncated: false,
+    pageCount: 0,
+    productCount: 0,
+    variants: [],
+  };
+  const query = buildProductsQuery(includeInventory);
+
+  let cursor: string | null = null;
+  for (let pageIndex = 0; pageIndex < MAX_PRODUCT_PAGES; pageIndex += 1) {
+    const page = await runProductsPage(admin, query, cursor);
+
+    // Field-level denials can arrive alongside partial data; any access error
+    // aborts this attempt so the caller can retry without the cost fields.
+    if (page.errors.length && isAccessError(page.errors)) {
+      attempt.accessDenied = true;
+      attempt.accessMessage = String(page.errors[0]?.message || "Access denied for inventory cost fields.");
+      return attempt;
+    }
+
+    if (!page.data) {
+      if (isThrottleError(page.errors)) {
+        attempt.throttled = true;
+        return attempt;
+      }
+      attempt.error = String(page.errors[0]?.message || "Shopify query failed.");
+      return attempt;
+    }
+
+    attempt.pageCount += 1;
+    const connection = page.data.products;
+    for (const edge of connection?.edges || []) {
+      const node = edge?.node;
+      if (!node) continue;
+      attempt.productCount += 1;
+      const variantsTruncated = Boolean(node.variants?.pageInfo?.hasNextPage);
+      for (const variantEdge of node.variants?.edges || []) {
+        const variant = variantEdge?.node;
+        if (!variant) continue;
+        attempt.variants.push({
+          productId: String(node.id || ""),
+          productTitle: String(node.title || ""),
+          handle: String(node.handle || ""),
+          vendor: String(node.vendor || ""),
+          productType: String(node.productType || ""),
+          tags: Array.isArray(node.tags) ? node.tags.join(", ") : String(node.tags || ""),
+          productStatus: String(node.status || ""),
+          variantId: String(variant.id || ""),
+          variantTitle: String(variant.title || ""),
+          sku: String(variant.sku || ""),
+          barcode: String(variant.barcode || ""),
+          price: moneyOrNull(variant.price),
+          compareAtPrice: moneyOrNull(variant.compareAtPrice),
+          inventoryItemId: String(variant.inventoryItem?.id || ""),
+          tracked: variant.inventoryItem ? Boolean(variant.inventoryItem.tracked) : null,
+          unitCost: includeInventory ? moneyOrNull(variant.inventoryItem?.unitCost) : null,
+          currency: variant.inventoryItem?.unitCost?.currencyCode || null,
+          variantsTruncated,
+        });
+      }
+    }
+
+    if (!connection?.pageInfo?.hasNextPage) return attempt;
+    cursor = String(connection.pageInfo.endCursor || "");
+    if (!cursor) return attempt;
+  }
+
+  attempt.truncated = true;
+  return attempt;
 }
 
 export async function pullShopifyCatalog(admin: any): Promise<ShopifyPullResult> {
-  const result: ShopifyPullResult = {
+  const empty: ShopifyPullResult = {
     ok: false,
     error: null,
     inventoryAccess: true,
@@ -317,81 +422,42 @@ export async function pullShopifyCatalog(admin: any): Promise<ShopifyPullResult>
     variants: [],
   };
 
-  let query = buildProductsQuery(true);
-
-  // Scope probe: if the first page is denied because of inventory access,
-  // fall back to the degraded query (no inventoryItem/unitCost) and restart.
   try {
-    let probe = await runProductsPage(admin, query, null);
-    if (!probe.data && probe.errors.length && isAccessError(probe.errors)) {
-      result.inventoryAccess = false;
-      result.inventoryAccessError = String(probe.errors[0]?.message || "Access denied for inventory cost fields.");
-      query = buildProductsQuery(false);
-      probe = await runProductsPage(admin, query, null);
+    let inventoryAccess = true;
+    let inventoryAccessError: string | null = null;
+
+    let attempt = await attemptPull(admin, true);
+    if (attempt.accessDenied) {
+      inventoryAccess = false;
+      inventoryAccessError = attempt.accessMessage;
+      attempt = await attemptPull(admin, false);
+      if (attempt.accessDenied) {
+        // Even the plain read_products query was denied. Surface it in-page;
+        // never propagate a redirect.
+        return {
+          ...empty,
+          inventoryAccess: false,
+          inventoryAccessError,
+          error: attempt.accessMessage || "Shopify denied the product query. Check app permissions, then reload.",
+        };
+      }
     }
 
-    let page = probe;
-    let cursor: string | null = null;
-    for (let pageIndex = 0; pageIndex < MAX_PRODUCT_PAGES; pageIndex += 1) {
-      if (pageIndex > 0) page = await runProductsPage(admin, query, cursor);
-
-      if (!page.data) {
-        if (isThrottleError(page.errors)) {
-          result.throttled = true;
-          break;
-        }
-        result.error = String(page.errors[0]?.message || "Shopify query failed.");
-        break;
-      }
-
-      result.pageCount += 1;
-      const connection = page.data.products;
-      for (const edge of connection?.edges || []) {
-        const node = edge?.node;
-        if (!node) continue;
-        result.productCount += 1;
-        const variantsTruncated = Boolean(node.variants?.pageInfo?.hasNextPage);
-        for (const variantEdge of node.variants?.edges || []) {
-          const variant = variantEdge?.node;
-          if (!variant) continue;
-          result.variants.push({
-            productId: String(node.id || ""),
-            productTitle: String(node.title || ""),
-            handle: String(node.handle || ""),
-            vendor: String(node.vendor || ""),
-            productType: String(node.productType || ""),
-            tags: Array.isArray(node.tags) ? node.tags.join(", ") : String(node.tags || ""),
-            productStatus: String(node.status || ""),
-            variantId: String(variant.id || ""),
-            variantTitle: String(variant.title || ""),
-            sku: String(variant.sku || ""),
-            barcode: String(variant.barcode || ""),
-            price: moneyOrNull(variant.price),
-            compareAtPrice: moneyOrNull(variant.compareAtPrice),
-            inventoryItemId: String(variant.inventoryItem?.id || ""),
-            tracked: variant.inventoryItem ? Boolean(variant.inventoryItem.tracked) : null,
-            unitCost: result.inventoryAccess ? moneyOrNull(variant.inventoryItem?.unitCost) : null,
-            currency: variant.inventoryItem?.unitCost?.currencyCode || null,
-            variantsTruncated,
-          });
-        }
-      }
-
-      if (!connection?.pageInfo?.hasNextPage) {
-        result.ok = !result.error;
-        return result;
-      }
-      cursor = String(connection.pageInfo.endCursor || "");
-      if (!cursor) break;
-    }
-
-    // Loop ended without pageInfo saying done: capped or errored.
-    if (!result.error && !result.throttled) result.truncated = true;
-    result.ok = result.variants.length > 0 || !result.error;
-    return result;
+    return {
+      ok: !attempt.error,
+      error: attempt.error,
+      inventoryAccess,
+      inventoryAccessError,
+      throttled: attempt.throttled,
+      truncated: attempt.truncated,
+      pageCount: attempt.pageCount,
+      productCount: attempt.productCount,
+      variants: attempt.variants,
+    };
   } catch (error) {
-    result.error = error instanceof Error ? error.message : "Shopify pull failed.";
-    result.ok = result.variants.length > 0;
-    return result;
+    return {
+      ...empty,
+      error: error instanceof Error ? error.message : "Shopify pull failed.",
+    };
   }
 }

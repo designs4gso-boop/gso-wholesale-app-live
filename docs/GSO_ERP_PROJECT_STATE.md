@@ -389,6 +389,14 @@ Quote recipe gates remain:
 - Tests: 82 -> 97 passing (15 new in `tests/shopify-cost-audit.test.ts`: SKU/GID normalization, matcher precedence + handle + dedupe, ambiguity, cost-authority order, band delta math, exact tolerance boundaries, non-numeric statuses, CSV escaping). Pure logic lives in client-safe `app/lib/shopify-cost-audit-shared.ts` (the route component and tests import only this; the `.server` lib layers the Shopify pull + Prisma-parameterized index on top, so tests never construct Prisma against the production DATABASE_URL).
 - Still not allowed / not built: any Shopify mutation, any ERP-database write from this page, any "sync cost" button (requires separate owner approval + write scope), Bulk Operations.
 
+## Completed Milestone: Shopify Cost Audit Auth-Loop Fix (Patch 12B.2b.1)
+
+- CORRECTION to 12B.2b: requiring `read_inventory` caused an embedded login loop in production — after `shopify app deploy`, the deployed config demanded the new scope while the installed token lacked it, so the graphql client's 401/403 handling threw a re-auth redirect on every Pull click that could never complete inside the iframe.
+- `read_inventory` REMOVED from `shopify.app.toml` required scopes (no new required scope; `read_products` kept). Shopify research: InventoryItem is queryable with `read_products`; `InventoryItem.unitCost` may additionally require the staff "view product costs" granular permission — which a required scope cannot fix anyway. **Owner must run `shopify app deploy` again to publish the reverted scope list; the loop persists until that deploy.**
+- Pull hardening (the mechanical anti-loop guarantee): `runProductsPage` now catches thrown redirect `Response`s from the graphql client and converts them into in-page access errors, so no redirect can ever escape the loader; field-level access denials that arrive alongside partial data now also trigger the degraded retry; if even the plain product query is denied, the page shows an error banner instead of redirecting.
+- Degraded banner copy updated per owner wording: "Shopify cost/COGS access is unavailable. Inventory item cost may require product cost permission / granular Shopify permissions. Products, variants, prices, SKUs, and ERP matching still work."
+- Everything else unchanged: read-only pull, no action export, no writes, no mutations, CSV/TSV export intact.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:

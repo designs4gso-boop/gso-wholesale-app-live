@@ -276,9 +276,8 @@ export default function ShopifyCostAuditRoute() {
 
       {data.pulled && !data.pull.inventoryAccess ? (
         <section style={{ marginTop: 16, border: "2px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 12, padding: "12px 16px", fontSize: 13 }}>
-          <b>Shopify cost/COGS access is unavailable.</b> Add/approve the <code>read_inventory</code> scope and ensure product cost permission is
-          available, then redeploy/reauthorize the app (owner runs <code>shopify app deploy</code> and accepts the new permission in the admin).
-          Products, variants, prices, SKUs, and ERP matching below still work; the cost column is disabled.
+          <b>Shopify cost/COGS access is unavailable.</b> Inventory item cost may require product cost permission / granular Shopify permissions.
+          Products, variants, prices, SKUs, and ERP matching still work; the cost column is disabled for this pull.
           {data.pull.inventoryAccessError ? <div style={smallHelp}>Shopify said: {data.pull.inventoryAccessError}</div> : null}
         </section>
       ) : null}

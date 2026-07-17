@@ -26,9 +26,14 @@ uri = "/webhooks/orders_paid"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-# read_inventory added in 12B.2b for InventoryItem.unitCost (Shopify Cost Audit page).
-# NOT live until the owner runs `shopify app deploy` and re-approves permissions in the admin.
-scopes = "read_customers,read_inventory,read_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms"
+# 12B.2b.1: read_inventory was briefly required here and caused an embedded auth
+# loop (installed token lacked the new scope, so every admin.graphql call
+# redirected to login). InventoryItem is readable with read_products;
+# InventoryItem.unitCost may additionally need the staff "view product costs"
+# granular permission. The Shopify Cost Audit page probes for cost access and
+# degrades with a banner, so no new required scope is needed.
+# Owner must run `shopify app deploy` after changing this line to publish it.
+scopes = "read_customers,read_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
