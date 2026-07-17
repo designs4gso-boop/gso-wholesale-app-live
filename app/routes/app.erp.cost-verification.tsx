@@ -14,7 +14,9 @@ import {
   NO_FLAT_COST_ISSUE,
   OWNER_CHECKLIST_HEADER,
   PLACEHOLDER_ISSUE,
+  REPLAY_RECORD_FIELDS,
   SEEDED_FINGERPRINTS,
+  SINGLE_TIER_FLAT_NOTE,
   UNEXPECTED_TIERS_ISSUE,
   buildReplayTests,
   checklistRowToCells,
@@ -295,16 +297,13 @@ export async function loader({ request }: { request: Request }) {
     const hit = vendorProducts.find((p) => needle.test(`${p.vendorSku || ""} ${p.name || ""}`));
     return hit ? `vendor:${hit.id}` : null;
   };
-  const holographic = materials.find((m) => materialKind(m) === "print" && /holo/i.test(m.name || ""));
-  const tieredVendor = vendorProducts.find((p) => p.tiers.length > 0);
+  const bannerVinyl = materials.find((m) => materialKind(m) === "print" && /banner/i.test(m.name || ""));
   const replayTests = buildReplayTests({
     threeOzItemId: findVendorItem(/3oz.*clear|preset:3oz-jar-clear/i),
     fourOzItemId: findVendorItem(/4oz.*clear|preset:4oz-jar-clear/i),
-    holographicMaterialId: holographic?.id || null,
     bagItemId: findVendorItem(/4x5.*bag|preset:blank-4x5-bag/i) || "preset:blank-4x5-bag",
-    blankOnlyItemId: tieredVendor ? `vendor:${tieredVendor.id}` : null,
-    hasRipRows: ripCount > 0,
-    hasOutsourcedRecipe: recipes.some((recipe) => recipe.productionMode === "outsourced"),
+    dtpPouchItemId: findVendorItem(/preset:dtp-4x5x2-pouch|4\s?x\s?5\s?x\s?2.*pouch/i),
+    bannerVinylMaterialId: bannerVinyl?.id || null,
   });
 
   issues.sort((a, b) => (a.severity === b.severity ? a.area.localeCompare(b.area) : a.severity === "critical" ? -1 : 1));
@@ -315,12 +314,18 @@ export async function loader({ request }: { request: Request }) {
 
   for (const product of vendorProducts) {
     const policy = tierPolicy(product.vendor, product.name);
+    const productVerified = hasVerifiedMarker(product.notes);
     const baseIssues: string[] = [];
     if (looksLikePlaceholder(product.name, product.vendorSku, product.notes)) baseIssues.push(PLACEHOLDER_ISSUE);
     const verify = `Vendor invoice / price sheet (${product.vendor || "vendor"})`;
 
     if (product.tiers.length) {
-      if (policy === "expected_flat") baseIssues.push(UNEXPECTED_TIERS_ISSUE);
+      // 13.2.5 warning cleanup: approved-tiered items (Miron, DTP 4x5x2) and
+      // anything the owner has VERIFIED never get the unexpected-tiers flag —
+      // verification is the confirmation the warning asks for. One-row tiers
+      // are the app's flat-storage convention: informational note only.
+      if (product.tiers.length > 1 && policy === "expected_flat" && !productVerified) baseIssues.push(UNEXPECTED_TIERS_ISSUE);
+      if (product.tiers.length === 1 && !productVerified) baseIssues.push(SINGLE_TIER_FLAT_NOTE);
       if (tiersNonMonotonic(product.tiers)) baseIssues.push("Tier cost rises with quantity — check for typos.");
       for (const tier of product.tiers) {
         ownerChecklist.push({
@@ -640,6 +645,32 @@ export default function CostVerificationRoute() {
         their proper verified stamps arrive with the planned schema patch.)
       </section>
 
+      <section style={{ ...cardStyle, marginTop: 16, borderColor: "#86efac" }}>
+        <h2 style={{ marginTop: 0 }}>Remaining calibration work</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, fontSize: 13 }}>
+          <div>
+            <b style={{ color: "#166534" }}>Raw costs VERIFIED (owner-approved 2026-07-17):</b>
+            <ul style={{ margin: "6px 0 0 18px", lineHeight: 1.7 }}>
+              <li>Miron jars + normal SAN lid (tiered) and SAFECARE 3oz/4oz/5oz jars (flat)</li>
+              <li>Blank bags: 4x5 $0.09 · 4x6 $0.10 · 14x16 $1.00</li>
+              <li>DTP 4x5x2 blank pouch (approved tiered $0.7138 → $0.3117)</li>
+              <li>Roll media: Poseidon matte/gloss $0.3156 · holographic $0.7141 · banner vinyl $0.2963 per sqft</li>
+              <li>Raw ink: Mimaki $0.1760/ml · Roland $0.1987/ml</li>
+            </ul>
+          </div>
+          <div>
+            <b style={{ color: "#92400e" }}>Still needs calibration (deliberately unresolved):</b>
+            <ul style={{ margin: "6px 0 0 18px", lineHeight: 1.7 }}>
+              <li>Ink <b>usage per sqft</b> (0.0075 seeded; the $/sqft estimate profiles) — calibrate from RIP actuals (13A)</li>
+              <li>Machine hourly rate — $5/hr on Machines vs $8/hr calculator default; owner picks one later</li>
+              <li>Print speed / setup minutes (finish speed curve + setup assumptions)</li>
+              <li>Labor rate + application/cutting/prepress/packout timing (code heuristics — stopwatch a real run)</li>
+              <li>Known-job replay: 0 of 7 recorded (section below)</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <section style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginTop: 16 }}>
         {[
           { label: "Blank item costs", value: `${data.summary.blankCount} items`, ok: data.summary.blankReady },
@@ -834,24 +865,44 @@ export default function CostVerificationRoute() {
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Known-job replay checklist</h2>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={thStyle}>#</th><th style={thStyle}>Job</th><th style={thStyle}>Cost drivers tested</th><th style={thStyle}>What to verify</th><th style={thStyle}>Run</th></tr></thead>
-            <tbody>
-              {data.replayTests.map((test: ReplayTest) => (
-                <tr key={test.id} style={test.pending ? { opacity: 0.6 } : undefined}>
-                  <td style={tdStyle}><b>{test.id}</b></td>
-                  <td style={tdStyle}>{test.name}</td>
-                  <td style={tdStyle}>{test.drivers}</td>
-                  <td style={tdStyle}>{test.verify}</td>
-                  <td style={tdStyle}>{test.href ? <Link to={test.href}>{test.hrefLabel}</Link> : <span style={{ color: "#6b7280" }}>{test.hrefLabel}</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <h2 style={{ marginTop: 0 }}>Known Job Replay Prep (0 of 7 recorded)</h2>
+        <p style={{ fontSize: 13, color: "#4b5563" }}>
+          Seven test jobs, ready to run once you want to prove the calculator against reality. Each slot prefills the Cost Calculator where the
+          record exists; enter real label/art sizes on the page. Results are <b>not saved by the app yet</b> (no schema this patch) — fill the
+          boxes on a printout or record numbers in docs/GSO_ERP_PROJECT_STATE.md; a schema-backed replay log is a later patch.
+        </p>
+        <div style={{ display: "grid", gap: 12 }}>
+          {data.replayTests.map((test: ReplayTest) => (
+            <div key={test.id} style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: test.pending ? "#f9fafb" : "white" }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                <b style={{ fontSize: 15 }}>{test.id} — {test.name}</b>
+                <span style={{ marginLeft: "auto" }}>
+                  {test.href ? <Link to={test.href} className="no-print">{test.hrefLabel}</Link> : <span style={{ color: "#92400e", fontSize: 12 }}>{test.hrefLabel}</span>}
+                </span>
+              </div>
+              <div style={{ ...smallHelp, marginTop: 4 }}>Tests: {test.drivers}</div>
+              <div style={{ ...smallHelp }}>Verify: {test.verify}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8, marginTop: 10 }}>
+                {REPLAY_RECORD_FIELDS.map((field) => {
+                  const prefilled =
+                    field === "job name" ? test.name
+                    : field === "quantity" ? (test.quantity == null ? "" : String(test.quantity))
+                    : field === "product/material" ? test.product
+                    : field === "finish" ? test.finish
+                    : "";
+                  return (
+                    <div key={field} style={{ fontSize: 11 }}>
+                      <div style={{ color: "#6b7280", marginBottom: 2 }}>{field}</div>
+                      <div style={{ border: "1px solid #d1d5db", borderRadius: 6, minHeight: 26, padding: "4px 6px", background: prefilled ? "#f9fafb" : "white", color: "#111827" }}>
+                        {prefilled}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
-        <div style={smallHelp}>Results are not saved yet — record pass/fail and the numbers in docs/GSO_ERP_PROJECT_STATE.md (or the printed checklist) after each run.</div>
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: "#86efac", background: "#f0fdf4" }}>

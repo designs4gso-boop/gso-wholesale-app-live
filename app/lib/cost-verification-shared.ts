@@ -108,12 +108,18 @@ export type CategoryRow = {
 
 // ---------- Owner Cost Checklist export (13.2.1) ----------
 
-// Owner rule: only Miron jars are expected to carry quantity tiers; everything
-// else should be a flat cost unless the owner confirms otherwise.
+// Owner rule (updated 13.2.5): Miron jars AND the DTP 4x5x2 blank pouch are
+// approved as tiered; everything else should be a flat cost unless the owner
+// confirms otherwise. A [VERIFIED ...] marker on a record also counts as that
+// confirmation (verification IS the owner sign-off the warning asks for).
 export function tierPolicy(vendor: unknown, name: unknown): "expected_tiered" | "expected_flat" {
   const text = `${String(vendor ?? "")} ${String(name ?? "")}`;
-  return /miron/i.test(text) ? "expected_tiered" : "expected_flat";
+  return /miron|4\s?x\s?5\s?x\s?2/i.test(text) ? "expected_tiered" : "expected_flat";
 }
+
+// One-row all-range tiers are the app's storage pattern for flat costs (the
+// jar seed wrote SAFECARE jars this way). Informational, never a warning.
+export const SINGLE_TIER_FLAT_NOTE = "Flat cost stored as a single tier row (app convention) — informational only.";
 
 const PLACEHOLDER_HINT = /(template|placeholder|sample|\btest\b)/i;
 const FIVE_OZ_HINT = /(jar_5oz|5\s*oz)/i;
@@ -299,12 +305,34 @@ export function tierChangeSummary(
 export type ReplayTest = {
   id: string;
   name: string;
+  quantity: number | null;
+  product: string;
+  finish: string;
   drivers: string;
   verify: string;
   href: string | null;
   hrefLabel: string;
   pending: boolean;
 };
+
+// The fields each replay slot eventually records. Read-only prep for now (no
+// schema): rendered as blank fill-in cells on the page and in the CSV; results
+// get written into docs/GSO_ERP_PROJECT_STATE.md until a schema patch adds a
+// proper replay-results model.
+export const REPLAY_RECORD_FIELDS = [
+  "job name",
+  "quantity",
+  "product/material",
+  "label/art sqft",
+  "finish",
+  "estimated app cost",
+  "actual material used",
+  "actual ink/RIP result",
+  "actual labor minutes",
+  "actual machine/print minutes",
+  "variance",
+  "owner notes",
+] as const;
 
 // Prefill URL for the Cost Calculator. Param names MUST match the calculator's
 // form field names exactly (unit-tested); values the owner must supply (real
@@ -318,19 +346,18 @@ export function calculatorPrefillUrl(params: Record<string, string | number>) {
   return `/app/erp/cost-calculator?${search.toString()}`;
 }
 
+// 13.2.5 replay slots: the owner's seven known-job tests. Each slot prefills
+// the Cost Calculator where records exist; real label/art sizes are always
+// left for the owner to enter. Results are recorded manually for now.
 export function buildReplayTests(context: {
   threeOzItemId: string | null;
   fourOzItemId: string | null;
-  holographicMaterialId: string | null;
   bagItemId: string | null;
-  blankOnlyItemId: string | null;
-  hasRipRows: boolean;
-  hasOutsourcedRecipe: boolean;
+  dtpPouchItemId: string | null;
+  bannerVinylMaterialId: string | null;
 }): ReplayTest[] {
   const jarBase = {
     lineCount: 1,
-    lineName: "Jar label",
-    lineQty: 600,
     lineLabelType: "side",
     itemMode: "inventory",
     applicationMode: "apply-jar",
@@ -342,95 +369,96 @@ export function buildReplayTests(context: {
   return [
     {
       id: "T1",
-      name: "600 × 3oz jar labels — holographic media, jar application, cut, proof, packout",
-      drivers: "Holographic $/sqft, 3oz blank cost, application seconds, cutting, prepress, packout, waste",
-      verify: "Blank at $0.50 (clear) / $0.62 (b&w) unless the invoice says otherwise; holographic $/sqft vs supplier invoice (the old hardcode was $0.72); total vs what this job was actually charged.",
+      name: "600 × 3oz jar labels",
+      quantity: 600,
+      product: "3oz SAFECARE jar (verified $0.50/$0.62) + label media",
+      finish: "CMYK (choose media on the page)",
+      drivers: "Verified 3oz blank cost, media $/sqft, application seconds, cutting, prepress, packout",
+      verify: "Estimated total vs what this job was actually charged; blank cost line at the verified value.",
       href: context.threeOzItemId
-        ? calculatorPrefillUrl({
-            ...jarBase,
-            lineName: "3oz jar label",
-            ...(context.holographicMaterialId ? { lineMaterialId: context.holographicMaterialId } : {}),
-            itemId: context.threeOzItemId,
-          })
+        ? calculatorPrefillUrl({ ...jarBase, lineName: "3oz jar label", lineQty: 600, itemId: context.threeOzItemId })
         : null,
-      hrefLabel: context.threeOzItemId ? "Open prefilled in Cost Calculator (enter real label size)" : "3oz jar item not found in Vendor Products — enter it first",
+      hrefLabel: context.threeOzItemId ? "Open prefilled in Cost Calculator (enter real label size)" : "3oz jar item not found in Vendor Products",
       pending: false,
     },
     {
       id: "T2",
       name: "600 × 4oz jar labels",
-      drivers: "4oz blank cost, media $/sqft, application seconds",
-      verify: "Blank at $0.60 / $0.65 vs invoice; suggested price vs the jar sell sheet.",
+      quantity: 600,
+      product: "4oz SAFECARE jar (verified $0.60/$0.65) + label media",
+      finish: "CMYK",
+      drivers: "Verified 4oz blank cost, media $/sqft, application seconds",
+      verify: "Suggested price vs the jar sell sheet; blank cost line at the verified value.",
       href: context.fourOzItemId
-        ? calculatorPrefillUrl({ ...jarBase, lineName: "4oz jar label", itemId: context.fourOzItemId })
+        ? calculatorPrefillUrl({ ...jarBase, lineName: "4oz jar label", lineQty: 600, itemId: context.fourOzItemId })
         : null,
-      hrefLabel: context.fourOzItemId ? "Open prefilled in Cost Calculator (enter real label size)" : "4oz jar item not found in Vendor Products — enter it first",
+      hrefLabel: context.fourOzItemId ? "Open prefilled in Cost Calculator (enter real label size)" : "4oz jar item not found in Vendor Products",
       pending: false,
     },
     {
       id: "T3",
-      name: "1,000 sticker bags — single design",
-      drivers: "Blank 4x5 bag cost, media $/sqft, flat-bag application, cutting",
-      verify: "Bag blank at $0.09 vs invoice; compare against the live configurator price for the same combo (Shopify Cost Audit / storefront).",
+      name: "1,000 × 4x5 sticker bags",
+      quantity: 1000,
+      product: "4x5 blank bag (verified $0.09) + label media",
+      finish: "CMYK",
+      drivers: "Verified bag cost, media $/sqft, flat-bag application, cutting",
+      verify: "Compare against the live configurator price for the same combo; bag line at $0.09.",
       href: context.bagItemId
-        ? calculatorPrefillUrl({
-            lineCount: 1,
-            lineName: "4x5 bag label",
-            lineQty: 1000,
-            lineLabelType: "front",
-            itemMode: "inventory",
-            itemId: context.bagItemId,
-            applicationMode: "apply-flat-bag",
-            cuttingMode: "square",
-          })
+        ? calculatorPrefillUrl({ lineCount: 1, lineName: "4x5 bag label", lineQty: 1000, lineLabelType: "front", itemMode: "inventory", itemId: context.bagItemId, applicationMode: "apply-flat-bag", cuttingMode: "square" })
         : null,
-      hrefLabel: context.bagItemId ? "Open prefilled in Cost Calculator (enter real label size)" : "4x5 bag item not found — presets/vendor products missing",
+      hrefLabel: context.bagItemId ? "Open prefilled in Cost Calculator (enter real label size)" : "4x5 bag item not found",
       pending: false,
     },
     {
       id: "T4",
-      name: "Multi-label / multi-design job",
-      drivers: "Per-design setup, prepress, application across designs",
-      verify: "Pending — multi-design/file groups (12B.1b) are deliberately not built until cost verification completes.",
-      href: null,
-      hrefLabel: "Placeholder — pending 12B.1b",
-      pending: true,
+      name: "DTP 4x5x2 pouch tier test",
+      quantity: 2500,
+      product: "DTP 4x5x2 blank pouch (verified tiers 0.7138 -> 0.3117)",
+      finish: "Blank item only",
+      drivers: "Verified pouch tier selection at quantity boundaries (1000/2500/5000/7500/10000)",
+      verify: "Item cost row picks the right tier: 2,500 units must price at $0.4744; re-run at 1,000 ($0.7138) and 5,000 ($0.4029).",
+      href: context.dtpPouchItemId
+        ? calculatorPrefillUrl({ lineCount: 1, lineQty: 2500, itemMode: "inventory", itemId: context.dtpPouchItemId, applicationMode: "none" })
+        : null,
+      hrefLabel: context.dtpPouchItemId ? "Open prefilled in Cost Calculator (tier check at 2,500)" : "DTP 4x5x2 pouch record not found",
+      pending: false,
     },
     {
       id: "T5",
-      name: "Actual RIP-imported job with ink data",
-      drivers: "RIP actual ink cost/cc vs estimated ink profiles; the NAS sync script's ink $/ml constant",
-      verify: "Run the same art in Actual GSOQ mode and Estimated mode; the gap calibrates the ink profiles. Locate the NAS script's ink price and record it in the state doc.",
-      href: context.hasRipRows
-        ? calculatorPrefillUrl({ quoteMode: "actual", lineCount: 1, lineName: "RIP actual test", lineQty: 100 })
+      name: "Banner vinyl test",
+      quantity: 1,
+      product: "Banner Vinyl (verified $0.2963/sqft)",
+      finish: "CMYK banner",
+      drivers: "Verified banner $/sqft at large-format sizes; machine speed/setup assumptions",
+      verify: "Enter a real banner size (e.g. 3ft x 8ft = 24 sqft) and compare material cost to 24 x $0.2963 = $7.11 before waste.",
+      href: context.bannerVinylMaterialId
+        ? calculatorPrefillUrl({ lineCount: 1, lineName: "Banner", lineQty: 1, lineMaterialId: context.bannerVinylMaterialId, lineWastePct: 5 })
         : null,
-      hrefLabel: context.hasRipRows ? "Open Cost Calculator in Actual mode (pick a GSOQ result)" : "No synced GSOQ RIP results yet — run a sync first (RIP Imports)",
+      hrefLabel: context.bannerVinylMaterialId ? "Open prefilled in Cost Calculator (enter banner size)" : "Banner Vinyl material not found",
       pending: false,
     },
     {
       id: "T6",
-      name: "Blank-only item (no printing)",
-      drivers: "Vendor tier selection at quantity, blank waste rounding",
-      verify: "Item cost row only: 500 units should price at the correct tier (e.g. Miron 500-999). Ignore the incomplete label line — it only carries the quantity.",
-      href: context.blankOnlyItemId
-        ? calculatorPrefillUrl({
-            lineCount: 1,
-            lineQty: 500,
-            itemMode: "inventory",
-            itemId: context.blankOnlyItemId,
-            applicationMode: "none",
-          })
-        : null,
-      hrefLabel: context.blankOnlyItemId ? "Open prefilled in Cost Calculator" : "No tiered vendor item found",
+      name: "Heavy white ink label/job",
+      quantity: 500,
+      product: "Any clear/holographic label with white underprint",
+      finish: "CMYK + White Heavy",
+      drivers: "UNVERIFIED ink usage per sqft — the $/sqft white profile vs verified $0.176/ml raw cost x real ml usage",
+      verify: "Run estimated mode, then the same art in Actual GSOQ mode after RIP; the gap is the usage calibration error (13A).",
+      href: calculatorPrefillUrl({ lineCount: 1, lineName: "White-heavy label", lineQty: 500, lineInkEstimateProfile: "cmyk-white-heavy" }),
+      hrefLabel: "Open prefilled in Cost Calculator (white-heavy profile)",
       pending: false,
     },
     {
       id: "T7",
-      name: "Outsourced / vendor product",
-      drivers: "Vendor tier costs + add-ons through the pricing engine (outsourced recipes price via the engine, not the calculator)",
-      verify: "Open an outsourced recipe in Product Setup and use the readiness price test at a real quantity; compare unit cost to the vendor quote/invoice.",
-      href: context.hasOutsourcedRecipe ? "/app/erp/product-setup" : null,
-      hrefLabel: context.hasOutsourcedRecipe ? "Open Product Setup (use the recipe readiness price test)" : "No outsourced recipe found — create one first",
+      name: "Spot gloss / multi-layer gloss test",
+      quantity: 500,
+      product: "Any label with 2X-3X spot gloss",
+      finish: "CMYK + 3X Gloss Heavy",
+      drivers: "UNVERIFIED gloss ink usage + Roland speed at multi-layer gloss; verified $0.19867/ml raw cost",
+      verify: "Estimated vs Actual GSOQ for a real gloss job; also sanity-check print minutes vs the finish speed curve.",
+      href: calculatorPrefillUrl({ lineCount: 1, lineName: "Spot gloss label", lineQty: 500, lineInkEstimateProfile: "cmyk-3x-gloss-heavy" }),
+      hrefLabel: "Open prefilled in Cost Calculator (3X gloss profile)",
       pending: false,
     },
   ];

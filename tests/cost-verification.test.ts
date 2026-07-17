@@ -7,7 +7,9 @@ import {
   NO_FLAT_COST_ISSUE,
   OWNER_CHECKLIST_HEADER,
   PLACEHOLDER_ISSUE,
+  REPLAY_RECORD_FIELDS,
   SEEDED_FINGERPRINTS,
+  SINGLE_TIER_FLAT_NOTE,
   UNEXPECTED_TIERS_ISSUE,
   buildReplayTests,
   calculatorPrefillUrl,
@@ -95,10 +97,12 @@ describe("fingerprints and tier sanity", () => {
 });
 
 describe("owner cost checklist (13.2.1)", () => {
-  it("tier policy: Miron is expected tiered, everything else expected flat", () => {
+  it("tier policy: Miron AND DTP 4x5x2 are expected tiered, everything else expected flat", () => {
     expect(tierPolicy("MIRON", "50ml Miron jar + lid")).toBe("expected_tiered");
     expect(tierPolicy("", "100ml tall Miron jar")).toBe("expected_tiered");
+    expect(tierPolicy("Vendor TBD", "DTP 4x5x2 Blank Pouch")).toBe("expected_tiered");
     expect(tierPolicy("SAFE CARE", "4oz jar - clear")).toBe("expected_flat");
+    expect(tierPolicy("", "DTP 4x6x2 Blank Pouch")).toBe("expected_flat");
     expect(tierPolicy(null, null)).toBe("expected_flat");
   });
 
@@ -416,15 +420,13 @@ describe("roll material + ink verification (13.2.4)", () => {
   });
 });
 
-describe("replay tests (T1-T7)", () => {
+describe("replay slots (13.2.5 T1-T7)", () => {
   const context = {
     threeOzItemId: "vendor:abc",
     fourOzItemId: "vendor:def",
-    holographicMaterialId: "mat-holo",
     bagItemId: "preset:blank-4x5-bag",
-    blankOnlyItemId: "vendor:tiered",
-    hasRipRows: true,
-    hasOutsourcedRecipe: true,
+    dtpPouchItemId: "vendor:pouch",
+    bannerVinylMaterialId: "mat-banner",
   };
 
   it("prefill URLs use the Cost Calculator's exact param names", () => {
@@ -437,37 +439,69 @@ describe("replay tests (T1-T7)", () => {
     expect(params.get("itemId")).toBe("vendor:abc");
   });
 
-  it("builds all seven tests with T4 as a pending placeholder", () => {
+  it("builds the owner's seven slots in order with quantities and products", () => {
     const tests = buildReplayTests(context);
     expect(tests.map((t) => t.id)).toEqual(["T1", "T2", "T3", "T4", "T5", "T6", "T7"]);
-    const t4 = tests.find((t) => t.id === "T4")!;
-    expect(t4.pending).toBe(true);
-    expect(t4.href).toBeNull();
+    expect(tests.map((t) => t.quantity)).toEqual([600, 600, 1000, 2500, 1, 500, 500]);
+    expect(tests.every((t) => !t.pending)).toBe(true);
+    expect(tests.find((t) => t.id === "T3")!.name).toContain("4x5 sticker bags");
+    expect(tests.find((t) => t.id === "T5")!.product).toContain("Banner Vinyl");
   });
 
-  it("T1 prefills the holographic material, 3oz item, and jar workflow", () => {
-    const t1 = buildReplayTests(context).find((t) => t.id === "T1")!;
-    const params = new URLSearchParams(String(t1.href).split("?")[1]);
-    expect(params.get("itemId")).toBe("vendor:abc");
-    expect(params.get("lineMaterialId")).toBe("mat-holo");
-    expect(params.get("applicationMode")).toBe("apply-jar");
-    expect(params.get("cuttingMode")).toBe("contour");
-    expect(params.get("prepressMode")).toBe("basic");
-    expect(params.get("packoutMode")).toBe("standard");
-    expect(params.get("lineQty")).toBe("600");
+  it("T4 prefills the DTP pouch tier check at 2,500 with no application", () => {
+    const t4 = buildReplayTests(context).find((t) => t.id === "T4")!;
+    const params = new URLSearchParams(String(t4.href).split("?")[1]);
+    expect(params.get("itemId")).toBe("vendor:pouch");
+    expect(params.get("lineQty")).toBe("2500");
+    expect(params.get("applicationMode")).toBe("none");
+    expect(t4.verify).toContain("$0.4744");
   });
 
-  it("degrades gracefully when records are missing", () => {
-    const tests = buildReplayTests({
-      threeOzItemId: null,
-      fourOzItemId: null,
-      holographicMaterialId: null,
-      bagItemId: null,
-      blankOnlyItemId: null,
-      hasRipRows: false,
-      hasOutsourcedRecipe: false,
-    });
-    for (const test of tests) expect(test.href).toBeNull();
-    expect(tests.find((t) => t.id === "T5")!.hrefLabel).toContain("No synced GSOQ");
+  it("T5 prefills the banner material; T6/T7 always link with the right ink profiles", () => {
+    const tests = buildReplayTests(context);
+    const t5 = new URLSearchParams(String(tests.find((t) => t.id === "T5")!.href).split("?")[1]);
+    expect(t5.get("lineMaterialId")).toBe("mat-banner");
+    const t6 = new URLSearchParams(String(tests.find((t) => t.id === "T6")!.href).split("?")[1]);
+    expect(t6.get("lineInkEstimateProfile")).toBe("cmyk-white-heavy");
+    const t7 = new URLSearchParams(String(tests.find((t) => t.id === "T7")!.href).split("?")[1]);
+    expect(t7.get("lineInkEstimateProfile")).toBe("cmyk-3x-gloss-heavy");
+  });
+
+  it("degrades gracefully: record-dependent slots lose links, profile slots keep them", () => {
+    const tests = buildReplayTests({ threeOzItemId: null, fourOzItemId: null, bagItemId: null, dtpPouchItemId: null, bannerVinylMaterialId: null });
+    for (const id of ["T1", "T2", "T3", "T4", "T5"]) expect(tests.find((t) => t.id === id)!.href).toBeNull();
+    for (const id of ["T6", "T7"]) expect(tests.find((t) => t.id === id)!.href).not.toBeNull();
+  });
+
+  it("the replay record template has the 12 required fields", () => {
+    expect([...REPLAY_RECORD_FIELDS]).toEqual([
+      "job name", "quantity", "product/material", "label/art sqft", "finish",
+      "estimated app cost", "actual material used", "actual ink/RIP result",
+      "actual labor minutes", "actual machine/print minutes", "variance", "owner notes",
+    ]);
+  });
+});
+
+describe("warning cleanup (13.2.5)", () => {
+  it("single-tier flat note is informational wording, not the unexpected-tiers warning", () => {
+    expect(SINGLE_TIER_FLAT_NOTE).toContain("informational only");
+    expect(SINGLE_TIER_FLAT_NOTE).not.toContain("Unexpected");
+  });
+
+  it("verified DTP 4x5x2 evaluates already_correct in the approved tool (no unexpected-tier path exists there)", () => {
+    const item = APPROVED_COST_TRUTH.find((entry) => entry.key === "dtp-4x5x2-pouch")!;
+    const record = {
+      id: "p1", name: "DTP 4x5x2 Blank Pouch", vendor: "Vendor TBD", vendorSku: "preset:dtp-4x5x2-pouch",
+      defaultUnitCost: 0.7138, notes: "[VERIFIED 2026-07-17 owner-approved DTP 4x5x2 blank pouch table]",
+      tiers: [
+        { id: "t1", minQty: 1000, maxQty: 2499, unitCost: 0.7138 },
+        { id: "t2", minQty: 2500, maxQty: 4999, unitCost: 0.4744 },
+        { id: "t3", minQty: 5000, maxQty: 7499, unitCost: 0.4029 },
+        { id: "t4", minQty: 7500, maxQty: 9999, unitCost: 0.3458 },
+        { id: "t5", minQty: 10000, maxQty: null, unitCost: 0.3117 },
+      ],
+    };
+    const { row } = evaluateApprovedItem(item, ctxWith({ vendorProducts: [record] as any }));
+    expect(row.status).toBe("already_correct");
   });
 });
