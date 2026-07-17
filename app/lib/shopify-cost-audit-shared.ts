@@ -174,6 +174,130 @@ export function matchVariantToErp(
   return { level: "none" as const, matches: [] as ErpMatch[] };
 }
 
+// ---------- Cost-factor classification (12B.2b.3) ----------
+// The pull returns every Shopify variant, but most are customer-facing sales
+// variants (especially stock-bag configurator option combinations), not cost
+// inputs. Classification decides which rows are likely real cost factors so
+// the default view is auditable by a human.
+
+export type AuditViewMode =
+  | "cost_factors"
+  | "erp_matched"
+  | "missing_cost"
+  | "ambiguous"
+  | "stock_configurator"
+  | "all";
+
+export const AUDIT_VIEW_LABELS: Record<AuditViewMode, string> = {
+  cost_factors: "Cost factors only",
+  erp_matched: "ERP matched",
+  missing_cost: "Missing Shopify cost",
+  ambiguous: "Ambiguous",
+  stock_configurator: "Stock/configurator variants",
+  all: "All Shopify variants",
+};
+
+export type RowClassification = {
+  view: "cost_factor" | "stock_configurator" | "other";
+  costFactorCandidate: boolean;
+  hiddenReason: string | null;
+};
+
+const STOCK_CONFIGURATOR_HINT = /(stock[\s_-]?bag|configurator|4\s?x\s?5)/i;
+const COST_SIGNAL_HINT = /(blank|jar|\bbags?\b|box|\bcans?\b|media|material|roll|ink|labels?\b|stickers?\b|vendor|outsourc|pouch|tube)/i;
+
+export function classifyAuditRow(input: {
+  sku: string;
+  shopifyCost: number | null;
+  matchLevel: string;
+  matches: Pick<ErpMatch, "table" | "matchedBy">[];
+  productType: string;
+  vendor: string;
+  tags: string;
+  title: string;
+  handle: string;
+}): RowClassification {
+  const matches = input.matches || [];
+  const hasSku = Boolean(normalizeSku(input.sku));
+  const hasShopifyCost = input.shopifyCost != null && input.shopifyCost > 0;
+  const text = `${input.productType} ${input.vendor} ${input.tags} ${input.title} ${input.handle}`;
+
+  // Strongest evidence first: a SKU-level or variant-level match into a real
+  // cost table is a cost factor even if the product text looks configurator-ish
+  // (e.g. a "Blank 4x5 bag" vendor item must not be buried as noise).
+  const skuCostMatch = matches.some((m) => m.matchedBy === "sku" && m.table !== "configurator");
+  const variantLevelMatch =
+    input.matchLevel === "variant_gid" &&
+    matches.some((m) => m.table === "recipe" || m.table === "variant_rule" || m.table === "pricing_rule");
+  if (skuCostMatch || variantLevelMatch) {
+    return { view: "cost_factor", costFactorCandidate: true, hiddenReason: null };
+  }
+
+  // Storefront/configurator sales variants: matched only through the
+  // configurator mapping, or clearly stock-bag/configurator by name.
+  const configuratorOnly = matches.length > 0 && matches.every((m) => m.table === "configurator");
+  if (configuratorOnly || STOCK_CONFIGURATOR_HINT.test(text)) {
+    return { view: "stock_configurator", costFactorCandidate: false, hiddenReason: "Stock/configurator sales variant" };
+  }
+
+  // A Shopify cost is itself a cost signal: either it corroborates an ERP
+  // match, or it is a cost factor that has not been entered into ERP yet.
+  if (hasShopifyCost) {
+    return { view: "cost_factor", costFactorCandidate: true, hiddenReason: null };
+  }
+
+  // Cost-flavored text (jars, bags, media, ink, ...) counts only with a SKU;
+  // no-SKU rows without a cost are hidden from the default view.
+  if (hasSku && COST_SIGNAL_HINT.test(text)) {
+    return { view: "cost_factor", costFactorCandidate: true, hiddenReason: null };
+  }
+
+  if (!hasSku) {
+    return { view: "other", costFactorCandidate: false, hiddenReason: "No SKU and no Shopify cost" };
+  }
+  if (input.matchLevel === "product_gid") {
+    return { view: "other", costFactorCandidate: false, hiddenReason: "Matched only by broad product mapping" };
+  }
+  return { view: "other", costFactorCandidate: false, hiddenReason: "No cost signals (customer-facing sales variant)" };
+}
+
+export function rowMatchesViewMode(
+  row: {
+    view: RowClassification["view"];
+    costFactorCandidate: boolean;
+    status: AuditStatus;
+    matchLevel: string;
+  },
+  mode: AuditViewMode,
+): boolean {
+  if (mode === "all") return true;
+  if (mode === "cost_factors") return row.costFactorCandidate;
+  if (mode === "erp_matched") return row.matchLevel !== "none";
+  if (mode === "missing_cost") return row.status === "missing_shopify_cost" || row.status === "cost_unavailable";
+  if (mode === "ambiguous") return row.status === "ambiguous";
+  return row.view === "stock_configurator";
+}
+
+export function summarizeAuditRows(
+  rows: Array<{
+    view: RowClassification["view"];
+    costFactorCandidate: boolean;
+    status: AuditStatus;
+    matchLevel: string;
+    unitCost: number | null;
+  }>,
+) {
+  return {
+    totalVariants: rows.length,
+    costFactorCandidates: rows.filter((row) => row.costFactorCandidate).length,
+    shopifyCostPresent: rows.filter((row) => row.unitCost != null && row.unitCost > 0).length,
+    missingShopifyCost: rows.filter((row) => row.status === "missing_shopify_cost" || row.status === "cost_unavailable").length,
+    erpMatched: rows.filter((row) => row.matchLevel !== "none").length,
+    ambiguous: rows.filter((row) => row.status === "ambiguous").length,
+    stockConfiguratorHidden: rows.filter((row) => row.view === "stock_configurator").length,
+  };
+}
+
 // Authority order for the compared ERP cost.
 const COST_AUTHORITY: ErpMatch["table"][] = ["recipe", "vendor_product", "material", "configurator", "pricing_rule"];
 

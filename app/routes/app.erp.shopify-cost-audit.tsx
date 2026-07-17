@@ -6,17 +6,23 @@ import db from "../db.server";
 import {
   AUDIT_STATUS_LABELS,
   AUDIT_STATUS_RANK,
+  AUDIT_VIEW_LABELS,
   DEFAULT_TOLERANCE_PCT,
   EXPORT_ROW_CAP,
   MAX_UI_ROWS,
   buildCsv,
+  classifyAuditRow,
   deltaAgainstBand,
   matchVariantToErp,
   pickErpCost,
+  rowMatchesViewMode,
+  summarizeAuditRows,
   auditStatus,
   type AuditStatus,
+  type AuditViewMode,
   type ErpCost,
   type ErpMatch,
+  type RowClassification,
 } from "../lib/shopify-cost-audit-shared";
 import { buildErpIndex, computeRecipeCosts, pullShopifyCatalog } from "../lib/shopify-cost-audit.server";
 
@@ -50,6 +56,9 @@ type AuditRow = {
   delta: number;
   deltaPct: number;
   status: AuditStatus;
+  view: RowClassification["view"];
+  costFactorCandidate: boolean;
+  hiddenReason: string | null;
 };
 
 function matchSummaryText(matches: ErpMatch[]) {
@@ -69,6 +78,7 @@ const CSV_HEADER = [
   "inventoryItemId", "tracked", "shopifyUnitCost", "currency",
   "matchLevel", "matchSummary", "erpCostLow", "erpCostHigh", "erpCostSource", "erpCostLabel",
   "deltaPct", "status",
+  "auditView", "costFactorCandidate", "hiddenReason",
 ];
 
 function rowToCsvCells(row: AuditRow) {
@@ -83,6 +93,7 @@ function rowToCsvCells(row: AuditRow) {
     row.erpCostSource, row.erpCostLabel,
     row.deltaPct ? row.deltaPct.toFixed(2) : "0",
     AUDIT_STATUS_LABELS[row.status],
+    row.view, String(row.costFactorCandidate), row.hiddenReason || "",
   ];
 }
 
@@ -149,7 +160,21 @@ export async function loader({ request }: { request: Request }) {
     const band = erpCost && variant.unitCost != null
       ? deltaAgainstBand(variant.unitCost, erpCost.low, erpCost.high)
       : { delta: 0, deltaPct: 0 };
+    const classification = classifyAuditRow({
+      sku: variant.sku,
+      shopifyCost: variant.unitCost,
+      matchLevel: match.level,
+      matches: match.matches,
+      productType: variant.productType,
+      vendor: variant.vendor,
+      tags: variant.tags,
+      title: variant.productTitle,
+      handle: variant.handle,
+    });
     return {
+      view: classification.view,
+      costFactorCandidate: classification.costFactorCandidate,
+      hiddenReason: classification.hiddenReason,
       productTitle: variant.productTitle,
       handle: variant.handle,
       vendor: variant.vendor,
@@ -184,8 +209,7 @@ export async function loader({ request }: { request: Request }) {
     || a.productTitle.localeCompare(b.productTitle),
   );
 
-  const statusCounts: Record<string, number> = {};
-  for (const row of rows) statusCounts[row.status] = (statusCounts[row.status] || 0) + 1;
+  const summary = summarizeAuditRows(rows);
 
   return {
     pulled: true as const,
@@ -202,7 +226,7 @@ export async function loader({ request }: { request: Request }) {
       variantCount: pullResult.variants.length,
       variantsTruncatedProducts: [...new Set(pullResult.variants.filter((v) => v.variantsTruncated).map((v) => v.productTitle))].slice(0, 10),
     },
-    statusCounts,
+    summary,
     rowTotal: rows.length,
     rows: rows.slice(0, EXPORT_ROW_CAP),
   };
@@ -227,7 +251,7 @@ export async function loader({ request }: { request: Request }) {
         variantCount: 0,
         variantsTruncatedProducts: [] as string[],
       },
-      statusCounts: {} as Record<string, number>,
+      summary: summarizeAuditRows([]),
       rowTotal: 0,
       rows: [] as AuditRow[],
     };
@@ -255,21 +279,36 @@ function money(value: number | null) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 }
 
+const VIEW_MODE_ORDER: AuditViewMode[] = ["cost_factors", "erp_matched", "missing_cost", "ambiguous", "stock_configurator", "all"];
+
 export default function ShopifyCostAuditRoute() {
   const data = useLoaderData<typeof loader>();
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [viewMode, setViewMode] = useState<AuditViewMode>("cost_factors");
   const [copied, setCopied] = useState(false);
 
   const rows = data.pulled ? data.rows : [];
   const filteredRows = useMemo(
-    () => (statusFilter === "all" ? rows : rows.filter((row) => row.status === statusFilter)),
-    [rows, statusFilter],
+    () => rows.filter((row) => rowMatchesViewMode(row, viewMode)),
+    [rows, viewMode],
   );
   const displayRows = filteredRows.slice(0, MAX_UI_ROWS);
+  const viewCounts: Record<AuditViewMode, number> = data.pulled
+    ? {
+        cost_factors: data.summary.costFactorCandidates,
+        erp_matched: data.summary.erpMatched,
+        missing_cost: data.summary.missingShopifyCost,
+        ambiguous: data.summary.ambiguous,
+        stock_configurator: data.summary.stockConfiguratorHidden,
+        all: data.summary.totalVariants,
+      }
+    : { cost_factors: 0, erp_matched: 0, missing_cost: 0, ambiguous: 0, stock_configurator: 0, all: 0 };
 
+  // Exports respect the current view mode (12B.2b.3); the auditView /
+  // costFactorCandidate / hiddenReason columns make the classification
+  // visible in the sheet either way.
   const copyTsv = () => {
     const clean = (value: unknown) => String(value ?? "").replace(/[\t\r\n]+/g, " ");
-    const lines = [CSV_HEADER.join("\t"), ...rows.map((row) => rowToCsvCells(row).map(clean).join("\t"))];
+    const lines = [CSV_HEADER.join("\t"), ...filteredRows.map((row) => rowToCsvCells(row).map(clean).join("\t"))];
     navigator.clipboard?.writeText(lines.join("\n")).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
@@ -279,12 +318,12 @@ export default function ShopifyCostAuditRoute() {
   // Client-side download from already-loaded rows: no navigation, no extra
   // Shopify pull, and no way to lose the embedded session (12B.2b.2).
   const downloadCsv = () => {
-    const csv = buildCsv(CSV_HEADER, rows.map(rowToCsvCells));
+    const csv = buildCsv(CSV_HEADER, filteredRows.map(rowToCsvCells));
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = objectUrl;
-    anchor.download = "shopify-cost-audit.csv";
+    anchor.download = `shopify-cost-audit-${viewMode}.csv`;
     anchor.click();
     URL.revokeObjectURL(objectUrl);
   };
@@ -303,9 +342,11 @@ export default function ShopifyCostAuditRoute() {
       </section>
 
       <section style={{ marginTop: 16, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e3a8a", borderRadius: 12, padding: "12px 16px", fontSize: 13 }}>
-        <b>Read this first:</b> Shopify's variant cost is merchant-entered and can be just as wrong as any other number — a mismatch below tells you
-        <b> where to pull the invoice first</b>, it does not tell you which side is right. Invoice verification (the Cost Verification Workbook work
-        from 12B.2a) decides the truth; this page finds the disagreements fast.
+        <b>Read this first:</b> This page has two jobs: <b>Cost Factors mode</b> (the default) helps verify real cost inputs — vendor items, blank
+        jars/bags, media, and anything carrying a Shopify cost. <b>All Variants mode</b> is for storefront/configurator audits and shows every sales
+        variant, including the thousands of stock-bag option combinations. In both: Shopify's variant cost is merchant-entered and can be just as
+        wrong as any other number — a mismatch tells you <b>where to pull the invoice first</b>, it does not tell you which side is right. Invoice
+        verification (the Cost Verification Workbook work from 12B.2a) decides the truth; this page finds the disagreements fast.
       </section>
 
       {data.pulled && !data.pull.inventoryAccess ? (
@@ -359,45 +400,67 @@ export default function ShopifyCostAuditRoute() {
 
           <section style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10, marginTop: 16 }}>
             <div style={cardStyle}>
-              <div style={{ fontSize: 12, color: "#6b7280" }}>Variants audited</div>
-              <div style={{ fontSize: 26, fontWeight: 800 }}>{data.rowTotal}</div>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Total variants pulled</div>
+              <div style={{ fontSize: 26, fontWeight: 800 }}>{data.summary.totalVariants}</div>
               <div style={smallHelp}>{data.pull.productCount} products · {data.pull.pageCount} page(s) · tolerance ±{data.tolerancePct}%</div>
             </div>
-            {(Object.keys(AUDIT_STATUS_LABELS) as AuditStatus[])
-              .filter((status) => data.statusCounts[status])
-              .map((status) => (
-                <div key={status} style={cardStyle}>
-                  <div style={{ fontSize: 12, color: "#6b7280" }}>{AUDIT_STATUS_LABELS[status]}</div>
-                  <div style={{ fontSize: 26, fontWeight: 800 }}>{data.statusCounts[status]}</div>
-                  <span style={badgeStyle[statusTone(status)]}>{status.replace(/_/g, " ")}</span>
-                </div>
-              ))}
+            <div style={cardStyle}>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Cost-factor candidates</div>
+              <div style={{ fontSize: 26, fontWeight: 800 }}>{data.summary.costFactorCandidates}</div>
+              <span style={badgeStyle.ok}>the list worth auditing</span>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Shopify cost present</div>
+              <div style={{ fontSize: 26, fontWeight: 800 }}>{data.summary.shopifyCostPresent}</div>
+              <span style={badgeStyle.info}>merchant-entered COGS</span>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Missing Shopify cost</div>
+              <div style={{ fontSize: 26, fontWeight: 800 }}>{data.summary.missingShopifyCost}</div>
+              <span style={badgeStyle.warn}>no COGS entered / unavailable</span>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>ERP matched</div>
+              <div style={{ fontSize: 26, fontWeight: 800 }}>{data.summary.erpMatched}</div>
+              <span style={badgeStyle.info}>linked to an ERP record</span>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Ambiguous</div>
+              <div style={{ fontSize: 26, fontWeight: 800 }}>{data.summary.ambiguous}</div>
+              <span style={badgeStyle.bad}>needs manual review</span>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Hidden as stock/configurator noise</div>
+              <div style={{ fontSize: 26, fontWeight: 800 }}>{data.summary.stockConfiguratorHidden}</div>
+              <span style={badgeStyle.info}>sales-variant combinations</span>
+            </div>
           </section>
 
           <section style={{ ...cardStyle, marginTop: 16 }}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <b style={{ fontSize: 13 }}>Filter:</b>
-              <button type="button" onClick={() => setStatusFilter("all")} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: statusFilter === "all" ? "#111827" : "white", color: statusFilter === "all" ? "white" : "#111827", fontSize: 12 }}>
-                All ({data.rowTotal})
-              </button>
-              {(Object.keys(AUDIT_STATUS_LABELS) as AuditStatus[])
-                .filter((status) => data.statusCounts[status])
-                .map((status) => (
-                  <button key={status} type="button" onClick={() => setStatusFilter(status)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: statusFilter === status ? "#111827" : "white", color: statusFilter === status ? "white" : "#111827", fontSize: 12 }}>
-                    {AUDIT_STATUS_LABELS[status]} ({data.statusCounts[status]})
-                  </button>
-                ))}
+              <b style={{ fontSize: 13 }}>View:</b>
+              {VIEW_MODE_ORDER.map((mode) => (
+                <button key={mode} type="button" onClick={() => setViewMode(mode)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: viewMode === mode ? "#111827" : "white", color: viewMode === mode ? "white" : "#111827", fontSize: 12 }}>
+                  {AUDIT_VIEW_LABELS[mode]} ({viewCounts[mode]})
+                </button>
+              ))}
               <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
                 <button type="button" onClick={downloadCsv} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 12 }}>
-                  Download CSV
+                  Download CSV (this view)
                 </button>
                 <button type="button" onClick={copyTsv} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 12 }}>
-                  {copied ? "Copied!" : "Copy TSV"}
+                  {copied ? "Copied!" : "Copy TSV (this view)"}
                 </button>
               </span>
             </div>
+            {viewMode === "cost_factors" ? (
+              <div style={{ ...smallHelp, marginTop: 8 }}>
+                Cost Factors mode hides {Math.max(data.summary.totalVariants - data.summary.costFactorCandidates, 0)} row(s): stock/configurator sales
+                variants, no-SKU rows without a Shopify cost, and rows matched only by broad product mapping. Switch views to see them.
+              </div>
+            ) : null}
             {displayRows.length < filteredRows.length ? (
-              <div style={{ ...smallHelp, marginTop: 8 }}>Showing the worst {displayRows.length} of {filteredRows.length} rows for this filter on screen; CSV/TSV export includes all {data.rowTotal} rows.</div>
+              <div style={{ ...smallHelp, marginTop: 8 }}>Showing the worst {displayRows.length} of {filteredRows.length} rows for this view on screen; CSV/TSV export includes all {filteredRows.length} rows of this view.</div>
             ) : null}
 
             <div style={{ overflowX: "auto", marginTop: 12 }}>
@@ -427,7 +490,11 @@ export default function ShopifyCostAuditRoute() {
                       <td style={{ padding: 8 }} align="right"><b>{row.unitCost == null ? "—" : money(row.unitCost)}</b></td>
                       <td style={{ padding: 8 }}>{row.erpCostLabel || "—"}{row.erpCostSource ? <div style={smallHelp}>{row.erpCostSource.replace(/_/g, " ")}</div> : null}</td>
                       <td style={{ padding: 8 }} align="right">{row.deltaPct ? `${row.deltaPct > 0 ? "+" : ""}${row.deltaPct.toFixed(1)}%` : "—"}</td>
-                      <td style={{ padding: 8 }}>{row.matchSummary || "No ERP record matched"}{row.matchLevel !== "none" ? <div style={smallHelp}>matched by {row.matchLevel.replace(/_/g, " ")}</div> : null}</td>
+                      <td style={{ padding: 8 }}>
+                        {row.matchSummary || "No ERP record matched"}
+                        {row.matchLevel !== "none" ? <div style={smallHelp}>matched by {row.matchLevel.replace(/_/g, " ")}</div> : null}
+                        {row.hiddenReason ? <div style={{ ...smallHelp, color: "#92400e" }}>Hidden from Cost Factors: {row.hiddenReason}</div> : null}
+                      </td>
                     </tr>
                   ))}
                   {!filteredRows.length ? (

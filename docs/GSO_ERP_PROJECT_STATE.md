@@ -405,6 +405,16 @@ Quote recipe gates remain:
 - Degraded cost mode unchanged: full query with `inventoryItem.unitCost` first, automatic retry without cost fields on denial, banner if even the plain product query fails.
 - No scope changes this patch; still read-only end to end (no action export, no writes, no mutations).
 
+## Completed Milestone: Shopify Cost Audit Cost-Factors Mode (Patch 12B.2b.3)
+
+- Problem: the pull returned ~2,028 variants, mostly stock-bag configurator option combinations and other customer-facing sales variants — unauditable by a human. The page now defaults to **Cost factors only** and keeps the full audit behind explicit view modes.
+- Six view modes (client-state buttons with counts): Cost factors only (default) / ERP matched / Missing Shopify cost / Ambiguous / Stock-configurator variants / All Shopify variants. The all-variant audit is preserved, not removed.
+- Classification (`classifyAuditRow` in the shared lib, precedence order): (1) any SKU-level match into a cost table (VendorProduct/Material/ProductRecipe/variant rule/pricing rule) or variant-GID match to recipe/variant-rule/pricing-rule = cost factor — strongest evidence wins, so "Blank 4x5 bag" with a vendor SKU can never be buried as configurator noise; (2) configurator-only matches or stock-bag/configurator/4x5-named rows = stock/configurator noise; (3) any row with a Shopify cost = cost factor (either corroborates ERP or is a cost factor not yet entered in ERP); (4) cost-flavored text (blank/jar/bag/box/can/media/material/roll/ink/label/sticker/vendor/outsourced/pouch/tube) counts only when the row has a SKU; (5) everything else is hidden with an explicit reason: "No SKU and no Shopify cost", "Matched only by broad product mapping", or "No cost signals (customer-facing sales variant)".
+- Seven summary cards: total variants pulled, cost-factor candidates, Shopify cost present, missing Shopify cost, ERP matched, ambiguous, hidden as stock/configurator noise. Page copy states the two jobs: Cost Factors mode verifies real cost inputs; All Variants mode is for storefront/configurator audits.
+- CSV/TSV exports now respect the current view mode and carry three new columns (auditView / costFactorCandidate / hiddenReason); hidden rows show their reason inline in the table too.
+- Tests: 97 -> 107 passing (10 new: classifier precedence incl. the Blank-4x5 protection, configurator-only and title-based noise, no-SKU hide/cost exception, Shopify-cost-without-ERP-match inclusion, broad-mapping hide, text-signal inclusion, view-mode filtering counts, summary counts).
+- Still read-only end to end: no action export, no writes, no mutations, no scope changes.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:

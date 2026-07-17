@@ -4,6 +4,7 @@ import {
   AUDIT_STATUS_LABELS,
   auditStatus,
   buildCsv,
+  classifyAuditRow,
   csvEscape,
   deltaAgainstBand,
   gidKeys,
@@ -11,7 +12,10 @@ import {
   matchVariantToErp,
   normalizeSku,
   pickErpCost,
+  rowMatchesViewMode,
   splitIdList,
+  summarizeAuditRows,
+  type AuditStatus,
   type ErpCost,
   type ErpMatch,
 } from "../app/lib/shopify-cost-audit-shared";
@@ -155,6 +159,135 @@ describe("delta math and tolerance boundary", () => {
 
   it("has a label for every status", () => {
     for (const label of Object.values(AUDIT_STATUS_LABELS)) expect(label.length).toBeGreaterThan(0);
+  });
+});
+
+describe("cost-factor classification (12B.2b.3)", () => {
+  const baseInput = {
+    sku: "",
+    shopifyCost: null as number | null,
+    matchLevel: "none",
+    matches: [] as Pick<ErpMatch, "table" | "matchedBy">[],
+    productType: "",
+    vendor: "",
+    tags: "",
+    title: "",
+    handle: "",
+  };
+
+  it("SKU matches into cost tables are cost factors (vendor product / material / recipe)", () => {
+    for (const table of ["vendor_product", "material", "recipe"] as const) {
+      const result = classifyAuditRow({
+        ...baseInput,
+        sku: "SKU-1",
+        matchLevel: "sku",
+        matches: [{ table, matchedBy: "sku" }],
+      });
+      expect(result.costFactorCandidate).toBe(true);
+      expect(result.view).toBe("cost_factor");
+      expect(result.hiddenReason).toBeNull();
+    }
+  });
+
+  it("a cost-table SKU match beats configurator-looking text (Blank 4x5 bag stays a cost factor)", () => {
+    const result = classifyAuditRow({
+      ...baseInput,
+      sku: "PRESET:BLANK-4X5-BAG",
+      title: "Blank 4x5 bag",
+      matchLevel: "sku",
+      matches: [{ table: "vendor_product", matchedBy: "sku" }],
+    });
+    expect(result.costFactorCandidate).toBe(true);
+    expect(result.view).toBe("cost_factor");
+  });
+
+  it("configurator-only matches are stock/configurator noise", () => {
+    const result = classifyAuditRow({
+      ...baseInput,
+      sku: "4X5-GLOSS-DOUBLE",
+      matchLevel: "product_gid",
+      matches: [{ table: "configurator", matchedBy: "product_gid" }],
+    });
+    expect(result.view).toBe("stock_configurator");
+    expect(result.costFactorCandidate).toBe(false);
+    expect(result.hiddenReason).toContain("Stock/configurator");
+  });
+
+  it("stock-bag titles are classified as configurator noise even without a match", () => {
+    const result = classifyAuditRow({ ...baseInput, title: "4X5 Sticker Bag - Gloss / Double Sided / 250" });
+    expect(result.view).toBe("stock_configurator");
+    expect(result.costFactorCandidate).toBe(false);
+  });
+
+  it("no-SKU rows are hidden unless they carry a Shopify cost", () => {
+    const hidden = classifyAuditRow({ ...baseInput });
+    expect(hidden.costFactorCandidate).toBe(false);
+    expect(hidden.hiddenReason).toBe("No SKU and no Shopify cost");
+
+    const withCost = classifyAuditRow({ ...baseInput, shopifyCost: 1.25 });
+    expect(withCost.costFactorCandidate).toBe(true);
+  });
+
+  it("Shopify cost with no ERP match is still a cost factor (may be missing from ERP)", () => {
+    const result = classifyAuditRow({ ...baseInput, sku: "NEW-ITEM", shopifyCost: 0.62, matchLevel: "none" });
+    expect(result.costFactorCandidate).toBe(true);
+  });
+
+  it("broad product-mapping-only matches without cost signals are hidden from Cost Factors", () => {
+    const result = classifyAuditRow({
+      ...baseInput,
+      sku: "SALES-VARIANT-1",
+      matchLevel: "product_gid",
+      matches: [{ table: "recipe", matchedBy: "product_gid" }],
+      title: "Deluxe Gift Wrap Option",
+    });
+    expect(result.costFactorCandidate).toBe(false);
+    expect(result.hiddenReason).toBe("Matched only by broad product mapping");
+  });
+
+  it("cost-flavored text with a SKU counts as a cost factor", () => {
+    const result = classifyAuditRow({ ...baseInput, sku: "JAR-100", productType: "blank_jars", title: "100ml Wide Jar" });
+    expect(result.costFactorCandidate).toBe(true);
+  });
+});
+
+describe("view modes and summary counts", () => {
+  const row = (overrides: Partial<{ view: "cost_factor" | "stock_configurator" | "other"; costFactorCandidate: boolean; status: AuditStatus; matchLevel: string; unitCost: number | null }>) => ({
+    view: "other" as const,
+    costFactorCandidate: false,
+    status: "no_erp_match" as AuditStatus,
+    matchLevel: "none",
+    unitCost: null as number | null,
+    ...overrides,
+  });
+
+  const rows = [
+    row({ view: "cost_factor", costFactorCandidate: true, status: "within_tolerance", matchLevel: "sku", unitCost: 2.0 }),
+    row({ view: "cost_factor", costFactorCandidate: true, status: "missing_shopify_cost", matchLevel: "sku" }),
+    row({ view: "stock_configurator", status: "no_erp_match" }),
+    row({ view: "stock_configurator", status: "no_erp_match" }),
+    row({ status: "ambiguous", matchLevel: "sku" }),
+    row({ status: "cost_unavailable", matchLevel: "variant_gid" }),
+  ];
+
+  it("filters rows per view mode", () => {
+    expect(rows.filter((r) => rowMatchesViewMode(r, "cost_factors"))).toHaveLength(2);
+    expect(rows.filter((r) => rowMatchesViewMode(r, "erp_matched"))).toHaveLength(4);
+    expect(rows.filter((r) => rowMatchesViewMode(r, "missing_cost"))).toHaveLength(2);
+    expect(rows.filter((r) => rowMatchesViewMode(r, "ambiguous"))).toHaveLength(1);
+    expect(rows.filter((r) => rowMatchesViewMode(r, "stock_configurator"))).toHaveLength(2);
+    expect(rows.filter((r) => rowMatchesViewMode(r, "all"))).toHaveLength(6);
+  });
+
+  it("summarizes counts for the cards", () => {
+    const summary = summarizeAuditRows(rows);
+    expect(summary.totalVariants).toBe(6);
+    expect(summary.costFactorCandidates).toBe(2);
+    expect(summary.shopifyCostPresent).toBe(1);
+    expect(summary.missingShopifyCost).toBe(2);
+    expect(summary.erpMatched).toBe(4);
+    expect(summary.ambiguous).toBe(1);
+    expect(summary.stockConfiguratorHidden).toBe(2);
   });
 });
 
