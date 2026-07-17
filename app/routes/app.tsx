@@ -32,6 +32,8 @@ export default function App() {
         <s-link href="/app/erp/rip-imports">RIP Imports</s-link>
         <s-link href="/app/erp/print-intake">Print Intake</s-link>
         <s-link href="/app/erp/cost-calculator">Cost Calculator</s-link>
+        <s-link href="/app/erp/cost-health">Cost Health</s-link>
+        <s-link href="/app/erp/shopify-cost-audit">Shopify Cost Audit</s-link>
         <s-link href="/app/erp/pricing-rules">Pricing Rules</s-link>
         <s-link href="/app/erp/pricing-health">Pricing Health</s-link>
         <s-link href="/app/erp/configurator">Configurator</s-link>

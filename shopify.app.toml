@@ -26,7 +26,9 @@ uri = "/webhooks/orders_paid"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,read_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms"
+# read_inventory added in 12B.2b for InventoryItem.unitCost (Shopify Cost Audit page).
+# NOT live until the owner runs `shopify app deploy` and re-approves permissions in the admin.
+scopes = "read_customers,read_inventory,read_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

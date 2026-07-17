@@ -1,6 +1,5 @@
 node_modules
 .env
-<<<<<<< HEAD
 .env.*
 dist
 build
@@ -11,9 +10,5 @@ build
 coverage
 .vscode
 .idea
-=======
-build
-dist
 .shopify
-.cache
->>>>>>> 504e0d7a75c1c68c5f6047c6868426fd0cd1effd
+.react-router/
