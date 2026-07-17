@@ -331,7 +331,7 @@ export default function ShopifyCostAuditRoute() {
   return (
     <main style={{ maxWidth: 1320, margin: "32px auto", padding: 20, fontFamily: "system-ui, sans-serif", background: "#f9fafb" }}>
       <p>
-        <Link to="/app/erp/cost-health">← Cost Health</Link> · <Link to="/app/erp/cost-calculator">Cost Calculator</Link> · <Link to="/app/erp/shopify-links">Shopify Links</Link> · <Link to="/app/erp/vendor-cost-book">Vendor Cost Book</Link>
+        <Link to="/app/erp/cost-health">← Cost Health</Link> · <Link to="/app/erp/cost-verification">Cost Verification Workbook</Link> · <Link to="/app/erp/cost-calculator">Cost Calculator</Link> · <Link to="/app/erp/shopify-links">Shopify Links</Link> · <Link to="/app/erp/vendor-cost-book">Vendor Cost Book</Link>
       </p>
       <section style={{ background: "linear-gradient(135deg,#111827,#1e3a8a)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>Shopify Cost Audit</h1>

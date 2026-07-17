@@ -41,6 +41,7 @@ export default function App() {
         <s-link href="/app/erp/machines">Setup · Machines</s-link>
         <s-link href="/app/erp/vendors">Setup · Vendors</s-link>
         <s-link href="/app/erp/vendor-cost-book">Setup · Vendor Cost Book</s-link>
+        <s-link href="/app/erp/cost-verification">Audit · Cost Verification</s-link>
         <s-link href="/app/erp/cost-health">Audit · Cost Health</s-link>
         <s-link href="/app/erp/shopify-cost-audit">Audit · Shopify Cost Audit</s-link>
         <s-link href="/app/erp/pricing-health">Audit · Pricing Health</s-link>

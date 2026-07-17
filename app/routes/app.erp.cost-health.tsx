@@ -582,6 +582,7 @@ export default function CostHealthRoute() {
       <div className="notice">
         This page does not update Shopify and does not change prices or data. It tells us which backend cost sources are ready, which are estimates, and which must be fixed before the calculator can be trusted for real quotes.
         <div className="nav">
+          <Link to="/app/erp/cost-verification">Open Cost Verification Workbook</Link>
           <Link to="/app/erp/materials">Open Materials</Link>
           <Link to="/app/erp/machines">Open Machine Center</Link>
           <Link to="/app/erp/product-setup">Open Product Setup</Link>

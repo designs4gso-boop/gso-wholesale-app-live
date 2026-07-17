@@ -442,6 +442,17 @@ Quote recipe gates remain:
 - Redirect modules remain pure: no authenticate, no db, no Shopify, loader+action both redirect, default export kept for the product-costs shim.
 - Next planned: 13.2 Cost Verification Workbook.
 
+## Completed Milestone: Cost Verification Workbook (Patch 13.2)
+
+- New read-only page `/app/erp/cost-verification` (nav: "Audit · Cost Verification"): the instrument for the owner's invoice verification pass. Purpose copy: "This page verifies the cost data feeding quotes, calculator, and production. It does not update prices, products, Shopify, or recipes." Zero writes, zero Shopify calls, no action export.
+- Eleven sections: header warning (Shopify = helper only; seeded != proof), nine readiness cards (blank/material/ink/machine+labor/vendor tiers/RIP/known-job tests/criticals/warnings), master cost-source table (category, source, value/range, confidence, problem, verify-against, fix link), blank-item detail (per-vendor-product tier bands + MOQ), print-media detail ($/sqft + unit pair), ink detail (per-channel cost/ml + usage + fingerprint flags), finishing/prepress/packout + Shopify explanation, known-job replay checklist, and ordered next actions ending with the frozen sequence (engine completeness -> 12B.1b -> publisher).
+- Provenance/confidence (no schema): `[VERIFIED yyyy-mm-dd inv#]` notes marker = Verified (outranks everything, interim convention documented on-page); value + cost history / plain notes = Manual; seed/preset notes text or fingerprint constants ($156.99/750ml Roland, $190/1000ml Mimaki, 0.0075 usage, $5/hr, 40% coverage, 15% allowance, $0.08/$0.05 overheads) = Seeded/estimated; no usable value = Missing. Machines/ink channels have no notes field, so their Verified stamps wait for the schema patch (documented on-page).
+- Criticals: no-cost vendor products, purchaseCost traps, missing $/sqft, roll media without dims, enabled channels without cost/ml, machines without hourly cost. Warnings: every seeded fingerprint, non-monotonic vendor tiers (cost rising with quantity), flat-Material copies drifting outside vendor tier bands, stored-but-unpriced recipe labor, default estimating assumptions, costReviewNeeded flags, legacy PricingRule/ProductCost/SourcedCostTier rows, no RIP actuals yet.
+- Known-job replay tests T1-T7 render as prefilled Cost Calculator links built in the loader from real record ids (3oz/4oz vendor items, holographic material, 4x5 bag, a tiered item for blank-only); real label dimensions are deliberately left for the owner to enter. T4 (multi-design) is a pending placeholder until 12B.1b; T7 (outsourced) routes to Product Setup's readiness price test because outsourced recipes price through the engine. Results are not stored yet - record them in this doc.
+- Client-side CSV export (categories + issues + replay rows) and a print-friendly checklist button; deep links to Materials, Machines, Vendors, Vendor Cost Book, Product Setup, Cost Calculator, Cost Health, Shopify Cost Audit, Print Logs, RIP Imports. Cross-links added from Cost Health and Shopify Cost Audit (one line each).
+- New client-safe lib `app/lib/cost-verification-shared.ts` (fingerprints, confidence classifier, tier sanity check, replay builder — pure and unit-tested); DB queries are bounded loader reads. Tests: 107 -> 119 passing (12 new).
+- Deferred as planned: schema-backed verifiedAt/By/Source columns (migration batch), storing replay results, any engine/preset changes.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
