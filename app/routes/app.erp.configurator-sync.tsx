@@ -538,6 +538,9 @@ export default function ConfiguratorSync() {
             Sync Shopify products into ERP configurator records by direct collection ID, then filter by tag
             and product type inside ERP. This replaces manual product mapping for large catalogs.
           </p>
+          <p style={{ border: "2px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 12, padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>
+            Owner / advanced tool — changes here can affect live pricing, mappings, or Shopify behavior.
+          </p>
         </div>
         <div className="hero-card">
           <strong>Sync Target</strong>

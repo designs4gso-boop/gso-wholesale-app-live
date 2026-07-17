@@ -969,6 +969,10 @@ export default function MarginReviewPage() {
         <p>Compare linked Shopify variant prices against recipe costs, target margins, and suggested prices before updating Shopify.</p>
       </section>
 
+      <section style={{ border: "2px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 12, padding: "12px 16px", fontSize: 13, fontWeight: 700, margin: "12px 0" }}>
+        Owner / advanced tool — changes here can affect live pricing, mappings, or Shopify behavior.
+      </section>
+
       <section className="card">
         <strong>Safe review workflow</strong>
         <p className="muted">

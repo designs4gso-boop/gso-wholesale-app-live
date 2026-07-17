@@ -1233,6 +1233,10 @@ export default function ShopifyLinksPage() {
       <p>Control-center for connecting Shopify products and collections to recipes. Safe batch sync, auto-sync, exception review, link registry, sync history, and cleanup controls are kept on one page.</p>
     </header>
 
+    <section style={{ border: "2px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 12, padding: "12px 16px", fontSize: 13, fontWeight: 700, margin: "12px 0" }}>
+      Owner / advanced tool — changes here can affect live pricing, mappings, or Shopify behavior.
+    </section>
+
     <section className="card wide plan-card">
       <h2>Clean linking model</h2>
       <div className="pill-row">

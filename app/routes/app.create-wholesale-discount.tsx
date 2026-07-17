@@ -4,6 +4,27 @@ import { authenticate } from "../shopify.server";
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
 
+  // Patch 13.0 confirm gate: this route creates the live wholesale discount
+  // in Shopify when visited. It must never run from a casual page load.
+  const url = new URL(request.url);
+  if (url.searchParams.get("confirm") !== "1") {
+    return new Response(
+      JSON.stringify(
+        {
+          ok: false,
+          blocked: true,
+          warning: "Owner / advanced tool — changes here can affect live pricing, mappings, or Shopify behavior.",
+          message:
+            "This tool CREATES the live 'Wholesale Pricing' automatic discount in Shopify. Nothing was changed. To run it on purpose, re-open this URL with ?confirm=1 appended.",
+          confirmUrl: "/app/create-wholesale-discount?confirm=1",
+        },
+        null,
+        2,
+      ),
+      { headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   const functionsRes = await admin.graphql(`
     query {
       shopifyFunctions(first: 25) {

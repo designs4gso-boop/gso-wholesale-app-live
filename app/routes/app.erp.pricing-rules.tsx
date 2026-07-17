@@ -772,6 +772,9 @@ export default function ErpPricingRulesRoute() {
       >
         <p style={{ margin: "0 0 6px", color: "#666" }}>{version}</p>
         <h1 style={{ margin: 0 }}>Tier Rule Manager</h1>
+        <p style={{ border: "2px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 12, padding: "10px 14px", fontSize: 13, fontWeight: 700, maxWidth: 900 }}>
+          Owner / advanced tool — changes here can affect live pricing, mappings, or Shopify behavior.
+        </p>
         <p style={{ maxWidth: 900, lineHeight: 1.5 }}>
           Build tier rules connected to existing Shopify products and
           collections. v1.6 adds a safe preview that reads saved recipe data and current Shopify variants to generate sample tier prices before anything is published.
