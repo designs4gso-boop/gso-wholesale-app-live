@@ -43,6 +43,7 @@ export default [
     route("erp/production-calendar", "routes/app.erp.production-calendar.tsx"),
     route("erp/print-logs", "routes/app.erp.print-logs.tsx"),
     route("erp/rip-imports", "routes/app.erp.rip-imports.tsx"),
+    route("erp/rip-import-review", "routes/app.erp.rip-import-review.tsx"),
     route("erp/print-intake", "routes/app.erp.print-intake.tsx"),
     route("erp/print-log-settings", "routes/app.erp.print-log-settings.tsx"),
     route("erp/reorder-report", "routes/app.erp.reorder-report.tsx"),

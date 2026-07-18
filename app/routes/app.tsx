@@ -33,6 +33,7 @@ export default function App() {
         <s-link href="/app/erp/reports-dashboard">Reports Dashboard</s-link>
         <s-link href="/app/erp/print-logs">Print Logs</s-link>
         <s-link href="/app/erp/rip-imports">RIP Imports</s-link>
+        <s-link href="/app/erp/rip-import-review">RIP Import Review</s-link>
         <s-link href="/app/erp/print-intake">Print Intake</s-link>
         <s-link href="/app/erp/cost-calculator">Cost Calculator</s-link>
         <s-link href="/app/erp/product-setup">Setup · Product Setup</s-link>

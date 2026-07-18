@@ -62,7 +62,7 @@ export async function loader({ request }: { request: Request }) {
     const status = matchStatusOf(entry);
     const warnings = [...costs.warnings];
     if (media.warning) warnings.push(media.warning);
-    if (status === "potentially_matchable") warnings.push("GSO ticket present but no production job link — re-import or match in 13A.6.");
+    if (status === "potentially_matchable") warnings.push("GSO ticket present but no production job link — attach it in RIP Import Review.");
     if (status === "missing_ticket") warnings.push("No GSO ticket detected — file may have bypassed the intake watcher.");
     const sqft = Number(entry.sqft) || 0;
     return {
@@ -163,6 +163,9 @@ export default function ActualCostsRoute() {
       <section style={{ background: "linear-gradient(135deg,#111827,#7c2d12)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>Actual Cost Dashboard</h1>
         <p style={{ marginBottom: 0 }}>v1 (13A.5): actual ink/machine dollars computed from imported RIP/print-log rows using the verified database channel costs.</p>
+        <p style={{ margin: "8px 0 0", fontSize: 13 }}>
+          Unmatched or ambiguous rows? <Link to="/app/erp/rip-import-review" style={{ color: "#c4b5fd" }}>Open RIP Import Review</Link> to attach them safely.
+        </p>
       </section>
 
       <section style={{ marginTop: 16, border: "2px solid #16a34a", background: "#f0fdf4", color: "#166534", borderRadius: 12, padding: "12px 16px", fontSize: 13, fontWeight: 700 }}>

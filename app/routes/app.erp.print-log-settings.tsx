@@ -247,6 +247,9 @@ Get-ChildItem -Path $IncomingFolder -File -Include *.csv,*.txt,*.xml -Recurse | 
                 RIP import endpoint (source=rasterlink), and moves the file to processed or error with logs, retries, and error sidecars. Server
                 duplicates are treated as success. Files are never deleted — only moved.
               </Text>
+              <InlineStack gap="200">
+                <Button onClick={() => navigate("/app/erp/rip-import-review")}>Review unmatched / ambiguous rows (13A.6C)</Button>
+              </InlineStack>
               <Text as="p">
                 <b>1. Token:</b> use the upload token shown on this page (also on Print Intake). It is validated before any file is read; logs never
                 contain it. <b>2. Configure:</b> on the print computer, copy tools\gso-rasterlink-sync-config.example.json to
