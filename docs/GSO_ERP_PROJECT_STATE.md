@@ -549,6 +549,18 @@ Quote recipe gates remain:
 - Shop-computer collection list recorded in the plan doc: VersaWorks job-log CSV sample + hot folder, RasterLink job result files + per-channel confirmation, the off-repo NAS sync script `gso-sync-quote-rip-results-to-app.ps1` (its ink $/ml constant must be recorded and the script committed to tools/), intake watcher config, cutter log existence check.
 - Owner principles pinned: initial quotes stay conservative; actuals flow automatically post-print; the app recommends calibrations but NEVER changes pricing assumptions without owner approval.
 
+## Completed Milestone: Read-Only Actual Cost Dashboard (Patch 13A.5)
+
+- New read-only page `/app/erp/actual-costs` (registered + nav "Audit · Actual Costs"): turns existing PrintLogEntry rows into actual dollars. No action export, zero writes, no Shopify, no calculator/engine/production changes.
+- Ink cost is computed from the VERIFIED database channel costs (13.2.4), never hardcoded: per-brand CMYK/white/gloss $/ml built from Machine ink channels; machine attribution by log machine name -> RIP software (VersaWorks=Roland, RasterLink=Mimaki) -> the ROUTE token the intake watcher embeds in job names. Unattributable rows get a loud warning and a null ink cost — nothing is guessed. Channel-split-unknown rows price total ml at the CMYK rate with an explicit note.
+- Machine time cost shown at BOTH $5/hr and $8/hr (owner has not picked; formula minutes/60 x rate). Summary cards: production row count, matched/unmatched, date range, total ink ml, calculated ink cost (marked partial when any row was uncostable), print minutes, both machine costs, GSOQ count, and the channel rates in use.
+- Per-row table (latest 200 of up to 500): date, machine, RIP job/ticket, media (+ display-only Material name-match with $/sqft and possible media cost — unique match only; ambiguous/none warn; NOTHING persisted), sqft, minutes, CMYK/white/gloss/total ml, ink cost, both machine costs, match status badge (matched / potentially matchable / quote-rip / missing ticket), warnings.
+- Per-ticket rollup for matched + potentially-matchable rows: totals, partial-ink flag, machines/media seen with multiple-machine and multiple-media warnings, production job info (customer/status/quoteId) with a Production link.
+- Warnings implemented per spec: no channel cost, media unmatched/ambiguous, no ticket match, missing minutes, missing ink ml, multi-machine/media per ticket, and the ROUTING warning for white/gloss ink on Mimaki (business rule: Mimaki is CMYK-only; warn-only in 13A.5, documented in a banner with the ROLAND-tag rule).
+- GSOQ quote-time results shown in their own section (file, date, cc, RIP seconds, NAS-computed ink $) with the explanation that they are quote-time pricing inputs, priced by the off-repo NAS constant, distinct from production actuals.
+- New pure lib `app/lib/rip-actual-costs.server.ts` (data passed as params) with client-safe constants split into `rip-actual-costs-shared.ts` (the component imports rates/status labels there — same server-bundle pattern as the other dashboards). Tests: 167 -> 177 passing (10 new: brand rates from channels, attribution chain, ink/machine cost math at both rates, no-attribution null + warning, missing-channel exclusion warning, Mimaki white/gloss routing flag, missing ml/minutes warnings, match statuses, media unique/ambiguous/none, ticket rollup with multi-machine/media flags).
+- Next per the 13A.4 plan: 13A.6 matching hardening (gated), 13A.7 estimated-vs-actual variance, 13A.8 owner-approved calibration, 13A.9 routing enforcement — plus the shop-computer collection list (VersaWorks/RasterLink samples, NAS sync script).
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:
