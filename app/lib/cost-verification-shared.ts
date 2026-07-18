@@ -241,6 +241,95 @@ export const LABOR_STANDARDS: LaborStandard[] = [
 
 export const LABOR_STANDARD_CONFIDENCE_LABEL = "Verified / Owner-approved standard";
 
+// ---------- Labor Wiring Preview (13A.2) ----------
+// READ-ONLY mirror of the Cost Calculator's current hardcoded labor rules
+// (app/routes/app.erp.cost-calculator.tsx: secondsForKnownApplication,
+// estimateApplicationRule, prepressRule). The calculator is deliberately NOT
+// changed by this patch; these constants exist so the preview can show exact
+// current assumptions instead of guessing. The future wiring patch replaces
+// the calculator's rules with LABOR_STANDARDS and deletes this mirror.
+export const CURRENT_CALC_LABOR = {
+  laborRatePerHour: 25,
+  jarApplicationSeconds: 10, // safe-care jar, side label
+  bagApplicationSecondsPerSide: 10, // blank 4x5 bag
+  jarApplicationSetupMinutes: 10,
+  bagApplicationSetupMinutes: 5,
+  prepressBasicMinutes: 15, // "Basic proof / file check"
+  glossWhiteSetup: 0, // the calculator has NO gloss/white setup labor today
+} as const;
+
+// Assumption-level comparison: current calculator rule vs owner standard.
+// "needs_wiring_review" = the two use different bases and cannot be compared
+// numerically without a wiring decision (never silently guessed).
+export type LaborRuleComparison = {
+  task: string;
+  currentRule: string;
+  ownerStandard: string;
+  status: "comparable" | "needs_wiring_review";
+  note: string;
+};
+
+export const LABOR_RULE_COMPARISONS: LaborRuleComparison[] = [
+  { task: "Jar application", currentRule: "10 s/jar + 10 min setup @ $25/hr (≈ $0.0694/jar + setup)", ownerStandard: "$0.20/jar ($20/hr ÷ 100/hr)", status: "comparable", note: "Owner standard is ~2.9x the current per-jar rate." },
+  { task: "4x5 bag application", currentRule: "10 s/side + 5 min setup @ $25/hr (≈ $0.0694/side + setup)", ownerStandard: "$0.1111/side ($20/hr ÷ 180/hr)", status: "comparable", note: "Front+back doubles per-bag cost in both models." },
+  { task: "14x16 bag application", currentRule: "15 s/side (pound bag) @ $25/hr (≈ $0.1042/side)", ownerStandard: "$1.00/side ($20/hr ÷ 20/hr)", status: "comparable", note: "Owner standard is ~9.6x the current rate — big change, shown deliberately." },
+  { task: "Design/prepress setup", currentRule: "Prepress 'basic' = 15 min = $6.25/job", ownerStandard: "Art setup $8.3333/design + print setup $1.00/design = $9.3333/design", status: "comparable", note: "Also becomes per-DESIGN instead of per-job (matters for future multi-design jobs)." },
+  { task: "Gloss/white setup", currentRule: "None — $0 (finish only affects ink $/sqft profile)", ownerStandard: "$8.3333/setup ($25/hr ÷ 3/hr)", status: "comparable", note: "Setup labor only; ink usage profiles unchanged." },
+  { task: "Cutting", currentRule: "Hand-labor minutes @ $25/hr (e.g. die-cut 15 min + 6 s/unit)", ownerStandard: "Machine/cutter time — 25 cm/s setting, 12.5 cm/s effective estimate", status: "needs_wiring_review", note: "Different basis (hand labor vs cutter time) — wiring decision required." },
+  { task: "Weeding", currentRule: "'Weeded decal' cut rule: 10 min + 8 s/unit @ $25/hr", ownerStandard: "$1.3333 per 54x54 sheet ($20/hr ÷ 15 sheets/hr)", status: "needs_wiring_review", note: "Different basis (per unit vs per sheet) — needs sheet-count wiring." },
+  { task: "Packout", currentRule: "'Standard' = $2 flat + $0.02/product unit", ownerStandard: "$2.00 per packout unit / order box ($20/hr ÷ 10/hr)", status: "needs_wiring_review", note: "Different basis (per product unit vs per order box) — wiring decision required." },
+];
+
+export type LaborWiringScenario = {
+  id: string;
+  name: string;
+  quantity: number;
+  currentLabor: number;
+  currentBasis: string;
+  ownerLabor: number;
+  ownerBasis: string;
+  diff: number;
+  diffPct: number;
+  whatChanged: string;
+};
+
+const rate = CURRENT_CALC_LABOR.laborRatePerHour / 60; // $ per minute
+
+function currentApplication(quantity: number, secondsPerUnit: number, setupMinutes: number) {
+  return ((quantity * secondsPerUnit) / 60 + setupMinutes) * rate;
+}
+
+const CURRENT_PREPRESS = CURRENT_CALC_LABOR.prepressBasicMinutes * rate; // $6.25
+const OWNER_DESIGN_SETUP = 25 / 3 + 1; // art + print setup per design = $9.3333
+
+// Sample scenarios comparing ONLY the labor portion the wiring would change
+// (application + design/gloss setup). Media, ink, machine, waste, and the
+// calculator's live output are untouched by this preview.
+export function buildLaborWiringScenarios(): LaborWiringScenario[] {
+  const jarStandard = 20 / 100;
+  const bagSideStandard = 20 / 180;
+  const glossSetupStandard = 25 / 3;
+
+  const make = (id: string, name: string, quantity: number, currentLabor: number, currentBasis: string, ownerLabor: number, ownerBasis: string, whatChanged: string): LaborWiringScenario => ({
+    id, name, quantity, currentLabor, currentBasis, ownerLabor, ownerBasis,
+    diff: ownerLabor - currentLabor,
+    diffPct: currentLabor > 0 ? ((ownerLabor - currentLabor) / currentLabor) * 100 : 100,
+    whatChanged,
+  });
+
+  const jarCurrent = currentApplication(600, CURRENT_CALC_LABOR.jarApplicationSeconds, CURRENT_CALC_LABOR.jarApplicationSetupMinutes) + CURRENT_PREPRESS;
+  const jarOwner = 600 * jarStandard + OWNER_DESIGN_SETUP;
+
+  return [
+    make("T1", "600 × 3oz jar labels", 600, jarCurrent, "600 × 10s + 10 min setup + prepress 15 min @ $25/hr", jarOwner, "600 × $0.20/jar + art/print setup $9.3333", "Jar application 600 × $0.20 = $120.00 (was ≈$45.83 incl. setup); design setup $9.33 (was $6.25)."),
+    make("T2", "600 × 4oz jar labels", 600, jarCurrent, "600 × 10s + 10 min setup + prepress 15 min @ $25/hr", jarOwner, "600 × $0.20/jar + art/print setup $9.3333", "Same speeds as T1 — identical labor change."),
+    make("T3", "1,000 × 4x5 sticker bags (front only)", 1000, currentApplication(1000, CURRENT_CALC_LABOR.bagApplicationSecondsPerSide, CURRENT_CALC_LABOR.bagApplicationSetupMinutes) + CURRENT_PREPRESS, "1,000 × 10s + 5 min setup + prepress @ $25/hr", 1000 * bagSideStandard + OWNER_DESIGN_SETUP, "1,000 × $0.1111/side + setup $9.3333", "Front-only application 1,000 × $0.1111 = $111.11 (was ≈$71.53 incl. setup)."),
+    make("T3b", "1,000 × 4x5 sticker bags (front + back)", 1000, currentApplication(2000, CURRENT_CALC_LABOR.bagApplicationSecondsPerSide, CURRENT_CALC_LABOR.bagApplicationSetupMinutes) + CURRENT_PREPRESS, "2,000 sides × 10s + 5 min setup + prepress @ $25/hr", 2000 * bagSideStandard + OWNER_DESIGN_SETUP, "2,000 sides × $0.1111 + setup $9.3333", "Front+back application 1,000 × $0.2222 = $222.22 (was ≈$140.97 incl. setup)."),
+    make("T5", "Banner vinyl test (no application)", 1, CURRENT_PREPRESS, "Prepress 'basic' 15 min @ $25/hr", OWNER_DESIGN_SETUP, "Art setup $8.3333 + print setup $1.00 per design", "Design setup becomes per-design $9.33 (was per-job $6.25); no application labor either way."),
+    make("T7", "Spot gloss / white-gloss setup test", 500, CURRENT_PREPRESS + CURRENT_CALC_LABOR.glossWhiteSetup, "Prepress $6.25; gloss/white setup $0 today", OWNER_DESIGN_SETUP + glossSetupStandard, "Design setup $9.3333 + gloss/white setup $8.3333 (labor only)", "Adds the $8.33 gloss/white SETUP labor the calculator currently charges nothing for — ink usage profiles unchanged."),
+  ];
+}
+
 // ---------- Approved Cost Updates (13.2.2) ----------
 // Pure matching/diff logic for applying the owner-approved cost truth list.
 // The truth table and db orchestration live in approved-cost-updates.server.ts;

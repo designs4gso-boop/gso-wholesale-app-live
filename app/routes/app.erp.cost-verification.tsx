@@ -11,9 +11,11 @@ import {
   APPROVED_UPDATE_STATUS_LABELS,
   CALCULATOR_ASSUMPTION_ROWS,
   CONFIDENCE_LABELS,
+  LABOR_RULE_COMPARISONS,
   LABOR_STANDARDS,
   LABOR_STANDARD_CONFIDENCE_LABEL,
   NO_FLAT_COST_ISSUE,
+  buildLaborWiringScenarios,
   OWNER_CHECKLIST_HEADER,
   PLACEHOLDER_ISSUE,
   REPLAY_RECORD_FIELDS,
@@ -522,6 +524,22 @@ export async function loader({ request }: { request: Request }) {
   }
 
   ownerChecklist.push({
+    category: "Labor wiring (context)",
+    itemName: "Labor Wiring Preview (13A.2)",
+    vendor: "",
+    cost: null,
+    unit: "",
+    tierMinQty: null,
+    tierMaxQty: null,
+    moq: null,
+    source: "Cost Verification page",
+    confidence: "n/a",
+    issue: "Preview exists but is NOT live — the calculator still uses its hardcoded labor heuristics until the approved wiring patch.",
+    verify: "Review the before/after scenarios, then approve the wiring patch",
+    fixPage: "Cost Verification",
+  });
+
+  ownerChecklist.push({
     category: "Recipes (context)",
     itemName: `${recipes.length} active recipe(s) attach blanks via RecipeMaterial`,
     vendor: "",
@@ -737,6 +755,71 @@ export default function CostVerificationRoute() {
           Future RIP/machine actuals (Patch 13A): ink ml per job, print minutes, and cutter time replace the estimate profiles once the
           RasterLink/VersaWorks log loop is calibrated. Gloss/white setup above is setup labor only — ink usage profiles are unchanged.
         </div>
+      </section>
+
+      <section style={{ ...cardStyle, marginTop: 16, border: "2px solid #6366f1" }}>
+        <h2 style={{ marginTop: 0 }}>Labor Wiring Preview — NOT LIVE</h2>
+        <p style={{ fontSize: 13, color: "#3730a3", background: "#e0e7ff", border: "1px solid #6366f1", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
+          Preview only. The Cost Calculator's live estimates are UNCHANGED — it still uses its old hardcoded labor rules. This section shows what
+          would change if the owner-approved labor standards were wired in, so the impact is visible before any math changes.
+        </p>
+
+        <h3 style={{ marginBottom: 6 }}>Rule-by-rule: current calculator vs owner standard</h3>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={thStyle}>Task</th><th style={thStyle}>Current calculator rule (hardcoded)</th><th style={thStyle}>Owner standard</th><th style={thStyle}>Status</th><th style={thStyle}>Note</th></tr></thead>
+            <tbody>
+              {LABOR_RULE_COMPARISONS.map((rule) => (
+                <tr key={rule.task}>
+                  <td style={tdStyle}><b>{rule.task}</b></td>
+                  <td style={tdStyle}>{rule.currentRule}</td>
+                  <td style={tdStyle}>{rule.ownerStandard}</td>
+                  <td style={tdStyle}>
+                    <span style={rule.status === "comparable" ? confidenceStyle.manual : confidenceStyle.seeded}>
+                      {rule.status === "comparable" ? "comparable — not live" : "needs calculator wiring review"}
+                    </span>
+                  </td>
+                  <td style={tdStyle}>{rule.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style={{ marginBottom: 6 }}>Sample scenarios — labor portion only (media/ink/machine unchanged)</h3>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={thStyle}>#</th><th style={thStyle}>Job</th><th style={thStyle}>Qty</th><th style={thStyle}>Current labor estimate</th><th style={thStyle}>Owner-standard labor</th><th style={thStyle}>Difference</th><th style={thStyle}>What changed</th><th style={thStyle}>Status</th></tr></thead>
+            <tbody>
+              {buildLaborWiringScenarios().map((scenario) => (
+                <tr key={scenario.id}>
+                  <td style={tdStyle}><b>{scenario.id}</b></td>
+                  <td style={tdStyle}>{scenario.name}<div style={smallHelp}>{scenario.currentBasis}</div></td>
+                  <td style={tdStyle}>{scenario.quantity.toLocaleString()}</td>
+                  <td style={tdStyle}>${scenario.currentLabor.toFixed(2)}</td>
+                  <td style={tdStyle}><b>${scenario.ownerLabor.toFixed(2)}</b><div style={smallHelp}>{scenario.ownerBasis}</div></td>
+                  <td style={tdStyle}>
+                    <b style={{ color: scenario.diff >= 0 ? "#991b1b" : "#166534" }}>
+                      {scenario.diff >= 0 ? "+" : "−"}${Math.abs(scenario.diff).toFixed(2)} ({scenario.diffPct >= 0 ? "+" : ""}{scenario.diffPct.toFixed(1)}%)
+                    </b>
+                  </td>
+                  <td style={tdStyle}>{scenario.whatChanged}</td>
+                  <td style={tdStyle}><span style={confidenceStyle.seeded}>not live yet</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style={{ marginBottom: 6 }}>Staff readiness summary</h3>
+        <ul style={{ margin: "0 0 0 18px", fontSize: 13, lineHeight: 1.7 }}>
+          <li>✅ Raw costs verified (jars, bags, pouch, roll media, ink per ml).</li>
+          <li>✅ Labor standards verified (owner-approved, table above).</li>
+          <li>⚠️ Labor standards NOT live in the calculator yet — estimates still use old heuristics (generally LOWER labor than the standards; see scenarios).</li>
+          <li>⚠️ RIP actual automation not built yet (ink usage, print minutes, cut time still estimates).</li>
+          <li>✅ Normal jobs can be staff-estimated with owner review of the final number.</li>
+          <li>⚠️ Complex white/gloss/heavy-coverage jobs still require owner review — ink usage is uncalibrated and gloss setup labor is not charged by the live calculator.</li>
+        </ul>
       </section>
 
       <section style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginTop: 16 }}>

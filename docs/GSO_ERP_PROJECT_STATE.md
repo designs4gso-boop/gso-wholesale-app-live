@@ -517,6 +517,18 @@ Quote recipe gates remain:
 - Tests: 151 -> 156 passing (5 new: ten-task inventory, full-precision unit-cost pins, cut-setup/cutting machine rules, gloss-labor-only wording, owner_standard CSV label).
 - Next wiring decision (owner-approved patch later): replace the calculator's hardcoded application/cutting/prepress/packout heuristics with these standards, then validate via T1-T7 replays.
 
+## Completed Milestone: Calculator Labor Wiring Preview (Patch 13A.2)
+
+- Read-only preview comparing the calculator's CURRENT hardcoded labor rules against the 13A.1 owner standards — the calculator's live output is deliberately unchanged (verified: only a static note added to its estimate panel). No writes, no apply workflow, no engine/quote/production/schema changes.
+- Current rules are MIRRORED exactly, never guessed (`CURRENT_CALC_LABOR` in the shared lib documents the source functions in app.erp.cost-calculator.tsx): $25/hr, jar 10s + 10 min setup, bag 10s/side + 5 min setup, prepress basic 15 min, gloss/white setup $0. The future wiring patch replaces the calculator's rules and deletes this mirror; a test pins the mirror so drift is caught.
+- Rule-by-rule table: five comparable rules (jar app ~2.9x higher under the standard, 4x5 bag/side, 14x16 bag ~9.6x higher, design setup $6.25/job -> $9.3333/DESIGN, gloss/white setup $0 -> $8.3333) and three "needs calculator wiring review" rows where the bases differ and are never silently converted: Cutting (hand labor vs cutter time at 12.5 cm/s effective), Weeding (per unit vs per 54x54 sheet), Packout (per product unit vs per order box).
+- Sample scenarios (labor portion only; media/ink/machine untouched): T1/T2 600 jar labels current $52.08 -> owner $129.33 (+$77.25, +148.3%; application alone 600 x $0.20 = $120.00); T3 1,000 4x5 bags front-only -> application $111.11; T3b front+back -> $222.22; T5 banner (setup-only change $6.25 -> $9.33); T7 gloss test adds the $8.33 gloss/white setup labor the live calculator charges nothing for (ink usage unchanged). Scary jumps shown deliberately.
+- Staff readiness summary added: raw costs verified; labor standards verified; labor NOT live in calculator (estimates generally under-charge labor vs standards); RIP actual automation not built; normal jobs staff-estimable with owner review; complex white/gloss/heavy-coverage jobs still owner-review-only.
+- Cost Calculator got a single static read-only note under the estimate: "Owner labor standards preview is available in Cost Verification. Current estimate still uses existing calculator labor rules." No output, math, submit, or field changes.
+- Owner Cost Checklist CSV: new context row "Labor Wiring Preview (13A.2) — preview exists but is NOT live"; the 13A.1 labor-standard rows and the hardcoded-heuristics assumption rows remain.
+- Tests: 156 -> 162 passing (6 new: mirror pins, T1 exact math incl. +148.3%, T3/T3b $111.11/$222.22, T7 gloss-setup-only, needs-wiring-review task list, scenario set coverage).
+- Next: owner reviews the preview numbers, then approves the actual wiring patch (calculator labor rules replaced by the standards, mirror deleted, T1-T7 replays re-run as validation).
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:

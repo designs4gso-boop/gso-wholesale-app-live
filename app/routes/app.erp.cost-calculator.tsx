@@ -1234,6 +1234,11 @@ function CalculatorForm({
           </tbody>
         </table>
 
+        <div style={{ marginTop: 10, border: "1px solid #c7d2fe", background: "#eef2ff", color: "#3730a3", borderRadius: 10, padding: "8px 12px", fontSize: 12 }}>
+          Owner labor standards preview is available in <a href="/app/erp/cost-verification">Cost Verification</a>. Current estimate still uses
+          existing calculator labor rules.
+        </div>
+
         <h3>Line breakdown</h3>
         <div style={{ display: "grid", gap: 10 }}>
           {form.lines.map((line) => {

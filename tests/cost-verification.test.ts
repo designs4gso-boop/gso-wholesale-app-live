@@ -4,9 +4,12 @@ import {
   APPLY_CONFIRM_PHRASE,
   CALCULATOR_ASSUMPTION_ROWS,
   CONFIDENCE_LABELS,
+  CURRENT_CALC_LABOR,
+  LABOR_RULE_COMPARISONS,
   LABOR_STANDARDS,
   LABOR_STANDARD_CONFIDENCE_LABEL,
   NO_FLAT_COST_ISSUE,
+  buildLaborWiringScenarios,
   OWNER_CHECKLIST_HEADER,
   PLACEHOLDER_ISSUE,
   REPLAY_RECORD_FIELDS,
@@ -536,6 +539,60 @@ describe("labor standards (13A.1)", () => {
     });
     expect(cells[9]).toBe(LABOR_STANDARD_CONFIDENCE_LABEL);
     expect(LABOR_STANDARD_CONFIDENCE_LABEL).toBe("Verified / Owner-approved standard");
+  });
+});
+
+describe("labor wiring preview (13A.2)", () => {
+  const scenarios = buildLaborWiringScenarios();
+  const byId = (id: string) => scenarios.find((scenario) => scenario.id === id)!;
+
+  it("mirrors the calculator's current hardcoded rules exactly", () => {
+    expect(CURRENT_CALC_LABOR.laborRatePerHour).toBe(25);
+    expect(CURRENT_CALC_LABOR.jarApplicationSeconds).toBe(10);
+    expect(CURRENT_CALC_LABOR.bagApplicationSecondsPerSide).toBe(10);
+    expect(CURRENT_CALC_LABOR.jarApplicationSetupMinutes).toBe(10);
+    expect(CURRENT_CALC_LABOR.bagApplicationSetupMinutes).toBe(5);
+    expect(CURRENT_CALC_LABOR.prepressBasicMinutes).toBe(15);
+    expect(CURRENT_CALC_LABOR.glossWhiteSetup).toBe(0);
+  });
+
+  it("T1: 600 jars — owner application alone is 600 x $0.20 = $120.00", () => {
+    const t1 = byId("T1");
+    // current: (600*10s)/60 + 10 setup = 110 min + prepress 15 min = 125 min @ $25/hr
+    expect(t1.currentLabor).toBeCloseTo((110 + 15) * (25 / 60), 4);
+    expect(t1.currentLabor).toBeCloseTo(52.0833, 3);
+    expect(t1.ownerLabor).toBeCloseTo(600 * 0.2 + (25 / 3 + 1), 4);
+    expect(t1.ownerLabor).toBeCloseTo(129.3333, 3);
+    expect(t1.diff).toBeCloseTo(77.25, 2);
+    expect(t1.diffPct).toBeCloseTo(148.32, 1);
+  });
+
+  it("T3/T3b: 1,000 4x5 bags — front $111.11, front+back $222.22 application", () => {
+    const t3 = byId("T3");
+    expect(t3.ownerLabor).toBeCloseTo(1000 * (20 / 180) + (25 / 3 + 1), 4);
+    expect(1000 * (20 / 180)).toBeCloseTo(111.1111, 3);
+    const t3b = byId("T3b");
+    expect(2000 * (20 / 180)).toBeCloseTo(222.2222, 3);
+    expect(t3b.ownerLabor - t3.ownerLabor).toBeCloseTo(111.1111, 3);
+  });
+
+  it("T7: adds gloss/white setup labor the calculator charges nothing for today", () => {
+    const t7 = byId("T7");
+    expect(t7.currentLabor).toBeCloseTo(6.25, 4); // prepress only, gloss setup $0
+    expect(t7.ownerLabor).toBeCloseTo(25 / 3 + 1 + 25 / 3, 4);
+    expect(t7.whatChanged).toContain("ink usage profiles unchanged");
+  });
+
+  it("incomparable bases are labeled needs_wiring_review, never guessed", () => {
+    const reviewTasks = LABOR_RULE_COMPARISONS.filter((rule) => rule.status === "needs_wiring_review").map((rule) => rule.task);
+    expect(reviewTasks).toEqual(["Cutting", "Weeding", "Packout"]);
+    const comparable = LABOR_RULE_COMPARISONS.filter((rule) => rule.status === "comparable");
+    expect(comparable.length).toBe(5);
+  });
+
+  it("scenarios cover the required sample set", () => {
+    expect(scenarios.map((scenario) => scenario.id)).toEqual(["T1", "T2", "T3", "T3b", "T5", "T7"]);
+    expect(scenarios.every((scenario) => Number.isFinite(scenario.diff) && Number.isFinite(scenario.diffPct))).toBe(true);
   });
 });
 
