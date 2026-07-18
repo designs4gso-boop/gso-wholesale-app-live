@@ -9,6 +9,16 @@ import {
   resultKeyOf,
   rowDedupeWhere,
 } from "../lib/rasterlink-parse.server";
+import {
+  VERSAWORKS_SOURCE,
+  buildVersaworksRawRow,
+  decideVersaworksMatch,
+  looksLikeVersaworksCsv,
+  parseVersaworksRows,
+  ripNameJobIdsFor,
+  versaworksParseWarningCount,
+  versaworksRowDedupeWhere,
+} from "../lib/versaworks-parse.server";
 
 function textResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -207,6 +217,118 @@ export async function action({ request }: { request: Request }) {
       ambiguous: ambiguousCount,
       unmatched: Math.max(0, created - matchedCount),
       parseWarnings,
+      outcome: "processed",
+    });
+  }
+
+  // 13A.6D: VersaWorks job-history CSVs take a hardened branch with the same
+  // safety layers as RasterLink: sha256 file dedupe, natural-key row dedupe,
+  // conservative exact-only matching (never first-match-wins, never bare
+  // contains), and transparent matchMeta in rawRow that the 13A.6C review
+  // page classifies via the shared top-level matchFlag. Files that do not
+  // sniff as VersaWorks (non-CSV placeholder uploads, unknown CSV shapes)
+  // continue through the legacy path below, byte-identical.
+  if (file.name.toLowerCase().endsWith(".csv") && looksLikeVersaworksCsv(rawText)) {
+    const marker = fileHashMarker(rawText);
+    // Same rule as RasterLink: only fully processed imports block a re-upload,
+    // so a crashed partial import may retry and row dedupe keeps it idempotent.
+    const duplicateFile = await db.printLogImport.findFirst({
+      where: { shop: setting.shop, source: VERSAWORKS_SOURCE, fileName: file.name, status: "processed", notes: { startsWith: marker } },
+    });
+    if (duplicateFile) {
+      return textResponse({ ok: true, format: VERSAWORKS_SOURCE, duplicateFile: true, fileName: file.name, importId: duplicateFile.id, message: "File already imported (same name + content hash); nothing written." });
+    }
+
+    const entries = parseVersaworksRows(rawText, file.name);
+    const importRecord = await db.printLogImport.create({
+      data: {
+        shop: setting.shop,
+        source: VERSAWORKS_SOURCE,
+        fileName: file.name,
+        rawText: rawText.slice(0, 250000),
+        rowCount: entries.length,
+        totalSqft: entries.reduce((sum, entry) => sum + entry.sqft, 0),
+        totalInkMl: entries.reduce((sum, entry) => sum + entry.inkMl, 0),
+        status: "processing",
+        notes: marker,
+      },
+    });
+
+    // One bounded ripJobName index per file for the exact second-stage key.
+    const ripItems = await db.productionJobItem.findMany({
+      where: { shop: setting.shop, ripJobName: { not: null } },
+      select: { jobId: true, ripJobName: true },
+      take: 300,
+    });
+
+    let created = 0;
+    let skippedDuplicates = 0;
+    let matchedCount = 0;
+    let ambiguousCount = 0;
+
+    for (const entry of entries) {
+      const existing = await db.printLogEntry.findFirst({ where: versaworksRowDedupeWhere(setting.shop, entry) as any });
+      if (existing) { skippedDuplicates += 1; continue; }
+
+      const ticketCandidates = entry.jobTicket
+        ? await db.productionJob.findMany({ where: { shop: setting.shop, jobTicket: entry.jobTicket }, select: { id: true }, take: 5 })
+        : [];
+      const decision = decideVersaworksMatch({
+        ticketCandidates,
+        ripNameJobIds: ticketCandidates.length ? [] : ripNameJobIdsFor(entry.jobName, ripItems),
+      });
+      if (decision.productionJobId) matchedCount += 1;
+      if (decision.matchFlag) ambiguousCount += 1;
+
+      await db.printLogEntry.create({
+        data: {
+          shop: setting.shop,
+          importId: importRecord.id,
+          productionJobId: decision.productionJobId || undefined,
+          jobTicket: entry.jobTicket || null,
+          sourceJobName: entry.jobName,
+          printerSoftware: VERSAWORKS_SOURCE,
+          machineName: entry.machineName,
+          mediaName: entry.mediaName,
+          status: entry.event,
+          sqft: entry.sqft,
+          inkMl: entry.inkMl,
+          cmykInkMl: entry.cmykInkMl,
+          whiteInkMl: entry.whiteInkMl,
+          glossInkMl: entry.glossInkMl,
+          printMinutes: 0,
+          startedAt: entry.startedAt,
+          completedAt: entry.completedAt,
+          rawRow: JSON.stringify(buildVersaworksRawRow(entry, decision)).slice(0, 12000),
+        },
+      });
+      created += 1;
+    }
+
+    const versaworksWarnings = versaworksParseWarningCount(entries);
+    await db.printLogImport.update({
+      where: { id: importRecord.id },
+      data: {
+        matchedCount,
+        unmatchedCount: Math.max(0, created - matchedCount),
+        status: "processed",
+        notes: `${marker}\nrows:${entries.length} created:${created} duplicatesSkipped:${skippedDuplicates} matched:${matchedCount} ambiguous:${ambiguousCount} parseWarnings:${versaworksWarnings} outcome:processed`,
+      },
+    });
+    await db.printLogAutoImportSetting.update({ where: { id: setting.id }, data: { lastAutoImportAt: new Date() } });
+
+    return textResponse({
+      ok: true,
+      format: VERSAWORKS_SOURCE,
+      fileName: file.name,
+      fileHash: marker,
+      rows: entries.length,
+      created,
+      skippedDuplicates,
+      matched: matchedCount,
+      ambiguous: ambiguousCount,
+      unmatched: Math.max(0, created - matchedCount),
+      parseWarnings: versaworksWarnings,
       outcome: "processed",
     });
   }
