@@ -5,12 +5,16 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { materialKind } from "../lib/material-classify";
 import {
+  WIRED_LABOR,
   blankItemCostQty,
   blankItemUnitCostAtQty,
   computeLineCosts,
+  designSetupCost,
+  glossWhiteSetupApplies,
   resolveMaterialUnitCost,
   resolvePrintMaterialCostPerSqft,
   suggestedPriceFromMargin,
+  wiredApplicationRate,
 } from "../lib/cost-calculator.server";
 
 type QuoteRipRow = {
@@ -362,21 +366,8 @@ function cuttingRule(mode: string, qty: number, customMinutes: number, customFla
   return { name: rule.name, minutes, cost: rule.flatCost + (minutes / 60) * laborRatePerHour };
 }
 
-function prepressRule(mode: string, customMinutes: number, customFlatCost: number, laborRatePerHour: number) {
-  const rules: Record<string, { name: string; minutes: number; flatCost: number }> = {
-    none: { name: "No prepress/design", minutes: 0, flatCost: 0 },
-    basic: { name: "Basic proof / file check", minutes: 15, flatCost: 0 },
-    repair: { name: "File repair", minutes: 25, flatCost: 0 },
-    dieline: { name: "Dieline setup", minutes: 35, flatCost: 0 },
-    color: { name: "Color match / test setup", minutes: 30, flatCost: 0 },
-  };
-  if (mode === "custom") {
-    const minutes = Math.max(customMinutes || 0, 0);
-    return { name: "Custom prepress/design", minutes, cost: Math.max(customFlatCost || 0, 0) + (minutes / 60) * laborRatePerHour };
-  }
-  const rule = rules[mode] || rules.none;
-  return { name: rule.name, minutes: rule.minutes, cost: rule.flatCost + (rule.minutes / 60) * laborRatePerHour };
-}
+// prepressRule was replaced in 13A.3 by designSetupCost (owner standard:
+// art + print setup per design; cut setup included). See cost-calculator.server.ts.
 
 function packoutRule(mode: string, qty: number, customUnitCost: number, customFlatCost: number) {
   const safeQty = Math.max(qty || 0, 0);
@@ -620,29 +611,58 @@ export async function loader({ request }: { request: Request }) {
   const applicationRule = estimateApplicationRule(applicationMode, averageLabelSqIn, lines.length);
   const customApplicationSecondsPerUnit = fieldNumber(url, "applicationSecondsPerUnit", 8);
   const customApplicationUnitCost = fieldNumber(url, "applicationUnitCost", 0);
-  const applicationSetupMinutes = applicationMode === "none" ? 0 : applicationMode === "apply-flat-bag" ? 5 : applicationMode === "apply-box" ? 8 : 10;
+  // 13A.3: comparable application labor uses OWNER STANDARDS (per-application
+  // dollar rates; sides = label lines; no extra setup minutes — the standard
+  // is all-in). Unmapped combinations (oz bags, generic bags, boxes, tubes,
+  // label sets, custom) keep the legacy seconds heuristic.
+  const wiredAppRate = applicationMode === "custom" || applicationMode === "none"
+    ? null
+    : wiredApplicationRate(applicationMode, `${selectedItem?.applicationKey || ""} ${selectedItem?.name || ""}`);
+  const applicationSetupMinutes = applicationMode === "none" || wiredAppRate != null ? 0 : applicationMode === "apply-flat-bag" ? 5 : applicationMode === "apply-box" ? 8 : 10;
   const applicationLineDetails = applicationMode === "none" ? [] : completeLines.map((line) => {
-    const seconds = applicationMode === "custom" ? customApplicationSecondsPerUnit : secondsForKnownApplication(selectedItem, line, applicationMode) || applicationRule.secondsPerUnit;
     const apps = line.quantity;
+    if (wiredAppRate != null) {
+      return { lineIndex: line.index, lineName: line.name, labelType: line.labelTypeName, apps, seconds: 0, minutes: 0, wired: true, ratePerApp: wiredAppRate, laborCost: apps * wiredAppRate };
+    }
+    const seconds = applicationMode === "custom" ? customApplicationSecondsPerUnit : secondsForKnownApplication(selectedItem, line, applicationMode) || applicationRule.secondsPerUnit;
     const minutes = (apps * seconds) / 60;
-    return { lineIndex: line.index, lineName: line.name, labelType: line.labelTypeName, apps, seconds, minutes, laborCost: (minutes / 60) * laborRatePerHour };
+    return { lineIndex: line.index, lineName: line.name, labelType: line.labelTypeName, apps, seconds, minutes, wired: false, ratePerApp: null as number | null, laborCost: (minutes / 60) * laborRatePerHour };
   });
   const applicationQty = applicationMode === "none" ? 0 : applicationLineDetails.reduce((sum, line) => sum + line.apps, 0);
   const applicationSecondsPerUnit = applicationMode === "none" ? 0 : applicationLineDetails.length ? applicationLineDetails.reduce((sum, line) => sum + line.seconds, 0) / applicationLineDetails.length : 0;
   const applicationUnitCost = applicationMode === "custom" ? customApplicationUnitCost : applicationRule.extraCostPerUnit;
   const applicationMinutesBeforeSetup = applicationLineDetails.reduce((sum, line) => sum + line.minutes, 0);
   const applicationLaborMinutes = applicationMode === "none" ? 0 : applicationSetupMinutes + applicationMinutesBeforeSetup;
-  const applicationLaborCost = (applicationLaborMinutes / 60) * laborRatePerHour + applicationQty * applicationUnitCost;
+  const applicationLaborCost = wiredAppRate != null
+    ? applicationLineDetails.reduce((sum, line) => sum + line.laborCost, 0)
+    : (applicationLaborMinutes / 60) * laborRatePerHour + applicationQty * applicationUnitCost;
 
   const cuttingMode = cleanText(url.searchParams.get("cuttingMode") || "none");
   const cuttingCustomMinutes = fieldNumber(url, "cuttingCustomMinutes", 0);
   const cuttingCustomFlatCost = fieldNumber(url, "cuttingCustomFlatCost", 0);
   const cutting = cuttingRule(cuttingMode, primaryQuantity, cuttingCustomMinutes, cuttingCustomFlatCost, laborRatePerHour);
 
+  // 13A.3: preset prepress modes are replaced by the owner design-setup
+  // standard (art + print per design, 1 design; cut setup included). "custom"
+  // stays a user override; "none" stays $0.
   const prepressMode = cleanText(url.searchParams.get("prepressMode") || "none");
   const prepressCustomMinutes = fieldNumber(url, "prepressCustomMinutes", 0);
   const prepressCustomFlatCost = fieldNumber(url, "prepressCustomFlatCost", 0);
-  const prepress = prepressRule(prepressMode, prepressCustomMinutes, prepressCustomFlatCost, laborRatePerHour);
+  const prepress = designSetupCost(prepressMode, prepressCustomMinutes, prepressCustomFlatCost, laborRatePerHour);
+
+  // 13A.3: gloss/white SETUP labor (owner standard, once per job) whenever any
+  // line prints white/gloss — estimated profile or actual RIP ink. Labor only;
+  // ink usage profiles unchanged.
+  const glossWhiteApplies = glossWhiteSetupApplies({
+    estimatedProfiles: quoteMode === "estimated" ? completeLines.map((line) => line.inkEstimateProfile) : [],
+    ripWhiteOrGlossCc: quoteMode === "actual"
+      ? completeLines.reduce((sum, line) => {
+          const row = rowById.get(line.quoteId);
+          return sum + (row ? (row.whiteCc || 0) + (row.clearCc || 0) : 0);
+        }, 0)
+      : 0,
+  });
+  const glossWhiteSetupCost = glossWhiteApplies ? WIRED_LABOR.glossWhiteSetupPerJob : 0;
 
   const packoutMode = cleanText(url.searchParams.get("packoutMode") || "none");
   const packoutCustomUnitCost = fieldNumber(url, "packoutCustomUnitCost", 0);
@@ -673,7 +693,7 @@ export async function loader({ request }: { request: Request }) {
   const cuttingCost = cutting.cost;
   const prepressCost = prepress.cost;
   const packoutCost = packout.cost;
-  const totalCost = lineMaterialCost + lineInkCost + itemCost + applicationLaborCost + processLaborCost + processMachineCost + cuttingCost + prepressCost + packoutCost;
+  const totalCost = lineMaterialCost + lineInkCost + itemCost + applicationLaborCost + glossWhiteSetupCost + processLaborCost + processMachineCost + cuttingCost + prepressCost + packoutCost;
   const unitCost = totalCost / primaryQuantity;
   const suggestedTotal = suggestedPriceFromMargin(totalCost, targetMarginPct);
   const suggestedUnit = suggestedTotal / primaryQuantity;
@@ -750,6 +770,10 @@ export async function loader({ request }: { request: Request }) {
       applicationSetupMinutes,
       applicationName: applicationRule.name,
       applicationLineDetails,
+      applicationWired: wiredAppRate != null,
+      applicationRatePerApp: wiredAppRate,
+      glossWhiteApplies,
+      glossWhiteSetupCost,
       processLaborCost,
       processMachineCost,
       cuttingName: cutting.name,
@@ -938,7 +962,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a> · <a href="/app/erp/cost-health">Cost Health</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v2.0 (12B.1a): print media costs come from the Materials database, blank/vendor items use quantity cost tiers, waste math matches the quote engine, and the form only recalculates when you press Calculate.</p>
+        <p style={{ marginBottom: 0 }}>v2.1 (13A.3): owner labor standards are LIVE for comparable labor lines — jar/4x5/14x16 application, design setup, gloss/white setup. Print media costs come from the Materials database, blank/vendor items use quantity cost tiers, waste math matches the quote engine, and the form only recalculates when you press Calculate.</p>
       </section>
 
       <section style={{ marginTop: 16, border: "2px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 12, padding: "12px 16px", fontWeight: 700 }}>
@@ -1123,7 +1147,9 @@ function CalculatorForm({
           )}
           {applicationMode !== "none" ? (
             <div style={{ gridColumn: "1 / -1", fontSize: 13, color: "#374151", background: "#f3f4f6", borderRadius: 10, padding: 10 }}>
-              Auto application labor rule: {form.applicationName}. {form.applicationLineDetails.map((detail) => `${detail.lineName} ${detail.labelType}: ${num(detail.apps, 0)} × ${num(detail.seconds, 2)} sec`).join("; ")} + {num(form.applicationSetupMinutes, 1)} min application setup = {num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)}.
+              {calc.applicationWired
+                ? <>Owner-standard application labor: {form.applicationLineDetails.map((detail) => `${detail.lineName} ${detail.labelType}: ${num(detail.apps, 0)} × ${money(detail.ratePerApp || 0)}/app`).join("; ")} = {money(calc.applicationLaborCost)} (all-in rate; no separate setup minutes).</>
+                : <>Auto application labor rule: {form.applicationName}. {form.applicationLineDetails.map((detail) => `${detail.lineName} ${detail.labelType}: ${num(detail.apps, 0)} × ${num(detail.seconds, 2)} sec`).join("; ")} + {num(form.applicationSetupMinutes, 1)} min application setup = {num(calc.applicationLaborMinutes, 1)} min / {money(calc.applicationLaborCost)} (legacy heuristic — no owner standard for this item yet).</>}
             </div>
           ) : null}
         </div>
@@ -1220,7 +1246,8 @@ function CalculatorForm({
             <tr><td>Label material cost</td><td align="right">{money(calc.lineMaterialCost)}</td></tr>
             <tr><td>Ink cost</td><td align="right">{money(calc.lineInkCost)}</td></tr>
             <tr><td>{calc.itemName}</td><td align="right">{calc.itemQty ? `${num(calc.itemCostQty, 0)} x ${money(calc.itemUnitCost)} = ${money(calc.itemCost)}` : money(0)}</td></tr>
-            <tr><td>Application labor</td><td align="right">{form.applicationMode === "none" ? "No application / $0.00" : `${num(calc.applicationQty, 0)} apps · ${num(calc.applicationLaborMinutes, 1)} min incl. setup · ${money(calc.applicationLaborCost)}`}</td></tr>
+            <tr><td>Application labor{calc.applicationWired ? " (owner standard)" : ""}</td><td align="right">{form.applicationMode === "none" ? "No application / $0.00" : calc.applicationWired ? `${num(calc.applicationQty, 0)} apps × ${money(calc.applicationRatePerApp || 0)}/app · ${money(calc.applicationLaborCost)}` : `${num(calc.applicationQty, 0)} apps · ${num(calc.applicationLaborMinutes, 1)} min incl. setup · ${money(calc.applicationLaborCost)}`}</td></tr>
+            <tr><td>Gloss/white setup (labor only)</td><td align="right">{calc.glossWhiteApplies ? `${money(calc.glossWhiteSetupCost)} — owner standard, ink usage unchanged` : money(0)}</td></tr>
             <tr><td>Print/setup labor</td><td align="right">{money(calc.processLaborCost)}</td></tr>
             <tr><td>Machine/setup cost</td><td align="right">{money(calc.processMachineCost)}</td></tr>
             <tr><td>Cutting / finishing</td><td align="right">{calc.cuttingCost ? `${calc.cuttingName}: ${num(calc.cuttingMinutes, 1)} min / ${money(calc.cuttingCost)}` : money(0)}</td></tr>
@@ -1234,9 +1261,10 @@ function CalculatorForm({
           </tbody>
         </table>
 
-        <div style={{ marginTop: 10, border: "1px solid #c7d2fe", background: "#eef2ff", color: "#3730a3", borderRadius: 10, padding: "8px 12px", fontSize: 12 }}>
-          Owner labor standards preview is available in <a href="/app/erp/cost-verification">Cost Verification</a>. Current estimate still uses
-          existing calculator labor rules.
+        <div style={{ marginTop: 10, border: "1px solid #86efac", background: "#f0fdf4", color: "#166534", borderRadius: 10, padding: "8px 12px", fontSize: 12 }}>
+          <b>Owner labor standards are now live for comparable labor lines</b> (jar $0.20/app, 4x5 bag $0.1111/side, 14x16 bag $1.00/side, design
+          setup $9.33/design, gloss/white setup $8.33 labor-only). Cutting, weeding, and packout remain under review unless exact basis is
+          available — they still use the previous calculator rules. Details in <a href="/app/erp/cost-verification">Cost Verification</a>.
         </div>
 
         <h3>Line breakdown</h3>
@@ -1259,7 +1287,9 @@ function CalculatorForm({
                 <div style={{ marginTop: 6 }}>Material: {line.materialName} @ {money(line.materialCostPerSqft)}/sqft = <b>{money(line.materialCost)}</b></div>
                 <div>Ink: {line.inkSource} = <b>{money(line.inkCost)}</b>{line.inkCc ? ` (${num(line.inkCc, 2)} cc)` : ""}</div>
                 {form.applicationMode !== "none" ? (
-                  <div>Application labor: {num(line.quantity, 0)} × {num(appSeconds, 2)} sec = {num(appMinutes, 1)} min / <b>{money(appCost)}</b></div>
+                  appDetail?.wired
+                    ? <div>Application labor (owner standard): {num(line.quantity, 0)} × {money(appDetail.ratePerApp || 0)}/app = <b>{money(appCost)}</b></div>
+                    : <div>Application labor: {num(line.quantity, 0)} × {num(appSeconds, 2)} sec = {num(appMinutes, 1)} min / <b>{money(appCost)}</b></div>
                 ) : null}
                 <div style={{ color: "#6b7280", marginTop: 6 }}>Line subtotal includes material + ink{form.applicationMode !== "none" ? " + direct application labor" : ""}. Shared setup, blank item, and machine costs are listed below.</div>
               </div>
@@ -1271,7 +1301,8 @@ function CalculatorForm({
         <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, fontSize: 13, background: "#f9fafb" }}>
           <div style={{ display: "flex", justifyContent: "space-between" }}><span>Blank item / product</span><b>{money(calc.itemCost)}</b></div>
           <div style={{ color: "#6b7280", marginBottom: 6 }}>{calc.itemQty ? `${calc.itemName}: base qty ${num(calc.itemQty, 0)}${calc.itemWastePct ? ` + ${num(calc.itemWastePct, 1)}% waste = ${num(calc.itemCostQty, 0)} costed units` : ""} × ${money(calc.itemUnitCost)}${calc.itemTierLabel !== "fixed" ? ` tier ${calc.itemTierLabel}` : ""}` : "No blank item selected."}</div>
-          <div style={{ display: "flex", justifyContent: "space-between" }}><span>Application setup included in application labor</span><b>{form.applicationMode === "none" ? money(0) : `${num(calc.applicationSetupMinutes, 1)} min`}</b></div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><span>{calc.applicationWired ? "Application setup (included in owner-standard rate)" : "Application setup included in application labor"}</span><b>{form.applicationMode === "none" ? money(0) : calc.applicationWired ? "included" : `${num(calc.applicationSetupMinutes, 1)} min`}</b></div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><span>Gloss/white setup (labor only)</span><b>{calc.glossWhiteApplies ? money(calc.glossWhiteSetupCost) : money(0)}</b></div>
           <div style={{ display: "flex", justifyContent: "space-between" }}><span>Print/setup labor</span><b>{money(calc.processLaborCost)}</b></div>
           <div style={{ display: "flex", justifyContent: "space-between" }}><span>Machine/setup cost</span><b>{money(calc.processMachineCost)}</b></div>
           <div style={{ display: "flex", justifyContent: "space-between" }}><span>Cutting / finishing</span><b>{calc.cuttingCost ? `${calc.cuttingName}: ${money(calc.cuttingCost)}` : money(0)}</b></div>

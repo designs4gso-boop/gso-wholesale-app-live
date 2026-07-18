@@ -525,7 +525,7 @@ export async function loader({ request }: { request: Request }) {
 
   ownerChecklist.push({
     category: "Labor wiring (context)",
-    itemName: "Labor Wiring Preview (13A.2)",
+    itemName: "Labor wiring status (13A.3)",
     vendor: "",
     cost: null,
     unit: "",
@@ -534,8 +534,8 @@ export async function loader({ request }: { request: Request }) {
     moq: null,
     source: "Cost Verification page",
     confidence: "n/a",
-    issue: "Preview exists but is NOT live — the calculator still uses its hardcoded labor heuristics until the approved wiring patch.",
-    verify: "Review the before/after scenarios, then approve the wiring patch",
+    issue: "Comparable labor standards are LIVE in the Cost Calculator (jar/4x5/14x16 application, design setup, gloss/white setup). Cutting, weeding, and packout remain review-needed and still use previous calculator rules.",
+    verify: "Validate with the T1-T7 replays; then decide cutting/weeding/packout wiring",
     fixPage: "Cost Verification",
   });
 
@@ -701,7 +701,7 @@ export default function CostVerificationRoute() {
           <div>
             <b style={{ color: "#92400e" }}>Still needs calibration (deliberately unresolved):</b>
             <ul style={{ margin: "6px 0 0 18px", lineHeight: 1.7 }}>
-              <li><b>Labor standards entered / owner-approved (13A.1)</b> — but NOT wired into the calculator yet, and still need actual job replay validation</li>
+              <li><b>Labor standards partially LIVE in the calculator (13A.3)</b> — jar/bag application, design setup, and gloss/white setup use owner standards; cutting/weeding/packout still on previous rules (review needed); replay validation still open</li>
               <li>Ink <b>usage per sqft</b> (0.0075 seeded; the $/sqft estimate profiles) — calibrate from RIP actuals (13A)</li>
               <li>Machine hourly rate — $5/hr on Machines vs $8/hr calculator default; owner picks one later</li>
               <li>Print speed / setup minutes (finish speed curve; cut time from cutter speed later — 12.5 cm/s effective estimate)</li>
@@ -714,9 +714,9 @@ export default function CostVerificationRoute() {
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={{ marginTop: 0 }}>Labor Standards (owner-approved 2026-07-17)</h2>
         <p style={{ fontSize: 13, color: "#4b5563" }}>
-          Labor is <b>owner-standard based</b>. Ink, media, print time, and cut time will come from RIP/machine actuals later. These standards are
-          the approved numbers for hand tasks — they are <b>not wired into the Cost Calculator yet</b> (it still uses its old code heuristics until
-          a separate approved wiring patch), so use this table when checking replay results by hand.
+          Labor is <b>owner-standard based</b>. Ink, media, print time, and cut time will come from RIP/machine actuals later. Since 13A.3 the
+          comparable standards (jar/4x5/14x16 application, design setup, gloss/white setup) are <b>LIVE in the Cost Calculator</b>; weeding,
+          cutting, and packout below remain reference values until their wiring basis is decided.
         </p>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -757,11 +757,12 @@ export default function CostVerificationRoute() {
         </div>
       </section>
 
-      <section style={{ ...cardStyle, marginTop: 16, border: "2px solid #6366f1" }}>
-        <h2 style={{ marginTop: 0 }}>Labor Wiring Preview — NOT LIVE</h2>
-        <p style={{ fontSize: 13, color: "#3730a3", background: "#e0e7ff", border: "1px solid #6366f1", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
-          Preview only. The Cost Calculator's live estimates are UNCHANGED — it still uses its old hardcoded labor rules. This section shows what
-          would change if the owner-approved labor standards were wired in, so the impact is visible before any math changes.
+      <section style={{ ...cardStyle, marginTop: 16, border: "2px solid #16a34a" }}>
+        <h2 style={{ marginTop: 0 }}>Labor Wiring — comparable standards are LIVE (13A.3)</h2>
+        <p style={{ fontSize: 13, color: "#166534", background: "#f0fdf4", border: "1px solid #16a34a", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
+          Comparable owner labor standards are now LIVE in the Cost Calculator: jar/4x5/14x16 application, design setup, and gloss/white setup.
+          Cutting, weeding, and packout still use the previous calculator rules (mismatched bases — review needed). The tables below are the
+          historical before/after record of what changed.
         </p>
 
         <h3 style={{ marginBottom: 6 }}>Rule-by-rule: current calculator vs owner standard</h3>
@@ -775,8 +776,8 @@ export default function CostVerificationRoute() {
                   <td style={tdStyle}>{rule.currentRule}</td>
                   <td style={tdStyle}>{rule.ownerStandard}</td>
                   <td style={tdStyle}>
-                    <span style={rule.status === "comparable" ? confidenceStyle.manual : confidenceStyle.seeded}>
-                      {rule.status === "comparable" ? "comparable — not live" : "needs calculator wiring review"}
+                    <span style={rule.status === "live" ? confidenceStyle.verified : confidenceStyle.seeded}>
+                      {rule.status === "live" ? "LIVE in calculator" : "needs calculator wiring review"}
                     </span>
                   </td>
                   <td style={tdStyle}>{rule.note}</td>
@@ -789,7 +790,7 @@ export default function CostVerificationRoute() {
         <h3 style={{ marginBottom: 6 }}>Sample scenarios — labor portion only (media/ink/machine unchanged)</h3>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={thStyle}>#</th><th style={thStyle}>Job</th><th style={thStyle}>Qty</th><th style={thStyle}>Current labor estimate</th><th style={thStyle}>Owner-standard labor</th><th style={thStyle}>Difference</th><th style={thStyle}>What changed</th><th style={thStyle}>Status</th></tr></thead>
+            <thead><tr><th style={thStyle}>#</th><th style={thStyle}>Job</th><th style={thStyle}>Qty</th><th style={thStyle}>Previous labor (pre-13A.3)</th><th style={thStyle}>Owner-standard labor (now live)</th><th style={thStyle}>Difference</th><th style={thStyle}>What changed</th><th style={thStyle}>Status</th></tr></thead>
             <tbody>
               {buildLaborWiringScenarios().map((scenario) => (
                 <tr key={scenario.id}>
@@ -804,7 +805,7 @@ export default function CostVerificationRoute() {
                     </b>
                   </td>
                   <td style={tdStyle}>{scenario.whatChanged}</td>
-                  <td style={tdStyle}><span style={confidenceStyle.seeded}>not live yet</span></td>
+                  <td style={tdStyle}><span style={confidenceStyle.verified}>live in calculator</span></td>
                 </tr>
               ))}
             </tbody>
@@ -815,7 +816,8 @@ export default function CostVerificationRoute() {
         <ul style={{ margin: "0 0 0 18px", fontSize: 13, lineHeight: 1.7 }}>
           <li>✅ Raw costs verified (jars, bags, pouch, roll media, ink per ml).</li>
           <li>✅ Labor standards verified (owner-approved, table above).</li>
-          <li>⚠️ Labor standards NOT live in the calculator yet — estimates still use old heuristics (generally LOWER labor than the standards; see scenarios).</li>
+          <li>✅ Comparable labor standards LIVE in the calculator since 13A.3 (jar/4x5/14x16 application, design setup, gloss/white setup) — estimates now charge the honest owner-standard labor.</li>
+          <li>⚠️ Cutting, weeding, and packout still use previous calculator rules (mismatched bases — review needed); oz/generic bags without a size signal keep the legacy application heuristic.</li>
           <li>⚠️ RIP actual automation not built yet (ink usage, print minutes, cut time still estimates).</li>
           <li>✅ Normal jobs can be staff-estimated with owner review of the final number.</li>
           <li>⚠️ Complex white/gloss/heavy-coverage jobs still require owner review — ink usage is uncalibrated and gloss setup labor is not charged by the live calculator.</li>

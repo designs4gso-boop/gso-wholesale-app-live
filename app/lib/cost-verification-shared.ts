@@ -201,9 +201,9 @@ export const CALCULATOR_ASSUMPTION_ROWS: Array<{ itemName: string; cost: number 
   { itemName: "Ink profile: CMYK + 2X Gloss Heavy", cost: 1.5, unit: "per sqft", note: "Estimated profile." },
   { itemName: "Ink profile: CMYK + 3X Gloss Heavy", cost: 2.0, unit: "per sqft", note: "Estimated profile." },
   { itemName: "Ink profile: CMYK + 4X Gloss Heavy", cost: 2.5, unit: "per sqft", note: "Estimated profile." },
-  { itemName: "Application seconds (jars/bags heuristics)", cost: null, unit: "8-15 sec/unit", note: "Hardcoded per item type; stopwatch one real run." },
-  { itemName: "Cutting rules (square/contour/die-cut/weed)", cost: null, unit: "setup min + sec/unit", note: "Hardcoded rule table." },
-  { itemName: "Prepress rules (proof/repair/dieline/color)", cost: null, unit: "15-35 min", note: "Hardcoded rule table." },
+  { itemName: "Application seconds (jars/bags heuristics)", cost: null, unit: "8-15 sec/unit", note: "13A.3: replaced by owner standards for jar/4x5/14x16; legacy seconds remain only for oz/generic bags, boxes, tubes, label sets." },
+  { itemName: "Cutting rules (square/contour/die-cut/weed)", cost: null, unit: "setup min + sec/unit", note: "Still in use — cutting/weeding wiring needs a machine-time/sheet basis (review)." },
+  { itemName: "Prepress rules (proof/repair/dieline/color)", cost: null, unit: "15-35 min", note: "13A.3: preset modes replaced by the design-setup owner standard ($9.3333/design); 'custom' remains a user override." },
   { itemName: "Packout rules (standard/bulk/individual)", cost: null, unit: "$0.01-0.05/unit + flat", note: "Hardcoded rule table." },
   { itemName: "Default line waste", cost: null, unit: "10 %", note: "Assumed, never measured." },
 ];
@@ -241,13 +241,11 @@ export const LABOR_STANDARDS: LaborStandard[] = [
 
 export const LABOR_STANDARD_CONFIDENCE_LABEL = "Verified / Owner-approved standard";
 
-// ---------- Labor Wiring Preview (13A.2) ----------
-// READ-ONLY mirror of the Cost Calculator's current hardcoded labor rules
-// (app/routes/app.erp.cost-calculator.tsx: secondsForKnownApplication,
-// estimateApplicationRule, prepressRule). The calculator is deliberately NOT
-// changed by this patch; these constants exist so the preview can show exact
-// current assumptions instead of guessing. The future wiring patch replaces
-// the calculator's rules with LABOR_STANDARDS and deletes this mirror.
+// ---------- Labor Wiring Preview (13A.2) / historical record (13A.3) ----------
+// Mirror of the Cost Calculator's PRE-13A.3 labor rules, kept as the
+// before/after record now that the comparable standards are live. Legacy
+// values still apply to unmapped combinations (oz/generic bags, boxes, tubes,
+// label sets) and to cutting/packout, which keep previous calculator logic.
 export const CURRENT_CALC_LABOR = {
   laborRatePerHour: 25,
   jarApplicationSeconds: 10, // safe-care jar, side label
@@ -265,19 +263,23 @@ export type LaborRuleComparison = {
   task: string;
   currentRule: string;
   ownerStandard: string;
-  status: "comparable" | "needs_wiring_review";
+  status: "live" | "needs_wiring_review";
   note: string;
 };
 
+// 13A.3: the five comparable rules are now LIVE in the Cost Calculator; the
+// "currentRule" column documents the PREVIOUS behavior as the historical
+// before/after record. The three mismatched-basis rules keep their legacy
+// calculator logic until a wiring decision.
 export const LABOR_RULE_COMPARISONS: LaborRuleComparison[] = [
-  { task: "Jar application", currentRule: "10 s/jar + 10 min setup @ $25/hr (≈ $0.0694/jar + setup)", ownerStandard: "$0.20/jar ($20/hr ÷ 100/hr)", status: "comparable", note: "Owner standard is ~2.9x the current per-jar rate." },
-  { task: "4x5 bag application", currentRule: "10 s/side + 5 min setup @ $25/hr (≈ $0.0694/side + setup)", ownerStandard: "$0.1111/side ($20/hr ÷ 180/hr)", status: "comparable", note: "Front+back doubles per-bag cost in both models." },
-  { task: "14x16 bag application", currentRule: "15 s/side (pound bag) @ $25/hr (≈ $0.1042/side)", ownerStandard: "$1.00/side ($20/hr ÷ 20/hr)", status: "comparable", note: "Owner standard is ~9.6x the current rate — big change, shown deliberately." },
-  { task: "Design/prepress setup", currentRule: "Prepress 'basic' = 15 min = $6.25/job", ownerStandard: "Art setup $8.3333/design + print setup $1.00/design = $9.3333/design", status: "comparable", note: "Also becomes per-DESIGN instead of per-job (matters for future multi-design jobs)." },
-  { task: "Gloss/white setup", currentRule: "None — $0 (finish only affects ink $/sqft profile)", ownerStandard: "$8.3333/setup ($25/hr ÷ 3/hr)", status: "comparable", note: "Setup labor only; ink usage profiles unchanged." },
-  { task: "Cutting", currentRule: "Hand-labor minutes @ $25/hr (e.g. die-cut 15 min + 6 s/unit)", ownerStandard: "Machine/cutter time — 25 cm/s setting, 12.5 cm/s effective estimate", status: "needs_wiring_review", note: "Different basis (hand labor vs cutter time) — wiring decision required." },
-  { task: "Weeding", currentRule: "'Weeded decal' cut rule: 10 min + 8 s/unit @ $25/hr", ownerStandard: "$1.3333 per 54x54 sheet ($20/hr ÷ 15 sheets/hr)", status: "needs_wiring_review", note: "Different basis (per unit vs per sheet) — needs sheet-count wiring." },
-  { task: "Packout", currentRule: "'Standard' = $2 flat + $0.02/product unit", ownerStandard: "$2.00 per packout unit / order box ($20/hr ÷ 10/hr)", status: "needs_wiring_review", note: "Different basis (per product unit vs per order box) — wiring decision required." },
+  { task: "Jar application", currentRule: "Was: 10 s/jar + 10 min setup @ $25/hr (≈ $0.0694/jar + setup)", ownerStandard: "$0.20/jar ($20/hr ÷ 100/hr)", status: "live", note: "LIVE since 13A.3 — ~2.9x the previous per-jar rate." },
+  { task: "4x5 bag application", currentRule: "Was: 10 s/side + 5 min setup @ $25/hr (≈ $0.0694/side + setup)", ownerStandard: "$0.1111/side ($20/hr ÷ 180/hr)", status: "live", note: "LIVE since 13A.3 — front+back doubles per-bag cost. Oz/generic bags without a size signal keep the legacy heuristic (no owner standard yet)." },
+  { task: "14x16 bag application", currentRule: "Was: 15 s/side (pound bag) @ $25/hr (≈ $0.1042/side)", ownerStandard: "$1.00/side ($20/hr ÷ 20/hr)", status: "live", note: "LIVE since 13A.3 — ~9.6x the previous rate, shown deliberately." },
+  { task: "Design/prepress setup", currentRule: "Was: prepress 'basic' = 15 min = $6.25/job (other presets up to $14.58)", ownerStandard: "Art setup $8.3333/design + print setup $1.00/design = $9.3333/design (cut setup included)", status: "live", note: "LIVE since 13A.3 — all preset prepress modes now charge the per-design standard (1 design); 'custom' stays a user override." },
+  { task: "Gloss/white setup", currentRule: "Was: none — $0 (finish only affected ink $/sqft profile)", ownerStandard: "$8.3333/setup ($25/hr ÷ 3/hr)", status: "live", note: "LIVE since 13A.3 — setup labor only; ink usage profiles unchanged." },
+  { task: "Cutting", currentRule: "Hand-labor minutes @ $25/hr (e.g. die-cut 15 min + 6 s/unit) — still in use", ownerStandard: "Machine/cutter time — 25 cm/s setting, 12.5 cm/s effective estimate", status: "needs_wiring_review", note: "Different basis (hand labor vs cutter time) — wiring decision required; calculator keeps its previous cutting logic." },
+  { task: "Weeding", currentRule: "'Weeded decal' cut rule: 10 min + 8 s/unit @ $25/hr — still in use", ownerStandard: "$1.3333 per 54x54 sheet ($20/hr ÷ 15 sheets/hr)", status: "needs_wiring_review", note: "Different basis (per unit vs per sheet) — needs sheet-count wiring; calculator keeps its previous logic." },
+  { task: "Packout", currentRule: "'Standard' = $2 flat + $0.02/product unit — still in use", ownerStandard: "$2.00 per packout unit / order box ($20/hr ÷ 10/hr)", status: "needs_wiring_review", note: "Different basis (per product unit vs per order box) — wiring decision required; calculator keeps its previous logic." },
 ];
 
 export type LaborWiringScenario = {

@@ -160,3 +160,72 @@ export function blankItemCostQty(quantity: number, wastePct: number) {
   if (qty <= 0) return 0;
   return Math.ceil(applyWasteDivisor(qty, wastePct));
 }
+
+// ---------- Owner labor standards wiring (13A.3) ----------
+// Owner-approved 2026-07-17, FULL PRECISION. These replace the calculator's
+// old seconds-based heuristics for COMPARABLE labor lines only. Cutting,
+// weeding, and packout keep their legacy calculator logic (no cut-length,
+// sheet-count, or packout-unit basis exists yet — review-needed). Used by the
+// Cost Calculator route only; quotes/pricing engine do not import these.
+export const WIRED_LABOR = {
+  jarPerApplication: 20 / 100, // $0.20 per jar/application
+  bag4x5PerSide: 20 / 180, // $0.1111 per side/application
+  bag14x16PerSide: 20 / 20, // $1.00 per side/application
+  artSetupPerDesign: 25 / 3, // $8.3333 per design
+  printSetupPerDesign: 25 / 25, // $1.00 per design
+  designSetupPerDesign: 25 / 3 + 25 / 25, // art + print = $9.3333 per design
+  glossWhiteSetupPerJob: 25 / 3, // $8.3333 per setup (labor only)
+} as const;
+
+// Per-application dollar rate for a wired mode/item combination, or null when
+// the combination has no owner standard and must keep the legacy seconds
+// heuristic (oz bags, generic bags without a size signal, boxes, tubes,
+// label sets, custom).
+export function wiredApplicationRate(applicationMode: string, itemText: string): number | null {
+  const mode = String(applicationMode || "");
+  const text = String(itemText || "");
+  if (mode === "apply-jar") return WIRED_LABOR.jarPerApplication;
+  if (mode === "apply-flat-bag") {
+    if (/14\s?x\s?16|pound/i.test(text)) return WIRED_LABOR.bag14x16PerSide;
+    if (/4\s?x\s?5\b/i.test(text)) return WIRED_LABOR.bag4x5PerSide;
+    return null;
+  }
+  return null;
+}
+
+// Design setup (replaces the old prepress preset minutes): every preset mode
+// becomes the owner standard art + print setup per design (1 design until the
+// calculator collects a design count); "custom" stays a user override and
+// "none" stays $0. Cut setup is included in art setup per the owner standard.
+export function designSetupCost(
+  prepressMode: string,
+  customMinutes: number,
+  customFlatCost: number,
+  laborRatePerHour: number,
+): { name: string; minutes: number; cost: number; wired: boolean } {
+  const mode = String(prepressMode || "none");
+  if (mode === "none") return { name: "No design setup", minutes: 0, cost: 0, wired: false };
+  if (mode === "custom") {
+    const minutes = Math.max(safeNumber(customMinutes), 0);
+    return {
+      name: "Custom prepress/design (user override)",
+      minutes,
+      cost: Math.max(safeNumber(customFlatCost), 0) + (minutes / 60) * safeNumber(laborRatePerHour),
+      wired: false,
+    };
+  }
+  return {
+    name: "Design setup — owner standard (art $8.33 + print $1.00, 1 design; cut setup included)",
+    minutes: 0,
+    cost: WIRED_LABOR.designSetupPerDesign,
+    wired: true,
+  };
+}
+
+// Gloss/white SETUP labor applies once per job when any line prints white or
+// gloss (estimated profile name, or actual RIP white/clear ink). Labor only —
+// ink usage profiles are untouched.
+export function glossWhiteSetupApplies(input: { estimatedProfiles: string[]; ripWhiteOrGlossCc: number }): boolean {
+  if (input.estimatedProfiles.some((profile) => /white|gloss/i.test(String(profile || "")))) return true;
+  return safeNumber(input.ripWhiteOrGlossCc) > 0;
+}

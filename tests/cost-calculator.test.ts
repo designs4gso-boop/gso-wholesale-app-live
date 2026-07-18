@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  WIRED_LABOR,
   blankItemCostQty,
   blankItemUnitCostAtQty,
   computeLineCosts,
+  designSetupCost,
+  glossWhiteSetupApplies,
   resolveMaterialUnitCost,
   resolvePrintMaterialCostPerSqft,
   suggestedPriceFromMargin,
   tierRangeLabel,
+  wiredApplicationRate,
 } from "../app/lib/cost-calculator.server";
 import { applyWasteDivisor, percentToDivisor } from "../app/lib/recipe-pricing.server";
 import { materialKind, materialKindLabel } from "../app/lib/material-classify";
@@ -180,6 +184,52 @@ describe("line ink modes", () => {
     });
     expect(costs.inkCost).toBeCloseTo(7.25, 6);
     expect(costs.inkCc).toBeCloseTo(320, 6);
+  });
+});
+
+describe("owner labor standards wiring (13A.3)", () => {
+  it("pins the wired standards at full precision", () => {
+    expect(WIRED_LABOR.jarPerApplication).toBe(0.2);
+    expect(WIRED_LABOR.bag4x5PerSide).toBe(20 / 180);
+    expect(WIRED_LABOR.bag14x16PerSide).toBe(1);
+    expect(WIRED_LABOR.designSetupPerDesign).toBeCloseTo(25 / 3 + 1, 9);
+    expect(WIRED_LABOR.glossWhiteSetupPerJob).toBe(25 / 3);
+  });
+
+  it("maps modes/items to wired rates; unmapped combinations stay legacy (null)", () => {
+    expect(wiredApplicationRate("apply-jar", "safe-care-jar 3oz jar - clear")).toBe(0.2);
+    expect(wiredApplicationRate("apply-jar", "miron-250ml 250ml Miron jar + lid")).toBe(0.2);
+    expect(wiredApplicationRate("apply-flat-bag", "preset:blank-4x5-bag 4x5 Blank Bag")).toBe(20 / 180);
+    expect(wiredApplicationRate("apply-flat-bag", "14x16 Blank Bag")).toBe(1);
+    expect(wiredApplicationRate("apply-flat-bag", "pound-bag Pound bag")).toBe(1);
+    expect(wiredApplicationRate("apply-flat-bag", "oz-bag OZ bag")).toBeNull();
+    expect(wiredApplicationRate("apply-box", "some box")).toBeNull();
+    expect(wiredApplicationRate("apply-label-set", "4x5 Blank Bag")).toBeNull();
+  });
+
+  it("600 jars = $120.00; 1,000 4x5 front = $111.11; front+back = $222.22 application labor", () => {
+    expect(600 * wiredApplicationRate("apply-jar", "jar")!).toBeCloseTo(120, 6);
+    expect(1000 * wiredApplicationRate("apply-flat-bag", "4x5 Blank Bag")!).toBeCloseTo(111.1111, 3);
+    expect(2000 * wiredApplicationRate("apply-flat-bag", "4x5 Blank Bag")!).toBeCloseTo(222.2222, 3);
+  });
+
+  it("design setup: presets charge the $9.3333 standard, none is $0, custom stays a user override", () => {
+    expect(designSetupCost("none", 0, 0, 25).cost).toBe(0);
+    const basic = designSetupCost("basic", 0, 0, 25);
+    expect(basic.cost).toBeCloseTo(25 / 3 + 1, 9);
+    expect(basic.wired).toBe(true);
+    expect(designSetupCost("dieline", 0, 0, 25).cost).toBeCloseTo(25 / 3 + 1, 9);
+    const custom = designSetupCost("custom", 30, 10, 25);
+    expect(custom.cost).toBeCloseTo(10 + (30 / 60) * 25, 6);
+    expect(custom.wired).toBe(false);
+  });
+
+  it("gloss/white setup applies on white/gloss profiles or RIP ink, labor only", () => {
+    expect(glossWhiteSetupApplies({ estimatedProfiles: ["cmyk-white-heavy"], ripWhiteOrGlossCc: 0 })).toBe(true);
+    expect(glossWhiteSetupApplies({ estimatedProfiles: ["cmyk-3x-gloss-heavy"], ripWhiteOrGlossCc: 0 })).toBe(true);
+    expect(glossWhiteSetupApplies({ estimatedProfiles: ["cmyk-heavy"], ripWhiteOrGlossCc: 0 })).toBe(false);
+    expect(glossWhiteSetupApplies({ estimatedProfiles: [], ripWhiteOrGlossCc: 12.5 })).toBe(true);
+    expect(glossWhiteSetupApplies({ estimatedProfiles: [], ripWhiteOrGlossCc: 0 })).toBe(false);
   });
 });
 

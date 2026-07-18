@@ -583,11 +583,12 @@ describe("labor wiring preview (13A.2)", () => {
     expect(t7.whatChanged).toContain("ink usage profiles unchanged");
   });
 
-  it("incomparable bases are labeled needs_wiring_review, never guessed", () => {
+  it("five rules are LIVE (13A.3); incomparable bases stay needs_wiring_review, never guessed", () => {
     const reviewTasks = LABOR_RULE_COMPARISONS.filter((rule) => rule.status === "needs_wiring_review").map((rule) => rule.task);
     expect(reviewTasks).toEqual(["Cutting", "Weeding", "Packout"]);
-    const comparable = LABOR_RULE_COMPARISONS.filter((rule) => rule.status === "comparable");
-    expect(comparable.length).toBe(5);
+    const live = LABOR_RULE_COMPARISONS.filter((rule) => rule.status === "live");
+    expect(live.length).toBe(5);
+    expect(live.every((rule) => rule.note.includes("LIVE since 13A.3"))).toBe(true);
   });
 
   it("scenarios cover the required sample set", () => {
