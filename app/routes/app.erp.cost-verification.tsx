@@ -11,6 +11,8 @@ import {
   APPROVED_UPDATE_STATUS_LABELS,
   CALCULATOR_ASSUMPTION_ROWS,
   CONFIDENCE_LABELS,
+  LABOR_STANDARDS,
+  LABOR_STANDARD_CONFIDENCE_LABEL,
   NO_FLAT_COST_ISSUE,
   OWNER_CHECKLIST_HEADER,
   PLACEHOLDER_ISSUE,
@@ -499,6 +501,26 @@ export async function loader({ request }: { request: Request }) {
     });
   }
 
+  // 13A.1: owner-approved labor standards — reporting foundation only, not
+  // wired into the calculator or engine yet.
+  for (const standard of LABOR_STANDARDS) {
+    ownerChecklist.push({
+      category: "Labor standard (owner-approved)",
+      itemName: standard.task,
+      vendor: "",
+      cost: standard.unitCost,
+      unit: standard.basis,
+      tierMinQty: null,
+      tierMaxQty: null,
+      moq: null,
+      source: `Owner labor standards (13A.1) — ${standard.hourlyCost ? `$${standard.hourlyCost}/hr at ${standard.minSpeed}` : standard.minSpeed}; NOT wired into calculator yet`,
+      confidence: standard.kind === "machine" ? "n/a" : "owner_standard",
+      issue: standard.note,
+      verify: "Owner standard — re-time if reality drifts",
+      fixPage: "Cost Calculator",
+    });
+  }
+
   ownerChecklist.push({
     category: "Recipes (context)",
     itemName: `${recipes.length} active recipe(s) attach blanks via RecipeMaterial`,
@@ -661,13 +683,59 @@ export default function CostVerificationRoute() {
           <div>
             <b style={{ color: "#92400e" }}>Still needs calibration (deliberately unresolved):</b>
             <ul style={{ margin: "6px 0 0 18px", lineHeight: 1.7 }}>
+              <li><b>Labor standards entered / owner-approved (13A.1)</b> — but NOT wired into the calculator yet, and still need actual job replay validation</li>
               <li>Ink <b>usage per sqft</b> (0.0075 seeded; the $/sqft estimate profiles) — calibrate from RIP actuals (13A)</li>
               <li>Machine hourly rate — $5/hr on Machines vs $8/hr calculator default; owner picks one later</li>
-              <li>Print speed / setup minutes (finish speed curve + setup assumptions)</li>
-              <li>Labor rate + application/cutting/prepress/packout timing (code heuristics — stopwatch a real run)</li>
+              <li>Print speed / setup minutes (finish speed curve; cut time from cutter speed later — 12.5 cm/s effective estimate)</li>
               <li>Known-job replay: 0 of 7 recorded (section below)</li>
             </ul>
           </div>
+        </div>
+      </section>
+
+      <section style={{ ...cardStyle, marginTop: 16 }}>
+        <h2 style={{ marginTop: 0 }}>Labor Standards (owner-approved 2026-07-17)</h2>
+        <p style={{ fontSize: 13, color: "#4b5563" }}>
+          Labor is <b>owner-standard based</b>. Ink, media, print time, and cut time will come from RIP/machine actuals later. These standards are
+          the approved numbers for hand tasks — they are <b>not wired into the Cost Calculator yet</b> (it still uses its old code heuristics until
+          a separate approved wiring patch), so use this table when checking replay results by hand.
+        </p>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={thStyle}>Task</th><th style={thStyle}>Hourly cost</th><th style={thStyle}>Minimum speed</th><th style={thStyle}>Basis / unit</th><th style={thStyle}>Calculated unit cost</th><th style={thStyle}>Status</th><th style={thStyle}>Notes</th></tr></thead>
+            <tbody>
+              {LABOR_STANDARDS.filter((standard) => standard.kind === "hand").map((standard) => (
+                <tr key={standard.key}>
+                  <td style={tdStyle}><b>{standard.task}</b></td>
+                  <td style={tdStyle}>{standard.hourlyCost == null ? "—" : `$${standard.hourlyCost}/hr`}</td>
+                  <td style={tdStyle}>{standard.minSpeed}</td>
+                  <td style={tdStyle}>{standard.basis}</td>
+                  <td style={tdStyle}><b>{standard.unitCost == null ? "—" : `$${standard.unitCost.toFixed(4)}`}</b></td>
+                  <td style={tdStyle}><span style={confidenceStyle.verified}>{LABOR_STANDARD_CONFIDENCE_LABEL}</span></td>
+                  <td style={tdStyle}>{standard.note || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <h3 style={{ marginBottom: 6 }}>Machine-based (not hand labor)</h3>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <tbody>
+              {LABOR_STANDARDS.filter((standard) => standard.kind === "machine").map((standard) => (
+                <tr key={standard.key}>
+                  <td style={tdStyle}><b>{standard.task}</b></td>
+                  <td style={tdStyle}>{standard.minSpeed}</td>
+                  <td style={tdStyle}><span style={confidenceStyle.manual}>machine-based</span></td>
+                  <td style={tdStyle}>{standard.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={smallHelp}>
+          Future RIP/machine actuals (Patch 13A): ink ml per job, print minutes, and cutter time replace the estimate profiles once the
+          RasterLink/VersaWorks log loop is calibrated. Gloss/white setup above is setup labor only — ink usage profiles are unchanged.
         </div>
       </section>
 
@@ -868,8 +936,10 @@ export default function CostVerificationRoute() {
         <h2 style={{ marginTop: 0 }}>Known Job Replay Prep (0 of 7 recorded)</h2>
         <p style={{ fontSize: 13, color: "#4b5563" }}>
           Seven test jobs, ready to run once you want to prove the calculator against reality. Each slot prefills the Cost Calculator where the
-          record exists; enter real label/art sizes on the page. Results are <b>not saved by the app yet</b> (no schema this patch) — fill the
-          boxes on a printout or record numbers in docs/GSO_ERP_PROJECT_STATE.md; a schema-backed replay log is a later patch.
+          record exists; enter real label/art sizes on the page. When checking labor lines, compare against the <b>Labor Standards</b> table above
+          (e.g. jar application $0.20/jar, 4x5 bag $0.1111/side, packout $2.00/unit) — the calculator still uses its old heuristics until the
+          wiring patch, so differences there are expected and worth recording. Results are <b>not saved by the app yet</b> (no schema this patch) —
+          fill the boxes on a printout or record numbers in docs/GSO_ERP_PROJECT_STATE.md; a schema-backed replay log is a later patch.
         </p>
         <div style={{ display: "grid", gap: 12 }}>
           {data.replayTests.map((test: ReplayTest) => (

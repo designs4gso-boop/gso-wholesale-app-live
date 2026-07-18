@@ -503,6 +503,20 @@ Quote recipe gates remain:
 - "Known Job Replay Prep" rebuilt to the owner's seven slots: T1 600x3oz jar labels, T2 600x4oz, T3 1000x4x5 sticker bags, T4 DTP 4x5x2 pouch tier test (prefilled at 2,500 -> must price $0.4744; re-run at boundaries), T5 banner vinyl (real-size math check vs $0.2963/sqft), T6 heavy-white ink job (usage calibration vs verified $0.176/ml), T7 spot-gloss multi-layer (usage + speed). Each slot shows the 12 record fields (job name, quantity, product/material, label/art sqft, finish, estimated app cost, actual material, actual ink/RIP, actual labor min, actual machine min, variance, owner notes) as read-only fill-in boxes — results are recorded on a printout or in this doc until a schema-backed replay log is approved. Prefill links resolve live record ids; T6/T7 always link (profile-only).
 - Tests: 147 -> 151 passing (rewritten replay suite for the new slots incl. prefill/degrade/12-field template cases + tier-policy DTP case + single-tier note wording + verified-DTP already-correct proof).
 
+## Completed Milestone: Labor Standards Foundation (Patch 13A.1)
+
+- Reporting/foundation only: owner-approved labor standards added to the Cost Verification workbook and Owner Cost Checklist CSV. NO data writes, no new apply workflow, no calculator math, engine, quote, production, or schema changes — the calculator still uses its old code heuristics until a separate approved wiring patch.
+- Standards recorded FULL PRECISION in `LABOR_STANDARDS` (`app/lib/cost-verification-shared.ts`), owner-approved 2026-07-17:
+  - Art setup $25/hr ÷ 3 designs/hr = $8.3333/design; Print setup $25/hr ÷ 25 = $1.00/design; Cut setup included in art setup ($0 extra).
+  - Cutting = MACHINE-based (printer/cutter, not hand labor): 25 cm/s setting, conservative 12.5 cm/s effective estimate; cost basis will be cutter time later, not wired yet.
+  - Weeding $20/hr ÷ 15 sheets/hr = $1.3333 per 54x54 sheet; Jar application $20/hr ÷ 100 = $0.20/jar; 4x5 bag application $20/hr ÷ 180 = $0.1111/side (front+back $0.2222/bag); 14x16 bag application $20/hr ÷ 20 = $1.00/side (front+back $2.00/bag); Packout $20/hr ÷ 10 = $2.00 per packout unit/order box.
+  - Gloss/white setup $25/hr ÷ 3 = $8.3333/setup — setup LABOR only; white/gloss ink usage profiles unchanged.
+- New "Labor Standards" section on `/app/erp/cost-verification`: hand-labor table (task, hourly, min speed, basis, calculated unit cost, "Verified / Owner-approved standard" badge, notes), a separate machine-based cutting block, and the framing line "Labor is owner-standard based. Ink, media, print time, and cut time will come from RIP/machine actuals later."
+- Remaining Calibration Work now leads with "Labor standards entered / owner-approved — but NOT wired into the calculator yet, and still need actual job replay validation"; Known Job Replay Prep references the standards for hand-checking labor lines (differences vs the calculator's old heuristics are expected and worth recording).
+- Owner Cost Checklist CSV: ten new "Labor standard (owner-approved)" rows (cost, unit basis, source shows the hourly÷speed derivation and the not-wired caveat; hand tasks show the new "Verified / Owner-approved standard" confidence, machine cutting shows n/a; notes carry the cut-setup-included, machine-based-cutting, and labor-only-gloss caveats). No existing rows removed.
+- Tests: 151 -> 156 passing (5 new: ten-task inventory, full-precision unit-cost pins, cut-setup/cutting machine rules, gloss-labor-only wording, owner_standard CSV label).
+- Next wiring decision (owner-approved patch later): replace the calculator's hardcoded application/cutting/prepress/packout heuristics with these standards, then validate via T1-T7 replays.
+
 ## Product Builder / Product Setup Scope
 
 Current ERP/Product Builder priority:

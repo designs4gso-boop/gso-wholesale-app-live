@@ -163,7 +163,7 @@ export type ChecklistRow = {
   tierMaxQty: number | null;
   moq: number | null;
   source: string;
-  confidence: Confidence | "n/a";
+  confidence: Confidence | "n/a" | "owner_standard";
   issue: string;
   verify: string;
   fixPage: string;
@@ -180,7 +180,7 @@ export function checklistRowToCells(row: ChecklistRow): (string | number)[] {
     row.tierMaxQty == null ? "" : row.tierMaxQty,
     row.moq == null ? "" : row.moq,
     row.source,
-    row.confidence === "n/a" ? "n/a" : CONFIDENCE_LABELS[row.confidence],
+    row.confidence === "n/a" ? "n/a" : row.confidence === "owner_standard" ? LABOR_STANDARD_CONFIDENCE_LABEL : CONFIDENCE_LABELS[row.confidence],
     row.issue,
     row.verify,
     row.fixPage,
@@ -207,6 +207,39 @@ export const CALCULATOR_ASSUMPTION_ROWS: Array<{ itemName: string; cost: number 
   { itemName: "Packout rules (standard/bulk/individual)", cost: null, unit: "$0.01-0.05/unit + flat", note: "Hardcoded rule table." },
   { itemName: "Default line waste", cost: null, unit: "10 %", note: "Assumed, never measured." },
 ];
+
+// ---------- Labor Standards (13A.1) ----------
+// Owner-approved hand-labor standards, FULL PRECISION (hourly / min speed).
+// Reporting foundation only: these are NOT wired into the calculator or the
+// pricing engine yet — the calculator still uses its old heuristics until a
+// separate approved wiring patch. Cutting is machine-based (cutter time), and
+// gloss/white setup is setup labor only (ink usage profiles untouched).
+
+export type LaborStandard = {
+  key: string;
+  task: string;
+  kind: "hand" | "machine";
+  hourlyCost: number | null;
+  minSpeed: string;
+  basis: string;
+  unitCost: number | null;
+  note: string;
+};
+
+export const LABOR_STANDARDS: LaborStandard[] = [
+  { key: "art-setup", task: "Art setup", kind: "hand", hourlyCost: 25, minSpeed: "3 designs/hr", basis: "per design", unitCost: 25 / 3, note: "" },
+  { key: "print-setup", task: "Print setup", kind: "hand", hourlyCost: 25, minSpeed: "25 designs/hr", basis: "per design", unitCost: 25 / 25, note: "" },
+  { key: "cut-setup", task: "Cut setup", kind: "hand", hourlyCost: null, minSpeed: "—", basis: "included", unitCost: 0, note: "Included in art setup — $0 extra." },
+  { key: "cutting", task: "Cutting", kind: "machine", hourlyCost: null, minSpeed: "25 cm/s setting; use conservative 12.5 cm/s effective estimate", basis: "machine-based", unitCost: null, note: "Done by the printer/cutter, not hand labor. Cost basis will be machine/cutter time later — not wired into the calculator yet." },
+  { key: "weeding", task: "Weeding", kind: "hand", hourlyCost: 20, minSpeed: "15 sheets/hr (54in x 54in page)", basis: "per 54x54 sheet", unitCost: 20 / 15, note: "" },
+  { key: "jar-application", task: "Jar application", kind: "hand", hourlyCost: 20, minSpeed: "100 jars/hr", basis: "per jar/application", unitCost: 20 / 100, note: "" },
+  { key: "bag-4x5-application", task: "4x5 bag application", kind: "hand", hourlyCost: 20, minSpeed: "180 bags/hr", basis: "per side/application", unitCost: 20 / 180, note: "Front only = $0.1111/bag; front + back = $0.2222/bag." },
+  { key: "bag-14x16-application", task: "14x16 bag application", kind: "hand", hourlyCost: 20, minSpeed: "20 bags/hr", basis: "per side/application", unitCost: 20 / 20, note: "Front only = $1.00/bag; front + back = $2.00/bag." },
+  { key: "packout", task: "Pack out / shipping prep", kind: "hand", hourlyCost: 20, minSpeed: "10 packout units/hr", basis: "per packout unit/order box", unitCost: 20 / 10, note: "" },
+  { key: "gloss-white-setup", task: "Gloss / white setup", kind: "hand", hourlyCost: 25, minSpeed: "3 setup jobs/hr", basis: "per setup", unitCost: 25 / 3, note: "Setup labor only — white/gloss ink usage profiles are NOT changed by this standard." },
+];
+
+export const LABOR_STANDARD_CONFIDENCE_LABEL = "Verified / Owner-approved standard";
 
 // ---------- Approved Cost Updates (13.2.2) ----------
 // Pure matching/diff logic for applying the owner-approved cost truth list.

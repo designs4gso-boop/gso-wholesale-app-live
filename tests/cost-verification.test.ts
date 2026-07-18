@@ -4,6 +4,8 @@ import {
   APPLY_CONFIRM_PHRASE,
   CALCULATOR_ASSUMPTION_ROWS,
   CONFIDENCE_LABELS,
+  LABOR_STANDARDS,
+  LABOR_STANDARD_CONFIDENCE_LABEL,
   NO_FLAT_COST_ISSUE,
   OWNER_CHECKLIST_HEADER,
   PLACEHOLDER_ISSUE,
@@ -479,6 +481,61 @@ describe("replay slots (13.2.5 T1-T7)", () => {
       "estimated app cost", "actual material used", "actual ink/RIP result",
       "actual labor minutes", "actual machine/print minutes", "variance", "owner notes",
     ]);
+  });
+});
+
+describe("labor standards (13A.1)", () => {
+  const byKey = (key: string) => LABOR_STANDARDS.find((standard) => standard.key === key)!;
+
+  it("has all ten owner-approved tasks", () => {
+    expect(LABOR_STANDARDS).toHaveLength(10);
+    expect(LABOR_STANDARDS.map((standard) => standard.key)).toEqual([
+      "art-setup", "print-setup", "cut-setup", "cutting", "weeding",
+      "jar-application", "bag-4x5-application", "bag-14x16-application", "packout", "gloss-white-setup",
+    ]);
+  });
+
+  it("pins the calculated unit costs at full precision (hourly / min speed)", () => {
+    expect(byKey("art-setup").unitCost).toBe(25 / 3);
+    expect(byKey("art-setup").unitCost).toBeCloseTo(8.333333, 5);
+    expect(byKey("print-setup").unitCost).toBe(1);
+    expect(byKey("weeding").unitCost).toBe(20 / 15);
+    expect(byKey("weeding").unitCost).toBeCloseTo(1.333333, 5);
+    expect(byKey("jar-application").unitCost).toBe(0.2);
+    expect(byKey("bag-4x5-application").unitCost).toBe(20 / 180);
+    expect(byKey("bag-4x5-application").unitCost).toBeCloseTo(0.111111, 5);
+    expect(byKey("bag-14x16-application").unitCost).toBe(1);
+    expect(byKey("packout").unitCost).toBe(2);
+    expect(byKey("gloss-white-setup").unitCost).toBe(25 / 3);
+  });
+
+  it("cut setup is included at $0; cutting is machine-based with no hand-labor cost", () => {
+    const cutSetup = byKey("cut-setup");
+    expect(cutSetup.unitCost).toBe(0);
+    expect(cutSetup.basis).toBe("included");
+    expect(cutSetup.note).toContain("Included in art setup");
+
+    const cutting = byKey("cutting");
+    expect(cutting.kind).toBe("machine");
+    expect(cutting.unitCost).toBeNull();
+    expect(cutting.minSpeed).toContain("25 cm/s");
+    expect(cutting.minSpeed).toContain("12.5 cm/s");
+    expect(cutting.note).toContain("not hand labor");
+    expect(cutting.note).toContain("not wired into the calculator");
+  });
+
+  it("gloss/white setup is labor only and says so", () => {
+    expect(byKey("gloss-white-setup").note).toContain("ink usage profiles are NOT changed");
+  });
+
+  it("checklist rows serialize owner_standard confidence with the approved label", () => {
+    const cells = checklistRowToCells({
+      category: "Labor standard (owner-approved)", itemName: "Jar application", vendor: "",
+      cost: 0.2, unit: "per jar/application", tierMinQty: null, tierMaxQty: null, moq: null,
+      source: "Owner labor standards (13A.1)", confidence: "owner_standard", issue: "", verify: "", fixPage: "Cost Calculator",
+    });
+    expect(cells[9]).toBe(LABOR_STANDARD_CONFIDENCE_LABEL);
+    expect(LABOR_STANDARD_CONFIDENCE_LABEL).toBe("Verified / Owner-approved standard");
   });
 });
 
