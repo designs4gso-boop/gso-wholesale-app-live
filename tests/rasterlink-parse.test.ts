@@ -12,6 +12,7 @@ import {
   parseInkUse,
   parseJobInfoInkUsed,
   parseRasterlinkRows,
+  parseWarningCount,
   resultKeyOf,
   rowDedupeWhere,
 } from "../app/lib/rasterlink-parse.server";
@@ -120,6 +121,24 @@ describe("row building", () => {
     const row = parseRasterlinkRows(csv, "r.csv")[0];
     expect(row.inkMl).toBeCloseTo(0.168, 6);
     expect(row.raw.arrangeAssumed).toBe(true);
+  });
+});
+
+describe("parse warning count (13A.6B audit metadata)", () => {
+  it("counts missing-ink, assumed-arrange, and RIP-only rows; clean rows count zero", () => {
+    const clean = `${PRINT_HEADER}\nGSO-1_j.pdf,Complete,${INKUSE},,,2026/06/04 10:00:00,2026/06/04 10:20:00,40,OK`;
+    expect(parseWarningCount(parseRasterlinkRows(clean, "a.csv"))).toBe(0);
+
+    const warny = [
+      PRINT_HEADER,
+      `blank-ink.pdf,Complete,,,,,,40,OK`, // missing_inkuse
+      `no-arrange.pdf,Complete,${INKUSE},,,2026/06/04 10:00:00,2026/06/04 10:10:00,,OK`, // arrangeAssumed
+      `rip-only.pdf,Complete,${INKUSE},2026/06/04 09:00:00,2026/06/04 09:05:00,,,40,OK`, // rip_only timing
+    ].join("\n");
+    expect(parseWarningCount(parseRasterlinkRows(warny, "b.csv"))).toBe(3);
+
+    const cut = `${CUT_HEADER}\nGSO-2_j.pdf,Complete,2026/06/04 11:00:00,2026/06/04 11:02:00,2026/06/04 11:03:00,2026/06/04 11:10:00,12,OK`;
+    expect(parseWarningCount(parseRasterlinkRows(cut, "c.csv"))).toBe(0);
   });
 });
 

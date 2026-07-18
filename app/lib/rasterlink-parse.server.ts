@@ -295,6 +295,17 @@ export function rowDedupeWhere(shop: string, entry: RasterlinkEntry): Record<str
   return where;
 }
 
+// Count of rows that imported with a caveat flag (missing ink, assumed
+// arrange count, or RIP-only timing) — surfaced in the upload response and
+// import notes so the watcher/audit trail can see parse quality per file.
+export function parseWarningCount(entries: RasterlinkEntry[]): number {
+  return entries.filter((entry) =>
+    entry.raw.inkBasis === INK_BASIS_MISSING ||
+    entry.raw.arrangeAssumed === true ||
+    entry.raw.timingBasis === "rip_only_no_print_times",
+  ).length;
+}
+
 // Conservative production-job matching: attach ONLY on exactly one match.
 // Zero -> unmatched. Two or more -> unmatched + flagged for manual review;
 // never silently pick the first.

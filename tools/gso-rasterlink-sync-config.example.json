@@ -1,0 +1,14 @@
+{
+  "ApiBaseUrl": "https://gso-wholesale-app-live.onrender.com",
+  "UploadToken": "PASTE_TOKEN_FROM_/app/erp/print-intake_OR_/app/erp/print-log-settings",
+  "IncomingFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\rasterlink\\incoming",
+  "ProcessedFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\processed",
+  "ErrorFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\error",
+  "LogFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\sync-logs",
+  "Source": "rasterlink",
+  "PollSeconds": 30,
+  "StableFileSeconds": 20,
+  "MaxRetries": 4,
+  "RetryDelaySeconds": 10,
+  "ClaimStaleMinutes": 30
+}

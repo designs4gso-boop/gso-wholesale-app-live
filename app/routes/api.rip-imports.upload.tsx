@@ -5,6 +5,7 @@ import {
   fileHashMarker,
   looksLikeRasterlinkCsv,
   parseRasterlinkRows,
+  parseWarningCount,
   resultKeyOf,
   rowDedupeWhere,
 } from "../lib/rasterlink-parse.server";
@@ -182,13 +183,14 @@ export async function action({ request }: { request: Request }) {
       created += 1;
     }
 
+    const parseWarnings = parseWarningCount(entries);
     await db.printLogImport.update({
       where: { id: importRecord.id },
       data: {
         matchedCount,
         unmatchedCount: Math.max(0, created - matchedCount),
         status: "processed",
-        notes: `${marker}\nrows:${entries.length} created:${created} duplicatesSkipped:${skippedDuplicates} matched:${matchedCount} ambiguous:${ambiguousCount}`,
+        notes: `${marker}\nrows:${entries.length} created:${created} duplicatesSkipped:${skippedDuplicates} matched:${matchedCount} ambiguous:${ambiguousCount} parseWarnings:${parseWarnings} outcome:processed`,
       },
     });
     await db.printLogAutoImportSetting.update({ where: { id: setting.id }, data: { lastAutoImportAt: new Date() } });
@@ -197,12 +199,15 @@ export async function action({ request }: { request: Request }) {
       ok: true,
       format: RASTERLINK_SOURCE,
       fileName: file.name,
+      fileHash: marker,
       rows: entries.length,
       created,
       skippedDuplicates,
       matched: matchedCount,
       ambiguous: ambiguousCount,
       unmatched: Math.max(0, created - matchedCount),
+      parseWarnings,
+      outcome: "processed",
     });
   }
 

@@ -237,6 +237,31 @@ Get-ChildItem -Path $IncomingFolder -File -Include *.csv,*.txt,*.xml -Recurse | 
             </BlockStack>
           </Card>
         </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">RasterLink automatic sync (tools/gso-rasterlink-sync.ps1 — Patch 13A.6B)</Text>
+              <Text as="p" tone="subdued">
+                Dedicated watcher for RasterLink result CSVs. It polls the rasterlink incoming NAS folder, uploads each stable CSV to this app's
+                RIP import endpoint (source=rasterlink), and moves the file to processed or error with logs, retries, and error sidecars. Server
+                duplicates are treated as success. Files are never deleted — only moved.
+              </Text>
+              <Text as="p">
+                <b>1. Token:</b> use the upload token shown on this page (also on Print Intake). It is validated before any file is read; logs never
+                contain it. <b>2. Configure:</b> on the print computer, copy tools\gso-rasterlink-sync-config.example.json to
+                gso-rasterlink-sync-config.json next to the script, paste the token, and confirm the four NAS folders (incoming / processed /
+                error / sync-logs). <b>3. Health check (creates no imports):</b>{" "}
+                <code>powershell -ExecutionPolicy Bypass -File .\gso-rasterlink-sync.ps1 -Health</code>. <b>4. Test one pass:</b> drop one result
+                CSV into incoming, then <code>powershell -ExecutionPolicy Bypass -File .\gso-rasterlink-sync.ps1 -Once</code> (add
+                <code> -DryRun</code> first to preview without uploading). <b>5. Scheduled Task:</b>{" "}
+                <code>{`schtasks /Create /TN "GSO RasterLink Sync" /TR "powershell -ExecutionPolicy Bypass -File C:\\gso\\gso-rasterlink-sync.ps1" /SC ONSTART /RU <serviceaccount> /RP`}</code>{" "}
+                — the account needs read/write/delete on all four NAS folders and read on the script folder; the script keeps itself running (poll
+                loop) and a second instance is safe (claim files prevent double-processing).
+              </Text>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
       </Layout>
     </Page>
   );
