@@ -1,4 +1,13 @@
 import db from "../db.server";
+import {
+  RASTERLINK_SOURCE,
+  decideMatch,
+  fileHashMarker,
+  looksLikeRasterlinkCsv,
+  parseRasterlinkRows,
+  resultKeyOf,
+  rowDedupeWhere,
+} from "../lib/rasterlink-parse.server";
 
 function textResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -99,6 +108,104 @@ export async function action({ request }: { request: Request }) {
   if (!(file instanceof File)) return textResponse({ ok: false, error: "Missing file field." }, 400);
   const source = cleanText(form.get("source") || "auto");
   const rawText = await file.text();
+
+  // 13A.6A: RasterLink result CSVs (KEY_* headers) take a dedicated branch
+  // with file- and row-level duplicate protection and conservative matching.
+  // The existing VersaWorks path below is untouched.
+  if (looksLikeRasterlinkCsv(rawText)) {
+    const marker = fileHashMarker(rawText);
+    // Only fully processed imports block a re-upload: a crashed partial
+    // import (status "processing") may be retried, and the row-level dedupe
+    // below makes that retry idempotent.
+    const duplicateFile = await db.printLogImport.findFirst({
+      where: { shop: setting.shop, source: RASTERLINK_SOURCE, fileName: file.name, status: "processed", notes: { startsWith: marker } },
+    });
+    if (duplicateFile) {
+      return textResponse({ ok: true, format: RASTERLINK_SOURCE, duplicateFile: true, fileName: file.name, importId: duplicateFile.id, message: "File already imported (same name + content hash); nothing written." });
+    }
+
+    const entries = parseRasterlinkRows(rawText, file.name);
+    const importRecord = await db.printLogImport.create({
+      data: {
+        shop: setting.shop,
+        source: RASTERLINK_SOURCE,
+        fileName: file.name,
+        rawText: rawText.slice(0, 250000),
+        rowCount: entries.length,
+        totalInkMl: entries.reduce((sum, entry) => sum + entry.inkMl, 0),
+        totalPrintMinutes: entries.reduce((sum, entry) => sum + entry.printMinutes, 0),
+        status: "processing",
+        notes: marker,
+      },
+    });
+
+    let created = 0;
+    let skippedDuplicates = 0;
+    let matchedCount = 0;
+    let ambiguousCount = 0;
+
+    for (const entry of entries) {
+      const existing = await db.printLogEntry.findFirst({ where: rowDedupeWhere(setting.shop, entry) as any });
+      if (existing) { skippedDuplicates += 1; continue; }
+
+      let productionJobId: string | undefined;
+      let matchFlag: string | null = null;
+      if (entry.jobTicket) {
+        const jobs = await db.productionJob.findMany({ where: { shop: setting.shop, jobTicket: entry.jobTicket }, select: { id: true }, take: 2 });
+        const decision = decideMatch(jobs);
+        if (decision.productionJobId) { productionJobId = decision.productionJobId; matchedCount += 1; }
+        else if (decision.ambiguous) { ambiguousCount += 1; matchFlag = "ambiguous_ticket_needs_review"; }
+      }
+
+      await db.printLogEntry.create({
+        data: {
+          shop: setting.shop,
+          importId: importRecord.id,
+          productionJobId,
+          jobTicket: entry.jobTicket || null,
+          sourceJobName: entry.fileName,
+          printerSoftware: RASTERLINK_SOURCE,
+          machineName: "",
+          mediaName: "",
+          status: entry.status,
+          sqft: 0,
+          inkMl: entry.inkMl,
+          cmykInkMl: entry.cmykInkMl,
+          whiteInkMl: entry.whiteInkMl,
+          glossInkMl: entry.glossInkMl,
+          printMinutes: entry.printMinutes,
+          startedAt: entry.startedAt,
+          completedAt: entry.completedAt,
+          rawRow: JSON.stringify({ ...entry.raw, resultKey: resultKeyOf(entry), ...(matchFlag ? { matchFlag } : {}) }).slice(0, 12000),
+        },
+      });
+      created += 1;
+    }
+
+    await db.printLogImport.update({
+      where: { id: importRecord.id },
+      data: {
+        matchedCount,
+        unmatchedCount: Math.max(0, created - matchedCount),
+        status: "processed",
+        notes: `${marker}\nrows:${entries.length} created:${created} duplicatesSkipped:${skippedDuplicates} matched:${matchedCount} ambiguous:${ambiguousCount}`,
+      },
+    });
+    await db.printLogAutoImportSetting.update({ where: { id: setting.id }, data: { lastAutoImportAt: new Date() } });
+
+    return textResponse({
+      ok: true,
+      format: RASTERLINK_SOURCE,
+      fileName: file.name,
+      rows: entries.length,
+      created,
+      skippedDuplicates,
+      matched: matchedCount,
+      ambiguous: ambiguousCount,
+      unmatched: Math.max(0, created - matchedCount),
+    });
+  }
+
   const rows = parseRows(rawText, file.name, source);
   let matchedCount = 0;
   const importRecord = await db.printLogImport.create({ data: { shop: setting.shop, source, fileName: file.name, rawText: rawText.slice(0, 250000), rowCount: rows.length, totalSqft: rows.reduce((s, r) => s + r.sqft, 0), totalInkMl: rows.reduce((s, r) => s + r.inkMl, 0), status: "auto_imported" } });
