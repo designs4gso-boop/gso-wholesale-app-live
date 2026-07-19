@@ -1,5 +1,5 @@
 import type React from "react";
-import { Link, useLoaderData } from "react-router";
+import { Form, Link, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { materialKind } from "../lib/material-classify";
@@ -17,6 +17,11 @@ import {
   parseGsoqRow,
   rollupByTicket,
 } from "../lib/rip-actual-costs.server";
+import {
+  computeJobVariance,
+  filterVarianceRows,
+  type VarianceReportRow,
+} from "../lib/actual-variance.server";
 
 // Actual Cost Dashboard (13A.5): READ-ONLY. Turns imported RIP/print-log rows
 // into actual dollars using the verified DB channel costs. No action export,
@@ -35,7 +40,7 @@ export async function loader({ request }: { request: Request }) {
         id: true, jobTicket: true, sourceJobName: true, printerSoftware: true, machineName: true,
         mediaName: true, sqft: true, inkMl: true, cmykInkMl: true, whiteInkMl: true, glossInkMl: true,
         printMinutes: true, startedAt: true, completedAt: true, createdAt: true,
-        productionJobId: true, rawRow: true, status: true,
+        productionJobId: true, productionJobItemId: true, rawRow: true, status: true,
       },
     }),
     db.machine.findMany({
@@ -134,7 +139,54 @@ export async function loader({ request }: { request: Request }) {
 
   const gsoqRows = gsoqEntries.slice(0, 50).map((entry) => parseGsoqRow(entry));
 
-  return { summary, rows: rows.slice(0, 200), rowTotal: rows.length, rollups, gsoqRows };
+  // ----- 13A.7A: estimated-vs-actual variance (READ-ONLY preview) -----
+  const url = new URL(request.url);
+  const varianceFilters = {
+    match: url.searchParams.get("vmatch") || "all",
+    printer: url.searchParams.get("vprinter") || "all",
+    severity: url.searchParams.get("vseverity") || "all",
+  };
+  let varianceRows: VarianceReportRow[] = [];
+  let varianceTotal = 0;
+  let varianceError: string | null = null;
+  try {
+    const varianceJobs = matchedJobIds.length
+      ? await db.productionJob.findMany({
+          where: { id: { in: matchedJobIds }, shop },
+          take: 100,
+          select: {
+            id: true, jobTicket: true, customerName: true, company: true, status: true,
+            actualTotalCost: true, actualFinalProfit: true, actualFinalMargin: true, actualCostFinalized: true,
+            items: { select: { id: true, itemTicket: true, productTitle: true, quantity: true, unitPrice: true, unitCost: true, costSnapshot: true } },
+          },
+        })
+      : [];
+    const entriesByJob = new Map<string, typeof productionEntries>();
+    for (const entry of productionEntries) {
+      if (!entry.productionJobId) continue;
+      const list = entriesByJob.get(entry.productionJobId) || [];
+      list.push(entry);
+      entriesByJob.set(entry.productionJobId, list);
+    }
+    const allVarianceRows = varianceJobs
+      .map((job) => computeJobVariance({ job, entries: entriesByJob.get(job.id) || [], rates, printMaterials }))
+      .sort((a, b) => Math.abs(b.variancePctHigh ?? 0) - Math.abs(a.variancePctHigh ?? 0));
+    varianceTotal = allVarianceRows.length;
+    varianceRows = filterVarianceRows(allVarianceRows, varianceFilters);
+  } catch (error) {
+    varianceError = `Variance report failed to compute: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  const varianceSummary = {
+    jobsAnalyzed: varianceTotal,
+    shown: varianceRows.length,
+    highSeverity: varianceRows.filter((row) => row.severity === "high").length,
+    withReprints: varianceRows.filter((row) => row.reprintDetected).length,
+    estimatedTotal: varianceRows.reduce((sum, row) => sum + row.estimatedCost, 0),
+    previewLowTotal: varianceRows.reduce((sum, row) => sum + (row.previewTotalLow ?? 0), 0),
+    previewHighTotal: varianceRows.reduce((sum, row) => sum + (row.previewTotalHigh ?? 0), 0),
+  };
+
+  return { summary, rows: rows.slice(0, 200), rowTotal: rows.length, rollups, gsoqRows, varianceRows, varianceSummary, varianceFilters, varianceError };
 }
 
 const cardStyle: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 12, padding: 14, background: "white" };
@@ -231,6 +283,8 @@ export default function ActualCostsRoute() {
         </div>
       </section>
 
+      <VarianceSection data={data} />
+
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={{ marginTop: 0 }}>Print log rows ({data.rowTotal}{data.rowTotal > data.rows.length ? `, showing latest ${data.rows.length}` : ""})</h2>
         <div style={{ overflowX: "auto" }}>
@@ -290,5 +344,155 @@ export default function ActualCostsRoute() {
         </div>
       </section>
     </main>
+  );
+}
+
+// ----- 13A.7A: estimated-vs-actual variance section (READ-ONLY preview) -----
+
+function VarianceSection({ data }: { data: ReturnType<typeof useLoaderData<typeof loader>> }) {
+  const navigation = useNavigation();
+  const busy = navigation.state !== "idle";
+  const pct = (value: number | null) => (value == null ? "n/a" : `${value.toFixed(1)}%`);
+  const componentBadge = (label: string, status: "calculated" | "partial" | "not_configured") => (
+    <span key={label} style={{
+      display: "inline-block", marginRight: 6, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
+      background: status === "calculated" ? "#dcfce7" : status === "partial" ? "#fef3c7" : "#f3f4f6",
+      color: status === "calculated" ? "#166534" : status === "partial" ? "#92400e" : "#6b7280",
+    }}>{label}: {status === "not_configured" ? "Not configured" : status}</span>
+  );
+  const severityBadge: Record<string, React.CSSProperties> = {
+    high: { background: "#fee2e2", color: "#991b1b", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700 },
+    medium: { background: "#fef3c7", color: "#92400e", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700 },
+    low: { background: "#dcfce7", color: "#166534", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700 },
+    unknown: { background: "#f3f4f6", color: "#6b7280", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700 },
+  };
+
+  return (
+    <section style={{ ...cardStyle, marginTop: 16, borderColor: "#7c2d12", borderWidth: 2 }}>
+      <h2 style={{ marginTop: 0 }}>Estimated vs Actual variance (13A.7A — read-only preview)</h2>
+      <p style={{ ...smallHelp, marginTop: 0 }}>
+        PARTIAL preview by design: it covers ink (verified channel costs), machine time (both undecided rates), and media
+        (name-matched material cost) — labor, packing, shipping, and outsourcing are excluded, so this is never a final
+        cost. Duplicate historical rows are ignored in the math but counted; cut rows are listed, never costed; reprint
+        runs stay visible. Nothing on this page writes anything.
+      </p>
+
+      {data.varianceError ? (
+        <div style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 10, padding: 12, fontSize: 13 }}>
+          {data.varianceError}
+        </div>
+      ) : null}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10, marginBottom: 12 }}>
+        {[
+          { label: "Jobs with matched print data", value: String(data.varianceSummary.jobsAnalyzed) },
+          { label: "High variance (>25%)", value: String(data.varianceSummary.highSeverity) },
+          { label: "Jobs with reprint runs", value: String(data.varianceSummary.withReprints) },
+          { label: "Estimated vs preview (shown jobs)", value: `${money(data.varianceSummary.estimatedTotal)} vs ${money(data.varianceSummary.previewLowTotal)}-${money(data.varianceSummary.previewHighTotal)}` },
+        ].map((card) => (
+          <div key={card.label} style={cardStyle}>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>{card.label}</div>
+            <div style={{ fontSize: 18, fontWeight: 800 }}>{card.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <Form method="get" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginBottom: 12 }}>
+        <label style={{ fontSize: 12 }}>Match<br />
+          <select name="vmatch" defaultValue={data.varianceFilters.match} style={{ padding: 6, borderRadius: 6, border: "1px solid #aaa" }}>
+            <option value="all">All matched jobs</option>
+            <option value="item">Item-ticket matched</option>
+            <option value="job">Job-ticket matched</option>
+          </select>
+        </label>
+        <label style={{ fontSize: 12 }}>Printer<br />
+          <select name="vprinter" defaultValue={data.varianceFilters.printer} style={{ padding: 6, borderRadius: 6, border: "1px solid #aaa" }}>
+            <option value="all">All printers</option>
+            <option value="mimaki">Mimaki / RasterLink</option>
+            <option value="roland">Roland / VersaWorks</option>
+          </select>
+        </label>
+        <label style={{ fontSize: 12 }}>Variance severity<br />
+          <select name="vseverity" defaultValue={data.varianceFilters.severity} style={{ padding: 6, borderRadius: 6, border: "1px solid #aaa" }}>
+            <option value="all">All severities</option>
+            <option value="high">High (&gt;25%)</option>
+            <option value="medium">Medium (10-25%)</option>
+            <option value="low">Low (&le;10%)</option>
+          </select>
+        </label>
+        <button type="submit" disabled={busy} style={{ background: "#111827", color: "white", border: 0, borderRadius: 8, padding: "8px 14px", fontWeight: 700 }}>
+          {busy ? "Loading..." : "Apply"}
+        </button>
+        <span style={smallHelp}>Showing {data.varianceSummary.shown} of {data.varianceSummary.jobsAnalyzed} jobs.</span>
+      </Form>
+
+      {!data.varianceRows.length && !data.varianceError ? (
+        <p style={{ color: "#6b7280", fontSize: 13 }}>
+          {data.varianceSummary.jobsAnalyzed === 0
+            ? "No production jobs have matched print-log rows yet — attach rows in RIP Import Review and they will appear here."
+            : "No jobs match these filters."}
+        </p>
+      ) : null}
+
+      {data.varianceRows.map((row) => (
+        <div key={row.jobId} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <b>{row.jobTicket || row.jobId}</b> — {row.customer || "no customer"} <span style={smallHelp}>({row.jobStatus}, {row.itemCount} item{row.itemCount === 1 ? "" : "s"})</span>
+              <div style={smallHelp}>
+                <Link to={`/app/erp/production/${row.jobId}/print`}>Open production job</Link>
+                {" · "}match: {row.matchMethods.join(", ")} · printers: {row.printers.join(", ") || "n/a"}
+              </div>
+            </div>
+            <div>
+              <span style={severityBadge[row.severity]}>variance {row.severity}</span>{" "}
+              <span style={{ ...smallHelp, fontWeight: 700 }}>{row.complete ? "complete" : "PARTIAL preview"}</span>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10, marginTop: 8, fontSize: 12 }}>
+            <div>
+              <b>Estimated</b>
+              <div>Revenue: {money(row.revenue)}</div>
+              <div>Cost: {money(row.estimatedCost)}{row.estimatedUnitCost != null ? ` (${money(row.estimatedUnitCost)}/unit)` : ""}</div>
+              <div>Profit: {money(row.estimatedProfit)} · Margin: {pct(row.estimatedMarginPct)}</div>
+            </div>
+            <div>
+              <b>Observed print data</b>
+              <div>{row.printRowCount} print row(s){row.cutRowCount ? ` + ${row.cutRowCount} cut` : ""}{row.duplicateRowsIgnored ? ` (${row.duplicateRowsIgnored} dup ignored)` : ""}</div>
+              <div>Ink: {row.inkMl.toFixed(2)} ml (C {row.cmykInkMl.toFixed(1)} / W {row.whiteInkMl.toFixed(1)} / G {row.glossInkMl.toFixed(1)})</div>
+              <div>Sqft: {row.sqft.toFixed(2)} · Minutes: {row.printMinutes.toFixed(1)}</div>
+              <div>Runs: {row.runCount == null ? "unknown" : row.runCount}{row.reprintDetected ? " (reprint!)" : ""}</div>
+            </div>
+            <div>
+              <b>Actual preview (partial)</b>
+              <div>Ink: {money(row.inkCost)} · Media: {money(row.materialCost)}</div>
+              <div>Machine: {row.machineCostLow == null ? "Not configured" : `${money(row.machineCostLow)}-${money(row.machineCostHigh)}`}</div>
+              <div>Total: {row.previewTotalLow == null ? "Not configured" : `${money(row.previewTotalLow)}-${money(row.previewTotalHigh)}`}</div>
+              <div>Profit: {row.previewProfitLow == null ? "n/a" : `${money(row.previewProfitLow)}-${money(row.previewProfitHigh)}`} · Margin: {pct(row.previewMarginLowPct)}-{pct(row.previewMarginHighPct)}</div>
+            </div>
+            <div>
+              <b>Variance vs estimate</b>
+              <div>Dollars: {row.varianceLow == null ? "n/a" : `${money(row.varianceLow)} to ${money(row.varianceHigh)}`}</div>
+              <div>Percent: {pct(row.variancePctLow)} to {pct(row.variancePctHigh)}</div>
+              {row.finalized ? <div style={{ marginTop: 4 }}><b>Manually recorded final:</b> {money(row.finalized.totalCost)} cost · {money(row.finalized.profit)} profit · {pct(row.finalized.marginPct)}</div> : null}
+            </div>
+          </div>
+          <div style={{ marginTop: 6 }}>
+            {componentBadge("ink", row.components.ink)}
+            {componentBadge("machine time", row.components.machineTime)}
+            {componentBadge("material", row.components.material)}
+            <span style={smallHelp}>excluded: {row.excludedComponents.join(", ")}</span>
+          </div>
+          {row.warnings.length ? (
+            <details style={{ marginTop: 6 }}>
+              <summary style={{ ...warnStyle, cursor: "pointer" }}>{row.warnings.length} warning(s) / data-quality note(s)</summary>
+              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                {row.warnings.map((warning) => <li key={warning} style={warnStyle}>{warning}</li>)}
+              </ul>
+            </details>
+          ) : null}
+        </div>
+      ))}
+    </section>
   );
 }
