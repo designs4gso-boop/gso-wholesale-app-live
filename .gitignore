@@ -1,6 +1,11 @@
 node_modules
 .env
 .env.*
+# Local watcher/agent configs hold the real upload token - only *.example.json is committed.
+tools/gso-rasterlink-sync-config.json
+tools/gso-rasterlink-sync.config.json
+tools/gso-print-intake-config.json
+tools/gso-print-intake-agent-config.json
 dist
 build
 .cache

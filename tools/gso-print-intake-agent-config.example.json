@@ -1,0 +1,15 @@
+{
+  "ApiBaseUrl": "https://gso-wholesale-app-live.onrender.com",
+  "UploadToken": "PASTE_TOKEN_FROM_/app/erp/print-intake",
+  "PrintsForTodayFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\Prints For Today",
+  "RoutedArchiveFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\Prints For Today\\_routed-archive",
+  "ErrorFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\print-intake\\error",
+  "LogFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\print-intake\\agent-logs",
+  "MimakiHotFolder": "\\\\DESKTOP-KD7NQTS\\GSO_MIMAKI_CMYK_STANDARD",
+  "VersaWorksHotFolder": "",
+  "MimakiRoutingEnabled": false,
+  "RolandRoutingEnabled": false,
+  "PollSeconds": 30,
+  "StableFileSeconds": 20,
+  "ClaimStaleMinutes": 30
+}

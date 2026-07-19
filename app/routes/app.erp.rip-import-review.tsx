@@ -323,13 +323,12 @@ export default function RipImportReview() {
         </Form>
       </section>
 
-      <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
+      <section style={{ ...card, borderColor: "#bfdbfe", background: "#eff6ff" }}>
         <b>VersaWorks matching note.</b>{" "}
         <span style={{ fontSize: 13 }}>
-          VersaWorks rows appear here too, but their <i>import-time</i> matching is weaker than RasterLink&apos;s: the
-          upload path attaches the first job whose ticket matches (including a substring fallback) with no ambiguity
-          detection. Hardening that parser is deferred to Patch 13A.6D — until then, spot-check VersaWorks attachments
-          in the &quot;Attached&quot; view and correct them here.
+          VersaWorks uploads are hardened (Patch 13A.6D): exact-only two-stage matching with ambiguity flags, file and
+          row dedupe — the same standard as RasterLink. Rows imported <i>before</i> that patch may still carry silent
+          first-match attachments; spot-check older rows in the &quot;Attached&quot; view and correct them here.
         </span>
       </section>
 
