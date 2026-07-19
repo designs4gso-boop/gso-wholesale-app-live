@@ -26,6 +26,131 @@ import {
   validateMutation,
   type CandidateJob,
 } from "../lib/rip-import-review.server";
+import { attributeMachine } from "../lib/rip-actual-costs.server";
+import {
+  RIP_BACKFILL_PHRASE,
+  appendRawRowBlock,
+  attributeEntryToItem,
+  resolvePrintDuration,
+} from "../lib/rip-duration.server";
+
+// 13A.7C: shared duration/attribution audit over recent ATTACHED rows. Used
+// by the loader (read-only display) and re-computed fresh by the backfill
+// action — eligibility is deterministic from stored data, so preview and
+// apply always agree.
+async function computeRipBackfillAudit(shop: string) {
+  const entries = await db.printLogEntry.findMany({
+    where: { shop, productionJobId: { not: null } },
+    orderBy: { createdAt: "desc" },
+    take: 400,
+    select: {
+      id: true, productionJobId: true, productionJobItemId: true, jobTicket: true, sourceJobName: true,
+      printerSoftware: true, machineName: true, status: true, printMinutes: true, rawRow: true,
+    },
+  });
+  const jobIds = [...new Set(entries.map((entry) => entry.productionJobId).filter(Boolean))] as string[];
+  const jobs = jobIds.length
+    ? await db.productionJob.findMany({
+        where: { shop, id: { in: jobIds } },
+        select: {
+          id: true, jobTicket: true,
+          items: { select: { id: true, itemTicket: true, ripJobName: true, suggestedFileName: true, productTitle: true } },
+          files: { select: { fileName: true, originalFileName: true }, take: 20 },
+        },
+      })
+    : [];
+  const jobById = new Map(jobs.map((job) => [job.id, job]));
+
+  const counts = {
+    attachedRows: entries.length,
+    rolandRows: 0,
+    nativeDuration: 0,
+    derivedDuration: 0,
+    unknownDuration: 0,
+    exactItem: 0,
+    singleItemFallback: 0,
+    jobLevelOnly: 0,
+    unresolved: 0,
+    durationEligible: 0,
+    itemEligible: 0,
+  };
+  const auditRows: Array<Record<string, unknown>> = [];
+  const eligible: Array<{ id: string; jobId: string; data: { printMinutes?: number; productionJobItemId?: string }; rawRowNext: string; fills: string[] }> = [];
+
+  for (const entry of entries) {
+    const job = jobById.get(entry.productionJobId as string);
+    if (!job) continue;
+    const brand = attributeMachine(entry);
+    const duration = resolvePrintDuration(entry);
+    const isCut = String(entry.status || "").toLowerCase().startsWith("cut:");
+    if (brand === "roland") counts.rolandRows += 1;
+    if (!isCut) {
+      if (duration.source === "imported_native") counts.nativeDuration += 1;
+      else if (duration.source === "derived_print_timestamps") counts.derivedDuration += 1;
+      else counts.unknownDuration += 1;
+    }
+    const attribution = attributeEntryToItem(entry, {
+      id: job.id,
+      jobTicket: job.jobTicket,
+      items: job.items,
+      fileNames: job.files.flatMap((file) => [file.fileName, file.originalFileName || ""]).filter(Boolean),
+    });
+    if (attribution.confidence === "exact") counts.exactItem += 1;
+    else if (attribution.confidence === "fallback") counts.singleItemFallback += 1;
+    else if (attribution.confidence === "job_level") counts.jobLevelOnly += 1;
+    else counts.unresolved += 1;
+
+    // Deterministic backfill eligibility: FILL-ONLY, never overwrite.
+    const fills: string[] = [];
+    const data: { printMinutes?: number; productionJobItemId?: string } = {};
+    let rawRowNext = entry.rawRow || "";
+    const storedMinutes = Number(entry.printMinutes) || 0;
+    if (!isCut && storedMinutes === 0 && duration.source === "derived_print_timestamps" && duration.minutes > 0) {
+      data.printMinutes = duration.minutes;
+      rawRowNext = appendRawRowBlock(rawRowNext, "durationBackfill", {
+        engine: "13A.7C", source: duration.source, minutes: duration.minutes,
+        printStartRaw: duration.printStartRaw, printEndRaw: duration.printEndRaw,
+        previousPrintMinutes: 0, appliedBy: "rip-import-review",
+      });
+      fills.push("duration");
+      counts.durationEligible += 1;
+    }
+    if (!entry.productionJobItemId && attribution.productionJobItemId && (attribution.confidence === "exact" || attribution.confidence === "fallback")) {
+      data.productionJobItemId = attribution.productionJobItemId;
+      rawRowNext = appendRawRowBlock(rawRowNext, "itemAttributionBackfill", {
+        engine: "13A.7C", method: attribution.method, confidence: attribution.confidence,
+        candidateCount: attribution.candidateCount, appliedBy: "rip-import-review",
+      });
+      fills.push("item");
+      counts.itemEligible += 1;
+    }
+    if (fills.length) eligible.push({ id: entry.id, jobId: job.id, data, rawRowNext, fills });
+
+    if (auditRows.length < 50) {
+      auditRows.push({
+        id: entry.id,
+        sourceJobName: entry.sourceJobName || "",
+        jobTicket: entry.jobTicket || "",
+        printer: `${entry.printerSoftware || "?"}${entry.machineName ? `/${entry.machineName}` : ""}`,
+        brand: brand || "unknown",
+        isCut,
+        storedMinutes,
+        selectedMinutes: duration.minutes,
+        durationSource: duration.source,
+        printStartRaw: duration.printStartRaw,
+        printEndRaw: duration.printEndRaw,
+        jobId: job.id,
+        jobTicketOfJob: job.jobTicket,
+        itemAttribution: attribution.method,
+        itemConfidence: attribution.confidence,
+        attributedItemId: entry.productionJobItemId || attribution.productionJobItemId,
+        fills,
+        warnings: [...duration.warnings, ...attribution.warnings],
+      });
+    }
+  }
+  return { counts, auditRows, eligible };
+}
 
 // RIP Import Review (13A.6C): inspect unmatched/ambiguous PrintLogEntry rows
 // from RasterLink AND VersaWorks and attach them to the correct ProductionJob
@@ -127,6 +252,8 @@ export async function loader({ request }: { request: Request }) {
     candidates: entry.reviewStatus === "attached" ? [] : rankCandidates(entry, jobPool, ripNames),
   }));
 
+  const backfillAudit = await computeRipBackfillAudit(shop);
+
   return {
     shop,
     filters,
@@ -135,6 +262,7 @@ export async function loader({ request }: { request: Request }) {
     page,
     pageCount,
     total,
+    backfillAudit: { counts: backfillAudit.counts, auditRows: backfillAudit.auditRows, eligibleCount: backfillAudit.eligible.length },
     recentJobs,
     imports: imports.map((item) => ({
       id: item.id,
@@ -232,6 +360,39 @@ export async function action({ request }: { request: Request }) {
       }),
     ]);
     return { ok: true, message: `Attached ${selected.length} rows to ${job.jobTicket || job.id}.` };
+  }
+
+  // 13A.7C: owner-gated deterministic backfill — FILL-ONLY (missing duration
+  // from exact print stamps; missing item attribution from exact/single-item
+  // tiers). Never overwrites nonzero minutes or a different item id; one
+  // transaction; provenance appended to rawRow; per-job audit events.
+  if (intent === "applyRipBackfill") {
+    const phrase = String(form.get("confirmPhrase") || "");
+    if (phrase !== RIP_BACKFILL_PHRASE) {
+      return { ok: false, message: `Confirmation phrase must be exactly "${RIP_BACKFILL_PHRASE}" (case-sensitive) — nothing was written.` };
+    }
+    const { eligible } = await computeRipBackfillAudit(shop);
+    if (!eligible.length) return { ok: false, message: "No deterministic backfill candidates — nothing to write." };
+    const affectedJobs = [...new Set(eligible.map((row) => row.jobId))];
+    const durationFills = eligible.filter((row) => row.fills.includes("duration")).length;
+    const itemFills = eligible.filter((row) => row.fills.includes("item")).length;
+    await db.$transaction([
+      ...eligible.map((row) =>
+        db.printLogEntry.update({ where: { id: row.id }, data: { ...row.data, rawRow: row.rawRowNext } }),
+      ),
+      ...affectedJobs.map((jobId) =>
+        db.productionJobEvent.create({
+          data: {
+            shop,
+            jobId,
+            eventType: "rip_backfill_applied",
+            message: `Verified RIP backfill applied: filled ${durationFills} missing duration(s) from exact print stamps and ${itemFills} missing item attribution(s). Fill-only — nothing overwritten.`,
+            createdBy: "rip-import-review",
+          },
+        }),
+      ),
+    ]);
+    return { ok: true, message: `Backfill applied: ${durationFills} duration fill(s), ${itemFills} item attribution fill(s) across ${affectedJobs.length} job(s). Re-run writeback on affected jobs to update machine-time cost.` };
   }
 
   return { ok: false, message: "Unknown review action." };
@@ -457,6 +618,76 @@ export default function RipImportReview() {
           </label>
           <button type="submit" style={btn} disabled={busy}>Bulk attach checked rows</button>
         </Form>
+      </section>
+
+      <section style={{ ...card, borderColor: "#7c2d12", borderWidth: 2 }}>
+        <h2 style={{ margin: "0 0 4px" }}>Roland duration &amp; item attribution audit (13A.7C)</h2>
+        <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
+          Read-only audit of the {data.backfillAudit.counts.attachedRows} most recent attached rows. Duration precedence:
+          exact print start/end stamps from the row&apos;s own source data (derived, plausibility-checked) &gt; imported
+          native minutes &gt; unknown (stays 0 — never guessed from RIP time, queue time, sqft, or ink). Item attribution:
+          exact item ticket &gt; exact RIP name &gt; job-file on single-item job &gt; single-item fallback (recorded) &gt;
+          job-level only. The backfill below is FILL-ONLY and owner-gated.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8, marginBottom: 10, fontSize: 13 }}>
+          {[
+            ["Roland rows", data.backfillAudit.counts.rolandRows],
+            ["Native duration", data.backfillAudit.counts.nativeDuration],
+            ["Derived duration", data.backfillAudit.counts.derivedDuration],
+            ["Unknown duration", data.backfillAudit.counts.unknownDuration],
+            ["Exact item attribution", data.backfillAudit.counts.exactItem],
+            ["Single-item fallback", data.backfillAudit.counts.singleItemFallback],
+            ["Job-level only", data.backfillAudit.counts.jobLevelOnly],
+            ["Unresolved", data.backfillAudit.counts.unresolved],
+            ["Duration fills available", data.backfillAudit.counts.durationEligible],
+            ["Item fills available", data.backfillAudit.counts.itemEligible],
+          ].map(([label, value]) => (
+            <div key={String(label)} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+              <div style={{ color: "#6b7280", fontSize: 11 }}>{label}</div>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>{String(value)}</div>
+            </div>
+          ))}
+        </div>
+        {data.backfillAudit.eligibleCount > 0 ? (
+          <Form method="post" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12, border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 10, padding: 10 }}>
+            <input type="hidden" name="intent" value="applyRipBackfill" />
+            <span style={{ fontSize: 13 }}>
+              <b>{data.backfillAudit.eligibleCount} row(s)</b> have deterministic fills (missing duration from exact print
+              stamps, or missing item attribution). Fill-only — nonzero durations and existing item links are never touched.
+              After applying, re-run the writeback on affected jobs to update machine-time cost.
+            </span>
+            <input name="confirmPhrase" placeholder="Type APPLY VERIFIED RIP BACKFILL" autoComplete="off" style={{ ...input, minWidth: 280, width: "auto" }} />
+            <button type="submit" style={btn} disabled={busy}>Apply verified RIP backfill</button>
+          </Form>
+        ) : (
+          <p style={{ fontSize: 13, color: "#166534", marginBottom: 12 }}>No deterministic backfill needed — every attached row already has its best-available duration and attribution.</p>
+        )}
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f3f4f6" }}>
+                <th align="left" style={{ padding: 6 }}>Source row</th><th align="left">Ticket</th><th align="left">Printer</th>
+                <th align="left">Raw print stamps</th><th align="left">Minutes (source)</th><th align="left">Item attribution</th>
+                <th align="left">Fills</th><th align="left">Job</th><th align="left">Warnings</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.backfillAudit.auditRows.map((row: any) => (
+                <tr key={row.id} style={{ borderTop: "1px solid #e5e7eb" }}>
+                  <td style={{ padding: 6 }}>{row.sourceJobName || "—"}{row.isCut ? " (cut)" : ""}</td>
+                  <td>{row.jobTicket || "—"}</td>
+                  <td>{row.printer} <span style={{ color: "#6b7280" }}>({row.brand})</span></td>
+                  <td>{row.printStartRaw ? `${row.printStartRaw} → ${row.printEndRaw || "?"}` : "—"}</td>
+                  <td><b>{Number(row.selectedMinutes).toFixed(1)}</b> ({String(row.durationSource).replace(/_/g, " ")}){row.storedMinutes !== row.selectedMinutes ? ` · stored ${Number(row.storedMinutes).toFixed(1)}` : ""}</td>
+                  <td>{String(row.itemAttribution).replace(/_/g, " ")} ({row.itemConfidence})</td>
+                  <td>{(row.fills || []).join(", ") || "—"}</td>
+                  <td><Link to={`/app/erp/production/${row.jobId}/print`}>{row.jobTicketOfJob || "job"}</Link></td>
+                  <td>{(row.warnings || []).length ? (row.warnings as string[]).map((warning) => <div key={warning} style={{ color: "#92400e", fontSize: 11 }}>{warning}</div>) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section style={card}>

@@ -20,6 +20,7 @@
 // (13A.7B.1 display normalization).
 
 import { MACHINE_RATE_CURRENT } from "./rip-actual-costs-shared";
+import { resolvePrintDuration } from "./rip-duration.server";
 import {
   computeEntryCosts,
   matchMediaToMaterial,
@@ -224,7 +225,8 @@ export function computeJobVariance(params: {
   const whiteInkMl = round2(printRows.reduce((sum, entry) => sum + (Number(entry.whiteInkMl) || 0), 0));
   const glossInkMl = round2(printRows.reduce((sum, entry) => sum + (Number(entry.glossInkMl) || 0), 0));
   const sqft = round2(printRows.reduce((sum, entry) => sum + (Number(entry.sqft) || 0), 0));
-  const printMinutes = round2(printRows.reduce((sum, entry) => sum + (Number(entry.printMinutes) || 0), 0));
+  // 13A.7C: reliable per-row duration (derived print stamps > stored > 0).
+  const printMinutes = round2(printRows.reduce((sum, entry) => sum + resolvePrintDuration(entry).minutes, 0));
   const printers = [...new Set(unique.map((entry) => `${entry.printerSoftware || "?"}${entry.machineName ? `/${entry.machineName}` : ""}`))];
   const matchMethods = [...new Set(unique.map((entry) => matchMethodOf(entry, job)))];
   const { runCount, reprintDetected } = detectRuns(printRows);

@@ -26,6 +26,7 @@ import {
   type VarianceJobInput,
 } from "./actual-variance.server";
 import { computeEntryCosts, type BrandInkRates } from "./rip-actual-costs.server";
+import { resolvePrintDuration } from "./rip-duration.server";
 
 // Client-safe constants live in print-log-writeback-shared.ts (the board
 // component references them); re-exported here so server code and tests use
@@ -142,10 +143,23 @@ export function computePrintLogWriteback(params: {
     if (costedRows < printRows.length) warnings.push(`Ink cost covers ${costedRows}/${printRows.length} print rows — uncovered rows are excluded, not guessed.`);
   }
 
-  // ---- machine time (single configurable rate) ----
-  const printMinutes = round2(printRows.reduce((sum, entry) => sum + (Number(entry.printMinutes) || 0), 0));
+  // ---- machine time (single configurable rate; 13A.7C reliable durations) ----
+  // Duration precedence per row: exact print stamps from the row's own raw
+  // fields (derived, plausibility-gated) > stored imported minutes > unknown.
+  const durationSources = { derived: 0, native: 0, unknown: 0 };
+  let printMinutes = 0;
+  for (const entry of printRows) {
+    const duration = resolvePrintDuration(entry);
+    printMinutes += duration.minutes;
+    if (duration.source === "derived_print_timestamps") durationSources.derived += 1;
+    else if (duration.source === "imported_native") durationSources.native += 1;
+    else durationSources.unknown += 1;
+  }
+  printMinutes = round2(printMinutes);
   const machineCost = printMinutes > 0 ? round2((printMinutes / 60) * params.machineRatePerHour) : null;
-  if (printMinutes <= 0) warnings.push("No print minutes recorded — machine-time component unavailable.");
+  if (durationSources.unknown > 0) warnings.push(`${durationSources.unknown} print row(s) have no reliable duration (no native value, no exact print stamps) — their machine time stays 0, never guessed.`);
+  if (durationSources.derived > 0) warnings.push(`${durationSources.derived} row(s) use duration DERIVED from exact print start/end stamps (labeled, not native).`);
+  if (printMinutes <= 0) warnings.push("No reliable print minutes — machine-time component unavailable.");
 
   if (inkCost == null && machineCost == null) {
     return { ok: false, blockedReason: "No supported cost component is computable (no attributable ink rates and no print minutes). Nothing to write.", warnings };
@@ -208,7 +222,7 @@ export function computePrintLogWriteback(params: {
       costPerUnit: params.machineRatePerHour,
       totalCost: machineCost,
       source: PRINT_LOG_USAGE_SOURCE,
-      notes: provenanceNote(COMPONENT_MACHINE_TIME, { ...baseProvenance, printMinutes, machineRatePerHour: params.machineRatePerHour }),
+      notes: provenanceNote(COMPONENT_MACHINE_TIME, { ...baseProvenance, printMinutes, machineRatePerHour: params.machineRatePerHour, durationSources }),
     });
   }
 

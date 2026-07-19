@@ -21,6 +21,7 @@ import {
   computePrintLogWriteback,
   parseWritebackProvenance,
 } from "../lib/print-log-writeback.server";
+import { resolvePrintDuration } from "../lib/rip-duration.server";
 import crypto from "node:crypto";
 
 const productionStatuses = [
@@ -107,7 +108,8 @@ function summarizeActualPrintLogs(job: any, entries: any[], rates: BrandInkRates
   const cmykInkMl = printEntries.reduce((sum, entry) => sum + Number(entry.cmykInkMl || 0), 0);
   const whiteInkMl = printEntries.reduce((sum, entry) => sum + Number(entry.whiteInkMl || 0), 0);
   const glossInkMl = printEntries.reduce((sum, entry) => sum + Number(entry.glossInkMl || 0), 0);
-  const actualPrintMinutes = printEntries.reduce((sum, entry) => sum + Number(entry.printMinutes || 0), 0);
+  // 13A.7C: reliable per-row duration (derived print stamps > stored > 0).
+  const actualPrintMinutes = printEntries.reduce((sum, entry) => sum + resolvePrintDuration(entry).minutes, 0);
   let actualInkCost = 0;
   let inkRatesCovered = true;
   for (const entry of printEntries) {
