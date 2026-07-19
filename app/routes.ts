@@ -29,6 +29,7 @@ export default [
     route("erp/cost-health", "routes/app.erp.cost-health.tsx"),
     route("erp/cost-verification", "routes/app.erp.cost-verification.tsx"),
     route("erp/actual-costs", "routes/app.erp.actual-costs.tsx"),
+    route("erp/calibration", "routes/app.erp.calibration.tsx"),
     route("erp/shopify-cost-audit", "routes/app.erp.shopify-cost-audit.tsx"),
     route("erp/pricing-rules", "routes/app.erp.pricing-rules.tsx"),
     route("erp/pricing-health", "routes/app.erp.pricing-health.tsx"),
