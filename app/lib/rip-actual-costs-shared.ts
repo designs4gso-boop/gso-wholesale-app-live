@@ -2,10 +2,15 @@
 // the route COMPONENT, so they must not live in a .server module. The math
 // helpers stay in rip-actual-costs.server.ts (loader-only).
 
-// Owner has not picked the machine hourly rate yet ($5 seeded vs $8
-// calculator default) — the dashboard shows BOTH until that decision.
+// Machine hourly rate. Owner decision (13A.7B): $8/hour is the CURRENT rate
+// for previews and print-log writeback. It lives here as the ONE shared
+// source (never scattered as inline constants); the server accessor
+// machineRatePerHour() in rip-actual-costs.server.ts adds an env override
+// (GSO_MACHINE_RATE_PER_HOUR) so it stays configurable without code edits.
+// LOW/HIGH remain for the audit dashboard's historical range display.
 export const MACHINE_RATE_LOW = 5;
 export const MACHINE_RATE_HIGH = 8;
+export const MACHINE_RATE_CURRENT = 8;
 
 export type MatchStatus = "matched" | "potentially_matchable" | "quote_rip" | "missing_ticket";
 

@@ -14,6 +14,13 @@ import {
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { buildBrandRates, computeEntryCosts, machineRatePerHour, type BrandInkRates } from "../lib/rip-actual-costs.server";
+import { PRINT_LOG_USAGE_SOURCE } from "../lib/print-log-writeback-shared";
+import {
+  WRITEBACK_PHRASE,
+  computePrintLogWriteback,
+  parseWritebackProvenance,
+} from "../lib/print-log-writeback.server";
 import crypto from "node:crypto";
 
 const productionStatuses = [
@@ -86,31 +93,34 @@ function money(value: any) {
   return (Number(value) || 0).toFixed(2);
 }
 
-const ROLAND_INK_COST_PER_ML = 156.99 / 750;
-const MIMAKI_INK_COST_PER_ML = 190 / 1000;
-const DEFAULT_MACHINE_RECOVERY_PER_HOUR = 5;
-
-function inkCostRateForEntry(entry: any) {
-  const text = `${entry?.printerSoftware || ""} ${entry?.machineName || ""}`.toLowerCase();
-  if (text.includes("mimaki") || text.includes("raster")) return MIMAKI_INK_COST_PER_ML;
-  return ROLAND_INK_COST_PER_ML;
-}
-
-function summarizeActualPrintLogs(job: any, entries: any[]) {
+// 13A.7B: the legacy hardcoded ink rates (Roland 156.99/750, Mimaki 190/1000)
+// and the $5 recovery constant are REMOVED. Ink cost comes from the shared
+// verified channel-cost engine (same as Audit Actual Costs / 13A.7A) and the
+// machine rate from the ONE configurable source machineRatePerHour() ($8/hr).
+function summarizeActualPrintLogs(job: any, entries: any[], rates: BrandInkRates[], ratePerHour: number) {
   const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const estimatedCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
-  const actualSqft = entries.reduce((sum, entry) => sum + Number(entry.sqft || 0), 0);
-  const actualInkMl = entries.reduce((sum, entry) => sum + Number(entry.inkMl || 0), 0);
-  const cmykInkMl = entries.reduce((sum, entry) => sum + Number(entry.cmykInkMl || 0), 0);
-  const whiteInkMl = entries.reduce((sum, entry) => sum + Number(entry.whiteInkMl || 0), 0);
-  const glossInkMl = entries.reduce((sum, entry) => sum + Number(entry.glossInkMl || 0), 0);
-  const actualPrintMinutes = entries.reduce((sum, entry) => sum + Number(entry.printMinutes || 0), 0);
-  const actualInkCost = entries.reduce((sum, entry) => sum + Number(entry.inkMl || 0) * inkCostRateForEntry(entry), 0);
-  const actualMachineCost = (actualPrintMinutes / 60) * DEFAULT_MACHINE_RECOVERY_PER_HOUR;
+  // Cut rows are separate operations: never ink/time-costed.
+  const printEntries = entries.filter((entry: any) => !String(entry.status || "").toLowerCase().startsWith("cut:"));
+  const actualSqft = printEntries.reduce((sum, entry) => sum + Number(entry.sqft || 0), 0);
+  const actualInkMl = printEntries.reduce((sum, entry) => sum + Number(entry.inkMl || 0), 0);
+  const cmykInkMl = printEntries.reduce((sum, entry) => sum + Number(entry.cmykInkMl || 0), 0);
+  const whiteInkMl = printEntries.reduce((sum, entry) => sum + Number(entry.whiteInkMl || 0), 0);
+  const glossInkMl = printEntries.reduce((sum, entry) => sum + Number(entry.glossInkMl || 0), 0);
+  const actualPrintMinutes = printEntries.reduce((sum, entry) => sum + Number(entry.printMinutes || 0), 0);
+  let actualInkCost = 0;
+  let inkRatesCovered = true;
+  for (const entry of printEntries) {
+    const costs = computeEntryCosts(entry, rates);
+    if (costs.inkCost != null) actualInkCost += costs.inkCost;
+    else if (Number(entry.inkMl) > 0) inkRatesCovered = false;
+  }
+  const actualMachineCost = (actualPrintMinutes / 60) * ratePerHour;
   const roughActualPrintCost = actualInkCost + actualMachineCost;
   const estimatedProfit = revenue - estimatedCost;
   return {
     entryCount: entries.length,
+    cutRowCount: entries.length - printEntries.length,
     actualSqft,
     actualInkMl,
     cmykInkMl,
@@ -118,7 +128,9 @@ function summarizeActualPrintLogs(job: any, entries: any[]) {
     glossInkMl,
     actualPrintMinutes,
     actualInkCost,
+    inkRatesCovered,
     actualMachineCost,
+    machineRatePerHour: ratePerHour,
     roughActualPrintCost,
     revenue,
     estimatedCost,
@@ -130,20 +142,30 @@ function summarizeActualPrintLogs(job: any, entries: any[]) {
 
 
 function summarizeMaterialUsage(usages: any[]) {
-  const materialCost = usages.reduce((sum, usage) => sum + Number(usage.totalCost || 0), 0);
-  const pulledQty = usages.reduce((sum, usage) => sum + Number(usage.pulledQty || 0), 0);
-  const usedQty = usages.reduce((sum, usage) => sum + Number(usage.usedQty || 0), 0);
-  const wasteQty = usages.reduce((sum, usage) => sum + Number(usage.wasteQty || 0), 0);
-  const reprintQty = usages.reduce((sum, usage) => sum + Number(usage.reprintQty || 0), 0);
-  const deductedQty = usages.reduce((sum, usage) => sum + Number(usage.stockDeductedQty || 0), 0);
+  // 13A.7B split: rows imported by the print-log writeback (source
+  // "print_log") are PRINT cost, not media/material cost — separating them
+  // prevents double counting in the final-cost formula.
+  const manualUsages = usages.filter((usage: any) => String(usage.source || "") !== PRINT_LOG_USAGE_SOURCE);
+  const printLogUsages = usages.filter((usage: any) => String(usage.source || "") === PRINT_LOG_USAGE_SOURCE);
+  const materialCost = manualUsages.reduce((sum, usage) => sum + Number(usage.totalCost || 0), 0);
+  const printLogRecordedCost = printLogUsages.reduce((sum, usage) => sum + Number(usage.totalCost || 0), 0);
+  const pulledQty = manualUsages.reduce((sum, usage) => sum + Number(usage.pulledQty || 0), 0);
+  const usedQty = manualUsages.reduce((sum, usage) => sum + Number(usage.usedQty || 0), 0);
+  const wasteQty = manualUsages.reduce((sum, usage) => sum + Number(usage.wasteQty || 0), 0);
+  const reprintQty = manualUsages.reduce((sum, usage) => sum + Number(usage.reprintQty || 0), 0);
+  const deductedQty = manualUsages.reduce((sum, usage) => sum + Number(usage.stockDeductedQty || 0), 0);
   const wastePct = usedQty > 0 ? (wasteQty / usedQty) * 100 : 0;
-  return { materialCost, pulledQty, usedQty, wasteQty, reprintQty, deductedQty, wastePct };
+  return { materialCost, printLogRecordedCost, printLogUsageCount: printLogUsages.length, pulledQty, usedQty, wasteQty, reprintQty, deductedQty, wastePct };
 }
 
 function summarizeFinalActualCosts(job: any, actuals: any, materialSummary: any) {
   const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const estimatedCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
-  const printCost = Number(actuals?.roughActualPrintCost || 0);
+  // Recorded print-log actuals (owner-gated writeback) win over the live
+  // preview; the live number remains a preview until applied.
+  const printLogRecorded = Number(materialSummary?.printLogRecordedCost || 0);
+  const printCost = printLogRecorded > 0 ? printLogRecorded : Number(actuals?.roughActualPrintCost || 0);
+  const printCostSource = printLogRecorded > 0 ? "recorded_print_log" : "live_preview";
   const materialCost = Number(materialSummary?.materialCost || 0);
   const laborCost = Number(job.actualLaborCost || 0);
   const packingCost = Number(job.actualPackingCost || 0);
@@ -156,7 +178,7 @@ function summarizeFinalActualCosts(job: any, actuals: any, materialSummary: any)
   const finalProfit = revenue - finalTotal;
   const finalMargin = revenue > 0 ? (finalProfit / revenue) * 100 : 0;
   const estimateVariance = finalTotal - estimatedCost;
-  return { revenue, estimatedCost, printCost, materialCost, laborCost, packingCost, shippingCost, outsourceCost, otherCost, reprintCost, liveActualTotal, finalTotal, finalProfit, finalMargin, estimateVariance };
+  return { revenue, estimatedCost, printCost, printCostSource, materialCost, laborCost, packingCost, shippingCost, outsourceCost, otherCost, reprintCost, liveActualTotal, finalTotal, finalProfit, finalMargin, estimateVariance };
 }
 
 function materialStockTone(material: any) {
@@ -582,12 +604,21 @@ export async function loader({ request }: { request: Request }) {
   ]);
 
   const jobIds = jobs.map((job: any) => job.id);
-  const printLogEntries = jobIds.length
-    ? await db.printLogEntry.findMany({
-        where: { shop, productionJobId: { in: jobIds } },
-        orderBy: { createdAt: "desc" },
-      })
-    : [];
+  const [printLogEntries, machines] = await Promise.all([
+    jobIds.length
+      ? db.printLogEntry.findMany({
+          where: { shop, productionJobId: { in: jobIds } },
+          orderBy: { createdAt: "desc" },
+        })
+      : Promise.resolve([]),
+    db.machine.findMany({
+      where: { shop, active: true },
+      select: { name: true, inkChannels: { select: { inkType: true, inkName: true, enabled: true, costPerMl: true, cartridgeCost: true, cartridgeMl: true } } },
+      take: 50,
+    }),
+  ]);
+  const rates = buildBrandRates(machines);
+  const ratePerHour = machineRatePerHour();
 
   const entriesByJob = printLogEntries.reduce((map: Record<string, any[]>, entry: any) => {
     if (!entry.productionJobId) return map;
@@ -596,11 +627,34 @@ export async function loader({ request }: { request: Request }) {
     return map;
   }, {});
 
-  const jobsWithActuals = jobs.map((job: any) => ({
-    ...job,
-    actuals: summarizeActualPrintLogs(job, entriesByJob[job.id] || []),
-    customerProofUrl: job.proofApprovalToken ? `${baseUrl}/proof/${job.proofApprovalToken}` : "",
-  }));
+  const jobsWithActuals = jobs.map((job: any) => {
+    const jobEntries = entriesByJob[job.id] || [];
+    // 13A.7B: server-computed writeback preview (the apply action re-computes
+    // fresh — client numbers are never trusted) + digest of already-applied
+    // print_log usage rows for the UI.
+    const writeback = computePrintLogWriteback({
+      job: { id: job.id, jobTicket: job.jobTicket, items: job.items || [], actualCostFinalized: Boolean(job.actualCostFinalized) },
+      entries: jobEntries,
+      rates,
+      machineRatePerHour: ratePerHour,
+    });
+    const appliedRows = (job.materialUsages || []).filter((usage: any) => String(usage.source || "") === PRINT_LOG_USAGE_SOURCE);
+    const appliedProvenance = appliedRows.length ? parseWritebackProvenance(appliedRows[0].notes).provenance : null;
+    return {
+      ...job,
+      actuals: summarizeActualPrintLogs(job, jobEntries, rates, ratePerHour),
+      writebackPreview: writeback,
+      printLogApplied: appliedRows.length
+        ? {
+            totalCost: appliedRows.reduce((sum: number, usage: any) => sum + Number(usage.totalCost || 0), 0),
+            components: appliedRows.map((usage: any) => ({ name: usage.materialName, totalCost: Number(usage.totalCost || 0), unit: usage.unit, usedQty: Number(usage.usedQty || 0) })),
+            appliedAt: (appliedProvenance?.appliedAt as string) || null,
+            appliedBy: (appliedProvenance?.appliedBy as string) || null,
+          }
+        : null,
+      customerProofUrl: job.proofApprovalToken ? `${baseUrl}/proof/${job.proofApprovalToken}` : "",
+    };
+  });
 
 
   const materials = await db.material.findMany({
@@ -998,10 +1052,18 @@ Source ref: ${sourceRef}` : ""}`,
     const actualCostNotes = String(formData.get("actualCostNotes") || "") || null;
     const actualCostFinalized = String(formData.get("actualCostFinalized") || "false") === "true";
 
-    const actuals = summarizeActualPrintLogs(job, printLogEntries);
+    const costMachines = await db.machine.findMany({
+      where: { shop, active: true },
+      select: { name: true, inkChannels: { select: { inkType: true, inkName: true, enabled: true, costPerMl: true, cartridgeCost: true, cartridgeMl: true } } },
+      take: 50,
+    });
+    const actuals = summarizeActualPrintLogs(job, printLogEntries, buildBrandRates(costMachines), machineRatePerHour());
     const materialSummary = summarizeMaterialUsage(job.materialUsages || []);
     const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
-    const actualTotalCost = Number(actuals.roughActualPrintCost || 0) + Number(materialSummary.materialCost || 0) + actualLaborCost + actualPackingCost + actualShippingCost + actualOutsourceCost + actualOtherCost + actualReprintCost;
+    // Recorded print-log actuals win over the live preview; manual material
+    // rows are counted separately from print_log rows (no double count).
+    const printCostComponent = Number(materialSummary.printLogRecordedCost || 0) > 0 ? Number(materialSummary.printLogRecordedCost) : Number(actuals.roughActualPrintCost || 0);
+    const actualTotalCost = printCostComponent + Number(materialSummary.materialCost || 0) + actualLaborCost + actualPackingCost + actualShippingCost + actualOutsourceCost + actualOtherCost + actualReprintCost;
     const actualFinalProfit = revenue - actualTotalCost;
     const actualFinalMargin = revenue > 0 ? (actualFinalProfit / revenue) * 100 : 0;
 
@@ -1028,6 +1090,69 @@ Source ref: ${sourceRef}` : ""}`,
 
     await createEvent(shop, jobId, actualCostFinalized ? "actual_cost_finalized" : "actual_cost_updated", `Actual job cost ${actualCostFinalized ? "finalized" : "updated"}. Total cost: $${actualTotalCost.toFixed(2)}. Profit: $${actualFinalProfit.toFixed(2)}. Margin: ${actualFinalMargin.toFixed(1)}%.`);
     return Response.json({ ok: true, message: actualCostFinalized ? "Actual cost finalized." : "Actual cost updated." });
+  }
+
+  // 13A.7B: guarded print-log actual-cost writeback. Preview lives on the
+  // board (loader-computed); this action RE-COMPUTES server-side, enforces the
+  // typed owner phrase, and writes ink + machine-time ProductionMaterialUsage
+  // rows (source "print_log") in ONE transaction. Material/media cost is
+  // preview-only and never written. Manual rows and manual actual fields are
+  // never touched; the job is never auto-finalized.
+  if (intent === "pullPrintLogActuals") {
+    const jobId = String(formData.get("jobId") || "");
+    const confirmPhrase = String(formData.get("confirmPhrase") || "");
+    const job = await db.productionJob.findFirst({ where: { shop, id: jobId }, include: { items: true } });
+    if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
+    if (confirmPhrase !== WRITEBACK_PHRASE) {
+      return Response.json({ ok: false, message: `Confirmation phrase must be exactly "${WRITEBACK_PHRASE}" (case-sensitive) — nothing was written.` });
+    }
+    const entries = await db.printLogEntry.findMany({ where: { shop, productionJobId: jobId }, orderBy: { createdAt: "desc" } });
+    const writebackMachines = await db.machine.findMany({
+      where: { shop, active: true },
+      select: { name: true, inkChannels: { select: { inkType: true, inkName: true, enabled: true, costPerMl: true, cartridgeCost: true, cartridgeMl: true } } },
+      take: 50,
+    });
+    const computation = computePrintLogWriteback({
+      job: { id: job.id, jobTicket: job.jobTicket, items: job.items || [], actualCostFinalized: Boolean(job.actualCostFinalized) },
+      entries: entries as any,
+      rates: buildBrandRates(writebackMachines),
+      machineRatePerHour: machineRatePerHour(),
+    });
+    if (!computation.ok) {
+      return Response.json({ ok: false, message: `Blocked: ${computation.blockedReason}` });
+    }
+    await db.$transaction([
+      // Replace ONLY rows this feature owns — manual usage, inventory
+      // deductions, and every other source survive untouched.
+      db.productionMaterialUsage.deleteMany({ where: { shop, jobId, source: PRINT_LOG_USAGE_SOURCE } }),
+      ...computation.rows.map((row) =>
+        db.productionMaterialUsage.create({
+          data: {
+            shop,
+            jobId,
+            materialName: row.materialName,
+            materialType: row.materialType,
+            unit: row.unit,
+            usedQty: row.usedQty,
+            costPerUnit: row.costPerUnit,
+            totalCost: row.totalCost,
+            source: row.source,
+            notes: row.notes,
+          },
+        }),
+      ),
+      db.productionJobEvent.create({
+        data: {
+          shop,
+          jobId,
+          eventType: "print_log_actuals_applied",
+          message: `Print-log actuals imported (PARTIAL, not finalized): $${computation.totalCost.toFixed(2)} = ink ${computation.inkCost == null ? "n/a" : `$${computation.inkCost.toFixed(2)}`} + machine ${computation.machineCost == null ? "n/a" : `$${computation.machineCost.toFixed(2)} @ $${computation.machineRatePerHour}/hr`} across ${computation.printRowCount} print row(s)${computation.cutRowsExcluded ? `, ${computation.cutRowsExcluded} cut row(s) excluded` : ""}${computation.duplicatesIgnored ? `, ${computation.duplicatesIgnored} duplicate(s) ignored` : ""}. Material/media stays preview-only.`,
+          newValue: computation.totalCost.toFixed(2),
+          createdBy: "production-board",
+        },
+      }),
+    ]);
+    return Response.json({ ok: true, message: `Applied $${computation.totalCost.toFixed(2)} print-log actuals (ink + machine time, PARTIAL — job not finalized). Re-run any time new logs arrive; reruns replace only these imported rows.` });
   }
 
   if (intent === "markPrinted") {
@@ -1147,7 +1272,64 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
                   <Text as="p">Gloss: {Number(job.actuals.glossInkMl || 0).toFixed(2)} ml</Text>
                   <Text as="p">Profit after logged print + material cost: ${money(job.actuals.conservativeProfitAfterLoggedPrintCost - materialSummary.materialCost)}</Text>
                 </InlineStack>
-                <Text as="p" tone="subdued">Rough print cost uses current default ink and machine recovery estimates. It is for variance tracking and will become more accurate as real machine/material costs are dialed in.</Text>
+                <Text as="p" tone="subdued">
+                  Print cost preview uses the shared verified channel-cost engine and the configured ${job.actuals.machineRatePerHour}/hr machine rate
+                  (same engine as Audit · Actual Costs). {job.actuals.inkRatesCovered ? "" : "Some rows lack attributable ink rates and are excluded from the ink preview. "}
+                  {Number(job.actuals.cutRowCount || 0) > 0 ? `${job.actuals.cutRowCount} cut row(s) are excluded from ink/time cost. ` : ""}
+                </Text>
+
+                {/* 13A.7B: guarded print-log writeback (preview -> typed phrase -> apply) */}
+                <Card>
+                  <BlockStack gap="150">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text as="h4" variant="headingSm">Pull actuals from print logs</Text>
+                      {job.printLogApplied ? <Badge tone="success">{`Imported $${money(job.printLogApplied.totalCost)}`}</Badge> : <Badge tone="attention">Not imported yet</Badge>}
+                    </InlineStack>
+                    {job.printLogApplied ? (
+                      <Text as="p" tone="subdued">
+                        Applied {job.printLogApplied.appliedAt ? new Date(job.printLogApplied.appliedAt).toLocaleString() : "(time unknown)"}
+                        {job.printLogApplied.appliedBy ? ` by ${job.printLogApplied.appliedBy}` : ""}:{" "}
+                        {job.printLogApplied.components.map((component: any) => `${component.name} $${money(component.totalCost)} (${component.usedQty.toFixed(2)} ${component.unit})`).join(" + ")}.
+                        Material excluded. PARTIAL — job is not finalized. Re-apply below when new logs arrive (replaces only these imported rows).
+                      </Text>
+                    ) : null}
+                    {job.writebackPreview?.ok ? (
+                      <BlockStack gap="100">
+                        <Text as="p">
+                          Proposed writeback: <b>${money(job.writebackPreview.totalCost)}</b> = ink {job.writebackPreview.inkCost == null ? "n/a" : `$${money(job.writebackPreview.inkCost)} (${job.writebackPreview.inkMl.toFixed(2)} ml)`}
+                          {" + "}machine {job.writebackPreview.machineCost == null ? "n/a" : `$${money(job.writebackPreview.machineCost)} (${job.writebackPreview.printMinutes.toFixed(1)} min @ $${job.writebackPreview.machineRatePerHour}/hr)`}
+                        </Text>
+                        <Text as="p" tone="subdued">
+                          {job.writebackPreview.printRowCount} print row(s){job.writebackPreview.cutRowsExcluded ? `, ${job.writebackPreview.cutRowsExcluded} cut excluded` : ""}
+                          {job.writebackPreview.duplicatesIgnored ? `, ${job.writebackPreview.duplicatesIgnored} duplicate(s) ignored` : ""}
+                          {" · runs: "}{job.writebackPreview.runCount == null ? "unknown" : job.writebackPreview.runCount}{job.writebackPreview.reprintDetected ? " (reprints included)" : ""}
+                          {" · match: "}{job.writebackPreview.matchMethods.join(", ")} · {job.writebackPreview.printers.join(", ")}
+                          {job.writebackPreview.itemTicketAttribution ? ` · item ${job.writebackPreview.itemTicketAttribution}` : ""}
+                          {" · material preview-only (not written)"}
+                        </Text>
+                        {(job.writebackPreview.warnings || []).slice(0, 6).map((warning: string) => (
+                          <Text as="p" tone="subdued" key={warning}>⚠ {warning}</Text>
+                        ))}
+                        <Form method="post">
+                          <input type="hidden" name="intent" value="pullPrintLogActuals" />
+                          <input type="hidden" name="jobId" value={job.id} />
+                          <InlineStack gap="200" blockAlign="center" wrap>
+                            <input
+                              name="confirmPhrase"
+                              placeholder='Type APPLY PRINT LOG ACTUALS'
+                              autoComplete="off"
+                              style={{ padding: 8, borderRadius: 8, border: "1px solid #aaa", minWidth: 260 }}
+                            />
+                            <Button submit variant="primary">{job.printLogApplied ? "Re-apply print-log actuals" : "Apply print-log actuals"}</Button>
+                            <Button onClick={() => navigate("/app/erp/actual-costs")}>Audit · Actual Costs</Button>
+                          </InlineStack>
+                        </Form>
+                      </BlockStack>
+                    ) : (
+                      <Text as="p" tone="subdued">Writeback unavailable: {job.writebackPreview?.blockedReason || "no preview computed"}</Text>
+                    )}
+                  </BlockStack>
+                </Card>
               </BlockStack>
             ) : (
               <Text as="p" tone="subdued">Import a VersaWorks/RasterLink log using the job or item ticket to fill actual sqft, ink, time, and rough print cost.</Text>

@@ -10,13 +10,22 @@ import { resolvePrintMaterialCostPerSqft } from "./cost-calculator.server";
 // Client-safe constants live in rip-actual-costs-shared.ts (the route
 // component imports them there); re-exported here so tests and the loader
 // use one import path.
-export { MACHINE_RATE_HIGH, MACHINE_RATE_LOW, MATCH_STATUS_LABELS } from "./rip-actual-costs-shared";
+export { MACHINE_RATE_CURRENT, MACHINE_RATE_HIGH, MACHINE_RATE_LOW, MATCH_STATUS_LABELS } from "./rip-actual-costs-shared";
 export type { MatchStatus } from "./rip-actual-costs-shared";
-import { MACHINE_RATE_HIGH, MACHINE_RATE_LOW } from "./rip-actual-costs-shared";
+import { MACHINE_RATE_CURRENT, MACHINE_RATE_HIGH, MACHINE_RATE_LOW } from "./rip-actual-costs-shared";
 import type { MatchStatus } from "./rip-actual-costs-shared";
 
 export function machineCost(printMinutes: number, ratePerHour: number) {
   return (Math.max(0, safeNumber(printMinutes)) / 60) * safeNumber(ratePerHour);
+}
+
+// The ONE configurable machine-rate source (owner decision 13A.7B: $8/hr).
+// Env override GSO_MACHINE_RATE_PER_HOUR wins when set to a positive number;
+// otherwise the shared MACHINE_RATE_CURRENT constant applies. Board previews,
+// the audit page, and print-log writeback must all call this.
+export function machineRatePerHour(env: Record<string, string | undefined> = process.env): number {
+  const override = Number(env.GSO_MACHINE_RATE_PER_HOUR);
+  return Number.isFinite(override) && override > 0 ? override : MACHINE_RATE_CURRENT;
 }
 
 // ---------- machine attribution + per-brand ink rates ----------
@@ -71,7 +80,9 @@ export function buildBrandRates(machines: Array<{ name?: string | null; inkChann
 export function attributeMachine(entry: { machineName?: string | null; printerSoftware?: string | null; sourceJobName?: string | null }): MachineBrand | null {
   const name = String(entry.machineName || "");
   if (/mimaki|ucjv/i.test(name)) return "mimaki";
-  if (/roland|lg[-\s]?540|truevis/i.test(name)) return "roland";
+  // 13A.7B normalization: the shop's Roland is the LG-640 (operational hot
+  // folders are named LG640-*); LG-540 stays matched for historical rows.
+  if (/roland|lg[-\s]?[56]40|truevis/i.test(name)) return "roland";
   const software = String(entry.printerSoftware || "");
   if (/rasterlink/i.test(software)) return "mimaki";
   if (/versaworks/i.test(software)) return "roland";

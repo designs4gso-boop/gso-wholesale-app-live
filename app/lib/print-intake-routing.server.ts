@@ -11,7 +11,7 @@
 // - the server returns a machine KEY only — hot-folder paths live exclusively
 //   in the local agent config (no local paths cross the wire or reach the UI);
 // - machine routing follows the FINALIZED owner rules (see decideMachine):
-//   white/gloss -> Roland LG-540; explicit ERP Roland or a standalone ROLAND
+//   white/gloss -> Roland LG-640 (normalized 13A.7B); explicit ERP Roland or a standalone ROLAND
 //   filename tag -> Roland; all other CMYK-only -> Mimaki UCJV300 default.
 //   Genuinely contradictory machine data still reviews, never guesses.
 
@@ -128,7 +128,7 @@ export type MachineDecision = {
 };
 
 // Finalized business routing rules (owner-approved, 13A.6G continuation):
-//   1. white and/or gloss required        -> Roland LG-540 (white_or_gloss)
+//   1. white and/or gloss required        -> Roland LG-640 (normalized 13A.7B) (white_or_gloss)
 //   2. CMYK-only + explicit ERP Roland    -> Roland (explicit_erp_machine)
 //   3. CMYK-only + standalone ROLAND tag  -> Roland (explicit_roland_tag)
 //   4. all other CMYK-only jobs           -> Mimaki UCJV300 (default_cmyk;
