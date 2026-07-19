@@ -4,14 +4,14 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { materialKind } from "../lib/material-classify";
 import {
-  MACHINE_RATE_HIGH,
-  MACHINE_RATE_LOW,
   MATCH_STATUS_LABELS,
   type MatchStatus,
 } from "../lib/rip-actual-costs-shared";
 import {
   buildBrandRates,
   computeEntryCosts,
+  machineCost,
+  machineRatePerHour,
   matchMediaToMaterial,
   matchStatusOf,
   parseGsoqRow,
@@ -56,6 +56,7 @@ export async function loader({ request }: { request: Request }) {
   ]);
 
   const rates = buildBrandRates(machines);
+  const ratePerHour = machineRatePerHour(); // the ONE configured rate ($8/hr) - same source as board + writeback
   const printMaterials = materials.filter((material) => materialKind(material) === "print");
 
   const gsoqEntries = entries.filter((entry) => /^GSOQ-/i.test(String(entry.jobTicket || "")));
@@ -88,8 +89,7 @@ export async function loader({ request }: { request: Request }) {
       glossMl: Number(entry.glossInkMl) || 0,
       totalMl: Number(entry.inkMl) || 0,
       inkCost: costs.inkCost,
-      machineCostLow: costs.machineCostLow,
-      machineCostHigh: costs.machineCostHigh,
+      machineCostCurrent: machineCost(Number(entry.printMinutes) || 0, ratePerHour),
       productionJobId: entry.productionJobId || null,
       status,
       warnings,
@@ -118,6 +118,7 @@ export async function loader({ request }: { request: Request }) {
     })),
   ).map((rollup) => ({
     ...rollup,
+    machineCostCurrent: machineCost(rollup.totalPrintMinutes, ratePerHour),
     job: rollup.productionJobId ? jobById.get(rollup.productionJobId) || null : null,
   }));
 
@@ -130,8 +131,8 @@ export async function loader({ request }: { request: Request }) {
     totalInkCost: rows.reduce((sum, row) => sum + (row.inkCost ?? 0), 0),
     inkCostComplete: rows.every((row) => row.inkCost != null),
     totalPrintMinutes: rows.reduce((sum, row) => sum + row.printMinutes, 0),
-    machineCostLow: rows.reduce((sum, row) => sum + row.machineCostLow, 0),
-    machineCostHigh: rows.reduce((sum, row) => sum + row.machineCostHigh, 0),
+    machineCostCurrent: rows.reduce((sum, row) => sum + row.machineCostCurrent, 0),
+    machineRatePerHour: ratePerHour,
     dateRange: dates.length ? `${dates[0].slice(0, 10)} -> ${dates[dates.length - 1].slice(0, 10)}` : "no rows",
     gsoqCount: gsoqEntries.length,
     ratesFound: rates.map((rate) => `${rate.machineName}: CMYK ${rate.cmykPerMl == null ? "—" : `$${rate.cmykPerMl.toFixed(4)}/ml`}, white ${rate.whitePerMl == null ? "—" : `$${rate.whitePerMl.toFixed(4)}/ml`}, gloss ${rate.glossPerMl == null ? "—" : `$${rate.glossPerMl.toFixed(4)}/ml`}`),
@@ -169,8 +170,8 @@ export async function loader({ request }: { request: Request }) {
       entriesByJob.set(entry.productionJobId, list);
     }
     const allVarianceRows = varianceJobs
-      .map((job) => computeJobVariance({ job, entries: entriesByJob.get(job.id) || [], rates, printMaterials }))
-      .sort((a, b) => Math.abs(b.variancePctHigh ?? 0) - Math.abs(a.variancePctHigh ?? 0));
+      .map((job) => computeJobVariance({ job, entries: entriesByJob.get(job.id) || [], rates, printMaterials, machineRatePerHour: ratePerHour }))
+      .sort((a, b) => Math.abs(b.variancePct ?? 0) - Math.abs(a.variancePct ?? 0));
     varianceTotal = allVarianceRows.length;
     varianceRows = filterVarianceRows(allVarianceRows, varianceFilters);
   } catch (error) {
@@ -182,8 +183,7 @@ export async function loader({ request }: { request: Request }) {
     highSeverity: varianceRows.filter((row) => row.severity === "high").length,
     withReprints: varianceRows.filter((row) => row.reprintDetected).length,
     estimatedTotal: varianceRows.reduce((sum, row) => sum + row.estimatedCost, 0),
-    previewLowTotal: varianceRows.reduce((sum, row) => sum + (row.previewTotalLow ?? 0), 0),
-    previewHighTotal: varianceRows.reduce((sum, row) => sum + (row.previewTotalHigh ?? 0), 0),
+    previewTotal: varianceRows.reduce((sum, row) => sum + (row.previewTotal ?? 0), 0),
   };
 
   return { summary, rows: rows.slice(0, 200), rowTotal: rows.length, rollups, gsoqRows, varianceRows, varianceSummary, varianceFilters, varianceError };
@@ -226,9 +226,10 @@ export default function ActualCostsRoute() {
       </section>
 
       <section style={{ marginTop: 12, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e3a8a", borderRadius: 12, padding: "10px 14px", fontSize: 13 }}>
-        <b>Machine routing rule (documented, warn-only for now):</b> ROLAND tag → Roland LG-540; no tag → Mimaki. Mimaki is CMYK-only for
-        routing/pricing; Roland handles CMYK + white + gloss. Rows below warn when white/gloss ink shows up on the Mimaki. Machine hourly cost is
-        shown at BOTH ${MACHINE_RATE_LOW}/hr and ${MACHINE_RATE_HIGH}/hr until the owner picks one. Channel rates in use: {data.summary.ratesFound.join(" · ") || "none found — ink costs cannot be calculated"}.
+        <b>Machine routing rule:</b> ROLAND tag or white/gloss → Roland LG-640; all other CMYK-only → Mimaki (Mimaki is CMYK-only).
+        Rows below warn when white/gloss ink shows up on the Mimaki. Machine time is costed at the current configured rate of
+        ${data.summary.machineRatePerHour}/hr (same shared source as the Production Board and print-log writeback). Ink uses the verified
+        shared channel costs: {data.summary.ratesFound.join(" · ") || "none found — ink costs cannot be calculated"}.
       </section>
 
       <section style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginTop: 16 }}>
@@ -239,8 +240,7 @@ export default function ActualCostsRoute() {
           { label: "Total ink ml", value: data.summary.totalInkMl.toFixed(1) },
           { label: `Calculated ink cost${data.summary.inkCostComplete ? "" : " (partial)"}`, value: money(data.summary.totalInkCost) },
           { label: "Total print minutes", value: data.summary.totalPrintMinutes.toFixed(1) },
-          { label: `Machine cost @ $${MACHINE_RATE_LOW}/hr`, value: money(data.summary.machineCostLow) },
-          { label: `Machine cost @ $${MACHINE_RATE_HIGH}/hr`, value: money(data.summary.machineCostHigh) },
+          { label: `Machine cost @ $${data.summary.machineRatePerHour}/hr (current rate)`, value: money(data.summary.machineCostCurrent) },
           { label: "Quote-time GSOQ results", value: String(data.summary.gsoqCount) },
         ].map((card) => (
           <div key={card.label} style={cardStyle}>
@@ -254,7 +254,7 @@ export default function ActualCostsRoute() {
         <h2 style={{ marginTop: 0 }}>Per-ticket rollup (matched + potentially matchable)</h2>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={thStyle}>Ticket</th><th style={thStyle}>Job / customer</th><th style={thStyle}>Rows</th><th style={thStyle}>Ink ml</th><th style={thStyle}>Ink cost</th><th style={thStyle}>Print min</th><th style={thStyle}>Machine @ ${MACHINE_RATE_LOW}</th><th style={thStyle}>Machine @ ${MACHINE_RATE_HIGH}</th><th style={thStyle}>Machines / media</th><th style={thStyle}>Warnings</th></tr></thead>
+            <thead><tr><th style={thStyle}>Ticket</th><th style={thStyle}>Job / customer</th><th style={thStyle}>Rows</th><th style={thStyle}>Ink ml</th><th style={thStyle}>Ink cost</th><th style={thStyle}>Print min</th><th style={thStyle}>Machine @ ${data.summary.machineRatePerHour}/hr</th><th style={thStyle}>Machines / media</th><th style={thStyle}>Warnings</th></tr></thead>
             <tbody>
               {data.rollups.map((rollup) => (
                 <tr key={rollup.jobTicket}>
@@ -271,13 +271,12 @@ export default function ActualCostsRoute() {
                   <td style={tdStyle}>{rollup.totalInkMl.toFixed(1)}</td>
                   <td style={tdStyle}><b>{money(rollup.totalInkCost)}</b>{rollup.inkCostComplete ? "" : <span style={warnStyle}> partial</span>}</td>
                   <td style={tdStyle}>{rollup.totalPrintMinutes.toFixed(1)}</td>
-                  <td style={tdStyle}>{money(rollup.machineCostLow)}</td>
-                  <td style={tdStyle}>{money(rollup.machineCostHigh)}</td>
+                  <td style={tdStyle}>{money(rollup.machineCostCurrent)}</td>
                   <td style={tdStyle}>{rollup.machines.join(", ")}<div style={smallHelp}>{rollup.medias.join(", ") || "—"}</div></td>
                   <td style={tdStyle}>{rollup.warnings.length ? rollup.warnings.map((warning) => <div key={warning} style={warnStyle}>{warning}</div>) : "—"}</td>
                 </tr>
               ))}
-              {!data.rollups.length ? <tr><td colSpan={10} style={{ ...tdStyle, color: "#6b7280" }}>No ticketed production print-log rows yet — upload RIP logs via RIP Imports.</td></tr> : null}
+              {!data.rollups.length ? <tr><td colSpan={9} style={{ ...tdStyle, color: "#6b7280" }}>No ticketed production print-log rows yet — upload RIP logs via RIP Imports.</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -289,7 +288,7 @@ export default function ActualCostsRoute() {
         <h2 style={{ marginTop: 0 }}>Print log rows ({data.rowTotal}{data.rowTotal > data.rows.length ? `, showing latest ${data.rows.length}` : ""})</h2>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Machine</th><th style={thStyle}>RIP job / ticket</th><th style={thStyle}>Media</th><th style={thStyle}>Sqft</th><th style={thStyle}>Min</th><th style={thStyle}>CMYK ml</th><th style={thStyle}>White ml</th><th style={thStyle}>Gloss ml</th><th style={thStyle}>Total ml</th><th style={thStyle}>Ink cost</th><th style={thStyle}>Mach @ ${MACHINE_RATE_LOW}</th><th style={thStyle}>Mach @ ${MACHINE_RATE_HIGH}</th><th style={thStyle}>Match</th><th style={thStyle}>Warnings</th></tr></thead>
+            <thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Machine</th><th style={thStyle}>RIP job / ticket</th><th style={thStyle}>Media</th><th style={thStyle}>Sqft</th><th style={thStyle}>Min</th><th style={thStyle}>CMYK ml</th><th style={thStyle}>White ml</th><th style={thStyle}>Gloss ml</th><th style={thStyle}>Total ml</th><th style={thStyle}>Ink cost</th><th style={thStyle}>Machine @ ${data.summary.machineRatePerHour}/hr</th><th style={thStyle}>Match</th><th style={thStyle}>Warnings</th></tr></thead>
             <tbody>
               {data.rows.map((row) => (
                 <tr key={row.id}>
@@ -304,8 +303,7 @@ export default function ActualCostsRoute() {
                   <td style={tdStyle}>{row.glossMl.toFixed(1)}</td>
                   <td style={tdStyle}>{row.totalMl.toFixed(1)}</td>
                   <td style={tdStyle}><b>{money(row.inkCost)}</b></td>
-                  <td style={tdStyle}>{money(row.machineCostLow)}</td>
-                  <td style={tdStyle}>{money(row.machineCostHigh)}</td>
+                  <td style={tdStyle}>{money(row.machineCostCurrent)}</td>
                   <td style={tdStyle}><span style={statusBadge[row.status]}>{MATCH_STATUS_LABELS[row.status]}</span></td>
                   <td style={tdStyle}>{row.warnings.length ? row.warnings.map((warning) => <div key={warning} style={warnStyle}>{warning}</div>) : "—"}</td>
                 </tr>
@@ -371,10 +369,11 @@ function VarianceSection({ data }: { data: ReturnType<typeof useLoaderData<typeo
     <section style={{ ...cardStyle, marginTop: 16, borderColor: "#7c2d12", borderWidth: 2 }}>
       <h2 style={{ marginTop: 0 }}>Estimated vs Actual variance (13A.7A — read-only preview)</h2>
       <p style={{ ...smallHelp, marginTop: 0 }}>
-        PARTIAL preview by design: it covers ink (verified channel costs), machine time (both undecided rates), and media
-        (name-matched material cost) — labor, packing, shipping, and outsourcing are excluded, so this is never a final
-        cost. Duplicate historical rows are ignored in the math but counted; cut rows are listed, never costed; reprint
-        runs stay visible. Nothing on this page writes anything.
+        PARTIAL preview by design: the total covers ink (verified shared channel costs) + machine time at the current
+        configured rate — the SAME math and total as the Production Board writeback. Media/material is shown as a
+        separate preview-only reference (name-matched, not write-grade, excluded from the total). Labor, packing,
+        shipping, and outsourcing are excluded, so this is never a final cost. Duplicate historical rows are ignored in
+        the math but counted; cut rows are listed, never costed; reprint runs stay visible. Nothing on this page writes anything.
       </p>
 
       {data.varianceError ? (
@@ -388,7 +387,7 @@ function VarianceSection({ data }: { data: ReturnType<typeof useLoaderData<typeo
           { label: "Jobs with matched print data", value: String(data.varianceSummary.jobsAnalyzed) },
           { label: "High variance (>25%)", value: String(data.varianceSummary.highSeverity) },
           { label: "Jobs with reprint runs", value: String(data.varianceSummary.withReprints) },
-          { label: "Estimated vs preview (shown jobs)", value: `${money(data.varianceSummary.estimatedTotal)} vs ${money(data.varianceSummary.previewLowTotal)}-${money(data.varianceSummary.previewHighTotal)}` },
+          { label: "Estimated vs partial print cost (shown jobs)", value: `${money(data.varianceSummary.estimatedTotal)} vs ${money(data.varianceSummary.previewTotal)}` },
         ].map((card) => (
           <div key={card.label} style={cardStyle}>
             <div style={{ fontSize: 12, color: "#6b7280" }}>{card.label}</div>
@@ -465,15 +464,15 @@ function VarianceSection({ data }: { data: ReturnType<typeof useLoaderData<typeo
             </div>
             <div>
               <b>Actual preview (partial)</b>
-              <div>Ink: {money(row.inkCost)} · Media: {money(row.materialCost)}</div>
-              <div>Machine: {row.machineCostLow == null ? "Not configured" : `${money(row.machineCostLow)}-${money(row.machineCostHigh)}`}</div>
-              <div>Total: {row.previewTotalLow == null ? "Not configured" : `${money(row.previewTotalLow)}-${money(row.previewTotalHigh)}`}</div>
-              <div>Profit: {row.previewProfitLow == null ? "n/a" : `${money(row.previewProfitLow)}-${money(row.previewProfitHigh)}`} · Margin: {pct(row.previewMarginLowPct)}-{pct(row.previewMarginHighPct)}</div>
+              <div>Ink: {money(row.inkCost)} · Machine: {row.machineCost == null ? "Not configured" : `${money(row.machineCost)} @ $${row.machineRatePerHour}/hr`}</div>
+              <div>Partial print total: <b>{row.previewTotal == null ? "Not configured" : money(row.previewTotal)}</b> (matches the Production Board)</div>
+              <div>Media (preview-only, excluded): {money(row.materialCost)}</div>
+              <div>Profit: {row.previewProfit == null ? "n/a" : money(row.previewProfit)} · Margin: {pct(row.previewMarginPct)}</div>
             </div>
             <div>
               <b>Variance vs estimate</b>
-              <div>Dollars: {row.varianceLow == null ? "n/a" : `${money(row.varianceLow)} to ${money(row.varianceHigh)}`}</div>
-              <div>Percent: {pct(row.variancePctLow)} to {pct(row.variancePctHigh)}</div>
+              <div>Dollars: {row.variance == null ? "n/a" : money(row.variance)}</div>
+              <div>Percent: {pct(row.variancePct)}</div>
               {row.finalized ? <div style={{ marginTop: 4 }}><b>Manually recorded final:</b> {money(row.finalized.totalCost)} cost · {money(row.finalized.profit)} profit · {pct(row.finalized.marginPct)}</div> : null}
             </div>
           </div>

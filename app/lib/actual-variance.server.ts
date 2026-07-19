@@ -12,12 +12,14 @@
 //   a count; cut rows are never ink/time-costed; reprint runs are surfaced,
 //   never merged silently.
 //
-// Rates come exclusively from the verified 13A.5 engine (DB machine channel
-// costs + the undecided $5/$8 machine-rate range). The Production Board's
-// legacy hardcoded ink rates are deliberately NOT used; the discrepancy is
-// surfaced as a warning so the owner can reconcile it in 13A.7B.
+// Rates come exclusively from the verified shared engine: DB machine channel
+// costs for ink and the ONE configured machine rate (13A.7B: $8/hr via
+// machineRatePerHour()/MACHINE_RATE_CURRENT). The preview total is ink +
+// machine ONLY so it always equals the Production Board / writeback total;
+// media/material cost is shown as a separate preview-only reference
+// (13A.7B.1 display normalization).
 
-import { MACHINE_RATE_HIGH, MACHINE_RATE_LOW } from "./rip-actual-costs-shared";
+import { MACHINE_RATE_CURRENT } from "./rip-actual-costs-shared";
 import {
   computeEntryCosts,
   matchMediaToMaterial,
@@ -102,19 +104,14 @@ export type VarianceReportRow = {
   missingComponents: string[];
   excludedComponents: string[];
   inkCost: number | null;
-  machineCostLow: number | null;
-  machineCostHigh: number | null;
-  materialCost: number | null;
-  previewTotalLow: number | null;
-  previewTotalHigh: number | null;
-  previewProfitLow: number | null;
-  previewProfitHigh: number | null;
-  previewMarginLowPct: number | null;
-  previewMarginHighPct: number | null;
-  varianceLow: number | null; // previewLow - estimatedCost
-  varianceHigh: number | null;
-  variancePctLow: number | null;
-  variancePctHigh: number | null;
+  machineCost: number | null;
+  machineRatePerHour: number;
+  materialCost: number | null; // preview-only reference — EXCLUDED from previewTotal (not write-grade)
+  previewTotal: number | null; // ink + machine only, so it always equals the board/writeback total
+  previewProfit: number | null;
+  previewMarginPct: number | null;
+  variance: number | null; // previewTotal - estimatedCost
+  variancePct: number | null;
   severity: "high" | "medium" | "low" | "unknown";
   complete: boolean; // always false while labor/packing/shipping are underivable
   finalized: { recorded: boolean; totalCost: number; profit: number; marginPct: number } | null;
@@ -187,8 +184,10 @@ export function computeJobVariance(params: {
   entries: VarianceEntryInput[];
   rates: BrandInkRates[];
   printMaterials: Parameters<typeof matchMediaToMaterial>[1];
+  machineRatePerHour?: number;
 }): VarianceReportRow {
   const { job, rates, printMaterials } = params;
+  const ratePerHour = params.machineRatePerHour ?? MACHINE_RATE_CURRENT;
   const warnings: string[] = [];
 
   // ----- estimated side (same source the Production Board uses: qty x unit) -----
@@ -251,15 +250,12 @@ export function computeJobVariance(params: {
     else if (costed > 0) { inkStatus = "partial"; inkCost = round2(costSum); warnings.push(`Ink cost covers ${costed}/${printRows.length} print rows — remaining rows lack attributable verified rates.`); }
   }
 
-  // ----- actual preview: machine time (owner has not picked $5 vs $8 -> range) -----
-  let machineCostLow: number | null = null;
-  let machineCostHigh: number | null = null;
+  // ----- actual preview: machine time (single configured rate — 13A.7B) -----
+  let machineCost: number | null = null;
   let machineStatus: ComponentStatus = "not_configured";
   if (printMinutes > 0) {
-    machineCostLow = round2((printMinutes / 60) * MACHINE_RATE_LOW);
-    machineCostHigh = round2((printMinutes / 60) * MACHINE_RATE_HIGH);
+    machineCost = round2((printMinutes / 60) * ratePerHour);
     machineStatus = "calculated";
-    warnings.push(`Machine rate undecided — showing both $${MACHINE_RATE_LOW}/hr and $${MACHINE_RATE_HIGH}/hr.`);
   }
 
   // ----- actual preview: material (display-only media->material name match) -----
@@ -286,17 +282,17 @@ export function computeJobVariance(params: {
   if (inkStatus === "not_configured") missingComponents.push("ink");
   if (machineStatus === "not_configured") missingComponents.push("machine_time");
   if (materialStatus === "not_configured") missingComponents.push("material");
-  const supported = inkCost != null || machineCostLow != null || materialCost != null;
-  const previewTotalLow = supported ? round2((inkCost || 0) + (machineCostLow || 0) + (materialCost || 0)) : null;
-  const previewTotalHigh = supported ? round2((inkCost || 0) + (machineCostHigh || 0) + (materialCost || 0)) : null;
-  const previewProfitLow = previewTotalHigh != null ? round2(revenue - previewTotalHigh) : null; // low profit uses HIGH cost
-  const previewProfitHigh = previewTotalLow != null ? round2(revenue - previewTotalLow) : null;
-  const previewMarginLowPct = previewProfitLow != null && revenue > 0 ? round2((previewProfitLow / revenue) * 100) : null;
-  const previewMarginHighPct = previewProfitHigh != null && revenue > 0 ? round2((previewProfitHigh / revenue) * 100) : null;
-  const varianceLow = previewTotalLow != null ? round2(previewTotalLow - estimatedCost) : null;
-  const varianceHigh = previewTotalHigh != null ? round2(previewTotalHigh - estimatedCost) : null;
-  const variancePctLow = varianceLow != null && estimatedCost > 0 ? round2((varianceLow / estimatedCost) * 100) : null;
-  const variancePctHigh = varianceHigh != null && estimatedCost > 0 ? round2((varianceHigh / estimatedCost) * 100) : null;
+  // Preview total = ink + machine ONLY, matching the writeback exactly.
+  // Material (name-matched, not write-grade) is a separate reference number.
+  const supported = inkCost != null || machineCost != null;
+  const previewTotal = supported ? round2((inkCost || 0) + (machineCost || 0)) : null;
+  if (materialCost != null) {
+    warnings.push(`Media/material preview $${materialCost.toFixed(2)} shown for reference only — excluded from the partial total (name matching is not write-grade).`);
+  }
+  const previewProfit = previewTotal != null ? round2(revenue - previewTotal) : null;
+  const previewMarginPct = previewProfit != null && revenue > 0 ? round2((previewProfit / revenue) * 100) : null;
+  const variance = previewTotal != null ? round2(previewTotal - estimatedCost) : null;
+  const variancePct = variance != null && estimatedCost > 0 ? round2((variance / estimatedCost) * 100) : null;
 
   // The preview NEVER includes labor/packing/shipping/outsource — it is a
   // partial print-cost preview by construction and is labeled as such.
@@ -322,11 +318,10 @@ export function computeJobVariance(params: {
     components: { ink: inkStatus, machineTime: machineStatus, material: materialStatus },
     missingComponents,
     excludedComponents: EXCLUDED_COMPONENTS,
-    inkCost, machineCostLow, machineCostHigh, materialCost,
-    previewTotalLow, previewTotalHigh, previewProfitLow, previewProfitHigh,
-    previewMarginLowPct, previewMarginHighPct,
-    varianceLow, varianceHigh, variancePctLow, variancePctHigh,
-    severity: severityOf(variancePctHigh),
+    inkCost, machineCost, machineRatePerHour: ratePerHour, materialCost,
+    previewTotal, previewProfit, previewMarginPct,
+    variance, variancePct,
+    severity: severityOf(variancePct),
     complete,
     finalized: job.actualTotalCost > 0 || job.actualCostFinalized
       ? { recorded: true, totalCost: round2(job.actualTotalCost), profit: round2(job.actualFinalProfit), marginPct: round2(job.actualFinalMargin) }
