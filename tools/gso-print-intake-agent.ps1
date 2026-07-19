@@ -26,7 +26,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.1 (13A.6G final routing rules)"
+$ScriptVersion = "gso-print-intake-agent/1.2 (13A.6G go-live cutoff)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -48,13 +48,30 @@ function Read-IntakeConfig([string]$Path) {
     PollSeconds           = if ($raw.PollSeconds) { [int]$raw.PollSeconds } else { 30 }
     StableFileSeconds     = if ($raw.StableFileSeconds) { [int]$raw.StableFileSeconds } else { 20 }
     ClaimStaleMinutes     = if ($raw.ClaimStaleMinutes) { [int]$raw.ClaimStaleMinutes } else { 30 }
+    ProcessFilesModifiedAfterUtc = [string]$raw.ProcessFilesModifiedAfterUtc
   }
   foreach ($key in @("ApiBaseUrl","UploadToken","PrintsForTodayFolder","RoutedArchiveFolder","LogFolder")) {
     if ([string]::IsNullOrWhiteSpace($config[$key])) { throw "Config missing required value: $key" }
   }
   $config.PlanUrl = ($config.ApiBaseUrl.TrimEnd('/')) + "/api/print-intake/route-plan"
   $config.ReportUrl = ($config.ApiBaseUrl.TrimEnd('/')) + "/api/print-intake/report"
+  # Go-live cutoff (13A.6G): parsed ONCE at config load; an invalid value must
+  # fail loudly here - a silently ignored typo would process every historical
+  # file in Prints For Today on first start.
+  $config.CutoffUtc = ConvertTo-CutoffUtc $config.ProcessFilesModifiedAfterUtc
   return $config
+}
+
+# ISO-8601 UTC cutoff -> [DateTime] (Utc kind). Empty/missing -> $null (no
+# cutoff, all files eligible). Anything unparseable throws.
+function ConvertTo-CutoffUtc([string]$Value) {
+  if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+  try {
+    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+    return [DateTime]::Parse($Value, [System.Globalization.CultureInfo]::InvariantCulture, $styles)
+  } catch {
+    throw "Config ProcessFilesModifiedAfterUtc is not a valid ISO-8601 UTC timestamp: '$Value' (expected e.g. 2026-07-19T17:20:00Z)"
+  }
 }
 
 function Get-MaskedToken([string]$Token) {
@@ -165,6 +182,50 @@ function Get-RoutePlan($Config, [string]$FileName, [string]$Subfolder) {
 function Send-IntakeReport($Config, [hashtable]$Outcome) {
   $payload = @{ token = $Config.UploadToken } + $Outcome
   return Invoke-IntakeJsonPost $Config $Config.ReportUrl $payload 60
+}
+
+# ---------- go-live cutoff + reserved-folder scanning (pure, self-testable) ----------
+
+$ArtworkExtensions = @('.pdf','.eps','.ai','.tif','.tiff','.png','.jpg','.jpeg')
+$ReservedFolderNames = @('_agent-test','_routed-archive')
+
+# A file is ignored when a cutoff is configured and its LastWriteTimeUtc is at
+# or before the cutoff (equal = ignored). No cutoff -> everything eligible.
+function Test-FileEligibleByCutoff([DateTime]$LastWriteTimeUtc, $CutoffUtc) {
+  if ($null -eq $CutoffUtc) { return $true }
+  return ($LastWriteTimeUtc -gt $CutoffUtc)
+}
+
+# Reserved locations are never scanned: the fixed folder names _agent-test and
+# _routed-archive anywhere in the path, plus the configured routed-archive,
+# error, and log folders (path-prefix match, case-insensitive).
+function Test-PathIsReserved([string]$FullName, $Config) {
+  foreach ($name in $ReservedFolderNames) {
+    if ($FullName -match ('[\\/]' + [regex]::Escape($name) + '([\\/]|$)')) { return $true }
+  }
+  foreach ($root in @($Config.RoutedArchiveFolder, $Config.ErrorFolder, $Config.LogFolder)) {
+    if ([string]::IsNullOrWhiteSpace($root)) { continue }
+    $trimmed = $root.TrimEnd('\','/')
+    if ($FullName.StartsWith($trimmed, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
+
+# Single scan pass: eligible artwork files (sorted oldest-first) plus the
+# count of historical files ignored by the cutoff. Ignored files are filtered
+# HERE, before detection logging, claims, hashing, ledger lookups, plan calls,
+# copies, moves, or reports - they never enter the per-file pipeline at all.
+function Get-EligibleArtworkFiles($Config) {
+  $eligible = @()
+  $ignoredHistorical = 0
+  $all = @(Get-ChildItem -Path $Config.PrintsForTodayFolder -File -Recurse -ErrorAction SilentlyContinue)
+  foreach ($file in $all) {
+    if ($ArtworkExtensions -notcontains $file.Extension.ToLowerInvariant()) { continue }
+    if (Test-PathIsReserved $file.FullName $Config) { continue }
+    if (-not (Test-FileEligibleByCutoff $file.LastWriteTimeUtc $Config.CutoffUtc)) { $ignoredHistorical++; continue }
+    $eligible += $file
+  }
+  return @{ files = @($eligible | Sort-Object LastWriteTime); ignoredHistorical = $ignoredHistorical }
 }
 
 # ---------- routing helpers (pure, self-testable) ----------
@@ -340,8 +401,17 @@ function Invoke-IntakeHealth($Config) {
   if ($probe.status -eq 400) { Write-Host "token accepted: OK (400 missing-fileName as expected, nothing written)" }
   elseif ($probe.status -eq 401 -or $probe.status -eq 403) { Write-Host "token accepted: REJECTED (HTTP $($probe.status)) - check the config token" }
   else { Write-Host "token accepted: INCONCLUSIVE (HTTP $($probe.status) $($probe.exception))" }
-  $pending = @(Get-ChildItem -Path $Config.PrintsForTodayFolder -File -Recurse -ErrorAction SilentlyContinue | Where-Object { @('.pdf','.eps','.ai','.tif','.tiff','.png','.jpg','.jpeg') -contains $_.Extension.ToLowerInvariant() })
-  Write-Host ("pending artwork files: " + $pending.Count)
+  if ($Config.CutoffUtc) {
+    Write-Host ("go-live cutoff (ProcessFilesModifiedAfterUtc): " + $Config.CutoffUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'))
+  } else {
+    Write-Host "go-live cutoff (ProcessFilesModifiedAfterUtc): NOT SET - every artwork file in the folder is eligible"
+  }
+  $scan = Get-EligibleArtworkFiles $Config
+  Write-Host ("historical files ignored by cutoff: " + $scan.ignoredHistorical)
+  Write-Host ("eligible pending artwork files: " + $scan.files.Count)
+  if ($null -eq $Config.CutoffUtc -and $scan.files.Count -gt 100) {
+    Write-Host "WARNING: no cutoff is set and $($scan.files.Count) files are eligible - set ProcessFilesModifiedAfterUtc before enabling routing."
+  }
 }
 
 # ---------- offline self-test ----------
@@ -409,6 +479,44 @@ function Invoke-IntakeSelfTest {
     # token masking never leaks the raw token
     $mask = Get-MaskedToken "supersecrettoken1234"
     Assert "token mask hides the token" ($mask -notmatch "supersecrettoken1234" -and $mask -match "supe\*\*\*\*")
+
+    # go-live cutoff (13A.6G): parse, boundary semantics, reserved folders,
+    # and proof that ignored files never enter the processing pipeline.
+    $cutoff = ConvertTo-CutoffUtc "2026-07-19T17:20:00Z"
+    Assert "cutoff parses ISO-8601 Z to UTC" ($cutoff.Kind -eq [System.DateTimeKind]::Utc -and $cutoff.Hour -eq 17 -and $cutoff.Minute -eq 20)
+    Assert "empty cutoff means no cutoff" ($null -eq (ConvertTo-CutoffUtc ""))
+    $badCutoff = $false; try { ConvertTo-CutoffUtc "not-a-date" | Out-Null } catch { $badCutoff = $true }
+    Assert "invalid cutoff fails loudly instead of processing everything" $badCutoff
+    Assert "file older than cutoff is ignored" (-not (Test-FileEligibleByCutoff $cutoff.AddSeconds(-1) $cutoff))
+    Assert "file exactly equal to cutoff is ignored" (-not (Test-FileEligibleByCutoff $cutoff $cutoff))
+    Assert "file newer than cutoff is eligible" (Test-FileEligibleByCutoff $cutoff.AddSeconds(1) $cutoff)
+    Assert "no cutoff leaves files eligible" (Test-FileEligibleByCutoff $cutoff $null)
+
+    $scanRoot = Join-Path $temp "prints"
+    foreach ($sub in @("", "_agent-test", "_routed-archive", "jobsub")) { New-Item -ItemType Directory -Path (Join-Path $scanRoot $sub) -Force | Out-Null }
+    $scanConfig = @{ PrintsForTodayFolder = $scanRoot; RoutedArchiveFolder = (Join-Path $temp "archive"); ErrorFolder = (Join-Path $temp "err"); LogFolder = (Join-Path $temp "logs"); CutoffUtc = $cutoff }
+    New-Item -ItemType Directory -Path $scanConfig.RoutedArchiveFolder -Force | Out-Null
+    $old = Join-Path $scanRoot "historical.pdf"; Set-Content -Path $old -Value "old"
+    (Get-Item $old).LastWriteTimeUtc = $cutoff.AddDays(-30)
+    $atCutoff = Join-Path $scanRoot "at-cutoff.pdf"; Set-Content -Path $atCutoff -Value "edge"
+    (Get-Item $atCutoff).LastWriteTimeUtc = $cutoff
+    $fresh = Join-Path $scanRoot "jobsub\new art.pdf"; Set-Content -Path $fresh -Value "new"
+    (Get-Item $fresh).LastWriteTimeUtc = $cutoff.AddMinutes(5)
+    $inTest = Join-Path $scanRoot "_agent-test\test.pdf"; Set-Content -Path $inTest -Value "t"
+    (Get-Item $inTest).LastWriteTimeUtc = $cutoff.AddMinutes(5)
+    $inRoutedName = Join-Path $scanRoot "_routed-archive\done.pdf"; Set-Content -Path $inRoutedName -Value "d"
+    (Get-Item $inRoutedName).LastWriteTimeUtc = $cutoff.AddMinutes(5)
+    $inArchiveRoot = Join-Path $scanConfig.RoutedArchiveFolder "archived.pdf"; Set-Content -Path $inArchiveRoot -Value "a"
+    (Get-Item $inArchiveRoot).LastWriteTimeUtc = $cutoff.AddMinutes(5)
+    $notArt = Join-Path $scanRoot "notes.txt"; Set-Content -Path $notArt -Value "n"
+    $scanOut = Get-EligibleArtworkFiles $scanConfig
+    Assert "only the fresh file is eligible (older + at-cutoff ignored)" (($scanOut.files.Count -eq 1) -and ($scanOut.files[0].Name -eq "new art.pdf"))
+    Assert "historical count covers older and at-cutoff files" ($scanOut.ignoredHistorical -eq 2)
+    Assert "reserved folder names and configured roots are never scanned" (@($scanOut.files | Where-Object { $_.FullName -match "_agent-test|_routed-archive" -or $_.FullName.StartsWith($scanConfig.RoutedArchiveFolder) }).Count -eq 0)
+    Assert "path reservation matches names and configured roots" ((Test-PathIsReserved $inTest $scanConfig) -and (Test-PathIsReserved $inRoutedName $scanConfig) -and (Test-PathIsReserved $inArchiveRoot $scanConfig) -and (-not (Test-PathIsReserved $fresh $scanConfig)))
+    # Ignored files never reach claims/hash/API/report: the scan result is the
+    # ONLY input to the processing loop, and scanning created no claim files.
+    Assert "scan itself creates no claim files for ignored files" (@(Get-ChildItem -Path $scanRoot -Recurse -Filter "*.gsoclaim" -File).Count -eq 0)
   } finally {
     Remove-Item $temp -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
   }
@@ -426,13 +534,18 @@ if ($Health) { Invoke-IntakeHealth $config; exit 0 }
 $modeLabel = if ($DryRun) { "dry-run" } elseif ($Loop) { "loop" } else { "once" }
 Write-IntakeLog $config "agent_started" "-" "version=$ScriptVersion mode=$modeLabel source=$($config.PrintsForTodayFolder)"
 
-$extensions = @('.pdf','.eps','.ai','.tif','.tiff','.png','.jpg','.jpeg')
+$lastScanSummary = ""
 while ($true) {
   $ledger = Read-IntakeLedger $config
-  $archiveRoot = $config.RoutedArchiveFolder.TrimEnd('\')
-  $files = @(Get-ChildItem -Path $config.PrintsForTodayFolder -File -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $extensions -contains $_.Extension.ToLowerInvariant() -and -not $_.FullName.StartsWith($archiveRoot) } |
-    Sort-Object LastWriteTime)
+  $scan = Get-EligibleArtworkFiles $config
+  $files = $scan.files
+  # One concise pass-level line (never one line per historical file), and only
+  # when the counts change so -Loop mode does not spam the log.
+  $scanSummary = "eligible=$($files.Count) historical_files_ignored=$($scan.ignoredHistorical)"
+  if ($scanSummary -ne $lastScanSummary) {
+    Write-IntakeLog $config "scan_summary" "-" ($scanSummary + $(if ($config.CutoffUtc) { " cutoffUtc=$($config.CutoffUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'))" } else { " cutoffUtc=(not set)" }))
+    $lastScanSummary = $scanSummary
+  }
   foreach ($file in $files) {
     Write-IntakeLog $config "detected" $file.Name "size=$($file.Length)"
     try {

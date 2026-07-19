@@ -11,5 +11,6 @@
   "RolandRoutingEnabled": false,
   "PollSeconds": 30,
   "StableFileSeconds": 20,
-  "ClaimStaleMinutes": 30
+  "ClaimStaleMinutes": 30,
+  "ProcessFilesModifiedAfterUtc": "2026-07-19T17:20:00Z"
 }
