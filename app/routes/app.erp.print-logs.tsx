@@ -12,6 +12,11 @@ import {
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import {
+  MATCH_ENTRY_RETIRED_MESSAGE,
+  decidePrintLogMatch,
+  printLogTicketWhere,
+} from "../lib/print-log-matching.server";
 
 const sourceOptions = [
   { label: "VersaWorks CSV/XML", value: "versaworks" },
@@ -191,29 +196,17 @@ function parsePrintLog(text: string) {
   });
 }
 
+// 13A.6E: conservative import-time matching, same standard as the automated
+// RasterLink/VersaWorks branches. The old three-stage helper (exact findFirst
+// -> bare `contains` findFirst -> includes() scan over recent jobs) attached
+// first-match-wins; now ONLY an exact unique shop-scoped ticket attaches.
+// Zero or two+ candidates stay unresolved for /app/erp/rip-import-review.
 async function findMatchingJob(shop: string, row: any) {
   const ticket = row.jobTicket;
-  const sourceJobName = row.sourceJobName || "";
-
-  if (ticket) {
-    const exact = await db.productionJob.findFirst({ where: { shop, jobTicket: ticket } });
-    if (exact) return exact;
-
-    const contains = await db.productionJob.findFirst({ where: { shop, jobTicket: { contains: ticket } } });
-    if (contains) return contains;
-  }
-
-  const jobs = await db.productionJob.findMany({
-    where: { shop, active: true },
-    orderBy: { updatedAt: "desc" },
-    take: 100,
-  });
-
-  return jobs.find((job: any) => {
-    if (job.jobTicket && sourceJobName.includes(job.jobTicket)) return true;
-    if (job.id && sourceJobName.includes(job.id)) return true;
-    return false;
-  }) || null;
+  if (!ticket) return null;
+  const candidates = await db.productionJob.findMany({ where: printLogTicketWhere(shop, ticket), take: 2 });
+  const decision = decidePrintLogMatch(candidates);
+  return decision.productionJobId ? candidates[0] : null;
 }
 
 async function createEvent(shop: string, jobId: string, eventType: string, message: string, data?: { oldValue?: string; newValue?: string }) {
@@ -351,18 +344,11 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (intent === "matchEntry") {
-    const entryId = String(formData.get("entryId") || "");
-    const jobId = String(formData.get("jobId") || "");
-    const entry = await db.printLogEntry.findFirst({ where: { shop, id: entryId } });
-    const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
-    if (!entry || !job) return Response.json({ ok: false, message: "Entry or job not found." }, { status: 404 });
-
-    await db.printLogEntry.update({
-      where: { id: entry.id },
-      data: { productionJobId: job.id, jobTicket: job.jobTicket || entry.jobTicket },
-    });
-    await createEvent(shop, job.id, "print_log_manual_match", `Print log entry manually matched: ${entry.sourceJobName || entry.id}.`);
-    return Response.json({ ok: true, message: "Print log row matched to production job." });
+    // 13A.6E: retired. The old attach wrote with no confirmation, no
+    // stale-write protection, no audit metadata, and overwrote the row's
+    // parsed jobTicket. Making it safe would duplicate the entire 13A.6C
+    // review workflow, so this intent no longer writes anything.
+    return Response.json({ ok: false, message: MATCH_ENTRY_RETIRED_MESSAGE });
   }
 
   return Response.json({ ok: false, message: "Unknown print log action." }, { status: 400 });
@@ -377,19 +363,11 @@ function SourceSelect({ name, defaultValue }: { name: string; defaultValue?: str
 }
 
 export default function PrintLogImportPage() {
-  const { imports, unmatchedEntries, jobs } = useLoaderData<any>();
+  const { imports, unmatchedEntries } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const navigate = useNavigate();
   const busy = navigation.state !== "idle";
-
-  const jobOptions = [
-    { label: "Choose production job", value: "" },
-    ...jobs.map((job: any) => ({
-      label: `${job.jobTicket || job.id} | ${job.company || job.customerName || "Customer"} | ${job.status}`,
-      value: job.id,
-    })),
-  ];
 
   return (
     <Page
@@ -499,27 +477,25 @@ export default function PrintLogImportPage() {
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">Unmatched rows</Text>
-              <Text as="p" tone="subdued">If a row cannot be matched automatically, choose the correct production job manually.</Text>
+              <Text as="p" tone="subdued">
+                Manual matching moved to RIP Import Review (Patch 13A.6E): it shows candidate suggestions, requires
+                explicit confirmation, protects against stale data, and keeps a full audit trail — the quick dropdown
+                here had none of that and could overwrite the row's parsed ticket.
+              </Text>
+              <InlineStack gap="200">
+                <Button variant="primary" onClick={() => navigate("/app/erp/rip-import-review")}>Open RIP Import Review</Button>
+              </InlineStack>
               {unmatchedEntries.length ? unmatchedEntries.map((entry: any) => (
                 <Card key={entry.id}>
-                  <Form method="post">
-                    <input type="hidden" name="intent" value="matchEntry" />
-                    <input type="hidden" name="entryId" value={entry.id} />
-                    <BlockStack gap="200">
-                      <Text as="p" fontWeight="bold">{entry.sourceJobName || entry.jobTicket || entry.id}</Text>
-                      <InlineStack gap="300" wrap>
-                        <Text as="p">Ticket: {entry.jobTicket || "Not detected"}</Text>
-                        <Text as="p">Ink: {money(entry.inkMl)} ml</Text>
-                        <Text as="p">Sqft: {money(entry.sqft)}</Text>
-                        <Text as="p">Time: {money(entry.printMinutes)} min</Text>
-                      </InlineStack>
-                      <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Match to production job</label>
-                      <select name="jobId" defaultValue="" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #aaa" }}>
-                        {jobOptions.map((job) => <option key={job.value} value={job.value}>{job.label}</option>)}
-                      </select>
-                      <Button submit>Match row</Button>
-                    </BlockStack>
-                  </Form>
+                  <BlockStack gap="200">
+                    <Text as="p" fontWeight="bold">{entry.sourceJobName || entry.jobTicket || entry.id}</Text>
+                    <InlineStack gap="300" wrap>
+                      <Text as="p">Ticket: {entry.jobTicket || "Not detected"}</Text>
+                      <Text as="p">Ink: {money(entry.inkMl)} ml</Text>
+                      <Text as="p">Sqft: {money(entry.sqft)}</Text>
+                      <Text as="p">Time: {money(entry.printMinutes)} min</Text>
+                    </InlineStack>
+                  </BlockStack>
                 </Card>
               )) : <Text as="p" tone="subdued">No unmatched rows.</Text>}
             </BlockStack>

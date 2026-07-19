@@ -19,6 +19,12 @@ import {
   versaworksParseWarningCount,
   versaworksRowDedupeWhere,
 } from "../lib/versaworks-parse.server";
+import {
+  buildJobInfoEnrichment,
+  decideJobInfoPairing,
+  jobInfoFallbackEnabled,
+  parseJobInfoIni,
+} from "../lib/jobinfo-fallback.server";
 
 function textResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -119,6 +125,43 @@ export async function action({ request }: { request: Request }) {
   if (!(file instanceof File)) return textResponse({ ok: false, error: "Missing file field." }, 400);
   const source = cleanText(form.get("source") || "auto");
   const rawText = await file.text();
+
+  // 13A.6E: RasterLink JobInfo.ini companion uploads. FEATURE-FLAGGED OFF by
+  // default (GSO_ENABLE_JOBINFO_FALLBACK=1) pending live validation with a
+  // real shop sample. When enabled, the ONLY possible write is filling the ink
+  // columns + rawRow provenance of exactly one blank-KEY_INKUSE RasterLink row
+  // paired by exact normalized name — valid CSV ink is never overridden, and
+  // blank-time rows are refused to protect the dedupe natural key. When
+  // disabled, .ini uploads are rejected cleanly (previously they would have
+  // created a junk placeholder row via the legacy non-CSV path).
+  if (file.name.toLowerCase().endsWith(".ini")) {
+    if (!jobInfoFallbackEnabled()) {
+      return textResponse({ ok: false, jobInfo: true, error: "JobInfo fallback is disabled. Set GSO_ENABLE_JOBINFO_FALLBACK=1 only after live validation with a real JobInfo.ini sample (see project state doc)." }, 400);
+    }
+    const record = parseJobInfoIni(rawText, cleanText(form.get("jobFolder")) || file.name);
+    const candidateRows = await db.printLogEntry.findMany({
+      where: { shop: setting.shop, printerSoftware: RASTERLINK_SOURCE, sourceJobName: { not: null } },
+      orderBy: { createdAt: "desc" },
+      take: 400,
+      select: { id: true, sourceJobName: true, startedAt: true, completedAt: true, rawRow: true },
+    });
+    const pairing = decideJobInfoPairing(record, candidateRows);
+    if (pairing.outcome !== "paired" || !pairing.row) {
+      return textResponse({
+        ok: true, jobInfo: true, outcome: pairing.outcome, sourceId: record.sourceId, jobName: record.jobName,
+        candidateRowIds: pairing.candidateRowIds, ineligible: pairing.ineligible, warnings: record.warnings, updated: 0,
+      });
+    }
+    const enrichment = buildJobInfoEnrichment(pairing.row, record);
+    if (!enrichment.ok) {
+      return textResponse({ ok: true, jobInfo: true, outcome: "rejected", reason: enrichment.reason, sourceId: record.sourceId, updated: 0 });
+    }
+    await db.printLogEntry.update({ where: { id: pairing.row.id }, data: enrichment.update });
+    return textResponse({
+      ok: true, jobInfo: true, outcome: "applied", sourceId: record.sourceId, jobName: record.jobName,
+      updatedEntryId: pairing.row.id, inkBasis: enrichment.inkBasis, estimatedTotalCc: enrichment.estimatedTotalCc, updated: 1,
+    });
+  }
 
   // 13A.6A: RasterLink result CSVs (KEY_* headers) take a dedicated branch
   // with file- and row-level duplicate protection and conservative matching.
