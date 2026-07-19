@@ -10,10 +10,10 @@
 //   customer-name matching; two+ candidates at any tier route NOTHING;
 // - the server returns a machine KEY only — hot-folder paths live exclusively
 //   in the local agent config (no local paths cross the wire or reach the UI);
-// - white/gloss work is review-only in v1: the repo-documented rule
-//   (13A.4: Mimaki is CMYK-only; white/gloss prefers Roland) contradicts the
-//   13A.6G request text, and the only CONFIRMED hot folder is
-//   GSO_MIMAKI_CMYK_STANDARD — contradictions go to review, never guessed.
+// - machine routing follows the FINALIZED owner rules (see decideMachine):
+//   white/gloss -> Roland LG-540; explicit ERP Roland or a standalone ROLAND
+//   filename tag -> Roland; all other CMYK-only -> Mimaki UCJV300 default.
+//   Genuinely contradictory machine data still reviews, never guesses.
 
 export const INTAKE_OUTCOMES_MARKER = "gso-print-intake-outcomes-v1";
 export const MAX_INTAKE_OUTCOMES = 50;
@@ -57,6 +57,7 @@ export type IntakeDecision = {
   itemTicket: string | null;
   ripName: string | null; // WITHOUT extension — the agent appends the original extension
   machine: "mimaki" | "roland" | null;
+  machineRule: "white_or_gloss" | "explicit_roland_tag" | "explicit_erp_machine" | "default_cmyk" | null;
   reasons: string[];
   candidates: IntakeCandidate[];
 };
@@ -113,29 +114,56 @@ export function assignedMachineOf(item: Pick<IntakeItem, "machineSummary">): "mi
   return null;
 }
 
-// v1 machine routing. Documented rule preserved (13A.4): no tag -> Mimaki,
-// Mimaki is CMYK-only. White/gloss is REVIEW-ONLY until the owner confirms a
-// white/gloss hot folder (the 13A.6G request text and the repo rule disagree
-// about where white/gloss runs — contradictions never auto-route).
-export function decideMachine(item: IntakeItem): { machine: "mimaki" | "roland" | null; reasons: string[] } {
-  const reasons: string[] = [];
+// Standalone printer tag in the dropped filename: ROLAND delimited by
+// non-letters (matches _ROLAND_, -roland., " ROLAND ") but never a substring
+// of another word ("Rolando" does not match).
+export function hasRolandFilenameTag(fileName: string): boolean {
+  return /(?<![A-Za-z])ROLAND(?![A-Za-z])/i.test(String(fileName || ""));
+}
+
+export type MachineDecision = {
+  machine: "mimaki" | "roland" | null;
+  machineRule: IntakeDecision["machineRule"];
+  reasons: string[];
+};
+
+// Finalized business routing rules (owner-approved, 13A.6G continuation):
+//   1. white and/or gloss required        -> Roland LG-540 (white_or_gloss)
+//   2. CMYK-only + explicit ERP Roland    -> Roland (explicit_erp_machine)
+//   3. CMYK-only + standalone ROLAND tag  -> Roland (explicit_roland_tag)
+//   4. all other CMYK-only jobs           -> Mimaki UCJV300 (default_cmyk;
+//      explicit ERP Mimaki also reports explicit_erp_machine)
+// Genuinely contradictory data still reviews: an explicit Mimaki assignment
+// on a job that needs white/gloss or carries the ROLAND tag, or a
+// machineSummary naming both printers, never auto-routes.
+export function decideMachine(item: IntakeItem, fileName = ""): MachineDecision {
   const whiteGloss = needsWhiteOrGloss(item);
   const assigned = assignedMachineOf(item);
+  const rolandTag = hasRolandFilenameTag(fileName);
   if (String(item.machineSummary || "").trim() && assigned === null) {
-    return { machine: null, reasons: ["machine_summary_contradictory_or_unknown"] };
+    return { machine: null, machineRule: null, reasons: ["machine_summary_contradictory_or_unknown"] };
   }
   if (whiteGloss) {
-    reasons.push("white_or_gloss_required_review_only_in_v1");
-    if (assigned === "mimaki") reasons.push("mimaki_is_cmyk_only_per_documented_rule");
-    return { machine: null, reasons };
+    if (assigned === "mimaki") {
+      // Mimaki is CMYK-only — an explicit Mimaki assignment on white/gloss
+      // work is contradictory data, not a routable instruction.
+      return { machine: null, machineRule: null, reasons: ["white_gloss_job_but_erp_assigned_mimaki_contradiction"] };
+    }
+    return { machine: "roland", machineRule: "white_or_gloss", reasons: ["white_or_gloss_requires_roland"] };
+  }
+  if (rolandTag) {
+    if (assigned === "mimaki") {
+      return { machine: null, machineRule: null, reasons: ["roland_filename_tag_but_erp_assigned_mimaki_contradiction"] };
+    }
+    return { machine: "roland", machineRule: "explicit_roland_tag", reasons: ["standalone_roland_tag_in_filename"] };
   }
   if (assigned === "roland") {
-    // CMYK-only + explicit Roland: allowed only when the agent has Roland
-    // routing enabled AND a confirmed hot folder; the agent enforces that.
-    return { machine: "roland", reasons: ["explicit_roland_assignment"] };
+    return { machine: "roland", machineRule: "explicit_erp_machine", reasons: ["explicit_erp_roland_assignment"] };
   }
-  // Documented default: CMYK-only work runs on the Mimaki (CMYK standard).
-  return { machine: "mimaki", reasons: [assigned === "mimaki" ? "explicit_mimaki_assignment" : "default_cmyk_to_mimaki"] };
+  if (assigned === "mimaki") {
+    return { machine: "mimaki", machineRule: "explicit_erp_machine", reasons: ["explicit_erp_mimaki_assignment"] };
+  }
+  return { machine: "mimaki", machineRule: "default_cmyk", reasons: ["default_cmyk_to_mimaki"] };
 }
 
 // ---------- RIP name ----------
@@ -157,11 +185,11 @@ function candidateOf(job: IntakeJob, item: IntakeItem | null, reason: string): I
 }
 
 function review(reasons: string[], candidates: IntakeCandidate[] = []): IntakeDecision {
-  return { decision: "review", rule: null, jobId: null, itemId: null, jobTicket: null, itemTicket: null, ripName: null, machine: null, reasons, candidates: candidates.slice(0, 5) };
+  return { decision: "review", rule: null, jobId: null, itemId: null, jobTicket: null, itemTicket: null, ripName: null, machine: null, machineRule: null, reasons, candidates: candidates.slice(0, 5) };
 }
 
-function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDecision["rule"]>, reasons: string[]): IntakeDecision {
-  const machineDecision = decideMachine(item);
+function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDecision["rule"]>, fileName: string): IntakeDecision {
+  const machineDecision = decideMachine(item, fileName);
   if (!machineDecision.machine) {
     return review([`matched_by_${rule}_but_machine_unresolved`, ...machineDecision.reasons], [candidateOf(job, item, rule)]);
   }
@@ -178,6 +206,7 @@ function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDec
     itemTicket: item.itemTicket,
     ripName,
     machine: machineDecision.machine,
+    machineRule: machineDecision.machineRule,
     reasons: machineDecision.reasons,
     candidates: [candidateOf(job, item, rule)],
   };
@@ -198,7 +227,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
         if (String(item.itemTicket || "").toUpperCase() === itemTicket) hits.push({ job, item });
       }
     }
-    if (hits.length === 1) return routeItem(hits[0].job, hits[0].item, "item_ticket", []);
+    if (hits.length === 1) return routeItem(hits[0].job, hits[0].item, "item_ticket", fileName);
     if (hits.length > 1) return review(["item_ticket_matches_multiple_items"], hits.map((hit) => candidateOf(hit.job, hit.item, "item_ticket")));
     return review([`item_ticket_${itemTicket}_not_found_in_eligible_jobs`]);
   }
@@ -210,7 +239,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
     if (jobs.length > 1) return review(["job_ticket_matches_multiple_jobs"], jobs.map((job) => candidateOf(job, null, "job_ticket")));
     if (jobs.length === 1) {
       const job = jobs[0];
-      if (job.items.length === 1) return routeItem(job, job.items[0], "job_ticket_single_item", []);
+      if (job.items.length === 1) return routeItem(job, job.items[0], "job_ticket_single_item", fileName);
       return review(
         ["job_ticket_matches_job_with_multiple_items_pick_item_in_review"],
         job.items.map((item) => candidateOf(job, item, "job_ticket_multiple_items")),
@@ -233,7 +262,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
       }
     }
     const uniqueNameHits = nameHits.filter((hit, index) => nameHits.findIndex((other) => other.item.id === hit.item.id) === index);
-    if (uniqueNameHits.length === 1) return routeItem(uniqueNameHits[0].job, uniqueNameHits[0].item, "stored_filename", []);
+    if (uniqueNameHits.length === 1) return routeItem(uniqueNameHits[0].job, uniqueNameHits[0].item, "stored_filename", fileName);
     if (uniqueNameHits.length > 1) return review(["stored_filename_matches_multiple_items"], uniqueNameHits.map((hit) => candidateOf(hit.job, hit.item, "stored_filename")));
 
     // (d) exact match vs stored ProductionJobFile names — job-level identity,
@@ -241,7 +270,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
     const fileJobHits = params.jobs.filter((job) => job.fileNames.some((name) => normalizeFileIdentity(name) === fileIdentity));
     if (fileJobHits.length === 1) {
       const job = fileJobHits[0];
-      if (job.items.length === 1) return routeItem(job, job.items[0], "job_file_name", []);
+      if (job.items.length === 1) return routeItem(job, job.items[0], "job_file_name", fileName);
       return review(["job_file_matches_job_with_multiple_items"], job.items.map((item) => candidateOf(job, item, "job_file_name")));
     }
     if (fileJobHits.length > 1) return review(["job_file_matches_multiple_jobs"], fileJobHits.map((job) => candidateOf(job, null, "job_file_name")));
@@ -254,7 +283,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
       const jobs = params.jobs.filter((job) => String(job.jobTicket || "").toUpperCase() === subTicket);
       if (jobs.length === 1) {
         const job = jobs[0];
-        if (job.items.length === 1) return routeItem(job, job.items[0], "job_subfolder", []);
+        if (job.items.length === 1) return routeItem(job, job.items[0], "job_subfolder", fileName);
         return review(["subfolder_job_has_multiple_items_pick_item_in_review"], job.items.map((item) => candidateOf(job, item, "job_subfolder")));
       }
       if (jobs.length > 1) return review(["subfolder_ticket_matches_multiple_jobs"], jobs.map((job) => candidateOf(job, null, "job_subfolder")));

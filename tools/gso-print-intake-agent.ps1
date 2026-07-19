@@ -26,7 +26,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.0 (13A.6G)"
+$ScriptVersion = "gso-print-intake-agent/1.1 (13A.6G final routing rules)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -208,9 +208,15 @@ function Test-PlanReview($Json) {
 # ---------- per-file processing ----------
 
 function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
-  if (!(New-IntakeClaim $File.FullName $Config.ClaimStaleMinutes)) {
-    Write-IntakeLog $Config "claim_skipped" $File.Name "another instance holds the claim"
-    return
+  # Dry-run safety: NO claims, no copies, no moves, no reports, no ledger
+  # writes - only read-only checks, a plan call, and a log line.
+  $claimed = $false
+  if (-not $DryRun) {
+    if (!(New-IntakeClaim $File.FullName $Config.ClaimStaleMinutes)) {
+      Write-IntakeLog $Config "claim_skipped" $File.Name "another instance holds the claim"
+      return
+    }
+    $claimed = $true
   }
   try {
     if (!(Test-IntakeFileStable $Config $File)) {
@@ -249,7 +255,11 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
 
     if ($DryRun) {
       $plan = $planResult.json.plan
-      Write-IntakeLog $Config "dry_run" $File.Name "decision=$($plan.decision) rule=$($plan.rule) ripName=$($plan.ripName) machine=$($plan.machine) reasons=$($plan.reasons -join '|') (no copy, no move, no report)"
+      if ($plan.decision -eq "route") {
+        Write-IntakeLog $Config "dry_run" $File.Name "decision=route machine=$($plan.machine) rule=$($plan.machineRule) matchedBy=$($plan.rule) ripName=$($plan.ripName) (no claim, no copy, no move, no report)"
+      } else {
+        Write-IntakeLog $Config "dry_run" $File.Name "decision=review reasons=$($plan.reasons -join '|') (no claim, no copy, no move, no report)"
+      }
       return
     }
 
@@ -278,7 +288,7 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
         Send-IntakeReport $Config @{ fileName = $File.Name; decision = "failed"; reason = "copy_length_mismatch"; fileHash8 = $sha8 } | Out-Null
         return
       }
-      Write-IntakeLog $Config "routed_to_hot_folder" $File.Name "as=$([System.IO.Path]::GetFileName($dest)) machine=$($plan.machine) rule=$($plan.rule)"
+      Write-IntakeLog $Config "routed_to_hot_folder" $File.Name "as=$([System.IO.Path]::GetFileName($dest)) machine=$($plan.machine) rule=$($plan.machineRule) matchedBy=$($plan.rule)"
       Send-IntakeReport $Config @{ fileName = $File.Name; decision = "routed"; rule = [string]$plan.rule; jobId = [string]$plan.jobId; jobTicket = [string]$plan.jobTicket; itemTicket = [string]$plan.itemTicket; ripName = [string]$plan.ripName; machine = [string]$plan.machine; fileHash8 = $sha8 } | Out-Null
       # Preserve the original: move (never delete) into the routed archive.
       if (!(Test-Path $Config.RoutedArchiveFolder)) { New-Item -ItemType Directory -Path $Config.RoutedArchiveFolder -Force | Out-Null }
@@ -297,7 +307,7 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
     Add-IntakeLedgerEntry $Config $hash $File.Name "needs_review"
     $Ledger[$hash] = "needs_review"
   } finally {
-    Remove-IntakeClaim $File.FullName
+    if ($claimed) { Remove-IntakeClaim $File.FullName }
   }
 }
 
@@ -375,10 +385,11 @@ function Invoke-IntakeSelfTest {
     Assert "ledger miss stays miss" (-not $ledger.ContainsKey("hash-c"))
 
     # plan-response classification from canned JSON
-    $routePlan = '{"ok":true,"plan":{"decision":"route","machine":"mimaki","ripName":"GSO-20260718-0001-01"}}' | ConvertFrom-Json
+    $routePlan = '{"ok":true,"plan":{"decision":"route","machine":"roland","machineRule":"white_or_gloss","rule":"item_ticket","ripName":"GSO-20260718-0001-01"}}' | ConvertFrom-Json
     $reviewPlan = '{"ok":true,"plan":{"decision":"review","reasons":["no_deterministic_match"]}}' | ConvertFrom-Json
     $errorPlan = '{"ok":false,"error":"x"}' | ConvertFrom-Json
     Assert "route plan recognized" (Test-PlanRoute $routePlan)
+    Assert "route plan carries machine rule and match rule" (($routePlan.plan.machineRule -eq "white_or_gloss") -and ($routePlan.plan.rule -eq "item_ticket") -and ($routePlan.plan.machine -eq "roland"))
     Assert "review plan recognized" ((Test-PlanReview $reviewPlan) -and (-not (Test-PlanRoute $reviewPlan)))
     Assert "error plan rejected" ((-not (Test-PlanRoute $errorPlan)) -and (-not (Test-PlanReview $errorPlan)))
 

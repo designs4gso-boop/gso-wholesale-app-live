@@ -88,13 +88,15 @@ export default function PrintIntake() {
       </section>
 
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
-        <b>Machine routing (v1, conservative).</b>
+        <b>Machine routing (finalized rules).</b>
         <div style={{ fontSize: 13, marginTop: 6 }}>
-          CMYK-only jobs route to the Mimaki hot folder (<code>GSO_MIMAKI_CMYK_STANDARD</code>) once
-          <code> MimakiRoutingEnabled </code> is switched on in the agent config. Jobs needing <b>white or gloss</b> go
-          to Needs review in this version: the documented routing rule (Mimaki is CMYK-only; white/gloss prefers the
-          Roland) conflicts with newer guidance, and no white/gloss hot folder is confirmed — the owner decides before
-          those route automatically. Roland/VersaWorks routing ships disabled until its hot folder is confirmed.
+          <b>White and/or gloss &rarr; Roland LG-540.</b> CMYK-only jobs explicitly assigned to Roland in the ERP, or
+          named with the standalone <code>ROLAND</code> filename tag, also route to Roland. All other CMYK-only jobs
+          default to the <b>Mimaki UCJV300</b> (<code>GSO_MIMAKI_CMYK_STANDARD</code>). Contradictory data (for example
+          a white/gloss job explicitly assigned to the CMYK-only Mimaki) goes to Needs review. Copies happen only where
+          the config enables them: <code>MimakiRoutingEnabled</code> / <code>RolandRoutingEnabled</code> ship off, and
+          Roland additionally needs its confirmed <code>VersaWorksHotFolder</code> path — until then Roland-bound plans
+          appear as Needs review with the blocking reason.
         </div>
       </section>
 

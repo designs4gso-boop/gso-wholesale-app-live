@@ -11,6 +11,7 @@ import {
   encodeIntakeOutcomes,
   extractItemTicketFrom,
   extractJobTicketFrom,
+  hasRolandFilenameTag,
   needsWhiteOrGloss,
   normalizeFileIdentity,
   ripFileBaseName,
@@ -141,30 +142,70 @@ describe("deterministic mapping hierarchy", () => {
   });
 });
 
-describe("machine routing (conservative v1)", () => {
-  it("CMYK-only defaults to Mimaki per the documented rule; explicit Mimaki also routes", () => {
-    expect(decideMachine(makeItem()).machine).toBe("mimaki");
-    expect(decideMachine(makeItem({ machineSummary: "Mimaki UCJV300" })).machine).toBe("mimaki");
-  });
-
-  it("explicit Roland assignment returns the roland key (agent enforces enable-flag + folder)", () => {
-    const decision = decideMachine(makeItem({ machineSummary: "Roland LG-540" }));
-    expect(decision.machine).toBe("roland");
-  });
-
-  it("white/gloss work never auto-routes in v1 — review with the documented-rule reason", () => {
+describe("machine routing (finalized owner rules)", () => {
+  it("rule 1: white and/or gloss routes to Roland with machineRule white_or_gloss", () => {
     expect(needsWhiteOrGloss(makeItem({ selectedFinish: "White + Gloss" }))).toBe(true);
     const decision = decideMachine(makeItem({ selectedFinish: "Spot Gloss" }));
-    expect(decision.machine).toBeNull();
-    expect(decision.reasons).toContain("white_or_gloss_required_review_only_in_v1");
-    const routed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [makeItem({ selectedFinish: "White ink" })] })] });
-    expect(routed.decision).toBe("review");
+    expect(decision.machine).toBe("roland");
+    expect(decision.machineRule).toBe("white_or_gloss");
   });
 
-  it("contradictory or unknown machine data reviews", () => {
-    const decision = decideMachine(makeItem({ machineSummary: "Mimaki or Roland" }));
-    expect(decision.machine).toBeNull();
-    expect(decision.reasons).toContain("machine_summary_contradictory_or_unknown");
+  it("the previously-reviewed case now routes: GSO-20260627-0002-01_TEST.pdf on a white/gloss job", () => {
+    const item = makeItem({ id: "wg1", itemTicket: "GSO-20260627-0002-01", ripJobName: "GSO-20260627-0002-01", selectedFinish: "White + Gloss" });
+    const job = makeJob({ id: "jobwg", jobTicket: "GSO-20260627-0002", items: [item] });
+    const decision = decideIntakeRoute({ fileName: "GSO-20260627-0002-01_TEST.pdf", jobs: [job] });
+    expect(decision.decision).toBe("route");
+    expect(decision.machine).toBe("roland");
+    expect(decision.machineRule).toBe("white_or_gloss");
+    expect(decision.rule).toBe("item_ticket"); // exact item-ticket matching intact
+    expect(decision.ripName).toBe("GSO-20260627-0002-01");
+  });
+
+  it("rule 2: CMYK-only with explicit ERP Roland assignment routes to Roland (explicit_erp_machine)", () => {
+    const decision = decideMachine(makeItem({ machineSummary: "Roland LG-540" }));
+    expect(decision.machine).toBe("roland");
+    expect(decision.machineRule).toBe("explicit_erp_machine");
+  });
+
+  it("rule 3/6: a standalone ROLAND filename tag forces Roland (explicit_roland_tag), case-insensitive", () => {
+    expect(hasRolandFilenameTag("GSO-20260718-0001-01_roland_R1.pdf")).toBe(true);
+    expect(hasRolandFilenameTag("art ROLAND final.pdf")).toBe(true);
+    expect(hasRolandFilenameTag("Rolando-poster.pdf")).toBe(false); // never a substring of another word
+    expect(hasRolandFilenameTag("unrolandish.pdf")).toBe(false);
+    const decision = decideIntakeRoute({ fileName: "GSO-20260718-0001-01_ROLAND.pdf", jobs: [makeJob()] });
+    expect(decision.decision).toBe("route");
+    expect(decision.machine).toBe("roland");
+    expect(decision.machineRule).toBe("explicit_roland_tag");
+  });
+
+  it("rules 4/5: CMYK-only with no assignment or tag defaults to Mimaki (default_cmyk); explicit Mimaki reports explicit_erp_machine", () => {
+    const byDefault = decideMachine(makeItem());
+    expect(byDefault.machine).toBe("mimaki");
+    expect(byDefault.machineRule).toBe("default_cmyk");
+    const explicit = decideMachine(makeItem({ machineSummary: "Mimaki UCJV300" }));
+    expect(explicit.machine).toBe("mimaki");
+    expect(explicit.machineRule).toBe("explicit_erp_machine");
+    const routed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob()] });
+    expect(routed.machine).toBe("mimaki");
+    expect(routed.machineRule).toBe("default_cmyk");
+  });
+
+  it("genuinely contradictory data still reviews: white/gloss vs explicit Mimaki, ROLAND tag vs explicit Mimaki, both-printer summaries", () => {
+    const whiteGlossMimaki = decideMachine(makeItem({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300" }));
+    expect(whiteGlossMimaki.machine).toBeNull();
+    expect(whiteGlossMimaki.reasons).toContain("white_gloss_job_but_erp_assigned_mimaki_contradiction");
+
+    const tagMimaki = decideMachine(makeItem({ machineSummary: "Mimaki UCJV300" }), "GSO-20260718-0001-01_ROLAND.pdf");
+    expect(tagMimaki.machine).toBeNull();
+    expect(tagMimaki.reasons).toContain("roland_filename_tag_but_erp_assigned_mimaki_contradiction");
+
+    const both = decideMachine(makeItem({ machineSummary: "Mimaki or Roland" }));
+    expect(both.machine).toBeNull();
+    expect(both.reasons).toContain("machine_summary_contradictory_or_unknown");
+
+    const reviewed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [makeItem({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300" })] })] });
+    expect(reviewed.decision).toBe("review");
+    expect(reviewed.machineRule).toBeNull();
   });
 });
 
