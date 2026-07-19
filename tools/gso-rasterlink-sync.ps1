@@ -18,7 +18,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-rasterlink-sync-config.json")
 )
 
-$ScriptVersion = "gso-rasterlink-sync/1.0 (13A.6B)"
+$ScriptVersion = "gso-rasterlink-sync/1.1 (13A.6B.1)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -105,25 +105,66 @@ function Test-FileStable($Config, $File) {
   return ($after.Length -eq $sizeBefore -and $after.LastWriteTime -eq $item.LastWriteTime)
 }
 
-# ---------- upload (PowerShell 5.1-safe multipart via HttpClient) ----------
+# ---------- upload (PowerShell 5.1-safe multipart, hand-built bytes) ----------
+
+# 13A.6B.1: Windows PowerShell 5.1 runs on .NET Framework, whose
+# MultipartFormDataContent writes Content-Disposition names WITHOUT quotes
+# (name=token) and a QUOTED boundary in the Content-Type header. Node/Undici
+# Request.formData() (what the Render server runs) rejects that body with
+# "TypeError: Failed to parse body as FormData" -> HTTP 500 on every upload.
+# This builder emits the standards-compliant form Undici requires: quoted
+# name="..."/filename="...", unquoted boundary, CRLF line endings, a blank
+# CRLF between part headers and content, exact file bytes, and a final
+# --boundary-- terminator. Verified offline against Undici's parser.
+function New-GsoMultipartBody([string]$Boundary, [System.Collections.IDictionary]$Fields, [string]$FileFieldName, [string]$FileName, [byte[]]$FileBytes, [string]$FileContentType) {
+  $crlf = "`r`n"
+  $enc = New-Object System.Text.UTF8Encoding($false)
+  $stream = New-Object System.IO.MemoryStream
+  foreach ($key in $Fields.Keys) {
+    $part = "--$Boundary$crlf" + "Content-Disposition: form-data; name=`"$key`"$crlf$crlf" + [string]$Fields[$key] + $crlf
+    $partBytes = $enc.GetBytes($part)
+    $stream.Write($partBytes, 0, $partBytes.Length)
+  }
+  if ($null -ne $FileBytes) {
+    $safeName = $FileName -replace '"', '_'
+    $head = "--$Boundary$crlf" + "Content-Disposition: form-data; name=`"$FileFieldName`"; filename=`"$safeName`"$crlf" + "Content-Type: $FileContentType$crlf$crlf"
+    $headBytes = $enc.GetBytes($head)
+    $stream.Write($headBytes, 0, $headBytes.Length)
+    $stream.Write($FileBytes, 0, $FileBytes.Length)
+    $tailBytes = $enc.GetBytes($crlf)
+    $stream.Write($tailBytes, 0, $tailBytes.Length)
+  }
+  $endBytes = $enc.GetBytes("--$Boundary--$crlf")
+  $stream.Write($endBytes, 0, $endBytes.Length)
+  $result = $stream.ToArray()
+  $stream.Dispose()
+  return ,$result
+}
+
+function Get-SafeBodySnippet([string]$Body) {
+  if ([string]::IsNullOrWhiteSpace($Body)) { return "(empty)" }
+  $flat = $Body -replace "[`r`n]+", " "
+  return $flat.Substring(0, [Math]::Min(180, $flat.Length))
+}
 
 function Invoke-RipUpload($Config, [string]$FilePath, [string]$FileName) {
   Add-Type -AssemblyName System.Net.Http | Out-Null
   $client = New-Object System.Net.Http.HttpClient
   $client.Timeout = [TimeSpan]::FromSeconds(120)
   try {
-    $content = New-Object System.Net.Http.MultipartFormDataContent
-    $content.Add((New-Object System.Net.Http.StringContent($Config.UploadToken)), "token")
-    $content.Add((New-Object System.Net.Http.StringContent($Config.Source)), "source")
-    $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-    $fileContent = New-Object System.Net.Http.ByteArrayContent(,$bytes)
-    $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("text/csv")
-    $content.Add($fileContent, "file", $FileName)
+    $boundary = "gso-" + [guid]::NewGuid().ToString("N")
+    $fileBytes = [System.IO.File]::ReadAllBytes($FilePath)
+    $fields = New-Object System.Collections.Specialized.OrderedDictionary
+    $fields.Add("token", $Config.UploadToken)
+    $fields.Add("source", $Config.Source)
+    $body = New-GsoMultipartBody $boundary $fields "file" $FileName $fileBytes "text/csv"
+    $content = New-Object System.Net.Http.ByteArrayContent(,$body)
+    $content.Headers.TryAddWithoutValidation("Content-Type", "multipart/form-data; boundary=$boundary") | Out-Null
     $response = $client.PostAsync($Config.UploadUrl, $content).GetAwaiter().GetResult()
-    $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    $responseBody = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
     $json = $null
-    try { $json = $body | ConvertFrom-Json } catch { $json = $null }
-    return @{ status = [int]$response.StatusCode; body = $body; json = $json; exception = $null }
+    try { $json = $responseBody | ConvertFrom-Json } catch { $json = $null }
+    return @{ status = [int]$response.StatusCode; body = $responseBody; json = $json; exception = $null }
   } catch {
     return @{ status = 0; body = ""; json = $null; exception = $_.Exception.Message }
   } finally {
@@ -217,7 +258,7 @@ function Invoke-ProcessFile($Config, $File) {
       # Transient (network exception, 5xx, 429): stepped backoff then retry.
       if ($attempt -lt $Config.MaxRetries) {
         $delay = $Config.RetryDelaySeconds * $attempt
-        Write-SyncLog $Config "retry_scheduled" $File.Name "attempt=$attempt status=$($result.status) exception=$($result.exception) delaySeconds=$delay"
+        Write-SyncLog $Config "retry_scheduled" $File.Name "attempt=$attempt status=$($result.status) exception=$($result.exception) bodySnippet=$(Get-SafeBodySnippet $result.body) delaySeconds=$delay"
         Start-Sleep -Seconds $delay
       } else {
         $sidecar = Write-ErrorSidecar $Config $File $attempt $result.status $result.body $result.exception
@@ -265,8 +306,15 @@ function Invoke-RipTokenProbe($Config) {
   $client = New-Object System.Net.Http.HttpClient
   $client.Timeout = [TimeSpan]::FromSeconds(20)
   try {
-    $content = New-Object System.Net.Http.MultipartFormDataContent
-    $content.Add((New-Object System.Net.Http.StringContent($Config.UploadToken)), "token")
+    # 13A.6B.1: same hand-built multipart as uploads - the old .NET-format body
+    # was rejected by the server's FormData parser (500) before the token was
+    # ever read, so a VALID token showed INCONCLUSIVE instead of the 400.
+    $boundary = "gso-" + [guid]::NewGuid().ToString("N")
+    $fields = New-Object System.Collections.Specialized.OrderedDictionary
+    $fields.Add("token", $Config.UploadToken)
+    $probeBody = New-GsoMultipartBody $boundary $fields $null $null $null $null
+    $content = New-Object System.Net.Http.ByteArrayContent(,$probeBody)
+    $content.Headers.TryAddWithoutValidation("Content-Type", "multipart/form-data; boundary=$boundary") | Out-Null
     $response = $client.PostAsync($Config.UploadUrl, $content).GetAwaiter().GetResult()
     $status = [int]$response.StatusCode
     if ($status -eq 400) { return "OK (token valid; 400 missing-file as expected, nothing imported)" }
@@ -324,6 +372,32 @@ function Invoke-SelfTest {
     # token masking never leaks the raw token
     $mask = Get-MaskedToken "supersecrettoken1234"
     Assert "token mask hides the token" ($mask -notmatch "supersecrettoken1234" -and $mask -match "supe\*\*\*\*")
+
+    # 13A.6B.1: hand-built multipart must be Undici-compliant (the .NET
+    # Framework writer's unquoted names / quoted boundary caused server 500s).
+    $mpBoundary = "gso-testboundary123"
+    $mpFileBytes = [byte[]](71, 83, 79, 13, 10, 0, 255, 66)  # text + CRLF + NUL + 0xFF binary bytes
+    $mpFields = New-Object System.Collections.Specialized.OrderedDictionary
+    $mpFields.Add("token", "tkn-value")
+    $mpFields.Add("source", "rasterlink")
+    $mp = New-GsoMultipartBody $mpBoundary $mpFields "file" "My Job File.csv" $mpFileBytes "text/csv"
+    $mpText = [System.Text.Encoding]::GetEncoding("ISO-8859-1").GetString($mp)
+    Assert "multipart opens with --boundary CRLF" ($mpText.StartsWith("--$mpBoundary`r`n"))
+    Assert "multipart quotes text field names" ($mpText.Contains('Content-Disposition: form-data; name="token"') -and $mpText.Contains('name="source"'))
+    Assert "multipart quotes file name and filename with spaces" ($mpText.Contains('name="file"; filename="My Job File.csv"'))
+    Assert "multipart separates headers from content with blank CRLF" ($mpText.Contains("name=`"token`"`r`n`r`ntkn-value`r`n"))
+    Assert "multipart ends with closing --boundary-- CRLF" ($mpText.EndsWith("--$mpBoundary--`r`n"))
+    Assert "multipart has no bare LF line endings" (-not [regex]::IsMatch($mpText, "(?<!`r)`n"))
+    $mpFileHead = "Content-Type: text/csv`r`n`r`n"
+    $mpIdx = $mpText.IndexOf($mpFileHead) + $mpFileHead.Length
+    $mpRoundTrip = [byte[]]$mp[$mpIdx..($mpIdx + $mpFileBytes.Length - 1)]
+    Assert "multipart preserves file bytes exactly (incl. binary)" ([Convert]::ToBase64String($mpRoundTrip) -eq [Convert]::ToBase64String($mpFileBytes))
+    $mpProbeFields = New-Object System.Collections.Specialized.OrderedDictionary
+    $mpProbeFields.Add("token", "tkn-value")
+    $mpProbe = New-GsoMultipartBody $mpBoundary $mpProbeFields $null $null $null $null
+    $mpProbeText = [System.Text.Encoding]::GetEncoding("ISO-8859-1").GetString($mpProbe)
+    Assert "token probe body has no file part and closes correctly" ((-not $mpProbeText.Contains("filename=")) -and $mpProbeText.EndsWith("--$mpBoundary--`r`n"))
+    Assert "body snippet flattens newlines and truncates" ((Get-SafeBodySnippet ("line1`r`nline2 " + ("x" * 500))).Length -le 180)
   } finally {
     Remove-Item $temp -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
   }
