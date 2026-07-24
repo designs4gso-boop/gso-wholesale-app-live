@@ -18,6 +18,7 @@ import {
   type CostLine,
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
+import { computeProductDrivenCost, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -764,6 +765,69 @@ export async function loader({ request }: { request: Request }) {
       eSetup = autoCost.setupTotal;
     }
   }
+
+  // ---- 14C.1 product-driven mode: user posts IDs + business inputs only;
+  // every cost/sqft/waste/box/weeding value is derived HERE from resolved
+  // records. Overrides the 14B.1 path when pfamily is present.
+  let productCost: ReturnType<typeof computeProductDrivenCost> | null = null;
+  const pFamily = String(eparams.get("pfamily") || "") as ProductFamilyKey | "";
+  if (pFamily && ["bags-4x5", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom"].includes(pFamily)) {
+    const pickedBlank = blankItemById.get(String(eparams.get("pblank") || ""));
+    const pickedLid = blankItemById.get(String(eparams.get("plid") || ""));
+    const pickedMaterial = materialById.get(String(eparams.get("pmat") || ""));
+    const customName = String(eparams.get("pcustomname") || "").slice(0, 80);
+    const customCost = Number(eparams.get("pcustomcost") || 0);
+    const customNote = String(eparams.get("pcustomnote") || "").slice(0, 160);
+    const toComponent = (item: any): ResolvedComponent | null =>
+      item ? { name: item.name, unitCost: Number(item.unitCost) > 0 ? Number(item.unitCost) : null, tiers: item.tiers || [], status: "verified" as const } : null;
+    const blankComponent = eparams.get("pblank") === "custom"
+      ? (customName && customCost > 0 && customNote
+          ? { name: customName, unitCost: customCost, tiers: [], status: "estimated" as const, note: `Custom item — ${customNote}` }
+          : null)
+      : eparams.get("pblank") === "none" ? null : toComponent(pickedBlank);
+    if (eparams.get("pblank") === "custom" && !blankComponent) {
+      // custom without name/cost/reason stays null -> MISSING line via engine when family expects a blank
+    }
+    const printer = eparams.get("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
+    productCost = computeProductDrivenCost({
+      family: pFamily as ProductFamilyKey,
+      quantity: Number(eparams.get("pqty") || 0) || eQuantities[eQuantities.length - 1] || 1,
+      designs: Number(eparams.get("pdesigns") || 0),
+      facesPerUnit: Math.max(1, Number(eparams.get("pfaces") || 1)),
+      widthIn: Number(eparams.get("pwidth") || 0),
+      heightIn: Number(eparams.get("pheight") || 0),
+      blank: blankComponent,
+      lid: pFamily === "miron-jars" ? toComponent(pickedLid) : null,
+      material: pickedMaterial && pickedMaterial.displayCostPerSqft > 0
+        ? { name: pickedMaterial.name, costPerSqft: pickedMaterial.displayCostPerSqft }
+        : pickedMaterial ? { name: pickedMaterial.name, costPerSqft: null } : null,
+      printer,
+      // Documented capability constants (match INK_RATES truth): Mimaki has a
+      // white channel, gloss COST is missing; Roland has all channels at the
+      // owner-approved provisional uniform rate.
+      printerHasWhite: true,
+      printerHasGloss: printer === "roland",
+      whiteLayers: Number(eparams.get("pwhitelayers") || 0),
+      glossLayers: Number(eparams.get("pglosslayers") || 0),
+      inkMlPerSqft: 0.6,
+      machineMinutesPerSqft: Number(eparams.get("pmachmin") || 0),
+      machineRatePerHour: 8,
+      cutRequiresWeeding: eparams.get("pcut") === "weeded",
+      hemming: eparams.get("phem") === "1",
+      grommets: eparams.get("pgrommet") === "1",
+      freightPerUnit: 0, // freight added ONCE by the freight panel pipeline below
+      freightSource: "estimated",
+      recipeWastePct: null,
+      wasteOverride: eparams.get("pwasteoverride") && eparams.get("pwastereason")
+        ? { pct: Number(eparams.get("pwasteoverride")), reason: String(eparams.get("pwastereason")) }
+        : null,
+      boxOverride: eparams.get("pboxoverride") && eparams.get("pboxreason")
+        ? { unitsPerBox: Number(eparams.get("pboxoverride")), reason: String(eparams.get("pboxreason")) }
+        : null,
+    });
+    eVar = productCost.perUnitVariable;
+    eSetup = productCost.setupTotal;
+  }
   const freight = computeFreight(
     {
       actualFreight: Number(eparams.get("efactual") || 0),
@@ -788,6 +852,31 @@ export async function loader({ request }: { request: Request }) {
   const emergency = {
     quantities: eQuantities, margins: eMargins, defaults: eDefaults, tiers: eTiers, freight, gate: eGate, floor: MARGIN_FLOOR_PCT,
     mode: eMode, autoCost: autoCost ? { lines: autoCost.lines, perUnitVariable: autoCost.perUnitVariable, setupTotal: autoCost.setupTotal, missing: autoCost.missing, warnings: autoCost.warnings } : null,
+    productMode: {
+      family: pFamily || null,
+      result: productCost ? { lines: productCost.lines, derived: productCost.derived, missing: productCost.missing, warnings: productCost.warnings, totalCost: productCost.totalCost, unitCost: productCost.unitCost } : null,
+      // Family-filtered pickers (values are record keys, labels are friendly;
+      // missing-price records are labeled, never shown as Verified).
+      blankOptions: blankItems
+        .filter((item) => {
+          const text = `${item.productType || ""} ${item.name}`.toLowerCase();
+          if (pFamily === "bags-4x5") return /bag/.test(text);
+          if (pFamily === "chiron-jars") return /(chiron|safecare|oz jar|oz matte|oz black)/.test(text) && !/miron/.test(text);
+          if (pFamily === "miron-jars") return /miron/.test(text) && !/lid/.test(text);
+          if (pFamily === "stickers-labels" || pFamily === "banners") return false;
+          return true;
+        })
+        .slice(0, 40)
+        .map((item) => ({ value: item.id, label: `${item.name} — ${Number(item.unitCost) > 0 || (item.tiers || []).length ? (Number(item.unitCost) > 0 ? `$${Number(item.unitCost).toFixed(2)}` : "tiered") + " — Verified" : "NO PRICE — not verified"}` })),
+      lidOptions: blankItems
+        .filter((item) => /miron/i.test(`${item.productType || ""} ${item.name}`) && /lid|cap/i.test(item.name))
+        .slice(0, 20)
+        .map((item) => ({ value: item.id, label: `${item.name} — ${Number(item.unitCost) > 0 || (item.tiers || []).length ? "Verified" : "NO PRICE"}` })),
+      materialOptions: materials
+        .filter((material) => (pFamily === "banners" ? /banner/i.test(`${material.materialType || ""} ${material.name}`) : true))
+        .slice(0, 40)
+        .map((material) => ({ value: material.id, label: `${material.name} — ${material.displayCostPerSqft > 0 ? `$${material.displayCostPerSqft.toFixed(4)}/sqft — Verified` : "NO PRICE — Missing"}` })),
+    },
     family: eFamilyRule
       ? { key: eFamilyRule.key, label: eFamilyRule.label, curve: eFamilyRule.curve, minPct: eFamilyRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
       : { key: String(eparams.get("efamily") || ""), label: "Not selected / unknown", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
@@ -936,6 +1025,66 @@ export async function action({ request }: { request: Request }) {
     });
     eVar = autoSnapshot.perUnitVariable; eSetup = autoSnapshot.setupTotal; // client evar/esetup IGNORED in auto mode
   }
+
+  // 14C.1: product-driven saves re-resolve the posted record IDs from the DB
+  // and re-derive EVERYTHING (costs, sqft, waste, boxes, weeding, layers).
+  let productSnapshot: ReturnType<typeof computeProductDrivenCost> | null = null;
+  const pFamilySave = String(form.get("pfamily") || "");
+  if (pFamilySave && ["bags-4x5", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom"].includes(pFamilySave)) {
+    const fetchComponent = async (rawId: string): Promise<ResolvedComponent | null> => {
+      if (!rawId || rawId === "none") return null;
+      if (rawId === "custom") {
+        const name = String(form.get("pcustomname") || "").slice(0, 80);
+        const cost = Number(form.get("pcustomcost") || 0);
+        const note = String(form.get("pcustomnote") || "").slice(0, 160);
+        return name && cost > 0 && note ? { name, unitCost: cost, tiers: [], status: "estimated", note: `Custom item — ${note}` } : null;
+      }
+      if (rawId.startsWith("vendor:")) {
+        const record = await db.vendorProduct.findFirst({ where: { shop, id: rawId.slice(7) }, include: { tiers: true } });
+        return record ? { name: record.name, unitCost: Number(record.defaultUnitCost) > 0 ? Number(record.defaultUnitCost) : null, tiers: (record.tiers || []).map((tier: any) => ({ minQty: tier.minQty, maxQty: tier.maxQty, unitCost: tier.unitCost })), status: "verified" } : null;
+      }
+      if (rawId.startsWith("material:")) {
+        const record = await db.material.findFirst({ where: { shop, id: rawId.slice(9) } });
+        if (!record) return null;
+        const resolved = resolveMaterialUnitCost(record);
+        return { name: record.name, unitCost: resolved.unitCost > 0 ? resolved.unitCost : null, tiers: [], status: "verified" };
+      }
+      return null;
+    };
+    const materialId = String(form.get("pmat") || "");
+    const materialRecord = materialId ? await db.material.findFirst({ where: { shop, id: materialId } }) : null;
+    const materialResolved = materialRecord ? resolvePrintMaterialCostPerSqft(materialRecord) : null;
+    const printerSave = form.get("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
+    productSnapshot = computeProductDrivenCost({
+      family: pFamilySave as ProductFamilyKey,
+      quantity: Number(form.get("pqty") || 0) || quantities[quantities.length - 1] || 1,
+      designs: Number(form.get("pdesigns") || 0),
+      facesPerUnit: Math.max(1, Number(form.get("pfaces") || 1)),
+      widthIn: Number(form.get("pwidth") || 0),
+      heightIn: Number(form.get("pheight") || 0),
+      blank: await fetchComponent(String(form.get("pblank") || "")),
+      lid: pFamilySave === "miron-jars" ? await fetchComponent(String(form.get("plid") || "")) : null,
+      material: materialRecord ? { name: materialRecord.name, costPerSqft: materialResolved && materialResolved.unitCost > 0 ? materialResolved.unitCost : null } : null,
+      printer: printerSave,
+      printerHasWhite: true,
+      printerHasGloss: printerSave === "roland",
+      whiteLayers: Number(form.get("pwhitelayers") || 0),
+      glossLayers: Number(form.get("pglosslayers") || 0),
+      inkMlPerSqft: 0.6,
+      machineMinutesPerSqft: Number(form.get("pmachmin") || 0),
+      machineRatePerHour: 8,
+      cutRequiresWeeding: form.get("pcut") === "weeded",
+      hemming: form.get("phem") === "1",
+      grommets: form.get("pgrommet") === "1",
+      freightPerUnit: 0,
+      freightSource: "estimated",
+      recipeWastePct: null,
+      wasteOverride: form.get("pwasteoverride") && form.get("pwastereason") ? { pct: Number(form.get("pwasteoverride")), reason: String(form.get("pwastereason")) } : null,
+      boxOverride: form.get("pboxoverride") && form.get("pboxreason") ? { unitsPerBox: Number(form.get("pboxoverride")), reason: String(form.get("pboxreason")) } : null,
+    });
+    eVar = productSnapshot.perUnitVariable;
+    eSetup = productSnapshot.setupTotal;
+  }
   const gate = checkMarginGate(Math.min(...tiers.map((tier) => tier.marginPct)), { phrase: String(form.get("eophrase") || ""), reason: String(form.get("eoreason") || "") }, familyRule?.familyMinPct ?? MARGIN_FLOOR_PCT);
   const lines: CostLine[] = [
     { key: "variable_per_unit", label: "Per-unit variable cost (entered)", amount: eVar, source: eVar > 0 ? "manual_override" : "missing" },
@@ -946,7 +1095,10 @@ export async function action({ request }: { request: Request }) {
   const primary = tiers[tiers.length - 1];
   const familyDefaults = familyRule ? curveForTierCount(familyRule.curve, tiers.length, familyRule.familyMinPct) : defaultTierMargins(tiers.length);
   const snapshot = {
-    engine: isAuto ? "14B.1a-auto" : "14B.0A-emergency", autoBreakdown: autoSnapshot ? { lines: autoSnapshot.lines, missing: autoSnapshot.missing, warnings: autoSnapshot.warnings } : null, savedAt: new Date().toISOString(), tiers, freight, gate,
+    engine: productSnapshot ? "14C.1-product" : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
+    autoBreakdown: autoSnapshot ? { lines: autoSnapshot.lines, missing: autoSnapshot.missing, warnings: autoSnapshot.warnings } : null,
+    productBreakdown: productSnapshot ? { family: pFamilySave, lines: productSnapshot.lines, derived: productSnapshot.derived, missing: productSnapshot.missing, warnings: productSnapshot.warnings, selections: { blank: String(form.get("pblank") || ""), lid: String(form.get("plid") || ""), material: String(form.get("pmat") || ""), printer: String(form.get("pprinter") || "mimaki"), whiteLayers: Number(form.get("pwhitelayers") || 0), glossLayers: Number(form.get("pglosslayers") || 0), faces: Number(form.get("pfaces") || 1), widthIn: Number(form.get("pwidth") || 0), heightIn: Number(form.get("pheight") || 0) } } : null,
+    savedAt: new Date().toISOString(), tiers, freight, gate,
     marginRules: {
       family: familyRule ? familyRule.key : "unknown", familyLabel: familyRule?.label || "FAMILY MARGIN RULE NOT CONFIGURED",
       curveUsed: familyRule ? familyRule.curve : "provisional-universal", researchedDefaultsPerTier: familyDefaults,
@@ -1196,28 +1348,8 @@ function EmergencySection() {
         <h3 style={{ margin: "0 0 4px" }}>Cost Calculator</h3>
         <p style={smallHelp}>Choose a product family and enter the job details to begin.</p>
         <p style={smallHelp}>Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
-        <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8 }}>
-          <input type="hidden" name="emode" value="auto" />
-          <input type="hidden" name="efamily" value={emergency.family.configured ? emergency.family.key : "bags-4x5"} />
-          <input type="hidden" name="eqty" value={emergency.quantities.join(",")} />
-          <label style={{ fontSize: 12 }}>* Number of designs<input name="edesigns" type="number" defaultValue={1} style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Sides (bags)<select name="esides" style={inputStyle}><option value="1">One-sided</option><option value="2">Two-sided</option></select></label>
-          <label style={{ fontSize: 12 }}>* Label/banner width (in)<input name="ewidth" type="number" step="0.01" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>* Height (in)<input name="eheight" type="number" step="0.01" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>* Material $/sqft (verified value)<input name="ematsqft" type="number" step="0.0001" placeholder="0.3156 matte" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Material name<input name="ematlabel" defaultValue="Matte vinyl" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Printer<select name="eprinter" style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select></label>
-          <label style={{ fontSize: 12 }}><input type="checkbox" name="ewhite" value="1" /> White ink</label>
-          <label style={{ fontSize: 12 }}><input type="checkbox" name="egloss" value="1" /> Spot gloss</label>
-          <label style={{ fontSize: 12 }}>Blank unit cost $ (0.09 bag / jar tier)<input name="eblank" type="number" step="0.0001" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Blank label<input name="eblanklabel" placeholder="4x5 blank bag" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Miron lid $ (tier)<input name="elid" type="number" step="0.0001" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Boxes<input name="eboxes" type="number" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Waste %<input name="ewaste" type="number" step="0.1" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Weeding pages (stickers)<input name="eweedpages" type="number" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}><input type="checkbox" name="ehem" value="1" /> Hemming (banner)</label>
-          <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#b45309", color: "white", fontWeight: 700 }}>CALCULATE COST</button>
-        </Form>
+        <ProductDrivenForm />
+        <ProductBreakdown />
         {(emergency as any).autoCost ? (
           <div style={{ marginTop: 10 }}>
             <b style={{ fontSize: 13 }}>Automatic cost breakdown</b>
@@ -1327,7 +1459,7 @@ Setup/design fee included in pricing.`}
       </div>
       <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 10 }}>
         <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />
-        {["efamily", "eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason"].map((key) => (
+        {["efamily", "eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason", "pfamily", "pblank", "plid", "pmat", "pqty", "pdesigns", "pfaces", "pwidth", "pheight", "pprinter", "pwhitelayers", "pglosslayers", "pcut", "phem", "pgrommet", "pcustomname", "pcustomcost", "pcustomnote", "pwasteoverride", "pwastereason", "pboxoverride", "pboxreason", "pmachmin"].map((key) => (
           <input key={key} type="hidden" name={key} value={new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get(key) || (key === "eqty" ? emergency.quantities.join(",") : key === "emargin" ? emergency.margins.join(",") : "")} />
         ))}
         <label style={{ fontSize: 12 }}>Product name<input name="eproduct" style={inputStyle} /></label>
@@ -1646,5 +1778,143 @@ function CalculatorForm({
         </div>
       </section>
     </Form>
+  );
+}
+
+// ---- 14C.1 product-driven form (family-conditional; posts IDs + business inputs only) ----
+function ProductDrivenForm() {
+  const { emergency } = useLoaderData<typeof loader>() as any;
+  const pm = emergency.productMode;
+  const family = pm?.family || "";
+  const isBags = family === "bags-4x5";
+  const isChiron = family === "chiron-jars";
+  const isMiron = family === "miron-jars";
+  const isStickers = family === "stickers-labels";
+  const isBanners = family === "banners";
+  const isCustom = family === "custom";
+  const jars = isChiron || isMiron;
+  return (
+    <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
+      <label style={{ fontSize: 12, gridColumn: "1 / -1" }}><b>STEP 1 — What are you pricing?</b>
+        <select name="pfamily" defaultValue={family} style={inputStyle}>
+          <option value="">— choose a product —</option>
+          <option value="bags-4x5">4x5 Sticker Bags</option>
+          <option value="chiron-jars">Chiron Jars</option>
+          <option value="miron-jars">Miron Jars</option>
+          <option value="stickers-labels">Stickers &amp; Labels</option>
+          <option value="banners">Banners</option>
+          <option value="custom">Custom Item</option>
+        </select>
+      </label>
+      {!family ? <p style={{ ...smallHelp, gridColumn: "1 / -1" }}>Choose a product family to begin.</p> : null}
+      {(isBags || jars || isCustom) && family ? (
+        <label style={{ fontSize: 12 }}>* Select product / blank item
+          <select name="pblank" style={inputStyle}>
+            <option value="">— select —</option>
+            {(pm.blankOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            <option value="none">No Blank Item</option>
+            <option value="custom">Custom Item (enter below)</option>
+          </select>
+        </label>
+      ) : null}
+      {isMiron ? (
+        <label style={{ fontSize: 12 }}>* Lid type
+          <select name="plid" style={inputStyle}>
+            <option value="">— select lid —</option>
+            {(pm.lidOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+      ) : null}
+      {family ? (<>
+        <label style={{ fontSize: 12 }}>* Quantity<input name="pqty" type="number" min={1} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>* Number of designs<input name="pdesigns" type="number" min={0} defaultValue={1} style={inputStyle} /></label>
+        {isBags ? (
+          <label style={{ fontSize: 12 }}>Print / application
+            <select name="pfaces" style={inputStyle}><option value="1">Front only</option><option value="2">Front and back</option></select>
+          </label>
+        ) : null}
+        {jars ? (
+          <label style={{ fontSize: 12 }}>Labels per jar
+            <select name="pfaces" style={inputStyle}><option value="1">1 label</option><option value="2">2 labels</option><option value="3">3 labels</option></select>
+          </label>
+        ) : null}
+        {isBanners ? (
+          <label style={{ fontSize: 12 }}>Print
+            <select name="pfaces" style={inputStyle}><option value="1">Single-sided</option><option value="2">Double-sided</option></select>
+          </label>
+        ) : null}
+        {isCustom ? <label style={{ fontSize: 12 }}>Printed faces/labels<input name="pfaces" type="number" min={1} defaultValue={1} style={inputStyle} /></label> : null}
+        <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : "Print height (in)"}<input name="pheight" type="number" step="0.01" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>* Material
+          <select name="pmat" style={inputStyle}>
+            <option value="">— select material —</option>
+            {(pm.materialOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <label style={{ fontSize: 12 }}>Printer
+          <select name="pprinter" style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select>
+        </label>
+        <label style={{ fontSize: 12 }}>White layers (0–14)<input name="pwhitelayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
+        {isStickers ? (
+          <label style={{ fontSize: 12 }}>Cut type
+            <select name="pcut" style={inputStyle}><option value="kiss">Kiss cut (no weeding)</option><option value="weeded">Weeded transfer</option></select>
+          </label>
+        ) : null}
+        {isBanners ? (<>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="phem" value="1" /> Hemming</label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="pgrommet" value="1" /> Grommets</label>
+        </>) : null}
+        <details style={{ gridColumn: "1 / -1" }}>
+          <summary style={{ fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Advanced Options (custom item, waste/box overrides)</summary>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 6 }}>
+            <label style={{ fontSize: 12 }}>Custom item name<input name="pcustomname" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Custom item unit cost $<input name="pcustomcost" type="number" step="0.0001" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Custom cost source/reason (required)<input name="pcustomnote" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Waste override %<input name="pwasteoverride" type="number" step="0.1" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Waste override reason<input name="pwastereason" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Units-per-box override<input name="pboxoverride" type="number" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Box override reason<input name="pboxreason" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Machine minutes/sqft<input name="pmachmin" type="number" step="0.01" style={inputStyle} /></label>
+          </div>
+        </details>
+        <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#b45309", color: "white", fontWeight: 700 }}>CALCULATE COST</button>
+        <a href="/app/erp/cost-calculator" style={{ ...secondaryButtonStyle, textAlign: "center", textDecoration: "none", color: "inherit" }}>RESET</a>
+      </>) : null}
+    </Form>
+  );
+}
+
+function ProductBreakdown() {
+  const { emergency } = useLoaderData<typeof loader>() as any;
+  const result = emergency.productMode?.result;
+  if (!result) return null;
+  const derived = result.derived;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <b style={{ fontSize: 13 }}>Cost breakdown (engine 14C.1 — all values derived by the server)</b>
+      <p style={smallHelp}>
+        {derived.totalPieces} printed piece(s) · {derived.baseSqft.toFixed(2)} sqft base · waste {derived.wastePct}% ({derived.wasteSource}) · {derived.wasteAdjustedSqft.toFixed(2)} sqft adjusted
+        {derived.boxes != null ? ` · ${derived.boxes} box(es) @ ${derived.unitsPerBox}/box` : ""} · {derived.printPasses} print pass(es)
+      </p>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+        <tbody>
+          {result.lines.filter((line: any) => line.amount !== 0 || line.source === "missing").map((line: any) => (
+            <tr key={line.key} style={{ borderTop: "1px solid #e5e7eb", background: line.source === "missing" ? "#fef2f2" : undefined }}>
+              <td style={{ padding: 5 }}>{line.label}</td>
+              <td align="right">${line.amount.toFixed(2)}</td>
+              <td style={{ paddingLeft: 8 }}><span style={{ fontWeight: 700, color: line.source === "verified" ? "#166534" : line.source === "owner_standard" ? "#1e40af" : line.source === "missing" ? "#991b1b" : line.source === "manual_override" ? "#7c2d12" : "#92400e" }}>{String(line.source).replace(/_/g, " ")}</span>{line.note ? <span style={{ color: "#6b7280" }}> — {line.note}</span> : null}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {result.missing.length ? (
+        <div style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 8, padding: 8, fontSize: 13, fontWeight: 700, marginTop: 6 }}>
+          COST NOT VERIFIED — DRAFT ONLY: {result.missing.join("; ")}
+        </div>
+      ) : <div style={{ color: "#166534", fontSize: 13, fontWeight: 700, marginTop: 6 }}>Finalizable: Yes</div>}
+      <p style={smallHelp}>Total cost ${result.totalCost.toFixed(2)} · Unit cost ${result.unitCost.toFixed(4)} — pricing tiers below use these values.</p>
+    </div>
   );
 }
