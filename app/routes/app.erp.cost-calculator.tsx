@@ -18,7 +18,7 @@ import {
   type CostLine,
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
-import { computeProductDrivenCost, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
+import { classifyCalculatorProduct, computeProductDrivenCost, formatComponentLabel, mironTopCompatible, uiFamilyToEngine, type CalculatorProductClass, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -769,10 +769,44 @@ export async function loader({ request }: { request: Request }) {
   // ---- 14C.1 product-driven mode: user posts IDs + business inputs only;
   // every cost/sqft/waste/box/weeding value is derived HERE from resolved
   // records. Overrides the 14B.1 path when pfamily is present.
+  // 14C.1B1 helpers: canonical top types render even when no separate top
+  // records exist yet (data limitation) — unverifiable picks stay Draft Only.
+  const CANONICAL_TOPS = [
+    { value: "type:standard-top", label: "Standard / Classic top" },
+    { value: "type:black-metal-top", label: "Black metal top" },
+  ];
+  const resolveTopSelection = (rawId: string, picked: any): ResolvedComponent | null => {
+    if (rawId.startsWith("type:")) {
+      const canonical = CANONICAL_TOPS.find((top) => top.value === rawId);
+      return canonical ? { name: canonical.label, unitCost: null, tiers: [], status: "estimated", note: "Canonical top type — no Vendor Cost Book record yet." } : null;
+    }
+    return picked ? { name: picked.name, unitCost: Number(picked.unitCost) > 0 ? Number(picked.unitCost) : null, tiers: picked.tiers || [], status: "verified" as const } : null;
+  };
+  const standardTopCost = (entries: Array<{ item: any; klass: CalculatorProductClass }>): number | null => {
+    const standard = entries.find((entry) => entry.klass === "miron_top" && /standard|classic/i.test(entry.item.name) && Number(entry.item.unitCost) > 0);
+    return standard ? Number(standard.item.unitCost) : null;
+  };
   let productCost: ReturnType<typeof computeProductDrivenCost> | null = null;
-  const pFamily = String(eparams.get("pfamily") || "") as ProductFamilyKey | "";
-  if (pFamily && ["bags-4x5", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom"].includes(pFamily)) {
-    const pickedBlank = blankItemById.get(String(eparams.get("pblank") || ""));
+  let classified: Array<{ item: any; klass: CalculatorProductClass; includesTop: boolean }> = [];
+  let selectedClass: CalculatorProductClass | null = null;
+  let selectedIncludesTop = false;
+  let topRequired = false;
+  let autoBag: any = null;
+  let bagRecords: Array<{ item: any }> = [];
+  let pickedBlankRef: any = null;
+  const pFamily = String(eparams.get("pfamily") || "");
+  if (pFamily && ["bags-4x5", "standard-jars", "premium-jars", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom", "custom-item"].includes(pFamily)) {
+    // 14C.1B: classify every option once; family pickers filter by class.
+    classified = blankItems.map((item) => ({ item, ...classifyCalculatorProduct({ name: item.name, productType: item.productType, vendor: item.vendor }) }));
+    bagRecords = classified.filter((entry: any) => entry.klass === "bag_4x5" && (Number(entry.item.unitCost) > 0 || (entry.item.tiers || []).length > 0));
+    autoBag = pFamily === "bags-4x5" && bagRecords.length === 1 ? (bagRecords[0] as any).item : null;
+    const requestedBlankId = String(eparams.get("pblank") || "") || (autoBag ? autoBag.id : "");
+    const pickedBlank = blankItemById.get(requestedBlankId);
+    pickedBlankRef = pickedBlank || null;
+    const pickedEntry = pickedBlank ? classified.find((entry) => entry.item.id === pickedBlank.id) : null;
+    selectedClass = pickedEntry ? pickedEntry.klass : null;
+    selectedIncludesTop = pickedEntry ? pickedEntry.includesTop : false;
+    topRequired = pFamily === "premium-jars" && selectedClass === "jar_miron"; // ALWAYS required for Miron (14C.1B1)
     const pickedLid = blankItemById.get(String(eparams.get("plid") || ""));
     const pickedMaterial = materialById.get(String(eparams.get("pmat") || ""));
     const customName = String(eparams.get("pcustomname") || "").slice(0, 80);
@@ -790,14 +824,19 @@ export async function loader({ request }: { request: Request }) {
     }
     const printer = eparams.get("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
     productCost = computeProductDrivenCost({
-      family: pFamily as ProductFamilyKey,
+      family: uiFamilyToEngine(pFamily, selectedClass, selectedIncludesTop),
       quantity: Number(eparams.get("pqty") || 0) || eQuantities[eQuantities.length - 1] || 1,
       designs: Number(eparams.get("pdesigns") || 0),
       facesPerUnit: Math.max(1, Number(eparams.get("pfaces") || 1)),
       widthIn: Number(eparams.get("pwidth") || 0),
       heightIn: Number(eparams.get("pheight") || 0),
       blank: blankComponent,
-      lid: pFamily === "miron-jars" ? toComponent(pickedLid) : null,
+      lid: pFamily === "miron-jars" || topRequired ? resolveTopSelection(String(eparams.get("plid") || ""), pickedLid) : null,
+      mironTop: topRequired ? {
+        setIncludesStandardTop: selectedIncludesTop,
+        includedStandardTopCost: standardTopCost(classified),
+        selectedTopIsStandard: /^type:standard/.test(String(eparams.get("plid") || "")) || /standard|classic/i.test(pickedLid?.name || ""),
+      } : null,
       material: pickedMaterial && pickedMaterial.displayCostPerSqft > 0
         ? { name: pickedMaterial.name, costPerSqft: pickedMaterial.displayCostPerSqft }
         : pickedMaterial ? { name: pickedMaterial.name, costPerSqft: null } : null,
@@ -854,24 +893,34 @@ export async function loader({ request }: { request: Request }) {
     mode: eMode, autoCost: autoCost ? { lines: autoCost.lines, perUnitVariable: autoCost.perUnitVariable, setupTotal: autoCost.setupTotal, missing: autoCost.missing, warnings: autoCost.warnings } : null,
     productMode: {
       family: pFamily || null,
+      selectedClass,
+      topRequired,
+      autoBag: autoBag ? { value: autoBag.id, label: `${autoBag.name} — $${Number(autoBag.unitCost).toFixed(2)} — Verified (auto-selected)` } : null,
+      bagCount: bagRecords.length,
       result: productCost ? { lines: productCost.lines, derived: productCost.derived, missing: productCost.missing, warnings: productCost.warnings, totalCost: productCost.totalCost, unitCost: productCost.unitCost } : null,
-      // Family-filtered pickers (values are record keys, labels are friendly;
-      // missing-price records are labeled, never shown as Verified).
-      blankOptions: blankItems
-        .filter((item) => {
-          const text = `${item.productType || ""} ${item.name}`.toLowerCase();
-          if (pFamily === "bags-4x5") return /bag/.test(text);
-          if (pFamily === "chiron-jars") return /(chiron|safecare|oz jar|oz matte|oz black)/.test(text) && !/miron/.test(text);
-          if (pFamily === "miron-jars") return /miron/.test(text) && !/lid/.test(text);
-          if (pFamily === "stickers-labels" || pFamily === "banners") return false;
-          return true;
-        })
-        .slice(0, 40)
-        .map((item) => ({ value: item.id, label: `${item.name} — ${Number(item.unitCost) > 0 || (item.tiers || []).length ? (Number(item.unitCost) > 0 ? `$${Number(item.unitCost).toFixed(2)}` : "tiered") + " — Verified" : "NO PRICE — not verified"}` })),
-      lidOptions: blankItems
-        .filter((item) => /miron/i.test(`${item.productType || ""} ${item.name}`) && /lid|cap/i.test(item.name))
-        .slice(0, 20)
-        .map((item) => ({ value: item.id, label: `${item.name} — ${Number(item.unitCost) > 0 || (item.tiers || []).length ? "Verified" : "NO PRICE"}` })),
+      // 14C.1B classification-driven pickers (labels via the shared formatter;
+      // NO PRICE records are never shown as Verified; 5oz/other stay hidden).
+      blankOptions: classified.filter((entry: any) => {
+        const priced = Number(entry.item.unitCost) > 0 || (entry.item.tiers || []).length > 0;
+        if (pFamily === "bags-4x5") return entry.klass === "bag_4x5";
+        if (pFamily === "standard-jars") return entry.klass === "jar_standard" && priced;
+        if (pFamily === "premium-jars") return (entry.klass === "jar_chiron" || entry.klass === "jar_miron") && priced;
+        if (pFamily === "custom" || pFamily === "custom-item") return true;
+        return false;
+      }).slice(0, 40).map((entry: any) => ({
+        value: entry.item.id,
+        group: entry.klass === "jar_chiron" ? "CHIRON" : entry.klass === "jar_miron" ? "MIRON" : null,
+        label: formatComponentLabel(entry.item.name, entry.klass, entry.includesTop,
+          Number(entry.item.unitCost) > 0 ? `$${Number(entry.item.unitCost).toFixed(2)} — Verified` : (entry.item.tiers || []).length ? "tiered — Verified" : "NO PRICE — not verified"),
+      })),
+      lidOptions: classified.filter((entry: any) =>
+        entry.klass === "miron_top"
+        && (Number(entry.item.unitCost) > 0 || (entry.item.tiers || []).length > 0)
+        && (!pickedBlankRef || mironTopCompatible(pickedBlankRef.name, entry.item.name)),
+      ).slice(0, 20).map((entry: any) => ({ value: entry.item.id, label: `${entry.item.name} — ${Number(entry.item.unitCost) > 0 ? `$${Number(entry.item.unitCost).toFixed(2)} — Verified` : "tiered — Verified"}` }))
+        // 14C.1B1: canonical top types always available so the required
+        // selector never silently disappears (unpriced picks stay Draft Only)
+        .concat(CANONICAL_TOPS.map((top) => ({ value: top.value, label: `${top.label} — ${top.value === "type:standard-top" ? "included when the set contains it" : "upgrade cost pending Vendor Cost Book record"}` }))),
       materialOptions: materials
         .filter((material) => (pFamily === "banners" ? /banner/i.test(`${material.materialType || ""} ${material.name}`) : true))
         .slice(0, 40)
@@ -1029,8 +1078,9 @@ export async function action({ request }: { request: Request }) {
   // 14C.1: product-driven saves re-resolve the posted record IDs from the DB
   // and re-derive EVERYTHING (costs, sqft, waste, boxes, weeding, layers).
   let productSnapshot: ReturnType<typeof computeProductDrivenCost> | null = null;
+  let savedClassification: { klass: CalculatorProductClass; includesTop: boolean } | null = null;
   const pFamilySave = String(form.get("pfamily") || "");
-  if (pFamilySave && ["bags-4x5", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom"].includes(pFamilySave)) {
+  if (pFamilySave && ["bags-4x5", "standard-jars", "premium-jars", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom", "custom-item"].includes(pFamilySave)) {
     const fetchComponent = async (rawId: string): Promise<ResolvedComponent | null> => {
       if (!rawId || rawId === "none") return null;
       if (rawId === "custom") {
@@ -1055,15 +1105,29 @@ export async function action({ request }: { request: Request }) {
     const materialRecord = materialId ? await db.material.findFirst({ where: { shop, id: materialId } }) : null;
     const materialResolved = materialRecord ? resolvePrintMaterialCostPerSqft(materialRecord) : null;
     const printerSave = form.get("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
+    // 14C.1B: classification + engine mapping recomputed at save from the
+    // FETCHED record (client cannot spoof the class or skip the Miron top).
+    const savedBlank = await fetchComponent(String(form.get("pblank") || ""));
+    savedClassification = savedBlank ? classifyCalculatorProduct({ name: savedBlank.name }) : null;
+    const savedTopRaw = String(form.get("plid") || "");
+    const savedTop = savedTopRaw.startsWith("type:")
+      ? (savedTopRaw === "type:standard-top" ? { name: "Standard / Classic top", unitCost: null, tiers: [], status: "estimated" as const } : savedTopRaw === "type:black-metal-top" ? { name: "Black metal top", unitCost: null, tiers: [], status: "estimated" as const } : null)
+      : await fetchComponent(savedTopRaw);
+    const savedEngineFamily = uiFamilyToEngine(pFamilySave, savedClassification ? savedClassification.klass : null, savedClassification ? savedClassification.includesTop : false);
     productSnapshot = computeProductDrivenCost({
-      family: pFamilySave as ProductFamilyKey,
+      family: savedEngineFamily,
       quantity: Number(form.get("pqty") || 0) || quantities[quantities.length - 1] || 1,
       designs: Number(form.get("pdesigns") || 0),
       facesPerUnit: Math.max(1, Number(form.get("pfaces") || 1)),
       widthIn: Number(form.get("pwidth") || 0),
       heightIn: Number(form.get("pheight") || 0),
-      blank: await fetchComponent(String(form.get("pblank") || "")),
-      lid: pFamilySave === "miron-jars" ? await fetchComponent(String(form.get("plid") || "")) : null,
+      blank: savedBlank,
+      lid: savedEngineFamily === "miron-jars" ? savedTop : null,
+      mironTop: savedEngineFamily === "miron-jars" ? {
+        setIncludesStandardTop: Boolean(savedClassification?.includesTop),
+        includedStandardTopCost: null, // no verified standard-top record yet — upgrades stay Draft Only
+        selectedTopIsStandard: savedTopRaw === "type:standard-top" || /standard|classic/i.test(savedTop?.name || ""),
+      } : null,
       material: materialRecord ? { name: materialRecord.name, costPerSqft: materialResolved && materialResolved.unitCost > 0 ? materialResolved.unitCost : null } : null,
       printer: printerSave,
       printerHasWhite: true,
@@ -1097,7 +1161,7 @@ export async function action({ request }: { request: Request }) {
   const snapshot = {
     engine: productSnapshot ? "14C.1-product" : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
     autoBreakdown: autoSnapshot ? { lines: autoSnapshot.lines, missing: autoSnapshot.missing, warnings: autoSnapshot.warnings } : null,
-    productBreakdown: productSnapshot ? { family: pFamilySave, lines: productSnapshot.lines, derived: productSnapshot.derived, missing: productSnapshot.missing, warnings: productSnapshot.warnings, selections: { blank: String(form.get("pblank") || ""), lid: String(form.get("plid") || ""), material: String(form.get("pmat") || ""), printer: String(form.get("pprinter") || "mimaki"), whiteLayers: Number(form.get("pwhitelayers") || 0), glossLayers: Number(form.get("pglosslayers") || 0), faces: Number(form.get("pfaces") || 1), widthIn: Number(form.get("pwidth") || 0), heightIn: Number(form.get("pheight") || 0) } } : null,
+    productBreakdown: productSnapshot ? { engine: "14C.1B1-required-miron-top", family: pFamilySave, classification: savedClassification ? savedClassification.klass : null, includesTop: savedClassification ? savedClassification.includesTop : false, topId: String(form.get("plid") || "") || null, lines: productSnapshot.lines, derived: productSnapshot.derived, missing: productSnapshot.missing, warnings: productSnapshot.warnings, selections: { blank: String(form.get("pblank") || ""), lid: String(form.get("plid") || ""), material: String(form.get("pmat") || ""), printer: String(form.get("pprinter") || "mimaki"), whiteLayers: Number(form.get("pwhitelayers") || 0), glossLayers: Number(form.get("pglosslayers") || 0), faces: Number(form.get("pfaces") || 1), widthIn: Number(form.get("pwidth") || 0), heightIn: Number(form.get("pheight") || 0) } } : null,
     savedAt: new Date().toISOString(), tiers, freight, gate,
     marginRules: {
       family: familyRule ? familyRule.key : "unknown", familyLabel: familyRule?.label || "FAMILY MARGIN RULE NOT CONFIGURED",
@@ -1790,12 +1854,13 @@ function ProductDrivenForm() {
   const pm = emergency.productMode;
   const family = pm?.family || "";
   const isBags = family === "bags-4x5";
-  const isChiron = family === "chiron-jars";
-  const isMiron = family === "miron-jars";
+  const isStandardJars = family === "standard-jars" || family === "chiron-jars";
+  const isPremium = family === "premium-jars" || family === "miron-jars";
   const isStickers = family === "stickers-labels";
   const isBanners = family === "banners";
-  const isCustom = family === "custom";
-  const jars = isChiron || isMiron;
+  const isCustom = family === "custom" || family === "custom-item";
+  const jars = isStandardJars || isPremium;
+  const topRequired = Boolean(pm?.topRequired);
   return (
     <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
       <label style={{ fontSize: 12, gridColumn: "1 / -1" }}><b>STEP 1 — What are you pricing?</b>
@@ -1808,8 +1873,8 @@ function ProductDrivenForm() {
         >
           <option value="">— choose a product —</option>
           <option value="bags-4x5">4x5 Sticker Bags</option>
-          <option value="chiron-jars">Chiron Jars</option>
-          <option value="miron-jars">Miron Jars</option>
+          <option value="standard-jars">Standard Jars</option>
+          <option value="premium-jars">Premium Jars — Chiron &amp; Miron</option>
           <option value="stickers-labels">Stickers &amp; Labels</option>
           <option value="banners">Banners</option>
           <option value="custom">Custom Item</option>
@@ -1825,23 +1890,42 @@ function ProductDrivenForm() {
       {family && (isBags || jars || isCustom) && !(pm.blankOptions || []).length ? (
         <p style={{ ...smallHelp, gridColumn: "1 / -1", color: "#92400e", fontWeight: 700 }}>No active products are configured for this family — pick No Blank Item or Custom Item, or add records in the Vendor Cost Book.</p>
       ) : null}
-      {(isBags || jars || isCustom) && family ? (
+      {isBags && pm?.autoBag ? (<>
+        <input type="hidden" name="pblank" value={pm.autoBag.value} />
+        <p style={{ fontSize: 12, gridColumn: "1 / -1", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: 8 }}><b>Blank bag:</b> {pm.autoBag.label}</p>
+      </>) : null}
+      {isBags && !pm?.autoBag && pm?.bagCount === 0 ? (
+        <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No active verified 4x5 blank bag is configured.</p>
+      ) : null}
+      {((isBags && !pm?.autoBag && (pm?.bagCount || 0) > 1) || jars || isCustom) && family ? (
         <label style={{ fontSize: 12 }}>* Select product / blank item
-          <select name="pblank" style={inputStyle}>
+          <select name="pblank" onChange={(event) => submit(event.currentTarget.form, { method: "get" })} style={inputStyle}>
             <option value="">— select —</option>
-            {(pm.blankOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            <option value="none">No Blank Item</option>
-            <option value="custom">Custom Item (enter below)</option>
+            {isPremium ? (<>
+              <optgroup label="CHIRON">{(pm.blankOptions || []).filter((option: any) => option.group === "CHIRON").map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup>
+              <optgroup label="MIRON">{(pm.blankOptions || []).filter((option: any) => option.group === "MIRON").map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup>
+            </>) : (pm.blankOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            <option value="none">No Blank Item (Advanced)</option>
+            <option value="custom">Custom Item (Advanced — enter below)</option>
           </select>
         </label>
       ) : null}
-      {isMiron ? (
-        <label style={{ fontSize: 12 }}>* Lid type
+      {isStandardJars && family && !(pm?.blankOptions || []).length ? (
+        <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No active standard jar products are configured.</p>
+      ) : null}
+      {isPremium && family && !(pm?.blankOptions || []).length ? (
+        <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No active Chiron or Miron jar sizes are configured.</p>
+      ) : null}
+      {topRequired ? (
+        <label style={{ fontSize: 12 }}>* Top type (required for Miron)
           <select name="plid" style={inputStyle}>
-            <option value="">— select lid —</option>
+            <option value="">— select top —</option>
             {(pm.lidOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
+      ) : null}
+      {topRequired && !(pm?.lidOptions || []).length ? (
+        <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No verified compatible tops are configured for this Miron jar.</p>
       ) : null}
       {family ? (<>
         <label style={{ fontSize: 12 }}>* Quantity<input name="pqty" type="number" min={1} style={inputStyle} /></label>

@@ -56,6 +56,10 @@ export type ProductDrivenInput = {
   heightIn: number;
   blank: ResolvedComponent | null; // null = No Blank Item
   lid: ResolvedComponent | null; // Miron only
+  // 14C.1B1: Miron top policy — a top selection is ALWAYS required for Miron.
+  // Combined vendor sets charge once; matching standard top = $0 incremental;
+  // different top = verified upgrade difference only; unverifiable = blocker.
+  mironTop?: { setIncludesStandardTop: boolean; includedStandardTopCost: number | null; selectedTopIsStandard: boolean } | null;
   material: { name: string; costPerSqft: number | null; rollLabel?: string } | null;
   printer: "mimaki" | "roland";
   printerHasWhite: boolean;
@@ -154,8 +158,11 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   };
   if (input.blank) componentLine(input.blank, "blank", input.family === "chiron-jars" || Boolean(input.blank.includesCap));
   if (input.family === "miron-jars") {
-    if (input.lid) componentLine(input.lid, "lid", false);
-    else lines.push({ key: "lid", label: "Miron lid", amount: 0, source: "missing", note: "Select a lid type." });
+    lines.push(resolveMironTopLine({
+      quantity,
+      selectedTop: input.lid,
+      policy: input.mironTop || null,
+    }));
   }
 
   // ---- material + ink + machine ----
@@ -244,4 +251,114 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
     setupTotal,
     perUnitVariable: (totalCost - setupTotal) / quantity,
   };
+}
+
+// ---------- 14C.1B: product classification + premium-jar rules ----------
+// One shared classifier — never scattered name matching. Precedence:
+// (1) structured productType slugs (jar_3oz_*, jar_4oz_* = standard; jar_5oz
+//     stays OUT of customer flow per AGENTS.md), (2) vendor metadata (MIRON,
+//     SAFECARE=Chiron brand), (3) vendorSku codes (preset:miron-*),
+// (4) documented normalized-name fallback. The seeded Miron records are
+// combined "jar + lid" sets, so includesTop is detected from the record and
+// a separate top is required ONLY for jar-only Miron records (prevents
+// double-counting a lid already inside the verified tier price).
+
+export type CalculatorProductClass = "bag_4x5" | "jar_standard" | "jar_chiron" | "jar_miron" | "miron_top" | "other";
+
+export type ClassifiableRecord = { name: string; productType?: string | null; vendor?: string | null; vendorSku?: string | null };
+
+export function classifyCalculatorProduct(record: ClassifiableRecord): { klass: CalculatorProductClass; includesTop: boolean } {
+  const name = String(record.name || "");
+  const type = String(record.productType || "").toLowerCase();
+  const vendor = String(record.vendor || "").toLowerCase();
+  const sku = String(record.vendorSku || "").toLowerCase();
+  const text = `${type} ${name}`.toLowerCase();
+  const includesTop = /\+\s*(lid|cap|top)|with\s+(lid|cap|top)|cap\s+included|lid\s+included/i.test(name) || /jar_(3|4)oz/.test(type);
+  // 1. structured productType
+  if (/^jar_(3|4)oz/.test(type)) return { klass: "jar_standard", includesTop: true }; // caps included per verified records
+  if (/^jar_5oz/.test(type)) return { klass: "other", includesTop: false }; // placeholder — never customer-facing
+  // 2/3. vendor + sku
+  const isMiron = vendor === "miron" || sku.includes("miron") || /\bmiron\b/.test(text);
+  if (isMiron && /\b(lid|top|cap)\b/.test(text) && !/\bjar\b/.test(text)) return { klass: "miron_top", includesTop: false };
+  if (isMiron) return { klass: "jar_miron", includesTop };
+  if (vendor.includes("safecare") || /\b(chiron|safecare)\b/.test(text) || sku.includes("safecare") || sku.includes("chiron")) {
+    return { klass: "jar_chiron", includesTop: true }; // Chiron cap always included
+  }
+  // 4. normalized-name fallback (documented)
+  if (/4\s?x\s?5/.test(text) && /bag/.test(text)) return { klass: "bag_4x5", includesTop: false };
+  if (/\bjar\b/.test(text)) return { klass: "jar_standard", includesTop };
+  return { klass: "other", includesTop: false };
+}
+
+// Miron top compatibility: no structured compatibility relation exists in the
+// schema, so the DOCUMENTED fallback is size-token matching — a top is
+// compatible when it names the jar's size token (50ml/100ml/150ml/250ml) or
+// carries no size token at all (universal top). Centralized here.
+const SIZE_TOKEN_RE = /(50|100|150|250)\s?ml/i;
+export function mironTopCompatible(jarName: string, topName: string): boolean {
+  const jarSize = String(jarName || "").match(SIZE_TOKEN_RE)?.[1] || null;
+  const topSize = String(topName || "").match(SIZE_TOKEN_RE)?.[1] || null;
+  if (!topSize) return true; // universal top
+  return jarSize != null && topSize === jarSize;
+}
+
+// UI family -> engine family. New canonical UI keys: standard-jars and
+// premium-jars (Chiron & Miron combined); legacy chiron-jars/miron-jars URL
+// values stay accepted for back-compat.
+export function uiFamilyToEngine(uiFamily: string, selectedClass: CalculatorProductClass | null, includesTop: boolean): ProductFamilyKey {
+  if (uiFamily === "standard-jars") return "chiron-jars"; // cap-included jar semantics, no top selector
+  if (uiFamily === "premium-jars") {
+    if (selectedClass === "jar_miron") return "miron-jars"; // top selection ALWAYS required (14C.1B1 owner rule)
+    return "chiron-jars";
+  }
+  if (uiFamily === "chiron-jars" || uiFamily === "miron-jars") return uiFamily as ProductFamilyKey; // legacy
+  if (uiFamily === "custom-item") return "custom";
+  return (["bags-4x5", "stickers-labels", "banners", "custom"].includes(uiFamily) ? uiFamily : "custom") as ProductFamilyKey;
+}
+
+export function formatComponentLabel(name: string, klass: CalculatorProductClass, includesTop: boolean, priceText: string): string {
+  const suffix = klass === "jar_chiron" || (klass === "jar_standard" && includesTop) ? "cap included"
+    : klass === "jar_miron" ? (includesTop ? "standard top included in vendor set" : "jar only, top required") : "";
+  return [name, suffix, priceText].filter(Boolean).join(" — ");
+}
+
+// ---------- 14C.1B1: required Miron top charge (centralized) ----------
+export const TOP_ENGINE_VERSION = "14C.1B1-required-miron-top";
+
+// Every Miron sale requires an explicit top selection (owner rule — no
+// exceptions, including combined "jar + lid" vendor sets). Cost behavior:
+//   jar-only record        -> full selected-top cost (qty-tiered)
+//   set + same standard top -> $0 incremental ("included in selected set")
+//   set + different top     -> verified upgrade difference ONLY (never the
+//                              full replacement cost on top of the set)
+//   unverifiable difference -> MISSING blocker, never assumed $0
+//   no selection            -> MISSING blocker
+export function resolveMironTopLine(input: {
+  quantity: number;
+  selectedTop: ResolvedComponent | null;
+  policy: { setIncludesStandardTop: boolean; includedStandardTopCost: number | null; selectedTopIsStandard: boolean } | null;
+}): CostLine {
+  const quantity = Math.max(1, Math.floor(input.quantity));
+  if (!input.selectedTop) {
+    return { key: "top", label: "Top type — Required (Miron)", amount: 0, source: "missing", note: "Every Miron sale requires an explicit top selection." };
+  }
+  const policy = input.policy;
+  const resolved = blankItemUnitCostAtQty(input.selectedTop.tiers, input.selectedTop.unitCost ?? 0, quantity, input.selectedTop.name);
+  const topUnit = resolved.unitCost > 0 ? resolved.unitCost : input.selectedTop.unitCost;
+  if (!policy || !policy.setIncludesStandardTop) {
+    // true jar-only Miron record: full top cost
+    if (topUnit != null && topUnit > 0) {
+      return { key: "top", label: `${input.selectedTop.name} @ $${topUnit.toFixed(4)} x ${quantity}`, amount: topUnit * quantity, source: input.selectedTop.status, note: "Full top cost (jar-only Miron record)." };
+    }
+    return { key: "top", label: input.selectedTop.name, amount: 0, source: "missing", note: "Selected top has no verified cost." };
+  }
+  if (policy.selectedTopIsStandard) {
+    return { key: "top", label: `Standard top — included in selected Miron set`, amount: 0, source: "verified", note: "Set price already contains this top — charged once, $0 incremental." };
+  }
+  // different top on a combined set: verified upgrade difference only
+  if (topUnit != null && topUnit > 0 && policy.includedStandardTopCost != null && policy.includedStandardTopCost >= 0) {
+    const upgrade = Math.max(0, topUnit - policy.includedStandardTopCost);
+    return { key: "top", label: `${input.selectedTop.name} — upgrade over included standard top`, amount: upgrade * quantity, source: input.selectedTop.status, note: `Upgrade difference $${upgrade.toFixed(4)}/unit (top $${topUnit.toFixed(4)} - included standard $${policy.includedStandardTopCost.toFixed(4)}); set cost charged once.` };
+  }
+  return { key: "top", label: `${input.selectedTop.name} — upgrade over included standard top`, amount: 0, source: "missing", note: "TOP UPGRADE COST NOT VERIFIED — DRAFT ONLY (never assumed $0)." };
 }
