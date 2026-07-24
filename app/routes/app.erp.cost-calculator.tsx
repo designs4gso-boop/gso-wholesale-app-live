@@ -1,8 +1,19 @@
 import type React from "react";
 import { useState } from "react";
-import { Form, useLoaderData, useLocation } from "react-router";
+import { Form, useActionData, useLoaderData, useLocation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import {
+  MARGIN_FLOOR_PCT,
+  OVERRIDE_PHRASE,
+  SUGGESTED_QUANTITIES,
+  canFinalize,
+  checkMarginGate,
+  computeFreight,
+  defaultTierMargins,
+  generateTiers,
+  type CostLine,
+} from "../lib/calculator-emergency.server";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -699,7 +710,40 @@ export async function loader({ request }: { request: Request }) {
   const suggestedUnit = suggestedTotal / primaryQuantity;
   const grossProfit = suggestedTotal - totalCost;
 
+  // ---- 14B.0 emergency panel (server-computed from GET params; ONE path) ----
+  const eparams = new URL(request.url).searchParams;
+  const eQuantities = String(eparams.get("eqty") || SUGGESTED_QUANTITIES.slice(0, 5).join(",")).split(",").map((value) => Number(value.trim())).filter((value) => value > 0);
+  const eMarginsRaw = String(eparams.get("emargin") || "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isFinite(value) && value > 0);
+  const eMargins = eMarginsRaw.length === eQuantities.length ? eMarginsRaw : defaultTierMargins(eQuantities.length);
+  const eVar = Number(eparams.get("evar") || 0);
+  const eSetup = Number(eparams.get("esetup") || 0);
+  const eBlank = Number(eparams.get("eblank") || 0);
+  const eWaste = Number(eparams.get("ewaste") || 0);
+  const freight = computeFreight(
+    {
+      actualFreight: Number(eparams.get("efactual") || 0),
+      handling: Number(eparams.get("efhandling") || 0),
+      otherFees: Number(eparams.get("effees") || 0),
+      estimatedAllowance: Number(eparams.get("efallow") || 0),
+      allocation: (eparams.get("efalloc") as any) || "per_unit",
+      manualPerUnit: Number(eparams.get("efmanual") || 0),
+    },
+    eQuantities[eQuantities.length - 1] || 1,
+    0,
+  );
+  const eTiers = generateTiers({
+    tiers: eQuantities.map((quantity, index) => ({ quantity, marginPct: eMargins[index] ?? MARGIN_FLOOR_PCT })),
+    perUnitVariableCost: eVar + freight.perUnit,
+    setupTotal: eSetup,
+    blankVendorRows: [],
+    blankFallbackUnitCost: eBlank > 0 ? eBlank : null,
+    wastePct: eWaste,
+  });
+  const eGate = checkMarginGate(Math.min(...eMargins, 100), { phrase: String(eparams.get("eophrase") || ""), reason: String(eparams.get("eoreason") || "") });
+  const emergency = { quantities: eQuantities, margins: eMargins, tiers: eTiers, freight, gate: eGate, floor: MARGIN_FLOOR_PCT };
+
   return {
+    emergency,
     appOrigin,
     syncEndpoint: `${appOrigin}/api/quote-rip-results/sync`,
     uploadToken: setting?.uploadToken || null,
@@ -793,6 +837,50 @@ export async function loader({ request }: { request: Request }) {
       grossProfit,
     },
   };
+}
+
+// 14B.0: the calculator's ONLY write action — save the emergency panel result
+// as a DRAFT quote (snapshot preserved; historical quotes untouched). The
+// server RE-COMPUTES from the posted fields; below-floor margins require the
+// exact override phrase + reason; missing costs force draft-with-warnings.
+export async function action({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const form = await request.formData();
+  if (String(form.get("intent")) !== "saveEmergencyQuoteDraft") return Response.json({ ok: false, message: "Unknown action." });
+  const quantities = String(form.get("eqty") || "").split(",").map((value) => Number(value.trim())).filter((value) => value > 0);
+  const margins = String(form.get("emargin") || "").split(",").map((value) => Number(value.trim()));
+  const eVar = Number(form.get("evar") || 0);
+  const eSetup = Number(form.get("esetup") || 0);
+  const eBlank = Number(form.get("eblank") || 0);
+  const eWaste = Number(form.get("ewaste") || 0);
+  const productName = String(form.get("eproduct") || "Emergency calculator item").slice(0, 120);
+  const freight = computeFreight(
+    { actualFreight: Number(form.get("efactual") || 0), handling: Number(form.get("efhandling") || 0), otherFees: Number(form.get("effees") || 0), estimatedAllowance: Number(form.get("efallow") || 0), allocation: (String(form.get("efalloc")) as any) || "per_unit", manualPerUnit: Number(form.get("efmanual") || 0) },
+    quantities[quantities.length - 1] || 1, 0,
+  );
+  const tiers = generateTiers({
+    tiers: quantities.map((quantity, index) => ({ quantity, marginPct: Number.isFinite(margins[index]) && margins[index] > 0 ? margins[index] : MARGIN_FLOOR_PCT })),
+    perUnitVariableCost: eVar + freight.perUnit, setupTotal: eSetup, blankVendorRows: [], blankFallbackUnitCost: eBlank > 0 ? eBlank : null, wastePct: eWaste,
+  });
+  if (!tiers.length) return Response.json({ ok: false, message: "No valid tier quantities." });
+  const gate = checkMarginGate(Math.min(...tiers.map((tier) => tier.marginPct)), { phrase: String(form.get("eophrase") || ""), reason: String(form.get("eoreason") || "") });
+  const lines: CostLine[] = [
+    { key: "variable_per_unit", label: "Per-unit variable cost (entered)", amount: eVar, source: eVar > 0 ? "manual_override" : "missing" },
+    { key: "freight", label: "Freight", amount: freight.total, source: freight.source, note: freight.note },
+  ];
+  const verdict = canFinalize(lines.filter((line) => line.key !== "freight"), gate);
+  if (!verdict.ok && !gate.allowed) return Response.json({ ok: false, message: verdict.blockers.join(" | ") });
+  const primary = tiers[tiers.length - 1];
+  const snapshot = { engine: "14B.0-emergency", savedAt: new Date().toISOString(), tiers, freight, gate, warnings: tiers.flatMap((tier) => tier.warnings), inputs: { quantities, margins, eVar, eSetup, eBlank, eWaste } };
+  const quote = await db.quote.create({
+    data: {
+      shop, status: "draft", customerName: String(form.get("ecustomer") || "") || null,
+      notes: `14B.0 emergency calculator draft${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}`,
+      items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({ unitPrice: primary.unitPrice, marginPct: primary.marginPct, tiers: tiers.map((tier) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })) }) }] },
+    },
+  });
+  return Response.json({ ok: true, message: `Draft quote ${quote.id.slice(0, 8)}… saved with the full tier snapshot${verdict.ok ? "" : " (DRAFT ONLY — has warnings)"}. Open Quotes to finish it.` });
 }
 
 const inputStyle: React.CSSProperties = { width: "100%", padding: 10, border: "1px solid #d1d5db", borderRadius: 8 };
@@ -1002,7 +1090,80 @@ export default function ErpCostCalculatorRoute() {
           </tbody>
         </table>
       </section>
+      <EmergencySection />
     </main>
+  );
+}
+
+// ---- 14B.0 Emergency pricing panel (tiers + freight + margin floor + draft save) ----
+function EmergencySection() {
+  const { emergency } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>() as { ok: boolean; message: string } | undefined;
+  const money2 = (value: number) => `$${value.toFixed(2)}`;
+  return (
+    <section style={{ ...cardStyle, marginTop: 18, borderColor: "#b45309", borderWidth: 2 }}>
+      <h2 style={{ marginTop: 0 }}>Emergency pricing (14B.0) — provisional tier curve, {emergency.floor}% margin floor</h2>
+      <p style={smallHelp}>
+        PROVISIONAL margin curve (60/55/50/45/40 — editable per tier) until competitor research is done. Setup spreads
+        across each tier quantity; every tier prices from its OWN cost (never a discount off tier 1). Freight stays a
+        separate visible line. Prices below {emergency.floor}% margin are blocked without the owner override.
+      </p>
+      {actionData?.message ? (
+        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600 }}>{actionData.message}</div>
+      ) : null}
+      <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginTop: 10 }}>
+        <label style={{ fontSize: 12 }}>Tier quantities (comma list)<input name="eqty" defaultValue={emergency.quantities.join(",")} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Tier margins % (comma list, blank = curve)<input name="emargin" defaultValue={emergency.margins.join(",")} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Per-unit variable cost $ (material+ink+labor+machine)<input name="evar" type="number" step="0.0001" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Setup total $ (art+print, spreads by qty)<input name="esetup" type="number" step="0.01" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Blank unit cost $ (e.g. 0.09 4x5 bag)<input name="eblank" type="number" step="0.0001" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Waste %<input name="ewaste" type="number" step="0.1" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Actual freight $<input name="efactual" type="number" step="0.01" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Handling $<input name="efhandling" type="number" step="0.01" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Other landed fees $<input name="effees" type="number" step="0.01" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>ESTIMATED freight allowance $ (used only when no actuals)<input name="efallow" type="number" step="0.01" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Freight allocation<select name="efalloc" style={inputStyle}><option value="per_unit">Per unit</option><option value="by_value">By merchandise value</option><option value="manual">Manual per unit</option></select></label>
+        <label style={{ fontSize: 12 }}>Manual freight $/unit<input name="efmanual" type="number" step="0.0001" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Owner override phrase (below-floor only)<input name="eophrase" placeholder="OWNER MARGIN OVERRIDE" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Override reason<input name="eoreason" style={inputStyle} /></label>
+        <button type="submit" style={secondaryButtonStyle}>Recalculate tiers</button>
+        <a href="/app/erp/cost-calculator" style={{ ...secondaryButtonStyle, textAlign: "center", textDecoration: "none", color: "inherit" }}>Reset</a>
+      </Form>
+      <p style={smallHelp}>
+        Freight: {emergency.freight.note} — total {money2(emergency.freight.total)}, per unit {money2(emergency.freight.perUnit)} ({emergency.freight.source.toUpperCase()}).
+        {emergency.gate.belowFloor ? ` MARGIN GATE: ${emergency.gate.reason}` : ""}
+      </p>
+      <div style={{ overflowX: "auto", marginTop: 8 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 6 }}>Qty</th><th>Blank/unit</th><th>Setup/unit</th><th>Unit cost</th><th>Margin %</th><th>Unit price</th><th>Total price</th><th>Profit</th><th align="left">Warnings</th></tr></thead>
+          <tbody>
+            {emergency.tiers.map((tier) => (
+              <tr key={tier.quantity} style={{ borderTop: "1px solid #e5e7eb", background: tier.belowFloor ? "#fef2f2" : undefined }}>
+                <td style={{ padding: 6 }}><b>{tier.quantity}</b></td>
+                <td align="center">{tier.blankUnitCost == null ? "—" : money2(tier.blankUnitCost)}</td>
+                <td align="center">{money2(tier.setupPerUnit)}</td>
+                <td align="center">{money2(tier.unitCost)}</td>
+                <td align="center">{tier.marginPct}%</td>
+                <td align="center"><b>{money2(tier.unitPrice)}</b></td>
+                <td align="center">{money2(tier.totalPrice)}</td>
+                <td align="center">{money2(tier.profit)} ({tier.actualMarginPct.toFixed(1)}%)</td>
+                <td style={{ color: "#92400e", fontSize: 12 }}>{tier.warnings.join("; ") || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 10 }}>
+        <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />
+        {["eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason"].map((key) => (
+          <input key={key} type="hidden" name={key} value={new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get(key) || (key === "eqty" ? emergency.quantities.join(",") : key === "emargin" ? emergency.margins.join(",") : "")} />
+        ))}
+        <label style={{ fontSize: 12 }}>Product name<input name="eproduct" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Customer (optional)<input name="ecustomer" style={inputStyle} /></label>
+        <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#111827", color: "white", fontWeight: 700 }}>Save as draft quote (snapshot)</button>
+      </Form>
+      <p style={smallHelp}>Saving creates a DRAFT quote with the full tier/freight/override snapshot — historical quotes are never touched. Finish it in Quotes / CRM.</p>
+    </section>
   );
 }
 
