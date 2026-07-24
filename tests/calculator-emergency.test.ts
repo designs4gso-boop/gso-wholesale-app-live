@@ -319,3 +319,16 @@ describe("calculator usability (14B.1B)", () => {
     expect(src).not.toContain("Emergency pricing (14B.0)");
   });
 });
+
+describe("daily-use layout (14C)", () => {
+  const src14c = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+  it("calculator-first order: auto form before tier controls, EmergencySection before Advanced tools and legacy", () => {
+    expect(src14c.indexOf("14B.1a: Automatic Costing form")).toBeLessThan(src14c.indexOf("View pricing rules"));
+    expect(src14c.indexOf("<EmergencySection />")).toBeLessThan(src14c.indexOf("Advanced Pricing Tools"));
+    expect(src14c.indexOf("Advanced Pricing Tools")).toBeLessThan(src14c.indexOf("Legacy Manual Calculator"));
+  });
+  it("sync/token/manual controls sit behind collapsed sections", () => {
+    expect(src14c).toContain("View pricing rules &amp; manual tier controls");
+    expect(src14c).toContain("Advanced Pricing Tools");
+  });
+});

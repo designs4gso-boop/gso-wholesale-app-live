@@ -757,3 +757,6 @@ Automatic Costing form with CALCULATE COST, badge-labeled breakdown, missing-cos
 
 ## Milestone: Calculator Usability Cleanup (Patch 14B.1B)
 Page restructured: header -> Cost Calculator section (auto form + breakdown + Pricing Tiers & Margin Review + customer summary + draft save) -> Legacy Manual Calculator wrapped in a collapsed "Fallback Only" details block with the unsupported-products warning (functionality preserved; no legacy content above the new tools). Renames applied; begin prompt added. Remaining for 14C: move the auto form physically above the tier/manual controls inside the section, per-family field hiding, freight/advanced collapse groups. Tests 397 -> 399; build clean; tsc 308 = baseline.
+
+## Milestone: Daily-Use Calculator Layout (Patch 14C core)
+Render order rebuilt: page opens directly with the Cost Calculator section (auto form first -> breakdown -> tiers/customer summary behind "View pricing rules & manual tier controls" collapse) -> collapsed "Advanced Pricing Tools" (old quote-builder header cards, sync/token/PowerShell content) -> collapsed "Legacy Manual Calculator - Fallback Only". All engines/gates/saves unchanged. Tests 399 -> 401; build clean; tsc 308 = baseline. Remaining polish: per-family field hiding, step headings, zero-state suppression of the tier table before first calculation.

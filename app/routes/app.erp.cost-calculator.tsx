@@ -1129,6 +1129,9 @@ export default function ErpCostCalculatorRoute() {
 
   return (
     <main style={{ maxWidth: 1280, margin: "32px auto", padding: 20, fontFamily: "system-ui, sans-serif", background: "#f9fafb" }}>
+      <EmergencySection />
+      <details style={{ marginTop: 18, border: "1px solid #d1d5db", borderRadius: 12, padding: 12 }}>
+        <summary style={{ fontWeight: 700, cursor: "pointer" }}>Advanced Pricing Tools</summary>
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a> · <a href="/app/erp/cost-health">Cost Health</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
@@ -1172,7 +1175,7 @@ export default function ErpCostCalculatorRoute() {
           </tbody>
         </table>
       </section>
-      <EmergencySection />
+      </details>
       <details style={{ marginTop: 18, border: "1px solid #d1d5db", borderRadius: 12, padding: 12 }}>
         <summary style={{ fontWeight: 700, cursor: "pointer" }}>Legacy Manual Calculator — Fallback Only</summary>
         <p style={{ color: "#92400e", fontSize: 13 }}>Use only for unsupported products or special jobs that cannot yet be calculated automatically.</p>
@@ -1188,6 +1191,69 @@ function EmergencySection() {
   const money2 = (value: number) => `$${value.toFixed(2)}`;
   return (
     <section style={{ ...cardStyle, marginTop: 18, borderColor: "#b45309", borderWidth: 2 }}>
+      {/* 14B.1a: Automatic Costing form (Recommended) — server computes everything */}
+      <div style={{ borderTop: "2px solid #b45309", marginTop: 14, paddingTop: 12 }}>
+        <h3 style={{ margin: "0 0 4px" }}>Cost Calculator</h3>
+        <p style={smallHelp}>Choose a product family and enter the job details to begin.</p>
+        <p style={smallHelp}>Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
+        <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8 }}>
+          <input type="hidden" name="emode" value="auto" />
+          <input type="hidden" name="efamily" value={emergency.family.configured ? emergency.family.key : "bags-4x5"} />
+          <input type="hidden" name="eqty" value={emergency.quantities.join(",")} />
+          <label style={{ fontSize: 12 }}>* Number of designs<input name="edesigns" type="number" defaultValue={1} style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Sides (bags)<select name="esides" style={inputStyle}><option value="1">One-sided</option><option value="2">Two-sided</option></select></label>
+          <label style={{ fontSize: 12 }}>* Label/banner width (in)<input name="ewidth" type="number" step="0.01" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>* Height (in)<input name="eheight" type="number" step="0.01" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>* Material $/sqft (verified value)<input name="ematsqft" type="number" step="0.0001" placeholder="0.3156 matte" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Material name<input name="ematlabel" defaultValue="Matte vinyl" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Printer<select name="eprinter" style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select></label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="ewhite" value="1" /> White ink</label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="egloss" value="1" /> Spot gloss</label>
+          <label style={{ fontSize: 12 }}>Blank unit cost $ (0.09 bag / jar tier)<input name="eblank" type="number" step="0.0001" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Blank label<input name="eblanklabel" placeholder="4x5 blank bag" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Miron lid $ (tier)<input name="elid" type="number" step="0.0001" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Boxes<input name="eboxes" type="number" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Waste %<input name="ewaste" type="number" step="0.1" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Weeding pages (stickers)<input name="eweedpages" type="number" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="ehem" value="1" /> Hemming (banner)</label>
+          <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#b45309", color: "white", fontWeight: 700 }}>CALCULATE COST</button>
+        </Form>
+        {(emergency as any).autoCost ? (
+          <div style={{ marginTop: 10 }}>
+            <b style={{ fontSize: 13 }}>Automatic cost breakdown</b>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 6 }}>
+              <tbody>
+                {(emergency as any).autoCost.lines.map((line: any) => (
+                  <tr key={line.key} style={{ borderTop: "1px solid #e5e7eb", background: line.source === "missing" ? "#fef2f2" : undefined }}>
+                    <td style={{ padding: 5 }}>{line.label}</td>
+                    <td align="right">${line.amount.toFixed(2)}</td>
+                    <td style={{ paddingLeft: 8 }}><span style={{ fontWeight: 700, color: line.source === "verified" ? "#166534" : line.source === "owner_standard" ? "#1e40af" : line.source === "missing" ? "#991b1b" : "#92400e" }}>{String(line.source).replace(/_/g, " ")}</span>{line.note ? <span style={{ color: "#6b7280" }}> — {line.note}</span> : null}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {(emergency as any).autoCost.missing.length ? (
+              <div style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 8, padding: 8, fontSize: 13, fontWeight: 700, marginTop: 6 }}>
+                COST NOT VERIFIED — DRAFT ONLY: {(emergency as any).autoCost.missing.join("; ")}
+              </div>
+            ) : <div style={{ color: "#166534", fontSize: 13, fontWeight: 700, marginTop: 6 }}>Finalizable: Yes — all lines verified/owner-standard/estimated.</div>}
+            {emergency.tiers.length ? (
+              <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, fontSize: 13, marginTop: 8 }}>
+                <b>Approved Customer Price summary (copy for invoice):</b>
+                <pre style={{ margin: "6px 0 0", fontSize: 12, background: "#f9fafb", padding: 8, borderRadius: 6 }}>
+{`Product: ${emergency.family.label}
+Quantity: ${emergency.tiers[emergency.tiers.length - 1].quantity}
+Unit price: $${emergency.tiers[emergency.tiers.length - 1].unitPrice.toFixed(2)}
+Total: $${emergency.tiers[emergency.tiers.length - 1].totalPrice.toFixed(2)}
+Freight (separate): $${emergency.freight.total.toFixed(2)} (${emergency.freight.source.toUpperCase()})
+Setup/design fee included in pricing.`}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      <details style={{ marginTop: 12 }}><summary style={{ fontWeight: 700, cursor: "pointer", fontSize: 13 }}>View pricing rules &amp; manual tier controls</summary>
       <h2 style={{ marginTop: 0 }}>Pricing Tiers &amp; Margin Review — family curves, {emergency.floor}% margin floor</h2>
       <p style={smallHelp}>
         PROVISIONAL margin curve (60/55/50/45/40 — editable per tier) until competitor research is done. Setup spreads
@@ -1270,68 +1336,7 @@ function EmergencySection() {
       </Form>
       <p style={smallHelp}>Saving creates a DRAFT quote with the full tier/freight/override snapshot — historical quotes are never touched. Finish it in Quotes / CRM.</p>
 
-      {/* 14B.1a: Automatic Costing form (Recommended) — server computes everything */}
-      <div style={{ borderTop: "2px solid #b45309", marginTop: 14, paddingTop: 12 }}>
-        <h3 style={{ margin: "0 0 4px" }}>Cost Calculator</h3>
-        <p style={smallHelp}>Choose a product family and enter the job details to begin.</p>
-        <p style={smallHelp}>Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
-        <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8 }}>
-          <input type="hidden" name="emode" value="auto" />
-          <input type="hidden" name="efamily" value={emergency.family.configured ? emergency.family.key : "bags-4x5"} />
-          <input type="hidden" name="eqty" value={emergency.quantities.join(",")} />
-          <label style={{ fontSize: 12 }}>* Number of designs<input name="edesigns" type="number" defaultValue={1} style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Sides (bags)<select name="esides" style={inputStyle}><option value="1">One-sided</option><option value="2">Two-sided</option></select></label>
-          <label style={{ fontSize: 12 }}>* Label/banner width (in)<input name="ewidth" type="number" step="0.01" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>* Height (in)<input name="eheight" type="number" step="0.01" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>* Material $/sqft (verified value)<input name="ematsqft" type="number" step="0.0001" placeholder="0.3156 matte" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Material name<input name="ematlabel" defaultValue="Matte vinyl" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Printer<select name="eprinter" style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select></label>
-          <label style={{ fontSize: 12 }}><input type="checkbox" name="ewhite" value="1" /> White ink</label>
-          <label style={{ fontSize: 12 }}><input type="checkbox" name="egloss" value="1" /> Spot gloss</label>
-          <label style={{ fontSize: 12 }}>Blank unit cost $ (0.09 bag / jar tier)<input name="eblank" type="number" step="0.0001" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Blank label<input name="eblanklabel" placeholder="4x5 blank bag" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Miron lid $ (tier)<input name="elid" type="number" step="0.0001" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Boxes<input name="eboxes" type="number" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Waste %<input name="ewaste" type="number" step="0.1" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>Weeding pages (stickers)<input name="eweedpages" type="number" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}><input type="checkbox" name="ehem" value="1" /> Hemming (banner)</label>
-          <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#b45309", color: "white", fontWeight: 700 }}>CALCULATE COST</button>
-        </Form>
-        {(emergency as any).autoCost ? (
-          <div style={{ marginTop: 10 }}>
-            <b style={{ fontSize: 13 }}>Automatic cost breakdown</b>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 6 }}>
-              <tbody>
-                {(emergency as any).autoCost.lines.map((line: any) => (
-                  <tr key={line.key} style={{ borderTop: "1px solid #e5e7eb", background: line.source === "missing" ? "#fef2f2" : undefined }}>
-                    <td style={{ padding: 5 }}>{line.label}</td>
-                    <td align="right">${line.amount.toFixed(2)}</td>
-                    <td style={{ paddingLeft: 8 }}><span style={{ fontWeight: 700, color: line.source === "verified" ? "#166534" : line.source === "owner_standard" ? "#1e40af" : line.source === "missing" ? "#991b1b" : "#92400e" }}>{String(line.source).replace(/_/g, " ")}</span>{line.note ? <span style={{ color: "#6b7280" }}> — {line.note}</span> : null}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {(emergency as any).autoCost.missing.length ? (
-              <div style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 8, padding: 8, fontSize: 13, fontWeight: 700, marginTop: 6 }}>
-                COST NOT VERIFIED — DRAFT ONLY: {(emergency as any).autoCost.missing.join("; ")}
-              </div>
-            ) : <div style={{ color: "#166534", fontSize: 13, fontWeight: 700, marginTop: 6 }}>Finalizable: Yes — all lines verified/owner-standard/estimated.</div>}
-            {emergency.tiers.length ? (
-              <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, fontSize: 13, marginTop: 8 }}>
-                <b>Approved Customer Price summary (copy for invoice):</b>
-                <pre style={{ margin: "6px 0 0", fontSize: 12, background: "#f9fafb", padding: 8, borderRadius: 6 }}>
-{`Product: ${emergency.family.label}
-Quantity: ${emergency.tiers[emergency.tiers.length - 1].quantity}
-Unit price: $${emergency.tiers[emergency.tiers.length - 1].unitPrice.toFixed(2)}
-Total: $${emergency.tiers[emergency.tiers.length - 1].totalPrice.toFixed(2)}
-Freight (separate): $${emergency.freight.total.toFixed(2)} (${emergency.freight.source.toUpperCase()})
-Setup/design fee included in pricing.`}
-                </pre>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+      </details>
     </section>
   );
 }
