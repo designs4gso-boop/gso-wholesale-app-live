@@ -1,6 +1,6 @@
 import type React from "react";
 import { useState } from "react";
-import { Form, useActionData, useLoaderData, useLocation } from "react-router";
+import { Form, useActionData, useLoaderData, useLocation, useNavigation, useSubmit } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import {
@@ -1784,6 +1784,9 @@ function CalculatorForm({
 // ---- 14C.1 product-driven form (family-conditional; posts IDs + business inputs only) ----
 function ProductDrivenForm() {
   const { emergency } = useLoaderData<typeof loader>() as any;
+  const submit = useSubmit();
+  const navigation = useNavigation();
+  const loadingFamily = navigation.state === "loading";
   const pm = emergency.productMode;
   const family = pm?.family || "";
   const isBags = family === "bags-4x5";
@@ -1796,7 +1799,13 @@ function ProductDrivenForm() {
   return (
     <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
       <label style={{ fontSize: 12, gridColumn: "1 / -1" }}><b>STEP 1 — What are you pricing?</b>
-        <select name="pfamily" defaultValue={family} style={inputStyle}>
+        <select
+          name="pfamily"
+          key={family}
+          defaultValue={family}
+          style={inputStyle}
+          onChange={(event) => submit(event.currentTarget.form, { method: "get" })}
+        >
           <option value="">— choose a product —</option>
           <option value="bags-4x5">4x5 Sticker Bags</option>
           <option value="chiron-jars">Chiron Jars</option>
@@ -1806,7 +1815,16 @@ function ProductDrivenForm() {
           <option value="custom">Custom Item</option>
         </select>
       </label>
-      {!family ? <p style={{ ...smallHelp, gridColumn: "1 / -1" }}>Choose a product family to begin.</p> : null}
+      {!family ? (
+        <p style={{ ...smallHelp, gridColumn: "1 / -1" }}>
+          Choose a product family to begin.{" "}
+          <button type="submit" style={{ ...secondaryButtonStyle, padding: "4px 10px" }}>CONTINUE</button>
+        </p>
+      ) : null}
+      {loadingFamily ? <p style={{ ...smallHelp, gridColumn: "1 / -1", fontWeight: 700 }}>Loading products…</p> : null}
+      {family && (isBags || jars || isCustom) && !(pm.blankOptions || []).length ? (
+        <p style={{ ...smallHelp, gridColumn: "1 / -1", color: "#92400e", fontWeight: 700 }}>No active products are configured for this family — pick No Blank Item or Custom Item, or add records in the Vendor Cost Book.</p>
+      ) : null}
       {(isBags || jars || isCustom) && family ? (
         <label style={{ fontSize: 12 }}>* Select product / blank item
           <select name="pblank" style={inputStyle}>

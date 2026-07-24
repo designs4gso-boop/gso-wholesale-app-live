@@ -169,3 +169,45 @@ describe("engine safety", () => {
     expect(result.lines.filter((line) => line.key === "freight")).toHaveLength(1);
   });
 });
+
+// ---- 14C.1A family-selection activation pins ----
+import { readFileSync } from "node:fs";
+
+describe("family selection activation (14C.1A)", () => {
+  const src = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+  const pdf = src.slice(src.indexOf("function ProductDrivenForm"));
+
+  it("the family select auto-submits via React Router useSubmit (client-side GET, embedded-safe)", () => {
+    expect(pdf).toContain('onChange={(event) => submit(event.currentTarget.form, { method: "get" })}');
+    expect(src).toContain("useSubmit } from \"react-router\"");
+  });
+
+  it("a submit path exists before any family is chosen (no-JS CONTINUE fallback) and loading feedback renders", () => {
+    expect(pdf).toContain("CONTINUE");
+    expect(pdf).toContain("Loading products…");
+    expect(pdf.indexOf("CONTINUE")).toBeLessThan(pdf.indexOf("{family ?"));
+  });
+
+  it("consistent default state: empty value option first, begin prompt only when family inactive", () => {
+    expect(pdf).toContain('<option value="">— choose a product —</option>');
+    expect(pdf).toContain("Choose a product family to begin.");
+  });
+
+  it("empty product list shows an explanation instead of a broken dropdown", () => {
+    expect(pdf).toContain("No active products are configured for this family");
+  });
+
+  it("canonical family values are consistent across form, loader, and engine", () => {
+    for (const key of ["bags-4x5", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom"]) {
+      expect(pdf).toContain(`value="${key}"`);
+      expect(src).toContain(`"${key}"`);
+    }
+  });
+
+  it("no nested Form inside ProductDrivenForm and no POST triggered by family selection", () => {
+    const formBody = pdf.slice(pdf.indexOf("<Form method=\"get\""), pdf.indexOf("function ProductBreakdown"));
+    expect((formBody.match(/<Form /g) || []).length).toBe(1);
+    expect(formBody).not.toContain('method="post"');
+    expect(formBody).not.toContain("saveEmergencyQuoteDraft");
+  });
+});
