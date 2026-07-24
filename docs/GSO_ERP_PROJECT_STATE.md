@@ -745,3 +745,6 @@ Do not change files outside the allowed list.
 Do not commit or push unless explicitly told.
 Report changed files, build result, git status, and risks.
 ```
+
+## Completed Milestone: Family-Specific Margin Curves (Patch 14B.0A)
+Nine researched family curves + family minimums implemented in calculator-emergency.server.ts (FAMILY_MARGIN_RULES; source "GSO 2026 competitor and margin study"); family selector + summary block on the emergency panel; three-level margin protection (target curve / family minimum / 40% global floor) through the existing phrase gate; documented tier-count mapping incl. >5 monotonic clamped interpolation; exact-alias family resolver (no fuzzy; unknown -> provisional curve + FAMILY MARGIN RULE NOT CONFIGURED); draft-quote snapshots carry full margin-rule metadata (engine 14B.0A-emergency). Tests 386 -> 391; build clean; tsc 308 = baseline; historical quotes untouched. Details: docs/GSO_COST_CALCULATOR_EMERGENCY_FIX.md.

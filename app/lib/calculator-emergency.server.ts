@@ -44,6 +44,53 @@ export const INK_RATES = {
 
 export type SourceLabel = "verified" | "owner_standard" | "estimated" | "missing" | "manual_override";
 
+// ---------- family-specific margin curves (14B.0A) ----------
+// Source: GSO 2026 competitor and margin study (owner-approved). Five levels,
+// smallest tier -> highest approved tier. Family minimum = normal floor for
+// that family; the 40% GLOBAL floor stays absolute underneath.
+export const MARGIN_RULE_SOURCE = "GSO 2026 competitor and margin study";
+export type FamilyMarginRule = { key: string; label: string; curve: number[]; familyMinPct: number; aliases: string[] };
+export const FAMILY_MARGIN_RULES: FamilyMarginRule[] = [
+  { key: "bags-4x5", label: "4x5 sticker bags", curve: [65, 58, 52, 47, 45], familyMinPct: 45, aliases: ["4x5", "4x5-bags", "stock-bags", "stock-bag", "bag-4x5", "sticker-bags-4x5"] },
+  { key: "chiron-jars", label: "Chiron jars", curve: [60, 55, 50, 45, 40], familyMinPct: 40, aliases: ["chiron", "chiron-jar", "safecare", "safecare-jars"] },
+  { key: "miron-jars", label: "Miron jars", curve: [65, 58, 52, 47, 45], familyMinPct: 45, aliases: ["miron", "miron-jar", "jars", "jar"] },
+  { key: "stickers-labels", label: "Standard stickers & labels", curve: [65, 58, 52, 46, 40], familyMinPct: 40, aliases: ["stickers", "labels", "sticker", "label", "die-cut-stickers"] },
+  { key: "spot-gloss-labels", label: "Spot gloss labels", curve: [70, 62, 56, 50, 45], familyMinPct: 45, aliases: ["spot-gloss", "gloss-labels", "spot-gloss-label"] },
+  { key: "banners", label: "Banners", curve: [60, 55, 50, 45, 40], familyMinPct: 40, aliases: ["banner"] },
+  { key: "dtp-pouches", label: "DTP pouches", curve: [65, 58, 52, 46, 42], familyMinPct: 42, aliases: ["dtp", "pouches", "pouch", "dtp-pouch", "dtp-4x5x2"] },
+  { key: "die-cut-bags", label: "Die-cut bags", curve: [68, 60, 55, 50, 45], familyMinPct: 45, aliases: ["diecut-bags", "die-cut-bag", "custom-bags"] },
+  { key: "boxes", label: "Boxes", curve: [68, 60, 54, 48, 45], familyMinPct: 45, aliases: ["box"] },
+];
+
+function normalizeFamilyKey(value: string): string {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+// EXACT normalized matching only — key or listed alias; never substring/fuzzy.
+export function resolveMarginFamily(input: string | null | undefined): FamilyMarginRule | null {
+  const normalized = normalizeFamilyKey(String(input || ""));
+  if (!normalized) return null;
+  return FAMILY_MARGIN_RULES.find((rule) => rule.key === normalized || rule.aliases.includes(normalized)) || null;
+}
+
+// Tier-count mapping (documented): 1 -> [last]; 2 -> [first,last];
+// 3 -> [first,middle,last]; 4 -> positions 1,2,4,5; 5 -> all; >5 -> monotonic
+// linear interpolation from first to last, never below the family minimum.
+export function curveForTierCount(curve: number[], count: number, familyMinPct: number): number[] {
+  const c = curve;
+  if (count <= 0) return [];
+  if (count === 1) return [c[4]];
+  if (count === 2) return [c[0], c[4]];
+  if (count === 3) return [c[0], c[2], c[4]];
+  if (count === 4) return [c[0], c[1], c[3], c[4]];
+  if (count === 5) return [...c];
+  return Array.from({ length: count }, (_v, index) => {
+    const t = index / (count - 1);
+    const value = c[0] + (c[4] - c[0]) * t;
+    return Math.max(familyMinPct, Math.round(value * 10) / 10);
+  });
+}
+
 export type CostLine = { key: string; label: string; amount: number; source: SourceLabel; note?: string };
 
 export function marginMath(totalCost: number, marginPct: number) {
@@ -55,15 +102,20 @@ export function marginMath(totalCost: number, marginPct: number) {
 
 export type MarginGate = { allowed: boolean; belowFloor: boolean; reason: string | null };
 
-export function checkMarginGate(marginPct: number, override: { phrase: string; reason: string }): MarginGate {
-  if (marginPct >= MARGIN_FLOOR_PCT) return { allowed: true, belowFloor: false, reason: null };
+// 14B.0A: three distinct levels — target margin (curve), FAMILY minimum
+// (override-able at/above 40), and the 40% GLOBAL hard floor (override-able
+// only via the same explicit gate).
+export function checkMarginGate(marginPct: number, override: { phrase: string; reason: string }, familyMinPct: number = MARGIN_FLOOR_PCT): MarginGate {
+  const effectiveMin = Math.max(familyMinPct, MARGIN_FLOOR_PCT);
+  if (marginPct >= effectiveMin) return { allowed: true, belowFloor: false, reason: null };
   const ok = override.phrase === OVERRIDE_PHRASE && override.reason.trim().length >= 5;
+  const scope = marginPct < MARGIN_FLOOR_PCT ? `${MARGIN_FLOOR_PCT}% GLOBAL floor` : `${effectiveMin}% family minimum`;
   return {
     allowed: ok,
     belowFloor: true,
     reason: ok
-      ? `OWNER OVERRIDE below the ${MARGIN_FLOOR_PCT}% floor: ${override.reason.trim()}`
-      : `Below the ${MARGIN_FLOOR_PCT}% minimum margin — blocked. Type "${OVERRIDE_PHRASE}" and give a reason to override.`,
+      ? `OWNER OVERRIDE below the ${scope}: ${override.reason.trim()}`
+      : `Below the ${scope} — blocked. Type "${OVERRIDE_PHRASE}" and give a reason to override.`,
   };
 }
 

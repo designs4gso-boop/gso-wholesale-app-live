@@ -10,8 +10,11 @@ import {
   canFinalize,
   checkMarginGate,
   computeFreight,
+  curveForTierCount,
   defaultTierMargins,
   generateTiers,
+  resolveMarginFamily,
+  MARGIN_RULE_SOURCE,
   type CostLine,
 } from "../lib/calculator-emergency.server";
 import { materialKind } from "../lib/material-classify";
@@ -714,7 +717,9 @@ export async function loader({ request }: { request: Request }) {
   const eparams = new URL(request.url).searchParams;
   const eQuantities = String(eparams.get("eqty") || SUGGESTED_QUANTITIES.slice(0, 5).join(",")).split(",").map((value) => Number(value.trim())).filter((value) => value > 0);
   const eMarginsRaw = String(eparams.get("emargin") || "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isFinite(value) && value > 0);
-  const eMargins = eMarginsRaw.length === eQuantities.length ? eMarginsRaw : defaultTierMargins(eQuantities.length);
+  const eFamilyRule = resolveMarginFamily(eparams.get("efamily"));
+  const eDefaults = eFamilyRule ? curveForTierCount(eFamilyRule.curve, eQuantities.length, eFamilyRule.familyMinPct) : defaultTierMargins(eQuantities.length);
+  const eMargins = eMarginsRaw.length === eQuantities.length ? eMarginsRaw : eDefaults;
   const eVar = Number(eparams.get("evar") || 0);
   const eSetup = Number(eparams.get("esetup") || 0);
   const eBlank = Number(eparams.get("eblank") || 0);
@@ -739,8 +744,13 @@ export async function loader({ request }: { request: Request }) {
     blankFallbackUnitCost: eBlank > 0 ? eBlank : null,
     wastePct: eWaste,
   });
-  const eGate = checkMarginGate(Math.min(...eMargins, 100), { phrase: String(eparams.get("eophrase") || ""), reason: String(eparams.get("eoreason") || "") });
-  const emergency = { quantities: eQuantities, margins: eMargins, tiers: eTiers, freight, gate: eGate, floor: MARGIN_FLOOR_PCT };
+  const eGate = checkMarginGate(Math.min(...eMargins, 100), { phrase: String(eparams.get("eophrase") || ""), reason: String(eparams.get("eoreason") || "") }, eFamilyRule?.familyMinPct ?? MARGIN_FLOOR_PCT);
+  const emergency = {
+    quantities: eQuantities, margins: eMargins, defaults: eDefaults, tiers: eTiers, freight, gate: eGate, floor: MARGIN_FLOOR_PCT,
+    family: eFamilyRule
+      ? { key: eFamilyRule.key, label: eFamilyRule.label, curve: eFamilyRule.curve, minPct: eFamilyRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
+      : { key: String(eparams.get("efamily") || ""), label: "Not selected / unknown", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
+  };
 
   return {
     emergency,
@@ -864,7 +874,8 @@ export async function action({ request }: { request: Request }) {
     perUnitVariableCost: eVar + freight.perUnit, setupTotal: eSetup, blankVendorRows: [], blankFallbackUnitCost: eBlank > 0 ? eBlank : null, wastePct: eWaste,
   });
   if (!tiers.length) return Response.json({ ok: false, message: "No valid tier quantities." });
-  const gate = checkMarginGate(Math.min(...tiers.map((tier) => tier.marginPct)), { phrase: String(form.get("eophrase") || ""), reason: String(form.get("eoreason") || "") });
+  const familyRule = resolveMarginFamily(String(form.get("efamily") || ""));
+  const gate = checkMarginGate(Math.min(...tiers.map((tier) => tier.marginPct)), { phrase: String(form.get("eophrase") || ""), reason: String(form.get("eoreason") || "") }, familyRule?.familyMinPct ?? MARGIN_FLOOR_PCT);
   const lines: CostLine[] = [
     { key: "variable_per_unit", label: "Per-unit variable cost (entered)", amount: eVar, source: eVar > 0 ? "manual_override" : "missing" },
     { key: "freight", label: "Freight", amount: freight.total, source: freight.source, note: freight.note },
@@ -872,7 +883,17 @@ export async function action({ request }: { request: Request }) {
   const verdict = canFinalize(lines.filter((line) => line.key !== "freight"), gate);
   if (!verdict.ok && !gate.allowed) return Response.json({ ok: false, message: verdict.blockers.join(" | ") });
   const primary = tiers[tiers.length - 1];
-  const snapshot = { engine: "14B.0-emergency", savedAt: new Date().toISOString(), tiers, freight, gate, warnings: tiers.flatMap((tier) => tier.warnings), inputs: { quantities, margins, eVar, eSetup, eBlank, eWaste } };
+  const familyDefaults = familyRule ? curveForTierCount(familyRule.curve, tiers.length, familyRule.familyMinPct) : defaultTierMargins(tiers.length);
+  const snapshot = {
+    engine: "14B.0A-emergency", savedAt: new Date().toISOString(), tiers, freight, gate,
+    marginRules: {
+      family: familyRule ? familyRule.key : "unknown", familyLabel: familyRule?.label || "FAMILY MARGIN RULE NOT CONFIGURED",
+      curveUsed: familyRule ? familyRule.curve : "provisional-universal", researchedDefaultsPerTier: familyDefaults,
+      editedMarginsPerTier: tiers.map((tier) => tier.marginPct), familyMinPct: familyRule?.familyMinPct ?? MARGIN_FLOOR_PCT,
+      globalFloorPct: MARGIN_FLOOR_PCT, overrideReason: gate.reason, ruleSource: familyRule ? MARGIN_RULE_SOURCE : "provisional",
+    },
+    warnings: tiers.flatMap((tier) => tier.warnings), inputs: { quantities, margins, eVar, eSetup, eBlank, eWaste },
+  };
   const quote = await db.quote.create({
     data: {
       shop, status: "draft", customerName: String(form.get("ecustomer") || "") || null,
@@ -1111,7 +1132,27 @@ function EmergencySection() {
       {actionData?.message ? (
         <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600 }}>{actionData.message}</div>
       ) : null}
+      <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 10 }}>
+        <b>Product family:</b> {emergency.family.label} · <b>Default curve:</b> {emergency.family.configured ? emergency.family.curve.join(" / ") + "%" : "provisional 60/55/50/45/40%"} ·{" "}
+        <b>Family minimum:</b> {emergency.family.minPct}% · <b>Global floor:</b> {emergency.floor}% · <b>Rule source:</b> {emergency.family.source}
+        {!emergency.family.configured && emergency.family.key ? <div style={{ color: "#92400e", fontWeight: 700 }}>FAMILY MARGIN RULE NOT CONFIGURED — using the provisional universal curve.</div> : null}
+        <div style={{ color: "#6b7280" }}>Researched defaults for these tiers: {emergency.defaults.join(" / ")}% — edit margins freely below; edits are kept, defaults stay visible here.</div>
+      </div>
       <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginTop: 10 }}>
+        <label style={{ fontSize: 12 }}>Product family
+          <select name="efamily" defaultValue={emergency.family.configured ? emergency.family.key : ""} style={inputStyle}>
+            <option value="">— choose family (uses provisional curve) —</option>
+            <option value="bags-4x5">4x5 sticker bags</option>
+            <option value="chiron-jars">Chiron jars</option>
+            <option value="miron-jars">Miron jars</option>
+            <option value="stickers-labels">Standard stickers &amp; labels</option>
+            <option value="spot-gloss-labels">Spot gloss labels</option>
+            <option value="banners">Banners</option>
+            <option value="dtp-pouches">DTP pouches</option>
+            <option value="die-cut-bags">Die-cut bags</option>
+            <option value="boxes">Boxes</option>
+          </select>
+        </label>
         <label style={{ fontSize: 12 }}>Tier quantities (comma list)<input name="eqty" defaultValue={emergency.quantities.join(",")} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Tier margins % (comma list, blank = curve)<input name="emargin" defaultValue={emergency.margins.join(",")} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Per-unit variable cost $ (material+ink+labor+machine)<input name="evar" type="number" step="0.0001" style={inputStyle} /></label>
@@ -1155,7 +1196,7 @@ function EmergencySection() {
       </div>
       <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 10 }}>
         <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />
-        {["eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason"].map((key) => (
+        {["efamily", "eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason"].map((key) => (
           <input key={key} type="hidden" name={key} value={new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get(key) || (key === "eqty" ? emergency.quantities.join(",") : key === "emargin" ? emergency.margins.join(",") : "")} />
         ))}
         <label style={{ fontSize: 12 }}>Product name<input name="eproduct" style={inputStyle} /></label>

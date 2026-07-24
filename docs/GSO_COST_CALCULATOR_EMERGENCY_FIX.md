@@ -25,3 +25,19 @@ banner hem/grommet labor; box family blanks.
 cost + setup as entered numbers rather than recomputing per-family lines; full
 family-aware field hiding and per-line source badges deferred to 14C; draft
 quotes need finishing in Quotes/CRM.
+
+## 14B.0A — Family-specific margin curves (researched)
+Nine researched five-level curves replace the universal curve when a family is
+selected (source: GSO 2026 competitor and margin study): bags-4x5 65/58/52/47/45
+(min 45); chiron-jars 60/55/50/45/40 (min 40); miron-jars 65/58/52/47/45 (min 45);
+stickers-labels 65/58/52/46/40 (min 40); spot-gloss-labels 70/62/56/50/45 (min 45);
+banners 60/55/50/45/40 (min 40); dtp-pouches 65/58/52/46/42 (min 42); die-cut-bags
+68/60/55/50/45 (min 45); boxes 68/60/54/48/45 (min 45). Global 40% floor stays
+absolute. Below family-min (>=40) needs the OWNER MARGIN OVERRIDE phrase+reason;
+below 40 uses the same gate with a GLOBAL floor message. Tier-count mapping:
+1->[last]; 2->[first,last]; 3->[first,middle,last]; 4->[1,2,4,5]; 5->all; >5 ->
+monotonic first->last interpolation clamped at family min. Exact-alias resolver
+only (no fuzzy); unknown family = provisional universal curve + "FAMILY MARGIN
+RULE NOT CONFIGURED". Edited margins are kept (defaults shown alongside). Draft
+snapshots record family, curve, researched defaults, edited margins, family min,
+global floor, override reason, timestamp (engine 14B.0A-emergency).
