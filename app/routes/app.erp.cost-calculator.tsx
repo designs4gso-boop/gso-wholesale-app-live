@@ -17,6 +17,7 @@ import {
   MARGIN_RULE_SOURCE,
   type CostLine,
 } from "../lib/calculator-emergency.server";
+import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -720,10 +721,49 @@ export async function loader({ request }: { request: Request }) {
   const eFamilyRule = resolveMarginFamily(eparams.get("efamily"));
   const eDefaults = eFamilyRule ? curveForTierCount(eFamilyRule.curve, eQuantities.length, eFamilyRule.familyMinPct) : defaultTierMargins(eQuantities.length);
   const eMargins = eMarginsRaw.length === eQuantities.length ? eMarginsRaw : eDefaults;
-  const eVar = Number(eparams.get("evar") || 0);
-  const eSetup = Number(eparams.get("esetup") || 0);
+  // 14B.1: AUTO mode — compute variable+setup from family inputs through the
+  // pure engine (manual entries remain the labeled fallback).
+  const eMode = eparams.get("emode") === "auto" && eFamilyRule ? "auto" : "manual";
+  let eVar = Number(eparams.get("evar") || 0);
+  let eSetup = Number(eparams.get("esetup") || 0);
   const eBlank = Number(eparams.get("eblank") || 0);
   const eWaste = Number(eparams.get("ewaste") || 0);
+  let autoCost: ReturnType<typeof computeAutoCost> | null = null;
+  if (eMode === "auto") {
+    const familyMap: Record<string, AutoFamily> = { "bags-4x5": "bags-4x5", "chiron-jars": "chiron-jars", "miron-jars": "miron-jars", "stickers-labels": "stickers-labels", "banners": "banners" };
+    const autoFamily = familyMap[eFamilyRule!.key];
+    if (autoFamily) {
+      autoCost = computeAutoCost(autoFamily, {
+        quantity: eQuantities[eQuantities.length - 1] || 1,
+        designs: Number(eparams.get("edesigns") || 0),
+        sides: eparams.get("esides") === "2" ? 2 : 1,
+        labelWidthIn: Number(eparams.get("ewidth") || 0),
+        labelHeightIn: Number(eparams.get("eheight") || 0),
+        materialCostPerSqft: Number(eparams.get("ematsqft") || 0) > 0 ? Number(eparams.get("ematsqft")) : null,
+        materialLabel: String(eparams.get("ematlabel") || "Material"),
+        printer: eparams.get("eprinter") === "roland" ? "roland" : "mimaki",
+        whiteInk: eparams.get("ewhite") === "1",
+        spotGloss: eparams.get("egloss") === "1",
+        inkMlPerSqft: Number(eparams.get("einkml") || 0.6),
+        machineMinutesPerSqft: Number(eparams.get("emachmin") || 0),
+        machineRatePerHour: 8,
+        blankUnitCost: eBlank > 0 ? eBlank : null,
+        blankLabel: String(eparams.get("eblanklabel") || "Blank item"),
+        lidUnitCost: Number(eparams.get("elid") || 0) > 0 ? Number(eparams.get("elid")) : null,
+        lidLabel: String(eparams.get("elidlabel") || "Miron lid"),
+        boxes: Number(eparams.get("eboxes") || 0),
+        wastePct: eparams.get("ewaste") ? eWaste : -1,
+        freightPerUnit: 0 /* freight added once by the panel pipeline */,
+        freightSource: "estimated",
+        cutIsProvisional: true,
+        weedingPages: Number(eparams.get("eweedpages") || 0),
+        hemming: eparams.get("ehem") === "1",
+        grommets: eparams.get("egrommet") === "1",
+      });
+      eVar = autoCost.perUnitVariable;
+      eSetup = autoCost.setupTotal;
+    }
+  }
   const freight = computeFreight(
     {
       actualFreight: Number(eparams.get("efactual") || 0),
@@ -747,6 +787,7 @@ export async function loader({ request }: { request: Request }) {
   const eGate = checkMarginGate(Math.min(...eMargins, 100), { phrase: String(eparams.get("eophrase") || ""), reason: String(eparams.get("eoreason") || "") }, eFamilyRule?.familyMinPct ?? MARGIN_FLOOR_PCT);
   const emergency = {
     quantities: eQuantities, margins: eMargins, defaults: eDefaults, tiers: eTiers, freight, gate: eGate, floor: MARGIN_FLOOR_PCT,
+    mode: eMode, autoCost: autoCost ? { lines: autoCost.lines, perUnitVariable: autoCost.perUnitVariable, setupTotal: autoCost.setupTotal, missing: autoCost.missing, warnings: autoCost.warnings } : null,
     family: eFamilyRule
       ? { key: eFamilyRule.key, label: eFamilyRule.label, curve: eFamilyRule.curve, minPct: eFamilyRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
       : { key: String(eparams.get("efamily") || ""), label: "Not selected / unknown", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
@@ -858,6 +899,7 @@ export async function action({ request }: { request: Request }) {
   const shop = session.shop;
   const form = await request.formData();
   if (String(form.get("intent")) !== "saveEmergencyQuoteDraft") return Response.json({ ok: false, message: "Unknown action." });
+  if (String(form.get("emode")) === "auto") return Response.json({ ok: false, message: "Auto-mode draft saving lands in 14B.1a with full server recomputation - client totals are never trusted. Use the breakdown to fill manual fields, or wait for 14B.1a." });
   const quantities = String(form.get("eqty") || "").split(",").map((value) => Number(value.trim())).filter((value) => value > 0);
   const margins = String(form.get("emargin") || "").split(",").map((value) => Number(value.trim()));
   const eVar = Number(form.get("evar") || 0);

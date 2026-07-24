@@ -221,3 +221,85 @@ describe("family margin curves (14B.0A)", () => {
     expect(edited).not.toEqual(resolveMarginFamily("bags-4x5")!.curve);
   });
 });
+
+// ---- 14B.1 automatic full costing ----
+import { computeAutoCost, type AutoInputs } from "../app/lib/auto-costing.server";
+
+function autoInputs(overrides: Partial<AutoInputs> = {}): AutoInputs {
+  return {
+    quantity: 100, designs: 2, sides: 1, labelWidthIn: 4, labelHeightIn: 5,
+    materialCostPerSqft: 0.3156, materialLabel: "Matte vinyl", printer: "mimaki",
+    whiteInk: false, spotGloss: false, inkMlPerSqft: 0.6, machineMinutesPerSqft: 2,
+    machineRatePerHour: 8, blankUnitCost: 0.09, blankLabel: "4x5 blank bag",
+    lidUnitCost: null, lidLabel: "", boxes: 2, wastePct: 10,
+    freightPerUnit: 0.05, freightSource: "estimated", cutIsProvisional: true,
+    weedingPages: 0, hemming: false, grommets: false, ...overrides,
+  };
+}
+
+describe("automatic full costing (14B.1)", () => {
+  it("4x5 bags: $0.09 blank, one vs two sided application, setup separated for tier spread", () => {
+    const one = computeAutoCost("bags-4x5", autoInputs());
+    const blank = one.lines.find((line) => line.key === "blank")!;
+    expect(blank.amount).toBeCloseTo(9, 6); // 100 x 0.09
+    expect(blank.source).toBe("verified");
+    const app1 = one.lines.find((line) => line.key === "application")!.amount;
+    const two = computeAutoCost("bags-4x5", autoInputs({ sides: 2 }));
+    const app2 = two.lines.find((line) => line.key === "application")!.amount;
+    expect(app1).toBeCloseTo(0.078125 * 100, 6);
+    expect(app2).toBeCloseTo(app1 * 2, 6);
+    expect(one.setupTotal).toBeCloseTo(2 * (25 / 3 + 1), 4); // art+print per design, spread later
+    expect(two.lines.find((line) => line.key === "material")!.amount).toBeCloseTo(two.lines.find((l) => l.key === "material")!.amount, 6);
+  });
+
+  it("missing Mimaki gloss blocks; white ink uses the verified rate; freight is its own labeled line", () => {
+    const gloss = computeAutoCost("bags-4x5", autoInputs({ spotGloss: true }));
+    expect(gloss.missing.some((label) => label.includes("Spot gloss"))).toBe(true);
+    const white = computeAutoCost("bags-4x5", autoInputs({ whiteInk: true }));
+    expect(white.lines.find((line) => line.key === "ink_white")!.source).toBe("verified");
+    const freight = white.lines.find((line) => line.key === "freight")!;
+    expect(freight.amount).toBeCloseTo(5, 6);
+    expect(freight.note).toContain("ESTIMATED");
+  });
+
+  it("Chiron: cap included with no duplicate; Miron: jar and lid separate, both tiered inputs", () => {
+    const chiron = computeAutoCost("chiron-jars", autoInputs({ blankUnitCost: 1.9, blankLabel: "Chiron 150ml (cap incl)" }));
+    expect(chiron.lines.filter((line) => line.key === "blank")).toHaveLength(1);
+    expect(chiron.lines.find((line) => line.key === "blank")!.note).toContain("Cap included");
+    expect(chiron.lines.some((line) => line.key === "lid")).toBe(false);
+    expect(chiron.lines.find((line) => line.key === "application")!.amount).toBeCloseTo(20, 6); // 0.20 x 100
+    const miron = computeAutoCost("miron-jars", autoInputs({ blankUnitCost: 1.95, blankLabel: "Miron 150ml tier", lidUnitCost: 0.45, lidLabel: "Black metal lid tier" }));
+    expect(miron.lines.find((line) => line.key === "blank")!.amount).toBeCloseTo(195, 6);
+    expect(miron.lines.find((line) => line.key === "lid")!.amount).toBeCloseTo(45, 6);
+    const mironNoLid = computeAutoCost("miron-jars", autoInputs({ blankUnitCost: 1.95, lidUnitCost: null }));
+    expect(mironNoLid.missing.some((label) => label.includes("lid"))).toBe(true);
+  });
+
+  it("stickers: sqft+waste applied once to material and ink, weeding standard, provisional cutting warns, missing dims block", () => {
+    const stickers = computeAutoCost("stickers-labels", autoInputs({ blankUnitCost: null, blankLabel: "", weedingPages: 3 }));
+    const area = (4 * 5 * 100) / 144;
+    const material = stickers.lines.find((line) => line.key === "material")!;
+    expect(material.amount).toBeCloseTo(0.3156 * area / 0.9, 4); // waste divisor once
+    const ink = stickers.lines.find((line) => line.key === "ink_cmyk")!;
+    expect(ink.amount).toBeCloseTo(0.176 * 0.6 * area / 0.9, 4);
+    expect(stickers.lines.find((line) => line.key === "weeding")!.amount).toBeCloseTo(4, 4); // 3 x 1.3333
+    expect(stickers.warnings.some((warning) => warning.includes("PROVISIONAL"))).toBe(true);
+    const noDims = computeAutoCost("stickers-labels", autoInputs({ labelWidthIn: 0 }));
+    expect(noDims.missing.some((label) => label.includes("dimensions"))).toBe(true);
+  });
+
+  it("banners: media+ink+machine computed; missing hem/grommet labor blocks; no-waste-rule flagged ESTIMATED", () => {
+    const banner = computeAutoCost("banners", autoInputs({ hemming: true, quantity: 2, labelWidthIn: 36, labelHeightIn: 72, wastePct: -1 }));
+    expect(banner.missing.some((label) => label.includes("hemming"))).toBe(true);
+    expect(banner.warnings.some((warning) => warning.includes("ESTIMATED 10%"))).toBe(true);
+    expect(banner.lines.find((line) => line.key === "machine")!.source).toBe("owner_standard");
+  });
+
+  it("safety: perUnitVariable + setup reconstruct the total (no double setup/waste/freight)", () => {
+    const result = computeAutoCost("bags-4x5", autoInputs());
+    const reconstructed = result.perUnitVariable * 100 + result.setupTotal;
+    const lineTotal = result.lines.reduce((sum, line) => sum + line.amount, 0);
+    expect(reconstructed).toBeCloseTo(lineTotal, 4);
+    expect(result.missing).toHaveLength(0);
+  });
+});

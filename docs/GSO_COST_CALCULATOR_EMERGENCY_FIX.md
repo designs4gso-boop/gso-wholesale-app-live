@@ -41,3 +41,20 @@ only (no fuzzy); unknown family = provisional universal curve + "FAMILY MARGIN
 RULE NOT CONFIGURED". Edited margins are kept (defaults shown alongside). Draft
 snapshots record family, curve, researched defaults, edited margins, family min,
 global floor, override reason, timestamp (engine 14B.0A-emergency).
+
+## 14B.1 — Automatic full product costing (engine core)
+Pure engine app/lib/auto-costing.server.ts (version 14B.1) computes the full
+labeled breakdown for the five priority families (4x5 bags, Chiron, Miron,
+stickers/labels, banners): blank/lid (qty-aware inputs; Chiron cap-included and
+never duplicated; Miron jar+lid separate), material sqft x verified $/sqft, ink
+via channel rates (Roland uniform = provisional; Mimaki gloss = MISSING blocker),
+machine at $8/hr, owner-standard art/print setup (spread by tier), family
+application labor, weeding, packing, freight as its own line (added ONCE by the
+freight panel pipeline), waste divisor applied once to material+ink (no rule ->
+ESTIMATED 10% flagged). Missing dims/designs/lid/finishing produce MISSING lines
+that block finalization; banners hem/grommet labor = missing. Loader auto mode
+(emode=auto + family) feeds computed variable+setup into the tier pipeline and
+returns the breakdown; auto-mode DRAFT SAVING is deliberately blocked until
+14B.1a adds full server-side recomputation of auto params (client totals are
+never trusted). Deferred to 14B.1a: auto-input UI fields + verified-material
+picker + auto-save recompute; manual mode remains the labeled fallback.
