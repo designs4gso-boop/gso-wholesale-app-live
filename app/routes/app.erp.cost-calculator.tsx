@@ -899,11 +899,11 @@ export async function action({ request }: { request: Request }) {
   const shop = session.shop;
   const form = await request.formData();
   if (String(form.get("intent")) !== "saveEmergencyQuoteDraft") return Response.json({ ok: false, message: "Unknown action." });
-  if (String(form.get("emode")) === "auto") return Response.json({ ok: false, message: "Auto-mode draft saving lands in 14B.1a with full server recomputation - client totals are never trusted. Use the breakdown to fill manual fields, or wait for 14B.1a." });
+  const isAuto = String(form.get("emode")) === "auto";
   const quantities = String(form.get("eqty") || "").split(",").map((value) => Number(value.trim())).filter((value) => value > 0);
   const margins = String(form.get("emargin") || "").split(",").map((value) => Number(value.trim()));
-  const eVar = Number(form.get("evar") || 0);
-  const eSetup = Number(form.get("esetup") || 0);
+  let eVar = Number(form.get("evar") || 0);
+  let eSetup = Number(form.get("esetup") || 0);
   const eBlank = Number(form.get("eblank") || 0);
   const eWaste = Number(form.get("ewaste") || 0);
   const productName = String(form.get("eproduct") || "Emergency calculator item").slice(0, 120);
@@ -917,6 +917,25 @@ export async function action({ request }: { request: Request }) {
   });
   if (!tiers.length) return Response.json({ ok: false, message: "No valid tier quantities." });
   const familyRule = resolveMarginFamily(String(form.get("efamily") || ""));
+  let autoSnapshot: ReturnType<typeof computeAutoCost> | null = null;
+  if (isAuto) {
+    const familyMapA: Record<string, AutoFamily> = { "bags-4x5": "bags-4x5", "chiron-jars": "chiron-jars", "miron-jars": "miron-jars", "stickers-labels": "stickers-labels", "banners": "banners" };
+    const autoFamily = familyRule ? familyMapA[familyRule.key] : undefined;
+    if (!autoFamily) return Response.json({ ok: false, message: "Automatic mode needs one of the five supported families." });
+    autoSnapshot = computeAutoCost(autoFamily, {
+      quantity: quantities[quantities.length - 1] || 1, designs: Number(form.get("edesigns") || 0),
+      sides: form.get("esides") === "2" ? 2 : 1, labelWidthIn: Number(form.get("ewidth") || 0), labelHeightIn: Number(form.get("eheight") || 0),
+      materialCostPerSqft: Number(form.get("ematsqft") || 0) > 0 ? Number(form.get("ematsqft")) : null, materialLabel: String(form.get("ematlabel") || "Material"),
+      printer: form.get("eprinter") === "roland" ? "roland" : "mimaki", whiteInk: form.get("ewhite") === "1", spotGloss: form.get("egloss") === "1",
+      inkMlPerSqft: Number(form.get("einkml") || 0.6), machineMinutesPerSqft: Number(form.get("emachmin") || 0), machineRatePerHour: 8,
+      blankUnitCost: eBlank > 0 ? eBlank : null, blankLabel: String(form.get("eblanklabel") || "Blank item"),
+      lidUnitCost: Number(form.get("elid") || 0) > 0 ? Number(form.get("elid")) : null, lidLabel: String(form.get("elidlabel") || "Miron lid"),
+      boxes: Number(form.get("eboxes") || 0), wastePct: form.get("ewaste") ? eWaste : -1,
+      freightPerUnit: 0, freightSource: "estimated", cutIsProvisional: true, weedingPages: Number(form.get("eweedpages") || 0),
+      hemming: form.get("ehem") === "1", grommets: form.get("egrommet") === "1",
+    });
+    eVar = autoSnapshot.perUnitVariable; eSetup = autoSnapshot.setupTotal; // client evar/esetup IGNORED in auto mode
+  }
   const gate = checkMarginGate(Math.min(...tiers.map((tier) => tier.marginPct)), { phrase: String(form.get("eophrase") || ""), reason: String(form.get("eoreason") || "") }, familyRule?.familyMinPct ?? MARGIN_FLOOR_PCT);
   const lines: CostLine[] = [
     { key: "variable_per_unit", label: "Per-unit variable cost (entered)", amount: eVar, source: eVar > 0 ? "manual_override" : "missing" },
@@ -927,7 +946,7 @@ export async function action({ request }: { request: Request }) {
   const primary = tiers[tiers.length - 1];
   const familyDefaults = familyRule ? curveForTierCount(familyRule.curve, tiers.length, familyRule.familyMinPct) : defaultTierMargins(tiers.length);
   const snapshot = {
-    engine: "14B.0A-emergency", savedAt: new Date().toISOString(), tiers, freight, gate,
+    engine: isAuto ? "14B.1a-auto" : "14B.0A-emergency", autoBreakdown: autoSnapshot ? { lines: autoSnapshot.lines, missing: autoSnapshot.missing, warnings: autoSnapshot.warnings } : null, savedAt: new Date().toISOString(), tiers, freight, gate,
     marginRules: {
       family: familyRule ? familyRule.key : "unknown", familyLabel: familyRule?.label || "FAMILY MARGIN RULE NOT CONFIGURED",
       curveUsed: familyRule ? familyRule.curve : "provisional-universal", researchedDefaultsPerTier: familyDefaults,
@@ -1246,6 +1265,68 @@ function EmergencySection() {
         <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#111827", color: "white", fontWeight: 700 }}>Save as draft quote (snapshot)</button>
       </Form>
       <p style={smallHelp}>Saving creates a DRAFT quote with the full tier/freight/override snapshot — historical quotes are never touched. Finish it in Quotes / CRM.</p>
+
+      {/* 14B.1a: Automatic Costing form (Recommended) — server computes everything */}
+      <div style={{ borderTop: "2px solid #b45309", marginTop: 14, paddingTop: 12 }}>
+        <h3 style={{ margin: "0 0 4px" }}>Automatic Costing — Recommended</h3>
+        <p style={smallHelp}>Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
+        <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8 }}>
+          <input type="hidden" name="emode" value="auto" />
+          <input type="hidden" name="efamily" value={emergency.family.configured ? emergency.family.key : "bags-4x5"} />
+          <input type="hidden" name="eqty" value={emergency.quantities.join(",")} />
+          <label style={{ fontSize: 12 }}>* Number of designs<input name="edesigns" type="number" defaultValue={1} style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Sides (bags)<select name="esides" style={inputStyle}><option value="1">One-sided</option><option value="2">Two-sided</option></select></label>
+          <label style={{ fontSize: 12 }}>* Label/banner width (in)<input name="ewidth" type="number" step="0.01" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>* Height (in)<input name="eheight" type="number" step="0.01" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>* Material $/sqft (verified value)<input name="ematsqft" type="number" step="0.0001" placeholder="0.3156 matte" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Material name<input name="ematlabel" defaultValue="Matte vinyl" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Printer<select name="eprinter" style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select></label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="ewhite" value="1" /> White ink</label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="egloss" value="1" /> Spot gloss</label>
+          <label style={{ fontSize: 12 }}>Blank unit cost $ (0.09 bag / jar tier)<input name="eblank" type="number" step="0.0001" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Blank label<input name="eblanklabel" placeholder="4x5 blank bag" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Miron lid $ (tier)<input name="elid" type="number" step="0.0001" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Boxes<input name="eboxes" type="number" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Waste %<input name="ewaste" type="number" step="0.1" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Weeding pages (stickers)<input name="eweedpages" type="number" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="ehem" value="1" /> Hemming (banner)</label>
+          <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#b45309", color: "white", fontWeight: 700 }}>CALCULATE COST</button>
+        </Form>
+        {(emergency as any).autoCost ? (
+          <div style={{ marginTop: 10 }}>
+            <b style={{ fontSize: 13 }}>Automatic cost breakdown</b>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 6 }}>
+              <tbody>
+                {(emergency as any).autoCost.lines.map((line: any) => (
+                  <tr key={line.key} style={{ borderTop: "1px solid #e5e7eb", background: line.source === "missing" ? "#fef2f2" : undefined }}>
+                    <td style={{ padding: 5 }}>{line.label}</td>
+                    <td align="right">${line.amount.toFixed(2)}</td>
+                    <td style={{ paddingLeft: 8 }}><span style={{ fontWeight: 700, color: line.source === "verified" ? "#166534" : line.source === "owner_standard" ? "#1e40af" : line.source === "missing" ? "#991b1b" : "#92400e" }}>{String(line.source).replace(/_/g, " ")}</span>{line.note ? <span style={{ color: "#6b7280" }}> — {line.note}</span> : null}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {(emergency as any).autoCost.missing.length ? (
+              <div style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 8, padding: 8, fontSize: 13, fontWeight: 700, marginTop: 6 }}>
+                COST NOT VERIFIED — DRAFT ONLY: {(emergency as any).autoCost.missing.join("; ")}
+              </div>
+            ) : <div style={{ color: "#166534", fontSize: 13, fontWeight: 700, marginTop: 6 }}>Finalizable: Yes — all lines verified/owner-standard/estimated.</div>}
+            {emergency.tiers.length ? (
+              <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, fontSize: 13, marginTop: 8 }}>
+                <b>Approved Customer Price summary (copy for invoice):</b>
+                <pre style={{ margin: "6px 0 0", fontSize: 12, background: "#f9fafb", padding: 8, borderRadius: 6 }}>
+{`Product: ${emergency.family.label}
+Quantity: ${emergency.tiers[emergency.tiers.length - 1].quantity}
+Unit price: $${emergency.tiers[emergency.tiers.length - 1].unitPrice.toFixed(2)}
+Total: $${emergency.tiers[emergency.tiers.length - 1].totalPrice.toFixed(2)}
+Freight (separate): $${emergency.freight.total.toFixed(2)} (${emergency.freight.source.toUpperCase()})
+Setup/design fee included in pricing.`}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

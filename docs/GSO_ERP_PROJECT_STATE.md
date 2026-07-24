@@ -751,3 +751,6 @@ Nine researched family curves + family minimums implemented in calculator-emerge
 
 ## Milestone: Automatic Full Costing Engine Core (Patch 14B.1)
 auto-costing.server.ts pure engine + loader auto-mode wiring (emode=auto) computing the full labeled five-family breakdown (D-spec lines with verified/owner-standard/estimated/missing sources) and feeding variable+setup into the 14B.0 tier pipeline; auto-mode draft saves are blocked pending 14B.1a server recomputation (no client-cost trust); manual mode stays as labeled fallback. Tests 391 -> 397; build clean; tsc 308 = baseline. Details: docs/GSO_COST_CALCULATOR_EMERGENCY_FIX.md.
+
+## Milestone: Usable Automatic Calculator Form + Safe Auto Draft Save (Patch 14B.1a)
+Automatic Costing form with CALCULATE COST, badge-labeled breakdown, missing-cost DRAFT ONLY banner, Finalizable indicator, copyable customer price summary; auto-mode draft saves recompute server-side (engine 14B.1a-auto, full autoBreakdown snapshot; client totals ignored); manual mode retained as fallback. Tests 397 passing (auto engine covered in 14B.1); build clean; tsc 308 = baseline. Deferred to 14C: DB pickers, per-family field hiding. Details: docs/GSO_COST_CALCULATOR_EMERGENCY_FIX.md.

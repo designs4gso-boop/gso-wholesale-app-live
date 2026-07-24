@@ -58,3 +58,17 @@ returns the breakdown; auto-mode DRAFT SAVING is deliberately blocked until
 14B.1a adds full server-side recomputation of auto params (client totals are
 never trusted). Deferred to 14B.1a: auto-input UI fields + verified-material
 picker + auto-save recompute; manual mode remains the labeled fallback.
+
+## 14B.1a — Automatic form + safe auto draft save
+Automatic Costing form (Recommended) on the calculator: family + designs/sides/
+dims/material/printer/white/gloss/blank/lid/boxes/waste/weeding/hemming fields,
+CALCULATE COST (GET -> server computeAutoCost), full breakdown with colored
+Verified/Owner standard/Estimated/Missing badges, COST NOT VERIFIED - DRAFT ONLY
+banner listing each missing cost, Finalizable indicator, and a copyable Approved
+Customer Price summary (product/qty/unit/total/freight/setup note). Auto-mode
+DRAFT SAVE now recomputes everything server-side from the posted family inputs
+(client evar/esetup ignored; engine "14B.1a-auto"; autoBreakdown lines+missing+
+warnings snapshotted). Manual Emergency mode retained as labeled fallback.
+Remaining before 14C: DB-record pickers for materials/jars/lids (values are
+typed from verified records this patch), per-family field hiding, form-value
+retention polish.
