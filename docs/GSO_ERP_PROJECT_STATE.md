@@ -754,3 +754,6 @@ auto-costing.server.ts pure engine + loader auto-mode wiring (emode=auto) comput
 
 ## Milestone: Usable Automatic Calculator Form + Safe Auto Draft Save (Patch 14B.1a)
 Automatic Costing form with CALCULATE COST, badge-labeled breakdown, missing-cost DRAFT ONLY banner, Finalizable indicator, copyable customer price summary; auto-mode draft saves recompute server-side (engine 14B.1a-auto, full autoBreakdown snapshot; client totals ignored); manual mode retained as fallback. Tests 397 passing (auto engine covered in 14B.1); build clean; tsc 308 = baseline. Deferred to 14C: DB pickers, per-family field hiding. Details: docs/GSO_COST_CALCULATOR_EMERGENCY_FIX.md.
+
+## Milestone: Calculator Usability Cleanup (Patch 14B.1B)
+Page restructured: header -> Cost Calculator section (auto form + breakdown + Pricing Tiers & Margin Review + customer summary + draft save) -> Legacy Manual Calculator wrapped in a collapsed "Fallback Only" details block with the unsupported-products warning (functionality preserved; no legacy content above the new tools). Renames applied; begin prompt added. Remaining for 14C: move the auto form physically above the tier/manual controls inside the section, per-family field hiding, freight/advanced collapse groups. Tests 397 -> 399; build clean; tsc 308 = baseline.

@@ -1173,6 +1173,10 @@ export default function ErpCostCalculatorRoute() {
         </table>
       </section>
       <EmergencySection />
+      <details style={{ marginTop: 18, border: "1px solid #d1d5db", borderRadius: 12, padding: 12 }}>
+        <summary style={{ fontWeight: 700, cursor: "pointer" }}>Legacy Manual Calculator — Fallback Only</summary>
+        <p style={{ color: "#92400e", fontSize: 13 }}>Use only for unsupported products or special jobs that cannot yet be calculated automatically.</p>
+      </details>
     </main>
   );
 }
@@ -1184,7 +1188,7 @@ function EmergencySection() {
   const money2 = (value: number) => `$${value.toFixed(2)}`;
   return (
     <section style={{ ...cardStyle, marginTop: 18, borderColor: "#b45309", borderWidth: 2 }}>
-      <h2 style={{ marginTop: 0 }}>Emergency pricing (14B.0) — provisional tier curve, {emergency.floor}% margin floor</h2>
+      <h2 style={{ marginTop: 0 }}>Pricing Tiers &amp; Margin Review — family curves, {emergency.floor}% margin floor</h2>
       <p style={smallHelp}>
         PROVISIONAL margin curve (60/55/50/45/40 — editable per tier) until competitor research is done. Setup spreads
         across each tier quantity; every tier prices from its OWN cost (never a discount off tier 1). Freight stays a
@@ -1268,7 +1272,8 @@ function EmergencySection() {
 
       {/* 14B.1a: Automatic Costing form (Recommended) — server computes everything */}
       <div style={{ borderTop: "2px solid #b45309", marginTop: 14, paddingTop: 12 }}>
-        <h3 style={{ margin: "0 0 4px" }}>Automatic Costing — Recommended</h3>
+        <h3 style={{ margin: "0 0 4px" }}>Cost Calculator</h3>
+        <p style={smallHelp}>Choose a product family and enter the job details to begin.</p>
         <p style={smallHelp}>Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
         <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8 }}>
           <input type="hidden" name="emode" value="auto" />

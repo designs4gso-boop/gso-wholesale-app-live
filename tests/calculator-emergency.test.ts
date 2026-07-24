@@ -303,3 +303,19 @@ describe("automatic full costing (14B.1)", () => {
     expect(result.missing).toHaveLength(0);
   });
 });
+
+// ---- 14B.1B usability pins ----
+import { readFileSync } from "node:fs";
+describe("calculator usability (14B.1B)", () => {
+  const src = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+  it("legacy calculator is collapsed behind a fallback-only details section below the new tools", () => {
+    expect(src).toContain("Legacy Manual Calculator — Fallback Only");
+    expect(src).toContain("Use only for unsupported products or special jobs");
+    expect(src.indexOf("<EmergencySection />")).toBeLessThan(src.indexOf("Legacy Manual Calculator — Fallback Only"));
+  });
+  it("renames applied: Cost Calculator primary, Pricing Tiers & Margin Review, begin prompt shown", () => {
+    expect(src).toContain("Pricing Tiers &amp; Margin Review");
+    expect(src).toContain("Choose a product family and enter the job details to begin.");
+    expect(src).not.toContain("Emergency pricing (14B.0)");
+  });
+});
