@@ -769,3 +769,61 @@ Shared classifier + compatibility + family mapping in product-driven-costing.ser
 
 ## Milestone: Required Miron Top Selection (Patch 14C.1B1)
 Owner rule enforced: every Miron sale requires an explicit Top type selection in the UI, without exception - the 14C.1B combined-set waiver is removed (uiFamilyToEngine premium+jar_miron always -> miron-jars). Cost policy centralized in ONE shared function resolveMironTopLine (product-driven-costing.server.ts, TOP_ENGINE_VERSION 14C.1B1-required-miron-top): combined jar+lid sets charge the set price once; selecting the included standard top adds $0 incremental ("Standard top - included in selected Miron set", verified); a different compatible top adds ONLY the verified upgrade difference (max(0, top - included standard), both costs required); unverifiable difference = MISSING "TOP UPGRADE COST NOT VERIFIED - DRAFT ONLY" (never assumed $0); true jar-only records add the full qty-tiered top cost; no selection = MISSING "Top type - Required (Miron)" blocker. Canonical top types (type:standard-top / type:black-metal-top) render even with zero Vendor Cost Book top records so the selector is never absent. Loader + save action both build the mironTop policy server-side; snapshot engine 14C.1B1-required-miron-top records set/top selection, includes-standard-top flag, and basis. Chiron unchanged (cap included, no selector). Tests 430 -> 435; build clean; tsc 308 = baseline. Verified standard/black-metal top unit costs still needed in the Vendor Cost Book to unlock $-verified upgrades (until then upgrades stay Draft Only).
+
+## Milestone: Complete Product-to-Price Quoting Flow (Patch 14C.2)
+Chiron restored: classifier normalizes vendor/sku (real records are vendor
+"SAFE CARE" with a space + productType plain "jar" — the old checks never
+matched, so every Chiron jar fell to jar_standard and the Premium CHIRON group
+rendered empty); owner precedence Miron top > Miron jar > Chiron/Safe Care >
+standard jar > sticker bag > other; 5oz placeholder excluded before the Chiron
+rule; family/class fit enforced at loader AND save (stale switches neutralized);
+vendor-vs-material picker dedupe; empty optgroups never rendered. Sticker Bags
+renamed + data-driven (bag_sticker class; 4x5/4x6/14x16/OZ today, future sizes
+appear without route changes; single bag auto-selects; size-resolved owner
+application rates — unknown sizes block). Jar multi-label builder (1-6 labels,
+same-size or per-row type+dimensions, shared buildLabelRows for loader+save,
+stale rows discarded, per-row missing blockers, application labor = labels
+applied not jars). Automatic family pricing tiers straight from the calculated
+job: per-quantity engine reruns, researched curves + 40% floor untouched,
+requested quantity highlighted, no zero-row tables, customer price selection
+("Use this price") -> customer-facing summary card (no internal cost/profit),
+SAVE DRAFT QUOTE recomputes everything server-side (psearch GET-state
+transport; selected tier resolved by quantity; posted totals ignored).
+Snapshot engine 14C.2-multilabel-auto-tiers (topEngine
+14C.1B1-required-miron-top preserved). Manual fields renamed/kept collapsed as
+"Advanced Pricing Controls". Tests 435 -> 457; build clean; tsc 308 = baseline.
+Limitations: no per-label material/layer overrides; application standards only
+for 4x5/14x16 bags; standard jars + non-4x5 bags on the provisional universal
+curve (labeled); Miron separate-top records still needed for verified upgrades.
+
+## Milestone: Corrected Jar and Sticker-Bag Catalog Rules (Patch 14C.2A)
+Owner-authoritative corrections to the (uncommitted) 14C.2 catalog pass. The
+14C.2 classifier treated SAFE CARE vendor records as Chiron — WRONG: 3 oz /
+4 oz / 5 oz normal jars are STANDARD jars (5 oz included in the calculator by
+owner rule; caps counted once; no Top Type), and SAFE CARE alone never implies
+Chiron. Chiron is now exactly two explicit records seeded additively via
+tools/seed-chiron-jars.mjs against VendorProduct (Chiron 100 ml
+cmrzkm4om0000w6ysvtyrt97k / chiron-100ml / $1.80; Chiron 150 ml
+cmrzkm4u80001w6yslkmw0lfb / chiron-150ml / $1.90; vendor CHIRON; zero tiers;
+nothing else touched — Miron tier records verified intact, 5 tiers each).
+Chiron blank cost is FLAT at every quantity: enforceFlatChironCost() ignores
+any stray tiers at loader AND save; labels render exactly "Chiron 100 ml — cap
+included — $1.80 — Verified" / "Chiron 150 ml — cap included — $1.90 —
+Verified". Miron unchanged (tiered cost, required Top Type, 14C.1B1 upgrade
+logic). Sticker bags: owner size list 4x5/4x6/5x8/6x9/14x16 always renders —
+OZ bag excluded from bag_sticker; unpriced records stay visible as NO PRICE;
+5x8/6x9 (no records) render as canonical type:bag-<size> options that quote
+Draft Only; size-specific application standards preserved (4x5/14x16 only).
+Tests 457 -> 463; build clean; tsc 308 = baseline.
+
+## Milestone: Neutralized Stale 4x6 Sticker-Bag Cost (Patch 14C.2A1)
+tools/neutralize-4x6-bag-cost.mjs zeroed the never-verified $0.10 seed value
+on VendorProduct cmrpjvdf10001av2aajhsnk4f (vendorSku preset:blank-4x6-bag)
+and renamed it "4x6 Sticker Bag" — record active, no tiers, nothing deleted,
+historical quotes untouched. The calculator now renders "4x6 Sticker Bag — NO
+PRICE — not verified"; selection = missing blank-cost blocker, tiers Draft
+Only, no borrowed 4x5 rules. Final sticker-bag statuses: 4x5 $0.09 Verified /
+4x6 NO PRICE / 5x8 NO PRICE / 6x9 NO PRICE / 14x16 $1.00 Verified / OZ
+excluded. Standard Jars confirmed: 3 oz + 4 oz + 5 oz + soda-can preset (owner
+treats the can as a jar); Chiron/Miron/tops excluded. Tests 463 -> 467; build
+clean; tsc 308 = baseline.

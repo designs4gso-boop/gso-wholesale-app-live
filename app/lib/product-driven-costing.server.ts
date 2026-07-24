@@ -11,10 +11,14 @@
 // lines are labeled with the layer count and "provisional linear model".
 
 import { INK_RATES, OWNER_LABOR, type CostLine, type SourceLabel } from "./calculator-emergency.server";
-import { blankItemUnitCostAtQty } from "./cost-calculator.server";
+import { WIRED_LABOR, blankItemUnitCostAtQty } from "./cost-calculator.server";
 
 export const PRODUCT_ENGINE_VERSION = "14C.1";
+// 14C.2: snapshot engine for the complete product-to-price flow (multi-label
+// jar builder + automatic family tiers fed directly from the calculated job).
+export const MULTILABEL_ENGINE_VERSION = "14C.2-multilabel-auto-tiers";
 export const MAX_LAYERS = 14;
+export const MAX_LABELS_PER_UNIT = 6;
 export const WEEDING_PAGE_SQFT = (54 * 54) / 144; // 20.25 sqft per 54x54in page
 
 // Owner-verified Safe Care packing (documented constants until an ERP
@@ -36,6 +40,76 @@ export function validateLayers(value: number): { ok: boolean; value: number; err
   return { ok: true, value: Math.floor(value), error: null };
 }
 
+// ---------- 14C.2: jar multi-label rows (server-built, never client-trusted) ----------
+// Terminology guard: these are PRINTED labels (a "Lid label" is artwork applied
+// to the lid). The Miron "Top type" is the PHYSICAL jar top — separate concept,
+// separate field, separate snapshot key.
+export const LABEL_TYPES = [
+  { value: "side", label: "Side label" },
+  { value: "lid", label: "Lid label" },
+  { value: "bottom", label: "Bottom label" },
+  { value: "neck", label: "Neck label" },
+  { value: "tamper", label: "Tamper label" },
+  { value: "additional", label: "Additional label" },
+  { value: "custom", label: "Custom" },
+];
+
+export function defaultLabelTypesFor(count: number): string[] {
+  const n = Math.min(Math.max(1, Math.floor(count || 1)), MAX_LABELS_PER_UNIT);
+  if (n === 1) return ["side"];
+  if (n === 2) return ["side", "lid"];
+  return ["side", "lid", ...Array.from({ length: n - 2 }, () => "additional")];
+}
+
+export type LabelRow = { type: string; typeLabel: string; widthIn: number; heightIn: number };
+
+// One shared row builder for loader AND save action. Rows are derived strictly
+// from the posted count — extra posted array entries (stale hidden rows) are
+// discarded here, so they can never affect cost. Same-size mode replicates one
+// width/height across every row with the documented default types.
+export function buildLabelRows(params: {
+  count: number;
+  same: boolean;
+  sameWidthIn: number;
+  sameHeightIn: number;
+  types: string[];
+  widths: number[];
+  heights: number[];
+}): LabelRow[] {
+  const count = Math.min(Math.max(1, Math.floor(params.count || 1)), MAX_LABELS_PER_UNIT);
+  const defaults = defaultLabelTypesFor(count);
+  const valid = new Set(LABEL_TYPES.map((option) => option.value));
+  const rows = Array.from({ length: count }, (_v, index) => {
+    const type = params.same
+      ? defaults[index]
+      : valid.has(String(params.types[index] || "")) ? String(params.types[index]) : defaults[index];
+    const widthIn = params.same ? Number(params.sameWidthIn) : Number(params.widths[index]);
+    const heightIn = params.same ? Number(params.sameHeightIn) : Number(params.heights[index]);
+    return {
+      type,
+      typeLabel: LABEL_TYPES.find((option) => option.value === type)?.label || "Custom",
+      widthIn: Number.isFinite(widthIn) && widthIn > 0 ? widthIn : 0,
+      heightIn: Number.isFinite(heightIn) && heightIn > 0 ? heightIn : 0,
+    };
+  });
+  // number repeated "Additional label" rows so breakdown lines stay distinct
+  const additionalCount = rows.filter((row) => row.type === "additional").length;
+  if (additionalCount > 1) {
+    let n = 0;
+    for (const row of rows) if (row.type === "additional") row.typeLabel = `Additional label ${++n}`;
+  }
+  return rows;
+}
+
+// Bag application labor by BAG SIZE (owner standards only; unknown sizes are
+// a MISSING blocker, never silently priced at the 4x5 rate).
+export function bagApplicationRateFor(bagName: string): { rate: number | null; source: SourceLabel; basis: string } {
+  const text = String(bagName || "");
+  if (/14\s?x\s?16|pound/i.test(text)) return { rate: WIRED_LABOR.bag14x16PerSide, source: "owner_standard", basis: "14x16 bag $1.00/label (owner standard)" };
+  if (/4\s?x\s?5\b/i.test(text)) return { rate: OWNER_LABOR.bagLabelApplicationPer, source: "owner_standard", basis: "4x5 bag $0.0781/label (owner standard)" };
+  return { rate: null, source: "missing", basis: "No owner application-labor standard for this bag size" };
+}
+
 export type ProductFamilyKey = "bags-4x5" | "chiron-jars" | "miron-jars" | "stickers-labels" | "banners" | "custom";
 
 export type ResolvedComponent = {
@@ -54,6 +128,10 @@ export type ProductDrivenInput = {
   facesPerUnit: number; // normalized from Front only/Front+back, labels per jar, sides, custom faces
   widthIn: number;
   heightIn: number;
+  // 14C.2: jar multi-label rows (built server-side by buildLabelRows). When
+  // present they REPLACE facesPerUnit/widthIn/heightIn: pieces = quantity x
+  // rows, sqft = sum of every row, each row needs positive dimensions.
+  labelRows?: LabelRow[] | null;
   blank: ResolvedComponent | null; // null = No Blank Item
   lid: ResolvedComponent | null; // Miron only
   // 14C.1B1: Miron top policy — a top selection is ALWAYS required for Miron.
@@ -79,6 +157,23 @@ export type ProductDrivenInput = {
   boxOverride: { unitsPerBox: number; reason: string } | null;
 };
 
+export type LabelRowDerived = {
+  index: number;
+  type: string;
+  typeLabel: string;
+  pieces: number;
+  widthIn: number;
+  heightIn: number;
+  sqin: number;
+  baseSqft: number;
+  sqftShare: number; // fraction of total base sqft (display allocation)
+  materialCostShare: number;
+  inkCostShare: number;
+  whiteLayers: number;
+  glossLayers: number;
+  applications: number;
+};
+
 export type DerivedValues = {
   sqinPerPiece: number;
   totalPieces: number;
@@ -92,6 +187,8 @@ export type DerivedValues = {
   weedingPages: number;
   weedingBasis: string;
   printPasses: number;
+  labelRows: LabelRowDerived[] | null; // 14C.2 multi-label detail (null = single-size flow)
+  applicationCount: number; // total labels applied (0 when no application labor line)
 };
 
 export function computeProductDrivenCost(input: ProductDrivenInput): {
@@ -115,13 +212,28 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   const glossLayers = input.printer === "mimaki" && !input.printerHasGloss ? Math.floor(Math.max(0, Math.min(MAX_LAYERS, input.glossLayers))) : gloss.value;
 
   // ---- geometry (server-derived; dimensions required for printed families) ----
-  const faces = Math.max(1, Math.floor(input.facesPerUnit));
+  // 14C.2: label rows (jars) sum per-row sqft; every row needs positive
+  // dimensions and each invalid row is its OWN missing blocker. Without rows,
+  // the single width/height x faces flow is unchanged.
+  const rows = input.labelRows && input.labelRows.length ? input.labelRows : null;
+  const faces = rows ? rows.length : Math.max(1, Math.floor(input.facesPerUnit));
   const totalPieces = quantity * faces;
-  const sqinPerPiece = input.widthIn > 0 && input.heightIn > 0 ? input.widthIn * input.heightIn : 0;
-  const baseSqft = (sqinPerPiece * totalPieces) / 144;
-  const printedFamily = input.family !== "custom" || sqinPerPiece > 0;
-  if (printedFamily && baseSqft <= 0) {
-    lines.push({ key: "dimensions", label: "Print width and height", amount: 0, source: "missing", note: "Dimensions required — square footage is never assumed." });
+  const rowSqft = rows ? rows.map((row) => (row.widthIn > 0 && row.heightIn > 0 ? (row.widthIn * row.heightIn * quantity) / 144 : 0)) : [];
+  const sqinPerPiece = rows
+    ? rows.reduce((sum, row) => sum + Math.max(0, row.widthIn) * Math.max(0, row.heightIn), 0) / rows.length
+    : input.widthIn > 0 && input.heightIn > 0 ? input.widthIn * input.heightIn : 0;
+  const baseSqft = rows ? rowSqft.reduce((sum, value) => sum + value, 0) : (sqinPerPiece * totalPieces) / 144;
+  if (rows) {
+    rows.forEach((row, index) => {
+      if (!(row.widthIn > 0 && row.heightIn > 0)) {
+        lines.push({ key: `label_dim_${index}`, label: `${row.typeLabel} (label ${index + 1}) — width and height`, amount: 0, source: "missing", note: "Each label row needs a positive width and height — never assumed." });
+      }
+    });
+  } else {
+    const printedFamily = input.family !== "custom" || sqinPerPiece > 0;
+    if (printedFamily && baseSqft <= 0) {
+      lines.push({ key: "dimensions", label: "Print width and height", amount: 0, source: "missing", note: "Dimensions required — square footage is never assumed." });
+    }
   }
 
   // ---- waste precedence: recipe -> override -> provisional 10% ----
@@ -203,8 +315,23 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   } else {
     lines.push({ key: "designs", label: "Number of designs", amount: 0, source: "missing", note: "Required." });
   }
-  if (input.family === "bags-4x5") lines.push({ key: "application", label: `Bag-label application — ${faces} label(s)/bag`, amount: OWNER_LABOR.bagLabelApplicationPer * totalPieces, source: "owner_standard" });
-  if (input.family === "chiron-jars" || input.family === "miron-jars") lines.push({ key: "application", label: `Jar application (${faces} label(s)/jar)`, amount: OWNER_LABOR.jarApplicationPer * quantity, source: "owner_standard" });
+  // 14C.2: application labor is charged per LABEL APPLIED (quantity x labels
+  // per unit), never per jar/bag. Bag rates resolve by bag size (owner
+  // standards only — unknown sizes block instead of borrowing the 4x5 rate).
+  let applicationCount = 0;
+  if (input.family === "bags-4x5") {
+    const bagRate = bagApplicationRateFor(input.blank?.name || "");
+    applicationCount = totalPieces;
+    if (bagRate.rate != null) {
+      lines.push({ key: "application", label: `Bag-label application — ${totalPieces} label(s) (${quantity} x ${faces}/bag; ${bagRate.basis})`, amount: bagRate.rate * totalPieces, source: "owner_standard" });
+    } else {
+      lines.push({ key: "application", label: `Bag-label application — ${totalPieces} label(s)`, amount: 0, source: "missing", note: `${bagRate.basis} — application labor cannot be priced.` });
+    }
+  }
+  if (input.family === "chiron-jars" || input.family === "miron-jars") {
+    applicationCount = totalPieces;
+    lines.push({ key: "application", label: `Jar label application — ${totalPieces} label(s) (${quantity} jar(s) x ${faces} label(s)/jar)`, amount: OWNER_LABOR.jarApplicationPer * totalPieces, source: "owner_standard" });
+  }
 
   // ---- automatic weeding (stickers only, when the cut requires it) ----
   let weedingPages = 0;
@@ -237,12 +364,31 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
 
   const totalCost = lines.reduce((sum, line) => sum + line.amount, 0);
   const missing = lines.filter((line) => line.source === "missing").map((line) => line.label);
+  // per-row DISPLAY allocation: shares of the single costed material/ink lines
+  // by sqft fraction — shares sum exactly back to the line amounts, so the
+  // breakdown reconstructs to total cost with nothing double-counted.
+  const materialAmount = lines.find((line) => line.key === "material")?.amount || 0;
+  const inkAmount = lines.filter((line) => line.key.startsWith("ink_")).reduce((sum, line) => sum + line.amount, 0);
+  const labelRowsDerived: LabelRowDerived[] | null = rows
+    ? rows.map((row, index) => {
+        const share = baseSqft > 0 ? rowSqft[index] / baseSqft : 0;
+        return {
+          index, type: row.type, typeLabel: row.typeLabel, pieces: quantity,
+          widthIn: row.widthIn, heightIn: row.heightIn, sqin: row.widthIn * row.heightIn,
+          baseSqft: rowSqft[index], sqftShare: share,
+          materialCostShare: materialAmount * share, inkCostShare: inkAmount * share,
+          whiteLayers, glossLayers, applications: quantity,
+        };
+      })
+    : null;
   return {
     lines,
     derived: {
       sqinPerPiece, totalPieces, baseSqft, wastePct, wasteSource, wasteAdjustedSqft,
       unitsPerBox: packRule.unitsPerBox ?? null, boxes, boxSource, weedingPages, weedingBasis,
       printPasses: 1 + whiteLayers + glossLayers,
+      labelRows: labelRowsDerived,
+      applicationCount,
     },
     missing,
     warnings,
@@ -263,31 +409,65 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
 // a separate top is required ONLY for jar-only Miron records (prevents
 // double-counting a lid already inside the verified tier price).
 
-export type CalculatorProductClass = "bag_4x5" | "jar_standard" | "jar_chiron" | "jar_miron" | "miron_top" | "other";
+export type CalculatorProductClass = "bag_sticker" | "jar_standard" | "jar_chiron" | "jar_miron" | "miron_top" | "other";
 
 export type ClassifiableRecord = { name: string; productType?: string | null; vendor?: string | null; vendorSku?: string | null };
 
+// 14C.2A precedence (owner-authoritative catalog rules):
+//   1. Miron top/component   2. Miron jar   3. Chiron jar (EXPLICIT only)
+//   4. standard jar          5. sticker bag 6. other
+// Structured fields (productType, vendor, vendorSku) decide first; the
+// normalized-name fallback only applies when they carry no signal.
+// Owner rules (2026-07-24): 3 oz / 4 oz / 5 oz normal jars are STANDARD jars —
+// vendor SAFE CARE alone does NOT mean Chiron. Chiron is only an explicit
+// Chiron record (flat cost, cap included). OZ bags are NOT sticker bags.
 export function classifyCalculatorProduct(record: ClassifiableRecord): { klass: CalculatorProductClass; includesTop: boolean } {
   const name = String(record.name || "");
   const type = String(record.productType || "").toLowerCase();
-  const vendor = String(record.vendor || "").toLowerCase();
-  const sku = String(record.vendorSku || "").toLowerCase();
+  const vendorNorm = String(record.vendor || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const skuNorm = String(record.vendorSku || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const text = `${type} ${name}`.toLowerCase();
-  const includesTop = /\+\s*(lid|cap|top)|with\s+(lid|cap|top)|cap\s+included|lid\s+included/i.test(name) || /jar_(3|4)oz/.test(type);
-  // 1. structured productType
-  if (/^jar_(3|4)oz/.test(type)) return { klass: "jar_standard", includesTop: true }; // caps included per verified records
-  if (/^jar_5oz/.test(type)) return { klass: "other", includesTop: false }; // placeholder — never customer-facing
-  // 2/3. vendor + sku
-  const isMiron = vendor === "miron" || sku.includes("miron") || /\bmiron\b/.test(text);
+  const includesTop = /\+\s*(lid|cap|top)|with\s+(lid|cap|top)|cap\s+included|lid\s+included/i.test(name) || /jar_(3|4|5)oz/.test(type);
+  const isMiron = vendorNorm === "miron" || skuNorm.includes("miron") || /\bmiron\b/.test(text);
+  const isChiron = vendorNorm.includes("chiron") || skuNorm.includes("chiron") || /\bchiron\b/.test(text);
+  // 1. Miron top/component
   if (isMiron && /\b(lid|top|cap)\b/.test(text) && !/\bjar\b/.test(text)) return { klass: "miron_top", includesTop: false };
+  // 2. Miron jar
   if (isMiron) return { klass: "jar_miron", includesTop };
-  if (vendor.includes("safecare") || /\b(chiron|safecare)\b/.test(text) || sku.includes("safecare") || sku.includes("chiron")) {
-    return { klass: "jar_chiron", includesTop: true }; // Chiron cap always included
-  }
-  // 4. normalized-name fallback (documented)
-  if (/4\s?x\s?5/.test(text) && /bag/.test(text)) return { klass: "bag_4x5", includesTop: false };
-  if (/\bjar\b/.test(text)) return { klass: "jar_standard", includesTop };
+  // 3. Chiron jar — EXPLICIT Chiron branding only; cap always included
+  if (isChiron) return { klass: "jar_chiron", includesTop: true };
+  // 4. standard jar — 3/4/5 oz normal jars (caps included per verified
+  //    records); structured productType first, then name fallback
+  if (/^jar_(3|4|5)oz/.test(type)) return { klass: "jar_standard", includesTop: true };
+  if (/\b(3|4|5)\s?oz\b/.test(text) && /jar/.test(text)) return { klass: "jar_standard", includesTop: true };
+  if (/\bjar\b/.test(text) || /\bcan\b/.test(text)) return { klass: "jar_standard", includesTop };
+  // 5. sticker bag — structured productType first (dtp/stock/die bags are
+  //    DIFFERENT product families; OZ bags are excluded by owner rule)
+  const excludedBag = /dtp|stock|die/.test(type) || /dtp|stock|die.?cut/.test(text) || /\boz\b/.test(text);
+  if (!excludedBag && /bag/.test(type)) return { klass: "bag_sticker", includesTop: false };
+  if (!excludedBag && /\bbag\b/.test(text) && !/box/.test(text)) return { klass: "bag_sticker", includesTop: false };
+  // 6. other
   return { klass: "other", includesTop: false };
+}
+
+// ---------- 14C.2A: Chiron flat cost + required sticker-bag sizes ----------
+// Owner rule: Chiron blank cost is FLAT at every quantity (100 ml = $1.80,
+// 150 ml = $1.90 on the seeded Vendor Cost Book records). Any quantity tiers
+// that ever appear on a Chiron record are IGNORED so the blank cost can never
+// drift by tier. Selling margins/prices still vary by tier normally.
+export function enforceFlatChironCost(component: ResolvedComponent | null, klass: CalculatorProductClass | null): ResolvedComponent | null {
+  if (!component || klass !== "jar_chiron" || !component.tiers.length) return component;
+  return { ...component, tiers: [], note: component.note || "Chiron flat cost — quantity tiers ignored (owner rule)." };
+}
+
+// Owner-required sticker-bag size list. Sizes without an active record render
+// as canonical NO PRICE options (value "type:bag-<size>") so they can be
+// quoted Draft Only — a cost is never guessed. A real Vendor Cost Book record
+// for the size automatically replaces the canonical entry.
+export const REQUIRED_STICKER_BAG_SIZES = ["4x5", "4x6", "5x8", "6x9", "14x16"];
+export function bagSizeToken(name: string): string | null {
+  const match = String(name || "").match(/(\d{1,2})\s*x\s*(\d{1,2})/);
+  return match ? `${Number(match[1])}x${Number(match[2])}` : null;
 }
 
 // Miron top compatibility: no structured compatibility relation exists in the
@@ -302,10 +482,12 @@ export function mironTopCompatible(jarName: string, topName: string): boolean {
   return jarSize != null && topSize === jarSize;
 }
 
-// UI family -> engine family. New canonical UI keys: standard-jars and
-// premium-jars (Chiron & Miron combined); legacy chiron-jars/miron-jars URL
-// values stay accepted for back-compat.
+// UI family -> engine family. 14C.2 canonical UI keys: sticker-bags,
+// standard-jars, premium-jars (Chiron & Miron combined), stickers-labels,
+// banners, custom-item. Legacy URL/snapshot values (bags-4x5, chiron-jars,
+// miron-jars, custom) stay accepted for back-compat.
 export function uiFamilyToEngine(uiFamily: string, selectedClass: CalculatorProductClass | null, includesTop: boolean): ProductFamilyKey {
+  if (uiFamily === "sticker-bags" || uiFamily === "bags-4x5") return "bags-4x5";
   if (uiFamily === "standard-jars") return "chiron-jars"; // cap-included jar semantics, no top selector
   if (uiFamily === "premium-jars") {
     if (selectedClass === "jar_miron") return "miron-jars"; // top selection ALWAYS required (14C.1B1 owner rule)
@@ -313,7 +495,51 @@ export function uiFamilyToEngine(uiFamily: string, selectedClass: CalculatorProd
   }
   if (uiFamily === "chiron-jars" || uiFamily === "miron-jars") return uiFamily as ProductFamilyKey; // legacy
   if (uiFamily === "custom-item") return "custom";
-  return (["bags-4x5", "stickers-labels", "banners", "custom"].includes(uiFamily) ? uiFamily : "custom") as ProductFamilyKey;
+  return (["stickers-labels", "banners", "custom"].includes(uiFamily) ? uiFamily : "custom") as ProductFamilyKey;
+}
+
+// Canonical family value recorded on NEW snapshots (legacy inputs normalize).
+export type CanonicalUiFamily = "sticker-bags" | "standard-jars" | "premium-jars" | "stickers-labels" | "banners" | "custom-item";
+export function canonicalUiFamily(uiFamily: string): CanonicalUiFamily {
+  if (uiFamily === "bags-4x5" || uiFamily === "sticker-bags") return "sticker-bags";
+  if (uiFamily === "standard-jars") return "standard-jars";
+  if (uiFamily === "premium-jars" || uiFamily === "chiron-jars" || uiFamily === "miron-jars") return "premium-jars";
+  if (uiFamily === "stickers-labels") return "stickers-labels";
+  if (uiFamily === "banners") return "banners";
+  return "custom-item";
+}
+
+// Which product classes a family's blank picker accepts. Applied at BOTH the
+// loader and the save action so a stale selection from a previous family can
+// never survive a family switch (a Miron jar posted under Standard Jars is
+// treated as no selection, not silently re-priced).
+export function blankClassAllowedFor(uiFamily: string, klass: CalculatorProductClass): boolean {
+  if (uiFamily === "chiron-jars") return klass === "jar_chiron"; // legacy narrow value
+  if (uiFamily === "miron-jars") return klass === "jar_miron"; // legacy narrow value
+  const canonical = canonicalUiFamily(uiFamily);
+  if (canonical === "sticker-bags") return klass === "bag_sticker";
+  if (canonical === "standard-jars") return klass === "jar_standard";
+  if (canonical === "premium-jars") return klass === "jar_chiron" || klass === "jar_miron";
+  if (canonical === "custom-item") return true;
+  return false; // stickers/banners have no blank picker
+}
+
+// Researched margin family for the AUTOMATIC tier table (14C.2). Derived from
+// the product selection server-side — the owner never re-enters the family.
+// null = no researched curve exists (standard jars, custom items, non-4x5 bag
+// sizes) -> the provisional universal curve applies with the existing
+// "FAMILY MARGIN RULE NOT CONFIGURED" label. Never invents a new curve.
+export function marginFamilyKeyFor(uiFamily: string, selectedClass: CalculatorProductClass | null, blankName: string): string | null {
+  const canonical = canonicalUiFamily(uiFamily);
+  if (canonical === "sticker-bags") return /4\s?x\s?5\b/i.test(String(blankName || "")) ? "bags-4x5" : null;
+  if (canonical === "premium-jars") {
+    if (selectedClass === "jar_miron") return "miron-jars";
+    if (selectedClass === "jar_chiron") return "chiron-jars";
+    return null;
+  }
+  if (canonical === "stickers-labels") return "stickers-labels";
+  if (canonical === "banners") return "banners";
+  return null;
 }
 
 export function formatComponentLabel(name: string, klass: CalculatorProductClass, includesTop: boolean, priceText: string): string {

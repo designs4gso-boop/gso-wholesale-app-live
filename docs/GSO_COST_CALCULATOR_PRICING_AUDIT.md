@@ -230,3 +230,25 @@ actual-costs, calibration. Models: Material, Machine(+InkChannel), VendorProduct
 ProductTypeProfile, ProductRecipe(+RecipeTier/materials/addOns/machineRules), PricingRule,
 WholesaleRule, ConfiguratorPricingRule, Quote(+Item snapshots), ProductionJob(+Item),
 ErpAdminSetting. Seeds: tools/seed-jar-*, seed-product-families, sync-stockbag-*.
+
+## 14C.2 addendum (2026-07-24)
+The dual-entry gap flagged in this audit (calculate costs, then re-enter them
+in the tier form) is closed: the product calculator now feeds the family tier
+engine directly (per-quantity engine reruns; researched curves + 40% floor
+unchanged), with customer-price selection and a recomputing draft save.
+Sticker bags are data-driven with size-resolved owner application rates.
+(A 14C.2 classifier pass that treated SAFE CARE vendor records as Chiron was
+overruled by the owner and corrected in 14C.2A before commit — see below.)
+Outstanding pricing-data gaps unchanged: Mimaki gloss $/ml, Miron separate-top
+records, application standards beyond 4x5/14x16 bags, researched curves for
+standard jars and non-4x5 bag sizes.
+
+## 14C.2A addendum (2026-07-24) — owner-authoritative catalog rules
+3 oz / 4 oz / 5 oz normal jars = STANDARD jars (SAFE CARE is just the vendor).
+Chiron = two explicit records only, FLAT blank cost at every quantity:
+Chiron 100 ml $1.80 / Chiron 150 ml $1.90 (seeded via
+tools/seed-chiron-jars.mjs; enforceFlatChironCost strips stray tiers). Miron
+stays tier-priced with required Top Type. Sticker bags = 4x5/4x6/5x8/6x9/14x16
+(OZ excluded); 5x8 + 6x9 have no records and quote Draft Only; the 4x6
+record's stale $0.10 seed value was NEUTRALIZED to NO PRICE by 14C.2A1
+(tools/neutralize-4x6-bag-cost.mjs) — 4x6/5x8/6x9 all await owner pricing.

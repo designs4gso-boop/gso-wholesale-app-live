@@ -72,3 +72,12 @@ warnings snapshotted). Manual Emergency mode retained as labeled fallback.
 Remaining before 14C: DB-record pickers for materials/jars/lids (values are
 typed from verified records this patch), per-family field hiding, form-value
 retention polish.
+
+## 14C.2 note
+The manual tier form is now the collapsed "Advanced Pricing Controls" (custom
+tier quantities, target-margin edits, freight/handling, owner below-floor
+override + reason). The normal flow never re-asks for family, costs, waste,
+quantity, or freight — automatic tiers generate from the calculated job. The
+manual pipeline itself (generateTiers, gates, freight math) is unchanged and
+remains the fallback; its tier table now hides zero-value rows until real
+costs exist.

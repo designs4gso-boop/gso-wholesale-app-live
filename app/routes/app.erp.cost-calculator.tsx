@@ -13,12 +13,14 @@ import {
   curveForTierCount,
   defaultTierMargins,
   generateTiers,
+  marginMath,
   resolveMarginFamily,
   MARGIN_RULE_SOURCE,
   type CostLine,
+  type FamilyMarginRule,
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
-import { classifyCalculatorProduct, computeProductDrivenCost, formatComponentLabel, mironTopCompatible, uiFamilyToEngine, type CalculatorProductClass, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
+import { MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -76,6 +78,7 @@ type BlankItemOption = {
   applicationKey: string;
   wastePct: number;
   vendor: string;
+  sku?: string; // 14C.2: lets the product pickers dedupe material rows that mirror a vendor record
 };
 
 type QuoteLine = {
@@ -467,6 +470,7 @@ export async function loader({ request }: { request: Request }) {
         applicationKey: "custom",
         wastePct: 0,
         vendor: m.vendor || "Saved material",
+        sku: cleanText(m.sku),
       };
     });
 
@@ -486,6 +490,7 @@ export async function loader({ request }: { request: Request }) {
     applicationKey: "custom",
     wastePct: 2,
     vendor: p.vendor || "Vendor product",
+    sku: cleanText(p.vendorSku),
   }));
 
   // Hide code presets that the jar ERP seed already copied into VendorProduct
@@ -794,19 +799,71 @@ export async function loader({ request }: { request: Request }) {
   let autoBag: any = null;
   let bagRecords: Array<{ item: any }> = [];
   let pickedBlankRef: any = null;
+  let labelRowsP: LabelRow[] | null = null;
+  let labelCountP = 1;
+  let sameSizeP = true;
+  let canonicalBagOptions: Array<{ value: string; label: string }> = [];
+  let productTiers: any[] | null = null;
+  let productMarginRule: FamilyMarginRule | null = null;
+  let productMarginKey: string | null = null;
+  let requestedQtyP = 0;
   const pFamily = String(eparams.get("pfamily") || "");
-  if (pFamily && ["bags-4x5", "standard-jars", "premium-jars", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom", "custom-item"].includes(pFamily)) {
+  if (pFamily && ["sticker-bags", "bags-4x5", "standard-jars", "premium-jars", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom", "custom-item"].includes(pFamily)) {
     // 14C.1B: classify every option once; family pickers filter by class.
-    classified = blankItems.map((item) => ({ item, ...classifyCalculatorProduct({ name: item.name, productType: item.productType, vendor: item.vendor }) }));
-    bagRecords = classified.filter((entry: any) => entry.klass === "bag_4x5" && (Number(entry.item.unitCost) > 0 || (entry.item.tiers || []).length > 0));
-    autoBag = pFamily === "bags-4x5" && bagRecords.length === 1 ? (bagRecords[0] as any).item : null;
+    classified = blankItems.map((item) => ({ item, ...classifyCalculatorProduct({ name: item.name, productType: item.productType, vendor: item.vendor, vendorSku: item.sku }) }));
+    // 14C.2 dedupe: a Material row that mirrors a VendorProduct record (same
+    // sku or same normalized name) is dropped from the pickers — the vendor
+    // record carries the quantity tiers and is the costing source of truth.
+    const normKey = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const vendorKeys = new Set(
+      classified
+        .filter((entry: any) => String(entry.item.id).startsWith("vendor:"))
+        .flatMap((entry: any) => [normKey(entry.item.name), normKey(entry.item.sku || "")])
+        .filter(Boolean),
+    );
+    classified = classified.filter((entry: any) => !(
+      String(entry.item.id).startsWith("material:")
+      && (vendorKeys.has(normKey(entry.item.name)) || (entry.item.sku && vendorKeys.has(normKey(entry.item.sku))))
+    ));
+    const isBagFamily = pFamily === "bags-4x5" || pFamily === "sticker-bags";
+    // 14C.2A: unpriced bag records stay VISIBLE (labeled NO PRICE — not
+    // verified; quotes stay Draft Only) and owner-required sizes without a
+    // record render as canonical NO PRICE options. A cost is never guessed.
+    bagRecords = classified.filter((entry: any) => entry.klass === "bag_sticker");
+    const presentBagSizes = new Set(bagRecords.map((entry: any) => bagSizeToken(entry.item.name)).filter(Boolean));
+    canonicalBagOptions = isBagFamily
+      ? REQUIRED_STICKER_BAG_SIZES.filter((size) => !presentBagSizes.has(size)).map((size) => ({ value: `type:bag-${size}`, label: `${size} Sticker Bag — NO PRICE — not verified` }))
+      : [];
+    autoBag = isBagFamily && bagRecords.length === 1 ? (bagRecords[0] as any).item : null;
     const requestedBlankId = String(eparams.get("pblank") || "") || (autoBag ? autoBag.id : "");
-    const pickedBlank = blankItemById.get(requestedBlankId);
+    let pickedBlank = blankItemById.get(requestedBlankId) || null;
+    let pickedEntry = pickedBlank ? classified.find((entry) => entry.item.id === pickedBlank!.id) : null;
+    // family-switch safety: a selection that is not valid for THIS family
+    // (stale Chiron/Miron/bag id from a previous family, or a deduped
+    // material row) is treated as no selection — never silently re-priced.
+    if (pickedBlank && (!pickedEntry || !blankClassAllowedFor(pFamily, pickedEntry.klass))) {
+      pickedBlank = null;
+      pickedEntry = null;
+    }
     pickedBlankRef = pickedBlank || null;
-    const pickedEntry = pickedBlank ? classified.find((entry) => entry.item.id === pickedBlank.id) : null;
     selectedClass = pickedEntry ? pickedEntry.klass : null;
     selectedIncludesTop = pickedEntry ? pickedEntry.includesTop : false;
-    topRequired = pFamily === "premium-jars" && selectedClass === "jar_miron"; // ALWAYS required for Miron (14C.1B1)
+    topRequired = (pFamily === "premium-jars" || pFamily === "miron-jars") && selectedClass === "jar_miron"; // ALWAYS required for Miron (14C.1B1)
+    // 14C.2 jar multi-label rows (server-built; stale extra rows discarded)
+    const jarFamilyP = ["standard-jars", "premium-jars", "chiron-jars", "miron-jars"].includes(pFamily);
+    labelCountP = Math.min(Math.max(1, Math.floor(Number(eparams.get("plabelcount") || 1))), MAX_LABELS_PER_UNIT);
+    sameSizeP = eparams.get("psame") !== "no";
+    labelRowsP = jarFamilyP
+      ? buildLabelRows({
+          count: labelCountP,
+          same: sameSizeP,
+          sameWidthIn: Number(eparams.get("pwidth") || 0),
+          sameHeightIn: Number(eparams.get("pheight") || 0),
+          types: eparams.getAll("plabeltype").map(String),
+          widths: eparams.getAll("plabelw").map(Number),
+          heights: eparams.getAll("plabelh").map(Number),
+        })
+      : null;
     const pickedLid = blankItemById.get(String(eparams.get("plid") || ""));
     const pickedMaterial = materialById.get(String(eparams.get("pmat") || ""));
     const customName = String(eparams.get("pcustomname") || "").slice(0, 80);
@@ -814,22 +871,34 @@ export async function loader({ request }: { request: Request }) {
     const customNote = String(eparams.get("pcustomnote") || "").slice(0, 160);
     const toComponent = (item: any): ResolvedComponent | null =>
       item ? { name: item.name, unitCost: Number(item.unitCost) > 0 ? Number(item.unitCost) : null, tiers: item.tiers || [], status: "verified" as const } : null;
-    const blankComponent = eparams.get("pblank") === "custom"
-      ? (customName && customCost > 0 && customNote
-          ? { name: customName, unitCost: customCost, tiers: [], status: "estimated" as const, note: `Custom item — ${customNote}` }
-          : null)
-      : eparams.get("pblank") === "none" ? null : toComponent(pickedBlank);
+    // 14C.2A: canonical NO PRICE bag sizes resolve to a null-cost component
+    // (Draft Only); Chiron blanks are forced to their flat cost (tiers ignored)
+    const canonicalBagSize = String(eparams.get("pblank") || "").startsWith("type:bag-") ? String(eparams.get("pblank")).slice("type:bag-".length) : null;
+    const canonicalBagComponent: ResolvedComponent | null = canonicalBagSize && REQUIRED_STICKER_BAG_SIZES.includes(canonicalBagSize)
+      ? { name: `${canonicalBagSize} Sticker Bag`, unitCost: null, tiers: [], status: "estimated", note: "Owner cost not provided yet — Draft Only." }
+      : null;
+    if (canonicalBagComponent) selectedClass = "bag_sticker";
+    const blankComponent = enforceFlatChironCost(
+      eparams.get("pblank") === "custom"
+        ? (customName && customCost > 0 && customNote
+            ? { name: customName, unitCost: customCost, tiers: [], status: "estimated" as const, note: `Custom item — ${customNote}` }
+            : null)
+        : eparams.get("pblank") === "none" ? null : canonicalBagComponent || toComponent(pickedBlank),
+      selectedClass,
+    );
     if (eparams.get("pblank") === "custom" && !blankComponent) {
       // custom without name/cost/reason stays null -> MISSING line via engine when family expects a blank
     }
     const printer = eparams.get("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
-    productCost = computeProductDrivenCost({
+    requestedQtyP = Math.floor(Number(eparams.get("pqty") || 0));
+    const productInput: ProductDrivenInput = {
       family: uiFamilyToEngine(pFamily, selectedClass, selectedIncludesTop),
-      quantity: Number(eparams.get("pqty") || 0) || eQuantities[eQuantities.length - 1] || 1,
+      quantity: requestedQtyP || eQuantities[eQuantities.length - 1] || 1,
       designs: Number(eparams.get("pdesigns") || 0),
       facesPerUnit: Math.max(1, Number(eparams.get("pfaces") || 1)),
       widthIn: Number(eparams.get("pwidth") || 0),
       heightIn: Number(eparams.get("pheight") || 0),
+      labelRows: labelRowsP,
       blank: blankComponent,
       lid: pFamily === "miron-jars" || topRequired ? resolveTopSelection(String(eparams.get("plid") || ""), pickedLid) : null,
       mironTop: topRequired ? {
@@ -863,9 +932,58 @@ export async function loader({ request }: { request: Request }) {
       boxOverride: eparams.get("pboxoverride") && eparams.get("pboxreason")
         ? { unitsPerBox: Number(eparams.get("pboxoverride")), reason: String(eparams.get("pboxreason")) }
         : null,
-    });
+    };
+    productCost = computeProductDrivenCost(productInput);
     eVar = productCost.perUnitVariable;
     eSetup = productCost.setupTotal;
+    // ---- 14C.2 AUTOMATIC family pricing tiers, fed directly from the
+    // calculated job. Each tier quantity RERUNS the full engine (blank tiers,
+    // boxes, setup spread all re-resolve per quantity) — the researched family
+    // curve and 40% floor are untouched; the requested quantity is always one
+    // of the rows. Only rendered once a quantity was actually entered.
+    if (requestedQtyP > 0) {
+      productMarginKey = marginFamilyKeyFor(pFamily, selectedClass, pickedBlank?.name || (autoBag ? autoBag.name : ""));
+      productMarginRule = productMarginKey ? resolveMarginFamily(productMarginKey) : null;
+      const tierQuantities = [...new Set([...eQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b);
+      const curveDefaults = productMarginRule
+        ? curveForTierCount(productMarginRule.curve, tierQuantities.length, productMarginRule.familyMinPct)
+        : defaultTierMargins(tierQuantities.length);
+      const tierMargins = eMarginsRaw.length === tierQuantities.length ? eMarginsRaw : curveDefaults;
+      const freightInputsP = {
+        actualFreight: Number(eparams.get("efactual") || 0),
+        handling: Number(eparams.get("efhandling") || 0),
+        otherFees: Number(eparams.get("effees") || 0),
+        estimatedAllowance: Number(eparams.get("efallow") || 0),
+        allocation: ((eparams.get("efalloc") as any) || "per_unit") as "per_unit" | "by_value" | "manual",
+        manualPerUnit: Number(eparams.get("efmanual") || 0),
+      };
+      const floorForFamily = Math.max(productMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
+      productTiers = tierQuantities.map((qty, index) => {
+        const run = qty === productInput.quantity ? productCost! : computeProductDrivenCost({ ...productInput, quantity: qty });
+        const tierFreight = computeFreight(freightInputsP, qty, 0);
+        const marginPct = tierMargins[index] ?? floorForFamily;
+        const unitCost = run.unitCost + tierFreight.perUnit; // same basis as the manual pipeline: freight rides in the margin basis
+        const { price, profit, actualMarginPct } = marginMath(unitCost, marginPct);
+        const belowFloor = marginPct < floorForFamily;
+        return {
+          quantity: qty,
+          requested: qty === requestedQtyP,
+          jobCost: run.totalCost + tierFreight.total,
+          unitCost,
+          marginPct,
+          unitPrice: price,
+          totalPrice: price * qty,
+          profit: profit * qty,
+          actualMarginPct,
+          belowFloor,
+          draftOnly: run.missing.length > 0,
+          freightTotal: tierFreight.total,
+          freightSource: tierFreight.source,
+          setupTotal: run.setupTotal,
+          status: run.missing.length ? "DRAFT ONLY — missing costs" : belowFloor ? "BELOW FLOOR — override required" : "Ready",
+        };
+      });
+    }
   }
   const freight = computeFreight(
     {
@@ -893,16 +1011,34 @@ export async function loader({ request }: { request: Request }) {
     mode: eMode, autoCost: autoCost ? { lines: autoCost.lines, perUnitVariable: autoCost.perUnitVariable, setupTotal: autoCost.setupTotal, missing: autoCost.missing, warnings: autoCost.warnings } : null,
     productMode: {
       family: pFamily || null,
+      canonicalFamily: pFamily ? canonicalUiFamily(pFamily) : null,
       selectedClass,
       topRequired,
       autoBag: autoBag ? { value: autoBag.id, label: `${autoBag.name} — $${Number(autoBag.unitCost).toFixed(2)} — Verified (auto-selected)` } : null,
       bagCount: bagRecords.length,
       result: productCost ? { lines: productCost.lines, derived: productCost.derived, missing: productCost.missing, warnings: productCost.warnings, totalCost: productCost.totalCost, unitCost: productCost.unitCost } : null,
+      // 14C.2 automatic tiers + label-builder echo (form state survives
+      // reloads; the save form posts the same GET state via psearch).
+      tiers: productTiers,
+      requestedQty: requestedQtyP,
+      marginFamily: productMarginRule
+        ? { key: productMarginRule.key, label: productMarginRule.label, curve: productMarginRule.curve, minPct: productMarginRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
+        : { key: productMarginKey || "", label: "FAMILY MARGIN RULE NOT CONFIGURED", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
+      labelForm: labelRowsP ? { count: labelCountP, same: sameSizeP, rows: labelRowsP } : null,
+      productLabel: pickedBlankRef ? pickedBlankRef.name : autoBag ? autoBag.name : null,
+      printConfig: labelRowsP
+        ? `${labelRowsP.length} label(s) per jar — ${labelRowsP.map((row) => row.typeLabel).join(", ")}`
+        : pFamily === "bags-4x5" || pFamily === "sticker-bags"
+          ? (Number(eparams.get("pfaces") || 1) >= 2 ? "Front and back" : "Front only")
+          : pFamily === "banners"
+            ? (Number(eparams.get("pfaces") || 1) >= 2 ? "Double-sided" : "Single-sided")
+            : "Single print",
       // 14C.1B classification-driven pickers (labels via the shared formatter;
       // NO PRICE records are never shown as Verified; 5oz/other stay hidden).
       blankOptions: classified.filter((entry: any) => {
         const priced = Number(entry.item.unitCost) > 0 || (entry.item.tiers || []).length > 0;
-        if (pFamily === "bags-4x5") return entry.klass === "bag_4x5";
+        // 14C.2A: unpriced sticker bags stay visible (NO PRICE label, Draft Only)
+        if (pFamily === "bags-4x5" || pFamily === "sticker-bags") return entry.klass === "bag_sticker";
         if (pFamily === "standard-jars") return entry.klass === "jar_standard" && priced;
         if (pFamily === "premium-jars") return (entry.klass === "jar_chiron" || entry.klass === "jar_miron") && priced;
         if (pFamily === "custom" || pFamily === "custom-item") return true;
@@ -912,7 +1048,7 @@ export async function loader({ request }: { request: Request }) {
         group: entry.klass === "jar_chiron" ? "CHIRON" : entry.klass === "jar_miron" ? "MIRON" : null,
         label: formatComponentLabel(entry.item.name, entry.klass, entry.includesTop,
           Number(entry.item.unitCost) > 0 ? `$${Number(entry.item.unitCost).toFixed(2)} — Verified` : (entry.item.tiers || []).length ? "tiered — Verified" : "NO PRICE — not verified"),
-      })),
+      })).concat(canonicalBagOptions.map((option) => ({ value: option.value, group: null, label: option.label }))),
       lidOptions: classified.filter((entry: any) =>
         entry.klass === "miron_top"
         && (Number(entry.item.unitCost) > 0 || (entry.item.tiers || []).length > 0)
@@ -1037,16 +1173,32 @@ export async function action({ request }: { request: Request }) {
   const shop = session.shop;
   const form = await request.formData();
   if (String(form.get("intent")) !== "saveEmergencyQuoteDraft") return Response.json({ ok: false, message: "Unknown action." });
-  const isAuto = String(form.get("emode")) === "auto";
-  const quantities = String(form.get("eqty") || "").split(",").map((value) => Number(value.trim())).filter((value) => value > 0);
-  const margins = String(form.get("emargin") || "").split(",").map((value) => Number(value.trim()));
-  let eVar = Number(form.get("evar") || 0);
-  let eSetup = Number(form.get("esetup") || 0);
-  const eBlank = Number(form.get("eblank") || 0);
-  const eWaste = Number(form.get("ewaste") || 0);
+  // 14C.2: the product-flow save form posts ONE hidden "psearch" field holding
+  // the calculated GET state (React Router location.search — identical on
+  // server and client). Reads fall back to it; multi-value label-row params
+  // come from it authoritatively. Everything is still re-fetched/re-computed —
+  // posted params carry IDs and business inputs only, never trusted totals.
+  const psearchParams = new URLSearchParams(String(form.get("psearch") || "").replace(/^\?/, ""));
+  const fRead = (key: string) => {
+    const direct = form.get(key);
+    if (direct != null && String(direct) !== "") return String(direct);
+    return String(psearchParams.get(key) ?? "");
+  };
+  const fReadAll = (key: string) => {
+    const fromSearch = psearchParams.getAll(key);
+    return fromSearch.length ? fromSearch.map(String) : form.getAll(key).map(String);
+  };
+  const isAuto = fRead("emode") === "auto";
+  let quantities = fRead("eqty").split(",").map((value) => Number(value.trim())).filter((value) => value > 0);
+  if (!quantities.length) quantities = SUGGESTED_QUANTITIES.slice(0, 5); // same default as the loader
+  const margins = fRead("emargin").split(",").map((value) => Number(value.trim()));
+  let eVar = Number(fRead("evar") || 0);
+  let eSetup = Number(fRead("esetup") || 0);
+  const eBlank = Number(fRead("eblank") || 0);
+  const eWaste = Number(fRead("ewaste") || 0);
   const productName = String(form.get("eproduct") || "Emergency calculator item").slice(0, 120);
   const freight = computeFreight(
-    { actualFreight: Number(form.get("efactual") || 0), handling: Number(form.get("efhandling") || 0), otherFees: Number(form.get("effees") || 0), estimatedAllowance: Number(form.get("efallow") || 0), allocation: (String(form.get("efalloc")) as any) || "per_unit", manualPerUnit: Number(form.get("efmanual") || 0) },
+    { actualFreight: Number(fRead("efactual") || 0), handling: Number(fRead("efhandling") || 0), otherFees: Number(fRead("effees") || 0), estimatedAllowance: Number(fRead("efallow") || 0), allocation: (fRead("efalloc") as any) || "per_unit", manualPerUnit: Number(fRead("efmanual") || 0) },
     quantities[quantities.length - 1] || 1, 0,
   );
   const tiers = generateTiers({
@@ -1054,7 +1206,7 @@ export async function action({ request }: { request: Request }) {
     perUnitVariableCost: eVar + freight.perUnit, setupTotal: eSetup, blankVendorRows: [], blankFallbackUnitCost: eBlank > 0 ? eBlank : null, wastePct: eWaste,
   });
   if (!tiers.length) return Response.json({ ok: false, message: "No valid tier quantities." });
-  const familyRule = resolveMarginFamily(String(form.get("efamily") || ""));
+  const familyRule = resolveMarginFamily(fRead("efamily"));
   let autoSnapshot: ReturnType<typeof computeAutoCost> | null = null;
   if (isAuto) {
     const familyMapA: Record<string, AutoFamily> = { "bags-4x5": "bags-4x5", "chiron-jars": "chiron-jars", "miron-jars": "miron-jars", "stickers-labels": "stickers-labels", "banners": "banners" };
@@ -1079,48 +1231,111 @@ export async function action({ request }: { request: Request }) {
   // and re-derive EVERYTHING (costs, sqft, waste, boxes, weeding, layers).
   let productSnapshot: ReturnType<typeof computeProductDrivenCost> | null = null;
   let savedClassification: { klass: CalculatorProductClass; includesTop: boolean } | null = null;
-  const pFamilySave = String(form.get("pfamily") || "");
-  if (pFamilySave && ["bags-4x5", "standard-jars", "premium-jars", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom", "custom-item"].includes(pFamilySave)) {
-    const fetchComponent = async (rawId: string): Promise<ResolvedComponent | null> => {
+  let savedEngineFamily: ProductFamilyKey | null = null;
+  let savedTiers: any[] | null = null;
+  let savedSelectedTier: any | null = null;
+  let savedMarginRule: FamilyMarginRule | null = null;
+  let savedMarginKey: string | null = null;
+  let savedLabelRows: LabelRow[] | null = null;
+  let savedSameSize = true;
+  let savedRequestedQty = 0;
+  const pFamilySave = String(fRead("pfamily") || "");
+  if (pFamilySave && ["sticker-bags", "bags-4x5", "standard-jars", "premium-jars", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom", "custom-item"].includes(pFamilySave)) {
+    type FetchedComponent = { component: ResolvedComponent; meta: { name: string; productType?: string; vendor?: string; vendorSku?: string } | null };
+    const fetchComponent = async (rawId: string): Promise<FetchedComponent | null> => {
       if (!rawId || rawId === "none") return null;
       if (rawId === "custom") {
-        const name = String(form.get("pcustomname") || "").slice(0, 80);
-        const cost = Number(form.get("pcustomcost") || 0);
-        const note = String(form.get("pcustomnote") || "").slice(0, 160);
-        return name && cost > 0 && note ? { name, unitCost: cost, tiers: [], status: "estimated", note: `Custom item — ${note}` } : null;
+        const name = String(fRead("pcustomname") || "").slice(0, 80);
+        const cost = Number(fRead("pcustomcost") || 0);
+        const note = String(fRead("pcustomnote") || "").slice(0, 160);
+        return name && cost > 0 && note ? { component: { name, unitCost: cost, tiers: [], status: "estimated", note: `Custom item — ${note}` }, meta: null } : null;
       }
       if (rawId.startsWith("vendor:")) {
         const record = await db.vendorProduct.findFirst({ where: { shop, id: rawId.slice(7) }, include: { tiers: true } });
-        return record ? { name: record.name, unitCost: Number(record.defaultUnitCost) > 0 ? Number(record.defaultUnitCost) : null, tiers: (record.tiers || []).map((tier: any) => ({ minQty: tier.minQty, maxQty: tier.maxQty, unitCost: tier.unitCost })), status: "verified" } : null;
+        return record ? {
+          component: { name: record.name, unitCost: Number(record.defaultUnitCost) > 0 ? Number(record.defaultUnitCost) : null, tiers: (record.tiers || []).map((tier: any) => ({ minQty: tier.minQty, maxQty: tier.maxQty, unitCost: tier.unitCost })), status: "verified" },
+          meta: { name: record.name, productType: record.productType || "", vendor: record.vendor || "", vendorSku: record.vendorSku || "" },
+        } : null;
       }
       if (rawId.startsWith("material:")) {
         const record = await db.material.findFirst({ where: { shop, id: rawId.slice(9) } });
         if (!record) return null;
         const resolved = resolveMaterialUnitCost(record);
-        return { name: record.name, unitCost: resolved.unitCost > 0 ? resolved.unitCost : null, tiers: [], status: "verified" };
+        return {
+          component: { name: record.name, unitCost: resolved.unitCost > 0 ? resolved.unitCost : null, tiers: [], status: "verified" },
+          meta: { name: record.name, productType: record.materialType || "", vendor: record.vendor || "", vendorSku: record.sku || "" },
+        };
+      }
+      if (rawId.startsWith("type:bag-")) {
+        // canonical owner-required bag size with no record yet — Draft Only
+        const size = rawId.slice("type:bag-".length);
+        return REQUIRED_STICKER_BAG_SIZES.includes(size)
+          ? { component: { name: `${size} Sticker Bag`, unitCost: null, tiers: [], status: "estimated", note: "Owner cost not provided yet — Draft Only." }, meta: { name: `${size} Sticker Bag`, productType: "bag" } }
+          : null;
+      }
+      if (rawId.startsWith("preset:")) {
+        // presets are code-priced fallbacks still visible in the pickers
+        // (customer-supplied, OZ bag, soda can) — resolve them at save the
+        // same way the loader does so a preset-based draft never loses its blank
+        const preset = presetBlankItems().find((item) => item.id === rawId);
+        return preset ? {
+          component: { name: preset.name, unitCost: preset.unitCost > 0 ? preset.unitCost : null, tiers: preset.tiers || [], status: "verified" },
+          meta: { name: preset.name, productType: preset.productType, vendor: preset.vendor, vendorSku: preset.id },
+        } : null;
       }
       return null;
     };
-    const materialId = String(form.get("pmat") || "");
+    const materialId = String(fRead("pmat") || "");
     const materialRecord = materialId ? await db.material.findFirst({ where: { shop, id: materialId } }) : null;
     const materialResolved = materialRecord ? resolvePrintMaterialCostPerSqft(materialRecord) : null;
-    const printerSave = form.get("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
+    const printerSave = fRead("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
     // 14C.1B: classification + engine mapping recomputed at save from the
     // FETCHED record (client cannot spoof the class or skip the Miron top).
-    const savedBlank = await fetchComponent(String(form.get("pblank") || ""));
-    savedClassification = savedBlank ? classifyCalculatorProduct({ name: savedBlank.name }) : null;
-    const savedTopRaw = String(form.get("plid") || "");
-    const savedTop = savedTopRaw.startsWith("type:")
+    const savedBlankRaw = String(fRead("pblank") || "");
+    const savedFetched = await fetchComponent(savedBlankRaw);
+    let savedBlank = savedFetched ? savedFetched.component : null;
+    savedClassification = savedFetched
+      ? classifyCalculatorProduct(savedFetched.meta || { name: savedFetched.component.name })
+      : null;
+    // family-switch safety (mirrors the loader): a real record whose class is
+    // not valid for the posted family is treated as no selection.
+    if (savedBlank && savedClassification && /^(vendor:|material:|preset:)/.test(savedBlankRaw) && !blankClassAllowedFor(pFamilySave, savedClassification.klass)) {
+      savedBlank = null;
+      savedClassification = null;
+    }
+    // 14C.2A: Chiron blank cost is flat — quantity tiers ignored at save too
+    savedBlank = enforceFlatChironCost(savedBlank, savedClassification ? savedClassification.klass : null);
+    const savedTopRaw = String(fRead("plid") || "");
+    const savedTopFetched = savedTopRaw.startsWith("type:")
       ? (savedTopRaw === "type:standard-top" ? { name: "Standard / Classic top", unitCost: null, tiers: [], status: "estimated" as const } : savedTopRaw === "type:black-metal-top" ? { name: "Black metal top", unitCost: null, tiers: [], status: "estimated" as const } : null)
-      : await fetchComponent(savedTopRaw);
-    const savedEngineFamily = uiFamilyToEngine(pFamilySave, savedClassification ? savedClassification.klass : null, savedClassification ? savedClassification.includesTop : false);
-    productSnapshot = computeProductDrivenCost({
+      : (await fetchComponent(savedTopRaw))?.component ?? null;
+    const savedTop = savedTopFetched;
+    savedEngineFamily = uiFamilyToEngine(pFamilySave, savedClassification ? savedClassification.klass : null, savedClassification ? savedClassification.includesTop : false);
+    // 14C.2 jar label rows — rebuilt server-side from the posted count; stale
+    // extra row entries are discarded by the shared builder.
+    const jarFamilySave = ["standard-jars", "premium-jars", "chiron-jars", "miron-jars"].includes(pFamilySave);
+    const labelCountSave = Math.min(Math.max(1, Math.floor(Number(fRead("plabelcount") || 1))), MAX_LABELS_PER_UNIT);
+    savedSameSize = fRead("psame") !== "no";
+    savedLabelRows = jarFamilySave
+      ? buildLabelRows({
+          count: labelCountSave,
+          same: savedSameSize,
+          sameWidthIn: Number(fRead("pwidth") || 0),
+          sameHeightIn: Number(fRead("pheight") || 0),
+          types: fReadAll("plabeltype"),
+          widths: fReadAll("plabelw").map(Number),
+          heights: fReadAll("plabelh").map(Number),
+        })
+      : null;
+    savedRequestedQty = Math.floor(Number(fRead("pqty") || 0)) || quantities[quantities.length - 1] || 1;
+    const productInputSave: ProductDrivenInput = {
       family: savedEngineFamily,
-      quantity: Number(form.get("pqty") || 0) || quantities[quantities.length - 1] || 1,
-      designs: Number(form.get("pdesigns") || 0),
-      facesPerUnit: Math.max(1, Number(form.get("pfaces") || 1)),
-      widthIn: Number(form.get("pwidth") || 0),
-      heightIn: Number(form.get("pheight") || 0),
+      quantity: savedRequestedQty,
+      designs: Number(fRead("pdesigns") || 0),
+      facesPerUnit: Math.max(1, Number(fRead("pfaces") || 1)),
+      widthIn: Number(fRead("pwidth") || 0),
+      heightIn: Number(fRead("pheight") || 0),
+      labelRows: savedLabelRows,
       blank: savedBlank,
       lid: savedEngineFamily === "miron-jars" ? savedTop : null,
       mironTop: savedEngineFamily === "miron-jars" ? {
@@ -1132,50 +1347,104 @@ export async function action({ request }: { request: Request }) {
       printer: printerSave,
       printerHasWhite: true,
       printerHasGloss: printerSave === "roland",
-      whiteLayers: Number(form.get("pwhitelayers") || 0),
-      glossLayers: Number(form.get("pglosslayers") || 0),
+      whiteLayers: Number(fRead("pwhitelayers") || 0),
+      glossLayers: Number(fRead("pglosslayers") || 0),
       inkMlPerSqft: 0.6,
-      machineMinutesPerSqft: Number(form.get("pmachmin") || 0),
+      machineMinutesPerSqft: Number(fRead("pmachmin") || 0),
       machineRatePerHour: 8,
-      cutRequiresWeeding: form.get("pcut") === "weeded",
-      hemming: form.get("phem") === "1",
-      grommets: form.get("pgrommet") === "1",
+      cutRequiresWeeding: fRead("pcut") === "weeded",
+      hemming: fRead("phem") === "1",
+      grommets: fRead("pgrommet") === "1",
       freightPerUnit: 0,
       freightSource: "estimated",
       recipeWastePct: null,
-      wasteOverride: form.get("pwasteoverride") && form.get("pwastereason") ? { pct: Number(form.get("pwasteoverride")), reason: String(form.get("pwastereason")) } : null,
-      boxOverride: form.get("pboxoverride") && form.get("pboxreason") ? { unitsPerBox: Number(form.get("pboxoverride")), reason: String(form.get("pboxreason")) } : null,
-    });
+      wasteOverride: fRead("pwasteoverride") && fRead("pwastereason") ? { pct: Number(fRead("pwasteoverride")), reason: fRead("pwastereason") } : null,
+      boxOverride: fRead("pboxoverride") && fRead("pboxreason") ? { unitsPerBox: Number(fRead("pboxoverride")), reason: fRead("pboxreason") } : null,
+    };
+    productSnapshot = computeProductDrivenCost(productInputSave);
     eVar = productSnapshot.perUnitVariable;
     eSetup = productSnapshot.setupTotal;
+    // ---- 14C.2: recompute the automatic tiers server-side and resolve the
+    // selected customer tier by QUANTITY — posted tier totals are ignored.
+    savedMarginKey = marginFamilyKeyFor(pFamilySave, savedClassification ? savedClassification.klass : null, savedBlank?.name || "");
+    savedMarginRule = savedMarginKey ? resolveMarginFamily(savedMarginKey) : null;
+    const tierQuantitiesSave = [...new Set([...quantities, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b);
+    const validMargins = margins.filter((value) => Number.isFinite(value) && value > 0);
+    const curveDefaultsSave = savedMarginRule
+      ? curveForTierCount(savedMarginRule.curve, tierQuantitiesSave.length, savedMarginRule.familyMinPct)
+      : defaultTierMargins(tierQuantitiesSave.length);
+    const tierMarginsSave = validMargins.length === tierQuantitiesSave.length ? validMargins : curveDefaultsSave;
+    const freightInputsSave = {
+      actualFreight: Number(fRead("efactual") || 0), handling: Number(fRead("efhandling") || 0), otherFees: Number(fRead("effees") || 0),
+      estimatedAllowance: Number(fRead("efallow") || 0), allocation: ((fRead("efalloc") as any) || "per_unit") as "per_unit" | "by_value" | "manual", manualPerUnit: Number(fRead("efmanual") || 0),
+    };
+    const floorForFamilySave = Math.max(savedMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
+    savedTiers = tierQuantitiesSave.map((qty, index) => {
+      const run = qty === savedRequestedQty ? productSnapshot! : computeProductDrivenCost({ ...productInputSave, quantity: qty });
+      const tierFreight = computeFreight(freightInputsSave, qty, 0);
+      const marginPct = tierMarginsSave[index] ?? floorForFamilySave;
+      const unitCost = run.unitCost + tierFreight.perUnit;
+      const { price, profit, actualMarginPct } = marginMath(unitCost, marginPct);
+      const belowFloor = marginPct < floorForFamilySave;
+      return {
+        quantity: qty, requested: qty === savedRequestedQty, jobCost: run.totalCost + tierFreight.total, unitCost, marginPct,
+        unitPrice: price, totalPrice: price * qty, profit: profit * qty, actualMarginPct, belowFloor,
+        draftOnly: run.missing.length > 0, freightTotal: tierFreight.total, freightSource: tierFreight.source, setupTotal: run.setupTotal,
+        status: run.missing.length ? "DRAFT ONLY — missing costs" : belowFloor ? "BELOW FLOOR — override required" : "Ready",
+      };
+    });
+    const selectedTierQty = Math.floor(Number(fRead("pseltier") || 0));
+    savedSelectedTier = savedTiers.find((tier) => tier.quantity === selectedTierQty)
+      || savedTiers.find((tier) => tier.requested)
+      || savedTiers[savedTiers.length - 1];
   }
-  const gate = checkMarginGate(Math.min(...tiers.map((tier) => tier.marginPct)), { phrase: String(form.get("eophrase") || ""), reason: String(form.get("eoreason") || "") }, familyRule?.familyMinPct ?? MARGIN_FLOOR_PCT);
+  // 14C.2: product saves gate/snapshot on the SERVER-derived family rule and
+  // the recomputed automatic tiers; manual/auto saves keep the legacy path.
+  const ruleForSave = productSnapshot ? savedMarginRule : familyRule;
+  const snapshotTiers: any[] = productSnapshot && savedTiers ? savedTiers : tiers;
+  const gate = checkMarginGate(Math.min(...snapshotTiers.map((tier: any) => tier.marginPct)), { phrase: fRead("eophrase"), reason: fRead("eoreason") }, ruleForSave?.familyMinPct ?? MARGIN_FLOOR_PCT);
   const lines: CostLine[] = [
     { key: "variable_per_unit", label: "Per-unit variable cost (entered)", amount: eVar, source: eVar > 0 ? "manual_override" : "missing" },
     { key: "freight", label: "Freight", amount: freight.total, source: freight.source, note: freight.note },
   ];
   const verdict = canFinalize(lines.filter((line) => line.key !== "freight"), gate);
   if (!verdict.ok && !gate.allowed) return Response.json({ ok: false, message: verdict.blockers.join(" | ") });
-  const primary = tiers[tiers.length - 1];
-  const familyDefaults = familyRule ? curveForTierCount(familyRule.curve, tiers.length, familyRule.familyMinPct) : defaultTierMargins(tiers.length);
+  const primary: any = productSnapshot && savedSelectedTier ? savedSelectedTier : tiers[tiers.length - 1];
+  const familyDefaults = ruleForSave ? curveForTierCount(ruleForSave.curve, snapshotTiers.length, ruleForSave.familyMinPct) : defaultTierMargins(snapshotTiers.length);
   const snapshot = {
-    engine: productSnapshot ? "14C.1-product" : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
+    engine: productSnapshot ? MULTILABEL_ENGINE_VERSION : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
     autoBreakdown: autoSnapshot ? { lines: autoSnapshot.lines, missing: autoSnapshot.missing, warnings: autoSnapshot.warnings } : null,
-    productBreakdown: productSnapshot ? { engine: "14C.1B1-required-miron-top", family: pFamilySave, classification: savedClassification ? savedClassification.klass : null, includesTop: savedClassification ? savedClassification.includesTop : false, topId: String(form.get("plid") || "") || null, lines: productSnapshot.lines, derived: productSnapshot.derived, missing: productSnapshot.missing, warnings: productSnapshot.warnings, selections: { blank: String(form.get("pblank") || ""), lid: String(form.get("plid") || ""), material: String(form.get("pmat") || ""), printer: String(form.get("pprinter") || "mimaki"), whiteLayers: Number(form.get("pwhitelayers") || 0), glossLayers: Number(form.get("pglosslayers") || 0), faces: Number(form.get("pfaces") || 1), widthIn: Number(form.get("pwidth") || 0), heightIn: Number(form.get("pheight") || 0) } } : null,
-    savedAt: new Date().toISOString(), tiers, freight, gate,
+    productBreakdown: productSnapshot ? {
+      engine: MULTILABEL_ENGINE_VERSION,
+      topEngine: TOP_ENGINE_VERSION,
+      family: pFamilySave,
+      canonicalFamily: canonicalUiFamily(pFamilySave),
+      classification: savedClassification ? savedClassification.klass : null,
+      includesTop: savedClassification ? savedClassification.includesTop : false,
+      // physical Miron Top Type only — never a printed "Lid label" row
+      topId: savedEngineFamily === "miron-jars" ? (fRead("plid") || null) : null,
+      labelsPerUnit: savedLabelRows ? savedLabelRows.length : Math.max(1, Number(fRead("pfaces") || 1)),
+      sameSizeLabels: savedLabelRows ? savedSameSize : null,
+      labelRows: savedLabelRows,
+      lines: productSnapshot.lines, derived: productSnapshot.derived, missing: productSnapshot.missing, warnings: productSnapshot.warnings,
+      tiers: savedTiers,
+      selectedTier: savedSelectedTier ? { quantity: savedSelectedTier.quantity, unitPrice: savedSelectedTier.unitPrice, totalPrice: savedSelectedTier.totalPrice, marginPct: savedSelectedTier.marginPct, status: savedSelectedTier.status } : null,
+      selections: { blank: fRead("pblank"), lid: fRead("plid"), material: fRead("pmat"), printer: fRead("pprinter") || "mimaki", whiteLayers: Number(fRead("pwhitelayers") || 0), glossLayers: Number(fRead("pglosslayers") || 0), faces: Number(fRead("pfaces") || 1), widthIn: Number(fRead("pwidth") || 0), heightIn: Number(fRead("pheight") || 0), quantity: savedRequestedQty, designs: Number(fRead("pdesigns") || 0) },
+    } : null,
+    savedAt: new Date().toISOString(), tiers: snapshotTiers, freight, gate,
     marginRules: {
-      family: familyRule ? familyRule.key : "unknown", familyLabel: familyRule?.label || "FAMILY MARGIN RULE NOT CONFIGURED",
-      curveUsed: familyRule ? familyRule.curve : "provisional-universal", researchedDefaultsPerTier: familyDefaults,
-      editedMarginsPerTier: tiers.map((tier) => tier.marginPct), familyMinPct: familyRule?.familyMinPct ?? MARGIN_FLOOR_PCT,
-      globalFloorPct: MARGIN_FLOOR_PCT, overrideReason: gate.reason, ruleSource: familyRule ? MARGIN_RULE_SOURCE : "provisional",
+      family: ruleForSave ? ruleForSave.key : "unknown", familyLabel: ruleForSave?.label || "FAMILY MARGIN RULE NOT CONFIGURED",
+      curveUsed: ruleForSave ? ruleForSave.curve : "provisional-universal", researchedDefaultsPerTier: familyDefaults,
+      editedMarginsPerTier: snapshotTiers.map((tier: any) => tier.marginPct), familyMinPct: ruleForSave?.familyMinPct ?? MARGIN_FLOOR_PCT,
+      globalFloorPct: MARGIN_FLOOR_PCT, overrideReason: gate.reason, ruleSource: ruleForSave ? MARGIN_RULE_SOURCE : "provisional",
     },
-    warnings: tiers.flatMap((tier) => tier.warnings), inputs: { quantities, margins, eVar, eSetup, eBlank, eWaste },
+    warnings: snapshotTiers.flatMap((tier: any) => tier.warnings || []), inputs: { quantities, margins, eVar, eSetup, eBlank, eWaste },
   };
   const quote = await db.quote.create({
     data: {
       shop, status: "draft", customerName: String(form.get("ecustomer") || "") || null,
-      notes: `14B.0 emergency calculator draft${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}`,
-      items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({ unitPrice: primary.unitPrice, marginPct: primary.marginPct, tiers: tiers.map((tier) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })) }) }] },
+      notes: `${productSnapshot ? "14C.2 product calculator draft" : "14B.0 emergency calculator draft"}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}`,
+      items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({ unitPrice: primary.unitPrice, marginPct: primary.marginPct, tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })) }) }] },
     },
   });
   return Response.json({ ok: true, message: `Draft quote ${quote.id.slice(0, 8)}… saved with the full tier snapshot${verdict.ok ? "" : " (DRAFT ONLY — has warnings)"}. Open Quotes to finish it.` });
@@ -1404,6 +1673,7 @@ export default function ErpCostCalculatorRoute() {
 function EmergencySection() {
   const { emergency } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>() as { ok: boolean; message: string } | undefined;
+  const legacySearch = useLocation().search.replace(/^\?/, ""); // identical on server and client — hydration-safe
   const money2 = (value: number) => `$${value.toFixed(2)}`;
   return (
     <section style={{ ...cardStyle, marginTop: 18, borderColor: "#b45309", borderWidth: 2 }}>
@@ -1414,6 +1684,7 @@ function EmergencySection() {
         <p style={smallHelp}>Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
         <ProductDrivenForm />
         <ProductBreakdown />
+        <ProductTiers />
         {(emergency as any).autoCost ? (
           <div style={{ marginTop: 10 }}>
             <b style={{ fontSize: 13 }}>Automatic cost breakdown</b>
@@ -1449,7 +1720,7 @@ Setup/design fee included in pricing.`}
           </div>
         ) : null}
       </div>
-      <details style={{ marginTop: 12 }}><summary style={{ fontWeight: 700, cursor: "pointer", fontSize: 13 }}>View pricing rules &amp; manual tier controls</summary>
+      <details style={{ marginTop: 12 }}><summary style={{ fontWeight: 700, cursor: "pointer", fontSize: 13 }}>Advanced Pricing Controls (custom tier quantities, target-margin edits, freight/handling, owner override)</summary>
       <h2 style={{ marginTop: 0 }}>Pricing Tiers &amp; Margin Review — family curves, {emergency.floor}% margin floor</h2>
       <p style={smallHelp}>
         PROVISIONAL margin curve (60/55/50/45/40 — editable per tier) until competitor research is done. Setup spreads
@@ -1501,6 +1772,7 @@ Setup/design fee included in pricing.`}
         Freight: {emergency.freight.note} — total {money2(emergency.freight.total)}, per unit {money2(emergency.freight.perUnit)} ({emergency.freight.source.toUpperCase()}).
         {emergency.gate.belowFloor ? ` MARGIN GATE: ${emergency.gate.reason}` : ""}
       </p>
+      {emergency.tiers.some((tier) => tier.unitCost > 0) ? (
       <div style={{ overflowX: "auto", marginTop: 8 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 6 }}>Qty</th><th>Blank/unit</th><th>Setup/unit</th><th>Unit cost</th><th>Margin %</th><th>Unit price</th><th>Total price</th><th>Profit</th><th align="left">Warnings</th></tr></thead>
@@ -1521,10 +1793,16 @@ Setup/design fee included in pricing.`}
           </tbody>
         </table>
       </div>
+      ) : (
+        <p style={{ ...smallHelp, marginTop: 8 }}>No tier rows yet — run CALCULATE COST above (or enter manual costs here) and the tier table fills in. Zero-value rows are never shown.</p>
+      )}
       <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 10 }}>
         <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />
+        {/* 14C.2: the full GET state (including multi-value label rows) rides in
+            psearch; the single-value hidden inputs below stay for back-compat. */}
+        <input type="hidden" name="psearch" value={legacySearch} />
         {["efamily", "eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason", "pfamily", "pblank", "plid", "pmat", "pqty", "pdesigns", "pfaces", "pwidth", "pheight", "pprinter", "pwhitelayers", "pglosslayers", "pcut", "phem", "pgrommet", "pcustomname", "pcustomcost", "pcustomnote", "pwasteoverride", "pwastereason", "pboxoverride", "pboxreason", "pmachmin"].map((key) => (
-          <input key={key} type="hidden" name={key} value={new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get(key) || (key === "eqty" ? emergency.quantities.join(",") : key === "emargin" ? emergency.margins.join(",") : "")} />
+          <input key={key} type="hidden" name={key} value={new URLSearchParams(legacySearch).get(key) || (key === "eqty" ? emergency.quantities.join(",") : key === "emargin" ? emergency.margins.join(",") : "")} />
         ))}
         <label style={{ fontSize: 12 }}>Product name<input name="eproduct" style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Customer (optional)<input name="ecustomer" style={inputStyle} /></label>
@@ -1853,31 +2131,67 @@ function ProductDrivenForm() {
   const loadingFamily = navigation.state === "loading";
   const pm = emergency.productMode;
   const family = pm?.family || "";
-  const isBags = family === "bags-4x5";
-  const isStandardJars = family === "standard-jars" || family === "chiron-jars";
-  const isPremium = family === "premium-jars" || family === "miron-jars";
-  const isStickers = family === "stickers-labels";
-  const isBanners = family === "banners";
-  const isCustom = family === "custom" || family === "custom-item";
+  const canonicalFamily = pm?.canonicalFamily || "";
+  const isBags = canonicalFamily === "sticker-bags";
+  const isStandardJars = canonicalFamily === "standard-jars";
+  const isPremium = canonicalFamily === "premium-jars";
+  const isStickers = canonicalFamily === "stickers-labels";
+  const isBanners = canonicalFamily === "banners";
+  const isCustom = canonicalFamily === "custom-item";
   const jars = isStandardJars || isPremium;
   const topRequired = Boolean(pm?.topRequired);
+  // ---- 14C.2 jar label builder (client state seeds from the server echo and
+  // survives calculation/validation/save; the SERVER rebuilds rows via
+  // buildLabelRows on every request, discarding stale extras).
+  const lf = pm?.labelForm || null;
+  const clientDefaultType = (index: number) => (index === 0 ? "side" : index === 1 ? "lid" : "additional");
+  const [labelCountSel, setLabelCountSel] = useState<string>(() => (lf ? (lf.count <= 3 ? String(lf.count) : "custom") : "1"));
+  const [labelCountCustom, setLabelCountCustom] = useState<number>(() => (lf && lf.count > 3 ? lf.count : 4));
+  const [sameSize, setSameSize] = useState<string>(() => (lf && lf.same === false ? "no" : "yes"));
+  const [labelRows, setLabelRows] = useState<Array<{ type: string; widthIn: string; heightIn: string }>>(() =>
+    lf && !lf.same && Array.isArray(lf.rows)
+      ? lf.rows.map((row: any) => ({ type: row.type, widthIn: row.widthIn > 0 ? String(row.widthIn) : "", heightIn: row.heightIn > 0 ? String(row.heightIn) : "" }))
+      : Array.from({ length: lf ? lf.count : 1 }, (_v, index) => ({ type: clientDefaultType(index), widthIn: "", heightIn: "" })),
+  );
+  const effectiveLabels = Math.min(Math.max(1, Math.floor(labelCountSel === "custom" ? labelCountCustom || 1 : Number(labelCountSel))), 6);
+  const resizeRows = (count: number) =>
+    setLabelRows((previous) => Array.from({ length: count }, (_v, index) => previous[index] || { type: clientDefaultType(index), widthIn: "", heightIn: "" }));
+  const updateRow = (index: number, patch: Partial<{ type: string; widthIn: string; heightIn: string }>) =>
+    setLabelRows((previous) => {
+      const next = [...previous];
+      while (next.length <= index) next.push({ type: clientDefaultType(next.length), widthIn: "", heightIn: "" });
+      next[index] = { ...next[index], ...patch };
+      return next;
+    });
+  // UI copy of LABEL_TYPES (the .server module cannot be imported client-side)
+  const LABEL_TYPE_CHOICES = [
+    { value: "side", label: "Side label" },
+    { value: "lid", label: "Lid label" },
+    { value: "bottom", label: "Bottom label" },
+    { value: "neck", label: "Neck label" },
+    { value: "tamper", label: "Tamper label" },
+    { value: "additional", label: "Additional label" },
+    { value: "custom", label: "Custom" },
+  ];
+  const chironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "CHIRON");
+  const mironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "MIRON");
   return (
     <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
       <label style={{ fontSize: 12, gridColumn: "1 / -1" }}><b>STEP 1 — What are you pricing?</b>
         <select
           name="pfamily"
-          key={family}
-          defaultValue={family}
+          key={canonicalFamily}
+          defaultValue={canonicalFamily}
           style={inputStyle}
           onChange={(event) => submit(event.currentTarget.form, { method: "get" })}
         >
           <option value="">— choose a product —</option>
-          <option value="bags-4x5">4x5 Sticker Bags</option>
+          <option value="sticker-bags">Sticker Bags</option>
           <option value="standard-jars">Standard Jars</option>
           <option value="premium-jars">Premium Jars — Chiron &amp; Miron</option>
           <option value="stickers-labels">Stickers &amp; Labels</option>
           <option value="banners">Banners</option>
-          <option value="custom">Custom Item</option>
+          <option value="custom-item">Custom Item</option>
         </select>
       </label>
       {!family ? (
@@ -1895,15 +2209,15 @@ function ProductDrivenForm() {
         <p style={{ fontSize: 12, gridColumn: "1 / -1", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: 8 }}><b>Blank bag:</b> {pm.autoBag.label}</p>
       </>) : null}
       {isBags && !pm?.autoBag && pm?.bagCount === 0 ? (
-        <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No active verified 4x5 blank bag is configured.</p>
+        <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No active sticker-bag products are configured.</p>
       ) : null}
-      {((isBags && !pm?.autoBag && (pm?.bagCount || 0) > 1) || jars || isCustom) && family ? (
+      {((isBags && !pm?.autoBag) || jars || isCustom) && family ? (
         <label style={{ fontSize: 12 }}>* Select product / blank item
           <select name="pblank" onChange={(event) => submit(event.currentTarget.form, { method: "get" })} style={inputStyle}>
             <option value="">— select —</option>
             {isPremium ? (<>
-              <optgroup label="CHIRON">{(pm.blankOptions || []).filter((option: any) => option.group === "CHIRON").map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup>
-              <optgroup label="MIRON">{(pm.blankOptions || []).filter((option: any) => option.group === "MIRON").map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup>
+              {chironOptions.length ? <optgroup label="CHIRON">{chironOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
+              {mironOptions.length ? <optgroup label="MIRON">{mironOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
             </>) : (pm.blankOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
             <option value="none">No Blank Item (Advanced)</option>
             <option value="custom">Custom Item (Advanced — enter below)</option>
@@ -1922,6 +2236,7 @@ function ProductDrivenForm() {
             <option value="">— select top —</option>
             {(pm.lidOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
+          <div style={smallHelp}>Physical Miron jar top. A printed "Lid label" is artwork and belongs in the label rows below — the two are never combined.</div>
         </label>
       ) : null}
       {topRequired && !(pm?.lidOptions || []).length ? (
@@ -1935,19 +2250,73 @@ function ProductDrivenForm() {
             <select name="pfaces" style={inputStyle}><option value="1">Front only</option><option value="2">Front and back</option></select>
           </label>
         ) : null}
-        {jars ? (
-          <label style={{ fontSize: 12 }}>Labels per jar
-            <select name="pfaces" style={inputStyle}><option value="1">1 label</option><option value="2">2 labels</option><option value="3">3 labels</option></select>
+        {jars ? (<>
+          <label style={{ fontSize: 12 }}>How many labels per jar?
+            <select
+              value={labelCountSel}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                setLabelCountSel(value);
+                resizeRows(Math.min(Math.max(1, Math.floor(value === "custom" ? labelCountCustom || 1 : Number(value))), 6));
+              }}
+              style={inputStyle}
+            >
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="custom">Custom (up to 6)</option>
+            </select>
           </label>
-        ) : null}
+          {labelCountSel === "custom" ? (
+            <label style={{ fontSize: 12 }}>Labels per jar (1–6)
+              <input
+                type="number" min={1} max={6} value={labelCountCustom}
+                onChange={(event) => {
+                  const value = Number(event.currentTarget.value) || 1;
+                  setLabelCountCustom(value);
+                  resizeRows(Math.min(Math.max(1, Math.floor(value)), 6));
+                }}
+                style={inputStyle}
+              />
+            </label>
+          ) : null}
+          <input type="hidden" name="plabelcount" value={effectiveLabels} />
+          <label style={{ fontSize: 12 }}>Are all label sizes the same?
+            <select name="psame" value={sameSize} onChange={(event) => setSameSize(event.currentTarget.value)} style={inputStyle}>
+              <option value="yes">Yes — one size for every label</option>
+              <option value="no">No — set each label separately</option>
+            </select>
+          </label>
+        </>) : null}
         {isBanners ? (
           <label style={{ fontSize: 12 }}>Print
             <select name="pfaces" style={inputStyle}><option value="1">Single-sided</option><option value="2">Double-sided</option></select>
           </label>
         ) : null}
         {isCustom ? <label style={{ fontSize: 12 }}>Printed faces/labels<input name="pfaces" type="number" min={1} defaultValue={1} style={inputStyle} /></label> : null}
-        <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : "Print height (in)"}<input name="pheight" type="number" step="0.01" style={inputStyle} /></label>
+        {!jars || sameSize === "yes" ? (<>
+          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" style={inputStyle} /></label>
+        </>) : null}
+        {jars && sameSize === "no" ? (
+          <div style={{ gridColumn: "1 / -1", display: "grid", gap: 6 }}>
+            {Array.from({ length: effectiveLabels }, (_v, index) => {
+              const row = labelRows[index] || { type: clientDefaultType(index), widthIn: "", heightIn: "" };
+              return (
+                <div key={index} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: 8, border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, background: "#f9fafb" }}>
+                  <label style={{ fontSize: 12 }}>Label {index + 1} type
+                    <select name="plabeltype" value={row.type} onChange={(event) => updateRow(index, { type: event.currentTarget.value })} style={inputStyle}>
+                      {LABEL_TYPE_CHOICES.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 12 }}>* Width (in)<input name="plabelw" type="number" step="0.01" min={0.01} value={row.widthIn} onChange={(event) => updateRow(index, { widthIn: event.currentTarget.value })} style={inputStyle} /></label>
+                  <label style={{ fontSize: 12 }}>* Height (in)<input name="plabelh" type="number" step="0.01" min={0.01} value={row.heightIn} onChange={(event) => updateRow(index, { heightIn: event.currentTarget.value })} style={inputStyle} /></label>
+                </div>
+              );
+            })}
+            <p style={{ ...smallHelp, margin: 0 }}>Every label row needs its own positive width and height. The server rebuilds these rows on Calculate and Save — stale hidden rows never affect cost.</p>
+          </div>
+        ) : null}
         <label style={{ fontSize: 12 }}>* Material
           <select name="pmat" style={inputStyle}>
             <option value="">— select material —</option>
@@ -1995,11 +2364,24 @@ function ProductBreakdown() {
   const derived = result.derived;
   return (
     <div style={{ marginTop: 10 }}>
-      <b style={{ fontSize: 13 }}>Cost breakdown (engine 14C.1 — all values derived by the server)</b>
+      <b style={{ fontSize: 13 }}>Cost breakdown (engine 14C.2 — all values derived by the server)</b>
       <p style={smallHelp}>
         {derived.totalPieces} printed piece(s) · {derived.baseSqft.toFixed(2)} sqft base · waste {derived.wastePct}% ({derived.wasteSource}) · {derived.wasteAdjustedSqft.toFixed(2)} sqft adjusted
         {derived.boxes != null ? ` · ${derived.boxes} box(es) @ ${derived.unitsPerBox}/box` : ""} · {derived.printPasses} print pass(es)
       </p>
+      {derived.labelRows && derived.labelRows.length ? (
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
+          {derived.labelRows.map((row: any) => (
+            <div key={row.index} style={{ padding: "2px 0" }}>
+              <b>{row.typeLabel}</b> — {row.pieces.toLocaleString()} pieces — {row.widthIn} x {row.heightIn} in — {row.baseSqft.toFixed(2)} sqft
+              <span style={{ color: "#6b7280" }}> · material ${row.materialCostShare.toFixed(2)} · ink ${row.inkCostShare.toFixed(2)}{row.whiteLayers ? ` · white x${row.whiteLayers}` : ""}{row.glossLayers ? ` · gloss x${row.glossLayers}` : ""} · {row.applications.toLocaleString()} application(s)</span>
+            </div>
+          ))}
+          <div style={{ borderTop: "1px solid #e5e7eb", marginTop: 4, paddingTop: 4, fontWeight: 700 }}>
+            Total printed labels: {derived.totalPieces.toLocaleString()} · Total base label sqft: {derived.baseSqft.toFixed(2)} · Waste: {derived.wastePct}% · Waste-adjusted sqft: {derived.wasteAdjustedSqft.toFixed(2)} · Application count: {derived.applicationCount.toLocaleString()}
+          </div>
+        </div>
+      ) : null}
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
         <tbody>
           {result.lines.filter((line: any) => line.amount !== 0 || line.source === "missing").map((line: any) => (
@@ -2016,7 +2398,86 @@ function ProductBreakdown() {
           COST NOT VERIFIED — DRAFT ONLY: {result.missing.join("; ")}
         </div>
       ) : <div style={{ color: "#166534", fontSize: 13, fontWeight: 700, marginTop: 6 }}>Finalizable: Yes</div>}
-      <p style={smallHelp}>Total cost ${result.totalCost.toFixed(2)} · Unit cost ${result.unitCost.toFixed(4)} — pricing tiers below use these values.</p>
+      <p style={smallHelp}>Total cost ${result.totalCost.toFixed(2)} · Unit cost ${result.unitCost.toFixed(4)} — the automatic pricing tiers below are generated from these values.</p>
+    </div>
+  );
+}
+
+// ---- 14C.2: automatic family pricing tiers + customer price selection ----
+// Rendered only after CALCULATE COST produced a job with a real quantity. The
+// rows come fully computed from the loader (per-quantity engine reruns); the
+// save form posts the SAME GET state via psearch plus the selected tier
+// QUANTITY — the action recomputes everything and ignores posted totals.
+function ProductTiers() {
+  const { emergency } = useLoaderData<typeof loader>() as any;
+  const actionData = useActionData<typeof action>() as { ok: boolean; message: string } | undefined;
+  const search = useLocation().search.replace(/^\?/, "");
+  const [selectedQty, setSelectedQty] = useState<number | null>(null);
+  const pm = emergency.productMode;
+  const tiers: any[] | null = pm?.tiers || null;
+  if (!tiers || !tiers.length) return null;
+  const money2 = (value: number) => `$${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const requested = tiers.find((tier) => tier.requested) || tiers[tiers.length - 1];
+  const selected = tiers.find((tier) => tier.quantity === selectedQty) || requested;
+  const mf = pm.marginFamily;
+  const productLabel = pm.productLabel || emergency.family?.label || "Selected product";
+  return (
+    <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
+      <b style={{ fontSize: 13 }}>Automatic pricing tiers — generated from the calculated job (no re-entry)</b>
+      <p style={{ ...smallHelp, marginTop: 4 }}>
+        {mf.configured
+          ? <>Margin family: <b>{mf.label}</b> · researched curve {mf.curve.join(" / ")}% · family minimum {mf.minPct}% · global floor {emergency.floor}% · source: {mf.source}</>
+          : <><b style={{ color: "#92400e" }}>FAMILY MARGIN RULE NOT CONFIGURED</b> — provisional universal curve with the {emergency.floor}% global floor. Margins are editable in Advanced Pricing Controls.</>}
+      </p>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead><tr style={{ background: "#f3f4f6" }}><th style={{ padding: 5 }}>Use</th><th align="left">Quantity</th><th>Job Cost</th><th>Unit Cost</th><th>Margin</th><th>Unit Price</th><th>Total Price</th><th>Profit</th><th align="left">Status</th></tr></thead>
+          <tbody>
+            {tiers.map((tier) => (
+              <tr key={tier.quantity} style={{ borderTop: "1px solid #e5e7eb", background: tier.requested ? "#fef9c3" : tier.draftOnly || tier.belowFloor ? "#fef2f2" : undefined }}>
+                <td align="center"><input type="radio" name="ptierpick" checked={selected.quantity === tier.quantity} onChange={() => setSelectedQty(tier.quantity)} aria-label={`Use ${tier.quantity} price`} /></td>
+                <td style={{ padding: 5 }}><b>{tier.quantity.toLocaleString()}</b>{tier.requested ? <span style={{ color: "#92400e", fontWeight: 700 }}> ← requested</span> : null}</td>
+                <td align="center">{money2(tier.jobCost)}</td>
+                <td align="center">{money2(tier.unitCost)}</td>
+                <td align="center">{tier.marginPct}%</td>
+                <td align="center"><b>{money2(tier.unitPrice)}</b></td>
+                <td align="center">{money2(tier.totalPrice)}</td>
+                <td align="center">{money2(tier.profit)} ({tier.actualMarginPct.toFixed(1)}%)</td>
+                <td style={{ color: tier.draftOnly || tier.belowFloor ? "#991b1b" : "#166534", fontWeight: 700 }}>{tier.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <button type="button" onClick={() => setSelectedQty(selected.quantity)} style={{ ...secondaryButtonStyle, marginTop: 8, fontWeight: 700 }}>
+        Use this price — {selected.quantity.toLocaleString()} @ {money2(selected.unitPrice)}/unit
+      </button>
+      <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 8 }}>
+        <b>Customer price summary</b> (internal costs and profit are not shown here):
+        <pre style={{ margin: "6px 0 0", fontSize: 12, background: "white", padding: 8, borderRadius: 6, whiteSpace: "pre-wrap" }}>
+{`Product: ${productLabel}
+Quantity: ${selected.quantity.toLocaleString()}
+Configuration: ${pm.printConfig || "—"}
+Unit price: ${money2(selected.unitPrice)}
+Product subtotal: ${money2(selected.totalPrice)}
+Setup/design: included in unit pricing
+Freight/handling: ${selected.freightTotal > 0 ? `${money2(selected.freightTotal)} (${String(selected.freightSource).toUpperCase()}) — included in unit pricing` : "none entered"}
+Total: ${money2(selected.totalPrice)}`}
+        </pre>
+        {selected.draftOnly ? <div style={{ color: "#991b1b", fontWeight: 700, marginTop: 6 }}>DRAFT ONLY — missing costs must be verified before this price is final.</div> : null}
+      </div>
+      {actionData?.message ? (
+        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}</div>
+      ) : null}
+      <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 8 }}>
+        <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />
+        <input type="hidden" name="psearch" value={search} />
+        <input type="hidden" name="pseltier" value={selected.quantity} />
+        <label style={{ fontSize: 12 }}>Product name<input name="eproduct" defaultValue={productLabel} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Customer (optional)<input name="ecustomer" style={inputStyle} /></label>
+        <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#111827", color: "white", fontWeight: 700 }}>SAVE DRAFT QUOTE</button>
+      </Form>
+      <p style={smallHelp}>Saving re-fetches every selected record and recomputes cost, label totals, tiers, and the customer total on the server — posted totals are never trusted. Historical quotes are never modified.</p>
     </div>
   );
 }
