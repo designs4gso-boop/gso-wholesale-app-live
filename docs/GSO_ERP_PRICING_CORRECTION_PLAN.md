@@ -102,3 +102,24 @@ interpolation at every point when band edges = default quantities).
 6. Minimum job price/profit per family (15F.0d).
 7. Sticker market price ladder — provide sheet or keep cost-plus (15F.0e).
 8. Overhead/payment-processing allowance policy (later P2-6).
+
+## 15F.0 IMPLEMENTED (2026-07-25)
+The correction sequence collapsed into one production-ready patch: 15F.0a
+quantity margins (marginPctForQuantity, band edges 64/128/256/640/1000),
+15F.0b machine ($8/hr owner rate x verified 150 sqft/hr) + square-rect
+cutting ($6.53/page owner model; contour/die BLOCK), 15F.0c packing defaults
++ shipping ownership (outbound excluded-with-statement), 15F.0d policy SLOTS
+for minimums (values = owner decisions, null skips candidate), premium
+spot-gloss floor live, multi-design display + multi-line sticker jobs added.
+15F.0e (sticker market ladder) and the numeric owner values remain open —
+see docs/GSO_ERP_PRICING_OWNER_DECISIONS.md. Architecture:
+docs/GSO_ERP_PRODUCTION_READY_PRICING.md.
+
+## 15F.0-FINAL IMPLEMENTED (2026-07-25)
+Commercial layer closed: sticker AREA market floor (documented low-end
+anchors), provisional family minimum profits/order totals (owner $25/hr
+basis; NO unit-price floors by design), contour cutting bands (x1.15/1.35/
+1.60), DTP normal-ladder READY (informational 40% note), deterministic
+banner finishing + tube packing, job-level minimums once for multi-line.
+All provisional values labeled + listed for ratification in
+GSO_ERP_PRICING_OWNER_DECISIONS.md; 15F.1 makes them editable.

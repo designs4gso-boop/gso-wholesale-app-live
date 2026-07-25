@@ -161,8 +161,11 @@ export function priceDtpQuote(input: {
     if (overrideRequired) {
       status = "OWNER OVERRIDE REQUIRED";
     } else if (grossMarginPct < DTP_MARGIN_WARNING_TARGET_PCT) {
-      status = "WARNING — OWNER REVIEW";
-      statusReasons.push(`Below the ${DTP_MARGIN_WARNING_TARGET_PCT}% margin target (meets the ${hardFloorPct}% DTP floor)`);
+      // 15F.0-FINAL: a normal owner-ladder quote that MEETS the DTP hard floor
+      // and the $500 job-profit target is READY — the generic 40% target is an
+      // INFORMATIONAL note, never routine owner review. Floors, the $500/$350
+      // profit rules, and every override path above are unchanged.
+      statusReasons.push(`Note: below the ${DTP_MARGIN_WARNING_TARGET_PCT}% margin target (meets the ${hardFloorPct}% DTP floor and the $${DTP_MIN_JOB_PROFIT} profit target)`);
     }
   }
 

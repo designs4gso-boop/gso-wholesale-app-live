@@ -45,7 +45,10 @@ export const INK_RATES = {
   rolandPerMl: 149 / 750, // owner-approved provisional: same across channels
 };
 
-export type SourceLabel = "verified" | "owner_standard" | "estimated" | "missing" | "manual_override";
+// 15F.0: "excluded" = a real-world cost that is DELIBERATELY not part of the
+// production price (e.g. outbound customer shipping) — shown with its reason,
+// never counted, and never confused with "missing".
+export type SourceLabel = "verified" | "owner_standard" | "estimated" | "missing" | "manual_override" | "excluded";
 
 // ---------- family-specific margin curves (14B.0A) ----------
 // Source: GSO 2026 competitor and margin study (owner-approved). Five levels,
@@ -94,7 +97,8 @@ export function curveForTierCount(curve: number[], count: number, familyMinPct: 
   });
 }
 
-export type CostLine = { key: string; label: string; amount: number; source: SourceLabel; note?: string };
+// 15F.0: formula = the exact arithmetic behind the amount (audit contract B).
+export type CostLine = { key: string; label: string; amount: number; source: SourceLabel; note?: string; formula?: string };
 
 export function marginMath(totalCost: number, marginPct: number) {
   const price = totalCost / percentToDivisor(marginPct); // price = cost / (1 - margin)

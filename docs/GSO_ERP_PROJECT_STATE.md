@@ -1121,3 +1121,48 @@ PRICING_CORRECTION_PLAN (sequence 15F.0a-e + owner decision list; smallest
 patch = 15F.0a quantity-based margins). Tests 561 -> 579 (18 forensic pins
 in tests/calculator-forensic-fixtures.test.ts); tsc 306 = baseline; build
 clean; no app behavior changed.
+
+## Phase 15F.0 — PRODUCTION-READY PRICING ENGINE (2026-07-25, implemented)
+The calculator now emits customer-ready prices or exact blockers. Delivered:
+complete cost contract (machine $8/hr x verified 150 sqft/hr with formula
+lines; square-rect cutting $6.53/54x54-page owner model, contour/die BLOCK;
+packing never $0 — rules + jar 100/box default + single-box floor, labeled;
+outbound shipping EXCLUDED-with-statement, inbound freight unchanged);
+quantity-band margins via shared marginPctForQuantity (P0-1 dead: row count
+can never shift margins; loader+save identical); NEW
+app/lib/commercial-pricing-policy.server.ts (candidates -> max() ->
+controlling rule; premium spot-gloss floor for gloss/white stickers; family
+minimum slots null pending owner numbers); multi-design split display
+(qty=total labels, designs share); multi-line sticker jobs (independent
+lines, per-line bands/premium, job-level packing once, combined price; save
+recomputes via fReadAll); READY TO QUOTE / BLOCKED presentation with
+includes/not-includes; snapshots add commercialPricing/multiLine/designSplit
+blocks under engine 15F.0-production-ready-pricing (DTP pipeline byte-
+preserved at 15C.2). Acceptance: 11 fixtures in
+GSO_ERP_CALCULATOR_QUOTE_FIXTURES.md (100x3x3 -> $60.45 at 65%, in market
+range; DTP 2,500 unchanged $2,200/39.83% WARNING). Owner decisions listed in
+GSO_ERP_PRICING_OWNER_DECISIONS.md (contour cutting, sticker ladder,
+minimums, jar packing density, $8 ratification, banner finishing, blank
+waste, recipe waste, overhead, band edges). Tests 579 -> 597 (new
+production-ready-pricing.test.ts; forensic pins updated to corrected
+values); tsc 306 = baseline; build clean; no migration; historical
+quotes/snapshots and Shopify payment/production flows untouched.
+
+## Phase 15F.0-FINAL — employee-ready commercial pricing (2026-07-25)
+Closed the commercial gaps on the production-ready engine (no migration; DTP
+ladders/vendor costs untouched; historical quotes untouched). Sticker AREA
+market floor (sqft-banded $8.00-$3.20 + setup recovery; documented low-end
+anchors) now controls volume stickers (1,000 x 3x3: $117.34 -> $209.33, in
+the $200-300 band); provisional minimum gross profits (25/75/75/100/25/25,
+owner $25/hr basis) + order minimums (stickers 25 / banners 40 / custom 25)
+are live max() candidates — NO unit-price floors by design; contour kiss
+cutting quotes automatically (x1.15/1.35/1.60 of the $6.53 page standard,
+plain-language picker; die-irregular still BLOCKS); DTP normal-ladder quotes
+are READY with an informational sub-40% note (floors/$500/$350/overrides
+exact); banner finishing deterministic ($5 setup + $0.60/ft hems + $0.30
+grommets @24in) and banners pack in $4 tubes; sticker boxes 5,000/box;
+multi-line jobs apply job-level packing and minimums ONCE. 14-fixture
+acceptance book + market calibration in
+GSO_ERP_CALCULATOR_QUOTE_FIXTURES.md (no fixture below its market band).
+Provisional-vs-ratify split in GSO_ERP_PRICING_OWNER_DECISIONS.md. Tests
+597 -> 605; tsc 306 = baseline; build clean.

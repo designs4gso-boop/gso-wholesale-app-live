@@ -162,3 +162,30 @@ all three (Phase 15B/15E).
   Tier margins: FAMILY_MARGIN_RULES curves OWNER-approved; the row-position
   mapping (curveForTierCount) is the P0-1 defect; quantity-band mapping to be
   owned by marginPctForQuantity after 15F.0a.
+
+## 15F.0 corrected-engine update (2026-07-25)
+- Commercial price OWNER = app/lib/commercial-pricing-policy.server.ts
+  (candidates + max() + controlling rule, version
+  15F.0-production-ready-pricing). Margin bands 64/128/256/640/1000 map the
+  researched curves by QUANTITY (owner ratification pending); premium
+  stickers ride the researched spot-gloss curve. Family minimum values =
+  ErpAdminSetting-bound future (15F.1/2); today null (owner decisions doc).
+- Machine recovery: rate OWNER = OWNER_STANDARDS.machineRecoveryPerHour
+  ($8/hr provisional); time OWNER = Machine.sqftPerHour verified records
+  (150), re-fetched at save; $5 record costPerHour and $25 legacy stay
+  non-authoritative. Cutting OWNER = CUT_SQUARE_RECT_STANDARD ($6.53/page,
+  owner-documented); contour models pending. Packing OWNER = PACKOUT_RULES +
+  documented family defaults (jar 100/box, single-box floor) labeled
+  estimated. Outbound shipping: excluded from product price by design.
+
+## 15F.0-FINAL update (2026-07-25)
+- Commercial floors OWNER = commercial-pricing-policy.server.ts:
+  STICKER_MARKET_FLOOR_BANDS (area-banded, PROVISIONAL anchors) +
+  FAMILY_COMMERCIAL_POLICIES minimum profit/order values (PROVISIONAL, owner
+  $25/hr basis; unit-price floors deliberately none). Contour cutting OWNER =
+  CUT_CONTOUR_MULTIPLIERS (x1.15/1.35/1.60 of the $6.53 page standard,
+  PROVISIONAL); banner finishing OWNER = BANNER_FINISHING_STANDARDS; packing
+  densities STICKER_UNITS_PER_BOX_DEFAULT 5000 / BANNER_TUBE 5@$4 /
+  JAR 100 (all PROVISIONAL, 15F.1 editable). DTP READY semantics: the 40%
+  target is informational; floors/$500/$350/overrides unchanged in
+  dtp-owner-pricing.server.ts.

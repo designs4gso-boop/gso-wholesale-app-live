@@ -192,7 +192,7 @@ describe("DTP route pins (15C)", () => {
     expect(src).toContain("DTP_LADDER_QUANTITIES : quantities");
     expect((src.match(/isDtpP \? \{ total: 0, perUnit: 0/g) || []).length).toBe(1); // loader tier pipeline skips freight for DTP
     expect((src.match(/savedIsDtp \? \{ total: 0, perUnit: 0/g) || []).length).toBe(1); // save pipeline too
-    expect(src).toContain("savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION"); // 15C.2 pricing engine
+    expect(src).toContain("savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : PRODUCTION_READY_ENGINE_VERSION"); // 15C.2 pricing engine preserved for DTP; 15F.0 engine for the rest
     expect(DTP_ENGINE_VERSION).toBe("15C-spektra-dtp"); // cost engine label retained in snapshots as costEngine
   });
 
@@ -326,9 +326,12 @@ describe("DTP owner price ladders (15C.2)", () => {
     expect(dtpHardFloorPct(5000)).toBe(38);
     expect(dtpHardFloorPct(10000)).toBe(38);
     const base = { ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: LANDED_4X5X2_2500, missingCost: false, designs: 1, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } };
-    // ladder default: ~39.8% -> below 40 target but above 35 floor + profit >$500 -> WARNING
+    // 15F.0-FINAL: ladder default ~39.8% -> meets the 35% hard floor AND the
+    // $500 profit target -> READY (the 40% target is an informational note,
+    // never routine owner review for a normal owner-ladder quote)
     const ladder = priceDtpQuote({ ...base, customUnitPrice: null });
-    expect(ladder.status).toBe("WARNING — OWNER REVIEW");
+    expect(ladder.status).toBe("READY");
+    expect(ladder.statusReasons.join(" ")).toContain("Note: below the 40% margin target");
     // healthy custom price -> READY
     expect(priceDtpQuote({ ...base, customUnitPrice: 0.95 }).status).toBe("READY");
     // below the 35% floor but profit >= $500 -> OVERRIDE REQUIRED

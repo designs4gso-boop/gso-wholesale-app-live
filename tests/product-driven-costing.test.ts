@@ -107,8 +107,11 @@ describe("derived geometry, waste, boxes, weeding", () => {
     expect(bags.derived.boxes).toBe(3); // ceil(2500/1000)
     expect(bags.lines.find((line) => line.key === "packing")!.amount).toBeCloseTo(6, 6);
     const unknown = computeProductDrivenCost(makeInput({ blank: { name: "Mystery pouch", unitCost: 0.5, tiers: [], status: "verified" } }));
-    expect(unknown.derived.boxes).toBeNull();
+    // 15F.0-F: no units-per-box rule -> single-box job floor of the $2 owner
+    // packout standard (labeled estimated) — packing is never silently $0.
+    expect(unknown.derived.boxes).toBe(1);
     expect(unknown.lines.find((line) => line.key === "packing")!.source).toBe("estimated");
+    expect(unknown.lines.find((line) => line.key === "packing")!.amount).toBe(2);
     const overridden = computeProductDrivenCost(makeInput({ boxOverride: { unitsPerBox: 500, reason: "half boxes" } }));
     expect(overridden.derived.boxes).toBe(2);
     expect(overridden.lines.find((line) => line.key === "packing")!.source).toBe("manual_override");
@@ -292,7 +295,7 @@ describe("premium-jar UI pins (14C.1B)", () => {
   });
   it("bag auto-selection renders read-only with a hidden resolved ID; save snapshots the 14C.2 engine + top engine", () => {
     expect(src2).toContain("Verified (auto-selected)");
-    expect(src2).toContain("savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION"); // 15C.2: DTP quotes use the pricing engine version
+    expect(src2).toContain("savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : PRODUCTION_READY_ENGINE_VERSION"); // 15F.0: production-ready engine on non-DTP saves; DTP keeps 15C.2
     expect(src2).toContain("topEngine: TOP_ENGINE_VERSION");
     expect(src2).toContain("type:standard-top"); // canonical tops render even without Vendor Cost Book records
   });
@@ -599,7 +602,7 @@ describe("automatic tier flow pins (14C.2)", () => {
   });
 
   it("researched family curves and the 40% floor are preserved — never invented; margin family derived from the product", () => {
-    expect(src3).toContain("curveForTierCount(productMarginRule.curve, tierQuantities.length, productMarginRule.familyMinPct)");
+    expect(src3).toContain("marginPctForQuantity(marginRuleForPricingP, qty)"); // 15F.0-C: quantity bands, never row position
     expect(src3).toContain("marginFamilyKeyFor(pFamily, selectedClass,");
     expect(src3).toContain("Math.max(productMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT)");
     expect(src3).toContain("FAMILY MARGIN RULE NOT CONFIGURED");
@@ -622,7 +625,7 @@ describe("automatic tier flow pins (14C.2)", () => {
     expect(src3).toContain('name="pseltier"');
     expect(src3).toContain("savedTiers.find((tier) => tier.quantity === selectedTierQty)");
     expect(src3).toContain('name="psearch"');
-    expect(src3).toContain("DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION");
+    expect(src3).toContain("DTP_PRICING_ENGINE_VERSION : PRODUCTION_READY_ENGINE_VERSION");
     expect(MULTILABEL_ENGINE_VERSION).toBe("14C.2-multilabel-auto-tiers");
   });
 

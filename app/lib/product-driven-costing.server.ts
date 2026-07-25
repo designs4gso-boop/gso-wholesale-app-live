@@ -18,6 +18,98 @@ export const PRODUCT_ENGINE_VERSION = "14C.1";
 // 14C.2: snapshot engine for the complete product-to-price flow (multi-label
 // jar builder + automatic family tiers fed directly from the calculated job).
 export const MULTILABEL_ENGINE_VERSION = "14C.2-multilabel-auto-tiers";
+// 15F.0: production-ready pricing — complete cost model (machine, cutting,
+// packing, shipping ownership) + commercial price policy. New snapshots
+// record this version; historical snapshots are never rewritten.
+export const PRODUCTION_READY_ENGINE_VERSION = "15F.0-production-ready-pricing";
+
+// ---------- 15F.0-D/E: machine + cutting standards (single location) ----------
+// Machine recovery: OWNER standard $8/hr (owner-standards registry) x a
+// PRODUCTION-TIME model. Time model precedence: Advanced minutes/sqft
+// override -> verified machine speed (Machine.sqftPerHour, both live
+// printers 150) -> BLOCKED (never silently $0 for in-house printing).
+// The stale $5/hr Machine.costPerHour and the quarantined $25/hr are NEVER
+// used as the recovery rate.
+export const DOCUMENTED_PRINTER_SQFT_PER_HOUR = 150; // verified Mimaki/Roland production rate (DB Machine records)
+
+// Owner-documented cutting standards (15F.0-E). Square/rectangle: the owner
+// measured 15.7 minutes = $6.53 at the applicable labor standard; applied per
+// 54x54in production page (the same page unit as weeding) so cost scales
+// deterministically with quantity/sqft. Kiss/contour and die-cut/complex have
+// NO verified model yet — they BLOCK with an exact configuration message
+// instead of silently charging $0 (or wrongly borrowing the square model).
+export const CUT_TYPES = [
+  { value: "none", label: "No cutting required" },
+  { value: "square-rect", label: "Square / rectangle cut" },
+  { value: "kiss-simple", label: "Kiss cut — simple contour (circles, ovals, rounded shapes)" },
+  { value: "kiss-moderate", label: "Kiss cut — moderate contour (multi-curve outlines)" },
+  { value: "kiss-complex", label: "Kiss cut — complex contour (detailed outlines)" },
+  { value: "die-irregular", label: "Die cut / irregular production (needs owner standard)" },
+] as const;
+export const CUT_SQUARE_RECT_STANDARD = {
+  minutesPerPage: 15.7,
+  costPerPage: 6.53,
+  basis: "Owner-documented square/rectangle model: 15.7 min = $6.53 per 54x54in production page",
+} as const;
+// 15F.0-FINAL contour bands (PROVISIONAL conservative, editable in 15F.1):
+// contour cut paths run longer and slower than the straight grid path the
+// square/rectangle page standard measures — the multiplier approximates the
+// perimeter/path increase per page (simple ~+15%, moderate ~+35%, complex
+// ~+60% of the measured 15.7-min page). Pages already scale with quantity and
+// label size, and cut setup is inside the owner art-setup standard, so
+// contour cost = pages x $6.53 x band. Die-cut/irregular production has NO
+// safe model and stays BLOCKED.
+export const CUT_CONTOUR_MULTIPLIERS: Record<string, { multiplier: number; label: string }> = {
+  "kiss-simple": { multiplier: 1.15, label: "simple contour (+15% of the square/rect page standard, provisional)" },
+  "kiss-moderate": { multiplier: 1.35, label: "moderate contour (+35%, provisional)" },
+  "kiss-complex": { multiplier: 1.6, label: "complex contour (+60%, provisional)" },
+};
+export type NormalizedCutType = "none" | "square-rect" | "kiss-simple" | "kiss-moderate" | "kiss-complex" | "die-irregular";
+// Legacy pcut values from saved quote links: "kiss"/"weeded" (14C-era simple
+// square kiss cuts) map to square-rect; the short-lived 15F.0 "kiss-contour"
+// maps to the simple contour band; "die-complex"/"die" stay blocked.
+export function normalizeCutType(raw: string | null | undefined): NormalizedCutType {
+  const value = String(raw || "").toLowerCase();
+  if (value === "none") return "none";
+  if (value === "kiss-simple" || value === "kiss-contour" || value === "contour") return "kiss-simple";
+  if (value === "kiss-moderate") return "kiss-moderate";
+  if (value === "kiss-complex") return "kiss-complex";
+  if (value === "die-irregular" || value === "die-complex" || value === "die" || value === "die-cut") return "die-irregular";
+  return "square-rect"; // includes legacy "kiss" / "weeded" / blank
+}
+
+// 15F.0-FINAL banner finishing standards (PROVISIONAL conservative, labeled;
+// editable in 15F.1). Basis: owner labor standard $25/hr. Hems: ~50 linear
+// ft/hr -> $0.50/ft labor + $0.10/ft hem tape = $0.60 per finished perimeter
+// foot. Grommets: one per 24in of perimeter (corners included by the ceil),
+// ~0.5 min each -> $0.21 labor + $0.10 consumable ~= $0.30 each. One $5
+// finishing setup per job when any finishing is selected. Trimming is the
+// square/rect cutting line. Specialty finishing (pole pockets, wind slits,
+// keder) has no standard and is not selectable — documented as unsupported.
+export const BANNER_FINISHING_STANDARDS = {
+  hemPerFoot: 0.6,
+  hemBasis: "$0.50/ft labor (owner $25/hr at ~50 ft/hr, provisional) + $0.10/ft hem tape",
+  grommetEach: 0.3,
+  grommetSpacingIn: 24,
+  grommetBasis: "~0.5 min labor each at the owner $25/hr standard + $0.10 consumable (provisional)",
+  finishingSetupPerJob: 5,
+  setupBasis: "Finishing setup/handling per job (provisional conservative)",
+} as const;
+
+// 15F.0-FINAL packing realism (PROVISIONAL, labeled): stickers ~5,000 per
+// box; banners ship rolled in tubes (~5 per tube, $4/tube consumable+labor) —
+// never priced like a sticker box.
+export const STICKER_UNITS_PER_BOX_DEFAULT = 5000;
+export const BANNER_TUBE_CAPACITY = 5;
+export const BANNER_TUBE_COST = 4;
+
+// 15F.0-F: packing family defaults where no verified units-per-box rule
+// exists. Jar families use the documented Safe Care 4oz density (100/box) as
+// the family default (labeled estimated — owner confirmation pending);
+// stickers/banners/misc bags use a single-box-per-job floor of the $2 owner
+// packout standard (labeled estimated). Packing is NEVER silently $0 for a
+// supported non-custom family.
+export const JAR_FAMILY_DEFAULT_UNITS_PER_BOX = 100;
 export const MAX_LAYERS = 14;
 export const MAX_LABELS_PER_UNIT = 6;
 export const WEEDING_PAGE_SQFT = (54 * 54) / 144; // 20.25 sqft per 54x54in page
@@ -189,8 +281,14 @@ export type ProductDrivenInput = {
   whiteLayers: number;
   glossLayers: number;
   inkMlPerSqft: number; // active base usage assumption (seeded 0.0075-derived / entered)
-  machineMinutesPerSqft: number; // 0 = unknown
+  machineMinutesPerSqft: number; // Advanced override only (0 = not overridden)
+  // 15F.0-D: verified machine production speed (Machine.sqftPerHour; both live
+  // printers 150). 0/absent = no speed model -> in-house printing BLOCKS
+  // (never silently $0).
+  machineSqftPerHour?: number;
   machineRatePerHour: number;
+  // 15F.0-E: cut type (CUT_TYPES). null/undefined on non-cut families.
+  cutType?: NormalizedCutType | null;
   cutRequiresWeeding: boolean;
   hemming: boolean;
   grommets: boolean;
@@ -370,10 +468,61 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
     }
     const passes = 1 + whiteLayers + glossLayers;
     if (passes > 1) lines.push({ key: "passes", label: `Additional print passes — ${passes - 1}`, amount: 0, source: "estimated", note: "Represented once via machine time below (provisional linear model)." });
-    if (input.machineMinutesPerSqft > 0) {
-      lines.push({ key: "machine", label: `Machine @ $${input.machineRatePerHour}/hr x ${passes} pass(es)`, amount: (input.machineMinutesPerSqft * wasteAdjustedSqft * passes / 60) * input.machineRatePerHour, source: "owner_standard" });
+    // 15F.0-D: machine recovery is a REQUIRED in-house cost. Time model:
+    // Advanced minutes/sqft override -> verified machine speed -> BLOCKED.
+    const machineSqftPerHour = input.machineSqftPerHour ?? 0;
+    const minutesPerSqft = input.machineMinutesPerSqft > 0
+      ? input.machineMinutesPerSqft
+      : machineSqftPerHour > 0 ? 60 / machineSqftPerHour : 0;
+    if (minutesPerSqft > 0) {
+      const machineMinutes = minutesPerSqft * wasteAdjustedSqft * passes;
+      lines.push({
+        key: "machine",
+        label: `Machine recovery — ${machineMinutes.toFixed(1)} min @ $${input.machineRatePerHour}/hr x ${passes} pass(es)`,
+        amount: (machineMinutes / 60) * input.machineRatePerHour,
+        source: input.machineMinutesPerSqft > 0 ? "manual_override" : "owner_standard",
+        formula: `${wasteAdjustedSqft.toFixed(2)} sqft x ${minutesPerSqft.toFixed(3)} min/sqft x ${passes} pass(es) / 60 x $${input.machineRatePerHour}/hr`,
+        note: input.machineMinutesPerSqft > 0
+          ? "Advanced minutes/sqft override."
+          : `Verified printer speed ${machineSqftPerHour} sqft/hr; $${input.machineRatePerHour}/hr owner recovery standard (provisional).`,
+      });
     } else {
-      lines.push({ key: "machine", label: "Machine time", amount: 0, source: "estimated", note: "No minutes/sqft model yet — not included." });
+      lines.push({ key: "machine", label: "Machine recovery", amount: 0, source: "missing", note: "Machine production-rate standard required — set the printer speed (sqft/hr) before this job can be quoted." });
+    }
+    // 15F.0-E: cutting. Stickers use the selected cut type; bag/jar labels and
+    // banner trim use the square/rectangle standard automatically (simple
+    // shapes cut in-line). A cut type without a verified model BLOCKS.
+    const autoCutFamilies: ProductFamilyKey[] = ["bags-4x5", "chiron-jars", "miron-jars", "banners"];
+    const effectiveCutType = input.family === "stickers-labels" || input.family === "custom"
+      ? (input.cutType || "square-rect")
+      : autoCutFamilies.includes(input.family) ? "square-rect" : "none";
+    if (effectiveCutType === "none") {
+      lines.push({ key: "cutting", label: "Cutting — not required", amount: 0, source: "excluded", note: "No cutting selected for this job." });
+    } else if (effectiveCutType === "square-rect") {
+      const cutPages = Math.ceil(baseSqft / WEEDING_PAGE_SQFT);
+      lines.push({
+        key: "cutting",
+        label: `Cutting — square/rectangle, ${cutPages} page(s)`,
+        amount: CUT_SQUARE_RECT_STANDARD.costPerPage * cutPages,
+        source: "owner_standard",
+        formula: `ceil(${baseSqft.toFixed(2)} sqft / ${WEEDING_PAGE_SQFT} sqft per page) x $${CUT_SQUARE_RECT_STANDARD.costPerPage}/page`,
+        note: CUT_SQUARE_RECT_STANDARD.basis + (input.family === "stickers-labels" || input.family === "custom" ? "" : " (label/trim cutting)."),
+      });
+    } else if (CUT_CONTOUR_MULTIPLIERS[effectiveCutType]) {
+      // 15F.0-FINAL: contour kiss cuts quote automatically on the documented
+      // page standard x the contour band multiplier (provisional, labeled).
+      const band = CUT_CONTOUR_MULTIPLIERS[effectiveCutType];
+      const cutPages = Math.ceil(baseSqft / WEEDING_PAGE_SQFT);
+      lines.push({
+        key: "cutting",
+        label: `Cutting — ${band.label.split(" (")[0]}, ${cutPages} page(s)`,
+        amount: CUT_SQUARE_RECT_STANDARD.costPerPage * band.multiplier * cutPages,
+        source: "owner_standard",
+        formula: `ceil(${baseSqft.toFixed(2)} sqft / ${WEEDING_PAGE_SQFT}) x $${CUT_SQUARE_RECT_STANDARD.costPerPage}/page x ${band.multiplier}`,
+        note: `${CUT_SQUARE_RECT_STANDARD.basis}; ${band.label} — cut setup included in the art-setup standard.`,
+      });
+    } else {
+      lines.push({ key: "cutting", label: "Cutting — die cut / irregular production", amount: 0, source: "missing", note: "Cutting standard required for this cut type — die-cut/irregular production has no safe owner model yet; provide the standard before quoting." });
     }
   }
 
@@ -416,8 +565,39 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
     weedingBasis = `ESTIMATED: ceil(${baseSqft.toFixed(2)} sqft / ${WEEDING_PAGE_SQFT} sqft per 54x54 page)`;
     lines.push({ key: "weeding", label: `Weeding — ${weedingPages} page(s)`, amount: OWNER_LABOR.weedingPerPage54x54 * weedingPages, source: "estimated", note: weedingBasis });
   }
+  // 15F.0-FINAL-G: ordinary banner finishing quotes automatically from the
+  // documented provisional standards (perimeter-based); trimming is the
+  // square/rect cutting line above. Specialty finishing stays unsupported.
   if (input.family === "banners" && (input.hemming || input.grommets)) {
-    lines.push({ key: "finishing", label: "Banner hemming/grommets", amount: 0, source: "missing", note: "Finishing labor standard not set." });
+    if (input.widthIn > 0 && input.heightIn > 0) {
+      const perimeterFtPerBanner = (2 * (input.widthIn + input.heightIn)) / 12;
+      const totalPerimeterFt = perimeterFtPerBanner * quantity;
+      lines.push({ key: "finishing_setup", label: "Banner finishing setup", amount: BANNER_FINISHING_STANDARDS.finishingSetupPerJob, source: "estimated", formula: `$${BANNER_FINISHING_STANDARDS.finishingSetupPerJob} per job`, note: BANNER_FINISHING_STANDARDS.setupBasis });
+      if (input.hemming) {
+        lines.push({
+          key: "finishing_hems",
+          label: `Hems — ${totalPerimeterFt.toFixed(1)} perimeter ft`,
+          amount: BANNER_FINISHING_STANDARDS.hemPerFoot * totalPerimeterFt,
+          source: "estimated",
+          formula: `${quantity} x 2 x (${input.widthIn} + ${input.heightIn}) in / 12 x $${BANNER_FINISHING_STANDARDS.hemPerFoot}/ft`,
+          note: BANNER_FINISHING_STANDARDS.hemBasis,
+        });
+      }
+      if (input.grommets) {
+        const grommetsPerBanner = Math.ceil((2 * (input.widthIn + input.heightIn)) / BANNER_FINISHING_STANDARDS.grommetSpacingIn);
+        const grommetCount = grommetsPerBanner * quantity;
+        lines.push({
+          key: "finishing_grommets",
+          label: `Grommets — ${grommetCount} @ ${BANNER_FINISHING_STANDARDS.grommetSpacingIn}in spacing`,
+          amount: BANNER_FINISHING_STANDARDS.grommetEach * grommetCount,
+          source: "estimated",
+          formula: `${quantity} x ceil(perimeter ${(2 * (input.widthIn + input.heightIn)).toFixed(0)}in / ${BANNER_FINISHING_STANDARDS.grommetSpacingIn}in) x $${BANNER_FINISHING_STANDARDS.grommetEach}`,
+          note: BANNER_FINISHING_STANDARDS.grommetBasis,
+        });
+      }
+    } else {
+      lines.push({ key: "finishing", label: "Banner finishing", amount: 0, source: "missing", note: "Banner dimensions required before finishing can be priced." });
+    }
   }
 
   // ---- automatic boxes/packout ----
@@ -425,20 +605,48 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
     ? { unitsPerBox: input.boxOverride.unitsPerBox, label: `OVERRIDE (${input.boxOverride.reason})` }
     : unitsPerBoxFor(input.blank?.name || "");
   let boxes: number | null = null;
+  let effectiveUnitsPerBox: number | null = packRule.unitsPerBox ?? null;
   let boxSource = "No units-per-box rule — packout Estimated/Missing (override in Advanced).";
   if (packRule.unitsPerBox && packRule.unitsPerBox > 0) {
     boxes = Math.ceil(quantity / packRule.unitsPerBox);
     boxSource = packRule.label || "rule";
-    lines.push({ key: "packing", label: `Packing — ${boxes} box(es) @ ${packRule.unitsPerBox}/box`, amount: OWNER_LABOR.packoutPerBox * boxes, source: input.boxOverride ? "manual_override" : "owner_standard", note: boxSource });
+    lines.push({ key: "packing", label: `Packing — ${boxes} box(es) @ ${packRule.unitsPerBox}/box`, amount: OWNER_LABOR.packoutPerBox * boxes, source: input.boxOverride ? "manual_override" : "owner_standard", formula: `ceil(${quantity} / ${packRule.unitsPerBox}) x $${OWNER_LABOR.packoutPerBox}/box`, note: boxSource });
+  } else if (input.family === "chiron-jars" || input.family === "miron-jars") {
+    // 15F.0-F: jar family default — documented Safe Care 4oz density until the
+    // owner sets a per-product rule. Labeled estimated, never silently $0.
+    effectiveUnitsPerBox = JAR_FAMILY_DEFAULT_UNITS_PER_BOX;
+    boxes = Math.ceil(quantity / JAR_FAMILY_DEFAULT_UNITS_PER_BOX);
+    boxSource = `Family default ${JAR_FAMILY_DEFAULT_UNITS_PER_BOX}/box (documented Safe Care 4oz jar density — owner confirmation pending)`;
+    lines.push({ key: "packing", label: `Packing — ${boxes} box(es) @ ${JAR_FAMILY_DEFAULT_UNITS_PER_BOX}/box (family default)`, amount: OWNER_LABOR.packoutPerBox * boxes, source: "estimated", formula: `ceil(${quantity} / ${JAR_FAMILY_DEFAULT_UNITS_PER_BOX}) x $${OWNER_LABOR.packoutPerBox}/box`, note: boxSource });
+  } else if (input.family === "banners") {
+    // 15F.0-FINAL-H: banners ship rolled in tubes — never priced like sticker
+    // boxes. ~5 banners per tube, $4/tube (provisional, labeled).
+    effectiveUnitsPerBox = BANNER_TUBE_CAPACITY;
+    boxes = Math.ceil(quantity / BANNER_TUBE_CAPACITY);
+    boxSource = `Banner tubes — ${BANNER_TUBE_CAPACITY}/tube @ $${BANNER_TUBE_COST} (provisional standard)`;
+    lines.push({ key: "packing", label: `Packing — ${boxes} shipping tube(s)`, amount: BANNER_TUBE_COST * boxes, source: "estimated", formula: `ceil(${quantity} / ${BANNER_TUBE_CAPACITY}) x $${BANNER_TUBE_COST}/tube`, note: boxSource });
   } else if (input.family !== "custom" && !isDtp) {
-    lines.push({ key: "packing", label: "Packing/boxes", amount: 0, source: "estimated", note: boxSource });
+    // 15F.0-FINAL-H: stickers/labels and unruled bag sizes — ~5,000 units per
+    // box (provisional realistic density), minimum one box, $2 owner packout.
+    effectiveUnitsPerBox = STICKER_UNITS_PER_BOX_DEFAULT;
+    boxes = Math.max(1, Math.ceil(quantity / STICKER_UNITS_PER_BOX_DEFAULT));
+    boxSource = `${STICKER_UNITS_PER_BOX_DEFAULT.toLocaleString()}/box provisional density ($2 owner packout standard) — owner units-per-box rule editable in 15F.1`;
+    lines.push({ key: "packing", label: `Packing — ${boxes} box(es)`, amount: OWNER_LABOR.packoutPerBox * boxes, source: "estimated", formula: `max(1, ceil(${quantity} / ${STICKER_UNITS_PER_BOX_DEFAULT})) x $${OWNER_LABOR.packoutPerBox}/box`, note: boxSource });
   }
+  // (DTP: packing is inside the Spektra vendor cost — the vendor_setup line
+  // documents it; no packing line renders, preserving the 15C "no in-house
+  // lines" contract.)
 
   // ---- freight (single visible line; computed by the freight panel) ----
   // 15C: DTP pushes its own flat per-PO freight line above — never both.
   if (!isDtp) {
     lines.push({ key: "freight", label: "Freight/handling (separate line)", amount: input.freightPerUnit * quantity, source: input.freightSource, note: input.freightSource === "estimated" ? "ESTIMATED allowance" : undefined });
   }
+  // 15F.0-G: shipping ownership — outbound CUSTOMER delivery is deliberately
+  // NOT a production cost. It is excluded with its reason (never "missing"),
+  // and the customer summary states it plainly. Inbound vendor freight
+  // (DTP $85/PO, entered actual freight) remains a production cost above.
+  lines.push({ key: "shipping_outbound", label: "Customer delivery/shipping — not included", amount: 0, source: "excluded", note: "Quoted/charged separately at shipment time (spec 15F.0-G); jobs needing delivered pricing must enter freight above." });
 
   const totalCost = lines.reduce((sum, line) => sum + line.amount, 0);
   const missing = lines.filter((line) => line.source === "missing").map((line) => line.label);
@@ -463,7 +671,7 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
     lines,
     derived: {
       sqinPerPiece, totalPieces, baseSqft, wastePct, wasteSource, wasteAdjustedSqft,
-      unitsPerBox: packRule.unitsPerBox ?? null, boxes, boxSource, weedingPages, weedingBasis,
+      unitsPerBox: effectiveUnitsPerBox, boxes, boxSource, weedingPages, weedingBasis,
       printPasses: 1 + whiteLayers + glossLayers,
       labelRows: labelRowsDerived,
       applicationCount,

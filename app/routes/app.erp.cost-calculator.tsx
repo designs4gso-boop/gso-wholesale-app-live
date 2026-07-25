@@ -6,6 +6,7 @@ import db from "../db.server";
 import {
   MARGIN_FLOOR_PCT,
   OVERRIDE_PHRASE,
+  PROVISIONAL_MARGIN_CURVE,
   SUGGESTED_QUANTITIES,
   canFinalize,
   checkMarginGate,
@@ -20,7 +21,8 @@ import {
   type FamilyMarginRule,
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
-import { DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
+import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
+import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginPctForQuantity } from "../lib/commercial-pricing-policy.server";
 import { calculatorFamilies, calculatorFamilyValues, familyByKeyOrAlias } from "../lib/product-family-registry";
 import { resolveProductDisplayName } from "../lib/commercial-name-resolver.server";
 import { OWNER_STANDARDS } from "../lib/owner-standards";
@@ -120,6 +122,18 @@ type QuoteLine = {
 
 function cleanText(value: unknown) {
   return String(value ?? "").replace(/^\uFEFF/, "").trim();
+}
+
+// 15F.0-D: verified printer speeds from the Machine records (both live
+// printers are 150 sqft/hr). Falls back to the documented production-rate
+// standard so a missing record never silently zeroes machine cost \u2014 the
+// engine still blocks if BOTH are absent (speed 0).
+function resolvePrinterSpeeds(machineRecords: Array<{ name: string; sqftPerHour: number }>): { mimaki: number; roland: number } {
+  const speedFor = (pattern: RegExp) => {
+    const match = machineRecords.find((machine) => pattern.test(machine.name) && machine.sqftPerHour > 0);
+    return match ? match.sqftPerHour : DOCUMENTED_PRINTER_SQFT_PER_HOUR;
+  };
+  return { mimaki: speedFor(/mimaki/i), roland: speedFor(/roland/i) };
 }
 
 function parseNumber(value: unknown) {
@@ -419,7 +433,7 @@ export async function loader({ request }: { request: Request }) {
 
   // Read-only since 12B.1a: the RIP sync settings row is created by the RIP
   // Imports / Print Intake / Print Log Settings pages, never by this route.
-  const [setting, entries, materialRecords, vendorProducts] = await Promise.all([
+  const [setting, entries, materialRecords, vendorProducts, machineRecords] = await Promise.all([
     db.printLogAutoImportSetting.findUnique({ where: { shop } }),
     db.printLogEntry.findMany({
       where: { shop, jobTicket: { startsWith: "GSOQ-" }, inkMl: { gt: 0 } },
@@ -437,7 +451,10 @@ export async function loader({ request }: { request: Request }) {
       orderBy: [{ productType: "asc" }, { name: "asc" }],
       take: 200,
     }),
+    // 15F.0-D: verified machine speeds for machine-recovery time (printers only)
+    db.machine.findMany({ where: { shop, active: true, machineType: "printer" }, select: { name: true, sqftPerHour: true } }),
   ]);
+  const printerSqftPerHour = resolvePrinterSpeeds(machineRecords);
 
   const rows = uniqueLatestByQuote(entries.map(rowFromEntry));
   const rowById = new Map(rows.map((row) => [row.quoteId, row]));
@@ -811,6 +828,7 @@ export async function loader({ request }: { request: Request }) {
   let sameSizeP = true;
   let canonicalBagOptions: Array<{ value: string; label: string }> = [];
   let productTiers: any[] | null = null;
+  let productMultiLine: any = null; // 15F.0-K multi-line sticker jobs
   let productMarginRule: FamilyMarginRule | null = null;
   let productMarginKey: string | null = null;
   let requestedQtyP = 0;
@@ -948,7 +966,9 @@ export async function loader({ request }: { request: Request }) {
       glossLayers: Number(eparams.get("pglosslayers") || 0),
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(eparams.get("pmachmin") || 0),
+      machineSqftPerHour: printer === "roland" ? printerSqftPerHour.roland : printerSqftPerHour.mimaki, // 15F.0-D verified speed
       machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+      cutType: normalizeCutType(eparams.get("pcut")), // 15F.0-E (legacy kiss/weeded -> square-rect)
       cutRequiresWeeding: eparams.get("pcut") === "weeded",
       hemming: eparams.get("phem") === "1",
       grommets: eparams.get("pgrommet") === "1",
@@ -975,11 +995,16 @@ export async function loader({ request }: { request: Request }) {
       productMarginRule = productMarginKey ? resolveMarginFamily(productMarginKey) : null;
       const baseTierQuantities = isDtpP && !eparams.get("eqty") ? DTP_LADDER_QUANTITIES : eQuantities; // 15C.2: DTP rows = owner ladder quantities (1000/2500/5000/7500/10000)
       const tierQuantities = [...new Set([...baseTierQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b);
+      // 15F.0-C: margin comes from each row's QUANTITY (researched band), never
+      // from row count/position — adding the requested row cannot shift the
+      // standard rows (forensic P0-1 fix). Families without a researched curve
+      // stay on the provisional universal curve, quantity-banded and labeled.
+      const provisionalRuleP: FamilyMarginRule = { key: "provisional-universal", label: "Provisional universal curve", curve: [...PROVISIONAL_MARGIN_CURVE], familyMinPct: MARGIN_FLOOR_PCT, aliases: [] };
+      const marginRuleForPricingP = productMarginRule ?? provisionalRuleP;
+      const premiumEligibleP = engineFamilyP === "stickers-labels" && (Number(eparams.get("pwhitelayers") || 0) > 0 || Number(eparams.get("pglosslayers") || 0) > 0);
       const curveDefaults = isDtpP
         ? tierQuantities.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: quantity-threshold rule, never row-position
-        : productMarginRule
-          ? curveForTierCount(productMarginRule.curve, tierQuantities.length, productMarginRule.familyMinPct)
-          : defaultTierMargins(tierQuantities.length);
+        : tierQuantities.map((qty) => marginPctForQuantity(marginRuleForPricingP, qty));
       const tierMargins = eMarginsRaw.length === tierQuantities.length ? eMarginsRaw : curveDefaults;
       const freightInputsP = {
         actualFreight: Number(eparams.get("efactual") || 0),
@@ -1041,28 +1066,92 @@ export async function loader({ request }: { request: Request }) {
             },
           };
         }
-        const marginPct = tierMargins[index] ?? floorForFamily;
-        const unitCost = run.unitCost + tierFreight.perUnit; // same basis as the manual pipeline: freight rides in the margin basis
-        const { price, profit, actualMarginPct } = marginMath(unitCost, marginPct);
-        const belowFloor = marginPct < floorForFamily;
+        // 15F.0-H: one commercial price per row — cost-based on the researched
+        // quantity band, lifted by any owner floor/ladder candidate; the
+        // controlling rule is recorded. Advanced per-tier margin edits still
+        // override the band margin (validated by the existing floor gate).
+        const overrideMargin = eMarginsRaw.length === tierQuantities.length ? eMarginsRaw[index] : null;
+        const completeCost = run.totalCost + tierFreight.total;
+        const commercial = computeCommercialPrice({
+          familyKey: canonicalUiFamily(pFamily), quantity: qty, completeCost,
+          marginRule: marginRuleForPricingP, premiumEligible: premiumEligibleP,
+          marginPctOverride: overrideMargin,
+          finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
+        });
+        const belowFloor = commercial.marginPctApplied < floorForFamily;
         return {
           quantity: qty,
           requested: qty === requestedQtyP,
-          jobCost: run.totalCost + tierFreight.total,
-          unitCost,
-          marginPct,
-          unitPrice: price,
-          totalPrice: price * qty,
-          profit: profit * qty,
-          actualMarginPct,
+          jobCost: completeCost,
+          unitCost: qty > 0 ? completeCost / qty : completeCost,
+          marginPct: commercial.marginPctApplied,
+          unitPrice: commercial.finalUnitPrice,
+          totalPrice: commercial.finalTotalPrice,
+          profit: commercial.achievedProfit,
+          actualMarginPct: commercial.achievedMarginPct,
           belowFloor,
           draftOnly: run.missing.length > 0,
           freightTotal: tierFreight.total,
           freightSource: tierFreight.source,
           setupTotal: run.setupTotal,
-          status: run.missing.length ? "DRAFT ONLY — missing costs" : belowFloor ? "BELOW FLOOR — override required" : "Ready",
+          blockers: run.missing,
+          commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP },
+          status: run.missing.length ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
         };
       });
+    }
+    // 15F.0-K: multi-line sticker jobs — every line runs the SAME engine
+    // independently (own material/printer/layers/cut/quantity band); job-level
+    // packing is charged once and allocated by cost share; the combined price
+    // is the sum of per-line commercial prices (premium lines stay premium).
+    const lineCountK = Math.floor(Number(eparams.get("pslcount") || 0));
+    if (engineFamilyP === "stickers-labels" && lineCountK >= 2) {
+      const lineInputs = buildStickerLines({
+        count: lineCountK,
+        names: eparams.getAll("pslname").map(String),
+        quantities: eparams.getAll("pslqty").map(Number),
+        designs: eparams.getAll("psldesigns").map(Number),
+        widths: eparams.getAll("pslw").map(Number),
+        heights: eparams.getAll("pslh").map(Number),
+        materialIds: eparams.getAll("pslmat").map(String),
+        printers: eparams.getAll("pslprinter").map(String),
+        whites: eparams.getAll("pslwhite").map(Number),
+        glosses: eparams.getAll("pslgloss").map(Number),
+        cuts: eparams.getAll("pslcut").map(String),
+      });
+      const lineResults = lineInputs.map((line) => {
+        const lineMaterial = materialById.get(line.materialId);
+        const run = computeProductDrivenCost({
+          family: "stickers-labels", quantity: Math.max(1, line.quantity), designs: line.designs,
+          facesPerUnit: 1, widthIn: line.widthIn, heightIn: line.heightIn, labelRows: null, dtp: null,
+          blank: null, lid: null, mironTop: null,
+          material: lineMaterial ? { name: lineMaterial.name, costPerSqft: lineMaterial.displayCostPerSqft > 0 ? lineMaterial.displayCostPerSqft : null } : null,
+          printer: line.printer, printerHasWhite: true, printerHasGloss: line.printer === "roland",
+          whiteLayers: line.whiteLayers, glossLayers: line.glossLayers, inkMlPerSqft: 0.6,
+          machineMinutesPerSqft: 0, machineSqftPerHour: line.printer === "roland" ? printerSqftPerHour.roland : printerSqftPerHour.mimaki,
+          machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value,
+          cutType: normalizeCutType(line.cutType), cutRequiresWeeding: false,
+          hemming: false, grommets: false, freightPerUnit: 0, freightSource: "estimated",
+          recipeWastePct: null, wasteOverride: null, boxOverride: null,
+        });
+        const packingAmount = run.lines.find((engineLine) => engineLine.key === "packing")?.amount || 0;
+        return {
+          name: line.name, quantity: line.quantity, designs: line.designs,
+          glossOrWhite: line.whiteLayers > 0 || line.glossLayers > 0,
+          lineCost: run.totalCost - packingAmount, // packing charged ONCE at job level below
+          missing: run.missing,
+          finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL floor inputs
+          splitText: designSplit(line.quantity, line.designs).text,
+        };
+      });
+      const totalUnitsK = lineInputs.reduce((sum, line) => sum + Math.max(0, line.quantity), 0);
+      const combined = combineStickerLines({
+        lines: lineResults,
+        // 15F.0-FINAL-H: one job-level packout on the combined units (sticker density rule)
+        jobPackingCost: OWNER_STANDARDS.packoutPerBox.value * Math.max(1, Math.ceil(totalUnitsK / 5000)),
+        marginRule: resolveMarginFamily("stickers-labels"),
+      });
+      productMultiLine = { perLine: lineResults, combined, packingNote: "Packing charged once at job level — single-box floor of the $2 owner standard." };
     }
   }
   const freight = computeFreight(
@@ -1105,6 +1194,12 @@ export async function loader({ request }: { request: Request }) {
         ? { key: productMarginRule.key, label: productMarginRule.label, curve: productMarginRule.curve, minPct: productMarginRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
         : { key: productMarginKey || "", label: "FAMILY MARGIN RULE NOT CONFIGURED", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
       labelForm: labelRowsP ? { count: labelCountP, same: sameSizeP, rows: labelRowsP } : null,
+      // 15F.0-J: multi-design split (quantity = TOTAL labels; designs share it)
+      designSplitText: pFamily && canonicalUiFamily(pFamily) === "stickers-labels" && Number(eparams.get("pdesigns") || 0) > 1 && requestedQtyP > 0
+        ? designSplit(requestedQtyP, Number(eparams.get("pdesigns"))).text
+        : null,
+      multiLine: productMultiLine, // 15F.0-K
+      cutSelected: eparams.get("pcut") || "square-rect", // 15F.0-E form echo
       isDtp: pFamily ? canonicalUiFamily(pFamily) === "dtp-bags" : false,
       dtpSpec: (() => {
         if (!pFamily || canonicalUiFamily(pFamily) !== "dtp-bags") return null;
@@ -1327,6 +1422,7 @@ export async function action({ request }: { request: Request }) {
   let savedEngineFamily: ProductFamilyKey | null = null;
   let savedTiers: any[] | null = null;
   let savedSelectedTier: any | null = null;
+  let savedMultiLine: ReturnType<typeof combineStickerLines> | null = null; // 15F.0-K
   let savedMarginRule: FamilyMarginRule | null = null;
   let savedMarginKey: string | null = null;
   let savedLabelRows: LabelRow[] | null = null;
@@ -1383,6 +1479,8 @@ export async function action({ request }: { request: Request }) {
     const materialRecord = materialId ? await db.material.findFirst({ where: { shop, id: materialId } }) : null;
     const materialResolved = materialRecord ? resolvePrintMaterialCostPerSqft(materialRecord) : null;
     const printerSave = fRead("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
+    // 15F.0-D: verified machine speeds re-fetched at save (posted values never trusted)
+    const printerSpeedsSave = resolvePrinterSpeeds(await db.machine.findMany({ where: { shop, active: true, machineType: "printer" }, select: { name: true, sqftPerHour: true } }));
     // 14C.1B: classification + engine mapping recomputed at save from the
     // FETCHED record (client cannot spoof the class or skip the Miron top).
     const savedBlankRaw = String(fRead("pblank") || "");
@@ -1463,7 +1561,9 @@ export async function action({ request }: { request: Request }) {
       glossLayers: Number(fRead("pglosslayers") || 0),
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(fRead("pmachmin") || 0),
+      machineSqftPerHour: printerSave === "roland" ? printerSpeedsSave.roland : printerSpeedsSave.mimaki, // 15F.0-D verified speed
       machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+      cutType: normalizeCutType(fRead("pcut")), // 15F.0-E (legacy kiss/weeded -> square-rect)
       cutRequiresWeeding: fRead("pcut") === "weeded",
       hemming: fRead("phem") === "1",
       grommets: fRead("pgrommet") === "1",
@@ -1483,11 +1583,13 @@ export async function action({ request }: { request: Request }) {
     const baseQuantitiesSave = savedIsDtp && !fRead("eqty") ? DTP_LADDER_QUANTITIES : quantities;
     const tierQuantitiesSave = [...new Set([...baseQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b);
     const validMargins = margins.filter((value) => Number.isFinite(value) && value > 0);
+    // 15F.0-C: quantity-band margins at save — identical resolver to the loader.
+    const provisionalRuleSave: FamilyMarginRule = { key: "provisional-universal", label: "Provisional universal curve", curve: [...PROVISIONAL_MARGIN_CURVE], familyMinPct: MARGIN_FLOOR_PCT, aliases: [] };
+    const marginRuleForPricingSave = savedMarginRule ?? provisionalRuleSave;
+    const premiumEligibleSave = savedEngineFamily === "stickers-labels" && (Number(fRead("pwhitelayers") || 0) > 0 || Number(fRead("pglosslayers") || 0) > 0);
     const curveDefaultsSave = savedIsDtp
       ? tierQuantitiesSave.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: same quantity-threshold rule at save
-      : savedMarginRule
-        ? curveForTierCount(savedMarginRule.curve, tierQuantitiesSave.length, savedMarginRule.familyMinPct)
-        : defaultTierMargins(tierQuantitiesSave.length);
+      : tierQuantitiesSave.map((qty) => marginPctForQuantity(marginRuleForPricingSave, qty));
     const tierMarginsSave = validMargins.length === tierQuantitiesSave.length ? validMargins : curveDefaultsSave;
     const freightInputsSave = {
       actualFreight: Number(fRead("efactual") || 0), handling: Number(fRead("efhandling") || 0), otherFees: Number(fRead("effees") || 0),
@@ -1542,21 +1644,102 @@ export async function action({ request }: { request: Request }) {
           },
         };
       }
-      const marginPct = tierMarginsSave[index] ?? floorForFamilySave;
-      const unitCost = run.unitCost + tierFreight.perUnit;
-      const { price, profit, actualMarginPct } = marginMath(unitCost, marginPct);
-      const belowFloor = marginPct < floorForFamilySave;
+      // 15F.0-H: identical commercial resolution to the loader (parity).
+      const overrideMarginSave = validMargins.length === tierQuantitiesSave.length ? validMargins[index] : null;
+      const completeCost = run.totalCost + tierFreight.total;
+      const commercial = computeCommercialPrice({
+        familyKey: canonicalUiFamily(pFamilySave), quantity: qty, completeCost,
+        marginRule: marginRuleForPricingSave, premiumEligible: premiumEligibleSave,
+        marginPctOverride: overrideMarginSave,
+        finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
+      });
+      const belowFloor = commercial.marginPctApplied < floorForFamilySave;
       return {
-        quantity: qty, requested: qty === savedRequestedQty, jobCost: run.totalCost + tierFreight.total, unitCost, marginPct,
-        unitPrice: price, totalPrice: price * qty, profit: profit * qty, actualMarginPct, belowFloor,
+        quantity: qty, requested: qty === savedRequestedQty, jobCost: completeCost, unitCost: qty > 0 ? completeCost / qty : completeCost, marginPct: commercial.marginPctApplied,
+        unitPrice: commercial.finalUnitPrice, totalPrice: commercial.finalTotalPrice, profit: commercial.achievedProfit, actualMarginPct: commercial.achievedMarginPct, belowFloor,
         draftOnly: run.missing.length > 0, freightTotal: tierFreight.total, freightSource: tierFreight.source, setupTotal: run.setupTotal,
-        status: run.missing.length ? "DRAFT ONLY — missing costs" : belowFloor ? "BELOW FLOOR — override required" : "Ready",
+        blockers: run.missing,
+        commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave },
+        status: run.missing.length ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
       };
     });
     const selectedTierQty = Math.floor(Number(fRead("pseltier") || 0));
     savedSelectedTier = savedTiers.find((tier) => tier.quantity === selectedTierQty)
       || savedTiers.find((tier) => tier.requested)
       || savedTiers[savedTiers.length - 1];
+    // 15F.0-K: multi-line sticker jobs — recompute the SAME combined quote at
+    // save (posted totals ignored) and make it the selected/customer figure.
+    const lineCountSave = Math.floor(Number(fRead("pslcount") || 0));
+    if (savedEngineFamily === "stickers-labels" && lineCountSave >= 2) {
+      const lineInputsSave = buildStickerLines({
+        count: lineCountSave,
+        names: fReadAll("pslname"),
+        quantities: fReadAll("pslqty").map(Number),
+        designs: fReadAll("psldesigns").map(Number),
+        widths: fReadAll("pslw").map(Number),
+        heights: fReadAll("pslh").map(Number),
+        materialIds: fReadAll("pslmat"),
+        printers: fReadAll("pslprinter"),
+        whites: fReadAll("pslwhite").map(Number),
+        glosses: fReadAll("pslgloss").map(Number),
+        cuts: fReadAll("pslcut"),
+      });
+      const lineMaterialRecords = await db.material.findMany({ where: { shop, id: { in: lineInputsSave.map((line) => line.materialId).filter(Boolean) } } });
+      const lineMaterialByIdSave = new Map(lineMaterialRecords.map((record) => [record.id, record]));
+      const lineResultsSave = lineInputsSave.map((line) => {
+        const record = lineMaterialByIdSave.get(line.materialId);
+        const resolved = record ? resolvePrintMaterialCostPerSqft(record) : null;
+        const run = computeProductDrivenCost({
+          family: "stickers-labels", quantity: Math.max(1, line.quantity), designs: line.designs,
+          facesPerUnit: 1, widthIn: line.widthIn, heightIn: line.heightIn, labelRows: null, dtp: null,
+          blank: null, lid: null, mironTop: null,
+          material: record ? { name: record.name, costPerSqft: resolved && resolved.unitCost > 0 ? resolved.unitCost : null } : null,
+          printer: line.printer, printerHasWhite: true, printerHasGloss: line.printer === "roland",
+          whiteLayers: line.whiteLayers, glossLayers: line.glossLayers, inkMlPerSqft: 0.6,
+          machineMinutesPerSqft: 0, machineSqftPerHour: line.printer === "roland" ? printerSpeedsSave.roland : printerSpeedsSave.mimaki,
+          machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value,
+          cutType: normalizeCutType(line.cutType), cutRequiresWeeding: false,
+          hemming: false, grommets: false, freightPerUnit: 0, freightSource: "estimated",
+          recipeWastePct: null, wasteOverride: null, boxOverride: null,
+        });
+        const packingAmount = run.lines.find((engineLine) => engineLine.key === "packing")?.amount || 0;
+        return {
+          name: line.name, quantity: line.quantity, designs: line.designs,
+          glossOrWhite: line.whiteLayers > 0 || line.glossLayers > 0,
+          lineCost: run.totalCost - packingAmount,
+          missing: run.missing,
+          finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL floor inputs
+        };
+      });
+      const totalUnitsSave = lineInputsSave.reduce((sum, line) => sum + Math.max(0, line.quantity), 0);
+      savedMultiLine = combineStickerLines({
+        lines: lineResultsSave,
+        jobPackingCost: OWNER_STANDARDS.packoutPerBox.value * Math.max(1, Math.ceil(totalUnitsSave / 5000)),
+        marginRule: resolveMarginFamily("stickers-labels"),
+      });
+      const combinedQty = Math.max(1, savedMultiLine.totalQuantity);
+      savedSelectedTier = {
+        quantity: combinedQty,
+        requested: true,
+        jobCost: savedMultiLine.totalCost,
+        unitCost: savedMultiLine.totalCost / combinedQty,
+        marginPct: Math.round(savedMultiLine.achievedMarginPct * 10) / 10,
+        unitPrice: savedMultiLine.finalTotalPrice / combinedQty,
+        totalPrice: savedMultiLine.finalTotalPrice,
+        profit: savedMultiLine.achievedProfit,
+        actualMarginPct: savedMultiLine.achievedMarginPct,
+        belowFloor: savedMultiLine.achievedMarginPct < Math.max(savedMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT),
+        draftOnly: savedMultiLine.blockers.length > 0,
+        freightTotal: 0,
+        freightSource: "estimated",
+        setupTotal: 0,
+        blockers: savedMultiLine.blockers,
+        commercial: { version: COMMERCIAL_PRICING_VERSION, candidates: null, controllingRule: `Multi-line sticker job — ${savedMultiLine.controllingRule}`, marginSource: "per-line researched quantity bands + area floors", premiumApplied: lineResultsSave.some((line) => line.glossOrWhite) },
+        status: savedMultiLine.blockers.length ? "BLOCKED" : "READY TO QUOTE",
+        multiLine: savedMultiLine,
+      };
+      savedTiers = [savedSelectedTier];
+    }
     // 15C.2: DTP safeguards gate the SAVE — BLOCKED never saves; below-floor /
     // below-$500 requires the owner phrase + written reason (server-enforced).
     if (savedIsDtp && savedSelectedTier?.dtp) {
@@ -1595,12 +1778,32 @@ export async function action({ request }: { request: Request }) {
   const familyDefaults = ruleForSave ? curveForTierCount(ruleForSave.curve, snapshotTiers.length, ruleForSave.familyMinPct) : defaultTierMargins(snapshotTiers.length);
   const savedIsDtpSnapshot = savedEngineFamily === "dtp-bags";
   const snapshot = {
-    engine: productSnapshot ? (savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION) : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
+    // 15F.0: non-DTP product saves record the production-ready engine; DTP
+    // keeps its 15C.2 version. Historical snapshots are never rewritten.
+    engine: productSnapshot ? (savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : PRODUCTION_READY_ENGINE_VERSION) : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
     autoBreakdown: autoSnapshot ? { lines: autoSnapshot.lines, missing: autoSnapshot.missing, warnings: autoSnapshot.warnings } : null,
     productBreakdown: productSnapshot ? {
-      engine: savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION,
-      costEngine: savedIsDtpSnapshot ? DTP_ENGINE_VERSION : null,
+      engine: savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : PRODUCTION_READY_ENGINE_VERSION,
+      costEngine: savedIsDtpSnapshot ? DTP_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION,
       topEngine: TOP_ENGINE_VERSION,
+      // 15F.0-H/P: the commercial decision for the SELECTED tier — candidates,
+      // controlling rule, and final figures (posted totals were ignored).
+      commercialPricing: !savedIsDtpSnapshot && savedSelectedTier?.commercial ? {
+        version: COMMERCIAL_PRICING_VERSION,
+        controllingRule: savedSelectedTier.commercial.controllingRule,
+        marginSource: savedSelectedTier.commercial.marginSource,
+        premiumApplied: savedSelectedTier.commercial.premiumApplied,
+        candidates: savedSelectedTier.commercial.candidates,
+        finalTotalPrice: savedSelectedTier.totalPrice,
+        finalUnitPrice: savedSelectedTier.unitPrice,
+        achievedProfit: savedSelectedTier.profit,
+        achievedMarginPct: savedSelectedTier.actualMarginPct,
+        shippingOwnership: "Outbound customer delivery/shipping excluded from the product price (quoted separately); inbound vendor freight remains a production cost.",
+      } : null,
+      multiLine: savedMultiLine ? { lines: savedMultiLine.lines, totalQuantity: savedMultiLine.totalQuantity, totalCost: savedMultiLine.totalCost, finalTotalPrice: savedMultiLine.finalTotalPrice, achievedMarginPct: savedMultiLine.achievedMarginPct, blockers: savedMultiLine.blockers } : null,
+      designSplit: !savedIsDtpSnapshot && savedEngineFamily === "stickers-labels" && Number(fRead("pdesigns") || 0) > 1
+        ? designSplit(savedRequestedQty, Number(fRead("pdesigns"))).text
+        : null,
       family: pFamilySave,
       canonicalFamily: canonicalUiFamily(pFamilySave),
       classification: savedClassification ? savedClassification.klass : null,
@@ -2591,9 +2794,27 @@ function ProductDrivenForm() {
         </>) : null}
         {isStickers ? (
           <label style={{ fontSize: 12 }}>Cut type
-            <select name="pcut" style={inputStyle}><option value="kiss">Kiss cut (no weeding)</option><option value="weeded">Weeded transfer</option></select>
+            {/* 15F.0-E: square/rectangle has the owner-documented model ($6.53
+                per 54x54 page); contour/die types BLOCK until the owner
+                provides their cutting standard. Legacy kiss/weeded map to
+                square-rect. defaultValue echoes the calculated state. */}
+            <select name="pcut" defaultValue={pm.cutSelected || "square-rect"} style={inputStyle}>
+              <option value="square-rect">Square / rectangle cut</option>
+              <option value="weeded">Square / rectangle + weeded transfer</option>
+              <option value="kiss-simple">Kiss cut — simple contour (circles, ovals, rounded)</option>
+              <option value="kiss-moderate">Kiss cut — moderate contour (multi-curve outline)</option>
+              <option value="kiss-complex">Kiss cut — complex contour (detailed outline)</option>
+              <option value="die-irregular">Die cut / irregular (needs owner standard)</option>
+              <option value="none">No cutting required</option>
+            </select>
           </label>
         ) : null}
+        {isStickers && pm.designSplitText ? (
+          <div style={{ gridColumn: "1 / -1", border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 8, padding: 8, fontSize: 12, fontWeight: 600 }}>
+            {pm.designSplitText} — quantity is the TOTAL physical labels; designs share it (art + print setup charged per design; production charged on the total).
+          </div>
+        ) : null}
+        {isStickers ? <MultiLineStickerRows /> : null}
         {isBanners ? (<>
           <label style={{ fontSize: 12 }}><input type="checkbox" name="phem" value="1" /> Hemming</label>
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pgrommet" value="1" /> Grommets</label>
@@ -2615,6 +2836,62 @@ function ProductDrivenForm() {
         <a href="/app/erp/cost-calculator" style={{ ...secondaryButtonStyle, textAlign: "center", textDecoration: "none", color: "inherit" }}>RESET</a>
       </>) : null}
     </Form>
+  );
+}
+
+// 15F.0-K: multi-line sticker/label jobs — different sizes/finishes get their
+// own lines (never averaged into one). Rendered inside the product form so
+// the psl* fields ride the same GET state (and the save's psearch replay).
+// A same-size/same-finish multi-design job stays ONE line (use "Number of
+// designs" above).
+function MultiLineStickerRows() {
+  const { emergency } = useLoaderData<typeof loader>() as any;
+  const pm = emergency.productMode;
+  const params = new URLSearchParams(useLocation().search);
+  const initialCount = Math.max(0, Math.floor(Number(params.get("pslcount") || 0)));
+  const [count, setCount] = useState<number>(initialCount);
+  const readAll = (key: string) => params.getAll(key);
+  if (!pm) return null;
+  return (
+    <details open={count >= 2} style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+      <summary style={{ fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Multiple sticker/label lines (different sizes or finishes)</summary>
+      <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0" }}>
+        Each line calculates independently (own size, material, printer, layers, cut) and prices on its own quantity band — premium gloss/white lines use the premium curve. Packing is charged once at job level. Same size + same finish with several designs? Keep ONE line and set "Number of designs".
+      </p>
+      <label style={{ fontSize: 12 }}>Number of lines (2–8; 0 = single-line job)
+        <input name="pslcount" type="number" min={0} max={8} value={count} onChange={(event) => setCount(Math.max(0, Math.min(8, Math.floor(Number(event.currentTarget.value) || 0))))} style={inputStyle} />
+      </label>
+      {Array.from({ length: Math.min(Math.max(count, 0), 8) }, (_v, index) => (
+        <div key={index} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6, border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, marginTop: 6, background: "#f9fafb" }}>
+          <label style={{ fontSize: 11 }}>Line name<input name="pslname" defaultValue={readAll("pslname")[index] || ""} placeholder={`Line ${index + 1}`} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>* Quantity<input name="pslqty" type="number" min={1} defaultValue={readAll("pslqty")[index] || ""} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>* Designs<input name="psldesigns" type="number" min={1} defaultValue={readAll("psldesigns")[index] || "1"} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>* Width (in)<input name="pslw" type="number" step="0.01" min={0.01} defaultValue={readAll("pslw")[index] || ""} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>* Height (in)<input name="pslh" type="number" step="0.01" min={0.01} defaultValue={readAll("pslh")[index] || ""} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>* Material
+            <select name="pslmat" defaultValue={readAll("pslmat")[index] || ""} style={inputStyle}>
+              <option value="">— select —</option>
+              {(pm.materialOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label style={{ fontSize: 11 }}>Printer
+            <select name="pslprinter" defaultValue={readAll("pslprinter")[index] || "mimaki"} style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select>
+          </label>
+          <label style={{ fontSize: 11 }}>White layers<input name="pslwhite" type="number" min={0} max={14} defaultValue={readAll("pslwhite")[index] || "0"} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>Gloss layers<input name="pslgloss" type="number" min={0} max={14} defaultValue={readAll("pslgloss")[index] || "0"} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>Cut type
+            <select name="pslcut" defaultValue={readAll("pslcut")[index] || "square-rect"} style={inputStyle}>
+              <option value="square-rect">Square / rectangle</option>
+              <option value="kiss-simple">Kiss — simple contour</option>
+              <option value="kiss-moderate">Kiss — moderate contour</option>
+              <option value="kiss-complex">Kiss — complex contour</option>
+              <option value="die-irregular">Die / irregular (needs standard)</option>
+              <option value="none">No cutting</option>
+            </select>
+          </label>
+        </div>
+      ))}
+    </details>
   );
 }
 
@@ -2680,8 +2957,70 @@ function ProductTiers() {
   const [selectedQty, setSelectedQty] = useState<number | null>(null);
   const pm = emergency.productMode;
   const tiers: any[] | null = pm?.tiers || null;
-  if (!tiers || !tiers.length) return null;
+  const multiLine = pm?.multiLine || null; // 15F.0-K
+  if ((!tiers || !tiers.length) && !multiLine) return null;
   const money2 = (value: number) => `$${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // 15F.0-K: multi-line sticker jobs replace the quantity ladder with ONE
+  // combined job quote (per-line detail + job totals + save).
+  if (multiLine?.combined) {
+    const combined = multiLine.combined;
+    const blocked = combined.blockers.length > 0;
+    return (
+      <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
+        <b style={{ fontSize: 13 }}>Multi-line sticker job — {combined.lines.length} line(s), {combined.totalQuantity.toLocaleString()} total labels</b>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 6 }}>
+            <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 5 }}>Line</th><th>Quantity</th><th>Line cost</th><th>Margin band</th><th>Line price</th><th>Unit price</th><th align="left">Pricing rule</th></tr></thead>
+            <tbody>
+              {combined.lines.map((line: any) => (
+                <tr key={line.name} style={{ borderTop: "1px solid #e5e7eb" }}>
+                  <td style={{ padding: 5 }}><b>{line.name}</b>{line.premiumApplied ? <span style={{ color: "#7c2d12" }}> (premium finish)</span> : null}</td>
+                  <td align="center">{line.quantity.toLocaleString()}</td>
+                  <td align="center">{money2(line.pricedCost)}</td>
+                  <td align="center">{line.marginPctApplied}%</td>
+                  <td align="center"><b>{money2(line.finalPrice)}</b></td>
+                  <td align="center">{money2(line.unitPrice)}</td>
+                  <td style={{ fontSize: 11, color: "#6b7280" }}>{line.controllingRule}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {(multiLine.perLine || []).filter((line: any) => line.splitText && line.designs > 1).map((line: any) => (
+          <p key={line.name} style={{ ...smallHelp, margin: "4px 0 0" }}>{line.name}: {line.splitText}</p>
+        ))}
+        <p style={{ ...smallHelp, margin: "4px 0 0" }}>{multiLine.packingNote}</p>
+        {blocked ? (
+          <div style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 700, marginTop: 8 }}>
+            BLOCKED — fix before quoting:
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontWeight: 400 }}>{combined.blockers.map((blocker: string) => <li key={blocker}>{blocker}</li>)}</ul>
+          </div>
+        ) : (
+          <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 8 }}>
+            <div style={{ fontWeight: 800, color: "#166534", fontSize: 15 }}>READY TO QUOTE</div>
+            <div style={{ fontSize: 16, fontWeight: 800, marginTop: 4 }}>Recommended customer price: {money2(combined.finalTotalPrice)} total</div>
+            <div style={{ fontSize: 13 }}>{combined.totalQuantity.toLocaleString()} labels · blended {money2(combined.finalTotalPrice / Math.max(1, combined.totalQuantity))}/unit · gross margin {combined.achievedMarginPct.toFixed(1)}% · gross profit {money2(combined.achievedProfit)}</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}>Price based on: {combined.controllingRule} (researched quantity bands; area floors; premium curve on gloss/white lines)</div>
+            <div style={{ fontSize: 12 }}>Includes: material, ink, machine recovery, cutting, setup, packing</div>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>Does not include: Customer delivery/shipping (quoted separately)</div>
+          </div>
+        )}
+        {actionData?.message ? (
+          <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}</div>
+        ) : null}
+        <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 8 }}>
+          <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />
+          <input type="hidden" name="psearch" value={search} />
+          <input type="hidden" name="pseltier" value={0} />
+          <label style={{ fontSize: 12 }}>Product name<input name="eproduct" defaultValue="Multi-line sticker job" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>Customer (optional)<input name="ecustomer" style={inputStyle} /></label>
+          <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#111827", color: "white", fontWeight: 700 }}>SAVE DRAFT QUOTE</button>
+        </Form>
+        <p style={smallHelp}>Saving recomputes every line server-side from the posted state — totals are never trusted from the client.</p>
+      </div>
+    );
+  }
+  if (!tiers || !tiers.length) return null;
   const requested = tiers.find((tier) => tier.requested) || tiers[tiers.length - 1];
   const selected = tiers.find((tier) => tier.quantity === selectedQty) || requested;
   const mf = pm.marginFamily;
@@ -2729,7 +3068,10 @@ function ProductTiers() {
                   <td align="center"><b>{money2(tier.unitPrice)}</b></td>
                   <td align="center">{money2(tier.totalPrice)}</td>
                   <td align="center">{money2(tier.profit)} ({tier.actualMarginPct.toFixed(1)}%)</td>
-                  <td style={{ color: tier.draftOnly || tier.belowFloor ? "#991b1b" : "#166534", fontWeight: 700 }}>{tier.status}</td>
+                  <td style={{ color: tier.draftOnly || tier.belowFloor ? "#991b1b" : "#166534", fontWeight: 700 }}>
+                    {tier.status}
+                    {tier.commercial && !tier.draftOnly ? <div style={{ fontWeight: 400, color: "#6b7280", fontSize: 11 }}>{tier.commercial.controllingRule}</div> : null}
+                  </td>
                 </>)}
               </tr>
             ))}
@@ -2756,18 +3098,36 @@ Freight: ${selected.dtp.freightTreatment === "pass_through" ? `${money2(selected
 Total: ${money2(selected.totalPrice)}`}
         </pre>
         ) : (
+        <>
+        {/* 15F.0-M: employee-facing price result — READY TO QUOTE / BLOCKED */}
+        {selected.draftOnly ? (
+          <div style={{ marginTop: 6 }}>
+            <div style={{ fontWeight: 800, color: "#991b1b", fontSize: 15 }}>BLOCKED — not customer-ready</div>
+            <ul style={{ margin: "6px 0", paddingLeft: 18, fontSize: 12, color: "#991b1b" }}>
+              {(selected.blockers || []).map((blocker: string) => <li key={blocker}>{blocker}</li>)}
+            </ul>
+          </div>
+        ) : (
+          <div style={{ marginTop: 6 }}>
+            <div style={{ fontWeight: 800, color: "#166534", fontSize: 15 }}>READY TO QUOTE</div>
+            <div style={{ fontSize: 16, fontWeight: 800, marginTop: 2 }}>Recommended customer price: {money2(selected.totalPrice)} total · {money2(selected.unitPrice)} per unit</div>
+            {selected.commercial ? <div style={{ fontSize: 12, marginTop: 2 }}>Price based on: {selected.commercial.controllingRule}</div> : null}
+          </div>
+        )}
         <pre style={{ margin: "6px 0 0", fontSize: 12, background: "white", padding: 8, borderRadius: 6, whiteSpace: "pre-wrap" }}>
 {`Product: ${productLabel}
-Quantity: ${selected.quantity.toLocaleString()}
+Quantity: ${selected.quantity.toLocaleString()}${pm.designSplitText ? `\n${pm.designSplitText}` : ""}
 Configuration: ${pm.printConfig || "—"}
 Unit price: ${money2(selected.unitPrice)}
 Product subtotal: ${money2(selected.totalPrice)}
 Setup/design: included in unit pricing
-Freight/handling: ${selected.freightTotal > 0 ? `${money2(selected.freightTotal)} (${String(selected.freightSource).toUpperCase()}) — included in unit pricing` : "none entered"}
+Includes: material, ink, machine recovery, cutting, application (where applicable), packing
+Does not include: Customer delivery/shipping — quoted separately${selected.freightTotal > 0 ? `\nFreight/handling entered: ${money2(selected.freightTotal)} (${String(selected.freightSource).toUpperCase()}) — included in unit pricing` : ""}
 Total: ${money2(selected.totalPrice)}`}
         </pre>
+        </>
         )}
-        {selected.draftOnly ? <div style={{ color: "#991b1b", fontWeight: 700, marginTop: 6 }}>DRAFT ONLY — missing costs must be verified before this price is final.</div> : null}
+        {selected.draftOnly && selected.dtp ? <div style={{ color: "#991b1b", fontWeight: 700, marginTop: 6 }}>DRAFT ONLY — missing costs must be verified before this price is final.</div> : null}
       </div>
       {actionData?.message ? (
         <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}</div>
