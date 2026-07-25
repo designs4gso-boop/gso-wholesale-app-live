@@ -1,0 +1,632 @@
+// Central production-job creation service (Patch 15D.1).
+// ONE creation path for every source — replaces the three divergent creators
+// (quotes page, production page, orders_paid webhook) found by the Phase 15D
+// audit. Sources are TRUSTED SERVER-SIDE records only: the service re-fetches
+// everything and never reads client-posted prices, costs, margins, or status.
+//
+// Idempotency (spec 15D.1-B): findFirst-then-create is NOT safe under
+// concurrent requests (Render can run multiple instances), so the check+create
+// runs inside ONE Prisma transaction that first takes a PostgreSQL
+// TRANSACTION-LEVEL ADVISORY LOCK (pg_advisory_xact_lock) keyed by a
+// deterministic pair of 32-bit hashes of `${shop}|${sourceType}|${sourceId}`.
+// The lock serializes competing creations for the same source across all app
+// instances and releases automatically at commit/rollback. Prisma cannot
+// express the lock natively, so the smallest raw SQL call is used inside the
+// transaction ($queryRawUnsafe with numeric parameters only — documented per
+// spec). On non-PostgreSQL dev databases (SQLite) the call fails and is
+// deliberately ignored: dev is single-instance, production is Postgres.
+// Future hardening MAY add a unique index on (shop, quoteId); this service is
+// concurrency-safe without it.
+
+import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
+
+export type ProductionJobSource =
+  | { type: "erp_quote"; quoteId: string }
+  | { type: "shopify_order"; order: any }
+  | { type: "manual_admin"; authorizedBy: string; payload: { customerName: string; items: Array<{ productTitle: string; quantity: number; unitPrice?: number; unitCost?: number; notes?: string }>; notes?: string } };
+
+export type CreateJobResult = { job: any; created: boolean; reason: string };
+
+// ---------- deterministic advisory-lock key ----------
+function fnv1a32(text: string, seed: number): number {
+  let hash = seed >>> 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash | 0; // signed 32-bit for pg int4
+}
+
+export function advisoryLockKeys(shop: string, sourceType: string, sourceId: string): [number, number] {
+  const composite = `${shop}|${sourceType}|${sourceId}`;
+  return [fnv1a32(composite, 0x811c9dc5), fnv1a32(composite, 0x01234567)];
+}
+
+async function acquireSourceLock(tx: any, shop: string, sourceType: string, sourceId: string) {
+  const [keyA, keyB] = advisoryLockKeys(shop, sourceType, sourceId);
+  try {
+    // numeric parameters only — no string interpolation into SQL
+    await tx.$queryRawUnsafe(`SELECT pg_advisory_xact_lock(${Math.trunc(keyA)}, ${Math.trunc(keyB)})`);
+  } catch {
+    // Non-Postgres dev database (SQLite): advisory locks unsupported. Dev is
+    // single-instance; production (Postgres) always takes the lock.
+  }
+}
+
+// ---------- shared naming (moved verbatim from the audited creators) ----------
+function clean(value: any) {
+  return String(value ?? "").trim();
+}
+function money(value: any) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+function dateStamp(value = new Date()) {
+  return value.toISOString().slice(0, 10).replace(/-/g, "");
+}
+function slugPart(value: any, fallback = "JOB") {
+  const cleanValue = String(value || fallback)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 30);
+  return cleanValue || fallback;
+}
+function normalizeFilePart(value: any, fallback = "ITEM") {
+  return slugPart(value || fallback, fallback).slice(0, 40);
+}
+export function itemTicketFor(jobTicket: string, index: number) {
+  return `${jobTicket}-${String(index + 1).padStart(2, "0")}`;
+}
+function parseJson(value: any) {
+  if (!value) return null;
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
+  }
+}
+function snapshotValue(item: any, key: string) {
+  return item?.[key] || parseJson(item.costSnapshot)?.[key] || parseJson(item.priceSnapshot)?.[key] || "";
+}
+function firstImageFromQuoteItem(item: any) {
+  const costSnapshot = parseJson(item.costSnapshot);
+  const priceSnapshot = parseJson(item.priceSnapshot);
+  return (
+    item.productImageUrl || costSnapshot?.productImageUrl || costSnapshot?.imageUrl ||
+    priceSnapshot?.productImageUrl || priceSnapshot?.imageUrl || ""
+  );
+}
+
+async function buildNextJobTicket(tx: any, shop: string, now = new Date()) {
+  const stamp = dateStamp(now);
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  const countToday = await tx.productionJob.count({ where: { shop, createdAt: { gte: start, lt: end } } });
+  for (let sequence = countToday + 1; sequence < countToday + 5000; sequence += 1) {
+    const ticket = `GSO-${stamp}-${String(sequence).padStart(4, "0")}`;
+    const existing = await tx.productionJob.findFirst({ where: { shop, jobTicket: ticket } });
+    if (!existing) return ticket;
+  }
+  return `GSO-${stamp}-${String(Date.now()).slice(-6)}`;
+}
+
+// quote-item file name (moved verbatim from app.erp.production.tsx)
+export function suggestedFileNameForQuoteItem(jobTicket: string, item: any, index: number) {
+  const ticket = itemTicketFor(jobTicket, index);
+  const product = normalizeFilePart(item.productName || item.productTitle || "PRODUCT");
+  const variant = normalizeFilePart(item.variant || item.variantTitle || "VARIANT");
+  const qty = Number(item.quantity || 1);
+  return `${ticket}_${product}_${variant}_QTY${qty}`;
+}
+
+// ---------- family checklist templates (15D.1-G) ----------
+export const FAMILY_CHECKLISTS: Record<string, Array<{ section: string; label: string; sortOrder: number }>> = {
+  "sticker-bags": [
+    { section: "prepress", label: "Artwork received / linked", sortOrder: 10 },
+    { section: "prepress", label: "Proof approved", sortOrder: 20 },
+    { section: "production", label: "Labels printed", sortOrder: 30 },
+    { section: "production", label: "Cut complete", sortOrder: 40 },
+    { section: "production", label: "Weeded (if required)", sortOrder: 50 },
+    { section: "production", label: "Labels applied to bags", sortOrder: 60 },
+    { section: "qc", label: "QC passed", sortOrder: 70 },
+    { section: "packing", label: "Packed and labeled", sortOrder: 80 },
+  ],
+  "standard-jars": [
+    { section: "prepress", label: "Artwork received / linked", sortOrder: 10 },
+    { section: "prepress", label: "Proof approved", sortOrder: 20 },
+    { section: "production", label: "Jar inventory pulled", sortOrder: 30 },
+    { section: "production", label: "Labels printed", sortOrder: 40 },
+    { section: "production", label: "Labels applied", sortOrder: 50 },
+    { section: "qc", label: "QC passed", sortOrder: 60 },
+    { section: "packing", label: "Packed and labeled", sortOrder: 70 },
+  ],
+  "premium-jars": [
+    { section: "prepress", label: "Artwork received / linked", sortOrder: 10 },
+    { section: "prepress", label: "Proof approved", sortOrder: 20 },
+    { section: "production", label: "Jar + top inventory verified (Miron top type from snapshot)", sortOrder: 30 },
+    { section: "production", label: "Labels printed", sortOrder: 40 },
+    { section: "production", label: "Labels applied", sortOrder: 50 },
+    { section: "qc", label: "QC passed", sortOrder: 60 },
+    { section: "packing", label: "Packed and labeled", sortOrder: 70 },
+  ],
+  "stickers-labels": [
+    { section: "prepress", label: "Artwork received / linked", sortOrder: 10 },
+    { section: "prepress", label: "Proof approved", sortOrder: 20 },
+    { section: "production", label: "Printed", sortOrder: 30 },
+    { section: "production", label: "Cut complete", sortOrder: 40 },
+    { section: "production", label: "Finish complete", sortOrder: 50 },
+    { section: "qc", label: "QC passed", sortOrder: 60 },
+    { section: "packing", label: "Packed and labeled", sortOrder: 70 },
+  ],
+  banners: [
+    { section: "prepress", label: "Artwork received / linked", sortOrder: 10 },
+    { section: "prepress", label: "Proof approved", sortOrder: 20 },
+    { section: "production", label: "Printed", sortOrder: 30 },
+    { section: "production", label: "Trim / hem / grommet complete", sortOrder: 40 },
+    { section: "qc", label: "QC passed", sortOrder: 50 },
+    { section: "packing", label: "Packed and labeled", sortOrder: 60 },
+  ],
+  // DTP = OUTSOURCED Spektra purchase workflow ONLY (15D.1-D) — no in-house
+  // print/machine/application/weeding steps.
+  "dtp-bags": [
+    { section: "prepress", label: "Artwork received", sortOrder: 10 },
+    { section: "prepress", label: "Artwork reviewed", sortOrder: 20 },
+    { section: "purchase", label: "Purchase order prepared", sortOrder: 30 },
+    { section: "purchase", label: "Purchase order sent to Spektra", sortOrder: 40 },
+    { section: "purchase", label: "Vendor proof received", sortOrder: 50 },
+    { section: "purchase", label: "Customer proof approved", sortOrder: 60 },
+    { section: "purchase", label: "Order confirmed", sortOrder: 70 },
+    { section: "purchase", label: "Expected delivery recorded", sortOrder: 80 },
+    { section: "receiving", label: "Goods received", sortOrder: 90 },
+    { section: "qc", label: "Quality control", sortOrder: 100 },
+    { section: "packing", label: "Customer delivery / pickup", sortOrder: 110 },
+    { section: "packing", label: "Complete", sortOrder: 120 },
+  ],
+  // generic default = the shared checklist all three creators used pre-15D.1
+  default: [
+    { section: "prepress", label: "Artwork received / linked", sortOrder: 10 },
+    { section: "prepress", label: "Dieline / size confirmed", sortOrder: 20 },
+    { section: "prepress", label: "Proof sent if required", sortOrder: 30 },
+    { section: "prepress", label: "Proof approved", sortOrder: 40 },
+    { section: "production", label: "Material pulled", sortOrder: 50 },
+    { section: "production", label: "Machine assigned", sortOrder: 60 },
+    { section: "production", label: "Print complete", sortOrder: 70 },
+    { section: "production", label: "Cut / laminate / finish complete", sortOrder: 80 },
+    { section: "qc", label: "QC passed", sortOrder: 90 },
+    { section: "packing", label: "Packed and labeled", sortOrder: 100 },
+  ],
+};
+
+export function familyFromQuoteItems(items: any[]): string {
+  for (const item of items) {
+    const snapshot = parseJson(item.costSnapshot);
+    const family = snapshot?.productBreakdown?.canonicalFamily || snapshot?.productBreakdown?.family || "";
+    if (family) {
+      if (family === "dtp-bags" || family === "dtp-pouches" || snapshot?.productBreakdown?.dtpPricing) return "dtp-bags";
+      if (FAMILY_CHECKLISTS[family]) return family;
+      if (family === "bags-4x5") return "sticker-bags";
+      if (family === "chiron-jars" || family === "miron-jars") return "premium-jars";
+    }
+    if (snapshot?.productBreakdown?.dtpPricing || snapshot?.productBreakdown?.dtp) return "dtp-bags";
+  }
+  return "default";
+}
+
+export function checklistForFamily(family: string) {
+  return FAMILY_CHECKLISTS[family] || FAMILY_CHECKLISTS.default;
+}
+
+// ---------- ERP quote conversion validation (15D.1-C) ----------
+// Pure + exported for tests. Re-validates the STORED snapshot — a quote that
+// saved as draft-with-warnings (missing costs) or a DTP quote that is BLOCKED
+// or lost its override can never convert, even after payment.
+export function validateQuoteSnapshotForConversion(items: any[]): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  for (const item of items) {
+    const snapshot = parseJson(item.costSnapshot);
+    if (!snapshot) continue; // legacy/manual quote-builder items carry other shapes — no engine snapshot to re-validate
+    const breakdown = snapshot.productBreakdown;
+    if (breakdown?.missing?.length) {
+      reasons.push(`Missing costs in the saved snapshot: ${breakdown.missing.slice(0, 3).join("; ")}${breakdown.missing.length > 3 ? "…" : ""}`);
+    }
+    const dtpPricing = breakdown?.dtpPricing;
+    if (dtpPricing) {
+      if (!breakdown?.dtp || !breakdown?.selections?.blank) {
+        reasons.push("DTP snapshot is missing vendor/product data.");
+      }
+      if (String(dtpPricing.status || "").startsWith("BLOCKED")) {
+        reasons.push(`DTP quote is BLOCKED: ${(dtpPricing.statusReasons || []).join("; ") || "blocked status"}`);
+      }
+      if (dtpPricing.overrideRequired) {
+        const reason = String(dtpPricing.overrideReason || "").trim();
+        if (reason.length < 5) {
+          reasons.push(`DTP owner override was required but no written reason is recorded — re-save the quote with the "${OVERRIDE_PHRASE}" phrase and a reason.`);
+        }
+      }
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+export function quoteConversionEligibility(quote: any | null, shop: string): { ok: boolean; reason: string } {
+  if (!quote) return { ok: false, reason: "Quote not found." };
+  if (quote.shop !== shop) return { ok: false, reason: "Quote not found." }; // never leak cross-shop existence
+  if (!["paid", "production"].includes(quote.status)) {
+    return {
+      ok: false,
+      reason: quote.status === "deposit_paid"
+        ? "Balance must be paid before production can start."
+        : "Production can start only after the quote is fully paid.",
+    };
+  }
+  if (!quote.items?.length) return { ok: false, reason: "Quote has no quote items to send to production." };
+  const snapshotCheck = validateQuoteSnapshotForConversion(quote.items);
+  if (!snapshotCheck.ok) return { ok: false, reason: `Quote cannot convert: ${snapshotCheck.reasons.join(" | ")}` };
+  return { ok: true, reason: "" };
+}
+
+// ---------- Shopify configurator-order mapping (15D.1-F) ----------
+// Moved from webhooks.orders_paid.tsx and kept FIELD-FOR-FIELD equivalent —
+// the webhook parity test pins every important generated value.
+function gid(type: string, value: any) {
+  const raw = clean(value);
+  if (!raw) return null;
+  if (raw.startsWith("gid://")) return raw;
+  return `gid://shopify/${type}/${raw}`;
+}
+export function orderIdentity(order: any) {
+  return clean(order.admin_graphql_api_id) || gid("Order", order.id) || clean(order.id);
+}
+function orderName(order: any) {
+  return clean(order.name) || clean(order.order_number) || clean(order.id) || "Shopify Order";
+}
+function getLineProperty(line: any, name: string) {
+  const wanted = name.toLowerCase();
+  const properties = Array.isArray(line.properties) ? line.properties : [];
+  for (const prop of properties) {
+    const key = clean(prop.name || prop.key).toLowerCase();
+    if (key === wanted) return clean(prop.value);
+  }
+  const customAttributes = Array.isArray(line.customAttributes) ? line.customAttributes : [];
+  for (const attr of customAttributes) {
+    const key = clean(attr.name || attr.key).toLowerCase();
+    if (key === wanted) return clean(attr.value);
+  }
+  return "";
+}
+function isJarFamily(value: any) {
+  const family = clean(value).toLowerCase();
+  return family === "jars" || family === "jar";
+}
+export function isConfiguratorLine(line: any) {
+  const material = getLineProperty(line, "Material");
+  const finish = getLineProperty(line, "Finish");
+  const bagColor = getLineProperty(line, "Bag Color");
+  const productFamily = getLineProperty(line, "Product Family");
+  const labelSet = getLineProperty(line, "Label Set");
+  return Boolean(
+    (material && finish && bagColor) ||
+      (isJarFamily(productFamily) && material && finish && labelSet),
+  );
+}
+function customerNameFromOrder(order: any) {
+  const first = clean(order.customer?.first_name || order.billing_address?.first_name);
+  const last = clean(order.customer?.last_name || order.billing_address?.last_name);
+  const joined = `${first} ${last}`.trim();
+  return joined || clean(order.billing_address?.name) || clean(order.email) || "Shopify customer";
+}
+function companyNameFromOrder(order: any) {
+  return clean(order.billing_address?.company) || clean(order.customer?.default_address?.company) || "";
+}
+function lineProductTitle(line: any) {
+  const title = clean(line.title || line.name);
+  if (!title) return "Configured Stock Bag";
+  return title.replace(/\s+-\s+[^-]+\/[^-]+\/[^-]+$/i, "");
+}
+function suggestedFileNameForOrderItem(jobTicket: string, item: any, index: number) {
+  const ticket = itemTicketFor(jobTicket, index);
+  const product = normalizeFilePart(item.productTitle || item.title || "PRODUCT");
+  const finish = normalizeFilePart(item.productionFinish || item.finish || "FINISH");
+  const isJar = isJarFamily(item.productFamily) || String(item.productType || "").startsWith("jar_");
+  const color = normalizeFilePart(isJar ? item.labelSet || "LABEL" : item.bagColor || "COLOR");
+  const qty = Number(item.quantity || 1);
+  if (isJar && item.jarColor) {
+    const jarColor = normalizeFilePart(item.jarColor);
+    return `${ticket}_${product}_${finish}_${jarColor}_${color}_QTY${qty}`;
+  }
+  return `${ticket}_${product}_${finish}_${color}_QTY${qty}`;
+}
+
+// Pure builder: everything the webhook used to assemble, given a jobTicket.
+export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
+  const orderId = orderIdentity(order);
+  const quoteId = `shopify_order_${orderId || clean(order.id) || Date.now()}`;
+  const quoteNumber = orderName(order);
+  const configuredLines = (Array.isArray(order.line_items) ? order.line_items : []).filter(isConfiguratorLine);
+  if (!configuredLines.length) return null;
+
+  const mappedItems = configuredLines.map((line: any, index: number) => {
+    const productFamily = getLineProperty(line, "Product Family");
+    const productType = getLineProperty(line, "Product Type");
+    const material = getLineProperty(line, "Material");
+    const finish = getLineProperty(line, "Finish");
+    const productionFinish = getLineProperty(line, "Production Finish") || finish;
+    const bagColor = getLineProperty(line, "Bag Color");
+    const labelSet = getLineProperty(line, "Label Set");
+    const jarColor = getLineProperty(line, "Jar Color");
+    const sides = getLineProperty(line, "Sides") || "Double Sided";
+    const isJar = isJarFamily(productFamily) || productType.startsWith("jar_");
+    const quantity = Number(line.quantity || 1);
+    const unitPrice = money(line.price || line.originalUnitPrice || line.original_unit_price || 0);
+    const productTitle = lineProductTitle(line);
+    const variantTitle = isJar
+      ? [jarColor, material, finish, labelSet].filter(Boolean).join(" / ")
+      : `${material} / ${finish} / ${bagColor}`;
+    const selectedAddOns = isJar
+      ? { productFamily, productType, material, finish, productionFinish, ...(jarColor ? { jarColor } : {}), labelSet }
+      : { productFamily, productType, material, finish, productionFinish, bagColor, sides };
+    const materialSummary = isJar
+      ? [
+          `Product Family: ${productFamily}`, `Product Type: ${productType}`, `Material: ${material}`,
+          `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
+          ...(jarColor ? [`Jar Color: ${jarColor}`] : []), `Label Set: ${labelSet}`,
+        ].join(" | ")
+      : `Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Bag Color: ${bagColor} | Sides: ${sides}`;
+    const productionNotes = isJar
+      ? [
+          `Shopify order: ${quoteNumber}`, `Product Family: ${productFamily}`, `Product Type: ${productType}`,
+          `Material: ${material}`, `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
+          ...(jarColor ? [`Jar Color: ${jarColor}`] : []), `Label Set: ${labelSet}`,
+        ].join("\n")
+      : [
+          `Shopify order: ${quoteNumber}`, `Material: ${material}`, `Finish: ${finish}`,
+          `Production Finish: ${productionFinish}`, `Bag Color: ${bagColor}`, `Sides: ${sides}`,
+        ].join("\n");
+    const priceSnapshot = {
+      source: "shopify_order_paid_webhook",
+      orderId, orderName: quoteNumber, lineItemId: line.id || null,
+      productFamily, productType, material, finish, productionFinish, bagColor,
+      ...(jarColor ? { jarColor } : {}), labelSet, sides, quantity, unitPrice,
+      lineTotal: money(unitPrice * quantity),
+    };
+    const item = {
+      productTitle,
+      variantTitle,
+      sku: clean(line.sku) || null,
+      quantity,
+      unitPrice,
+      unitCost: 0,
+      shopifyProductGid: gid("Product", line.product_id),
+      shopifyVariantGid: gid("ProductVariant", line.variant_id),
+      productImageUrl:
+        getLineProperty(line, "_GSO Product Image") || getLineProperty(line, "Product Image") ||
+        clean(line.image?.src || line.image?.url || line.variant?.image?.src || line.variant?.image?.url || "") || null,
+      selectedFinish: productionFinish,
+      selectedAddOns: JSON.stringify(selectedAddOns),
+      materialSummary,
+      priceSnapshot: JSON.stringify(priceSnapshot),
+      costSnapshot: JSON.stringify({
+        source: "pending_cost_book_mapping",
+        note: "Customer price captured from Shopify order. Internal cost will be mapped from Material Center / Cost Book later.",
+      }),
+      productionNotes,
+      sortOrder: index + 1,
+    };
+    return {
+      ...item,
+      itemTicket: itemTicketFor(jobTicket, index),
+      ripJobName: itemTicketFor(jobTicket, index),
+      suggestedFileName: suggestedFileNameForOrderItem(jobTicket, {
+        productTitle: item.productTitle, productFamily, productType,
+        productionFinish: line.productionFinish || productionFinish, finish: line.finish || finish,
+        bagColor: line.bagColor || bagColor, jarColor: line.jarColor || jarColor,
+        labelSet: line.labelSet || labelSet, quantity: item.quantity,
+      }, index),
+    };
+  });
+
+  const firstLine = configuredLines[0];
+  const firstImage =
+    getLineProperty(firstLine, "_GSO Product Image") || getLineProperty(firstLine, "Product Image") ||
+    clean(firstLine.image?.src || firstLine.image?.url || firstLine.variant?.image?.src || firstLine.variant?.image?.url || "") ||
+    mappedItems.find((item: any) => item.productImageUrl)?.productImageUrl || null;
+
+  return {
+    quoteId,
+    quoteNumber,
+    customerName: customerNameFromOrder(order),
+    company: companyNameFromOrder(order) || null,
+    email: clean(order.email || order.customer?.email) || null,
+    phone: clean(order.phone || order.billing_address?.phone || order.customer?.phone) || null,
+    customerNotes: clean(order.note) || null,
+    internalNotes: `Created automatically from paid Shopify configurator order ${quoteNumber}.`,
+    productImageUrl: firstImage,
+    items: mappedItems,
+    eventType: "created_from_shopify_order",
+    eventMessage: (ticket: string) => `Production job ${ticket} created from paid Shopify configurator order ${quoteNumber}.`,
+  };
+}
+
+// ---------- the central service ----------
+export async function createProductionJobFromSource(
+  dbClient: any,
+  input: { shop: string; source: ProductionJobSource; actor?: string },
+): Promise<CreateJobResult> {
+  const { shop, source } = input;
+  const actor = clean(input.actor) || "system";
+
+  // resolve the idempotency source key BEFORE the transaction
+  let sourceKey: string;
+  if (source.type === "erp_quote") {
+    sourceKey = clean(source.quoteId);
+    if (!sourceKey) throw new Error("Quote ID is required.");
+  } else if (source.type === "shopify_order") {
+    sourceKey = `shopify_order_${orderIdentity(source.order) || clean(source.order?.id) || Date.now()}`;
+  } else {
+    if (!clean(source.authorizedBy)) throw new Error("Manual production jobs require an authorizing user.");
+    sourceKey = `manual_${slugPart(source.payload.customerName, "ADMIN")}_${Date.now()}`;
+  }
+
+  return await dbClient.$transaction(async (tx: any) => {
+    // concurrency-safe idempotency: lock, THEN check, THEN create — all in one tx
+    await acquireSourceLock(tx, shop, source.type, sourceKey);
+
+    if (source.type !== "manual_admin") {
+      const existing = await tx.productionJob.findFirst({ where: { shop, quoteId: sourceKey } });
+      if (existing) return { job: existing, created: false, reason: "Production job already exists." };
+    }
+
+    if (source.type === "erp_quote") {
+      const quote = await tx.quote.findFirst({ where: { shop, id: sourceKey }, include: { items: true } });
+      const eligibility = quoteConversionEligibility(quote, shop);
+      if (!eligibility.ok) throw new Error(eligibility.reason);
+      const family = familyFromQuoteItems(quote.items);
+      const jobTicket = await buildNextJobTicket(tx, shop);
+      const job = await tx.productionJob.create({
+        data: {
+          shop,
+          quoteId: quote.id,
+          quoteNumber: quote.id,
+          jobTicket,
+          assetInboxKey: jobTicket,
+          customerName: quote.customerName || null,
+          company: quote.company || null,
+          email: quote.email || null,
+          phone: quote.phone || null,
+          status: "new",
+          priority: "normal",
+          customerNotes: quote.notes || null,
+          internalNotes: `Created from quote via central service (${family} checklist).`,
+          productImageUrl: firstImageFromQuoteItem(quote.items[0]) || null,
+          proofUrl: null,
+          items: {
+            create: quote.items.map((item: any, index: number) => ({
+              shop,
+              quoteItemId: item.id,
+              itemTicket: itemTicketFor(jobTicket, index),
+              ripJobName: itemTicketFor(jobTicket, index),
+              suggestedFileName: suggestedFileNameForQuoteItem(jobTicket, item, index),
+              productTitle: item.productName || "Custom item",
+              variantTitle: item.variant || null,
+              sku: item.sku || null,
+              quantity: Number(item.quantity) || 1,
+              unitPrice: Number(item.unitPrice) || 0,
+              unitCost: Number(item.unitCost) || 0,
+              productImageUrl: firstImageFromQuoteItem(item) || null,
+              shopifyProductGid: snapshotValue(item, "shopifyProductGid") || snapshotValue(item, "shopifyProductId") || null,
+              shopifyVariantGid: snapshotValue(item, "shopifyVariantGid") || snapshotValue(item, "shopifyVariantId") || null,
+              recipeId: item.recipeId || snapshotValue(item, "recipeId") || null,
+              recipeName: item.recipeName || snapshotValue(item, "recipeName") || null,
+              selectedFinish: item.selectedFinish || snapshotValue(item, "selectedFinish") || null,
+              selectedAddOns: item.selectedAddOnIds || snapshotValue(item, "selectedAddOns") || null,
+              costSnapshot: item.costSnapshot || null, // complete commercial snapshot preserved (incl. dtp/dtpPricing)
+              priceSnapshot: item.priceSnapshot || null,
+              productionNotes: item.notes || null,
+              sortOrder: index + 1,
+            })),
+          },
+          checklistItems: { create: checklistForFamily(family).map((check) => ({ shop, ...check })) },
+          events: {
+            create: [{
+              shop,
+              eventType: "created_from_quote",
+              message: `Production job ${jobTicket} created from quote ${quote.id} (source erp_quote, family ${family}).`,
+              createdBy: actor,
+            }],
+          },
+        },
+        include: { items: true },
+      });
+      // proof sheet + back-link (inside the same transaction)
+      const proofUrl = `/app/erp/production/${job.id}/proof`;
+      await tx.productionJob.update({ where: { id: job.id }, data: { proofUrl } });
+      await tx.productionJobFile.create({
+        data: {
+          shop, jobId: job.id,
+          fileName: "Standard GSO Proof Sheet", fileType: "proof", fileUrl: proofUrl,
+          assetRole: "proof", assetSource: "generated", sourceRef: jobTicket,
+          matchedBy: "auto_created_from_job", jobTicket,
+          originalFileName: "Standard GSO Proof Sheet",
+          notes: "Auto-created internal proof sheet. Open to edit images/artwork and print/export.",
+        },
+      });
+      await tx.productionJobEvent.create({ data: { shop, jobId: job.id, eventType: "proof_created", message: "Standard GSO proof sheet auto-created.", createdBy: actor } });
+      // authoritative lifecycle: paid -> production (forward-only; webhook
+      // payment logic already preserves production as a later status)
+      await tx.quote.updateMany({ where: { shop, id: quote.id, status: { in: ["paid", "production"] } }, data: { status: "production" } });
+      await tx.quote.updateMany({
+        where: { shop, id: quote.id },
+        data: { notes: `${quote.notes ? `${quote.notes}\n` : ""}[GSO] Production job ${jobTicket} created (${job.id}).` },
+      });
+      return { job: { ...job, proofUrl }, created: true, reason: "Production job created." };
+    }
+
+    if (source.type === "shopify_order") {
+      const jobTicket = await buildNextJobTicket(tx, shop);
+      const payload = buildShopifyOrderJobPayload(source.order, jobTicket);
+      if (!payload) return { job: null, created: false, reason: "No configurator line items found." };
+      const job = await tx.productionJob.create({
+        data: {
+          shop,
+          quoteId: payload.quoteId,
+          quoteNumber: payload.quoteNumber,
+          jobTicket,
+          assetInboxKey: jobTicket,
+          customerName: payload.customerName,
+          company: payload.company,
+          email: payload.email,
+          phone: payload.phone,
+          status: "new",
+          priority: "normal",
+          customerNotes: payload.customerNotes,
+          internalNotes: payload.internalNotes,
+          productImageUrl: payload.productImageUrl,
+          items: { create: payload.items.map((item: any) => ({ shop, ...item })) },
+          checklistItems: { create: FAMILY_CHECKLISTS.default.map((check) => ({ shop, ...check })) },
+          events: { create: [{ shop, eventType: payload.eventType, message: payload.eventMessage(jobTicket), createdBy: actor }] },
+        },
+        include: { items: true },
+      });
+      return { job, created: true, reason: "Production job created from configurator order." };
+    }
+
+    // manual_admin
+    const jobTicket = await buildNextJobTicket(tx, shop);
+    const job = await tx.productionJob.create({
+      data: {
+        shop,
+        quoteId: sourceKey,
+        quoteNumber: sourceKey,
+        jobTicket,
+        assetInboxKey: jobTicket,
+        customerName: source.payload.customerName || null,
+        status: "new",
+        priority: "normal",
+        customerNotes: source.payload.notes || null,
+        internalNotes: `Manual production job authorized by ${source.authorizedBy}.`,
+        items: {
+          create: source.payload.items.map((item, index) => ({
+            shop,
+            itemTicket: itemTicketFor(jobTicket, index),
+            ripJobName: itemTicketFor(jobTicket, index),
+            suggestedFileName: suggestedFileNameForQuoteItem(jobTicket, { productTitle: item.productTitle, quantity: item.quantity }, index),
+            productTitle: item.productTitle,
+            quantity: Number(item.quantity) || 1,
+            unitPrice: Number(item.unitPrice) || 0,
+            unitCost: Number(item.unitCost) || 0,
+            productionNotes: item.notes || null,
+            sortOrder: index + 1,
+          })),
+        },
+        checklistItems: { create: FAMILY_CHECKLISTS.default.map((check) => ({ shop, ...check })) },
+        events: {
+          create: [{ shop, eventType: "created_manual_admin", message: `Manual production job ${jobTicket} created by ${source.authorizedBy}.`, createdBy: actor }],
+        },
+      },
+      include: { items: true },
+    });
+    return { job, created: true, reason: "Manual production job created." };
+  });
+}

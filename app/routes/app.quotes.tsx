@@ -16,6 +16,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
+import { createProductionJobFromSource } from "../lib/production-job-source.server";
 import db from "../db.server";
 import { finishOptions } from "../lib/finish-presets";
 import {
@@ -177,124 +178,19 @@ async function sendProductionJobAlert(job: any) {
   }
 }
 
+// 15D.1: thin wrapper over the CENTRAL creation service (advisory-lock
+// idempotent, snapshot re-validated, always ticketed). Alerts stay here so
+// user-visible behavior is unchanged.
 async function createProductionJobFromQuoteInQuotes(shop: string, quoteId: string) {
-  const existingJob = await db.productionJob.findFirst({ where: { shop, quoteId } });
-  if (existingJob) return { job: existingJob, created: false };
-
-  const quote = await db.quote.findFirst({
-    where: { shop, id: quoteId },
-    include: { items: true },
-  });
-
-  if (!quote) throw new Error("Quote not found.");
-  if (!["paid", "production"].includes(quote.status)) {
-    throw new Error(
-      quote.status === "deposit_paid"
-        ? "Balance must be paid before production can start."
-        : "Production can start only after the quote is fully paid.",
-    );
+  const result = await createProductionJobFromSource(db, { shop, source: { type: "erp_quote", quoteId }, actor: "quotes_page" });
+  if (result.created && result.job) {
+    const alertResult = await sendProductionJobAlert(result.job);
+    await db.productionJobEvent.create({
+      data: { shop, jobId: result.job.id, eventType: alertResult.sent ? "alert_sent" : "alert_skipped", message: alertResult.reason || "Production alert processed." },
+    });
+    await db.productionJob.update({ where: { id: result.job.id }, data: { alertSentAt: alertResult.sent ? new Date() : null } });
   }
-  if (!quote.items.length) throw new Error("Quote has no quote items to send to production.");
-
-  const job = await db.productionJob.create({
-    data: {
-      shop,
-      quoteId: quote.id,
-      quoteNumber: quote.id,
-      customerName: quote.customerName || null,
-      company: quote.company || null,
-      email: quote.email || null,
-      phone: quote.phone || null,
-      status: "new",
-      priority: "normal",
-      customerNotes: quote.notes || null,
-      internalNotes: "Created directly from Quote Builder.",
-      productImageUrl: firstProductionImageFromQuoteItem(quote.items[0]) || null,
-      proofUrl: null,
-      items: {
-        create: quote.items.map((item: any, index: number) => ({
-          shop,
-          quoteItemId: item.id,
-          productTitle: item.productName || "Custom item",
-          variantTitle: item.variant || null,
-          sku: item.sku || null,
-          quantity: Number(item.quantity) || 1,
-          unitPrice: Number(item.unitPrice) || 0,
-          unitCost: Number(item.unitCost) || 0,
-          productImageUrl: firstProductionImageFromQuoteItem(item) || null,
-          shopifyProductGid: quoteItemSnapshotValue(item, "shopifyProductGid") || quoteItemSnapshotValue(item, "shopifyProductId") || null,
-          shopifyVariantGid: quoteItemSnapshotValue(item, "shopifyVariantGid") || quoteItemSnapshotValue(item, "shopifyVariantId") || null,
-          recipeId: item.recipeId || quoteItemSnapshotValue(item, "recipeId") || null,
-          recipeName: item.recipeName || quoteItemSnapshotValue(item, "recipeName") || null,
-          selectedFinish: item.selectedFinish || quoteItemSnapshotValue(item, "selectedFinish") || null,
-          selectedAddOns: item.selectedAddOnIds || quoteItemSnapshotValue(item, "selectedAddOns") || null,
-          costSnapshot: item.costSnapshot || null,
-          priceSnapshot: item.priceSnapshot || null,
-          productionNotes: item.notes || null,
-          sortOrder: index + 1,
-        })),
-      },
-      checklistItems: {
-        create: productionChecklistDefaults.map((check) => ({ shop, ...check })),
-      },
-      events: {
-        create: [
-          {
-            shop,
-            eventType: "created_from_quote_builder",
-            message: `Production job created directly from quote ${quote.id}.`,
-          },
-        ],
-      },
-    },
-    include: { items: true },
-  });
-
-  const proofUrl = `/app/erp/production/${job.id}/proof`;
-  await db.productionJob.update({
-    where: { id: job.id },
-    data: { proofUrl },
-  });
-  await db.productionJobFile.create({
-    data: {
-      shop,
-      jobId: job.id,
-      fileName: "Standard GSO Proof Sheet",
-      fileType: "proof",
-      fileUrl: proofUrl,
-      notes: "Auto-created internal proof sheet. Open to edit images/artwork and print/export.",
-    },
-  });
-  await db.productionJobEvent.create({
-    data: {
-      shop,
-      jobId: job.id,
-      eventType: "proof_created",
-      message: "Standard GSO proof sheet auto-created.",
-    },
-  });
-
-  const alertResult = await sendProductionJobAlert(job);
-  await db.productionJobEvent.create({
-    data: {
-      shop,
-      jobId: job.id,
-      eventType: alertResult.sent ? "alert_sent" : "alert_skipped",
-      message: alertResult.reason || "Production alert processed.",
-    },
-  });
-
-  await db.productionJob.update({
-    where: { id: job.id },
-    data: { alertSentAt: alertResult.sent ? new Date() : null },
-  });
-
-  await db.quote.updateMany({
-    where: { shop, id: quote.id, status: { not: "paid" } },
-    data: { status: "production" },
-  });
-
-  return { job, created: true };
+  return { job: result.job, created: result.created };
 }
 
 function emptyItem(): QuoteItemInput {
@@ -2314,10 +2210,18 @@ export default function QuotesPage() {
                                   <InlineStack gap="200">
                                     <Button onClick={() => loadQuote(quote)}>Open</Button>
                                     {productionJob ? (
-                                      <Button variant="primary" onClick={() => openProductionJob(productionJob.id)}>Open Production Job</Button>
+                                      <InlineStack gap="100" blockAlign="center">
+                                        <Button variant="primary" onClick={() => openProductionJob(productionJob.id)}>Open Production Job</Button>
+                                        <Text as="span" tone="subdued" variant="bodySm">created {productionJob.updatedAt ? new Date(productionJob.updatedAt).toLocaleDateString() : ""}</Text>
+                                      </InlineStack>
                                     ) : canCreateProductionJob ? (
                                       <Button variant="primary" onClick={() => createProductionJob(quote.id)}>Create Production Job</Button>
-                                    ) : null}
+                                    ) : (
+                                      /* 15D.1: exact disabled reason */
+                                      <Text as="span" tone="subdued" variant="bodySm">
+                                        {quote.status === "deposit_paid" ? "Production: balance must be paid first" : quote.status === "approved" ? "Production: available after full payment" : "Production: quote must be approved and paid"}
+                                      </Text>
+                                    )}
                                     {!quote.marginState?.approvalRequired && quote.status === "approved" && !quote.fullOrderCreated && !quote.depositCreated && !quote.balanceCreated ? (
                                       <Button variant="primary" onClick={() => approveAndCreateOrder(quote.id)}>Create Full Payment Order</Button>
                                     ) : null}

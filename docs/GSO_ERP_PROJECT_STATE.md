@@ -947,3 +947,29 @@ blocks), webhook routed through the service only behind output-equivalence
 tests. NO schema migration needed for 15D.1 (optional later: unique index on
 (shop, quoteId); queryable vendor-PO fields). Docs:
 GSO_ERP_QUOTE_TO_PRODUCTION_AUDIT.md + _PLAN.md.
+
+## Milestone: Central Production-Job Creation Service (Patch 15D.1)
+ONE creation path for all sources: app/lib/production-job-source.server.ts
+(createProductionJobFromSource; erp_quote / shopify_order / manual_admin).
+Concurrency-safe idempotency WITHOUT a migration: transaction-level
+pg_advisory_xact_lock keyed by deterministic FNV-1a 32-bit hash pair of
+shop|sourceType|sourceId (raw SQL documented; SQLite dev no-ops). The three
+divergent creators are deleted (quotes page ~110 lines, production page ~120
+lines, webhook ~300 lines; net -571): every job now gets
+jobTicket/assetInboxKey/itemTicket/ripJobName/suggestedFileName (closes the
+J1 gap — intake/RIP tooling sees quote-created jobs), full snapshot carry,
+source event with actor, quote back-link note, and paid->production status
+move. Conversion re-validates the STORED snapshot: missing costs refuse, DTP
+BLOCKED refuses, DTP override without a written reason refuses. Family
+checklists: sticker-bags/standard-jars/premium-jars (Miron top verification
+step)/stickers-labels/banners/default + DTP outsourced Spektra purchase
+workflow (artwork -> PO -> proof -> confirm -> receive -> QC -> deliver ->
+complete; no print/machine/application). Webhook: payment branch byte-
+identical; configurator branch through the service behind a field-for-field
+parity fixture (pseudo-quoteId, tickets, filenames, summaries, snapshots).
+UI: exact disabled reasons + Open Production Job + created date on Quotes;
+source type/link on the production board. Tests 509 -> 522 (13 new incl. a
+real concurrent-call test over an async advisory-lock fake); build clean; tsc
+306 (TWO BELOW the 308 baseline — the deleted duplicates carried two
+pre-existing errors). Alerts/proof-sheet behavior preserved (alerts stay in
+the routes post-call).

@@ -102,3 +102,10 @@ DTP-override quotes convert silently once paid), one-way job→quote linkage.
 idempotency, always-ticketed payload, family checklists incl. DTP outsourced
 purchase checklist, conversion re-validation, webhook routed through the
 service behind output-equivalence tests). No schema migration required.
+
+## Phase 15D.1 — SHIPPED (2026-07-24)
+Central production-job service live (see PLAN 15D.1 section): three creators
+unified, advisory-lock idempotency, snapshot re-validation, ticket gap
+closed, DTP purchase checklist, webhook parity fixture, minimal UI. Remaining
+15D scope for later: unique (shop, quoteId) index, queryable vendor-PO
+fields, Customer model, multi-line order handling.

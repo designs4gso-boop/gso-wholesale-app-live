@@ -85,3 +85,11 @@ all three (Phase 15B/15E).
 - Quote status lifecycle: draft/sent/approved/deposit_paid/paid/production/
   completed — payment webhooks own deposit_paid/paid transitions with
   note-marker idempotency; conversion to production requires paid.
+
+## 15D.1 update (2026-07-24)
+- Production-job creation: CANONICAL OWNER IS NOW
+  app/lib/production-job-source.server.ts (all three former creators deleted;
+  quotes page, production page, and the orders_paid configurator branch call
+  it). Idempotency = quoteId sourceKey + pg_advisory_xact_lock inside the
+  creation transaction. Family checklists + Shopify order mapping
+  (buildShopifyOrderJobPayload) live in the service.

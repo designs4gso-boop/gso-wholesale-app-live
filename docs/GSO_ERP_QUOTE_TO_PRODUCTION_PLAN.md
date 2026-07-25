@@ -120,3 +120,24 @@ else moves.
 One shared creation service used by all three paths; J1 ticket gap closed;
 conversion re-validation live; duplicate-click/concurrency safe; Shopify
 webhook output proven unchanged; 509+ tests green; tsc 308; build clean.
+
+## 15D.1 SHIPPED (2026-07-24)
+createProductionJobFromSource is live in app/lib/production-job-source.
+server.ts. Contract: (dbClient, { shop, source, actor }) with sources
+erp_quote / shopify_order / manual_admin; returns { job, created, reason }.
+Idempotency: ONE Prisma transaction that first takes
+pg_advisory_xact_lock(keyA, keyB) — two deterministic signed-32-bit FNV-1a
+hashes of `shop|sourceType|sourceId` — via the smallest raw SQL call
+($queryRawUnsafe, numeric params only), THEN checks for the existing job,
+THEN creates. Lock releases at commit; concurrent duplicates impossible on
+Postgres (SQLite dev ignores the lock — single-instance). Both pages and the
+webhook configurator branch now call the service; the two local page creators
+and the webhook creator are deleted (net -571 lines). Webhook parity proven
+by a recorded fixture pinning every important field (pseudo-quoteId, tickets,
+file names, summaries, snapshots, add-ons). Conversion re-validation:
+paid/production status + snapshot missing-cost refusal + DTP BLOCKED refusal
++ DTP override written-reason requirement. Quote gains a
+"[GSO] Production job <ticket> created" note and moves paid->production.
+Family checklists shipped incl. the DTP outsourced Spektra purchase workflow
+(12 steps, no in-house print/machine/application). Future optional hardening:
+unique index on (shop, quoteId).

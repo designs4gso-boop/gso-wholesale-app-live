@@ -13,6 +13,7 @@ import {
 } from "@shopify/polaris";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
+import { createProductionJobFromSource } from "../lib/production-job-source.server";
 import db from "../db.server";
 import { buildBrandRates, computeEntryCosts, machineRatePerHour, type BrandInkRates } from "../lib/rip-actual-costs.server";
 import { PRINT_LOG_USAGE_SOURCE } from "../lib/print-log-writeback-shared";
@@ -456,128 +457,16 @@ async function sendProductionAlert(job: any) {
   }
 }
 
+// 15D.1: thin wrapper over the CENTRAL creation service — the local duplicate
+// implementation is retired. Alerts stay here (unchanged user behavior).
 async function createProductionJobFromQuote(shop: string, quoteId: string) {
-  const existingJob = await db.productionJob.findFirst({ where: { shop, quoteId } });
-  if (existingJob) return { job: existingJob, created: false };
-
-  const quote = await db.quote.findFirst({
-    where: { shop, id: quoteId },
-    include: { items: true },
-  });
-
-  if (!quote) throw new Error("Quote not found.");
-  if (!["paid", "production"].includes(quote.status)) {
-    throw new Error(
-      quote.status === "deposit_paid"
-        ? "Balance must be paid before production can start."
-        : "Production can start only after the quote is fully paid.",
-    );
+  const result = await createProductionJobFromSource(db, { shop, source: { type: "erp_quote", quoteId }, actor: "production_page" });
+  if (result.created && result.job) {
+    const alertResult = await sendProductionAlert(result.job);
+    await createEvent(shop, result.job.id, alertResult.sent ? "alert_sent" : "alert_skipped", alertResult.reason || "Production alert processed.");
+    await db.productionJob.update({ where: { id: result.job.id }, data: { alertSentAt: alertResult.sent ? new Date() : null } });
   }
-  if (!quote.items.length) throw new Error("Quote has no items to send to production.");
-
-  const jobTicket = await buildNextJobTicket(shop);
-
-  const job = await db.productionJob.create({
-    data: {
-      shop,
-      quoteId: quote.id,
-      quoteNumber: quote.id,
-      jobTicket,
-      assetInboxKey: jobTicket,
-      customerName: quote.customerName || null,
-      company: quote.company || null,
-      email: quote.email || null,
-      phone: quote.phone || null,
-      status: "new",
-      priority: "normal",
-      customerNotes: quote.notes || null,
-      internalNotes: "Created from quote.",
-      productImageUrl: firstImageFromQuoteItem(quote.items[0]),
-      proofUrl: null,
-      items: {
-        create: quote.items.map((item: any, index: number) => ({
-          shop,
-          quoteItemId: item.id,
-          itemTicket: itemTicketFor(jobTicket, index),
-          ripJobName: ripNameForItem(jobTicket, index),
-          suggestedFileName: suggestedFileNameForItem(jobTicket, item, index),
-          productTitle: item.productName || "Custom item",
-          variantTitle: item.variant || null,
-          sku: item.sku || null,
-          quantity: Number(item.quantity) || 1,
-          unitPrice: Number(item.unitPrice) || 0,
-          unitCost: Number(item.unitCost) || 0,
-          productImageUrl: firstImageFromQuoteItem(item) || null,
-          shopifyProductGid: snapshotValue(item, "shopifyProductGid") || snapshotValue(item, "shopifyProductId") || null,
-          shopifyVariantGid: snapshotValue(item, "shopifyVariantGid") || snapshotValue(item, "shopifyVariantId") || null,
-          recipeId: item.recipeId || snapshotValue(item, "recipeId") || null,
-          recipeName: item.recipeName || snapshotValue(item, "recipeName") || null,
-          selectedFinish: item.selectedFinish || snapshotValue(item, "selectedFinish") || null,
-          selectedAddOns: item.selectedAddOnIds || snapshotValue(item, "selectedAddOns") || null,
-          costSnapshot: item.costSnapshot || null,
-          priceSnapshot: item.priceSnapshot || null,
-          productionNotes: item.notes || null,
-          sortOrder: index + 1,
-        })),
-      },
-      checklistItems: {
-        create: defaultChecklist.map((check) => ({ shop, ...check })),
-      },
-      events: {
-        create: [
-          {
-            shop,
-            eventType: "created_from_quote",
-            message: `Production job ${jobTicket} created from quote ${quote.id}.`,
-          },
-        ],
-      },
-    },
-    include: { items: true, events: true },
-  });
-
-  await db.quote.updateMany({
-    where: { shop, id: quote.id, status: { not: "paid" } },
-    data: { status: "production" },
-  });
-
-  const proofUrl = `/app/erp/production/${job.id}/proof`;
-  await db.productionJob.update({
-    where: { id: job.id },
-    data: { proofUrl },
-  });
-  await db.productionJobFile.create({
-    data: {
-      shop,
-      jobId: job.id,
-      fileName: "Standard GSO Proof Sheet",
-      fileType: "proof",
-      fileUrl: proofUrl,
-      assetRole: "proof",
-      assetSource: "generated",
-      sourceRef: jobTicket,
-      matchedBy: "auto_created_from_job",
-      jobTicket,
-      originalFileName: "Standard GSO Proof Sheet",
-      notes: "Auto-created internal proof sheet. Open to edit images/artwork and print/export.",
-    },
-  });
-  await createEvent(shop, job.id, "proof_created", "Standard GSO proof sheet auto-created.");
-
-  const alertResult = await sendProductionAlert(job);
-  await createEvent(
-    shop,
-    job.id,
-    alertResult.sent ? "alert_sent" : "alert_skipped",
-    alertResult.reason || "Production alert processed."
-  );
-
-  await db.productionJob.update({
-    where: { id: job.id },
-    data: { alertSentAt: alertResult.sent ? new Date() : null },
-  });
-
-  return { job, created: true };
+  return { job: result.job, created: result.created };
 }
 
 export async function loader({ request }: { request: Request }) {
@@ -1625,6 +1514,11 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
 
                 <BlockStack gap="100">
                   <Text as="p" tone="subdued">Job ticket: {job.jobTicket || "Not assigned"}</Text>
+                    {/* 15D.1: source traceability */}
+                    <Text as="p" tone="subdued">
+                      Source: {String(job.quoteId || "").startsWith("shopify_order_") ? `Shopify order ${job.quoteNumber || ""}` : String(job.quoteId || "").startsWith("manual_") ? "Manual admin" : job.quoteId ? "ERP quote" : "Unlinked"}
+                      {job.quoteId && !String(job.quoteId).startsWith("shopify_order_") && !String(job.quoteId).startsWith("manual_") ? <> — <a href={`/app/quotes?quote=${job.quoteId}`}>{job.quoteId.slice(0, 8)}…</a></> : null}
+                    </Text>
                   <Text as="p" tone="subdued">Drive folder: {job.assetFolderUrl ? "Linked" : "Not linked"}</Text>
                   <Text as="p" tone="subdued">Source folder: {job.sourceFolderUrl ? "Linked" : "Not linked"}</Text>
                   <Text as="p" tone="subdued">Main product image: {job.productImageUrl ? "Linked" : "Not linked"}</Text>
