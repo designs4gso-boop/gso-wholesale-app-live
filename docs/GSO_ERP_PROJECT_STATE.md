@@ -926,3 +926,24 @@ card (ladders/floors/fees/source; editability = move the table to
 ErpAdminSetting or a dedicated model — documented next step). Snapshot engine
 15C.2-dtp-owner-price-ladders + costEngine 15C-spektra-dtp + dtpPricing
 block. Tests 501 -> 509; build clean; tsc 308 = baseline.
+
+## Milestone: Quote-to-Production Unification Audit (Phase 15D, audit-only)
+No behavior changed. Inventoried: 3 quote creators (calculator draft save,
+quote-builder save, agent-queue conversion) + the webhook payment updater;
+approval chain (status gate + low-margin approval + approveCreateOrder
+deposit/balance/full with boolean duplicate guards); 3 production-job creators
+— quotes-page path (idempotent by quoteId findFirst but NO
+jobTicket/assetInboxKey: intake/RIP tooling blind to those jobs), production-
+page path (near-duplicate WITH tickets), orders_paid configurator branch
+(pseudo-quoteId shopify_order_<gid> idempotency; unitCost 0). Gaps: no
+transactional/unique-constraint duplicate protection; conversion does not
+re-validate snapshot finalizability or DTP override state; quote holds no
+productionJobId back-link. Plan: authoritative lifecycle on existing statuses
+(draft->sent->approved->deposit_paid->paid=production-ready->production->
+completed), ONE createProductionJobFromSource service with transactional
+idempotency + always-assigned tickets + family checklist templates (DTP =
+outsourced Spektra purchase checklist from the snapshot dtp/dtpPricing
+blocks), webhook routed through the service only behind output-equivalence
+tests. NO schema migration needed for 15D.1 (optional later: unique index on
+(shop, quoteId); queryable vendor-PO fields). Docs:
+GSO_ERP_QUOTE_TO_PRODUCTION_AUDIT.md + _PLAN.md.

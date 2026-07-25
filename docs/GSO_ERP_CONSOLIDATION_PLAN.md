@@ -90,3 +90,15 @@ Deferred to later phases: true tab routing, embedded VendorProduct editing in
 Product Setup, products.new wizard family list (sales-key based, registry-
 indexed via tests), Machines/ErpAdminSetting-backed rates, explicit
 VendorProduct.status field (optional 15B+ schema candidate).
+
+## Phase 15D — AUDIT COMPLETE (2026-07-24)
+Audit + plan delivered (GSO_ERP_QUOTE_TO_PRODUCTION_AUDIT.md / _PLAN.md).
+Headline findings: two near-duplicate create-from-quote implementations
+(quotes page lacks jobTicket/assetInboxKey — intake/RIP tooling cannot see
+those jobs; backfillTickets exists as the workaround), findFirst-then-create
+races on all three creators, conversion skips snapshot re-validation (blocked/
+DTP-override quotes convert silently once paid), one-way job→quote linkage.
+15D.1 = central createProductionJobFromSource service (transactional
+idempotency, always-ticketed payload, family checklists incl. DTP outsourced
+purchase checklist, conversion re-validation, webhook routed through the
+service behind output-equivalence tests). No schema migration required.

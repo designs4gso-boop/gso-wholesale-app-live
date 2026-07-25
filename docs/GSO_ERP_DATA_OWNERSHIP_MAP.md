@@ -73,3 +73,15 @@ all three (Phase 15B/15E).
   displayed read-only in Product Setup). Explicitly NOT VendorProduct tiers
   (vendor cost only) and never route JSX. Next step for no-code editing:
   migrate the table into ErpAdminSetting or a dedicated model.
+
+## 15D audit update (2026-07-24)
+- Production jobs: THREE creators today (quotes page function ~line 180 of
+  app.quotes.tsx — no jobTicket/assetInboxKey; production page function ~line
+  480 — with tickets; orders_paid webhook configurator branch — with tickets,
+  no internal cost). Recommended owner: ONE central
+  createProductionJobFromSource service (see
+  GSO_ERP_QUOTE_TO_PRODUCTION_PLAN.md); quoteId column doubles as the
+  idempotency key by convention (real quote id vs shopify_order_<gid>).
+- Quote status lifecycle: draft/sent/approved/deposit_paid/paid/production/
+  completed — payment webhooks own deposit_paid/paid transitions with
+  note-marker idempotency; conversion to production requires paid.
