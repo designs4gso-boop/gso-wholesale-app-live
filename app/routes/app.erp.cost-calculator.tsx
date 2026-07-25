@@ -21,6 +21,8 @@ import {
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
 import { MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
+import { calculatorFamilies, calculatorFamilyValues } from "../lib/product-family-registry";
+import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -752,7 +754,7 @@ export async function loader({ request }: { request: Request }) {
         spotGloss: eparams.get("egloss") === "1",
         inkMlPerSqft: Number(eparams.get("einkml") || 0.6),
         machineMinutesPerSqft: Number(eparams.get("emachmin") || 0),
-        machineRatePerHour: 8,
+        machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
         blankUnitCost: eBlank > 0 ? eBlank : null,
         blankLabel: String(eparams.get("eblanklabel") || "Blank item"),
         lidUnitCost: Number(eparams.get("elid") || 0) > 0 ? Number(eparams.get("elid")) : null,
@@ -808,7 +810,9 @@ export async function loader({ request }: { request: Request }) {
   let productMarginKey: string | null = null;
   let requestedQtyP = 0;
   const pFamily = String(eparams.get("pfamily") || "");
-  if (pFamily && ["sticker-bags", "bags-4x5", "standard-jars", "premium-jars", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom", "custom-item"].includes(pFamily)) {
+  // 15B: accepted values come from the shared registry (canonical + legacy
+  // aliases of calculator-ENABLED families — reserved dtp-bags stays out).
+  if (pFamily && calculatorFamilyValues().includes(pFamily)) {
     // 14C.1B: classify every option once; family pickers filter by class.
     classified = blankItems.map((item) => ({ item, ...classifyCalculatorProduct({ name: item.name, productType: item.productType, vendor: item.vendor, vendorSku: item.sku }) }));
     // 14C.2 dedupe: a Material row that mirrors a VendorProduct record (same
@@ -919,7 +923,7 @@ export async function loader({ request }: { request: Request }) {
       glossLayers: Number(eparams.get("pglosslayers") || 0),
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(eparams.get("pmachmin") || 0),
-      machineRatePerHour: 8,
+      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
       cutRequiresWeeding: eparams.get("pcut") === "weeded",
       hemming: eparams.get("phem") === "1",
       grommets: eparams.get("pgrommet") === "1",
@@ -1217,7 +1221,7 @@ export async function action({ request }: { request: Request }) {
       sides: form.get("esides") === "2" ? 2 : 1, labelWidthIn: Number(form.get("ewidth") || 0), labelHeightIn: Number(form.get("eheight") || 0),
       materialCostPerSqft: Number(form.get("ematsqft") || 0) > 0 ? Number(form.get("ematsqft")) : null, materialLabel: String(form.get("ematlabel") || "Material"),
       printer: form.get("eprinter") === "roland" ? "roland" : "mimaki", whiteInk: form.get("ewhite") === "1", spotGloss: form.get("egloss") === "1",
-      inkMlPerSqft: Number(form.get("einkml") || 0.6), machineMinutesPerSqft: Number(form.get("emachmin") || 0), machineRatePerHour: 8,
+      inkMlPerSqft: Number(form.get("einkml") || 0.6), machineMinutesPerSqft: Number(form.get("emachmin") || 0), machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
       blankUnitCost: eBlank > 0 ? eBlank : null, blankLabel: String(form.get("eblanklabel") || "Blank item"),
       lidUnitCost: Number(form.get("elid") || 0) > 0 ? Number(form.get("elid")) : null, lidLabel: String(form.get("elidlabel") || "Miron lid"),
       boxes: Number(form.get("eboxes") || 0), wastePct: form.get("ewaste") ? eWaste : -1,
@@ -1240,7 +1244,7 @@ export async function action({ request }: { request: Request }) {
   let savedSameSize = true;
   let savedRequestedQty = 0;
   const pFamilySave = String(fRead("pfamily") || "");
-  if (pFamilySave && ["sticker-bags", "bags-4x5", "standard-jars", "premium-jars", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom", "custom-item"].includes(pFamilySave)) {
+  if (pFamilySave && calculatorFamilyValues().includes(pFamilySave)) {
     type FetchedComponent = { component: ResolvedComponent; meta: { name: string; productType?: string; vendor?: string; vendorSku?: string } | null };
     const fetchComponent = async (rawId: string): Promise<FetchedComponent | null> => {
       if (!rawId || rawId === "none") return null;
@@ -1351,7 +1355,7 @@ export async function action({ request }: { request: Request }) {
       glossLayers: Number(fRead("pglosslayers") || 0),
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(fRead("pmachmin") || 0),
-      machineRatePerHour: 8,
+      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
       cutRequiresWeeding: fRead("pcut") === "weeded",
       hemming: fRead("phem") === "1",
       grommets: fRead("pgrommet") === "1",
@@ -2186,12 +2190,9 @@ function ProductDrivenForm() {
           onChange={(event) => submit(event.currentTarget.form, { method: "get" })}
         >
           <option value="">— choose a product —</option>
-          <option value="sticker-bags">Sticker Bags</option>
-          <option value="standard-jars">Standard Jars</option>
-          <option value="premium-jars">Premium Jars — Chiron &amp; Miron</option>
-          <option value="stickers-labels">Stickers &amp; Labels</option>
-          <option value="banners">Banners</option>
-          <option value="custom-item">Custom Item</option>
+          {/* 15B: options render from the shared registry — one family list.
+              Reserved families (dtp-bags) are excluded until enabled. */}
+          {calculatorFamilies().map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
         </select>
       </label>
       {!family ? (

@@ -6,6 +6,7 @@
 
 import { percentToDivisor, applyWasteDivisor } from "./recipe-pricing.server";
 import { blankItemUnitCostAtQty } from "./cost-calculator.server";
+import { OWNER_STANDARDS } from "./owner-standards";
 
 export const MARGIN_FLOOR_PCT = 40; // absolute minimum gross margin
 export const OVERRIDE_PHRASE = "OWNER MARGIN OVERRIDE"; // exact, case-sensitive
@@ -16,13 +17,15 @@ export const SUGGESTED_QUANTITIES = [64, 128, 256, 640, 1000, 2000, 5000, 10000]
 
 // Owner labor standards (verified 2026-07-24). Art+print setup are separate
 // lines now (8.3333 + 1.00 = the previously wired 9.3333 combined value).
+// 15B: values are WIRED to the shared owner-standards registry — edit them in
+// app/lib/owner-standards.ts, never here (same numbers, one source).
 export const OWNER_LABOR = {
-  artSetupPerDesign: 25 / 3, // $8.3333 — cut setup included here
-  printSetupPerDesign: 25 / 25, // $1.00
-  weedingPerPage54x54: 20 / 15, // $1.3333 per 54x54in page
-  jarApplicationPer: 20 / 100, // $0.20
-  bagLabelApplicationPer: 20 / 256, // $0.078125 per applied label
-  packoutPerBox: 20 / 10, // $2.00
+  artSetupPerDesign: OWNER_STANDARDS.artSetupPerDesign.value, // $8.3333 — cut setup included here
+  printSetupPerDesign: OWNER_STANDARDS.printSetupPerDesign.value, // $1.00
+  weedingPerPage54x54: OWNER_STANDARDS.weedingPerPage54x54.value, // $1.3333 per 54x54in page
+  jarApplicationPer: OWNER_STANDARDS.jarApplicationPerLabel.value, // $0.20
+  bagLabelApplicationPer: OWNER_STANDARDS.bagApplicationPerLabel4x5.value, // $0.078125 per applied label
+  packoutPerBox: OWNER_STANDARDS.packoutPerBox.value, // $2.00
 };
 
 // Verified material roll dimensions (inches x feet) — source labels, not math.

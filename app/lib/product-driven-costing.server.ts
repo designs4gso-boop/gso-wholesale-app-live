@@ -12,6 +12,7 @@
 
 import { INK_RATES, OWNER_LABOR, type CostLine, type SourceLabel } from "./calculator-emergency.server";
 import { WIRED_LABOR, blankItemUnitCostAtQty } from "./cost-calculator.server";
+import { familyByKeyOrAlias } from "./product-family-registry";
 
 export const PRODUCT_ENGINE_VERSION = "14C.1";
 // 14C.2: snapshot engine for the complete product-to-price flow (multi-label
@@ -499,14 +500,12 @@ export function uiFamilyToEngine(uiFamily: string, selectedClass: CalculatorProd
 }
 
 // Canonical family value recorded on NEW snapshots (legacy inputs normalize).
-export type CanonicalUiFamily = "sticker-bags" | "standard-jars" | "premium-jars" | "stickers-labels" | "banners" | "custom-item";
+// 15B: resolution is REGISTRY-driven (product-family-registry.ts owns the
+// canonical keys and legacy aliases); unknown values stay custom-item.
+export type CanonicalUiFamily = "sticker-bags" | "standard-jars" | "premium-jars" | "stickers-labels" | "banners" | "custom-item" | "dtp-bags";
 export function canonicalUiFamily(uiFamily: string): CanonicalUiFamily {
-  if (uiFamily === "bags-4x5" || uiFamily === "sticker-bags") return "sticker-bags";
-  if (uiFamily === "standard-jars") return "standard-jars";
-  if (uiFamily === "premium-jars" || uiFamily === "chiron-jars" || uiFamily === "miron-jars") return "premium-jars";
-  if (uiFamily === "stickers-labels") return "stickers-labels";
-  if (uiFamily === "banners") return "banners";
-  return "custom-item";
+  const entry = familyByKeyOrAlias(uiFamily);
+  return (entry ? entry.key : "custom-item") as CanonicalUiFamily;
 }
 
 // Which product classes a family's blank picker accepts. Applied at BOTH the

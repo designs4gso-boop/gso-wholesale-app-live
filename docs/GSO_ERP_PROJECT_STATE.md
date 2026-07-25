@@ -827,3 +827,34 @@ Only, no borrowed 4x5 rules. Final sticker-bag statuses: 4x5 $0.09 Verified /
 excluded. Standard Jars confirmed: 3 oz + 4 oz + 5 oz + soda-can preset (owner
 treats the can as a jar); Chiron/Miron/tops excluded. Tests 463 -> 467; build
 clean; tsc 308 = baseline.
+
+## Milestone: Unified Product Setup Foundation (Phase 15B)
+ONE shared product-family registry (app/lib/product-family-registry.ts,
+client-safe): canonical keys, owner labels, recipe-family vocabulary, legacy
+aliases, calculator/product-setup/vendor-cost flags, marginRuleKey +
+salesRuleKey indexes into the owner-approved tables, sort order — consumed by
+the Cost Calculator (options + accepted URL values registry-driven; canonical
+resolution in canonicalUiFamily) and Product Setup (registry-first recipe
+vocabulary preserving every live string). Reserved dtp-bags entry registered
+with calculatorEnabled=false — hidden from the live calculator until 15C.
+Owner-standards registry (app/lib/owner-standards.ts): bag 4x5 $0.078125/label
+($20/hr at 256), jar $0.20, art $8.3333 + print $1.00/design, weeding
+$1.3333/page, packing $2.00/box, machine $8/hr PROVISIONAL — OWNER_LABOR and
+all four calculator machine-rate call sites wired to it; legacy conflicting
+rates ($0.1111 4x5, $25/hr, $0.15/side) quarantined in
+LEGACY_CONFLICTING_RATES with tests proving they cannot override calculator
+truth. Product Setup is the product home: grouped sections 1-6 (Basics /
+Vendor Cost / Calculator Rules / Features / Shopify / Production Recipe),
+read-only Vendor Cost panel over applied VendorProduct records with derived
+status (Draft / Unverified / Verified x Active / Inactive via
+deriveProductVerification — Cost Book review status upgrades the basis; cost>0
+alone is labeled "implicit"), links into the Vendor Cost Book (single cost
+store, unchanged apply flow), and the "+ New Product (guided wizard)" entry
+(products/new keeps its URL and still redirects back with the draft selected).
+Duplicate prevention (findLikelyDuplicates: sku / normalized name /
+vendor+size-spec) WARNS before creating recipes (Add Product) and cost items
+(Cost Book) — "Nothing was created or merged" unless "Create anyway" is
+ticked. No schema change, no navigation change, no margin-curve change,
+storefront/configurator/webhooks untouched. Tests 467 -> 481; build clean;
+tsc 308 = baseline. 15C entry: flip dtp-bags calculatorEnabled + add the
+bag_dtp class/engine family + Spektra seed per GSO_ERP_DTP_READINESS_PLAN.md.

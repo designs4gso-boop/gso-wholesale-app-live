@@ -12,6 +12,7 @@ import {
 import { useState } from "react";
 import { Form, redirect, useActionData, useLoaderData } from "react-router";
 import { officialMoqForFamily, salesRulesForFamily } from "../lib/product-family-sales-rules";
+import { findLikelyDuplicates } from "../lib/product-family-registry";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -482,6 +483,20 @@ export async function action({ request }: { request: Request }) {
       ? parseTemplateTiers(String(selectedTemplate?.tierTemplate || ""), targetMargin)
       : tiersFromBreakpoints(formText(formData, "tiers") || String(selectedTemplate?.tierBreakpoints || ""), targetMargin);
 
+  // 15B duplicate prevention: WARN (never silently merge). Same normalized
+  // name/SKU as an existing recipe blocks creation unless explicitly confirmed.
+  const confirmDuplicate = String(formData.get("confirmDuplicate") || "") === "1";
+  const existingRecipes = await db.productRecipe.findMany({ where: { shop }, select: { id: true, name: true, sku: true }, orderBy: { updatedAt: "desc" }, take: 400 });
+  const likelyDuplicates = findLikelyDuplicates(
+    { name, vendorSku: sku || "" },
+    existingRecipes.map((row) => ({ id: row.id, name: row.name, vendorSku: row.sku })),
+  );
+  if (likelyDuplicates.length && !confirmDuplicate) {
+    return Response.json({
+      ok: false,
+      message: `Likely duplicate product record(s) already exist: ${likelyDuplicates.slice(0, 5).map((row) => row.name).join("; ")}. Nothing was created or merged — tick "Create anyway (not a duplicate)" to confirm this is a genuinely new product.`,
+    }, { status: 409 });
+  }
   const recipe = await db.$transaction(async (tx) => {
     const draft = await tx.productRecipe.create({
       data: {
@@ -1239,6 +1254,9 @@ export default function ProductBuilderPlan() {
                 <InlineStack gap="200" wrap>
                   <Button submit variant="primary">Preview Plan</Button>
                   <Button url="/app/erp/products/new">Clear</Button>
+                  <label style={{ fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <input type="checkbox" name="confirmDuplicate" value="1" /> Create anyway (not a duplicate)
+                  </label>
                   <button
                     type="submit"
                     name="intent"

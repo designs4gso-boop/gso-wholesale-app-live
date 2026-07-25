@@ -197,12 +197,16 @@ describe("family selection activation (14C.1A)", () => {
     expect(pdf).toContain("No active products are configured for this family");
   });
 
-  it("canonical family values are consistent across form, loader, and engine (14C.2 set; legacy values accepted in loader)", () => {
+  it("canonical family values flow from the SHARED registry (15B): options + accepted URL values registry-driven", () => {
+    // options render from the registry, not hardcoded literals
+    expect(pdf).toContain("calculatorFamilies().map((entry) =>");
+    expect(src).toContain("calculatorFamilyValues().includes(pFamily)"); // loader gate
+    expect(src).toContain("calculatorFamilyValues().includes(pFamilySave)"); // save gate
+    const registrySrc = readFileSync(new URL("../app/lib/product-family-registry.ts", import.meta.url), "utf8");
     for (const key of ["sticker-bags", "standard-jars", "premium-jars", "stickers-labels", "banners", "custom-item"]) {
-      expect(pdf).toContain(`value="${key}"`);
-      expect(src).toContain(`"${key}"`);
+      expect(registrySrc).toContain(`key: "${key}"`);
     }
-    for (const legacy of ["bags-4x5", "chiron-jars", "miron-jars", "custom"]) expect(src).toContain(`"${legacy}"`); // back-compat in loader/action
+    for (const legacy of ["bags-4x5", "chiron-jars", "miron-jars", "custom"]) expect(registrySrc).toContain(`"${legacy}"`); // legacy aliases preserved
   });
 
   it("no nested Form inside ProductDrivenForm and no POST triggered by family selection", () => {
@@ -269,11 +273,14 @@ describe("product classification (14C.1B)", () => {
 
 describe("premium-jar UI pins (14C.1B)", () => {
   const src2 = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
-  it("family options show Standard + combined Premium; no separate visible Chiron/Miron families", () => {
-    expect(src2).toContain('<option value="standard-jars">Standard Jars</option>');
-    expect(src2).toContain("Premium Jars — Chiron &amp; Miron");
+  it("family options show Standard + combined Premium via the registry; no separate visible Chiron/Miron families", () => {
+    // 15B: options come from the shared registry — the route has no hardcoded family options
+    expect(src2).toContain("calculatorFamilies().map((entry) =>");
     expect(src2).not.toContain('<option value="chiron-jars">Chiron Jars</option>');
     expect(src2).not.toContain('<option value="miron-jars">Miron Jars</option>');
+    const registrySrc2 = readFileSync(new URL("../app/lib/product-family-registry.ts", import.meta.url), "utf8");
+    expect(registrySrc2).toContain('label: "Standard Jars"');
+    expect(registrySrc2).toContain("Premium Jars — Chiron & Miron");
   });
   it("premium picker uses CHIRON/MIRON optgroups; top selector is gated by topRequired; empty states exist", () => {
     expect(src2).toContain('<optgroup label="CHIRON">');

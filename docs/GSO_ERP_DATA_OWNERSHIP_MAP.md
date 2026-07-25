@@ -39,3 +39,19 @@ code. Risk: HIGH = values can disagree and affect money today.
 Risk is not the split itself but silent drift of SHARED inputs (ink, labor,
 machine, waste). Consolidation target: one owner-standards source consumed by
 all three (Phase 15B/15E).
+
+## 15B update (2026-07-24)
+- Product family: CANONICAL OWNER IS NOW app/lib/product-family-registry.ts
+  (calculator options/gates + Product Setup vocabulary consume it; margin and
+  sales tables are indexed by marginRuleKey/salesRuleKey; the products.new
+  wizard list and ProductTypeProfile seeds remain consumers to converge in a
+  later phase — tests enforce key consistency).
+- Application/setup/packing/machine standards: CANONICAL OWNER IS NOW
+  app/lib/owner-standards.ts (OWNER_LABOR + calculator machine rate wired to
+  it). Legacy conflicting rates are quarantined in LEGACY_CONFLICTING_RATES
+  (WIRED_LABOR.bag4x5PerSide $0.1111 legacy-calculator-only; margin-review
+  $25/hr + $0.15/side report defaults) with tests proving the product engine
+  never reads them.
+- Product verification status: derived (no schema change) via
+  deriveProductVerification — Vendor Cost Book review status (active) is the
+  explicit basis; cost>0 alone remains Verified but labeled "implicit".

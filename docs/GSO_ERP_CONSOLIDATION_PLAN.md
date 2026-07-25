@@ -76,3 +76,17 @@ Exit: all criteria green; marketing/sales agents cleared to connect.
 (products/pricing correctness), the 15D webhook unification (agents create
 orders → jobs must be reliable), and the security items in the diagnostic
 (token display, agent scopes) — navigation polish (15F) can trail.
+
+## Phase 15B — SHIPPED (2026-07-24)
+Delivered: shared product-family registry (7 entries incl. reserved dtp-bags)
+consumed by the calculator (options + URL gates) and Product Setup (vocabulary);
+owner-standards registry with legacy-rate quarantine ($0.078125 4x5 standard
+authoritative; $0.1111 + $25/hr legacy values documented, fallback-only);
+Product Setup grouped as the product home (sections 1-6 + New Product wizard
+entry + read-only Vendor Cost status panel); derived product status
+(Draft/Unverified/Verified x Active/Inactive) with Cost Book review as the
+better-than-cost basis; duplicate warnings on recipe + cost-item creation.
+Deferred to later phases: true tab routing, embedded VendorProduct editing in
+Product Setup, products.new wizard family list (sales-key based, registry-
+indexed via tests), Machines/ErpAdminSetting-backed rates, explicit
+VendorProduct.status field (optional 15B+ schema candidate).

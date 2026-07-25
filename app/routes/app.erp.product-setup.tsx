@@ -1,6 +1,8 @@
 import { Form, Link, useActionData, useLoaderData } from "react-router";
 import { salesRulesForFamily } from "../lib/product-family-sales-rules";
 import { authenticate } from "../shopify.server";
+import { deriveProductVerification, productSetupFamilyLabels } from "../lib/product-family-registry";
+import { classifyCalculatorProduct } from "../lib/product-driven-costing.server";
 import db from "../db.server";
 import {
   QUOTE_RECIPE_PRICING_INCLUDE,
@@ -9,13 +11,11 @@ import {
 } from "../lib/recipe-pricing.server";
 import { materialKind, materialKindLabel } from "../lib/material-classify";
 
-const PRODUCT_FAMILIES = [
-  "Jars",
-  "Sticker Bags",
-  "DTP Pouches",
+// 15B: recipe-family vocabulary is REGISTRY-first (shared product-family
+// registry supplies the canonical families' recipe labels); the extra strings
+// preserve every value already stored on live ProductRecipe rows.
+const EXTRA_RECIPE_FAMILIES = [
   "Boxes",
-  "Labels / Stickers",
-  "Banners",
   "Apparel / DTF",
   "Sourced / Blank Resale",
   "Custom / Other",
@@ -23,6 +23,7 @@ const PRODUCT_FAMILIES = [
   "DTP Bags",
   "DTF / Apparel",
 ];
+const PRODUCT_FAMILIES = [...new Set([...productSetupFamilyLabels(), ...EXTRA_RECIPE_FAMILIES])];
 const PRODUCTION_MODES = ["in_house", "outsourced", "hybrid"];
 const UNIT_OPTIONS = ["each", "sqft", "sqin", "ml", "hour"];
 
@@ -624,7 +625,7 @@ export async function loader({ request }: { request: Request }) {
 
   const selectedWhere = selectedRecipeId ? { shop, id: selectedRecipeId } : null;
 
-  const [templates, recipeCount, recipeRows, selectedRecipe, machinesList, materialsList] = await Promise.all([
+  const [templates, recipeCount, recipeRows, selectedRecipe, machinesList, materialsList, vendorProductRows, costBookLinks] = await Promise.all([
     db.productTypeProfile.findMany({
       where: { shop },
       orderBy: [{ active: "desc" }, { name: "asc" }],
@@ -679,7 +680,35 @@ export async function loader({ request }: { request: Request }) {
       take: 200,
       select: { id: true, name: true, materialType: true, baseUnit: true, unit: true, calculatedUnitCost: true, costPerUnit: true },
     }),
+    // 15B Vendor Cost tab data: applied VendorProduct records (the calculator
+    // cost source of truth) — display + status only; edits stay in the Vendor
+    // Cost Book (single cost store, per docs/GSO_ERP_DATA_OWNERSHIP_MAP.md).
+    db.vendorProduct.findMany({
+      where: { shop },
+      orderBy: [{ active: "desc" }, { name: "asc" }],
+      take: 60,
+      select: { id: true, name: true, vendor: true, vendorSku: true, productType: true, active: true, defaultUnitCost: true, _count: { select: { tiers: true, addOns: true } } },
+    }),
+    db.vendorCostBookItem.findMany({
+      where: { shop, vendorProductId: { not: null } },
+      select: { vendorProductId: true, status: true },
+      take: 200,
+    }),
   ]);
+
+  const bookStatusByVendorProduct = new Map<string, string>();
+  for (const link of costBookLinks as any[]) if (link.vendorProductId) bookStatusByVendorProduct.set(link.vendorProductId, link.status || "");
+  const vendorCostRows = (vendorProductRows as any[]).map((row) => ({
+    id: row.id,
+    name: row.name,
+    vendor: row.vendor || "",
+    sku: row.vendorSku || "",
+    klass: classifyCalculatorProduct({ name: row.name, productType: row.productType, vendor: row.vendor, vendorSku: row.vendorSku }).klass,
+    unitCost: Number(row.defaultUnitCost) || 0,
+    tierCount: row._count.tiers,
+    addOnCount: row._count.addOns,
+    ...deriveProductVerification({ active: row.active, unitCost: row.defaultUnitCost, tierCount: row._count.tiers, costBookStatus: bookStatusByVendorProduct.get(row.id) || null }),
+  }));
 
   const activeTemplates = templates.filter((template: any) => template.active);
   const recipeTotalPages = Math.max(1, Math.ceil(recipeCount / recipeLimit));
@@ -693,6 +722,7 @@ export async function loader({ request }: { request: Request }) {
     recipes: recipeRows,
     selectedRecipe,
     selectedRecipeReadiness,
+    vendorCostRows,
     machines: machinesList,
     materialsAvailable: materialsList,
     selectedRecipeId,
@@ -1714,6 +1744,7 @@ export default function ProductSetupRecipeBuilder() {
     selectedRecipeId = "",
     recipeStatus = "active",
     recipeSearch = "",
+    vendorCostRows = [],
     recipeCount = 0,
     recipePage = 1,
     recipeLimit = 15,
@@ -1744,6 +1775,68 @@ export default function ProductSetupRecipeBuilder() {
         <p>512MB-safe recipe control center. Recipes load as a light list first; full details load only after selecting one recipe.</p>
       </div>
 
+      {/* 15B: Product Setup is the single Add/Edit Product home. Grouped
+          sections (jump links) — full forms are reused, never duplicated. */}
+      <div className="card">
+        <h2>Product home</h2>
+        <p className="muted">One place for every product: create or pick a recipe below, review applied vendor costs, and jump to the section you need.</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <a className="badge" href="#basics">1. Basics</a>
+          <a className="badge" href="#vendor-cost">2. Vendor Cost</a>
+          <a className="badge" href="#calculator-rules">3. Calculator Rules</a>
+          <a className="badge" href="#features">4. Features</a>
+          <a className="badge" href="#shopify">5. Shopify</a>
+          <a className="badge" href="#production-recipe">6. Production Recipe</a>
+          <a className="badge green" href="/app/erp/products/new">+ New Product (guided wizard)</a>
+        </div>
+        <p className="muted" style={{ marginBottom: 0 }}>
+          The guided wizard collects the basics and returns here with a draft recipe selected. Vendor costs are edited in the
+          {" "}<a href="/app/erp/vendor-cost-book">Vendor Cost Book</a> (intake/review) and applied to the Vendor Products shown in section 2 — there is no second cost store.
+        </p>
+      </div>
+
+      <div className="card" id="vendor-cost">
+        <h2>2. Vendor Cost — applied records (calculator source of truth)</h2>
+        <p className="muted">
+          Read-only view of VendorProduct records the Cost Calculator prices from. Status derives from live data
+          (cost + Vendor Cost Book review) — Draft / Unverified / Verified plus Active / Inactive. Edit or verify costs in the
+          {" "}<a href="/app/erp/vendor-cost-book">Vendor Cost Book</a>.
+        </p>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead><tr><th align="left">Product</th><th align="left">Vendor</th><th align="left">Class</th><th>Unit cost</th><th>Tiers</th><th>Features</th><th align="left">Status</th></tr></thead>
+            <tbody>
+              {(vendorCostRows as any[]).map((row: any) => (
+                <tr key={row.id} style={{ borderTop: "1px solid #e5e7eb" }}>
+                  <td>{row.name}</td>
+                  <td>{row.vendor}</td>
+                  <td>{row.klass}</td>
+                  <td align="center">{row.unitCost > 0 ? `$${row.unitCost.toFixed(4)}` : row.tierCount > 0 ? "tiered" : "—"}</td>
+                  <td align="center">{row.tierCount}</td>
+                  <td align="center">{row.addOnCount}</td>
+                  <td>
+                    <span className={`badge ${row.verification === "Verified" ? "green" : row.verification === "Unverified" ? "yellow" : ""}`}>{row.verification}</span>
+                    <span className={`badge ${row.lifecycle === "Active" ? "" : "red"}`}>{row.lifecycle}</span>
+                    <span className="muted" style={{ fontSize: 11 }}> {row.basis}</span>
+                  </td>
+                </tr>
+              ))}
+              {!(vendorCostRows as any[]).length ? <tr><td colSpan={7} className="muted" style={{ padding: 8 }}>No vendor product records yet — add them via the Vendor Cost Book.</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card" id="calculator-rules">
+        <h2>3. Calculator Rules — shared family registry</h2>
+        <p className="muted">
+          Families come from ONE registry (app/lib/product-family-registry.ts) consumed by this page and the Cost Calculator.
+          Owner labor/machine standards live in app/lib/owner-standards.ts (bag label $0.078125, jar label $0.20, art $8.3333 + print $1.00 per design,
+          weeding $1.3333/page, packing $2.00/box, machine $8/hour provisional). Legacy conflicting rates are quarantined and cannot override these.
+          Reserved families (Custom Printed Pouches / DTP Bags) stay hidden from the live calculator until Phase 15C enables them.
+        </p>
+      </div>
+
       {actionData?.message ? <div className="card"><span className={actionData.ok ? "badge green" : "badge red"}>{actionData.message}</span></div> : null}
 
       <div className="card">
@@ -1757,8 +1850,8 @@ export default function ProductSetupRecipeBuilder() {
         <span className="badge yellow">Shopify updates still locked</span>
       </div>
 
-      <div className="card">
-        <h2>Create Product Recipe</h2>
+      <div className="card" id="basics">
+        <h2>1. Basics — Create Product Recipe</h2>
         <p className="muted">Use this for new recipe shells. Open a recipe later to attach materials, zones, tiers, and rules.</p>
         <Form method="post" className="form-grid">
           <input type="hidden" name="intent" value="createRecipe" />
@@ -1833,8 +1926,10 @@ export default function ProductSetupRecipeBuilder() {
         </table> : <p>No recipes found.</p>}
       </div>
 
-      {selectedRecipe ? <div className="card">
+      {selectedRecipe ? <div className="card" id="production-recipe">
+        <span id="features" /><span id="shopify" />
         <h2>{selectedRecipe.name}</h2>
+        <p className="muted">Sections 4 (Features: recipe add-ons + vendor product add-ons above), 5 (Shopify: GID link fields below), and 6 (Production Recipe) all edit THIS selected recipe — the existing forms are reused, not duplicated.</p>
         <p className="muted">Full recipe details are loaded only for this one selected recipe to protect server memory.</p>
         {selectedRecipeQuoteReady ? <span className="badge green">Quote-ready</span> : <span className="badge yellow">Not quote-ready</span>}
 

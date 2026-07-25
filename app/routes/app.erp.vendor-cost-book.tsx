@@ -12,6 +12,7 @@ import {
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import type React from "react";
 import { authenticate } from "../shopify.server";
+import { findLikelyDuplicates } from "../lib/product-family-registry";
 import db from "../db.server";
 
 function clean(value: FormDataEntryValue | null) {
@@ -199,6 +200,18 @@ export async function action({ request }: { request: Request }) {
     }
 
     if (!itemName) return Response.json({ ok: false, message: "Item name is required." }, { status: 400 });
+
+    // 15B duplicate prevention: WARN before creating a likely-duplicate cost
+    // item (same sku, same normalized name, or same vendor + size/spec).
+    const confirmDuplicate = clean(formData.get("confirmDuplicate")) === "1";
+    const existingItems = await db.vendorCostBookItem.findMany({ where: { shop, status: { not: "inactive" } }, select: { id: true, itemName: true, vendorName: true, vendorSku: true }, take: 400 });
+    const likelyDuplicates = findLikelyDuplicates(
+      { name: itemName, vendor: vendor.vendorName, vendorSku: clean(formData.get("vendorSku")) },
+      existingItems.map((row) => ({ id: row.id, name: row.itemName, vendor: row.vendorName, vendorSku: row.vendorSku })),
+    );
+    if (likelyDuplicates.length && !confirmDuplicate) {
+      return Response.json({ ok: false, message: `Likely duplicate cost item(s): ${likelyDuplicates.slice(0, 5).map((row) => row.name).join("; ")}. Nothing was created or merged — tick "Create anyway (not a duplicate)" to confirm.` }, { status: 409 });
+    }
 
     await db.vendorCostBookItem.create({
       data: {
@@ -524,7 +537,7 @@ export default function VendorCostBook() {
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">Add vendor cost item</Text>
               <Form method="post">
-                <input type="hidden" name="intent" value="createCostItem" />
+                <input type="hidden" name="intent" value="createCostItem" /><label style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}><input type="checkbox" name="confirmDuplicate" value="1" /> Create anyway (not a duplicate)</label>
                 <BlockStack gap="250">
                   <InlineStack gap="200" wrap>
                     <div style={{ minWidth: 220, flex: 1 }}><NativeLabel>Vendor Center Vendor</NativeLabel><SelectBox name="vendorId"><VendorOptions vendors={vendorOptions} /></SelectBox></div>

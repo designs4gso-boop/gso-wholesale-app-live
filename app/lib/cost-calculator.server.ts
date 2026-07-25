@@ -169,7 +169,12 @@ export function blankItemCostQty(quantity: number, wastePct: number) {
 // Cost Calculator route only; quotes/pricing engine do not import these.
 export const WIRED_LABOR = {
   jarPerApplication: 20 / 100, // $0.20 per jar/application
-  bag4x5PerSide: 20 / 180, // $0.1111 per side/application
+  // LEGACY-CONFLICTING (15B): $0.1111 predates the owner-authoritative 4x5
+  // standard ($20/hr at 256 labels/hr = $0.078125 = OWNER_STANDARDS.
+  // bagApplicationPerLabel4x5). Used ONLY by the legacy calculator fallback —
+  // the product-driven engine resolves 4x5 via bagApplicationRateFor/OWNER_LABOR
+  // and must never read this value.
+  bag4x5PerSide: 20 / 180, // $0.1111 per side/application (legacy fallback only)
   bag14x16PerSide: 20 / 20, // $1.00 per side/application
   artSetupPerDesign: 25 / 3, // $8.3333 per design
   printSetupPerDesign: 25 / 25, // $1.00 per design
