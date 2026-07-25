@@ -17,6 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import { createProductionJobFromSource } from "../lib/production-job-source.server";
+import { cleanCommercialName, resolveQuoteDisplayName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
 import { finishOptions } from "../lib/finish-presets";
 import {
@@ -273,7 +274,13 @@ async function getQuotes(shop: string) {
     include: { items: true },
   });
 
-  return quotes.map((quote) => ({ ...quote, marginState: quoteMarginState(quote) }));
+  // 15D.2: server-resolved display name (customer stays a separate field;
+  // historical records are NOT mutated, only displayed cleanly)
+  return quotes.map((quote) => ({
+    ...quote,
+    marginState: quoteMarginState(quote),
+    displayName: resolveQuoteDisplayName({ company: quote.company, customerName: quote.customerName, productName: quote.items[0]?.productName }),
+  }));
 }
 
 async function getRecipeSummaries(shop: string) {
@@ -751,7 +758,7 @@ export async function action({ request }: { request: Request }) {
       }
 
       const lineItems = quote.items.map((item: any) => ({
-        title: item.productName || "Custom print item",
+        title: cleanCommercialName(item.productName) || "Custom print item", // 15D.2: never a placeholder line title
         quantity: Math.max(1, Number(item.quantity) || 1),
         originalUnitPriceWithCurrency: {
           amount: String(Number(item.unitPrice) || 0),
@@ -2165,7 +2172,7 @@ export default function QuotesPage() {
                             return (
                               <Card key={quote.id}>
                                 <BlockStack gap="200">
-                                  <Text as="p" fontWeight="bold">{quote.company || quote.customerName || "Unnamed Quote"}</Text>
+                                  <Text as="p" fontWeight="bold">{quote.displayName || quote.company || quote.customerName || "Custom Quote"}</Text>
                                   {isPaid ? <Badge tone="success">PAID - Quote locked</Badge> : null}
                                   <Badge>{customerTierDisplayLabel(quote.customerTier, quote.customerTierLabel)}</Badge>
                                   {tierRule(quote.customerTier).manualTermsOnly ? (

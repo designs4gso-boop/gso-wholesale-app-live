@@ -141,3 +141,13 @@ paid/production status + snapshot missing-cost refusal + DTP BLOCKED refusal
 Family checklists shipped incl. the DTP outsourced Spektra purchase workflow
 (12 steps, no in-house print/machine/application). Future optional hardening:
 unique index on (shop, quoteId).
+
+## 15D.2 note — commercial naming
+app/lib/commercial-name-resolver.server.ts is the ONE naming authority:
+isPlaceholderName / cleanCommercialName (fragment stripping + prefill-
+corruption repair) / resolveProductDisplayName (precedence) /
+resolveQuoteDisplayName / safeNameToken (folder/RIP/filename slug). Consumed
+by the calculator save action, getQuotes displayName, Shopify order line
+titles, and the central production service (quote/manual paths only — the
+Shopify-order mapping stays verbatim for parity). Historical records are
+displayed cleanly but never mutated.

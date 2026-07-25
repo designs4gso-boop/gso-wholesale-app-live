@@ -19,6 +19,7 @@
 // concurrency-safe without it.
 
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
+import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
 
 export type ProductionJobSource =
   | { type: "erp_quote"; quoteId: string }
@@ -112,11 +113,13 @@ async function buildNextJobTicket(tx: any, shop: string, now = new Date()) {
   return `GSO-${stamp}-${String(Date.now()).slice(-6)}`;
 }
 
-// quote-item file name (moved verbatim from app.erp.production.tsx)
+// quote-item file name. 15D.2: names pass through the shared resolver so
+// placeholder fragments can never reach folders/RIP/print filenames (the
+// Shopify-order file namer below is untouched for webhook parity).
 export function suggestedFileNameForQuoteItem(jobTicket: string, item: any, index: number) {
   const ticket = itemTicketFor(jobTicket, index);
-  const product = normalizeFilePart(item.productName || item.productTitle || "PRODUCT");
-  const variant = normalizeFilePart(item.variant || item.variantTitle || "VARIANT");
+  const product = safeNameToken(item.productName || item.productTitle, "PRODUCT");
+  const variant = safeNameToken(item.variant || item.variantTitle, "VARIANT");
   const qty = Number(item.quantity || 1);
   return `${ticket}_${product}_${variant}_QTY${qty}`;
 }
@@ -508,7 +511,7 @@ export async function createProductionJobFromSource(
               itemTicket: itemTicketFor(jobTicket, index),
               ripJobName: itemTicketFor(jobTicket, index),
               suggestedFileName: suggestedFileNameForQuoteItem(jobTicket, item, index),
-              productTitle: item.productName || "Custom item",
+              productTitle: cleanCommercialName(item.productName) || "Custom item", // 15D.2: clean resolved name
               variantTitle: item.variant || null,
               sku: item.sku || null,
               quantity: Number(item.quantity) || 1,

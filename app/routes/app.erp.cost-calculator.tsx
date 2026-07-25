@@ -21,7 +21,8 @@ import {
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
 import { DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
-import { calculatorFamilies, calculatorFamilyValues } from "../lib/product-family-registry";
+import { calculatorFamilies, calculatorFamilyValues, familyByKeyOrAlias } from "../lib/product-family-registry";
+import { resolveProductDisplayName } from "../lib/commercial-name-resolver.server";
 import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { officialMoqForFamily } from "../lib/product-family-sales-rules";
 import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
@@ -1288,7 +1289,7 @@ export async function action({ request }: { request: Request }) {
   let eSetup = Number(fRead("esetup") || 0);
   const eBlank = Number(fRead("eblank") || 0);
   const eWaste = Number(fRead("ewaste") || 0);
-  const productName = String(form.get("eproduct") || "Emergency calculator item").slice(0, 120);
+  const rawProductNameEntry = String(form.get("eproduct") || ""); // resolved AFTER the product block (15D.2 precedence)
   const freight = computeFreight(
     { actualFreight: Number(fRead("efactual") || 0), handling: Number(fRead("efhandling") || 0), otherFees: Number(fRead("effees") || 0), estimatedAllowance: Number(fRead("efallow") || 0), allocation: (fRead("efalloc") as any) || "per_unit", manualPerUnit: Number(fRead("efmanual") || 0) },
     quantities[quantities.length - 1] || 1, 0,
@@ -1331,6 +1332,7 @@ export async function action({ request }: { request: Request }) {
   let savedLabelRows: LabelRow[] | null = null;
   let savedSameSize = true;
   let savedRequestedQty = 0;
+  let savedBlankNameForNaming: string | null = null;
   const pFamilySave = String(fRead("pfamily") || "");
   if (pFamilySave && calculatorFamilyValues().includes(pFamilySave)) {
     type FetchedComponent = { component: ResolvedComponent; meta: { name: string; productType?: string; vendor?: string; vendorSku?: string; addOns?: Array<{ name: string; pricingType: string; amount: number; enabled: boolean }> } | null };
@@ -1397,6 +1399,7 @@ export async function action({ request }: { request: Request }) {
     }
     // 14C.2A: Chiron blank cost is flat — quantity tiers ignored at save too
     savedBlank = enforceFlatChironCost(savedBlank, savedClassification ? savedClassification.klass : null);
+    savedBlankNameForNaming = savedBlank?.name || null;
     const savedTopRaw = String(fRead("plid") || "");
     const savedTopFetched = savedTopRaw.startsWith("type:")
       ? (savedTopRaw === "type:standard-top" ? { name: "Standard / Classic top", unitCost: null, tiers: [], status: "estimated" as const } : savedTopRaw === "type:black-metal-top" ? { name: "Black metal top", unitCost: null, tiers: [], status: "estimated" as const } : null)
@@ -1670,6 +1673,13 @@ export async function action({ request }: { request: Request }) {
     },
     warnings: snapshotTiers.flatMap((tier: any) => tier.warnings || []), inputs: { quantities, margins, eVar, eSetup, eBlank, eWaste },
   };
+  // 15D.2: authoritative product name (placeholder fragments stripped; never
+  // a concatenated placeholder): explicit entry -> record name -> family label.
+  const productName = resolveProductDisplayName([
+    rawProductNameEntry,
+    savedBlankNameForNaming,
+    pFamilySave ? familyByKeyOrAlias(pFamilySave)?.label : null,
+  ]);
   const quote = await db.quote.create({
     data: {
       shop, status: "draft", customerName: String(form.get("ecustomer") || "") || fRead("pcustomer") || null,
@@ -2675,7 +2685,10 @@ function ProductTiers() {
   const requested = tiers.find((tier) => tier.requested) || tiers[tiers.length - 1];
   const selected = tiers.find((tier) => tier.quantity === selectedQty) || requested;
   const mf = pm.marginFamily;
-  const productLabel = pm.productLabel || emergency.family?.label || "Selected product";
+  // 15D.2: never prefill with panel placeholders; real record name, else the
+  // registry family label, else blank for the owner to type.
+  const familyEntryForLabel = calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily);
+  const productLabel = pm.productLabel || familyEntryForLabel?.label || "";
   return (
     <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
       <b style={{ fontSize: 13 }}>Automatic pricing tiers — generated from the calculated job (no re-entry)</b>
@@ -2763,7 +2776,7 @@ Total: ${money2(selected.totalPrice)}`}
         <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />
         <input type="hidden" name="psearch" value={search} />
         <input type="hidden" name="pseltier" value={selected.quantity} />
-        <label style={{ fontSize: 12 }}>Product name<input name="eproduct" defaultValue={productLabel} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Product name<input name="eproduct" defaultValue={productLabel} placeholder="e.g. Production Test Sticker" style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Customer (optional)<input name="ecustomer" style={inputStyle} /></label>
         <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#111827", color: "white", fontWeight: 700 }}>SAVE DRAFT QUOTE</button>
       </Form>

@@ -93,3 +93,10 @@ all three (Phase 15B/15E).
   it). Idempotency = quoteId sourceKey + pg_advisory_xact_lock inside the
   creation transaction. Family checklists + Shopify order mapping
   (buildShopifyOrderJobPayload) live in the service.
+
+## 15D.2 update (2026-07-24)
+- Commercial/product display names: OWNER =
+  app/lib/commercial-name-resolver.server.ts (precedence + placeholder
+  stripping + safe tokens). QuoteItem.productName stores the RESOLVED name at
+  save; quote display names are derived server-side at read time (historical
+  rows unchanged).

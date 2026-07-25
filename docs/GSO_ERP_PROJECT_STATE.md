@@ -973,3 +973,28 @@ real concurrent-call test over an async advisory-lock fake); build clean; tsc
 306 (TWO BELOW the 308 baseline — the deleted duplicates carried two
 pre-existing errors). Alerts/proof-sheet behavior preserved (alerts stay in
 the routes post-call).
+
+## Milestone: Quote / Product Naming Cleanup (Patch 15D.2)
+Root causes from live testing fixed. (1) "Unnamed Quote": calculator drafts
+save without company/customer and the CRM header fell back to a literal —
+getQuotes now attaches a server-resolved displayName
+(resolveQuoteDisplayName: "Customer — Product" | product | customer |
+"Custom Quote") and the literal is gone. (2) "NoProduction Test Sticker
+selected / unknown": the calculator product-name input PREFILLED with the
+manual panel fallback label "Not selected / unknown" (pm.productLabel ||
+emergency.family.label); typing into it fused the fragments and nothing
+sanitized server-side. Fixes: prefill now uses the real record name, else the
+registry family label, else blank; the save action resolves the name through
+ONE shared resolver (app/lib/commercial-name-resolver.server.ts) with the
+authoritative precedence (explicit entry -> VendorProduct/record name ->
+family owner label -> "Custom Quote") and placeholder-fragment stripping that
+repairs the exact corruption ("NoProduction Test Sticker selected / unknown"
+-> "Production Test Sticker") without ever touching legitimate No…-prefixed
+names. Shopify order line titles pass through cleanCommercialName (quote-ID
+note matching, totals, quantities untouched). Production service: quote/
+manual item titles cleaned; quote-path suggested filenames use the shared
+safeNameToken (PRODUCTION-TEST-STICKER; dimensions preserved; never blank;
+tickets untouched); the Shopify-order namer stays VERBATIM for webhook
+parity. Historical quotes/jobs are never mutated (display-time resolution
+only; a backfill utility remains an optional future admin tool). Tests 522 ->
+531; build clean; tsc 306 = current baseline.
