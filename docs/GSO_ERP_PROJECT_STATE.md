@@ -1084,3 +1084,40 @@ ProductionJobItem names HIGH (corruption pattern — only class eligible for
 the documented future owner-approved backfill) / MEDIUM (placeholder-only) /
 LOW (cosmetic); no write path exists (test-pinned). Backfill itself NOT
 built. Tests 554 -> 561; build clean; tsc 306 = baseline.
+
+## Phase 15F — Product setup & admin consolidation AUDIT (2026-07-24)
+Audit-only; zero app-behavior changes. Delivered 4 new docs:
+ADMIN_ROUTE_AUDIT (route decisions on top of the 15A inventory),
+PRODUCT_SETUP_PLAN (9-tab true-tab home, query-state tabs, creation
+workflow Draft->Unverified->Verified->Active with activation blockers),
+SETTINGS_OWNERSHIP_PLAN (ownerConfig ErpAdminSetting contract: key-embedded
+namespace because @@unique([shop,key]) spans categories; JSON envelope
+carries schemaVersion/updatedBy/note/previous since no updatedBy column; no
+migration needed), NAVIGATION_PERMISSION_PLAN (Daily Work / Products &
+Pricing / Operations / Owner-Audit groups; verified NO role checks exist —
+interim owner-email allowlist gate defined, honest about limits). Roadmap
+15F.1-15F.5 recorded in CONSOLIDATION_PLAN. Tests 561, tsc 306, build clean
+(docs-only).
+
+## Phase 15F.0 — EMERGENCY calculator forensic audit (2026-07-25)
+Audit-only (15F.1 owner settings PAUSED behind it). Owner-reported "quotes
+too low" fully explained: the live 100x3x3 sticker quote reproduces TO THE
+CENT from production records ($12.2580 cost -> $30.645 at 60%), so the
+arithmetic is exact — the money is missing structurally. P0-1: non-DTP tier
+margins map by ROW COUNT (curveForTierCount), so the requested quantity
+re-interpolates the researched curve (100 -> 60% instead of 65%; neighbors
+shift; >=1000 always 40%). P1: machine time (DB Mimaki $5/hr@150sqft/hr
+exists, product flow passes 0 minutes), cutting time (no line exists),
+outbound shipping (defaults $0), packing for stickers/banners/premium jars
+(no rules) — all $0 on "Ready" quotes. P2: no minimum job economics outside
+DTP; sticker volume pricing collapses (1,000 x 3x3 = $64.30 vs ~$200-300
+market); blanks not waste-adjusted in product flow; recipe waste unwired;
+machine-rate conflict $5/$8/$25. NO unit-conversion, mapping, rounding, or
+display/save parity defects found; DTP verified working as designed (2,500
+4x5x2 -> $1,323.83 landed, 39.83% WARNING). New docs:
+CALCULATOR_FORENSIC_AUDIT (findings + P list), CALCULATOR_COST_MATRIX
+(component x family), CALCULATOR_QUOTE_FIXTURES (7 reconstructed quotes),
+PRICING_CORRECTION_PLAN (sequence 15F.0a-e + owner decision list; smallest
+patch = 15F.0a quantity-based margins). Tests 561 -> 579 (18 forensic pins
+in tests/calculator-forensic-fixtures.test.ts); tsc 306 = baseline; build
+clean; no app behavior changed.

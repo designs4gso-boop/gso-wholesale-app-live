@@ -134,3 +134,31 @@ all three (Phase 15B/15E).
   stored values remain the immutable record; display cleanup + the dry-run
   audit live on the shared resolver (assessCommercialName); any future
   backfill requires the documented owner-approved per-record process.
+
+## 15F update (2026-07-24)
+- Owner-tunable settings: TARGET OWNER = ErpAdminSetting `ownerConfig.*`
+  JSON envelopes (schemaVersion/payload/updatedBy/note/previous) read via
+  planned app/lib/owner-config.server.ts with code defaults as fallback of
+  record. First movers: ownerConfig.standards.labor (15F.1, replaces direct
+  OWNER_STANDARDS reads), ownerConfig.dtp.ladders (15F.2, replaces
+  DTP_OWNER_PRICE_LADDERS lookups). Researched margin curves, DTP margin
+  thresholds, engine versions, gate phrases: REMAIN CODE-OWNED.
+- Access: NO role enforcement exists (verified — authenticate.admin only).
+  Interim gate = ownerConfig.access.ownerEmails allowlist +
+  Session.accountOwner, server-enforced on money-truth mutations only. See
+  GSO_ERP_NAVIGATION_PERMISSION_PLAN.md.
+
+## 15F.0 update (2026-07-25)
+- Calculator cost inputs VERIFIED against production: material $/sqft OWNER =
+  Material.calculatedUnitCost (Poseidon 0.3155556 = $213/675sqft exact); ink
+  $/ml OWNER = INK_RATES constants (MATCH MachineInkChannel.costPerMl rows);
+  ink usage 0.6 ml/sqft = route constant (MachineInkChannel.mlPerSqft1Pct
+  0.0075 x 80% — calibration pending). Machine time: Machine.costPerHour($5)/
+  sqftPerHour(150) rows are the UNUSED source; OWNER_STANDARDS $8 provisional
+  is the passed-but-inert rate; margin-review $25 quarantined. Blank costs
+  OWNER = VendorProduct(+Tier) records (verified exact); standard jars remain
+  code presets (P3-4). Waste: provisional 10% route constant — ProductRecipe.
+  wastePct (16 records) exists but is never consulted by the product flow.
+  Tier margins: FAMILY_MARGIN_RULES curves OWNER-approved; the row-position
+  mapping (curveForTierCount) is the P0-1 defect; quantity-band mapping to be
+  owned by marginPctForQuantity after 15F.0a.

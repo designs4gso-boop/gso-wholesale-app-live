@@ -125,3 +125,17 @@ GSO_ERP_ACTUAL_COST_REPORTING.md). Phase 15E is functionally complete:
 finalization governance (15E.1) + finalized-only reporting and owner-reviewed
 feedback (15E.2). Remaining from the 15A roadmap: 15F navigation cleanup +
 legacy retirement + token masking, then 15G acceptance audit.
+## Phase 15F — AUDIT COMPLETE (2026-07-24), implementation phased
+Consolidation decisions now authoritative in GSO_ERP_ADMIN_ROUTE_AUDIT.md
+(keep/merge/hide/retire per route), GSO_ERP_PRODUCT_SETUP_PLAN.md (9-tab
+product home + creation gates), GSO_ERP_SETTINGS_OWNERSHIP_PLAN.md
+(ownerConfig ErpAdminSetting contract — no migration), and
+GSO_ERP_NAVIGATION_PERMISSION_PLAN.md (4 nav groups; honest no-roles finding
++ interim owner gate). Implementation order: **15F.1** owner-config
+foundation (owner-config.server.ts + editable owner standards + interim
+owner gate) -> **15F.2** editable DTP ladders/floors/fees through the same
+contract -> **15F.3** Product Setup true tabs + activation gates ->
+**15F.4** navigation regrouping + renames + re-links (incl. print-token
+masking) -> **15F.5** duplicate-source retirement (margin-review fold-in,
+health-page merge, wizard/profile registry import, stub deletion). Each step
+is a small patch with the standard validation battery; no migrations.
