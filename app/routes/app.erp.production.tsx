@@ -15,6 +15,7 @@ import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "
 import { authenticate } from "../shopify.server";
 import { createProductionJobFromSource, familyFromQuoteItems } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
+import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
 import { buildBrandRates, computeEntryCosts, machineRatePerHour, type BrandInkRates } from "../lib/rip-actual-costs.server";
 import { PRINT_LOG_USAGE_SOURCE } from "../lib/print-log-writeback-shared";
@@ -533,6 +534,7 @@ export async function loader({ request }: { request: Request }) {
     const appliedRows = (job.materialUsages || []).filter((usage: any) => String(usage.source || "") === PRINT_LOG_USAGE_SOURCE);
     const appliedProvenance = appliedRows.length ? parseWritebackProvenance(appliedRows[0].notes).provenance : null;
     const jobFamily = familyFromQuoteItems(job.items || []);
+    const displayItems = (job.items || []).map((item: any) => ({ ...item, displayTitle: cleanCommercialName(item.productTitle) || item.productTitle })); // 15E.3: display-only cleanup — stored values untouched
     const jobMaterialSummary = summarizeMaterialUsage(job.materialUsages || []);
     const jobActuals = summarizeActualPrintLogs(job, jobEntries, rates, ratePerHour);
     const finalizeGate = assessFinalization({
@@ -568,6 +570,7 @@ export async function loader({ request }: { request: Request }) {
     });
     return {
       ...job,
+      items: displayItems,
       jobFamily,
       finalizeGate: { status: finalizeGate.status, blockedReasons: finalizeGate.blockedReasons, warningReasons: finalizeGate.warningReasons, varianceDollars: finalizeGate.varianceDollars, variancePct: finalizeGate.variancePct, estimatedTotalCost: finalizeGate.estimatedTotalCost },
       actuals: jobActuals,
@@ -1552,7 +1555,7 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
                   <img src={item.productImageUrl} alt="Item" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 10, border: "1px solid #ddd" }} />
                 ) : null}
                 <BlockStack gap="050">
-                  <Text as="p" fontWeight="bold">{item.productTitle}</Text>
+                  <Text as="p" fontWeight="bold">{item.displayTitle || item.productTitle}</Text>
                   <Text as="p" tone="subdued">Variant: {item.variantTitle || "None"} | SKU: {item.sku || "None"}</Text>
                   {(() => {
                     const config = configFromItem(item);

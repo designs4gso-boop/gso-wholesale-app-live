@@ -14,6 +14,8 @@ import {
   toCsv,
 } from "../lib/actual-cost-reporting.server";
 import { resolveActorFromSession } from "../lib/actual-cost-finalize.server";
+import { presentProductionEvent } from "../lib/production-event-presenter.server";
+import { assessCommercialName, cleanCommercialName } from "../lib/commercial-name-resolver.server";
 
 // 15E.2-M: owner review queue for pricing-feedback findings — decisions live
 // in ErpAdminSetting (category "pricing-feedback"); destination data (Product
@@ -270,7 +272,7 @@ export async function loader({ request }: { request: Request }) {
 
   const topCustomers = topEntries(groupBy(quoteTotals, (quote) => quote.company || quote.customerName || quote.email || "Unknown"), (items) => sum(items, (quote) => quote.revenue));
   const allQuoteItems = quotes.flatMap((quote) => (quote.items || []).map((item) => ({ ...item, quote })));
-  const topProducts = topEntries(groupBy(allQuoteItems, (item) => item.productName || "Unknown"), (items) => sum(items, (item) => number(item.quantity) * number(item.unitPrice)));
+  const topProducts = topEntries(groupBy(allQuoteItems, (item) => cleanCommercialName(item.productName) || item.productName || "Unknown"), (items) => sum(items, (item) => number(item.quantity) * number(item.unitPrice)));
 
   const metrics = {
     rangeDays,
@@ -334,7 +336,29 @@ export async function loader({ request }: { request: Request }) {
     rushJobs: rushJobs.slice(0, 10).map((job) => ({ id: job.id, jobTicket: job.jobTicket, customer: job.company || job.customerName || "Unknown", priority: job.priority, status: job.status, dueDate: job.dueDate })),
     lowStockMaterials: lowStockMaterials.slice(0, 15),
     latePurchases: latePurchases.slice(0, 10).map((po) => ({ id: po.id, requestNumber: po.requestNumber, materialName: po.materialName, vendor: po.vendor, expectedArrivalDate: po.expectedArrivalDate, estimatedCost: po.estimatedCost })),
-    recentProductionEvents: jobs.flatMap((job) => (job.events || []).map((event) => ({ ...event, jobTicket: job.jobTicket, customer: job.company || job.customerName || "Unknown" }))).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 12),
+    // 15E.3: events are presented server-side — human summaries, collapsed
+    // audit detail, raw payload preserved; product/customer names display-cleaned.
+    recentProductionEvents: jobs
+      .flatMap((job) => (job.events || []).map((event) => presentProductionEvent({ ...event, jobTicket: job.jobTicket, customer: job.company || job.customerName || "Unknown", product: (job.items || [])[0]?.productTitle || null })))
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+      .slice(0, 12),
+    nameAudit: url.searchParams.get("nameaudit") === "1" ? await (async () => {
+      // 15E.3-E: DRY RUN ONLY — read-only scan; nothing is ever written here.
+      const [quoteItems, jobItems] = await Promise.all([
+        db.quoteItem.findMany({ where: { quote: { shop } }, select: { id: true, productName: true, quoteId: true }, orderBy: { id: "desc" }, take: 300 }),
+        db.productionJobItem.findMany({ where: { shop }, select: { id: true, productTitle: true, jobId: true, itemTicket: true }, orderBy: { createdAt: "desc" }, take: 300 }),
+      ]);
+      const rows: any[] = [];
+      for (const item of quoteItems) {
+        const assessment = assessCommercialName(item.productName);
+        if (assessment.changed && assessment.confidence !== "none") rows.push({ recordType: "QuoteItem", recordId: item.id, related: item.quoteId, current: assessment.original, proposed: assessment.cleaned || "Custom Quote", reason: assessment.hadPlaceholderFragment ? "placeholder-corruption pattern" : "placeholder or cosmetic value", confidence: assessment.confidence });
+      }
+      for (const item of jobItems) {
+        const assessment = assessCommercialName(item.productTitle);
+        if (assessment.changed && assessment.confidence !== "none") rows.push({ recordType: "ProductionJobItem", recordId: item.id, related: item.itemTicket || item.jobId, current: assessment.original, proposed: assessment.cleaned || "Custom Quote", reason: assessment.hadPlaceholderFragment ? "placeholder-corruption pattern" : "placeholder or cosmetic value", confidence: assessment.confidence });
+      }
+      return rows.sort((a, b) => (a.confidence === "high" ? -1 : 1) - (b.confidence === "high" ? -1 : 1));
+    })() : null,
   });
 }
 
@@ -599,7 +623,77 @@ export default function ReportsDashboard() {
       </div>
 
       <Section title="Recent Production Events">
-        <MiniTable rows={data.recentProductionEvents.map((event: any) => ({ jobTicket: event.jobTicket || "No ticket", customer: event.customer, eventType: event.eventType, message: event.message, createdAt: event.createdAt }))} empty="No recent production events." />
+        {/* 15E.3: human-readable summaries — raw JSON only inside collapsed audit details */}
+        {data.recentProductionEvents.length ? (
+          <div style={{ display: "grid", gap: 8 }}>
+            {data.recentProductionEvents.map((event: any) => (
+              <div key={event.id} style={{ border: "1px solid #e4e4e4", borderRadius: 10, padding: 10, background: event.legacy ? "#fafafa" : "white", fontSize: 13 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <strong>{event.title}</strong>
+                  <span style={{ color: "#666" }}>
+                    {[event.jobTicket, event.customer, event.product].filter(Boolean).join(" · ")}
+                    {event.timestamp ? ` · ${new Date(event.timestamp).toLocaleString()}` : ""}
+                    {event.actor ? ` · ${event.actor}` : ""}
+                  </span>
+                </div>
+                {event.summaryLines.map((line: string, index: number) => (
+                  <div key={index} style={{ color: event.legacy ? "#666" : "#111", overflowWrap: "anywhere" }}>{line}</div>
+                ))}
+                {(event.auditSections.length || event.rawJson) ? (
+                  <details style={{ marginTop: 6 }}>
+                    <summary style={{ cursor: "pointer", fontSize: 12, color: "#666" }}>Show audit details</summary>
+                    {event.auditSections.map((section: any) => (
+                      <div key={section.title} style={{ marginTop: 6 }}>
+                        <b style={{ fontSize: 12 }}>{section.title}</b>
+                        {section.rows.map(([label, value]: [string, string]) => (
+                          <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
+                            <span style={{ color: "#666" }}>{label}</span><span style={{ overflowWrap: "anywhere", textAlign: "right" }}>{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    {event.rawJson ? (
+                      <details style={{ marginTop: 6 }}>
+                        <summary style={{ cursor: "pointer", fontSize: 12, color: "#666" }}>Raw event data</summary>
+                        <pre style={{ maxHeight: 240, overflow: "auto", background: "#111827", color: "#f9fafb", padding: 8, borderRadius: 6, fontSize: 11 }}>{event.rawJson}</pre>
+                      </details>
+                    ) : null}
+                  </details>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : <p style={{ color: "#666" }}>No recent production events.</p>}
+      </Section>
+
+      <Section title="Historical Name Audit (dry run — read-only)">
+        {data.nameAudit ? (
+          <div>
+            <p style={{ fontSize: 12, color: "#666", margin: "0 0 8px" }}>
+              DRY RUN — nothing was changed. Only HIGH-confidence rows (the known placeholder-corruption pattern) are eligible for a future owner-approved backfill
+              (process: dry run → CSV → owner review → apply selected high-confidence IDs with per-record audit events preserving prior values — not built in this patch).
+            </p>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Type</th><th align="left">Record ID</th><th align="left">Related</th><th align="left">Current stored value</th><th align="left">Proposed display value</th><th align="left">Reason</th><th>Confidence</th></tr></thead>
+                <tbody>
+                  {data.nameAudit.map((row: any) => (
+                    <tr key={`${row.recordType}-${row.recordId}`} style={{ borderTop: "1px solid #e5e7eb", background: row.confidence === "high" ? "#fffbeb" : undefined }}>
+                      <td>{row.recordType}</td><td>{row.recordId.slice(0, 10)}…</td><td>{row.related || ""}</td>
+                      <td style={{ overflowWrap: "anywhere" }}>{row.current}</td><td>{row.proposed}</td><td>{row.reason}</td>
+                      <td align="center"><b>{row.confidence}</b></td>
+                    </tr>
+                  ))}
+                  {!data.nameAudit.length ? <tr><td colSpan={7} style={{ padding: 8, color: "#666" }}>No malformed historical names found.</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <p style={{ fontSize: 12, color: "#666" }}>
+            <a href={`?range=${data.range}&nameaudit=1`}>Run the dry-run historical name audit</a> — scans recent QuoteItem and ProductionJobItem names for placeholder corruption. Read-only; stored values are never changed.
+          </p>
+        )}
       </Section>
     </div>
   );

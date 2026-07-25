@@ -78,6 +78,24 @@ export function cleanCommercialName(value: unknown): string | null {
   return text.slice(0, 120);
 }
 
+// 15E.3: dry-run assessment for the historical-name audit — reports whether
+// a stored value would change and how confident the cleanup is. High = the
+// known placeholder-corruption pattern (fragments present, clean remainder);
+// Medium = the whole value is a placeholder; Low = cosmetic-only change.
+export function assessCommercialName(value: unknown): { original: string; cleaned: string | null; changed: boolean; hadPlaceholderFragment: boolean; confidence: "high" | "medium" | "low" | "none" } {
+  const original = String(value ?? "");
+  const normalized = normalize(original);
+  const cleaned = cleanCommercialName(original);
+  const lowered = normalized.toLowerCase();
+  const hadPlaceholderFragment = PLACEHOLDER_FRAGMENTS.some((fragment) => lowered.includes(fragment)) && !PLACEHOLDER_EXACT.has(lowered);
+  const changed = cleaned != null ? cleaned !== normalized : normalized !== "";
+  let confidence: "high" | "medium" | "low" | "none" = "none";
+  if (hadPlaceholderFragment && cleaned) confidence = "high"; // known corruption pattern with a clean remainder
+  else if (isPlaceholderName(original)) confidence = "medium"; // placeholder-only value
+  else if (changed) confidence = "low"; // whitespace/ambiguous manual value
+  return { original, cleaned, changed, hadPlaceholderFragment, confidence };
+}
+
 // First clean candidate wins; safe fallback "Custom Quote".
 export function resolveProductDisplayName(candidates: Array<unknown>): string {
   for (const candidate of candidates) {

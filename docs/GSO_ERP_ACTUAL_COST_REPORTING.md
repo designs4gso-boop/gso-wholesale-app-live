@@ -53,3 +53,12 @@ Lib: app/lib/actual-cost-reporting.server.ts. UI: Reports Dashboard
 (finalized-profitability section with filters: date range [existing range
 param], family, customer, actor, margin-below, warnings-only, reopened-only,
 variance sign). Tests: tests/actual-cost-reporting.test.ts.
+
+## 15E.3 addendum — event readability + historical names
+Recent Production Events now render through the shared presenter (human
+summaries, collapsed audit sections, raw payload preserved — see
+GSO_ERP_EVENT_PRESENTATION.md). Product names across the dashboard/production
+board/CSVs are display-cleaned via the commercial-name resolver; stored
+values unchanged. A read-only dry-run name audit (?nameaudit=1) lists
+malformed historical names with confidence grades; only HIGH-confidence rows
+are eligible for the documented future owner-approved backfill.

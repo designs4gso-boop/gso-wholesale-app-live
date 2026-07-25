@@ -127,3 +127,10 @@ all three (Phase 15B/15E).
   LEAKAGE_THRESHOLDS, evidence-gated suggestions). Owner review decisions
   live in ErpAdminSetting (category "pricing-feedback"); pricing/vendor/
   standards data is never auto-written from reports.
+
+## 15E.3 update (2026-07-24)
+- Event presentation: OWNER = app/lib/production-event-presenter.server.ts
+  (display-only; event records immutable). Historical commercial names:
+  stored values remain the immutable record; display cleanup + the dry-run
+  audit live on the shared resolver (assessCommercialName); any future
+  backfill requires the documented owner-approved per-record process.

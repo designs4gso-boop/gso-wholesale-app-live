@@ -1066,3 +1066,21 @@ never written automatically. CSV exports (jobs/families/products/vendors/
 feedback) server-generated without snapshots/phrases. Variance % shows
 "unavailable" when the estimate is zero. Tests 543 -> 554; build clean; tsc
 306 = baseline; no schema migration; nothing mutated.
+
+## Milestone: Report Event Readability + Historical Name Cleanup (Patch 15E.3)
+app/lib/production-event-presenter.server.ts: finalize events summarize as
+Final cost/profit/margin/Variance/Gate/Reason (SNAPSHOT payload parsed);
+reopen events show previous final figures + reason (PRIOR FINAL payload);
+job-created/proof/alert/status/note events titled; malformed JSON falls back
+safely; blank/unknown events render compact "Legacy event" cards — raw JSON
+only inside the collapsed "Show audit details" -> "Raw event data" block, and
+original event data is never lost. Display-only historical name cleanup via
+the shared resolver: dashboard top products + events, production board item
+titles (displayTitle), CSVs; stored values/IDs/snapshots/tickets/filenames
+untouched ("NoProduction Test Sticker selected / unknown" displays as
+"Production Test Sticker"). New READ-ONLY dry-run name audit on the Reports
+Dashboard (?nameaudit=1): assessCommercialName grades QuoteItem/
+ProductionJobItem names HIGH (corruption pattern — only class eligible for
+the documented future owner-approved backfill) / MEDIUM (placeholder-only) /
+LOW (cosmetic); no write path exists (test-pinned). Backfill itself NOT
+built. Tests 554 -> 561; build clean; tsc 306 = baseline.
