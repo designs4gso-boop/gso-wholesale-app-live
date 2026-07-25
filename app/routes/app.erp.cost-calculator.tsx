@@ -124,16 +124,25 @@ function cleanText(value: unknown) {
   return String(value ?? "").replace(/^\uFEFF/, "").trim();
 }
 
-// 15F.0-D: verified printer speeds from the Machine records (both live
-// printers are 150 sqft/hr). Falls back to the documented production-rate
-// standard so a missing record never silently zeroes machine cost \u2014 the
-// engine still blocks if BOTH are absent (speed 0).
+// 15F.0G.2: PRINTER-SPECIFIC speeds \u2014 ONE authoritative resolver shared by
+// the loader, the save action, and (through the engine) every snapshot and
+// production estimate. Source-of-truth rule (documented):
+// - Roland: the Machine record (150 sqft/hr, correct) with the 150 baseline
+//   as fallback \u2014 the ADDITIVE mode model uses it as the CMYK base.
+// - Mimaki UCJV300-130: the ENGINE-OWNED RasterLink combined-layer profile
+//   (51.6/18.2/11.8/8.6 sqft/hr x 1.15 turnaround) is authoritative; the
+//   Machine record's stale generic speed (still the generic 150; the
+//   interim G.1 single-rate value was retired as incorrect) is NOT used for this
+//   verified profile, so the resolver passes 0 and the engine's Mimaki
+//   branch prices from MIMAKI_UCJV_RASTERLINK_PROFILE.
+// No browser-posted throughput is ever trusted (records re-fetched at save).
 function resolvePrinterSpeeds(machineRecords: Array<{ name: string; sqftPerHour: number }>): { mimaki: number; roland: number } {
-  const speedFor = (pattern: RegExp) => {
-    const match = machineRecords.find((machine) => pattern.test(machine.name) && machine.sqftPerHour > 0);
-    return match ? match.sqftPerHour : DOCUMENTED_PRINTER_SQFT_PER_HOUR;
+  const recordFor = (pattern: RegExp) => machineRecords.find((machine) => pattern.test(machine.name) && machine.sqftPerHour > 0) || null;
+  const rolandRecord = recordFor(/roland/i);
+  return {
+    mimaki: 0, // engine-owned RasterLink profile governs Mimaki (see note above)
+    roland: rolandRecord ? rolandRecord.sqftPerHour : DOCUMENTED_PRINTER_SQFT_PER_HOUR,
   };
-  return { mimaki: speedFor(/mimaki/i), roland: speedFor(/roland/i) };
 }
 
 function parseNumber(value: unknown) {

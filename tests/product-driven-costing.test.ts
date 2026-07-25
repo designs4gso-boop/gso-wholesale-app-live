@@ -49,7 +49,7 @@ describe("layers (14C.1)", () => {
     const mimaki = computeProductDrivenCost(makeInput({ glossLayers: 7 }));
     const glossLine = mimaki.lines.find((line) => line.key === "ink_gloss")!;
     expect(glossLine.source).toBe("missing");
-    expect(glossLine.note).toContain("GLOSS INK COST NOT VERIFIED");
+    expect(glossLine.note).toContain("Verified Mimaki gloss production and ink profile required"); // 15F.0G.1 exact blocker
     expect(mimaki.missing.length).toBeGreaterThan(0);
     const roland = computeProductDrivenCost(makeInput({ printer: "roland", printerHasGloss: true, glossLayers: 2 }));
     expect(roland.lines.find((line) => line.key === "ink_gloss")!.source).toBe("estimated");

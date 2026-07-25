@@ -1166,3 +1166,45 @@ acceptance book + market calibration in
 GSO_ERP_CALCULATOR_QUOTE_FIXTURES.md (no fixture below its market band).
 Provisional-vs-ratify split in GSO_ERP_PRICING_OWNER_DECISIONS.md. Tests
 597 -> 605; tsc 306 = baseline; build clean.
+
+## Owner-corrected Roland print profiles (2026-07-25)
+Machine-time model corrected per owner RIP screenshots: per-MODE speeds
+(CMYK 150 sqft/hr verified; Gloss/Emboss 110 and White HD 75 sqft/hr PER
+SELECTED LAYER; overprint 1x per layer — no hidden White-HD 3x), replacing
+the equal-speed passes multiplier; minutes = hours x 60 with the full
+formula on the machine line. Fixture 5 machine $21.49 -> $27.35 (owner
+worked example matched to the cent); gloss/white fixtures repriced (F5
+$385.95, F6 $397.09, F7 cost 64.54/final $202.00 unchanged); layerless jobs
+unchanged. Tests 605 -> 606; tsc 306; build clean.
+
+## Patch 15F.0G.1 — printer-specific Mimaki/Roland throughput (2026-07-25)
+[SUPERSEDED by 15F.0G.2 below — the 169 figure was INCORRECT for the active
+RasterLink profile and is retired; kept for log integrity only.]
+Mimaki UCJV300 CMYK corrected to the then-assumed 169.0 sqft/hr via a
+printer-mode registry that overrides the stale generic 150 Machine value
+(documented rule: a deliberately updated record supersedes the registry; no
+migration). Roland profiles unchanged (150 CMYK + 110/75 per layer). Mimaki
+white pass time falls back to the CMYK baseline labeled provisional; Mimaki
+gloss BLOCKS with "Verified Mimaki gloss production and ink profile
+required"; Roland ratios never leak into Mimaki (test-pinned). Breakdown
+names the printer-specific source; loader/save share the resolver. Mimaki
+fixtures repriced (100x3x3 $60.33, bags $540.85/$897.45, Chiron $2,551.16/
+$3,049.14, banners $72.12/$118.37); 1,000x3x3 final unchanged at $209.33
+(area floor); Roland premium fixture stays 3.4191 hr; DTP untouched. Tests
+606 -> 610; tsc 306; build clean.
+
+## Patch 15F.0G.2 — Mimaki UCJV300-130 RasterLink throughput (2026-07-25)
+The interim Mimaki single-rate figure was incorrect and is fully retired
+(test-enforced absence). Mimaki now prices from the owner-verified COMBINED
+RasterLink profile (600x1200 VD / 32-pass / Bi-direction / Fast Print High,
+LUS-170): 1-layer 51.6 / 2-layer 18.2 / 3-layer 11.8 / 4-layer 8.6 sqft/hr
+x 1.15 turnaround applied once (hours = sqft/rate x 1.15; minutes = hours x
+60; recovery = hours x $8). Layer totals 5+ BLOCK ("Verified Mimaki
+RasterLink layer profile required"); Mimaki gloss ink stays BLOCKED; Roland
+remains the unchanged ADDITIVE model (150 + 110/75). Owner examples pinned:
+19.26 sqft CMYK ~25.8 min; two-layer ~73.0 min; 100x3x3 ~9.29 min/$1.24;
+1,000x3x3 ~92.9 min/$12.38. Mimaki fixtures repriced (100x3x3 $62.93;
+1,000x3x3 final unchanged $209.33 via the area floor; bags $577.59/$970.94;
+Chiron $2,558.26/$3,060.96; banners $78.67/$124.92; multi-line $202.00
+unchanged). Roland premium fixture stays 3.4191 hr; DTP untouched. Tests
+610 -> 612; tsc 306; build clean.

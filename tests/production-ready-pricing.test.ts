@@ -23,7 +23,14 @@ import { OWNER_STANDARDS } from "../app/lib/owner-standards";
 
 const POSEIDON_PER_SQFT = 213 / ((54 / 12) * 150); // cmoxmgvx80000jj28acnr8ycp
 const MACHINE_RATE = OWNER_STANDARDS.machineRecoveryPerHour.value; // $8/hr
-const SPEED = 150; // verified printer sqft/hr
+// 15F.0G.2 printer-specific profiles (never one global constant): Roland =
+// additive 150 CMYK + 110/75 per layer; Mimaki UCJV300-130 = COMBINED
+// RasterLink table (600x1200 VD / 32-pass / Bi / Fast Print High) x 1.15
+// turnaround applied once.
+const SPEED = 150; // ROLAND verified baseline sqft/hr
+const MIMAKI_RASTERLINK: Record<number, number> = { 1: 51.6, 2: 18.2, 3: 11.8, 4: 8.6 };
+const MIMAKI_TURNAROUND = 1.15;
+const mimakiMachine = (sqft: number, layers = 1) => (sqft / MIMAKI_RASTERLINK[layers]) * MIMAKI_TURNAROUND * MACHINE_RATE;
 
 function stickerInput(overrides: Partial<ProductDrivenInput>): ProductDrivenInput {
   return {
@@ -32,7 +39,7 @@ function stickerInput(overrides: Partial<ProductDrivenInput>): ProductDrivenInpu
     material: { name: "Poseidon Matte Roll Media", costPerSqft: POSEIDON_PER_SQFT },
     printer: "mimaki", printerHasWhite: true, printerHasGloss: false,
     whiteLayers: 0, glossLayers: 0, inkMlPerSqft: 0.6,
-    machineMinutesPerSqft: 0, machineSqftPerHour: SPEED, machineRatePerHour: MACHINE_RATE,
+    machineMinutesPerSqft: 0, machineSqftPerHour: 0, machineRatePerHour: MACHINE_RATE, // Mimaki default: engine-owned RasterLink profile governs
     cutType: "square-rect", cutRequiresWeeding: false, hemming: false, grommets: false,
     freightPerUnit: 0, freightSource: "estimated", recipeWastePct: null, wasteOverride: null, boxOverride: null,
     ...overrides,
@@ -129,40 +136,68 @@ describe("multi-design stickers (15F.0-J)", () => {
   it("fixture 3/4 (N): 585 x 7.13x3.13, 3 designs — 3 gloss layers on Roland vs none: premium job costs and prices higher", () => {
     const gloss = computeProductDrivenCost(stickerInput({
       quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13,
-      printer: "roland", printerHasGloss: true, glossLayers: 3,
+      printer: "roland", printerHasGloss: true, glossLayers: 3, machineSqftPerHour: SPEED,
     }));
     const baseSqft = (7.13 * 3.13 * 585) / 144; // 90.662406
     const wasteSqft = baseSqft / 0.9; // 100.736007
     const rolandRate = INK_RATES.rolandPerMl;
+    // OWNER-CORRECTED RIP mode speeds: CMYK 150 + gloss 110/layer (1x per
+    // SELECTED layer, no hidden overprint multiplier). Owner worked example:
+    // 100.74 sqft -> 0.6716 + 2.7475 = 3.4191 hr -> ~205.15 min -> ~$27.35.
+    const machineHours = wasteSqft / SPEED + (wasteSqft / 110) * 3;
+    expect(machineHours).toBeCloseTo(3.4189, 3);
+    expect(machineHours * MACHINE_RATE).toBeCloseTo(27.3513, 3);
+    const machineLine = gloss.lines.find((line) => line.key === "machine")!;
+    expect(machineLine.amount).toBeCloseTo(machineHours * MACHINE_RATE, 6);
+    expect(machineLine.label).toContain(`${(machineHours * 60).toFixed(1)} min`); // 205.1 — hours x60, never x6
     const expectedGloss = POSEIDON_PER_SQFT * wasteSqft
       + rolandRate * 0.6 * wasteSqft // CMYK
       + rolandRate * 0.6 * wasteSqft * 3 // 3 gloss layers (provisional linear)
-      + (wasteSqft / SPEED) * MACHINE_RATE * 4 // 4 passes
+      + machineHours * MACHINE_RATE
       + CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(baseSqft / 20.25) // 5 pages
       + 2 + 3 * (25 / 3 + 1);
     expect(gloss.totalCost).toBeCloseTo(expectedGloss, 4);
-    expect(gloss.totalCost).toBeCloseTo(163.9590, 3);
+    expect(gloss.totalCost).toBeCloseTo(169.8200, 3);
     expect(gloss.missing).toHaveLength(0);
-    const plain = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, printer: "roland", printerHasGloss: true, glossLayers: 0 }));
+    const plain = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, printer: "roland", printerHasGloss: true, glossLayers: 0, machineSqftPerHour: SPEED }));
     expect(plain.totalCost).toBeCloseTo(111.8181, 3);
     // commercial: premium 56% vs basic 52% at 585
     const stickersRule = resolveMarginFamily("stickers-labels")!;
     const glossPrice = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: gloss.totalCost, marginRule: stickersRule, premiumEligible: true });
     const plainPrice = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: plain.totalCost, marginRule: stickersRule, premiumEligible: false });
-    expect(glossPrice.finalTotalPrice).toBeCloseTo(372.6342, 3);
+    expect(glossPrice.finalTotalPrice).toBeCloseTo(385.9546, 3);
     expect(plainPrice.finalTotalPrice).toBeCloseTo(232.9543, 3);
+  });
+
+  it("owner white-layer examples: 1 layer = sqft/75 hours exactly (never a hidden 3x); 3 layers = 3x that", () => {
+    const oneWhite = computeProductDrivenCost(stickerInput({
+      quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, printer: "roland", printerHasGloss: true, whiteLayers: 1, machineSqftPerHour: SPEED,
+    }));
+    const threeWhite = computeProductDrivenCost(stickerInput({
+      quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, printer: "roland", printerHasGloss: true, whiteLayers: 3, machineSqftPerHour: SPEED,
+    }));
+    const cmykOnly = computeProductDrivenCost(stickerInput({
+      quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, printer: "roland", printerHasGloss: true, machineSqftPerHour: SPEED,
+    }));
+    const wasteSqft = ((7.13 * 3.13 * 585) / 144) / 0.9; // 100.736
+    const oneMachine = oneWhite.lines.find((line) => line.key === "machine")!.amount;
+    const cmykMachine = cmykOnly.lines.find((line) => line.key === "machine")!.amount;
+    expect((wasteSqft / 75)).toBeCloseTo(1.3431, 3); // owner example ~1.3432 hr at 100.74
+    expect(oneMachine - cmykMachine).toBeCloseTo((wasteSqft / 75) * MACHINE_RATE, 6); // exactly ONE white pass
+    const threeMachine = threeWhite.lines.find((line) => line.key === "machine")!.amount;
+    expect(threeMachine - cmykMachine).toBeCloseTo((wasteSqft / 75) * 3 * MACHINE_RATE, 6); // owner example ~4.0296 hr worth
   });
 
   it("fixture 6 (J): the same gloss job with SIMPLE CONTOUR cutting — +$4.90 cutting, premium curve still controls at $383.77", () => {
     const contour = computeProductDrivenCost(stickerInput({
       quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13,
-      printer: "roland", printerHasGloss: true, glossLayers: 3, cutType: "kiss-simple",
+      printer: "roland", printerHasGloss: true, glossLayers: 3, cutType: "kiss-simple", machineSqftPerHour: SPEED,
     }));
     expect(contour.missing).toHaveLength(0); // READY — simple contour quotes automatically
     expect(contour.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(5 * 6.53 * 1.15, 5); // 37.5475
-    expect(contour.totalCost).toBeCloseTo(163.959025 + 5 * 6.53 * 0.15, 3); // 168.8566
+    expect(contour.totalCost).toBeCloseTo(169.82 + 5 * 6.53 * 0.15, 3); // 174.7175 (mode-speed machine)
     const priced = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: contour.totalCost, marginRule: resolveMarginFamily("stickers-labels")!, premiumEligible: true, finishedSqft: contour.derived.baseSqft, setupTotal: contour.setupTotal });
-    expect(priced.finalTotalPrice).toBeCloseTo(contour.totalCost / 0.44, 4); // 383.7648 — premium 56%
+    expect(priced.finalTotalPrice).toBeCloseTo(contour.totalCost / 0.44, 4); // 397.0853 — premium 56%
     expect(priced.controllingRule).toContain("Premium finish floor");
   });
 });
@@ -185,16 +220,16 @@ describe("multi-line sticker jobs (15F.0-K)", () => {
 
   it("fixture 7 (J): 100x3x3 matte + 250x4x4 single-gloss — per-line AREA floors control, job packing + minimums once", () => {
     // line A = fixture-1 economics minus packing (charged once at job level)
-    const lineA = 19.158395; // 21.158395 - 2
+    const lineA = 20.026181; // 22.026181 - 2 (Mimaki RasterLink 51.6)
     // line B: 250 x 4x4 Roland, 1 gloss layer
     const sqftB = (4 * 4 * 250) / 144; // 27.777778
     const wasteB = sqftB / 0.9;
     const lineB = POSEIDON_PER_SQFT * wasteB
       + INK_RATES.rolandPerMl * 0.6 * wasteB * 2 // CMYK + 1 gloss
-      + (wasteB / SPEED) * MACHINE_RATE * 2 // 2 passes
+      + (wasteB / SPEED + wasteB / 110) * MACHINE_RATE // owner mode speeds: CMYK + one gloss layer
       + CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(sqftB / 20.25) // 2 pages
       + (25 / 3 + 1);
-    expect(lineB).toBeCloseTo(42.7834, 3);
+    expect(lineB).toBeCloseTo(43.3816, 3);
     const combined = combineStickerLines({
       lines: [
         { name: "A", quantity: 100, designs: 1, glossOrWhite: false, lineCost: lineA, missing: [], finishedSqft: 6.25, setupTotal: 25 / 3 + 1 },
@@ -258,16 +293,16 @@ describe("fixtures 8/9 (N): Chiron 150ml jars", () => {
     const wasteSqft = baseSqft / 0.9;
     const expected = 1.9 * 585 + 0.2 * 585
       + POSEIDON_PER_SQFT * wasteSqft + INK_RATES.mimakiCmykPerMl * 0.6 * wasteSqft
-      + (wasteSqft / SPEED) * MACHINE_RATE
+      + mimakiMachine(wasteSqft)
       + CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(baseSqft / 20.25) // 2 pages
       + 2 * Math.ceil(585 / 100) + (25 / 3 + 1);
     expect(run.totalCost).toBeCloseTo(expected, 5);
-    expect(run.totalCost).toBeCloseTo(1275.7441, 3);
+    expect(run.totalCost).toBeCloseTo(1279.1284, 3);
     const chiron = resolveMarginFamily("chiron-jars")!;
     expect(marginPctForQuantity(chiron, 585)).toBe(50);
     const priced = computeCommercialPrice({ familyKey: "premium-jars", quantity: 585, completeCost: run.totalCost, marginRule: chiron, premiumEligible: false });
-    expect(priced.finalTotalPrice).toBeCloseTo(2551.4881, 3);
-    expect(priced.finalUnitPrice).toBeCloseTo(4.3615, 4);
+    expect(priced.finalTotalPrice).toBeCloseTo(2558.2569, 3);
+    expect(priced.finalUnitPrice).toBeCloseTo(4.3731, 4);
   });
 
   it("585 jars, three DIFFERENT labels (2x2 side, 2x2 lid, 2x1 additional) — $1,524.84 -> $3,049.68 at 50%", () => {
@@ -284,15 +319,15 @@ describe("fixtures 8/9 (N): Chiron 150ml jars", () => {
     const wasteSqft = baseSqft / 0.9;
     const expected = 1.9 * 585 + 0.2 * (585 * 3)
       + POSEIDON_PER_SQFT * wasteSqft + INK_RATES.mimakiCmykPerMl * 0.6 * wasteSqft
-      + (wasteSqft / SPEED) * MACHINE_RATE
+      + mimakiMachine(wasteSqft)
       + CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(baseSqft / 20.25) // 3 pages
       + 2 * Math.ceil(585 / 100) + (25 / 3 + 1);
     expect(run.derived.baseSqft).toBeCloseTo(baseSqft, 8);
     expect(run.derived.applicationCount).toBe(1755);
     expect(run.totalCost).toBeCloseTo(expected, 5);
-    expect(run.totalCost).toBeCloseTo(1524.8412, 3);
+    expect(run.totalCost).toBeCloseTo(1530.4818, 3);
     const priced = computeCommercialPrice({ familyKey: "premium-jars", quantity: 585, completeCost: run.totalCost, marginRule: resolveMarginFamily("chiron-jars")!, premiumEligible: false });
-    expect(priced.finalTotalPrice).toBeCloseTo(3049.6825, 3);
+    expect(priced.finalTotalPrice).toBeCloseTo(3060.9637, 3);
   });
 });
 
@@ -310,10 +345,10 @@ describe("contour cutting model (15F.0-FINAL-E)", () => {
     const simple100 = computeProductDrivenCost(stickerInput({ cutType: "kiss-simple" }));
     expect(simple100.missing).toHaveLength(0); // READY
     expect(simple100.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(6.53 * 1.15, 6); // 7.5095
-    expect(simple100.totalCost).toBeCloseTo(21.158395 - 6.53 + 6.53 * 1.15, 4); // 22.1379
+    expect(simple100.totalCost).toBeCloseTo(22.026181 - 6.53 + 6.53 * 1.15, 4); // 23.0057 (RasterLink 51.6)
     const simple1000 = computeProductDrivenCost(stickerInput({ quantity: 1000, cutType: "kiss-simple" }));
     expect(simple1000.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(6.53 * 1.15 * 4, 6); // 4 pages
-    expect(simple1000.totalCost).toBeCloseTo(74.3220, 3);
+    expect(simple1000.totalCost).toBeCloseTo(82.9998, 3);
     const moderate = computeProductDrivenCost(stickerInput({ cutType: "kiss-moderate" }));
     expect(moderate.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(6.53 * 1.35, 6);
     const complex = computeProductDrivenCost(stickerInput({ cutType: "kiss-complex" }));
@@ -326,10 +361,10 @@ describe("contour cutting model (15F.0-FINAL-E)", () => {
 
   it("fixture 3/4 (J) prices: 100 simple contour -> $63.25 cost-based; 1,000 simple contour -> area floor $209.33 still controls", () => {
     const rule = resolveMarginFamily("stickers-labels")!;
-    const small = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 100, completeCost: 22.137895, marginRule: rule, premiumEligible: false, finishedSqft: 6.25, setupTotal: 25 / 3 + 1 });
-    expect(small.finalTotalPrice).toBeCloseTo(22.137895 / 0.35, 4); // 63.25 — cost-based
+    const small = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 100, completeCost: 23.005681, marginRule: rule, premiumEligible: false, finishedSqft: 6.25, setupTotal: 25 / 3 + 1 });
+    expect(small.finalTotalPrice).toBeCloseTo(23.005681 / 0.35, 4); // 65.73 — cost-based (RasterLink profile)
     expect(small.controllingRule).toContain("Cost-based");
-    const big = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 1000, completeCost: 74.322045, marginRule: rule, premiumEligible: false, finishedSqft: 62.5, setupTotal: 25 / 3 + 1 });
+    const big = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 1000, completeCost: 82.999814, marginRule: rule, premiumEligible: false, finishedSqft: 62.5, setupTotal: 25 / 3 + 1 });
     expect(big.finalTotalPrice).toBeCloseTo(209.3333, 3); // floor absorbs the contour delta
     expect(big.controllingRule).toContain("Sticker market floor");
   });
@@ -352,7 +387,7 @@ describe("banner finishing (15F.0-FINAL-G)", () => {
     expect(grommets.amount).toBeCloseTo(Math.ceil(216 / 24) * BANNER_FINISHING_STANDARDS.grommetEach, 6); // 9 x $0.30
     expect(finished.lines.find((line) => line.key === "finishing_setup")!.amount).toBe(5);
     // fixture 14 (J): trimmed base 28.9679 + 5 + 10.80 + 2.70 = 47.4679
-    expect(finished.totalCost).toBeCloseTo(47.4679, 3);
+    expect(finished.totalCost).toBeCloseTo(49.9672, 3);
     const priced = computeCommercialPrice({ familyKey: "banners", quantity: 1, completeCost: finished.totalCost, marginRule: resolveMarginFamily("banners")!, premiumEligible: false });
     expect(priced.finalTotalPrice).toBeCloseTo(finished.totalCost / 0.4, 4); // $118.67 at the 60% band — READY
     expect(priced.controllingRule).toContain("Cost-based");
@@ -370,6 +405,70 @@ describe("banner finishing (15F.0-FINAL-G)", () => {
     expect(tiny.candidates.minimumOrderTotalPrice).toBe(40);
     expect(tiny.finalTotalPrice).toBe(40); // $40 minimum banner charge controls tiny jobs
     expect(tiny.controllingRule).toContain("Minimum order total");
+  });
+});
+
+describe("printer-specific profiles (15F.0G.2 — Mimaki RasterLink)", () => {
+  const wasteSqft = 6.25 / 0.9;
+
+  it("Mimaki CMYK resolves to 51.6 sqft/hr x 1.15 turnaround (once); Roland stays exactly 150 additive", () => {
+    const mimaki = computeProductDrivenCost(stickerInput({}));
+    const roland = computeProductDrivenCost(stickerInput({ printer: "roland", machineSqftPerHour: SPEED }));
+    const mimakiLine = mimaki.lines.find((line) => line.key === "machine")!;
+    const rolandLine = roland.lines.find((line) => line.key === "machine")!;
+    expect(mimakiLine.amount).toBeCloseTo(mimakiMachine(wasteSqft), 10);
+    expect(rolandLine.amount).toBeCloseTo((wasteSqft / 150) * MACHINE_RATE, 10);
+    expect(mimakiLine.label).toContain("CMYK machine time");
+    expect(mimakiLine.note).toContain("RasterLink profile 600x1200 VD / 32-pass / Bi-direction / Fast Print High");
+    expect(mimakiLine.note).toContain("1-layer throughput 51.6 sqft/hr");
+    expect(mimakiLine.note).toContain("1.15 UCJV300-130 turnaround factor");
+    expect(mimakiLine.note).not.toContain("169"); // retired incorrect figure
+    expect(mimakiLine.note).not.toContain("150 sqft/hr"); // never a generic statement for Mimaki
+    expect(rolandLine.note).toContain("Roland verified baseline 150 sqft/hr");
+  });
+
+  it("Mimaki combined-layer table: 2 layers 18.2, 3 layers 11.8, 4 layers 8.6 — never Roland-additive, 1.15 applied once", () => {
+    const white1 = computeProductDrivenCost(stickerInput({ whiteLayers: 1 })).lines.find((line) => line.key === "machine")!;
+    expect(white1.amount).toBeCloseTo(mimakiMachine(wasteSqft, 2), 10); // COMBINED profile, not cmyk+white sums
+    expect(white1.label).toContain("Combined 2-layer machine time");
+    expect(white1.note).toContain("2-layer throughput 18.2 sqft/hr");
+    const white2 = computeProductDrivenCost(stickerInput({ whiteLayers: 2 })).lines.find((line) => line.key === "machine")!;
+    expect(white2.amount).toBeCloseTo(mimakiMachine(wasteSqft, 3), 10);
+    const white3 = computeProductDrivenCost(stickerInput({ whiteLayers: 3 })).lines.find((line) => line.key === "machine")!;
+    expect(white3.amount).toBeCloseTo(mimakiMachine(wasteSqft, 4), 10);
+    // 1.15 exactly once: back out the factor and the raw hours remain
+    expect(white1.amount / MIMAKI_TURNAROUND).toBeCloseTo((wasteSqft / 18.2) * MACHINE_RATE, 10);
+  });
+
+  it("owner-verified examples: 19.26 sqft CMYK ~25.8 min; 19.26 sqft two-layer ~73.0 min", () => {
+    expect((19.26 / 51.6) * MIMAKI_TURNAROUND * 60).toBeCloseTo(25.756, 2); // ~26 minutes display
+    expect((19.26 / 18.2) * MIMAKI_TURNAROUND * 60).toBeCloseTo(73.02, 2); // ~1 hour 13 minutes display
+  });
+
+  it("unsupported Mimaki layer combinations BLOCK with the exact message", () => {
+    const five = computeProductDrivenCost(stickerInput({ whiteLayers: 4 })); // 5 total layers
+    const machineLine = five.lines.find((line) => line.key === "machine")!;
+    expect(machineLine.source).toBe("missing");
+    expect(machineLine.note).toContain("Verified Mimaki RasterLink layer profile required");
+  });
+
+  it("Mimaki gloss stays BLOCKED with the exact required message; profile speed does not unlock it", () => {
+    const gloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 }));
+    const glossLine = gloss.lines.find((line) => line.key === "ink_gloss")!;
+    expect(glossLine.source).toBe("missing");
+    expect(glossLine.note).toContain("Verified Mimaki gloss production and ink profile required");
+    expect(gloss.missing.length).toBeGreaterThan(0);
+  });
+
+  it("no active 169 throughput anywhere; engine owns the Mimaki profile; save re-fetches records", () => {
+    const engineSrc = readFileSync(new URL("../app/lib/product-driven-costing.server.ts", import.meta.url), "utf8");
+    const routeSrc = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+    expect(engineSrc).not.toContain("169"); // retired value fully removed
+    expect(routeSrc).not.toContain("169");
+    expect(engineSrc).toContain("MIMAKI_UCJV_RASTERLINK_PROFILE");
+    expect(engineSrc).toContain("sqftPerHourByTotalLayers: { 1: 51.6, 2: 18.2, 3: 11.8, 4: 8.6 }");
+    expect(routeSrc).toContain("mimaki: 0, // engine-owned RasterLink profile governs Mimaki");
+    expect(routeSrc).toContain("const printerSpeedsSave = resolvePrinterSpeeds(await db.machine.findMany");
   });
 });
 

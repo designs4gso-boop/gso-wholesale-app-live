@@ -30,7 +30,35 @@ export const PRODUCTION_READY_ENGINE_VERSION = "15F.0-production-ready-pricing";
 // printers 150) -> BLOCKED (never silently $0 for in-house printing).
 // The stale $5/hr Machine.costPerHour and the quarantined $25/hr are NEVER
 // used as the recovery rate.
-export const DOCUMENTED_PRINTER_SQFT_PER_HOUR = 150; // verified Mimaki/Roland production rate (DB Machine records)
+// 15F.0G.2 PRINTER-SPECIFIC production profiles — never one global CMYK
+// constant, and TWO DISTINCT ARCHITECTURES:
+// ROLAND = ADDITIVE mode-time model (owner-corrected RIP profiles
+// 2026-07-25; head speeds CMYK 1,354 / Gloss 1,016 / White HD 677 mm/sec;
+// overprint 1x PER SELECTED LAYER): CMYK 150 sqft/hr baseline; Gloss/Emboss
+// 110 and White HD 75 sqft/hr per selected layer; hours sum per mode.
+// MIMAKI UCJV300-130 = COMBINED RasterLink configuration-throughput model
+// (owner-verified 2026-07-25). Active standard production profile:
+//   600x1200 VD / 32 pass / Overprint 1 / Bi-direction / Fast Print High /
+//   LUS-170 ink. Effective throughput by TOTAL production layers:
+//   1 layer (CMYK only) 51.6 sqft/hr; 2 layers (e.g. CMYK+white) 18.2;
+//   3 layers 11.8; 4 layers 8.6. Runtime x1.15 UCJV300-130 carriage/
+//   turnaround factor, applied ONCE to total time. This is the verified
+//   profile for THIS configuration — not a universal spec for every Mimaki
+//   resolution/pass mode. (The interim G.1 single-rate figure was incorrect
+//   and is retired.) Unsupported layer totals (5+) BLOCK.
+export const ROLAND_CMYK_SQFT_PER_HOUR = 150; // Roland verified baseline
+// Back-compat alias: the generic value — ONLY the Roland baseline and the
+// stale-Machine-record marker (see resolvePrinterSpeeds in the route).
+export const DOCUMENTED_PRINTER_SQFT_PER_HOUR = ROLAND_CMYK_SQFT_PER_HOUR;
+export const ROLAND_PRINT_MODE_SQFT_PER_HOUR = {
+  glossPerLayer: 110,
+  whitePerLayer: 75,
+} as const;
+export const MIMAKI_UCJV_RASTERLINK_PROFILE = {
+  label: "600x1200 VD / 32-pass / Bi-direction / Fast Print High (LUS-170)",
+  turnaroundFactor: 1.15, // UCJV300-130 physical carriage/turnaround, once per job
+  sqftPerHourByTotalLayers: { 1: 51.6, 2: 18.2, 3: 11.8, 4: 8.6 } as Record<number, number>,
+} as const;
 
 // Owner-documented cutting standards (15F.0-E). Square/rectangle: the owner
 // measured 15.7 minutes = $6.53 at the applicable labor standard; applied per
@@ -461,30 +489,66 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
     if (glossLayers > 0) {
       const glossRate = input.printer === "mimaki" ? INK_RATES.mimakiGlossPerMl : INK_RATES.rolandPerMl;
       if (glossRate == null) {
-        lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s)`, amount: 0, source: "missing", note: "GLOSS INK COST NOT VERIFIED — DRAFT ONLY (never priced as $0-final)." });
+        lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s)`, amount: 0, source: "missing", note: "Verified Mimaki gloss production and ink profile required — DRAFT ONLY (never priced as $0-final)." });
       } else {
         lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s), provisional linear model`, amount: glossRate * input.inkMlPerSqft * wasteAdjustedSqft * glossLayers, source: "estimated" });
       }
     }
     const passes = 1 + whiteLayers + glossLayers;
-    if (passes > 1) lines.push({ key: "passes", label: `Additional print passes — ${passes - 1}`, amount: 0, source: "estimated", note: "Represented once via machine time below (provisional linear model)." });
-    // 15F.0-D: machine recovery is a REQUIRED in-house cost. Time model:
-    // Advanced minutes/sqft override -> verified machine speed -> BLOCKED.
+    if (passes > 1) lines.push({ key: "passes", label: `Additional print passes — ${passes - 1}`, amount: 0, source: "estimated", note: "Machine time uses per-MODE speeds below (owner-corrected RIP profiles); ink uses the provisional linear model." });
+    // 15F.0-D + owner-corrected RIP profiles: machine recovery is a REQUIRED
+    // in-house cost. Time model precedence: Advanced minutes/sqft override
+    // (x passes, manual) -> per-MODE speeds (CMYK baseline + 110 sqft/hr per
+    // gloss layer + 75 sqft/hr per white layer, 1x per SELECTED layer only,
+    // no hidden overprint multipliers) -> BLOCKED. Minutes = hours x 60.
     const machineSqftPerHour = input.machineSqftPerHour ?? 0;
-    const minutesPerSqft = input.machineMinutesPerSqft > 0
-      ? input.machineMinutesPerSqft
-      : machineSqftPerHour > 0 ? 60 / machineSqftPerHour : 0;
-    if (minutesPerSqft > 0) {
-      const machineMinutes = minutesPerSqft * wasteAdjustedSqft * passes;
+    if (input.machineMinutesPerSqft > 0) {
+      const machineMinutes = input.machineMinutesPerSqft * wasteAdjustedSqft * passes;
       lines.push({
         key: "machine",
-        label: `Machine recovery — ${machineMinutes.toFixed(1)} min @ $${input.machineRatePerHour}/hr x ${passes} pass(es)`,
+        label: `Machine recovery — ${machineMinutes.toFixed(1)} min (${(machineMinutes / 60).toFixed(2)} hr) @ $${input.machineRatePerHour}/hr`,
         amount: (machineMinutes / 60) * input.machineRatePerHour,
-        source: input.machineMinutesPerSqft > 0 ? "manual_override" : "owner_standard",
-        formula: `${wasteAdjustedSqft.toFixed(2)} sqft x ${minutesPerSqft.toFixed(3)} min/sqft x ${passes} pass(es) / 60 x $${input.machineRatePerHour}/hr`,
-        note: input.machineMinutesPerSqft > 0
-          ? "Advanced minutes/sqft override."
-          : `Verified printer speed ${machineSqftPerHour} sqft/hr; $${input.machineRatePerHour}/hr owner recovery standard (provisional).`,
+        source: "manual_override",
+        formula: `${wasteAdjustedSqft.toFixed(2)} sqft x ${input.machineMinutesPerSqft.toFixed(3)} min/sqft x ${passes} pass(es) / 60 x $${input.machineRatePerHour}/hr`,
+        note: "Advanced minutes/sqft override (applied per pass).",
+      });
+    } else if (input.printer === "mimaki") {
+      // 15F.0G.2: Mimaki UCJV300-130 = COMBINED RasterLink profile — one
+      // throughput selected by the TOTAL production-layer configuration
+      // (never Roland's additive formula, never inferred rates). The x1.15
+      // turnaround factor applies exactly ONCE to total time. The stale
+      // generic Machine-record speed is deliberately unused here.
+      const totalLayers = 1 + whiteLayers + glossLayers;
+      const profileRate = MIMAKI_UCJV_RASTERLINK_PROFILE.sqftPerHourByTotalLayers[totalLayers];
+      if (profileRate) {
+        const machineHours = (wasteAdjustedSqft / profileRate) * MIMAKI_UCJV_RASTERLINK_PROFILE.turnaroundFactor;
+        const machineMinutes = machineHours * 60; // hours -> minutes: x60, never x6
+        lines.push({
+          key: "machine",
+          label: `${totalLayers === 1 ? "CMYK" : `Combined ${totalLayers}-layer`} machine time — ${machineMinutes.toFixed(1)} min (${machineHours.toFixed(2)} hr), ${profileRate} sqft/hr`,
+          amount: machineHours * input.machineRatePerHour,
+          source: "owner_standard",
+          formula: `${wasteAdjustedSqft.toFixed(2)} sqft / ${profileRate} sqft/hr x ${MIMAKI_UCJV_RASTERLINK_PROFILE.turnaroundFactor} turnaround = ${machineHours.toFixed(4)} hr x 60 = ${machineMinutes.toFixed(1)} min; x $${input.machineRatePerHour}/hr`,
+          note: `Mimaki UCJV300-130 RasterLink profile ${MIMAKI_UCJV_RASTERLINK_PROFILE.label}: combined ${totalLayers}-layer throughput ${profileRate} sqft/hr, including the ${MIMAKI_UCJV_RASTERLINK_PROFILE.turnaroundFactor} UCJV300-130 turnaround factor (owner-verified); $${input.machineRatePerHour}/hr owner recovery standard.`,
+        });
+      } else {
+        lines.push({ key: "machine", label: `Machine recovery — ${totalLayers}-layer Mimaki configuration`, amount: 0, source: "missing", note: "Verified Mimaki RasterLink layer profile required — this layer combination has no verified throughput (supported: 1-4 total layers)." });
+      }
+    } else if (machineSqftPerHour > 0) {
+      // ROLAND = ADDITIVE mode-time model (unchanged): CMYK baseline + 110
+      // sqft/hr per gloss layer + 75 sqft/hr per white layer.
+      const cmykHours = wasteAdjustedSqft / machineSqftPerHour;
+      const glossHours = (wasteAdjustedSqft / ROLAND_PRINT_MODE_SQFT_PER_HOUR.glossPerLayer) * glossLayers;
+      const whiteHours = (wasteAdjustedSqft / ROLAND_PRINT_MODE_SQFT_PER_HOUR.whitePerLayer) * whiteLayers;
+      const machineHours = cmykHours + glossHours + whiteHours;
+      const machineMinutes = machineHours * 60; // hours -> minutes: x60, never x6
+      lines.push({
+        key: "machine",
+        label: `Machine recovery — ${machineMinutes.toFixed(1)} min (${machineHours.toFixed(2)} hr) @ $${input.machineRatePerHour}/hr`,
+        amount: machineHours * input.machineRatePerHour,
+        source: "owner_standard",
+        formula: `${wasteAdjustedSqft.toFixed(2)} sqft: /${machineSqftPerHour} CMYK${glossLayers > 0 ? ` + /${ROLAND_PRINT_MODE_SQFT_PER_HOUR.glossPerLayer} x ${glossLayers} gloss` : ""}${whiteLayers > 0 ? ` + /${ROLAND_PRINT_MODE_SQFT_PER_HOUR.whitePerLayer} x ${whiteLayers} white` : ""} = ${machineHours.toFixed(4)} hr x 60 = ${machineMinutes.toFixed(1)} min; x $${input.machineRatePerHour}/hr`,
+        note: `Roland verified baseline ${machineSqftPerHour} sqft/hr (CMYK); Gloss/Emboss ${ROLAND_PRINT_MODE_SQFT_PER_HOUR.glossPerLayer} and White HD ${ROLAND_PRINT_MODE_SQFT_PER_HOUR.whitePerLayer} sqft/hr PER SELECTED LAYER (owner provisional; overprint 1x per layer, no hidden multiplier); $${input.machineRatePerHour}/hr owner recovery standard.`,
       });
     } else {
       lines.push({ key: "machine", label: "Machine recovery", amount: 0, source: "missing", note: "Machine production-rate standard required — set the printer speed (sqft/hr) before this job can be quoted." });

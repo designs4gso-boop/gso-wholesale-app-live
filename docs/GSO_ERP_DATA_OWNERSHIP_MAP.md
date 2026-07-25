@@ -189,3 +189,14 @@ all three (Phase 15B/15E).
   JAR 100 (all PROVISIONAL, 15F.1 editable). DTP READY semantics: the 40%
   target is informational; floors/$500/$350/overrides unchanged in
   dtp-owner-pricing.server.ts.
+
+## 15F.0G.2 update (2026-07-25, supersedes G.1)
+- Printer production speeds OWNER = printer-specific registries in
+  product-driven-costing.server.ts: MIMAKI_UCJV_RASTERLINK_PROFILE
+  (COMBINED-layer table 51.6/18.2/11.8/8.6 sqft/hr x 1.15 turnaround,
+  owner-verified for 600x1200 VD / 32-pass / Bi / Fast Print High) and
+  ROLAND_CMYK_SQFT_PER_HOUR 150 + ROLAND_PRINT_MODE_SQFT_PER_HOUR 110/75
+  (additive). resolvePrinterSpeeds: Roland from the Machine record
+  (fallback 150); Mimaki record speed deliberately unused (stale generic;
+  the interim single-rate value was retired) — the engine-owned profile
+  governs. Mimaki gloss + 5-layer configurations: PROVIDE items.

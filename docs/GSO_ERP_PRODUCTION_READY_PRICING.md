@@ -145,3 +145,41 @@ docs/GSO_ERP_PRICING_OWNER_DECISIONS.md.
   packing (ceil(total/5,000) x $2) and job-level minimum-profit/order applied
   ONCE on the combined total (per-line calls suppress them).
 - Fixture book + market calibration: GSO_ERP_CALCULATOR_QUOTE_FIXTURES.md.
+
+## Owner-corrected Roland print profiles (2026-07-25)
+Machine time now uses PER-MODE RIP speeds (head speeds CMYK 1,354 / Gloss
+1,016 / White HD 677 mm/sec): cmykHours = sqft/150 (verified baseline) +
+glossHours = sqft/110 x glossLayers + whiteHours = sqft/75 x whiteLayers;
+overprint is 1x PER SELECTED LAYER — the Overprint=3 White HD screenshot was
+file-specific and no hidden multiplier exists. Minutes display = hours x 60
+(factor-of-ten class eliminated; the line shows minutes, hours, and the full
+formula). The Advanced minutes/sqft override keeps its documented x-passes
+manual semantics. Worked example (fixture 5, 100.74 sqft, 3 gloss):
+0.6716 + 2.7475 = 3.4191 hr = 205.1 min = $27.35 at $8/hr.
+
+## 15F.0G.2 — Mimaki UCJV300-130 RasterLink profile (2026-07-25, supersedes G.1)
+Two DISTINCT printer architectures, one authoritative resolver (loader,
+save action, snapshots, production estimates all flow through it):
+- **Mimaki UCJV300-130 = COMBINED RasterLink configuration-throughput**.
+  Active owner-verified standard profile: 600x1200 VD / 32 pass /
+  Overprint 1 / Bi-direction / Fast Print High / LUS-170. Effective
+  throughput by TOTAL production layers: **1 layer 51.6 / 2 layers 18.2 /
+  3 layers 11.8 / 4 layers 8.6 sqft/hr**, x **1.15** UCJV300-130
+  carriage/turnaround factor applied ONCE to total time (hours =
+  sqft / rate x 1.15; minutes = hours x 60; recovery = hours x $8).
+  This is the profile for THIS configuration, not a universal Mimaki spec.
+  The interim G.1 single-rate figure was incorrect and is fully retired
+  (test-enforced: the numeral appears nowhere in engine or route). Layer
+  totals of 5+ BLOCK: "Verified Mimaki RasterLink layer profile required".
+  Mimaki gloss ink remains BLOCKED: "Verified Mimaki gloss production and
+  ink profile required". The stale generic Machine-record speed is
+  deliberately unused for Mimaki (engine-owned profile governs).
+  Owner-verified examples (test-pinned): 19.26 sqft CMYK ~25.8 min;
+  19.26 sqft two-layer ~73.0 min; 100 x 3x3 ~9.29 min ($1.24);
+  1,000 x 3x3 ~92.9 min ($12.38).
+- **Roland = ADDITIVE mode-time model — unchanged**: CMYK 150 sqft/hr
+  verified baseline (Machine record) + Gloss/Emboss 110 and White HD 75
+  sqft/hr per selected layer; premium fixture stays 3.4191 hr.
+Displays name the real source ("CMYK machine time — 92.9 min (1.55 hr),
+51.6 sqft/hr" with the full RasterLink profile in the note; "Combined
+2-layer machine time — 18.2 sqft/hr" for two-layer jobs). DTP untouched.

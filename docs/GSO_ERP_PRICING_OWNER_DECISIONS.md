@@ -17,11 +17,22 @@ routine owner review of ordinary quotes.
 5. Banner finishing: $5 setup + $0.60/ft hems + $0.30/grommet @24in; $4
    tube packing (5 banners/tube).
 6. Packing densities: stickers 5,000/box; jars 100/box (Safe Care 4oz
-   basis); machine recovery $8/hr vs the stale $5 Machine records.
+   basis); machine recovery $8/hr vs the stale $5 Machine records; ROLAND
+   RIP mode rates Gloss 110 / White HD 75 sqft/hr per layer (owner-approved
+   provisional 2026-07-25). Mimaki UCJV300-130 RasterLink combined-layer
+   profile (600x1200 VD / 32-pass / Bi / Fast Print High: 51.6/18.2/11.8/
+   8.6 sqft/hr x 1.15 turnaround) is OWNER-VERIFIED — not a ratify item;
+   the stale generic Machine-record speed is deliberately unused for it
+   (the interim single-rate figure was retired as incorrect).
 7. Margin band edges 64/128/256/640/1000 (margin-study tier structure).
 
 ## PROVIDE (blocked or absent until supplied)
 8. Die-cut/irregular cutting model — BLOCKS with the exact message.
+8b. Mimaki GLOSS ink cost + a gloss-inclusive RasterLink profile — gloss
+    stays BLOCKED ("Verified Mimaki gloss production and ink profile
+    required"). White is now COVERED by the verified combined 2/3/4-layer
+    RasterLink throughputs; layer totals of 5+ BLOCK ("Verified Mimaki
+    RasterLink layer profile required"). Never inferred from Roland.
 9. Premium-label market range check (fixture 5 ~$372) — the spot-gloss curve
    is owner-approved; a market cross-check is pending.
 10. Unpriced bag sizes (4x6/5x8/6x9) — Vendor Cost Book entries.
