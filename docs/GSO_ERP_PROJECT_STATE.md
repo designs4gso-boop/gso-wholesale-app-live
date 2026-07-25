@@ -998,3 +998,24 @@ tickets untouched); the Shopify-order namer stays VERBATIM for webhook
 parity. Historical quotes/jobs are never mutated (display-time resolution
 only; a backfill utility remains an optional future admin tool). Tests 522 ->
 531; build clean; tsc 306 = current baseline.
+
+## Milestone: Actual Cost & Final Margin Audit (Phase 15E, audit-only)
+No behavior changed. Verified: saveFinalCosts recomputes revenue/print/
+material server-side (revenue from item rows — never client-posted); recorded
+print_log rows beat the live preview; manual-vs-print_log material split
+prevents print/material double count; material formula matches the
+(used+waste+reprint)×cost concept with pulled/estimated fallbacks; inventory
+movements audited with before/after. Gaps found: finalize is an ungated
+checkbox (zero actuals finalize freely; live-preview print cost silently
+becomes final; finalizedBy hardcoded "GSO ERP"; finalized rows silently
+editable; uncheck = unaudited reopen); labor rate defaults to legacy $25;
+DTP has one flat outsource field (invoice/freight/credit unstructured —
+freight double-count risk); no negative-stock guard confirmed; deduction qty
+can diverge from costed qty. Plan: 15E.1 = pure assessFinalization gate
+module (READY/WARNING with reason/BLOCKED incl. DTP invoice + preview
+demotion + zero-revenue block), finalize snapshot + variance + actor,
+reopen intent (owner phrase + reason + prior-totals audit event), DTP
+three-field outsource entry summing into the existing column — NO schema
+migration. Pricing feedback stays owner-reviewed (variance rollups ->
+suggested standards -> approval -> Cost Book/standards edit; never
+automatic). Docs: GSO_ERP_ACTUAL_COST_AUDIT.md + _PLAN.md.

@@ -100,3 +100,14 @@ all three (Phase 15B/15E).
   stripping + safe tokens). QuoteItem.productName stores the RESOLVED name at
   save; quote display names are derived server-side at read time (historical
   rows unchanged).
+
+## 15E audit update (2026-07-24)
+- Actual job cost: ProductionJob actual* columns (saveFinalCosts recomputes
+  totals server-side; revenue always from item rows). Print actuals =
+  PrintLogEntry -> guarded writeback rows (source print_log) — recorded rows
+  are authoritative, the live preview is estimate-grade. Material actuals =
+  manual ProductionMaterialUsage rows ((used|pulled|estimated)+waste+reprint
+  × costPerUnit, override allowed). Known gaps for 15E.1: finalization has no
+  gates/actor/immutability; live-preview print cost can silently enter
+  finals; vendor invoice vs freight unstructured (DTP); labor default $25
+  conflicts with owner standards. See GSO_ERP_ACTUAL_COST_AUDIT.md / _PLAN.md.

@@ -109,3 +109,12 @@ unified, advisory-lock idempotency, snapshot re-validation, ticket gap
 closed, DTP purchase checklist, webhook parity fixture, minimal UI. Remaining
 15D scope for later: unique (shop, quoteId) index, queryable vendor-PO
 fields, Customer model, multi-line order handling.
+
+## Phase 15E — AUDIT COMPLETE (2026-07-24)
+Actual-cost audit + plan delivered (GSO_ERP_ACTUAL_COST_AUDIT.md / _PLAN.md).
+Verdict: the data model is largely sufficient (no migration for 15E.1);
+recorded print-log writeback + manual material rows + typed actuals are
+sound; the gaps are finalization governance (no gates, hardcoded actor,
+silent reopen/overwrite, preview-as-final print cost) and DTP invoice
+structure. 15E.1 = assessFinalization gate module + reopen-with-audit +
+actor recording + DTP structured outsource entry + variance display.
