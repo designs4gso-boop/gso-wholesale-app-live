@@ -1045,3 +1045,24 @@ unavailable (not 0%) without an estimated cost. Board panel shows the gate
 status + reasons + variance and locks inputs when finalized. Tests 531 ->
 543 (12 new); build clean; tsc 306 = baseline; no schema migration;
 historical finalized rows untouched.
+
+## Milestone: Actual-Cost Reporting & Pricing Feedback (Patch 15E.2)
+app/lib/actual-cost-reporting.server.ts + Reports Dashboard section:
+finalized-only profitability (open jobs excluded + counted; legacy finals
+labeled), executive summary (jobs/revenue/cost/profit/WEIGHTED margin/
+variance/below-floor/warnings/reopened/reprint/top families), per-job report
+with filters (family/customer/actor/margin-below/warnings/reopened/variance
+sign) + leakage flags + source links, aggregates by family/product/customer
+(provisional email->company->name grouping)/vendor/quantity band — weighted
+margin is the KPI, never percentage averages; DTP rows carry invoice/freight/
+tier/custom-price detail with 4x5x2 vs 5x4x2 kept distinct. Centralized
+LEAKAGE_THRESHOLDS (40% target, family floors incl. banded DTP, 5-pt margin
+drop, 10% cost, 20% freight, 5% vendor invoice, 12% waste, 2% reprint,
+warning/reopen flags). Pricing feedback: 3+ comparable finalized jobs (5+ =
+high confidence) -> evidence cards (current standard vs observed, variance,
+supporting tickets) -> owner review queue accepted/dismissed/deferred stored
+in ErpAdminSetting category "pricing-feedback" — destination pricing data is
+never written automatically. CSV exports (jobs/families/products/vendors/
+feedback) server-generated without snapshots/phrases. Variance % shows
+"unavailable" when the estimate is zero. Tests 543 -> 554; build clean; tsc
+306 = baseline; no schema migration; nothing mutated.

@@ -118,3 +118,10 @@ sound; the gaps are finalization governance (no gates, hardcoded actor,
 silent reopen/overwrite, preview-as-final print cost) and DTP invoice
 structure. 15E.1 = assessFinalization gate module + reopen-with-audit +
 actor recording + DTP structured outsource entry + variance display.
+
+## Phase 15E.2 — SHIPPED (2026-07-24)
+Actual-cost reporting + pricing-feedback loop delivered (see
+GSO_ERP_ACTUAL_COST_REPORTING.md). Phase 15E is functionally complete:
+finalization governance (15E.1) + finalized-only reporting and owner-reviewed
+feedback (15E.2). Remaining from the 15A roadmap: 15F navigation cleanup +
+legacy retirement + token masking, then 15G acceptance audit.

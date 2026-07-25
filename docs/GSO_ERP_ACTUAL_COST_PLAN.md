@@ -107,3 +107,10 @@ reasons + variance, DTP structured invoice/charges/credit/freight entry with
 includes-freight normalization control, labor rate blank (no $25 default) +
 $0-labor confirmation, finalize-reason field, locked panel + reopen form when
 finalized. No schema migration; historical rows untouched.
+
+## 15E.2 SHIPPED (2026-07-24)
+Reporting + pricing feedback live per GSO_ERP_ACTUAL_COST_REPORTING.md:
+finalized-only rows from the 15E.1 snapshots, weighted-margin aggregates by
+family/product/customer/vendor/quantity band, centralized leakage thresholds,
+evidence-gated owner-review pricing feedback (ErpAdminSetting decisions, no
+automatic writes), CSV exports, legacy-final labeling.

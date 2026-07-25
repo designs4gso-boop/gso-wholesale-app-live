@@ -120,3 +120,10 @@ all three (Phase 15B/15E).
   actualOutsourceCost = normalized vendor cost (invoice +/- charges/credit,
   freight backed out when included); actualShippingCost = actual Spektra
   freight — counted once by construction.
+
+## 15E.2 update (2026-07-24)
+- Actual-cost reporting/feedback: OWNER = app/lib/actual-cost-reporting.
+  server.ts (finalized-only normalization, weighted-margin aggregation,
+  LEAKAGE_THRESHOLDS, evidence-gated suggestions). Owner review decisions
+  live in ErpAdminSetting (category "pricing-feedback"); pricing/vendor/
+  standards data is never auto-written from reports.
