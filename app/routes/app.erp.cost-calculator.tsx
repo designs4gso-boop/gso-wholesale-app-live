@@ -20,9 +20,10 @@ import {
   type FamilyMarginRule,
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
-import { MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
+import { DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
 import { calculatorFamilies, calculatorFamilyValues } from "../lib/product-family-registry";
 import { OWNER_STANDARDS } from "../lib/owner-standards";
+import { officialMoqForFamily } from "../lib/product-family-sales-rules";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -81,6 +82,7 @@ type BlankItemOption = {
   wastePct: number;
   vendor: string;
   sku?: string; // 14C.2: lets the product pickers dedupe material rows that mirror a vendor record
+  addOns?: Array<{ name: string; pricingType: string; amount: number; enabled: boolean }>; // 15C: DTP feature spec from VendorProductAddOn
 };
 
 type QuoteLine = {
@@ -429,7 +431,7 @@ export async function loader({ request }: { request: Request }) {
     }),
     db.vendorProduct.findMany({
       where: { shop, active: true },
-      include: { tiers: { orderBy: { minQty: "asc" } } },
+      include: { tiers: { orderBy: { minQty: "asc" } }, addOns: { orderBy: { name: "asc" } } },
       orderBy: [{ productType: "asc" }, { name: "asc" }],
       take: 200,
     }),
@@ -493,6 +495,7 @@ export async function loader({ request }: { request: Request }) {
     wastePct: 2,
     vendor: p.vendor || "Vendor product",
     sku: cleanText(p.vendorSku),
+    addOns: (p.addOns || []).map((addOn: any) => ({ name: addOn.name, pricingType: String(addOn.pricingType || ""), amount: Number(addOn.amount) || 0, enabled: Boolean(addOn.enabled) })),
   }));
 
   // Hide code presets that the jar ERP seed already copied into VendorProduct
@@ -895,14 +898,34 @@ export async function loader({ request }: { request: Request }) {
     }
     const printer = eparams.get("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
     requestedQtyP = Math.floor(Number(eparams.get("pqty") || 0));
+    const engineFamilyP = uiFamilyToEngine(pFamily, selectedClass, selectedIncludesTop);
+    const isDtpP = engineFamilyP === "dtp-bags";
+    // 15C: DTP freight — user-entered actual/allowance wins; else the $85
+    // Spektra flat per-PO default (one charge per PO, never per design/line).
+    const dtpUserActual = Number(eparams.get("efactual") || 0) + Number(eparams.get("efhandling") || 0) + Number(eparams.get("effees") || 0);
+    const dtpAllowance = Number(eparams.get("efallow") || 0);
+    const dtpAddOns = (pickedBlank as any)?.addOns || [];
+    const dtpInputP = isDtpP ? {
+      sizeLabel: pickedBlank?.name || "",
+      moq: officialMoqForFamily("dtp-pouches") || 1000,
+      hangHole: eparams.get("phanghole") === "yes",
+      includedFeatures: dtpAddOns.filter((addOn: any) => addOn.enabled && addOn.amount <= 0 && /includ/i.test(addOn.pricingType)).map((addOn: any) => addOn.name),
+      optionalFeatures: dtpAddOns.filter((addOn: any) => addOn.enabled && /option/i.test(addOn.pricingType)).map((addOn: any) => ({ name: addOn.name, amount: addOn.amount })),
+      ...(dtpUserActual > 0
+        ? { freightPerOrder: dtpUserActual, freightSource: "verified" as const, freightNote: "Actual entered freight/handling/fees (replaces the $85 Spektra default)." }
+        : dtpAllowance > 0
+          ? { freightPerOrder: dtpAllowance, freightSource: "estimated" as const, freightNote: "ESTIMATED allowance (replaces the $85 Spektra default)." }
+          : { freightPerOrder: SPEKTRA_FREIGHT_PER_PO, freightSource: "verified" as const, freightNote: "One $85 charge per Spektra purchase order — never per design, size, or line item; allocated across units in tier pricing." }),
+    } : null;
     const productInput: ProductDrivenInput = {
-      family: uiFamilyToEngine(pFamily, selectedClass, selectedIncludesTop),
+      family: engineFamilyP,
       quantity: requestedQtyP || eQuantities[eQuantities.length - 1] || 1,
       designs: Number(eparams.get("pdesigns") || 0),
       facesPerUnit: Math.max(1, Number(eparams.get("pfaces") || 1)),
       widthIn: Number(eparams.get("pwidth") || 0),
       heightIn: Number(eparams.get("pheight") || 0),
       labelRows: labelRowsP,
+      dtp: dtpInputP,
       blank: blankComponent,
       lid: pFamily === "miron-jars" || topRequired ? resolveTopSelection(String(eparams.get("plid") || ""), pickedLid) : null,
       mironTop: topRequired ? {
@@ -948,10 +971,13 @@ export async function loader({ request }: { request: Request }) {
     if (requestedQtyP > 0) {
       productMarginKey = marginFamilyKeyFor(pFamily, selectedClass, pickedBlank?.name || (autoBag ? autoBag.name : ""));
       productMarginRule = productMarginKey ? resolveMarginFamily(productMarginKey) : null;
-      const tierQuantities = [...new Set([...eQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b);
-      const curveDefaults = productMarginRule
-        ? curveForTierCount(productMarginRule.curve, tierQuantities.length, productMarginRule.familyMinPct)
-        : defaultTierMargins(tierQuantities.length);
+      const baseTierQuantities = isDtpP && !eparams.get("eqty") ? DTP_TIER_QUANTITIES : eQuantities; // 15C: DTP defaults to the vendor tier quantities
+      const tierQuantities = [...new Set([...baseTierQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b);
+      const curveDefaults = isDtpP
+        ? tierQuantities.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: quantity-threshold rule, never row-position
+        : productMarginRule
+          ? curveForTierCount(productMarginRule.curve, tierQuantities.length, productMarginRule.familyMinPct)
+          : defaultTierMargins(tierQuantities.length);
       const tierMargins = eMarginsRaw.length === tierQuantities.length ? eMarginsRaw : curveDefaults;
       const freightInputsP = {
         actualFreight: Number(eparams.get("efactual") || 0),
@@ -964,7 +990,9 @@ export async function loader({ request }: { request: Request }) {
       const floorForFamily = Math.max(productMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
       productTiers = tierQuantities.map((qty, index) => {
         const run = qty === productInput.quantity ? productCost! : computeProductDrivenCost({ ...productInput, quantity: qty });
-        const tierFreight = computeFreight(freightInputsP, qty, 0);
+        // 15C: DTP freight is a flat per-PO line INSIDE the engine run — the
+        // tier pipeline must not add it a second time.
+        const tierFreight = isDtpP ? { total: 0, perUnit: 0, source: "verified" as const, note: "" } : computeFreight(freightInputsP, qty, 0);
         const marginPct = tierMargins[index] ?? floorForFamily;
         const unitCost = run.unitCost + tierFreight.perUnit; // same basis as the manual pipeline: freight rides in the margin basis
         const { price, profit, actualMarginPct } = marginMath(unitCost, marginPct);
@@ -1029,8 +1057,20 @@ export async function loader({ request }: { request: Request }) {
         ? { key: productMarginRule.key, label: productMarginRule.label, curve: productMarginRule.curve, minPct: productMarginRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
         : { key: productMarginKey || "", label: "FAMILY MARGIN RULE NOT CONFIGURED", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
       labelForm: labelRowsP ? { count: labelCountP, same: sameSizeP, rows: labelRowsP } : null,
-      productLabel: pickedBlankRef ? pickedBlankRef.name : autoBag ? autoBag.name : null,
-      printConfig: labelRowsP
+      isDtp: pFamily ? canonicalUiFamily(pFamily) === "dtp-bags" : false,
+      dtpSpec: (() => {
+        if (!pFamily || canonicalUiFamily(pFamily) !== "dtp-bags") return null;
+        const addOns = (pickedBlankRef as any)?.addOns || [];
+        return {
+          included: addOns.filter((addOn: any) => addOn.enabled && addOn.amount <= 0 && /includ/i.test(addOn.pricingType)).map((addOn: any) => addOn.name),
+          optional: addOns.filter((addOn: any) => addOn.enabled && /option/i.test(addOn.pricingType)).map((addOn: any) => ({ name: addOn.name, amount: addOn.amount })),
+          moq: officialMoqForFamily("dtp-pouches") || 1000,
+          freightDefault: SPEKTRA_FREIGHT_PER_PO,
+        };
+      })(),
+      printConfig: pFamily && canonicalUiFamily(pFamily) === "dtp-bags"
+        ? `Vendor-finished pouches — ${Number(eparams.get("pdesigns") || 0) || 1} design(s)${eparams.get("phanghole") === "yes" ? " — hang hole" : ""}`
+        : labelRowsP
         ? `${labelRowsP.length} label(s) per jar — ${labelRowsP.map((row) => row.typeLabel).join(", ")}`
         : pFamily === "bags-4x5" || pFamily === "sticker-bags"
           ? (Number(eparams.get("pfaces") || 1) >= 2 ? "Front and back" : "Front only")
@@ -1043,6 +1083,7 @@ export async function loader({ request }: { request: Request }) {
         const priced = Number(entry.item.unitCost) > 0 || (entry.item.tiers || []).length > 0;
         // 14C.2A: unpriced sticker bags stay visible (NO PRICE label, Draft Only)
         if (pFamily === "bags-4x5" || pFamily === "sticker-bags") return entry.klass === "bag_sticker";
+        if (canonicalUiFamily(pFamily) === "dtp-bags") return entry.klass === "bag_dtp"; // 15C: unpriced sizes stay visible (NO PRICE, Draft Only)
         if (pFamily === "standard-jars") return entry.klass === "jar_standard" && priced;
         if (pFamily === "premium-jars") return (entry.klass === "jar_chiron" || entry.klass === "jar_miron") && priced;
         if (pFamily === "custom" || pFamily === "custom-item") return true;
@@ -1245,7 +1286,7 @@ export async function action({ request }: { request: Request }) {
   let savedRequestedQty = 0;
   const pFamilySave = String(fRead("pfamily") || "");
   if (pFamilySave && calculatorFamilyValues().includes(pFamilySave)) {
-    type FetchedComponent = { component: ResolvedComponent; meta: { name: string; productType?: string; vendor?: string; vendorSku?: string } | null };
+    type FetchedComponent = { component: ResolvedComponent; meta: { name: string; productType?: string; vendor?: string; vendorSku?: string; addOns?: Array<{ name: string; pricingType: string; amount: number; enabled: boolean }> } | null };
     const fetchComponent = async (rawId: string): Promise<FetchedComponent | null> => {
       if (!rawId || rawId === "none") return null;
       if (rawId === "custom") {
@@ -1255,10 +1296,10 @@ export async function action({ request }: { request: Request }) {
         return name && cost > 0 && note ? { component: { name, unitCost: cost, tiers: [], status: "estimated", note: `Custom item — ${note}` }, meta: null } : null;
       }
       if (rawId.startsWith("vendor:")) {
-        const record = await db.vendorProduct.findFirst({ where: { shop, id: rawId.slice(7) }, include: { tiers: true } });
+        const record = await db.vendorProduct.findFirst({ where: { shop, id: rawId.slice(7) }, include: { tiers: true, addOns: true } });
         return record ? {
           component: { name: record.name, unitCost: Number(record.defaultUnitCost) > 0 ? Number(record.defaultUnitCost) : null, tiers: (record.tiers || []).map((tier: any) => ({ minQty: tier.minQty, maxQty: tier.maxQty, unitCost: tier.unitCost })), status: "verified" },
-          meta: { name: record.name, productType: record.productType || "", vendor: record.vendor || "", vendorSku: record.vendorSku || "" },
+          meta: { name: record.name, productType: record.productType || "", vendor: record.vendor || "", vendorSku: record.vendorSku || "", addOns: (record.addOns || []).map((addOn: any) => ({ name: addOn.name, pricingType: String(addOn.pricingType || ""), amount: Number(addOn.amount) || 0, enabled: Boolean(addOn.enabled) })) },
         } : null;
       }
       if (rawId.startsWith("material:")) {
@@ -1332,6 +1373,22 @@ export async function action({ request }: { request: Request }) {
         })
       : null;
     savedRequestedQty = Math.floor(Number(fRead("pqty") || 0)) || quantities[quantities.length - 1] || 1;
+    const savedIsDtp = savedEngineFamily === "dtp-bags";
+    const savedDtpAddOns = savedFetched?.meta?.addOns || [];
+    const savedDtpUserActual = Number(fRead("efactual") || 0) + Number(fRead("efhandling") || 0) + Number(fRead("effees") || 0);
+    const savedDtpAllowance = Number(fRead("efallow") || 0);
+    const savedDtpInput = savedIsDtp ? {
+      sizeLabel: savedBlank?.name || "",
+      moq: officialMoqForFamily("dtp-pouches") || 1000,
+      hangHole: fRead("phanghole") === "yes",
+      includedFeatures: savedDtpAddOns.filter((addOn) => addOn.enabled && addOn.amount <= 0 && /includ/i.test(addOn.pricingType)).map((addOn) => addOn.name),
+      optionalFeatures: savedDtpAddOns.filter((addOn) => addOn.enabled && /option/i.test(addOn.pricingType)).map((addOn) => ({ name: addOn.name, amount: addOn.amount })),
+      ...(savedDtpUserActual > 0
+        ? { freightPerOrder: savedDtpUserActual, freightSource: "verified" as const, freightNote: "Actual entered freight/handling/fees (replaces the $85 Spektra default)." }
+        : savedDtpAllowance > 0
+          ? { freightPerOrder: savedDtpAllowance, freightSource: "estimated" as const, freightNote: "ESTIMATED allowance (replaces the $85 Spektra default)." }
+          : { freightPerOrder: SPEKTRA_FREIGHT_PER_PO, freightSource: "verified" as const, freightNote: "One $85 charge per Spektra purchase order — never per design, size, or line item; allocated across units in tier pricing." }),
+    } : null;
     const productInputSave: ProductDrivenInput = {
       family: savedEngineFamily,
       quantity: savedRequestedQty,
@@ -1340,6 +1397,7 @@ export async function action({ request }: { request: Request }) {
       widthIn: Number(fRead("pwidth") || 0),
       heightIn: Number(fRead("pheight") || 0),
       labelRows: savedLabelRows,
+      dtp: savedDtpInput,
       blank: savedBlank,
       lid: savedEngineFamily === "miron-jars" ? savedTop : null,
       mironTop: savedEngineFamily === "miron-jars" ? {
@@ -1372,11 +1430,14 @@ export async function action({ request }: { request: Request }) {
     // selected customer tier by QUANTITY — posted tier totals are ignored.
     savedMarginKey = marginFamilyKeyFor(pFamilySave, savedClassification ? savedClassification.klass : null, savedBlank?.name || "");
     savedMarginRule = savedMarginKey ? resolveMarginFamily(savedMarginKey) : null;
-    const tierQuantitiesSave = [...new Set([...quantities, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b);
+    const baseQuantitiesSave = savedIsDtp && !fRead("eqty") ? DTP_TIER_QUANTITIES : quantities;
+    const tierQuantitiesSave = [...new Set([...baseQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b);
     const validMargins = margins.filter((value) => Number.isFinite(value) && value > 0);
-    const curveDefaultsSave = savedMarginRule
-      ? curveForTierCount(savedMarginRule.curve, tierQuantitiesSave.length, savedMarginRule.familyMinPct)
-      : defaultTierMargins(tierQuantitiesSave.length);
+    const curveDefaultsSave = savedIsDtp
+      ? tierQuantitiesSave.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: same quantity-threshold rule at save
+      : savedMarginRule
+        ? curveForTierCount(savedMarginRule.curve, tierQuantitiesSave.length, savedMarginRule.familyMinPct)
+        : defaultTierMargins(tierQuantitiesSave.length);
     const tierMarginsSave = validMargins.length === tierQuantitiesSave.length ? validMargins : curveDefaultsSave;
     const freightInputsSave = {
       actualFreight: Number(fRead("efactual") || 0), handling: Number(fRead("efhandling") || 0), otherFees: Number(fRead("effees") || 0),
@@ -1385,7 +1446,7 @@ export async function action({ request }: { request: Request }) {
     const floorForFamilySave = Math.max(savedMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
     savedTiers = tierQuantitiesSave.map((qty, index) => {
       const run = qty === savedRequestedQty ? productSnapshot! : computeProductDrivenCost({ ...productInputSave, quantity: qty });
-      const tierFreight = computeFreight(freightInputsSave, qty, 0);
+      const tierFreight = savedIsDtp ? { total: 0, perUnit: 0, source: "verified" as const, note: "" } : computeFreight(freightInputsSave, qty, 0);
       const marginPct = tierMarginsSave[index] ?? floorForFamilySave;
       const unitCost = run.unitCost + tierFreight.perUnit;
       const { price, profit, actualMarginPct } = marginMath(unitCost, marginPct);
@@ -1415,11 +1476,12 @@ export async function action({ request }: { request: Request }) {
   if (!verdict.ok && !gate.allowed) return Response.json({ ok: false, message: verdict.blockers.join(" | ") });
   const primary: any = productSnapshot && savedSelectedTier ? savedSelectedTier : tiers[tiers.length - 1];
   const familyDefaults = ruleForSave ? curveForTierCount(ruleForSave.curve, snapshotTiers.length, ruleForSave.familyMinPct) : defaultTierMargins(snapshotTiers.length);
+  const savedIsDtpSnapshot = savedEngineFamily === "dtp-bags";
   const snapshot = {
-    engine: productSnapshot ? MULTILABEL_ENGINE_VERSION : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
+    engine: productSnapshot ? (savedIsDtpSnapshot ? DTP_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION) : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
     autoBreakdown: autoSnapshot ? { lines: autoSnapshot.lines, missing: autoSnapshot.missing, warnings: autoSnapshot.warnings } : null,
     productBreakdown: productSnapshot ? {
-      engine: MULTILABEL_ENGINE_VERSION,
+      engine: savedIsDtpSnapshot ? DTP_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION,
       topEngine: TOP_ENGINE_VERSION,
       family: pFamilySave,
       canonicalFamily: canonicalUiFamily(pFamilySave),
@@ -1430,6 +1492,29 @@ export async function action({ request }: { request: Request }) {
       labelsPerUnit: savedLabelRows ? savedLabelRows.length : Math.max(1, Number(fRead("pfaces") || 1)),
       sameSizeLabels: savedLabelRows ? savedSameSize : null,
       labelRows: savedLabelRows,
+      // 15C: full DTP record — size, vendor tier actually used, freight, design charge, features
+      dtp: savedIsDtpSnapshot && productSnapshot ? (() => {
+        const blankLine = productSnapshot.lines.find((line) => line.key === "blank");
+        const freightLine = productSnapshot.lines.find((line) => line.key === "freight");
+        const artLine = productSnapshot.lines.find((line) => line.key === "art_setup");
+        return {
+          size: fRead("pblank") || null,
+          sizeLabel: blankLine?.label || null,
+          requestedQuantity: savedRequestedQty,
+          vendorSubtotal: blankLine?.amount ?? null,
+          vendorTierLabel: blankLine?.label ?? null,
+          vendorUnitCost: blankLine ? blankLine.amount / Math.max(1, savedRequestedQty) : null,
+          freight: freightLine?.amount ?? null,
+          freightSource: freightLine?.source ?? null,
+          designs: Number(fRead("pdesigns") || 0),
+          designCharge: artLine?.amount ?? null,
+          designRule: "GSO art/design $8.3333 per design; no in-house print setup (outsourced production)",
+          includedFeatures: productSnapshot.lines.find((line) => line.key === "features")?.label || null,
+          hangHole: fRead("phanghole") === "yes",
+          moq: officialMoqForFamily("dtp-pouches") || 1000,
+          freightRule: "One $85 flat charge per Spektra purchase order; multi-line orders allocate the single charge across combined units (future phase).",
+        };
+      })() : null,
       lines: productSnapshot.lines, derived: productSnapshot.derived, missing: productSnapshot.missing, warnings: productSnapshot.warnings,
       tiers: savedTiers,
       selectedTier: savedSelectedTier ? { quantity: savedSelectedTier.quantity, unitPrice: savedSelectedTier.unitPrice, totalPrice: savedSelectedTier.totalPrice, marginPct: savedSelectedTier.marginPct, status: savedSelectedTier.status } : null,
@@ -1446,8 +1531,8 @@ export async function action({ request }: { request: Request }) {
   };
   const quote = await db.quote.create({
     data: {
-      shop, status: "draft", customerName: String(form.get("ecustomer") || "") || null,
-      notes: `${productSnapshot ? "14C.2 product calculator draft" : "14B.0 emergency calculator draft"}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}`,
+      shop, status: "draft", customerName: String(form.get("ecustomer") || "") || fRead("pcustomer") || null,
+      notes: `${productSnapshot ? (savedIsDtpSnapshot ? "15C DTP calculator draft" : "14C.2 product calculator draft") : "14B.0 emergency calculator draft"}${fRead("pnotes") ? " — " + fRead("pnotes").slice(0, 240) : ""}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}`,
       items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({ unitPrice: primary.unitPrice, marginPct: primary.marginPct, tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })) }) }] },
     },
   });
@@ -2143,6 +2228,7 @@ function ProductDrivenForm() {
   const isBanners = canonicalFamily === "banners";
   const isCustom = canonicalFamily === "custom-item";
   const jars = isStandardJars || isPremium;
+  const isDtp = canonicalFamily === "dtp-bags"; // 15C: vendor-finished pouches
   const topRequired = Boolean(pm?.topRequired);
   // ---- 14C.2 jar label builder (client state seeds from the server echo and
   // survives calculation/validation/save; the SERVER rebuilds rows via
@@ -2212,8 +2298,8 @@ function ProductDrivenForm() {
       {isBags && !pm?.autoBag && pm?.bagCount === 0 ? (
         <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No active sticker-bag products are configured.</p>
       ) : null}
-      {((isBags && !pm?.autoBag) || jars || isCustom) && family ? (
-        <label style={{ fontSize: 12 }}>* Select product / blank item
+      {((isBags && !pm?.autoBag) || jars || isCustom || isDtp) && family ? (
+        <label style={{ fontSize: 12 }}>* {isDtp ? "DTP size / product" : "Select product / blank item"}
           <select name="pblank" onChange={(event) => submit(event.currentTarget.form, { method: "get" })} style={inputStyle}>
             <option value="">— select —</option>
             {isPremium ? (<>
@@ -2244,7 +2330,7 @@ function ProductDrivenForm() {
         <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No verified compatible tops are configured for this Miron jar.</p>
       ) : null}
       {family ? (<>
-        <label style={{ fontSize: 12 }}>* Quantity<input name="pqty" type="number" min={1} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>* Quantity{isDtp ? ` (MOQ ${(pm?.dtpSpec?.moq || 1000).toLocaleString()})` : ""}<input name="pqty" type="number" min={isDtp ? pm?.dtpSpec?.moq || 1000 : 1} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>* Number of designs<input name="pdesigns" type="number" min={0} defaultValue={1} style={inputStyle} /></label>
         {isBags ? (
           <label style={{ fontSize: 12 }}>Print / application
@@ -2295,7 +2381,20 @@ function ProductDrivenForm() {
           </label>
         ) : null}
         {isCustom ? <label style={{ fontSize: 12 }}>Printed faces/labels<input name="pfaces" type="number" min={1} defaultValue={1} style={inputStyle} /></label> : null}
-        {!jars || sameSize === "yes" ? (<>
+        {isDtp ? (<>
+          <label style={{ fontSize: 12 }}>Hang hole (optional, $0)
+            <select name="phanghole" style={inputStyle}><option value="no">No</option><option value="yes">Yes — $0</option></select>
+          </label>
+          <label style={{ fontSize: 12 }}>Customer name<input name="pcustomer" style={inputStyle} /></label>
+          <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>Notes<input name="pnotes" style={inputStyle} placeholder="Quote notes (saved with the draft)" /></label>
+          <div style={{ gridColumn: "1 / -1", border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12 }}>
+            <b>Included product specification (Spektra — inside the unit cost, never charged again):</b>{" "}
+            {(pm?.dtpSpec?.included || []).length ? (pm.dtpSpec.included as string[]).join(" · ") : "Select a DTP size to load its feature records."}
+            {(pm?.dtpSpec?.optional || []).length ? <span> · Optional: {(pm.dtpSpec.optional as any[]).map((option: any) => `${option.name} ($${Number(option.amount).toFixed(2)})`).join(", ")}</span> : null}
+            <div style={{ color: "#166534" }}>Vendor-finished pouches — no in-house print inputs (dimensions/material/printer/layers do not apply). Freight: ${(pm?.dtpSpec?.freightDefault ?? 85).toFixed ? (pm?.dtpSpec?.freightDefault ?? 85).toFixed(2) : pm?.dtpSpec?.freightDefault} flat per Spektra PO.</div>
+          </div>
+        </>) : null}
+        {!isDtp && (!jars || sameSize === "yes") ? (<>
           <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={inputStyle} /></label>
           <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" style={inputStyle} /></label>
         </>) : null}
@@ -2318,17 +2417,19 @@ function ProductDrivenForm() {
             <p style={{ ...smallHelp, margin: 0 }}>Every label row needs its own positive width and height. The server rebuilds these rows on Calculate and Save — stale hidden rows never affect cost.</p>
           </div>
         ) : null}
-        <label style={{ fontSize: 12 }}>* Material
+        {!isDtp ? (<label style={{ fontSize: 12 }}>* Material
           <select name="pmat" style={inputStyle}>
             <option value="">— select material —</option>
             {(pm.materialOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-        </label>
+        </label>) : null}
+        {!isDtp ? (<>
         <label style={{ fontSize: 12 }}>Printer
           <select name="pprinter" style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select>
         </label>
         <label style={{ fontSize: 12 }}>White layers (0–14)<input name="pwhitelayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
+        </>) : null}
         {isStickers ? (
           <label style={{ fontSize: 12 }}>Cut type
             <select name="pcut" style={inputStyle}><option value="kiss">Kiss cut (no weeding)</option><option value="weeded">Weeded transfer</option></select>
@@ -2365,11 +2466,15 @@ function ProductBreakdown() {
   const derived = result.derived;
   return (
     <div style={{ marginTop: 10 }}>
-      <b style={{ fontSize: 13 }}>Cost breakdown (engine 14C.2 — all values derived by the server)</b>
+      <b style={{ fontSize: 13 }}>Cost breakdown (engine {emergency.productMode?.isDtp ? "15C-spektra-dtp" : "14C.2"} — all values derived by the server)</b>
+      {emergency.productMode?.isDtp ? (
+        <p style={smallHelp}>Vendor-finished Spektra pouches — no in-house sqft/material/machine derivation. Vendor tier cost + GSO design charge + flat per-PO freight only.</p>
+      ) : (
       <p style={smallHelp}>
         {derived.totalPieces} printed piece(s) · {derived.baseSqft.toFixed(2)} sqft base · waste {derived.wastePct}% ({derived.wasteSource}) · {derived.wasteAdjustedSqft.toFixed(2)} sqft adjusted
         {derived.boxes != null ? ` · ${derived.boxes} box(es) @ ${derived.unitsPerBox}/box` : ""} · {derived.printPasses} print pass(es)
       </p>
+      )}
       {derived.labelRows && derived.labelRows.length ? (
         <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
           {derived.labelRows.map((row: any) => (

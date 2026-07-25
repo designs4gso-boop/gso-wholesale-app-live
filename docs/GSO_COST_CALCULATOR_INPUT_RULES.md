@@ -203,3 +203,36 @@ PRICE / 6x9 NO PRICE / 14x16 $1.00 Verified / OZ excluded. Standard Jars =
 3 oz + 4 oz + 5 oz + soda-can preset (the can is treated as a jar, owner
 rule); Chiron, Miron, and Miron tops stay excluded. Entering the owner cost in
 the Vendor Cost Book makes 4x6 Verified automatically.
+
+## 15C — Custom Printed Pouches / DTP Bags (Spektra, vendor-finished)
+Family dtp-bags (alias dtp-pouches). Inputs: DTP size (from Spektra
+VendorProduct records; unpriced sizes show NO PRICE and stay Draft Only),
+quantity (MOQ 1,000 — below-MOQ is a MISSING blocker), number of designs,
+hang hole yes/no ($0), customer name, notes. NO print width/height, material,
+printer, layers, labels, weeding, boxes, or application — Spektra delivers
+finished pouches. Included spec (from the record's Vendor Cost Book add-ons,
+$0 verified, never re-charged): Silver PET; five colors incl. one white;
+soft-touch lamination; child-resistant zipper; tear notches; 2-inch gusset.
+Cost = vendor tier cost (range-based highest-reached tier: 1000-2499 /
+2500-4999 / 5000-7499 / 7500+; never interpolated) + GSO art/design
+$8.3333/design (NO in-house print setup — outsourced production) + $85 flat
+Spektra freight per PURCHASE ORDER (one line, verified, inside the cost and
+margin basis; never per design/size/line; actual entered freight replaces it).
+Automatic tiers: 1000/2500/5000/7500 + requested qty on the researched
+dtp-pouches curve (65/58/52/46/42, min 42; 40% global floor). Snapshot engine
+15C-spektra-dtp; save re-fetches records and recomputes. Add a new DTP size
+with ZERO code: create the Spektra VendorProduct + tiers + add-ons in the
+Vendor Cost Book and it classifies into the picker automatically.
+
+### 15C.1 — DTP margin is QUANTITY-based (owner-authoritative thresholds)
+The generic row-count curve mapping is NOT used for DTP (four vendor rows
+would wrongly drop the 52% point). dtpMarginPctForQuantity() maps quantity to
+the researched dtp-pouches curve:
+  1,000-2,499 -> 65% | 2,500-4,999 -> 58% | 5,000-7,499 -> 52%
+  7,500-9,999 -> 46% | 10,000+ -> 42%
+Requested quantities use the same rule (3,000 -> 58%, 6,000 -> 52%, 8,000 ->
+46%). Above 7,500 the VENDOR unit cost stays on the highest reached Spektra
+tier while the customer margin follows these thresholds independently. 42%
+family minimum and 40% global floor preserved. Both tier pipelines (calculate
+and save) use the one shared function; owner per-tier margin edits in Advanced
+still override with the same floor gates. No other family changed.

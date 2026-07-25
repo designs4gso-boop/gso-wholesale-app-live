@@ -1833,7 +1833,7 @@ export default function ProductSetupRecipeBuilder() {
           Families come from ONE registry (app/lib/product-family-registry.ts) consumed by this page and the Cost Calculator.
           Owner labor/machine standards live in app/lib/owner-standards.ts (bag label $0.078125, jar label $0.20, art $8.3333 + print $1.00 per design,
           weeding $1.3333/page, packing $2.00/box, machine $8/hour provisional). Legacy conflicting rates are quarantined and cannot override these.
-          Reserved families (Custom Printed Pouches / DTP Bags) stay hidden from the live calculator until Phase 15C enables them.
+          DTP (Custom Printed Pouches / DTP Bags — ENABLED 15C): vendor-finished Spektra pouches — MOQ 1,000; researched dtp-pouches margin curve (65/58/52/46/42, min 42); GSO art/design charge only (no in-house print setup); $85 flat freight per Spektra PO; included features come from each record's Vendor Cost Book add-ons. Add another DTP size by creating a Spektra VendorProduct + tiers + add-ons in the Vendor Cost Book — no calculator code changes needed.
         </p>
       </div>
 

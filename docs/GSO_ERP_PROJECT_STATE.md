@@ -858,3 +858,46 @@ ticked. No schema change, no navigation change, no margin-curve change,
 storefront/configurator/webhooks untouched. Tests 467 -> 481; build clean;
 tsc 308 = baseline. 15C entry: flip dtp-bags calculatorEnabled + add the
 bag_dtp class/engine family + Spektra seed per GSO_ERP_DTP_READINESS_PLAN.md.
+
+## Milestone: Spektra DTP Bags Through the Unified Product Model (Phase 15C)
+Custom Printed Pouches / DTP Bags is LIVE in the calculator via the shared
+registry (dtp-bags calculatorEnabled=true; alias dtp-pouches preserved) — no
+separate DTP page. Data seeded additively by tools/seed-spektra-dtp.mjs:
+Vendor Spektra (cmrzqo6aa0000w618m9c8r624; USD, US, no customs/duty; $85 flat
+freight per PO in shippingNotes) + four VendorProducts with EXACT owner tiers
+(4x5x2 cmrzqo6gv0002w61849d331gw 0.9897/0.4922/0.4033/0.3232; 5x4x2
+cmrzqo6yg000fw6189s0iy2r8 1.0504/0.5419/0.4697/0.3818; 6x5x2
+cmrzqo7b4000sw6182tp2iwi6 1.1048/0.5864/0.5290/0.4341; 8x5x2
+cmrzqo7no0015w61822yt0jd2 1.2418/0.6991/0.6799/0.5674 — 16 tiers as ranges
+1000-2499/2500-4999/5000-7499/7500+) + 28 VendorProductAddOns (6 included
+features + optional hang hole $0 per product). 4x5x2 vs 5x4x2 distinct (zipper
+location). Engine: bag_dtp class (Spektra vendor/sku/name or non-preset dtp
+type; legacy "DTP 4x5x2 Blank Pouch" preset stays out), dtp-bags engine family
+= vendor-FINISHED branch: no dimensions/material/ink/machine/application/
+weeding/packing/waste; MOQ 1,000 blocker below; vendor setup $0 verified line;
+included-features line from DB add-ons; hang hole optional $0; $85 flat
+freight as its own verified line INSIDE the cost/margin basis (tier pipeline
+never double-adds; user-entered actual freight overrides the default); GSO
+design charge = art $8.3333/design ONLY (owner rule: no in-house print setup
+on outsourced production). Tier resolution = existing range-based resolver
+(highest reached tier, never interpolated; above 7,500 stays on the top tier).
+Automatic tiers default to vendor quantities 1000/2500/5000/7500 + requested
+qty on the researched dtp-pouches curve (65/58/52/46/42, min 42; 40% floor
+untouched). DTP form: size picker (unpriced future sizes NO PRICE/Draft Only),
+qty (MOQ hint), designs, hang hole, customer name, notes, read-only included
+spec; no in-house print inputs. Snapshot engine 15C-spektra-dtp with size/
+vendor tier/unit cost/subtotal/freight+rule/design charge+rule/features/hang
+hole/moq/tiers/selected tier; save re-fetches product+tiers+add-ons and
+recomputes everything. Adding another DTP size = Vendor Cost Book records
+only, zero code. Tests 481 -> 496; build clean; tsc 308 = baseline.
+
+## Milestone: DTP Quantity-Based Margin Mapping (Patch 15C.1)
+Corrected before commit: DTP margins now come from dtpMarginPctForQuantity()
+(product-driven-costing.server.ts) — owner thresholds 1,000-2,499=65% /
+2,500-4,999=58% / 5,000-7,499=52% / 7,500-9,999=46% / 10,000+=42%, values read
+from the researched dtp-pouches curve (never duplicated). The generic
+curveForTierCount row-count mapping (which compressed four rows to
+65/58/46/42, dropping 52%) no longer applies to DTP; all other families keep
+it unchanged. Vendor cost above 7,500 stays on the top Spektra tier while
+margin follows the thresholds. Both the calculate and save tier pipelines use
+the shared function. Tests 496 -> 501; build clean; tsc 308 = baseline.

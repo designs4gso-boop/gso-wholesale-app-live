@@ -10,7 +10,7 @@
 // minutes scale by passes when a minutes/sqft model is supplied. All layer
 // lines are labeled with the layer count and "provisional linear model".
 
-import { INK_RATES, OWNER_LABOR, type CostLine, type SourceLabel } from "./calculator-emergency.server";
+import { INK_RATES, OWNER_LABOR, resolveMarginFamily, type CostLine, type SourceLabel } from "./calculator-emergency.server";
 import { WIRED_LABOR, blankItemUnitCostAtQty } from "./cost-calculator.server";
 import { familyByKeyOrAlias } from "./product-family-registry";
 
@@ -111,7 +111,36 @@ export function bagApplicationRateFor(bagName: string): { rate: number | null; s
   return { rate: null, source: "missing", basis: "No owner application-labor standard for this bag size" };
 }
 
-export type ProductFamilyKey = "bags-4x5" | "chiron-jars" | "miron-jars" | "stickers-labels" | "banners" | "custom";
+export type ProductFamilyKey = "bags-4x5" | "chiron-jars" | "miron-jars" | "stickers-labels" | "banners" | "custom" | "dtp-bags";
+
+// ---------- 15C: Spektra DTP constants (vendor rules, single location) ----------
+export const DTP_ENGINE_VERSION = "15C-spektra-dtp";
+// $85 flat per Spektra PURCHASE ORDER — never per design, size, or line item.
+// Multi-line orders on one PO enter the charge ONCE and allocate across the
+// combined units (documented; multi-line ordering itself lands in a later phase).
+export const SPEKTRA_FREIGHT_PER_PO = 85;
+export const DTP_TIER_QUANTITIES = [1000, 2500, 5000, 7500];
+
+// 15C.1 owner-authoritative DTP margin thresholds — margin is determined by
+// QUANTITY, never by table row count or row position (the generic
+// curveForTierCount 4-row mapping would wrongly drop the 52% point):
+//   1,000-2,499 -> 65% | 2,500-4,999 -> 58% | 5,000-7,499 -> 52%
+//   7,500-9,999 -> 46% | 10,000+ -> 42%
+// Margin values come from the researched dtp-pouches curve (never duplicated
+// here); these thresholds map quantity -> curve position. Vendor unit cost
+// above 7,500 stays on the highest reached Spektra tier — margin follows the
+// thresholds independently. 42% family minimum + 40% global floor preserved.
+export const DTP_MARGIN_QUANTITY_THRESHOLDS = [1000, 2500, 5000, 7500, 10000];
+export function dtpMarginPctForQuantity(quantity: number): number {
+  const rule = resolveMarginFamily("dtp-pouches");
+  const curve = rule ? rule.curve : [65, 58, 52, 46, 42];
+  const familyMin = rule ? rule.familyMinPct : 42;
+  let index = 0;
+  for (let position = 0; position < DTP_MARGIN_QUANTITY_THRESHOLDS.length; position += 1) {
+    if (quantity >= DTP_MARGIN_QUANTITY_THRESHOLDS[position]) index = position;
+  }
+  return Math.max(curve[Math.min(index, curve.length - 1)] ?? familyMin, familyMin);
+}
 
 export type ResolvedComponent = {
   name: string;
@@ -133,6 +162,20 @@ export type ProductDrivenInput = {
   // present they REPLACE facesPerUnit/widthIn/heightIn: pieces = quantity x
   // rows, sqft = sum of every row, each row needs positive dimensions.
   labelRows?: LabelRow[] | null;
+  // 15C: Spektra DTP (vendor-FINISHED pouches — no in-house print math).
+  // Features come from the record's VendorProductAddOn rows (resolved by the
+  // route, never duplicated in code); freightPerOrder is the resolved flat
+  // per-PO charge (user-entered actual freight wins over the $85 default).
+  dtp?: {
+    sizeLabel: string;
+    moq: number;
+    hangHole: boolean;
+    includedFeatures: string[];
+    optionalFeatures: Array<{ name: string; amount: number }>;
+    freightPerOrder: number;
+    freightSource: SourceLabel;
+    freightNote: string;
+  } | null;
   blank: ResolvedComponent | null; // null = No Blank Item
   lid: ResolvedComponent | null; // Miron only
   // 14C.1B1: Miron top policy — a top selection is ALWAYS required for Miron.
@@ -199,6 +242,9 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   const lines: CostLine[] = [];
   const warnings: string[] = [];
   const quantity = Math.max(1, Math.floor(input.quantity));
+  // 15C: vendor-finished DTP pouches skip ALL in-house print derivation
+  // (dimensions/material/ink/machine/application/weeding/packing).
+  const isDtp = input.family === "dtp-bags";
 
   // ---- layers (validated; capability-gated) ----
   const white = validateLayers(input.printerHasWhite ? input.whiteLayers : 0);
@@ -231,7 +277,7 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
       }
     });
   } else {
-    const printedFamily = input.family !== "custom" || sqinPerPiece > 0;
+    const printedFamily = (input.family !== "custom" && !isDtp) || (input.family === "custom" && sqinPerPiece > 0);
     if (printedFamily && baseSqft <= 0) {
       lines.push({ key: "dimensions", label: "Print width and height", amount: 0, source: "missing", note: "Dimensions required — square footage is never assumed." });
     }
@@ -246,6 +292,9 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   } else if (input.recipeWastePct != null && input.recipeWastePct >= 0) {
     wastePct = input.recipeWastePct;
     wasteSource = "Product/recipe waste rule";
+  } else if (isDtp) {
+    wastePct = 0; // vendor-finished — overrun/underrun already inside the quoted vendor cost
+    wasteSource = "Not applicable — vendor-finished product (Spektra cost includes overrun/underrun)";
   } else {
     wastePct = 10;
     wasteSource = "PROVISIONAL default 10% (no recipe rule)";
@@ -276,6 +325,26 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
       selectedTop: input.lid,
       policy: input.mironTop || null,
     }));
+  }
+
+  // ---- 15C: Spektra DTP (vendor-finished) lines ----
+  if (isDtp) {
+    const dtp = input.dtp;
+    if (!input.blank) {
+      lines.push({ key: "blank", label: "DTP size/product — Required", amount: 0, source: "missing", note: "Select a Spektra DTP size — cost comes from its verified vendor tiers." });
+    }
+    const moq = Math.max(1, Math.floor(dtp?.moq || 1000));
+    if (quantity < moq) {
+      lines.push({ key: "moq", label: `Below DTP minimum order — ${moq.toLocaleString()} required`, amount: 0, source: "missing", note: `Spektra MOQ is ${moq.toLocaleString()} units; requested ${quantity.toLocaleString()}.` });
+    }
+    lines.push({ key: "vendor_setup", label: "Vendor setup / plates / proofs / artwork — included by Spektra", amount: 0, source: "verified", note: "No vendor setup, plate/cylinder, proof/sample, artwork, or per-design fees; overrun/underrun inside the quoted unit cost." });
+    if (dtp && dtp.includedFeatures.length) {
+      lines.push({ key: "features", label: `Included: ${dtp.includedFeatures.join(", ")}`, amount: 0, source: "verified", note: "Included in the Spektra unit cost — never an additional customer charge." });
+    }
+    lines.push({ key: "hang_hole", label: `Hang hole — optional, $0${dtp?.hangHole ? " (selected)" : " (not selected)"}`, amount: 0, source: "verified" });
+    if (dtp) {
+      lines.push({ key: "freight", label: `Spektra freight — $${dtp.freightPerOrder.toFixed(2)} flat per purchase order`, amount: dtp.freightPerOrder, source: dtp.freightSource, note: dtp.freightNote });
+    }
   }
 
   // ---- material + ink + machine ----
@@ -309,10 +378,15 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   }
 
   // ---- setup + family labor ----
-  const setupTotal = input.designs > 0 ? input.designs * (OWNER_LABOR.artSetupPerDesign + OWNER_LABOR.printSetupPerDesign) : 0;
+  // 15C rule (owner-confirmed): outsourced DTP gets the GSO ART/design charge
+  // only — the $1.00 in-house PRINT setup standard does not apply to
+  // vendor-printed production and is never blindly added.
+  const setupTotal = input.designs > 0
+    ? input.designs * (isDtp ? OWNER_LABOR.artSetupPerDesign : OWNER_LABOR.artSetupPerDesign + OWNER_LABOR.printSetupPerDesign)
+    : 0;
   if (input.designs > 0) {
-    lines.push({ key: "art_setup", label: `Art setup — ${input.designs} design(s), cut setup included`, amount: input.designs * OWNER_LABOR.artSetupPerDesign, source: "owner_standard" });
-    lines.push({ key: "print_setup", label: "Print setup", amount: input.designs * OWNER_LABOR.printSetupPerDesign, source: "owner_standard" });
+    lines.push({ key: "art_setup", label: `${isDtp ? "GSO design/art charge" : "Art setup"} — ${input.designs} design(s)${isDtp ? "" : ", cut setup included"}`, amount: input.designs * OWNER_LABOR.artSetupPerDesign, source: "owner_standard", note: isDtp ? "Owner standard $8.3333/design. No in-house print setup — Spektra prints the pouches." : undefined });
+    if (!isDtp) lines.push({ key: "print_setup", label: "Print setup", amount: input.designs * OWNER_LABOR.printSetupPerDesign, source: "owner_standard" });
   } else {
     lines.push({ key: "designs", label: "Number of designs", amount: 0, source: "missing", note: "Required." });
   }
@@ -356,12 +430,15 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
     boxes = Math.ceil(quantity / packRule.unitsPerBox);
     boxSource = packRule.label || "rule";
     lines.push({ key: "packing", label: `Packing — ${boxes} box(es) @ ${packRule.unitsPerBox}/box`, amount: OWNER_LABOR.packoutPerBox * boxes, source: input.boxOverride ? "manual_override" : "owner_standard", note: boxSource });
-  } else if (input.family !== "custom") {
+  } else if (input.family !== "custom" && !isDtp) {
     lines.push({ key: "packing", label: "Packing/boxes", amount: 0, source: "estimated", note: boxSource });
   }
 
   // ---- freight (single visible line; computed by the freight panel) ----
-  lines.push({ key: "freight", label: "Freight/handling (separate line)", amount: input.freightPerUnit * quantity, source: input.freightSource, note: input.freightSource === "estimated" ? "ESTIMATED allowance" : undefined });
+  // 15C: DTP pushes its own flat per-PO freight line above — never both.
+  if (!isDtp) {
+    lines.push({ key: "freight", label: "Freight/handling (separate line)", amount: input.freightPerUnit * quantity, source: input.freightSource, note: input.freightSource === "estimated" ? "ESTIMATED allowance" : undefined });
+  }
 
   const totalCost = lines.reduce((sum, line) => sum + line.amount, 0);
   const missing = lines.filter((line) => line.source === "missing").map((line) => line.label);
@@ -410,7 +487,7 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
 // a separate top is required ONLY for jar-only Miron records (prevents
 // double-counting a lid already inside the verified tier price).
 
-export type CalculatorProductClass = "bag_sticker" | "jar_standard" | "jar_chiron" | "jar_miron" | "miron_top" | "other";
+export type CalculatorProductClass = "bag_sticker" | "bag_dtp" | "jar_standard" | "jar_chiron" | "jar_miron" | "miron_top" | "other";
 
 export type ClassifiableRecord = { name: string; productType?: string | null; vendor?: string | null; vendorSku?: string | null };
 
@@ -437,6 +514,13 @@ export function classifyCalculatorProduct(record: ClassifiableRecord): { klass: 
   if (isMiron) return { klass: "jar_miron", includesTop };
   // 3. Chiron jar — EXPLICIT Chiron branding only; cap always included
   if (isChiron) return { klass: "jar_chiron", includesTop: true };
+  // 15C. Spektra DTP (vendor-finished pouches). Structured fields first:
+  // Spektra vendor/sku, or a dtp productType that is NOT a legacy "preset:"
+  // pouch record (the old "DTP 4x5x2 Blank Pouch" preset stays out — it is a
+  // blank-pouch placeholder, not a Spektra finished product).
+  const isDtpRecord = vendorNorm.includes("spektra") || skuNorm.includes("spektradtp") || /\bspektra\b/.test(text)
+    || (/dtp/.test(type) && !skuNorm.startsWith("preset") && !/blank\s+pouch/i.test(name));
+  if (isDtpRecord && /dtp|pouch/.test(text)) return { klass: "bag_dtp", includesTop: false };
   // 4. standard jar — 3/4/5 oz normal jars (caps included per verified
   //    records); structured productType first, then name fallback
   if (/^jar_(3|4|5)oz/.test(type)) return { klass: "jar_standard", includesTop: true };
@@ -488,6 +572,7 @@ export function mironTopCompatible(jarName: string, topName: string): boolean {
 // banners, custom-item. Legacy URL/snapshot values (bags-4x5, chiron-jars,
 // miron-jars, custom) stay accepted for back-compat.
 export function uiFamilyToEngine(uiFamily: string, selectedClass: CalculatorProductClass | null, includesTop: boolean): ProductFamilyKey {
+  if (uiFamily === "dtp-bags" || uiFamily === "dtp-pouches" || uiFamily === "dtp") return "dtp-bags"; // 15C
   if (uiFamily === "sticker-bags" || uiFamily === "bags-4x5") return "bags-4x5";
   if (uiFamily === "standard-jars") return "chiron-jars"; // cap-included jar semantics, no top selector
   if (uiFamily === "premium-jars") {
@@ -519,6 +604,7 @@ export function blankClassAllowedFor(uiFamily: string, klass: CalculatorProductC
   if (canonical === "sticker-bags") return klass === "bag_sticker";
   if (canonical === "standard-jars") return klass === "jar_standard";
   if (canonical === "premium-jars") return klass === "jar_chiron" || klass === "jar_miron";
+  if (canonical === "dtp-bags") return klass === "bag_dtp"; // 15C: ONLY Spektra DTP records
   if (canonical === "custom-item") return true;
   return false; // stickers/banners have no blank picker
 }
@@ -538,6 +624,7 @@ export function marginFamilyKeyFor(uiFamily: string, selectedClass: CalculatorPr
   }
   if (canonical === "stickers-labels") return "stickers-labels";
   if (canonical === "banners") return "banners";
+  if (canonical === "dtp-bags") return "dtp-pouches"; // 15C: researched DTP curve (65/58/52/46/42, min 42)
   return null;
 }
 

@@ -106,14 +106,14 @@ export const PRODUCT_FAMILY_REGISTRY: ProductFamilyEntry[] = [
     active: true, sortOrder: 60,
   },
   {
-    // RESERVED for Phase 15C — never shown in the live calculator until
-    // calculatorEnabled flips to true. Data entry (Spektra vendor records)
-    // may proceed per docs/GSO_ERP_DTP_READINESS_PLAN.md.
+    // ENABLED in Phase 15C: Spektra vendor-finished pouches priced from
+    // VendorProduct/VendorProductTier records (seed-spektra-dtp.mjs), $85
+    // flat freight per Spektra PO, MOQ 1,000, art-only GSO design charge.
     key: "dtp-bags",
     label: "Custom Printed Pouches / DTP Bags",
     description: "Spektra vendor-printed pouches (4x5x2/5x4x2/6x5x2/8x5x2), $85 flat freight per PO, CR zipper + tear notch included.",
     recipeFamilyLabel: "DTP Pouches",
-    calculatorEnabled: false, productSetupEnabled: true, vendorCostCapable: true,
+    calculatorEnabled: true, productSetupEnabled: true, vendorCostCapable: true,
     marginRuleKey: "dtp-pouches",
     marginRuleNote: null,
     salesRuleKey: "dtp-pouches",

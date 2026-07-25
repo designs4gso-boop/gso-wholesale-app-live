@@ -41,14 +41,17 @@ describe("product-family registry (15B)", () => {
     expect(canonicalUiFamily("unknown-thing")).toBe("custom-item");
   });
 
-  it("DTP stays hidden until Phase 15C: registered but never exposed to the live calculator", () => {
+  it("DTP is calculator-visible (15C): enabled, alias resolves, no duplicate family option", () => {
     const dtp = familyByKeyOrAlias("dtp-bags")!;
-    expect(dtp.calculatorEnabled).toBe(false); // reserved
+    expect(dtp.calculatorEnabled).toBe(true); // ENABLED in 15C
+    expect(dtp.label).toBe("Custom Printed Pouches / DTP Bags");
     expect(dtp.marginRuleKey).toBe("dtp-pouches");
-    expect(calculatorFamilies().some((entry) => entry.key === "dtp-bags")).toBe(false);
-    expect(calculatorFamilyValues()).not.toContain("dtp-bags");
-    expect(calculatorFamilyValues()).not.toContain("dtp-pouches");
-    // the live six (plus their aliases) are ALL still accepted
+    expect(dtp.salesRuleKey).toBe("dtp-pouches");
+    expect(familyByKeyOrAlias("dtp-pouches")!.key).toBe("dtp-bags"); // legacy alias
+    expect(calculatorFamilies().filter((entry) => entry.key === "dtp-bags")).toHaveLength(1); // exactly once
+    expect(calculatorFamilyValues()).toContain("dtp-bags");
+    expect(calculatorFamilyValues()).toContain("dtp-pouches");
+    // the previous six (plus their aliases) are ALL still accepted
     for (const value of ["sticker-bags", "bags-4x5", "standard-jars", "premium-jars", "chiron-jars", "miron-jars", "stickers-labels", "banners", "custom", "custom-item"]) {
       expect(calculatorFamilyValues()).toContain(value);
     }

@@ -43,3 +43,20 @@ correct entry surface for these records.
 2. Confirm freight home (ErpAdminSetting vs schema field) — owner call.
 3. Owner confirms whether DTP quotes need per-size print-dimension defaults.
 4. Tests to write in 15C: tier resolution at 1000/2500/5000/7500 per size; 4x5x2 ≠ 5x4x2; $85 allocated once per PO across lines; included features $0-verified (never silently dropped, never charged); hang hole optional $0; no vendor design fee; MOQ warning under 1000; unpriced future size = NO PRICE/Draft Only.
+
+## 15C SHIPPED (2026-07-24)
+Everything above is implemented: registry family enabled, Spektra data seeded
+(records + IDs in GSO_ERP_PROJECT_STATE.md), bag_dtp classification,
+vendor-finished engine branch, $85/PO freight (single line, in the margin
+basis, override-able by actual entered freight), art-only GSO design charge,
+DB-driven feature spec, DTP tier quantities + researched curve, 15C-spektra-dtp
+snapshots. Tier semantics: range-based highest-reached tier (documented in
+tests), never interpolated. Multi-line PO freight allocation remains the
+documented future design: one $85 charge per combined Spektra PO allocated
+across all lines by units or merchandise value via computeFreight allocation
+modes — build with the multi-line quoting phase (15D+).
+
+## 15C.1 note
+DTP margin thresholds are quantity-based (65/58/52/46/42 at 1,000/2,500/
+5,000/7,500/10,000) via the shared dtpMarginPctForQuantity() — the four-row
+curve compression noted as a 15C limitation is resolved.

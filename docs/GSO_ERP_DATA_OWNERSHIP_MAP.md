@@ -55,3 +55,14 @@ all three (Phase 15B/15E).
 - Product verification status: derived (no schema change) via
   deriveProductVerification — Vendor Cost Book review status (active) is the
   explicit basis; cost>0 alone remains Verified but labeled "implicit".
+
+## 15C update (2026-07-24)
+- DTP vendor costs/tiers/features: OWNER = VendorProduct + VendorProductTier +
+  VendorProductAddOn (seeded by tools/seed-spektra-dtp.mjs; maintained in the
+  Vendor Cost Book). The calculator reads records only — no DTP costs in code
+  (tests pin that the route contains no tier dollar values).
+- DTP freight: $85/PO rule lives as SPEKTRA_FREIGHT_PER_PO in
+  product-driven-costing.server.ts (single documented location) + Vendor
+  Spektra shippingNotes; user-entered actual freight overrides per quote.
+  Future structured home (Vendor.freightFlatPerOrder or ErpAdminSetting)
+  deferred until multi-line ordering.

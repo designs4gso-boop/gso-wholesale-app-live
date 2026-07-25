@@ -252,3 +252,11 @@ stays tier-priced with required Top Type. Sticker bags = 4x5/4x6/5x8/6x9/14x16
 (OZ excluded); 5x8 + 6x9 have no records and quote Draft Only; the 4x6
 record's stale $0.10 seed value was NEUTRALIZED to NO PRICE by 14C.2A1
 (tools/neutralize-4x6-bag-cost.mjs) — 4x6/5x8/6x9 all await owner pricing.
+
+## 15C addendum (2026-07-24)
+DTP Bags now price from owner-verified Spektra VendorProduct tiers through the
+unified engine — the audit-era gap ("dtp-pouches curve existed with no
+calculator family") is closed. Freight $85/PO is explicit and separate; GSO
+design charge applies without in-house print setup. Remaining DTP items:
+multi-line PO freight allocation (future phase) and a structured vendor-level
+freight field.
