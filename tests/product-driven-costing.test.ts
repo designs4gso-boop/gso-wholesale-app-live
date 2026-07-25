@@ -292,7 +292,7 @@ describe("premium-jar UI pins (14C.1B)", () => {
   });
   it("bag auto-selection renders read-only with a hidden resolved ID; save snapshots the 14C.2 engine + top engine", () => {
     expect(src2).toContain("Verified (auto-selected)");
-    expect(src2).toContain("savedIsDtpSnapshot ? DTP_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION"); // 15C: DTP quotes use their own engine version
+    expect(src2).toContain("savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION"); // 15C.2: DTP quotes use the pricing engine version
     expect(src2).toContain("topEngine: TOP_ENGINE_VERSION");
     expect(src2).toContain("type:standard-top"); // canonical tops render even without Vendor Cost Book records
   });
@@ -622,7 +622,7 @@ describe("automatic tier flow pins (14C.2)", () => {
     expect(src3).toContain('name="pseltier"');
     expect(src3).toContain("savedTiers.find((tier) => tier.quantity === selectedTierQty)");
     expect(src3).toContain('name="psearch"');
-    expect(src3).toContain("DTP_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION");
+    expect(src3).toContain("DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION");
     expect(MULTILABEL_ENGINE_VERSION).toBe("14C.2-multilabel-auto-tiers");
   });
 

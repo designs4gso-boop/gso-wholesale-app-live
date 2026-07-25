@@ -260,3 +260,10 @@ calculator family") is closed. Freight $85/PO is explicit and separate; GSO
 design charge applies without in-house print setup. Remaining DTP items:
 multi-line PO freight allocation (future phase) and a structured vendor-level
 freight field.
+
+## 15C.2 addendum (2026-07-24)
+DTP switched from margin-derived prices to owner selling-price ladders with
+live server-computed landed cost, gross margin, and profit safeguards
+(30/35/38 floors, $500/$350 profit rules, override gating). The 40% global
+floor remains untouched for every other family; DTP uses its owner-approved
+band floors with 40% as the visible warning target.

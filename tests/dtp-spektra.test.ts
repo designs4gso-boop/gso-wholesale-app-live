@@ -188,12 +188,12 @@ describe("DTP route pins (15C)", () => {
   });
 
   it("automatic tiers use DTP vendor quantities + requested qty; freight never double-added; save recomputes with the 15C engine", () => {
-    expect(src).toContain("DTP_TIER_QUANTITIES : eQuantities");
-    expect(src).toContain("DTP_TIER_QUANTITIES : quantities");
+    expect(src).toContain("DTP_LADDER_QUANTITIES : eQuantities"); // 15C.2: ladder quantities incl. 10,000
+    expect(src).toContain("DTP_LADDER_QUANTITIES : quantities");
     expect((src.match(/isDtpP \? \{ total: 0, perUnit: 0/g) || []).length).toBe(1); // loader tier pipeline skips freight for DTP
     expect((src.match(/savedIsDtp \? \{ total: 0, perUnit: 0/g) || []).length).toBe(1); // save pipeline too
-    expect(src).toContain("savedIsDtpSnapshot ? DTP_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION");
-    expect(DTP_ENGINE_VERSION).toBe("15C-spektra-dtp");
+    expect(src).toContain("savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION"); // 15C.2 pricing engine
+    expect(DTP_ENGINE_VERSION).toBe("15C-spektra-dtp"); // cost engine label retained in snapshots as costEngine
   });
 
   it("snapshot stores the full DTP record and the seed never leaks costs into app code", () => {
@@ -255,5 +255,153 @@ describe("DTP quantity-based margins (15C.1)", () => {
     expect(src2).toContain("isDtpP\n        ? tierQuantities.map((qty) => dtpMarginPctForQuantity(qty))");
     expect(src2).toContain("savedIsDtp\n      ? tierQuantitiesSave.map((qty) => dtpMarginPctForQuantity(qty))");
     expect((src2.match(/dtpMarginPctForQuantity/g) || []).length).toBeGreaterThanOrEqual(3); // import + loader + save
+  });
+});
+
+// ---- 15C.2: owner selling-price ladders + safeguards ----
+import {
+  DTP_LADDER_QUANTITIES,
+  DTP_OWNER_PRICE_LADDERS,
+  DTP_PRICING_ENGINE_VERSION,
+  dtpExtraDesignFeeEach,
+  dtpHardFloorPct,
+  ownerPriceForQuantity,
+  priceDtpQuote,
+} from "../app/lib/dtp-owner-pricing.server";
+
+const LANDED_4X5X2_2500 = 0.4922 * 2500 + 85 + 25 / 3; // vendor + freight + 1 design art
+
+describe("DTP owner price ladders (15C.2)", () => {
+  it("holds all 20 exact owner prices, keyed by stable vendorSku", () => {
+    const expected: Record<string, number[]> = {
+      "spektra-dtp-4x5x2": [1.67, 0.88, 0.74, 0.61, 0.6],
+      "spektra-dtp-5x4x2": [1.76, 0.97, 0.86, 0.72, 0.71],
+      "spektra-dtp-6x5x2": [1.84, 1.04, 0.96, 0.81, 0.81],
+      "spektra-dtp-8x5x2": [2.05, 1.23, 1.23, 1.05, 1.05],
+    };
+    expect(DTP_LADDER_QUANTITIES).toEqual([1000, 2500, 5000, 7500, 10000]);
+    for (const [sku, prices] of Object.entries(expected)) {
+      DTP_LADDER_QUANTITIES.forEach((qty, index) => {
+        expect(DTP_OWNER_PRICE_LADDERS[sku][qty], `${sku}@${qty}`).toBe(prices[index]);
+      });
+    }
+  });
+
+  it("lookup: exact tier, highest-reached between tiers, above 10,000 — never interpolated", () => {
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 2500)).toEqual({ tierUsed: 2500, unitPrice: 0.88 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 1500)).toEqual({ tierUsed: 1000, unitPrice: 1.67 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 3000)).toEqual({ tierUsed: 2500, unitPrice: 0.88 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 6000)).toEqual({ tierUsed: 5000, unitPrice: 0.74 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 8000)).toEqual({ tierUsed: 7500, unitPrice: 0.61 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25000)).toEqual({ tierUsed: 10000, unitPrice: 0.6 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 500).unitPrice).toBeNull(); // below MOQ
+    expect(ownerPriceForQuantity("unknown-sku", 2500).unitPrice).toBeNull(); // no ladder — never guessed
+  });
+
+  it("PRODUCT MAPPING SAFEGUARD: 4x5x2 and 5x4x2 use their OWN ladders and never share (historical mislabel regression)", () => {
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 2500).unitPrice).toBe(0.88);
+    expect(ownerPriceForQuantity("spektra-dtp-5x4x2", 2500).unitPrice).toBe(0.97);
+    for (const qty of DTP_LADDER_QUANTITIES) {
+      expect(ownerPriceForQuantity("spektra-dtp-4x5x2", qty).unitPrice).not.toBe(ownerPriceForQuantity("spektra-dtp-5x4x2", qty).unitPrice);
+    }
+  });
+
+  it("actual margin/profit from landed cost; recommended 4x5x2 ladder lands near the study targets (~35/40/43/45/45%)", () => {
+    const cases: Array<[number, number, number]> = [
+      [1000, 0.9897 * 1000, 35], [2500, 0.4922 * 2500, 40], [5000, 0.4033 * 5000, 43], [7500, 0.3232 * 7500, 45], [10000, 0.3232 * 10000, 45],
+    ];
+    for (const [qty, vendor, approxPct] of cases) {
+      const landed = vendor + 85 + 25 / 3;
+      const quote = priceDtpQuote({ ladderSku: "spektra-dtp-4x5x2", quantity: qty, landedCost: landed, missingCost: false, designs: 1, customUnitPrice: null, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
+      expect(quote.grossProfit).toBeCloseTo(quote.customerTotal - landed, 6);
+      expect(Math.abs(quote.grossMarginPct - approxPct)).toBeLessThan(2.5); // approximate study targets, actual server-derived
+    }
+  });
+
+  it("floors and status ladder: 30/35/38 hard floors, 40% warning target, $500 target, $350 strategic floor, below-cost block", () => {
+    expect(dtpHardFloorPct(1000)).toBe(30);
+    expect(dtpHardFloorPct(2499)).toBe(30);
+    expect(dtpHardFloorPct(2500)).toBe(35);
+    expect(dtpHardFloorPct(4999)).toBe(35);
+    expect(dtpHardFloorPct(5000)).toBe(38);
+    expect(dtpHardFloorPct(10000)).toBe(38);
+    const base = { ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: LANDED_4X5X2_2500, missingCost: false, designs: 1, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } };
+    // ladder default: ~39.8% -> below 40 target but above 35 floor + profit >$500 -> WARNING
+    const ladder = priceDtpQuote({ ...base, customUnitPrice: null });
+    expect(ladder.status).toBe("WARNING — OWNER REVIEW");
+    // healthy custom price -> READY
+    expect(priceDtpQuote({ ...base, customUnitPrice: 0.95 }).status).toBe("READY");
+    // below the 35% floor but profit >= $500 -> OVERRIDE REQUIRED
+    const belowFloor = priceDtpQuote({ ...base, customUnitPrice: 0.79 });
+    expect(belowFloor.status).toBe("OWNER OVERRIDE REQUIRED");
+    expect(belowFloor.statusReasons.join(" ")).toContain("35%");
+    // profit between $350 and $500 -> OVERRIDE REQUIRED
+    const thinProfit = priceDtpQuote({ ...base, customUnitPrice: (LANDED_4X5X2_2500 + 400) / 2500 });
+    expect(thinProfit.status).toBe("OWNER OVERRIDE REQUIRED");
+    expect(thinProfit.statusReasons.join(" ")).toContain("$500");
+    // profit below $350 -> BLOCKED
+    expect(priceDtpQuote({ ...base, customUnitPrice: (LANDED_4X5X2_2500 + 300) / 2500 }).status).toBe("BLOCKED");
+    // below cost -> BLOCKED
+    expect(priceDtpQuote({ ...base, customUnitPrice: 0.4 }).status).toBe("BLOCKED");
+    // missing cost -> BLOCKED
+    expect(priceDtpQuote({ ...base, customUnitPrice: null, missingCost: true }).status).toBe("BLOCKED");
+    // override phrase + reason satisfies the override requirement (status stays factual)
+    const withOverride = priceDtpQuote({ ...base, customUnitPrice: 0.79, override: { phrase: "OWNER MARGIN OVERRIDE", reason: "strategic account entry" } });
+    expect(withOverride.overrideSatisfied).toBe(true);
+    expect(priceDtpQuote({ ...base, customUnitPrice: 0.79, override: { phrase: "wrong", reason: "strategic account entry" } }).overrideSatisfied).toBe(false);
+  });
+
+  it("design fees: first included; extras $25/$20/$15 by quantity; repeat order waives; internal art cost keeps EVERY design", () => {
+    expect(dtpExtraDesignFeeEach(1000)).toBe(25);
+    expect(dtpExtraDesignFeeEach(2499)).toBe(25);
+    expect(dtpExtraDesignFeeEach(2500)).toBe(20);
+    expect(dtpExtraDesignFeeEach(5000)).toBe(15);
+    const threeDesigns = priceDtpQuote({ ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: 0.4922 * 2500 + 85 + 3 * (25 / 3), missingCost: false, designs: 3, customUnitPrice: null, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
+    expect(threeDesigns.extraDesignCount).toBe(2);
+    expect(threeDesigns.extraDesignFees).toBe(40); // 2 x $20
+    expect(threeDesigns.customerTotal).toBeCloseTo(0.88 * 2500 + 40, 6);
+    const repeat = priceDtpQuote({ ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: 0.4922 * 2500 + 85 + 3 * (25 / 3), missingCost: false, designs: 3, customUnitPrice: null, repeatOrder: true, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
+    expect(repeat.extraDesignFees).toBe(0);
+    expect(repeat.designFeeWaived).toBe(true);
+    // internal cost still carries all 3 designs (landed input includes 3 x art) — engine-side test:
+    const engineRun = computeProductDrivenCost(dtpInput({ quantity: 2500, designs: 3 }));
+    expect(engineRun.lines.find((line) => line.key === "art_setup")!.amount).toBeCloseTo(3 * (25 / 3), 4);
+    expect(engineRun.lines.some((line) => line.key === "print_setup")).toBe(false);
+    expect(engineRun.lines.some((line) => line.key === "machine")).toBe(false);
+  });
+
+  it("freight: $85 internal once; embedded customer-facing by default; pass-through backs it out of the ladder subtotal (no double recovery)", () => {
+    const base = { ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: LANDED_4X5X2_2500, missingCost: false, designs: 1, customUnitPrice: null as number | null, repeatOrder: false, freightAmount: 85, override: { phrase: "", reason: "" } };
+    const embedded = priceDtpQuote({ ...base, passThroughFreight: false });
+    expect(embedded.customerFreight).toBe(0);
+    expect(embedded.customerTotal).toBeCloseTo(0.88 * 2500, 6); // no second $85 charge
+    const passThrough = priceDtpQuote({ ...base, passThroughFreight: true });
+    expect(passThrough.customerFreight).toBe(85);
+    expect(passThrough.customerBaseSubtotal).toBeCloseTo(0.88 * 2500 - 85, 6); // backed out
+    expect(passThrough.customerTotal).toBeCloseTo(embedded.customerTotal, 6); // NEVER recovered twice
+    const passThroughCustom = priceDtpQuote({ ...base, passThroughFreight: true, customUnitPrice: 0.85 });
+    expect(passThroughCustom.customerBaseSubtotal).toBeCloseTo(0.85 * 2500, 6); // custom price is product-only
+    expect(passThroughCustom.customerTotal).toBeCloseTo(0.85 * 2500 + 85, 6);
+  });
+
+  it("route pins: owner columns render, custom-price/repeat/pass-through fields exist, save gate enforces phrase+reason, snapshot has the pricing block", () => {
+    const src4 = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+    expect(src4).toContain('name="pdtpcustomprice"');
+    expect(src4).toContain('name="pdtprepeat"');
+    expect(src4).toContain('name="pdtpfreightpass"');
+    expect(src4).toContain("Owner unit price");
+    expect(src4).toContain("<th>Owner tier</th>"); // owner tier column
+    expect(src4).toContain("Owner price tier used"); // tier-used explanation
+    expect(src4).toContain("OWNER OVERRIDE REQUIRED:");
+    expect(src4).toContain("DTP quote BLOCKED:");
+    expect((src4.match(/priceDtpQuote\(\{/g) || []).length).toBe(2); // loader + save — one shared function
+    expect(src4).toContain("dtpPricing: savedIsDtpSnapshot");
+    expect(src4).toContain("Base pouch subtotal");
+    expect(DTP_PRICING_ENGINE_VERSION).toBe("15C.2-dtp-owner-price-ladders");
+    // owner ladder prices are NEVER hardcoded in the route
+    for (const price of ["1.67", "0.88", "0.74", "1.76", "0.97", "2.05"]) expect(src4).not.toContain(`= ${price}`);
+    const setupSrc = readFileSync(new URL("../app/routes/app.erp.product-setup.tsx", import.meta.url), "utf8");
+    expect(setupSrc).toContain("DTP pricing rules — owner selling-price ladders (15C.2)");
+    expect(setupSrc).toContain("DTP_OWNER_PRICE_LADDERS");
   });
 });

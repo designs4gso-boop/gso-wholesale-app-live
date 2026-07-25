@@ -3,6 +3,7 @@ import { salesRulesForFamily } from "../lib/product-family-sales-rules";
 import { authenticate } from "../shopify.server";
 import { deriveProductVerification, productSetupFamilyLabels } from "../lib/product-family-registry";
 import { classifyCalculatorProduct } from "../lib/product-driven-costing.server";
+import { DTP_EXTRA_DESIGN_FEES, DTP_HARD_FLOOR_BANDS, DTP_INTERNAL_ART_COST_PER_DESIGN, DTP_LADDER_QUANTITIES, DTP_MIN_JOB_PROFIT, DTP_OWNER_PRICE_LADDERS, DTP_PRICING_SOURCE, DTP_STRATEGIC_MIN_JOB_PROFIT } from "../lib/dtp-owner-pricing.server";
 import db from "../db.server";
 import {
   QUOTE_RECIPE_PRICING_INCLUDE,
@@ -716,6 +717,20 @@ export async function loader({ request }: { request: Request }) {
     ? recipeReadiness(selectedRecipe, Math.max(1, Number((selectedRecipe as any).minQuantity) || 1))
     : null;
 
+  // 15C.2: DTP owner-pricing rules (read-only display; centralized in
+  // app/lib/dtp-owner-pricing.server.ts — next step for in-app editing is
+  // moving the table into ErpAdminSetting or a dedicated model).
+  const dtpPricingRules = {
+    source: DTP_PRICING_SOURCE,
+    quantities: DTP_LADDER_QUANTITIES,
+    ladders: Object.entries(DTP_OWNER_PRICE_LADDERS).map(([sku, ladder]) => ({ sku, prices: DTP_LADDER_QUANTITIES.map((qty) => (ladder as Record<number, number>)[qty] ?? null) })),
+    floors: DTP_HARD_FLOOR_BANDS,
+    minJobProfit: DTP_MIN_JOB_PROFIT,
+    strategicMinJobProfit: DTP_STRATEGIC_MIN_JOB_PROFIT,
+    fees: DTP_EXTRA_DESIGN_FEES,
+    artCostPerDesign: DTP_INTERNAL_ART_COST_PER_DESIGN,
+  };
+
   return Response.json({
     templates,
     activeTemplates,
@@ -723,6 +738,7 @@ export async function loader({ request }: { request: Request }) {
     selectedRecipe,
     selectedRecipeReadiness,
     vendorCostRows,
+    dtpPricingRules,
     machines: machinesList,
     materialsAvailable: materialsList,
     selectedRecipeId,
@@ -1745,6 +1761,7 @@ export default function ProductSetupRecipeBuilder() {
     recipeStatus = "active",
     recipeSearch = "",
     vendorCostRows = [],
+    dtpPricingRules = null,
     recipeCount = 0,
     recipePage = 1,
     recipeLimit = 15,
@@ -1826,6 +1843,36 @@ export default function ProductSetupRecipeBuilder() {
           </table>
         </div>
       </div>
+
+      {(dtpPricingRules as any) ? (
+        <div className="card" id="dtp-pricing-rules">
+          <h2>DTP pricing rules — owner selling-price ladders (15C.2)</h2>
+          <p className="muted">
+            Customer selling prices per unit (NOT vendor costs — Spektra tiers stay in the Vendor Cost Book).
+            Source: {(dtpPricingRules as any).source}. Read-only here for now — centralized in app/lib/dtp-owner-pricing.server.ts;
+            the documented next step for no-code editing is moving this table into ErpAdminSetting or a dedicated model.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead><tr><th align="left">Size (sku)</th>{(dtpPricingRules as any).quantities.map((qty: number) => <th key={qty}>{qty.toLocaleString()}</th>)}</tr></thead>
+              <tbody>
+                {(dtpPricingRules as any).ladders.map((row: any) => (
+                  <tr key={row.sku} style={{ borderTop: "1px solid #e5e7eb" }}>
+                    <td>{row.sku}</td>
+                    {row.prices.map((price: number | null, index: number) => <td key={index} align="center">{price != null ? `$${price.toFixed(2)}` : "—"}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="muted" style={{ marginBottom: 0 }}>
+            Hard margin floors: {(dtpPricingRules as any).floors.map((band: any) => `${band.minQty.toLocaleString()}${band.maxQty ? `–${band.maxQty.toLocaleString()}` : "+"} → ${band.floorPct}%`).join(" · ")}.
+            {" "}Minimum job profit ${(dtpPricingRules as any).minJobProfit} (strategic owner exception floor ${(dtpPricingRules as any).strategicMinJobProfit}).
+            {" "}Additional-design customer fees: {(dtpPricingRules as any).fees.map((band: any) => `${band.minQty.toLocaleString()}${band.maxQty ? `–${band.maxQty.toLocaleString()}` : "+"} → $${band.feePerDesign}`).join(" · ")} (first design included; internal art cost ${(dtpPricingRules as any).artCostPerDesign.toFixed(4)}/design for EVERY design).
+            {" "}40% stays the visible warning target. Freight $85/PO embedded in prices by default.
+          </p>
+        </div>
+      ) : null}
 
       <div className="card" id="calculator-rules">
         <h2>3. Calculator Rules — shared family registry</h2>

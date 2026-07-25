@@ -901,3 +901,28 @@ curveForTierCount row-count mapping (which compressed four rows to
 it unchanged. Vendor cost above 7,500 stays on the top Spektra tier while
 margin follows the thresholds. Both the calculate and save tier pipelines use
 the shared function. Tests 496 -> 501; build clean; tsc 308 = baseline.
+
+## Milestone: DTP Size-Specific Owner Price Ladders (Patch 15C.2)
+Hybrid pricing live: app/lib/dtp-owner-pricing.server.ts is the centralized
+DTP CUSTOMER-price registry (vendor costs untouched in VendorProduct/Tier) —
+20 owner prices keyed by vendorSku (4x5x2 1.67/0.88/0.74/0.61/0.60; 5x4x2
+1.76/0.97/0.86/0.72/0.71; 6x5x2 1.84/1.04/0.96/0.81/0.81; 8x5x2
+2.05/1.23/1.23/1.05/1.05 at 1,000/2,500/5,000/7,500/10,000), highest-reached
+lookup, priceDtpQuote() as the ONE pricing function (loader + save). Tier
+table rows are the ladder quantities + requested qty with Vendor tier / Owner
+tier / Job cost / Owner unit price / Customer total / Gross profit / Gross
+margin / Status columns. Safeguards: 40% warning target; hard floors 30/35/38
+by band; $500 job-profit target; $350 strategic floor; BLOCKED (below cost /
+under $350 / missing cost) never saves; below-floor or sub-$500 saves require
+OWNER MARGIN OVERRIDE + reason (server-enforced; generic 40% gate bypassed
+for DTP only). Design fees: first included, extras $25/$20/$15 by band,
+repeat-order waiver checkbox; internal art cost keeps every design. Freight:
+$85 internal, embedded by default; pass-through option backs it out of the
+subtotal (never double-recovered). Custom owner unit price on the requested
+qty recomputes server-side. Product mapping safeguard: ladders resolve by
+vendorSku only — tests prove 4x5x2 and 5x4x2 never share (historical
+mislabel regression). Product Setup shows the read-only DTP pricing-rules
+card (ladders/floors/fees/source; editability = move the table to
+ErpAdminSetting or a dedicated model — documented next step). Snapshot engine
+15C.2-dtp-owner-price-ladders + costEngine 15C-spektra-dtp + dtpPricing
+block. Tests 501 -> 509; build clean; tsc 308 = baseline.

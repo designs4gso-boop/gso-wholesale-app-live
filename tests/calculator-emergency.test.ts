@@ -323,7 +323,7 @@ describe("calculator usability (14B.1B)", () => {
 describe("daily-use layout (14C)", () => {
   const src14c = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
   it("calculator-first order: auto form before tier controls, EmergencySection before Advanced tools and legacy", () => {
-    expect(src14c.indexOf("14B.1a: Automatic Costing form")).toBeLessThan(src14c.indexOf("Advanced Pricing Controls"));
+    expect(src14c.indexOf("14B.1a: Automatic Costing form")).toBeLessThan(src14c.indexOf("Advanced Pricing Controls (custom tier quantities")); // full summary label (15C.2 gate messages also mention the section)
     expect(src14c.indexOf("<EmergencySection />")).toBeLessThan(src14c.indexOf("Advanced Pricing Tools"));
     expect(src14c.indexOf("Advanced Pricing Tools")).toBeLessThan(src14c.indexOf("Legacy Manual Calculator"));
   });

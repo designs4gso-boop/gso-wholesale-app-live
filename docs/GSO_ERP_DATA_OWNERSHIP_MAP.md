@@ -66,3 +66,10 @@ all three (Phase 15B/15E).
   Spektra shippingNotes; user-entered actual freight overrides per quote.
   Future structured home (Vendor.freightFlatPerOrder or ErpAdminSetting)
   deferred until multi-line ordering.
+
+## 15C.2 update (2026-07-24)
+- DTP CUSTOMER selling prices: OWNER = app/lib/dtp-owner-pricing.server.ts
+  (ladders keyed by vendorSku + floors + profit rules + design-fee policy;
+  displayed read-only in Product Setup). Explicitly NOT VendorProduct tiers
+  (vendor cost only) and never route JSX. Next step for no-code editing:
+  migrate the table into ErpAdminSetting or a dedicated model.

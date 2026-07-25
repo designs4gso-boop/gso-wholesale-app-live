@@ -236,3 +236,31 @@ tier while the customer margin follows these thresholds independently. 42%
 family minimum and 40% global floor preserved. Both tier pipelines (calculate
 and save) use the one shared function; owner per-tier margin edits in Advanced
 still override with the same floor gates. No other family changed.
+
+## 15C.2 — DTP owner selling-price ladders (hybrid model)
+DTP selling prices come from the OWNER LADDER (app/lib/dtp-owner-pricing.
+server.ts, keyed by stable vendorSku — a mislabeled product NAME can never
+pull the wrong ladder), not a margin formula. Landed cost (vendor tier +
+every-design art + $85 freight) still computes server-side; the table shows
+owner unit price, customer total, actual gross profit, and actual gross
+margin. Ladders (per unit): 4x5x2 $1.67/$0.88/$0.74/$0.61/$0.60; 5x4x2
+$1.76/$0.97/$0.86/$0.72/$0.71; 6x5x2 $1.84/$1.04/$0.96/$0.81/$0.81; 8x5x2
+$2.05/$1.23/$1.23/$1.05/$1.05 at 1,000/2,500/5,000/7,500/10,000. Lookup =
+highest reached ladder step (1,500->1,000 price; 3,000->2,500; above 10,000->
+10,000) — never interpolated; the tier used is displayed. Safeguards: 40% =
+visible WARNING target; hard floors 30% (1,000-2,499) / 35% (2,500-4,999) /
+38% (5,000+); job profit target $500, strategic owner floor $350. Statuses:
+READY / WARNING — OWNER REVIEW / OWNER OVERRIDE REQUIRED (below floor or
+profit $350-$499 — needs "OWNER MARGIN OVERRIDE" + written reason) / BLOCKED
+(below cost, profit under $350, or missing cost — never savable). Design
+policy: first production-ready design included; extras $25/$20/$15 by quantity
+band; exact repeat orders waive the customer fee (checkbox); internal cost
+still carries EVERY design at $8.3333. Freight: $85 stays an internal cost
+line, embedded in prices by default (no second customer charge); the
+pass-through option backs the $85 out of the ladder subtotal and shows it as
+its own line (total unchanged — never recovered twice; owner custom prices
+are product-only). Custom unit price applies to the requested quantity,
+recomputes everything server-side, and passes the same floors. Snapshot
+engine 15C.2-dtp-owner-price-ladders (cost engine 15C-spektra-dtp retained as
+costEngine); the dtpPricing block records ladder tier, default + custom
+price, landed cost, profit, margin, floors, status, and override reason.

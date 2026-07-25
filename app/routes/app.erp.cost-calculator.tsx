@@ -24,6 +24,7 @@ import { DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_L
 import { calculatorFamilies, calculatorFamilyValues } from "../lib/product-family-registry";
 import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { officialMoqForFamily } from "../lib/product-family-sales-rules";
+import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -971,7 +972,7 @@ export async function loader({ request }: { request: Request }) {
     if (requestedQtyP > 0) {
       productMarginKey = marginFamilyKeyFor(pFamily, selectedClass, pickedBlank?.name || (autoBag ? autoBag.name : ""));
       productMarginRule = productMarginKey ? resolveMarginFamily(productMarginKey) : null;
-      const baseTierQuantities = isDtpP && !eparams.get("eqty") ? DTP_TIER_QUANTITIES : eQuantities; // 15C: DTP defaults to the vendor tier quantities
+      const baseTierQuantities = isDtpP && !eparams.get("eqty") ? DTP_LADDER_QUANTITIES : eQuantities; // 15C.2: DTP rows = owner ladder quantities (1000/2500/5000/7500/10000)
       const tierQuantities = [...new Set([...baseTierQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b);
       const curveDefaults = isDtpP
         ? tierQuantities.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: quantity-threshold rule, never row-position
@@ -993,6 +994,52 @@ export async function loader({ request }: { request: Request }) {
         // 15C: DTP freight is a flat per-PO line INSIDE the engine run — the
         // tier pipeline must not add it a second time.
         const tierFreight = isDtpP ? { total: 0, perUnit: 0, source: "verified" as const, note: "" } : computeFreight(freightInputsP, qty, 0);
+        // 15C.2: DTP prices come from the OWNER ladder (hybrid model) — never
+        // a margin formula. Custom price applies to the requested qty only.
+        if (isDtpP) {
+          const dtpRow = priceDtpQuote({
+            ladderSku: String((pickedBlank as any)?.sku || ""),
+            quantity: qty,
+            landedCost: run.totalCost,
+            missingCost: run.missing.length > 0,
+            designs: Number(eparams.get("pdesigns") || 0),
+            customUnitPrice: qty === requestedQtyP && Number(eparams.get("pdtpcustomprice") || 0) > 0 ? Number(eparams.get("pdtpcustomprice")) : null,
+            repeatOrder: eparams.get("pdtprepeat") === "1",
+            passThroughFreight: eparams.get("pdtpfreightpass") === "1",
+            freightAmount: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+            override: { phrase: String(eparams.get("eophrase") || ""), reason: String(eparams.get("eoreason") || "") },
+          });
+          return {
+            quantity: qty, requested: qty === requestedQtyP,
+            jobCost: run.totalCost, unitCost: run.unitCost,
+            marginPct: Math.round(dtpRow.grossMarginPct * 10) / 10,
+            unitPrice: dtpRow.unitPrice, totalPrice: dtpRow.customerTotal,
+            profit: dtpRow.grossProfit, actualMarginPct: dtpRow.grossMarginPct,
+            belowFloor: dtpRow.grossMarginPct < dtpRow.hardFloorPct,
+            draftOnly: run.missing.length > 0,
+            freightTotal: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+            freightSource: dtpInputP ? dtpInputP.freightSource : "verified",
+            setupTotal: run.setupTotal,
+            status: dtpRow.status,
+            dtp: {
+              vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
+              ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
+              defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
+              customUnitPrice: dtpRow.customUnitPrice,
+              baseSubtotal: dtpRow.customerBaseSubtotal,
+              extraDesignCount: dtpRow.extraDesignCount,
+              extraDesignFeeEach: dtpRow.extraDesignFeeEach,
+              extraDesignFees: dtpRow.extraDesignFees,
+              designFeeWaived: dtpRow.designFeeWaived,
+              freightTreatment: dtpRow.freightTreatment,
+              customerFreight: dtpRow.customerFreight,
+              hardFloorPct: dtpRow.hardFloorPct,
+              statusReasons: dtpRow.statusReasons,
+              overrideRequired: dtpRow.overrideRequired,
+              overrideSatisfied: dtpRow.overrideSatisfied,
+            },
+          };
+        }
         const marginPct = tierMargins[index] ?? floorForFamily;
         const unitCost = run.unitCost + tierFreight.perUnit; // same basis as the manual pipeline: freight rides in the margin basis
         const { price, profit, actualMarginPct } = marginMath(unitCost, marginPct);
@@ -1430,7 +1477,7 @@ export async function action({ request }: { request: Request }) {
     // selected customer tier by QUANTITY — posted tier totals are ignored.
     savedMarginKey = marginFamilyKeyFor(pFamilySave, savedClassification ? savedClassification.klass : null, savedBlank?.name || "");
     savedMarginRule = savedMarginKey ? resolveMarginFamily(savedMarginKey) : null;
-    const baseQuantitiesSave = savedIsDtp && !fRead("eqty") ? DTP_TIER_QUANTITIES : quantities;
+    const baseQuantitiesSave = savedIsDtp && !fRead("eqty") ? DTP_LADDER_QUANTITIES : quantities;
     const tierQuantitiesSave = [...new Set([...baseQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b);
     const validMargins = margins.filter((value) => Number.isFinite(value) && value > 0);
     const curveDefaultsSave = savedIsDtp
@@ -1447,6 +1494,51 @@ export async function action({ request }: { request: Request }) {
     savedTiers = tierQuantitiesSave.map((qty, index) => {
       const run = qty === savedRequestedQty ? productSnapshot! : computeProductDrivenCost({ ...productInputSave, quantity: qty });
       const tierFreight = savedIsDtp ? { total: 0, perUnit: 0, source: "verified" as const, note: "" } : computeFreight(freightInputsSave, qty, 0);
+      if (savedIsDtp) {
+        // 15C.2: recompute the owner-ladder price server-side — posted totals ignored
+        const dtpRow = priceDtpQuote({
+          ladderSku: String(savedFetched?.meta?.vendorSku || ""),
+          quantity: qty,
+          landedCost: run.totalCost,
+          missingCost: run.missing.length > 0,
+          designs: Number(fRead("pdesigns") || 0),
+          customUnitPrice: qty === savedRequestedQty && Number(fRead("pdtpcustomprice") || 0) > 0 ? Number(fRead("pdtpcustomprice")) : null,
+          repeatOrder: fRead("pdtprepeat") === "1",
+          passThroughFreight: fRead("pdtpfreightpass") === "1",
+          freightAmount: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+          override: { phrase: fRead("eophrase"), reason: fRead("eoreason") },
+        });
+        return {
+          quantity: qty, requested: qty === savedRequestedQty,
+          jobCost: run.totalCost, unitCost: run.unitCost,
+          marginPct: Math.round(dtpRow.grossMarginPct * 10) / 10,
+          unitPrice: dtpRow.unitPrice, totalPrice: dtpRow.customerTotal,
+          profit: dtpRow.grossProfit, actualMarginPct: dtpRow.grossMarginPct,
+          belowFloor: dtpRow.grossMarginPct < dtpRow.hardFloorPct,
+          draftOnly: run.missing.length > 0,
+          freightTotal: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+          freightSource: savedDtpInput ? savedDtpInput.freightSource : "verified",
+          setupTotal: run.setupTotal,
+          status: dtpRow.status,
+          dtp: {
+            vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
+            ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
+            defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
+            customUnitPrice: dtpRow.customUnitPrice,
+            baseSubtotal: dtpRow.customerBaseSubtotal,
+            extraDesignCount: dtpRow.extraDesignCount,
+            extraDesignFeeEach: dtpRow.extraDesignFeeEach,
+            extraDesignFees: dtpRow.extraDesignFees,
+            designFeeWaived: dtpRow.designFeeWaived,
+            freightTreatment: dtpRow.freightTreatment,
+            customerFreight: dtpRow.customerFreight,
+            hardFloorPct: dtpRow.hardFloorPct,
+            statusReasons: dtpRow.statusReasons,
+            overrideRequired: dtpRow.overrideRequired,
+            overrideSatisfied: dtpRow.overrideSatisfied,
+          },
+        };
+      }
       const marginPct = tierMarginsSave[index] ?? floorForFamilySave;
       const unitCost = run.unitCost + tierFreight.perUnit;
       const { price, profit, actualMarginPct } = marginMath(unitCost, marginPct);
@@ -1462,12 +1554,34 @@ export async function action({ request }: { request: Request }) {
     savedSelectedTier = savedTiers.find((tier) => tier.quantity === selectedTierQty)
       || savedTiers.find((tier) => tier.requested)
       || savedTiers[savedTiers.length - 1];
+    // 15C.2: DTP safeguards gate the SAVE — BLOCKED never saves; below-floor /
+    // below-$500 requires the owner phrase + written reason (server-enforced).
+    if (savedIsDtp && savedSelectedTier?.dtp) {
+      if (savedSelectedTier.status === "BLOCKED") {
+        return Response.json({ ok: false, message: `DTP quote BLOCKED: ${savedSelectedTier.dtp.statusReasons.join("; ")}. Fix the price/cost before saving.` });
+      }
+      if (savedSelectedTier.dtp.overrideRequired && !savedSelectedTier.dtp.overrideSatisfied) {
+        return Response.json({ ok: false, message: `OWNER OVERRIDE REQUIRED: ${savedSelectedTier.dtp.statusReasons.join("; ")}. Type "${OVERRIDE_PHRASE}" and give a written reason in Advanced Pricing Controls.` });
+      }
+    }
   }
   // 14C.2: product saves gate/snapshot on the SERVER-derived family rule and
   // the recomputed automatic tiers; manual/auto saves keep the legacy path.
   const ruleForSave = productSnapshot ? savedMarginRule : familyRule;
   const snapshotTiers: any[] = productSnapshot && savedTiers ? savedTiers : tiers;
-  const gate = checkMarginGate(Math.min(...snapshotTiers.map((tier: any) => tier.marginPct)), { phrase: fRead("eophrase"), reason: fRead("eoreason") }, ruleForSave?.familyMinPct ?? MARGIN_FLOOR_PCT);
+  // 15C.2: DTP uses its OWN floors (30/35/38 + $500/$350 profit rules,
+  // enforced above with the owner phrase) — the generic 40% gate would wrongly
+  // block owner-approved DTP prices. All other families keep the generic gate.
+  const savedIsDtpGate = savedEngineFamily === "dtp-bags";
+  const gate = savedIsDtpGate && savedSelectedTier?.dtp
+    ? {
+        allowed: true,
+        belowFloor: Boolean(savedSelectedTier.dtp.overrideRequired),
+        reason: savedSelectedTier.dtp.overrideRequired && savedSelectedTier.dtp.overrideSatisfied
+          ? `OWNER OVERRIDE below the DTP floor/target: ${fRead("eoreason").trim()}`
+          : savedSelectedTier.dtp.statusReasons.join("; ") || null,
+      }
+    : checkMarginGate(Math.min(...snapshotTiers.map((tier: any) => tier.marginPct)), { phrase: fRead("eophrase"), reason: fRead("eoreason") }, ruleForSave?.familyMinPct ?? MARGIN_FLOOR_PCT);
   const lines: CostLine[] = [
     { key: "variable_per_unit", label: "Per-unit variable cost (entered)", amount: eVar, source: eVar > 0 ? "manual_override" : "missing" },
     { key: "freight", label: "Freight", amount: freight.total, source: freight.source, note: freight.note },
@@ -1478,10 +1592,11 @@ export async function action({ request }: { request: Request }) {
   const familyDefaults = ruleForSave ? curveForTierCount(ruleForSave.curve, snapshotTiers.length, ruleForSave.familyMinPct) : defaultTierMargins(snapshotTiers.length);
   const savedIsDtpSnapshot = savedEngineFamily === "dtp-bags";
   const snapshot = {
-    engine: productSnapshot ? (savedIsDtpSnapshot ? DTP_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION) : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
+    engine: productSnapshot ? (savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION) : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
     autoBreakdown: autoSnapshot ? { lines: autoSnapshot.lines, missing: autoSnapshot.missing, warnings: autoSnapshot.warnings } : null,
     productBreakdown: productSnapshot ? {
-      engine: savedIsDtpSnapshot ? DTP_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION,
+      engine: savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : MULTILABEL_ENGINE_VERSION,
+      costEngine: savedIsDtpSnapshot ? DTP_ENGINE_VERSION : null,
       topEngine: TOP_ENGINE_VERSION,
       family: pFamilySave,
       canonicalFamily: canonicalUiFamily(pFamilySave),
@@ -1492,7 +1607,33 @@ export async function action({ request }: { request: Request }) {
       labelsPerUnit: savedLabelRows ? savedLabelRows.length : Math.max(1, Number(fRead("pfaces") || 1)),
       sameSizeLabels: savedLabelRows ? savedSameSize : null,
       labelRows: savedLabelRows,
-      // 15C: full DTP record — size, vendor tier actually used, freight, design charge, features
+      // 15C/15C.2: full DTP record — size, vendor tier, OWNER pricing, safeguards
+      dtpPricing: savedIsDtpSnapshot && savedSelectedTier?.dtp ? {
+        engine: DTP_PRICING_ENGINE_VERSION,
+        ownerPriceTierUsed: savedSelectedTier.dtp.ownerPriceTierUsed,
+        defaultOwnerUnitPrice: savedSelectedTier.dtp.defaultOwnerUnitPrice,
+        customUnitPrice: savedSelectedTier.dtp.customUnitPrice,
+        unitPrice: savedSelectedTier.unitPrice,
+        baseSubtotal: savedSelectedTier.dtp.baseSubtotal,
+        extraDesignCount: savedSelectedTier.dtp.extraDesignCount,
+        extraDesignFeeEach: savedSelectedTier.dtp.extraDesignFeeEach,
+        extraDesignFees: savedSelectedTier.dtp.extraDesignFees,
+        designFeeWaived: savedSelectedTier.dtp.designFeeWaived,
+        freightTreatment: savedSelectedTier.dtp.freightTreatment,
+        customerFreight: savedSelectedTier.dtp.customerFreight,
+        customerTotal: savedSelectedTier.totalPrice,
+        landedCost: savedSelectedTier.jobCost,
+        grossProfit: savedSelectedTier.profit,
+        grossMarginPct: savedSelectedTier.actualMarginPct,
+        hardFloorPct: savedSelectedTier.dtp.hardFloorPct,
+        minJobProfit: 500,
+        strategicMinJobProfit: 350,
+        marginWarningTargetPct: 40,
+        status: savedSelectedTier.status,
+        statusReasons: savedSelectedTier.dtp.statusReasons,
+        overrideRequired: savedSelectedTier.dtp.overrideRequired,
+        overrideReason: savedSelectedTier.dtp.overrideSatisfied ? fRead("eoreason").trim() : null,
+      } : null,
       dtp: savedIsDtpSnapshot && productSnapshot ? (() => {
         const blankLine = productSnapshot.lines.find((line) => line.key === "blank");
         const freightLine = productSnapshot.lines.find((line) => line.key === "freight");
@@ -2393,6 +2534,14 @@ function ProductDrivenForm() {
             {(pm?.dtpSpec?.optional || []).length ? <span> · Optional: {(pm.dtpSpec.optional as any[]).map((option: any) => `${option.name} ($${Number(option.amount).toFixed(2)})`).join(", ")}</span> : null}
             <div style={{ color: "#166534" }}>Vendor-finished pouches — no in-house print inputs (dimensions/material/printer/layers do not apply). Freight: ${(pm?.dtpSpec?.freightDefault ?? 85).toFixed ? (pm?.dtpSpec?.freightDefault ?? 85).toFixed(2) : pm?.dtpSpec?.freightDefault} flat per Spektra PO.</div>
           </div>
+          {/* 15C.2: owner pricing controls — ladder is the default; custom price
+              is owner-authorized and recomputed server-side with floor rules */}
+          <label style={{ fontSize: 12 }}>Custom unit price $ (owner — blank = owner ladder)
+            <input name="pdtpcustomprice" type="number" step="0.0001" min={0} style={inputStyle} />
+          </label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtprepeat" value="1" /> Exact repeat order — waive customer design fee (no art changes)</label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtpfreightpass" value="1" /> Pass freight through to customer (backs the $85 out of the ladder subtotal — never recovered twice)</label>
+          <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>One production-ready design included; extra designs bill $25 (1,000–2,499) / $20 (2,500–4,999) / $15 (5,000+) each. Below-floor or below-$500-profit prices need the owner phrase + reason in Advanced Pricing Controls.</p>
         </>) : null}
         {!isDtp && (!jars || sameSize === "yes") ? (<>
           <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={inputStyle} /></label>
@@ -2537,29 +2686,63 @@ function ProductTiers() {
       </p>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead><tr style={{ background: "#f3f4f6" }}><th style={{ padding: 5 }}>Use</th><th align="left">Quantity</th><th>Job Cost</th><th>Unit Cost</th><th>Margin</th><th>Unit Price</th><th>Total Price</th><th>Profit</th><th align="left">Status</th></tr></thead>
+          {pm.isDtp ? (
+            <thead><tr style={{ background: "#f3f4f6" }}><th style={{ padding: 5 }}>Use</th><th align="left">Quantity</th><th>Vendor tier</th><th>Owner tier</th><th>Job cost</th><th>Unit cost</th><th>Owner unit price</th><th>Customer total</th><th>Gross profit</th><th>Gross margin</th><th align="left">Status</th></tr></thead>
+          ) : (
+            <thead><tr style={{ background: "#f3f4f6" }}><th style={{ padding: 5 }}>Use</th><th align="left">Quantity</th><th>Job Cost</th><th>Unit Cost</th><th>Margin</th><th>Unit Price</th><th>Total Price</th><th>Profit</th><th align="left">Status</th></tr></thead>
+          )}
           <tbody>
             {tiers.map((tier) => (
-              <tr key={tier.quantity} style={{ borderTop: "1px solid #e5e7eb", background: tier.requested ? "#fef9c3" : tier.draftOnly || tier.belowFloor ? "#fef2f2" : undefined }}>
+              <tr key={tier.quantity} style={{ borderTop: "1px solid #e5e7eb", background: tier.requested ? "#fef9c3" : tier.draftOnly || tier.belowFloor || String(tier.status).startsWith("BLOCKED") ? "#fef2f2" : undefined }}>
                 <td align="center"><input type="radio" name="ptierpick" checked={selected.quantity === tier.quantity} onChange={() => setSelectedQty(tier.quantity)} aria-label={`Use ${tier.quantity} price`} /></td>
                 <td style={{ padding: 5 }}><b>{tier.quantity.toLocaleString()}</b>{tier.requested ? <span style={{ color: "#92400e", fontWeight: 700 }}> ← requested</span> : null}</td>
-                <td align="center">{money2(tier.jobCost)}</td>
-                <td align="center">{money2(tier.unitCost)}</td>
-                <td align="center">{tier.marginPct}%</td>
-                <td align="center"><b>{money2(tier.unitPrice)}</b></td>
-                <td align="center">{money2(tier.totalPrice)}</td>
-                <td align="center">{money2(tier.profit)} ({tier.actualMarginPct.toFixed(1)}%)</td>
-                <td style={{ color: tier.draftOnly || tier.belowFloor ? "#991b1b" : "#166534", fontWeight: 700 }}>{tier.status}</td>
+                {tier.dtp ? (<>
+                  <td align="center">{(() => { const match = String(tier.dtp.vendorTierLabel || "").match(/tier ([\d,+\-]+)/); return match ? match[1] : "—"; })()}</td>
+                  <td align="center">{tier.dtp.ownerPriceTierUsed ? tier.dtp.ownerPriceTierUsed.toLocaleString() : "—"}</td>
+                  <td align="center">{money2(tier.jobCost)}</td>
+                  <td align="center">{money2(tier.unitCost)}</td>
+                  <td align="center"><b>{money2(tier.unitPrice)}</b>{tier.dtp.customUnitPrice != null ? <span style={{ color: "#7c2d12" }}> (custom)</span> : null}</td>
+                  <td align="center">{money2(tier.totalPrice)}</td>
+                  <td align="center">{money2(tier.profit)}</td>
+                  <td align="center">{tier.actualMarginPct.toFixed(1)}%</td>
+                  <td style={{ color: tier.status === "READY" ? "#166534" : String(tier.status).startsWith("BLOCKED") ? "#991b1b" : "#92400e", fontWeight: 700 }}>
+                    {tier.status}
+                    {tier.dtp.statusReasons.length ? <div style={{ fontWeight: 400, color: "#6b7280" }}>{tier.dtp.statusReasons.join("; ")}</div> : null}
+                  </td>
+                </>) : (<>
+                  <td align="center">{money2(tier.jobCost)}</td>
+                  <td align="center">{money2(tier.unitCost)}</td>
+                  <td align="center">{tier.marginPct}%</td>
+                  <td align="center"><b>{money2(tier.unitPrice)}</b></td>
+                  <td align="center">{money2(tier.totalPrice)}</td>
+                  <td align="center">{money2(tier.profit)} ({tier.actualMarginPct.toFixed(1)}%)</td>
+                  <td style={{ color: tier.draftOnly || tier.belowFloor ? "#991b1b" : "#166534", fontWeight: 700 }}>{tier.status}</td>
+                </>)}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {pm.isDtp ? (
+        <p style={smallHelp}>Owner ladder prices (DTP pricing study, owner-approved 2026-07-24). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
+      ) : null}
       <button type="button" onClick={() => setSelectedQty(selected.quantity)} style={{ ...secondaryButtonStyle, marginTop: 8, fontWeight: 700 }}>
         Use this price — {selected.quantity.toLocaleString()} @ {money2(selected.unitPrice)}/unit
       </button>
       <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 8 }}>
         <b>Customer price summary</b> (internal costs and profit are not shown here):
+        {selected.dtp ? (
+        <pre style={{ margin: "6px 0 0", fontSize: 12, background: "white", padding: 8, borderRadius: 6, whiteSpace: "pre-wrap" }}>
+{`Product: ${productLabel}
+Quantity: ${selected.quantity.toLocaleString()} (owner price tier used: ${selected.dtp.ownerPriceTierUsed ? selected.dtp.ownerPriceTierUsed.toLocaleString() : "—"})
+Configuration: ${pm.printConfig || "—"}
+Unit price: ${money2(selected.unitPrice)}${selected.dtp.customUnitPrice != null ? " (owner custom)" : " (owner ladder)"}
+Base pouch subtotal: ${money2(selected.dtp.baseSubtotal)}
+Additional design fees: ${selected.dtp.designFeeWaived ? "$0.00 (repeat order — waived)" : `${money2(selected.dtp.extraDesignFees)}${selected.dtp.extraDesignCount ? ` (${selected.dtp.extraDesignCount} extra @ ${money2(selected.dtp.extraDesignFeeEach)})` : " (first design included)"}`}
+Freight: ${selected.dtp.freightTreatment === "pass_through" ? `${money2(selected.dtp.customerFreight)} (passed through)` : "included in unit pricing"}
+Total: ${money2(selected.totalPrice)}`}
+        </pre>
+        ) : (
         <pre style={{ margin: "6px 0 0", fontSize: 12, background: "white", padding: 8, borderRadius: 6, whiteSpace: "pre-wrap" }}>
 {`Product: ${productLabel}
 Quantity: ${selected.quantity.toLocaleString()}
@@ -2570,6 +2753,7 @@ Setup/design: included in unit pricing
 Freight/handling: ${selected.freightTotal > 0 ? `${money2(selected.freightTotal)} (${String(selected.freightSource).toUpperCase()}) — included in unit pricing` : "none entered"}
 Total: ${money2(selected.totalPrice)}`}
         </pre>
+        )}
         {selected.draftOnly ? <div style={{ color: "#991b1b", fontWeight: 700, marginTop: 6 }}>DRAFT ONLY — missing costs must be verified before this price is final.</div> : null}
       </div>
       {actionData?.message ? (

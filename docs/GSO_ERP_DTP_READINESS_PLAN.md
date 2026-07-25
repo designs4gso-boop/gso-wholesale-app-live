@@ -60,3 +60,9 @@ modes — build with the multi-line quoting phase (15D+).
 DTP margin thresholds are quantity-based (65/58/52/46/42 at 1,000/2,500/
 5,000/7,500/10,000) via the shared dtpMarginPctForQuantity() — the four-row
 curve compression noted as a 15C limitation is resolved.
+
+## 15C.2 note
+DTP now prices from owner selling-price ladders (hybrid model) with margin/
+profit safeguards — see GSO_COST_CALCULATOR_INPUT_RULES.md 15C.2. The
+quantity-based margin thresholds from 15C.1 remain as the underlying
+researched reference; the ladder is the selling-price source of truth.
