@@ -13,7 +13,8 @@ import {
 } from "@shopify/polaris";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
-import { createProductionJobFromSource } from "../lib/production-job-source.server";
+import { createProductionJobFromSource, familyFromQuoteItems } from "../lib/production-job-source.server";
+import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import db from "../db.server";
 import { buildBrandRates, computeEntryCosts, machineRatePerHour, type BrandInkRates } from "../lib/rip-actual-costs.server";
 import { PRINT_LOG_USAGE_SOURCE } from "../lib/print-log-writeback-shared";
@@ -531,9 +532,45 @@ export async function loader({ request }: { request: Request }) {
     });
     const appliedRows = (job.materialUsages || []).filter((usage: any) => String(usage.source || "") === PRINT_LOG_USAGE_SOURCE);
     const appliedProvenance = appliedRows.length ? parseWritebackProvenance(appliedRows[0].notes).provenance : null;
+    const jobFamily = familyFromQuoteItems(job.items || []);
+    const jobMaterialSummary = summarizeMaterialUsage(job.materialUsages || []);
+    const jobActuals = summarizeActualPrintLogs(job, jobEntries, rates, ratePerHour);
+    const finalizeGate = assessFinalization({
+      family: jobFamily,
+      alreadyFinalized: Boolean(job.actualCostFinalized),
+      revenue: (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0),
+      estimate: estimateExpectations(job.items || []),
+      sources: {
+        printLogRecordedCost: Number(jobMaterialSummary.printLogRecordedCost || 0),
+        previewPrintCost: Number(jobActuals?.roughActualPrintCost || 0),
+        materialCost: Number(jobMaterialSummary.materialCost || 0),
+        materialRowCount: (job.materialUsages || []).filter((usage: any) => String(usage.source || "") !== PRINT_LOG_USAGE_SOURCE).length,
+        deductedQty: Number(jobMaterialSummary.deductedQty || 0),
+        usedQty: Number(jobMaterialSummary.usedQty || 0),
+        wasteQty: Number(jobMaterialSummary.wasteQty || 0),
+        reprintQty: Number(jobMaterialSummary.reprintQty || 0),
+        pulledQty: Number(jobMaterialSummary.pulledQty || 0),
+      },
+      // display gate reflects the SAVED fields; the action re-assesses with the posted form
+      inputs: {
+        laborMinutes: Number(job.actualLaborMinutes || 0) > 0 ? Number(job.actualLaborMinutes) : null,
+        laborRate: Number(job.actualLaborRate || 0) > 0 ? Number(job.actualLaborRate) : null,
+        laborCostOverride: null,
+        laborZeroConfirmed: false,
+        packingCost: Number(job.actualPackingCost || 0) > 0 ? Number(job.actualPackingCost) : null,
+        shippingCost: Number(job.actualShippingCost || 0) > 0 ? Number(job.actualShippingCost) : null,
+        outsourceCost: Number(job.actualOutsourceCost || 0) > 0 ? Number(job.actualOutsourceCost) : null,
+        reprintCost: Number(job.actualReprintCost || 0) > 0 ? Number(job.actualReprintCost) : null,
+        otherCost: Number(job.actualOtherCost || 0) > 0 ? Number(job.actualOtherCost) : null,
+        dtp: jobFamily === "dtp-bags" ? { invoiceSubtotal: Number(job.actualOutsourceCost || 0) > 0 ? Number(job.actualOutsourceCost) : null, additionalCharges: null, credit: null, freight: Number(job.actualShippingCost || 0) > 0 ? Number(job.actualShippingCost) : null, invoiceIncludesFreight: false } : null,
+        warningReason: "",
+      },
+    });
     return {
       ...job,
-      actuals: summarizeActualPrintLogs(job, jobEntries, rates, ratePerHour),
+      jobFamily,
+      finalizeGate: { status: finalizeGate.status, blockedReasons: finalizeGate.blockedReasons, warningReasons: finalizeGate.warningReasons, varianceDollars: finalizeGate.varianceDollars, variancePct: finalizeGate.variancePct, estimatedTotalCost: finalizeGate.estimatedTotalCost },
+      actuals: jobActuals,
       writebackPreview: writeback,
       printLogApplied: appliedRows.length
         ? {
@@ -926,23 +963,15 @@ Source ref: ${sourceRef}` : ""}`,
     });
     if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
 
+    // 15E.1-G: finalized figures are never silently overwritten.
+    if (job.actualCostFinalized) {
+      return Response.json({ ok: false, message: `This job's actual cost is FINALIZED (${job.actualCostFinalizedAt ? new Date(job.actualCostFinalizedAt).toLocaleString() : ""} by ${job.actualCostFinalizedBy || "unknown"}). Reopen it first with Reopen Actual Cost — type "${REOPEN_PHRASE}" and a reason. Nothing was changed.` });
+    }
+
     const printLogEntries = await db.printLogEntry.findMany({
       where: { shop, productionJobId: jobId },
       orderBy: { createdAt: "desc" },
     });
-
-    const actualLaborMinutes = Number(formData.get("actualLaborMinutes") || 0);
-    const actualLaborRate = Number(formData.get("actualLaborRate") || 25);
-    const typedLaborCost = Number(formData.get("actualLaborCost") || 0);
-    const actualLaborCost = typedLaborCost || ((actualLaborMinutes / 60) * actualLaborRate);
-    const actualPackingCost = Number(formData.get("actualPackingCost") || 0);
-    const actualShippingCost = Number(formData.get("actualShippingCost") || 0);
-    const actualOutsourceCost = Number(formData.get("actualOutsourceCost") || 0);
-    const actualOtherCost = Number(formData.get("actualOtherCost") || 0);
-    const actualReprintCost = Number(formData.get("actualReprintCost") || 0);
-    const actualCostNotes = String(formData.get("actualCostNotes") || "") || null;
-    const actualCostFinalized = String(formData.get("actualCostFinalized") || "false") === "true";
-
     const costMachines = await db.machine.findMany({
       where: { shop, active: true },
       select: { name: true, inkChannels: { select: { inkType: true, inkName: true, enabled: true, costPerMl: true, cartridgeCost: true, cartridgeMl: true } } },
@@ -950,39 +979,123 @@ Source ref: ${sourceRef}` : ""}`,
     });
     const actuals = summarizeActualPrintLogs(job, printLogEntries, buildBrandRates(costMachines), machineRatePerHour());
     const materialSummary = summarizeMaterialUsage(job.materialUsages || []);
+    const family = familyFromQuoteItems(job.items || []);
     const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
-    // Recorded print-log actuals win over the live preview; manual material
-    // rows are counted separately from print_log rows (no double count).
-    const printCostComponent = Number(materialSummary.printLogRecordedCost || 0) > 0 ? Number(materialSummary.printLogRecordedCost) : Number(actuals.roughActualPrintCost || 0);
-    const actualTotalCost = printCostComponent + Number(materialSummary.materialCost || 0) + actualLaborCost + actualPackingCost + actualShippingCost + actualOutsourceCost + actualOtherCost + actualReprintCost;
-    const actualFinalProfit = revenue - actualTotalCost;
-    const actualFinalMargin = revenue > 0 ? (actualFinalProfit / revenue) * 100 : 0;
 
+    // 15E.1-M: blank means NOT ENTERED (null), never an authoritative $0.
+    const inputs = {
+      laborMinutes: numberOrNull(formData.get("actualLaborMinutes")),
+      laborRate: numberOrNull(formData.get("actualLaborRate")),
+      laborCostOverride: numberOrNull(formData.get("actualLaborCost")),
+      laborZeroConfirmed: String(formData.get("laborZeroConfirmed") || "") === "on",
+      packingCost: numberOrNull(formData.get("actualPackingCost")),
+      shippingCost: family === "dtp-bags" ? null : numberOrNull(formData.get("actualShippingCost")),
+      outsourceCost: family === "dtp-bags" ? null : numberOrNull(formData.get("actualOutsourceCost")),
+      reprintCost: numberOrNull(formData.get("actualReprintCost")),
+      otherCost: numberOrNull(formData.get("actualOtherCost")),
+      dtp: family === "dtp-bags" ? {
+        invoiceSubtotal: numberOrNull(formData.get("dtpInvoiceSubtotal")),
+        additionalCharges: numberOrNull(formData.get("dtpAdditionalCharges")),
+        credit: numberOrNull(formData.get("dtpCredit")),
+        freight: numberOrNull(formData.get("dtpFreight")),
+        invoiceIncludesFreight: String(formData.get("dtpInvoiceIncludesFreight") || "") === "on",
+      } : null,
+      warningReason: String(formData.get("finalizeReason") || ""),
+    };
+    const assessment = assessFinalization({
+      family,
+      alreadyFinalized: false,
+      revenue,
+      estimate: estimateExpectations(job.items || []),
+      sources: {
+        printLogRecordedCost: Number(materialSummary.printLogRecordedCost || 0),
+        previewPrintCost: Number(actuals?.roughActualPrintCost || 0),
+        materialCost: Number(materialSummary.materialCost || 0),
+        materialRowCount: (job.materialUsages || []).filter((usage: any) => String(usage.source || "") !== PRINT_LOG_USAGE_SOURCE).length,
+        deductedQty: Number(materialSummary.deductedQty || 0),
+        usedQty: Number(materialSummary.usedQty || 0),
+        wasteQty: Number(materialSummary.wasteQty || 0),
+        reprintQty: Number(materialSummary.reprintQty || 0),
+        pulledQty: Number(materialSummary.pulledQty || 0),
+      },
+      inputs,
+    });
+
+    const wantsFinalize = String(formData.get("actualCostFinalized") || "false") === "true";
+    if (wantsFinalize) {
+      if (assessment.status === "BLOCKED") {
+        return Response.json({ ok: false, message: `BLOCKED — cannot finalize: ${assessment.blockedReasons.join(" | ")}` });
+      }
+      if (assessment.requiresReason && inputs.warningReason.trim().length < 5) {
+        return Response.json({ ok: false, message: `WARNING — REASON REQUIRED: ${assessment.warningReasons.join(" | ")}. Type a finalization reason (5+ characters) to finalize anyway.` });
+      }
+    }
+
+    const actor = resolveActorFromSession(session, shop);
+    const actualCostNotes = String(formData.get("actualCostNotes") || "") || null;
     await db.productionJob.update({
       where: { id: jobId },
       data: {
-        actualLaborMinutes,
-        actualLaborRate,
-        actualLaborCost,
-        actualPackingCost,
-        actualShippingCost,
-        actualOutsourceCost,
-        actualOtherCost,
-        actualReprintCost,
-        actualTotalCost,
-        actualFinalProfit,
-        actualFinalMargin,
+        actualLaborMinutes: inputs.laborMinutes ?? 0,
+        actualLaborRate: inputs.laborRate ?? 0,
+        actualLaborCost: assessment.components.laborCost,
+        actualPackingCost: assessment.components.packingCost,
+        actualShippingCost: assessment.components.shippingCost,
+        actualOutsourceCost: assessment.components.outsourceCost,
+        actualOtherCost: assessment.components.otherCost,
+        actualReprintCost: assessment.components.reprintCost,
+        actualTotalCost: assessment.totalCost,
+        actualFinalProfit: assessment.grossProfit,
+        actualFinalMargin: assessment.grossMarginPct,
         actualCostNotes,
-        actualCostFinalized,
-        actualCostFinalizedAt: actualCostFinalized ? new Date() : null,
-        actualCostFinalizedBy: actualCostFinalized ? "GSO ERP" : null,
+        actualCostFinalized: wantsFinalize,
+        actualCostFinalizedAt: wantsFinalize ? new Date() : null,
+        actualCostFinalizedBy: wantsFinalize ? actor : null,
       },
     });
 
-    await createEvent(shop, jobId, actualCostFinalized ? "actual_cost_finalized" : "actual_cost_updated", `Actual job cost ${actualCostFinalized ? "finalized" : "updated"}. Total cost: $${actualTotalCost.toFixed(2)}. Profit: $${actualFinalProfit.toFixed(2)}. Margin: ${actualFinalMargin.toFixed(1)}%.`);
-    return Response.json({ ok: true, message: actualCostFinalized ? "Actual cost finalized." : "Actual cost updated." });
+    if (wantsFinalize) {
+      const snapshot = buildActualCostFinalizeSnapshot({ assessment, inputs, actor, finalizedAt: new Date().toISOString(), family });
+      await createEvent(shop, jobId, "actual_cost_finalized", `Actual cost FINALIZED by ${actor}. Total: $${assessment.totalCost.toFixed(2)} | Profit: $${assessment.grossProfit.toFixed(2)} | Margin: ${assessment.grossMarginPct.toFixed(1)}% | Variance: $${assessment.varianceDollars.toFixed(2)}${assessment.variancePct != null ? ` (${assessment.variancePct.toFixed(1)}%)` : " (variance % unavailable)"} | Gate: ${assessment.status}${assessment.warningReasons.length ? ` | Warnings: ${assessment.warningReasons.join("; ")} | Reason: ${inputs.warningReason.trim()}` : ""} | SNAPSHOT ${JSON.stringify(snapshot)}`, { createdBy: actor });
+      return Response.json({ ok: true, message: `Actual cost finalized (${assessment.status === "WARNING" ? "with warning reason" : "READY"}).` });
+    }
+    await createEvent(shop, jobId, "actual_cost_updated", `Actual job cost updated by ${actor}. Total: $${assessment.totalCost.toFixed(2)} (gate: ${assessment.status}).`, { createdBy: actor });
+    return Response.json({ ok: true, message: `Actual cost updated (gate: ${assessment.status}).` });
   }
 
+  // 15E.1-J: controlled reopen — owner phrase + written reason; the prior
+  // final figures are preserved in an immutable audit event before the flags
+  // clear (component values themselves stay on the job for review).
+  if (intent === "reopenJobCost") {
+    const jobId = String(formData.get("jobId") || "");
+    const phrase = String(formData.get("reopenPhrase") || "");
+    const reason = String(formData.get("reopenReason") || "").trim();
+    const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
+    if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
+    if (!job.actualCostFinalized) return Response.json({ ok: false, message: "This job is not finalized — nothing to reopen." });
+    if (phrase !== REOPEN_PHRASE) return Response.json({ ok: false, message: `Type the exact phrase "${REOPEN_PHRASE}" to reopen a finalized job cost. Nothing was changed.` });
+    if (reason.length < 5) return Response.json({ ok: false, message: "A written reopen reason (5+ characters) is required. Nothing was changed." });
+    const actor = resolveActorFromSession(session, shop);
+    const prior = {
+      totalCost: Number(job.actualTotalCost || 0),
+      profit: Number(job.actualFinalProfit || 0),
+      marginPct: Number(job.actualFinalMargin || 0),
+      laborCost: Number(job.actualLaborCost || 0),
+      packingCost: Number(job.actualPackingCost || 0),
+      shippingCost: Number(job.actualShippingCost || 0),
+      outsourceCost: Number(job.actualOutsourceCost || 0),
+      reprintCost: Number(job.actualReprintCost || 0),
+      otherCost: Number(job.actualOtherCost || 0),
+      finalizedAt: job.actualCostFinalizedAt ? new Date(job.actualCostFinalizedAt).toISOString() : null,
+      finalizedBy: job.actualCostFinalizedBy || null,
+    };
+    await createEvent(shop, jobId, "actual_cost_reopened", `Actual cost REOPENED by ${actor}. Reason: ${reason}. PRIOR FINAL ${JSON.stringify(prior)}`, { createdBy: actor });
+    await db.productionJob.update({
+      where: { id: jobId },
+      data: { actualCostFinalized: false, actualCostFinalizedAt: null, actualCostFinalizedBy: null },
+    });
+    return Response.json({ ok: true, message: "Finalized cost reopened — prior figures preserved in the job history. Edits are allowed again." });
+  }
   // 13A.7B: guarded print-log actual-cost writeback. Preview lives on the
   // board (loader-computed); this action RE-COMPUTES server-side, enforces the
   // typed owner phrase, and writes ink + machine-time ProductionMaterialUsage
@@ -1241,25 +1354,58 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
               <Text as="p">Final margin: {Number(summarizeFinalActualCosts(job, job.actuals, materialSummary).finalMargin || 0).toFixed(1)}%</Text>
               <Text as="p">Variance vs estimate: ${money(summarizeFinalActualCosts(job, job.actuals, materialSummary).estimateVariance)}</Text>
             </InlineStack>
-            <Text as="p" tone="subdued">Use this to close the job after production. Print/material costs come from logs and material usage; add labor, packing, shipping, outsource invoices, reprints, and other costs here.</Text>
+            <Text as="p" tone="subdued">Use this to close the job after production. Print/material costs come from logs and material usage; add labor, packing, shipping, vendor invoices, reprints, and other costs here. Blank = not entered (never counted as a confirmed $0).</Text>
+            {/* 15E.1: server-computed finalization gate */}
+            {job.finalizeGate ? (
+              <div style={{ border: "1px solid", borderColor: job.actualCostFinalized ? "#bbf7d0" : job.finalizeGate.status === "READY" ? "#bbf7d0" : job.finalizeGate.status === "WARNING" ? "#fde68a" : "#fecaca", background: job.actualCostFinalized ? "#f0fdf4" : job.finalizeGate.status === "READY" ? "#f0fdf4" : job.finalizeGate.status === "WARNING" ? "#fffbeb" : "#fef2f2", borderRadius: 8, padding: 10, fontSize: 13 }}>
+                <b>{job.actualCostFinalized ? "FINALIZED" : job.finalizeGate.status === "READY" ? "READY TO FINALIZE" : job.finalizeGate.status === "WARNING" ? "WARNING — REASON REQUIRED" : "BLOCKED"}</b>
+                {" "}· Variance vs estimate: ${money(job.finalizeGate.varianceDollars)}{job.finalizeGate.variancePct != null ? ` (${Number(job.finalizeGate.variancePct).toFixed(1)}%)` : " (% unavailable — no estimated cost)"} · Estimated: ${money(job.finalizeGate.estimatedTotalCost)}
+                {!job.actualCostFinalized && job.finalizeGate.blockedReasons?.length ? <div style={{ color: "#991b1b" }}>{job.finalizeGate.blockedReasons.join(" | ")}</div> : null}
+                {!job.actualCostFinalized && job.finalizeGate.warningReasons?.length ? <div style={{ color: "#92400e" }}>{job.finalizeGate.warningReasons.join(" | ")}</div> : null}
+              </div>
+            ) : null}
+            {job.actualCostFinalized ? (
+              <BlockStack gap="200">
+                <Text as="p" tone="success">Finalized {job.actualCostFinalizedAt ? new Date(job.actualCostFinalizedAt).toLocaleString() : ""} by {job.actualCostFinalizedBy || "unknown"}. Inputs are locked — reopen to edit.</Text>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="reopenJobCost" />
+                  <input type="hidden" name="jobId" value={job.id} />
+                  <InlineStack gap="200" blockAlign="end" wrap>
+                    <label>Reopen phrase<input name="reopenPhrase" placeholder="OWNER COST REOPEN" style={{ width: 220, padding: 8 }} /></label>
+                    <label>Reopen reason (required)<input name="reopenReason" style={{ width: 280, padding: 8 }} /></label>
+                    <Button submit tone="critical">Reopen Actual Cost</Button>
+                  </InlineStack>
+                </Form>
+              </BlockStack>
+            ) : (
             <Form method="post">
               <input type="hidden" name="intent" value="saveFinalCosts" />
               <input type="hidden" name="jobId" value={job.id} />
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(160px, 1fr))", gap: 12 }}>
                 <label>Labor minutes<input name="actualLaborMinutes" type="number" step="0.01" defaultValue={job.actualLaborMinutes || ""} style={{ width: "100%", padding: 8 }} /></label>
-                <label>Labor rate/hr<input name="actualLaborRate" type="number" step="0.01" defaultValue={job.actualLaborRate || 25} style={{ width: "100%", padding: 8 }} /></label>
+                <label>Labor rate/hr (confirm — no default)<input name="actualLaborRate" type="number" step="0.01" defaultValue={job.actualLaborRate || ""} placeholder="Enter confirmed rate" style={{ width: "100%", padding: 8 }} /></label>
                 <label>Labor cost override<input name="actualLaborCost" type="number" step="0.01" defaultValue={job.actualLaborCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                <label style={{ gridColumn: "1 / -1", fontSize: 13 }}><input type="checkbox" name="laborZeroConfirmed" /> Confirm $0 labor for this job (required when leaving labor blank)</label>
                 <label>Packing cost<input name="actualPackingCost" type="number" step="0.01" defaultValue={job.actualPackingCost || ""} style={{ width: "100%", padding: 8 }} /></label>
-                <label>Shipping cost<input name="actualShippingCost" type="number" step="0.01" defaultValue={job.actualShippingCost || ""} style={{ width: "100%", padding: 8 }} /></label>
-                <label>Outsource invoice cost<input name="actualOutsourceCost" type="number" step="0.01" defaultValue={job.actualOutsourceCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                {job.jobFamily === "dtp-bags" ? (<>
+                  <label>Spektra invoice subtotal<input name="dtpInvoiceSubtotal" type="number" step="0.01" defaultValue={job.actualOutsourceCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                  <label>Additional vendor charges<input name="dtpAdditionalCharges" type="number" step="0.01" style={{ width: "100%", padding: 8 }} /></label>
+                  <label>Vendor credit / adjustment<input name="dtpCredit" type="number" step="0.01" style={{ width: "100%", padding: 8 }} /></label>
+                  <label>Actual Spektra freight<input name="dtpFreight" type="number" step="0.01" defaultValue={job.actualShippingCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                  <label style={{ gridColumn: "1 / -1", fontSize: 13 }}><input type="checkbox" name="dtpInvoiceIncludesFreight" /> Invoice total INCLUDES freight (freight will be backed out of vendor cost and counted once as shipping)</label>
+                </>) : (<>
+                  <label>Shipping cost<input name="actualShippingCost" type="number" step="0.01" defaultValue={job.actualShippingCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                  <label>Outsource invoice cost<input name="actualOutsourceCost" type="number" step="0.01" defaultValue={job.actualOutsourceCost || ""} style={{ width: "100%", padding: 8 }} /></label>
+                </>)}
                 <label>Reprint cost<input name="actualReprintCost" type="number" step="0.01" defaultValue={job.actualReprintCost || ""} style={{ width: "100%", padding: 8 }} /></label>
                 <label>Other cost<input name="actualOtherCost" type="number" step="0.01" defaultValue={job.actualOtherCost || ""} style={{ width: "100%", padding: 8 }} /></label>
-                <label>Finalize job cost<select name="actualCostFinalized" defaultValue={job.actualCostFinalized ? "true" : "false"} style={{ width: "100%", padding: 8 }}><option value="false">No</option><option value="true">Yes - lock final cost</option></select></label>
+                <label>Finalize job cost<select name="actualCostFinalized" defaultValue="false" style={{ width: "100%", padding: 8 }}><option value="false">No</option><option value="true">Yes - lock final cost</option></select></label>
+                <label style={{ gridColumn: "1 / -1" }}>Finalization reason (required when the gate shows WARNING)<input name="finalizeReason" style={{ width: "100%", padding: 8 }} /></label>
               </div>
               <label style={{ display: "block", marginTop: 12 }}>Final cost notes<textarea name="actualCostNotes" defaultValue={job.actualCostNotes || ""} rows={3} style={{ width: "100%", padding: 8 }} /></label>
-              <Button submit>{job.actualCostFinalized ? "Update finalized cost" : "Save final cost"}</Button>
+              <Button submit>Save final cost</Button>
             </Form>
-            {job.actualCostFinalizedAt ? <Text as="p" tone="success">Finalized: {new Date(job.actualCostFinalizedAt).toLocaleString()}</Text> : null}
+            )}
           </BlockStack>
         </Card>
 

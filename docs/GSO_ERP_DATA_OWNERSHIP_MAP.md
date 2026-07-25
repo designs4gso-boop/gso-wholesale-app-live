@@ -111,3 +111,12 @@ all three (Phase 15B/15E).
   gates/actor/immutability; live-preview print cost can silently enter
   finals; vendor invoice vs freight unstructured (DTP); labor default $25
   conflicts with owner standards. See GSO_ERP_ACTUAL_COST_AUDIT.md / _PLAN.md.
+
+## 15E.1 update (2026-07-24)
+- Actual-cost finalization: OWNER = app/lib/actual-cost-finalize.server.ts
+  (gate + formulas + variance + snapshot + actor resolution). ProductionJob
+  actual* columns remain the queryable copy; the immutable finalize/reopen
+  events carry the full snapshots. DTP vendor invoice/freight ownership:
+  actualOutsourceCost = normalized vendor cost (invoice +/- charges/credit,
+  freight backed out when included); actualShippingCost = actual Spektra
+  freight — counted once by construction.

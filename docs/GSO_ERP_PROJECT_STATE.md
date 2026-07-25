@@ -1019,3 +1019,29 @@ three-field outsource entry summing into the existing column — NO schema
 migration. Pricing feedback stays owner-reviewed (variance rollups ->
 suggested standards -> approval -> Cost Book/standards edit; never
 automatic). Docs: GSO_ERP_ACTUAL_COST_AUDIT.md + _PLAN.md.
+
+## Milestone: Governed Actual-Cost Finalization (Patch 15E.1)
+Finalization is now gated, audited, and immutable-by-default. Pure module
+app/lib/actual-cost-finalize.server.ts (gate/formulas/variance/snapshot/
+actor/zero-vs-missing) + production route governance: finalized jobs refuse
+saveFinalCosts edits until reopenJobCost (phrase "OWNER COST REOPEN" + 5+
+char reason; prior totals/components/finalizedAt/By embedded in the reopen
+event); finalize runs the server-recomputed gate — BLOCKED refuses (zero/
+negative revenue, negative components/total, DTP missing Spektra invoice or
+invalid invoice/freight normalization, deducted-stock-with-no-costed-usage,
+labor minutes without rate, already finalized), WARNING requires a typed
+reason (live-preview print cost, missing expected material, unconfirmed $0
+labor, missing DTP actual freight, >25% deduction drift), READY otherwise;
+the actual_cost_finalized event embeds the complete input/component/variance
+snapshot and the REAL session actor (email/name/user:id/shop-admin fallback —
+"GSO ERP" hardcode removed). DTP actuals are structured (invoice subtotal +
+additional charges - credit -> actualOutsourceCost; actual freight ->
+actualShippingCost; includes-freight control backs freight out so it is
+counted ONCE) and DTP requires no print logs/material/ink/machine/
+application. Labor rate no longer defaults to the quarantined $25 (blank
+until confirmed; explicit $0 needs its checkbox). Blank inputs are NOT
+entered (null) and never become authoritative zeros; variance percent is
+unavailable (not 0%) without an estimated cost. Board panel shows the gate
+status + reasons + variance and locks inputs when finalized. Tests 531 ->
+543 (12 new); build clean; tsc 306 = baseline; no schema migration;
+historical finalized rows untouched.

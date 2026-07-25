@@ -85,3 +85,25 @@ NEW app/lib/actual-cost-finalize.server.ts + tests/actual-cost-finalize.test.ts;
 MODIFIED app/routes/app.erp.production.tsx (saveFinalCosts + reopen intent +
 DTP outsource inputs + status banner), docs (PROJECT_STATE, ACTUAL_COST_PLAN,
 DATA_OWNERSHIP_MAP). No schema, no webhook, no calculator changes.
+
+## 15E.1 SHIPPED (2026-07-24)
+app/lib/actual-cost-finalize.server.ts is live: assessFinalization
+(READY / WARNING-with-reason / BLOCKED per the G rules), computeFinalActualCost
+(components sum once: recorded print OR preview, labor override REPLACES
+minutes x rate, DTP freight in shipping only), computeEstimateVariance
+(percent NULL when no estimated cost — never 0%), normalizeDtpOutsource
+(invoice + charges - credit; invoice-includes-freight backs freight out of
+vendor cost; credit cannot go negative), estimateExpectations (read-only
+snapshot parsing), buildActualCostFinalizeSnapshot, resolveActorFromSession
+(email -> name -> user:id -> shop-admin fallback, documented), numberOrNull
+(blank = not entered, never $0), REOPEN_PHRASE "OWNER COST REOPEN".
+saveFinalCosts: refuses edits while finalized (exact message); recomputes
+everything server-side; finalize refuses BLOCKED and requires a 5+ char
+reason for WARNING; stores the real actor; writes the full snapshot +
+variance into the actual_cost_finalized event. reopenJobCost: phrase +
+written reason; prior final figures embedded in the reopen event before
+flags clear; component values preserved. UI: gate banner with exact
+reasons + variance, DTP structured invoice/charges/credit/freight entry with
+includes-freight normalization control, labor rate blank (no $25 default) +
+$0-labor confirmation, finalize-reason field, locked panel + reopen form when
+finalized. No schema migration; historical rows untouched.
