@@ -28,11 +28,15 @@ routine owner review of ordinary quotes.
 
 ## PROVIDE (blocked or absent until supplied)
 8. Die-cut/irregular cutting model — BLOCKS with the exact message.
-8b. Mimaki GLOSS ink cost + a gloss-inclusive RasterLink profile — gloss
-    stays BLOCKED ("Verified Mimaki gloss production and ink profile
-    required"). White is now COVERED by the verified combined 2/3/4-layer
-    RasterLink throughputs; layer totals of 5+ BLOCK ("Verified Mimaki
-    RasterLink layer profile required"). Never inferred from Roland.
+8b. Mimaki gloss INK ACTUALS — gloss now quotes PROVISIONALLY (owner
+    decision 2026-07-25): CMYK 0.6 ml/sqft basis x layers x glossFactor 1.00
+    x $0.176/ml, labeled estimated. RATIFY/refine the factor only through
+    the read-only RIP calibration report (min 3 finalized comparable jobs;
+    weighted factor = actual ml / base estimated ml; 3-4 low / 5-9 medium /
+    10+ high confidence) — never automatic, editable as
+    ownerConfig.inkCalibration.mimaki.glossFactor in 15F.1 (whiteFactor kept
+    separate; white ink itself remains verified). Layer totals of 5+ still
+    BLOCK ("Verified Mimaki RasterLink layer profile required").
 9. Premium-label market range check (fixture 5 ~$372) — the spot-gloss curve
    is owner-approved; a market cross-check is pending.
 10. Unpriced bag sizes (4x6/5x8/6x9) — Vendor Cost Book entries.

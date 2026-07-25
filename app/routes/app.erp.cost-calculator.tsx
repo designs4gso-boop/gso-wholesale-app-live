@@ -21,7 +21,7 @@ import {
   type FamilyMarginRule,
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
-import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
+import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
 import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginPctForQuantity } from "../lib/commercial-pricing-policy.server";
 import { calculatorFamilies, calculatorFamilyValues, familyByKeyOrAlias } from "../lib/product-family-registry";
 import { resolveProductDisplayName } from "../lib/commercial-name-resolver.server";
@@ -1209,6 +1209,9 @@ export async function loader({ request }: { request: Request }) {
         : null,
       multiLine: productMultiLine, // 15F.0-K
       cutSelected: eparams.get("pcut") || "square-rect", // 15F.0-E form echo
+      // 15F.0G.3: premium Mimaki jobs carry the estimated-ink customer note
+      premiumInkEstimated: pFamily && canonicalUiFamily(pFamily) !== "dtp-bags" && eparams.get("pprinter") !== "roland"
+        && (Number(eparams.get("pwhitelayers") || 0) > 0 || Number(eparams.get("pglosslayers") || 0) > 0),
       isDtp: pFamily ? canonicalUiFamily(pFamily) === "dtp-bags" : false,
       dtpSpec: (() => {
         if (!pFamily || canonicalUiFamily(pFamily) !== "dtp-bags") return null;
@@ -1812,6 +1815,17 @@ export async function action({ request }: { request: Request }) {
       multiLine: savedMultiLine ? { lines: savedMultiLine.lines, totalQuantity: savedMultiLine.totalQuantity, totalCost: savedMultiLine.totalCost, finalTotalPrice: savedMultiLine.finalTotalPrice, achievedMarginPct: savedMultiLine.achievedMarginPct, blockers: savedMultiLine.blockers } : null,
       designSplit: !savedIsDtpSnapshot && savedEngineFamily === "stickers-labels" && Number(fRead("pdesigns") || 0) > 1
         ? designSplit(savedRequestedQty, Number(fRead("pdesigns"))).text
+        : null,
+      // 15F.0G.3-E: calibration metadata for premium Mimaki quotes — the
+      // immutable record RIP actuals are later compared against (read-only
+      // calibration; historical snapshots never rewritten).
+      premiumInkEstimate: !savedIsDtpSnapshot && fRead("pprinter") !== "roland" && productSnapshot
+        ? buildMimakiPremiumInkEstimate({
+            wasteAdjustedSqft: productSnapshot.derived.wasteAdjustedSqft,
+            whiteLayers: Number(fRead("pwhitelayers") || 0),
+            glossLayers: Number(fRead("pglosslayers") || 0),
+            inkMlPerSqft: 0.6,
+          })
         : null,
       family: pFamilySave,
       canonicalFamily: canonicalUiFamily(pFamilySave),
@@ -3131,7 +3145,7 @@ Unit price: ${money2(selected.unitPrice)}
 Product subtotal: ${money2(selected.totalPrice)}
 Setup/design: included in unit pricing
 Includes: material, ink, machine recovery, cutting, application (where applicable), packing
-Does not include: Customer delivery/shipping — quoted separately${selected.freightTotal > 0 ? `\nFreight/handling entered: ${money2(selected.freightTotal)} (${String(selected.freightSource).toUpperCase()}) — included in unit pricing` : ""}
+Does not include: Customer delivery/shipping — quoted separately${pm.premiumInkEstimated ? "\nPremium ink usage is estimated for quoting and reconciled against RIP actuals after production." : ""}${selected.freightTotal > 0 ? `\nFreight/handling entered: ${money2(selected.freightTotal)} (${String(selected.freightSource).toUpperCase()}) — included in unit pricing` : ""}
 Total: ${money2(selected.totalPrice)}`}
         </pre>
         </>

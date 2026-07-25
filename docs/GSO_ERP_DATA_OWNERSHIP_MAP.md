@@ -200,3 +200,14 @@ all three (Phase 15B/15E).
   (fallback 150); Mimaki record speed deliberately unused (stale generic;
   the interim single-rate value was retired) — the engine-owned profile
   governs. Mimaki gloss + 5-layer configurations: PROVIDE items.
+
+## 15F.0G.3 update (2026-07-25)
+- Mimaki premium-ink ESTIMATE OWNER = MIMAKI_INK_CALIBRATION (whiteFactor /
+  glossFactor 1.00, code-backed until ownerConfig.inkCalibration 15F.1) +
+  buildMimakiPremiumInkEstimate snapshot block (version
+  15F.0G.3-provisional-ink-estimate) in product-driven-costing.server.ts.
+  Gloss line = provisional CMYK-basis estimate (never verified); white ink
+  rate remains VERIFIED and untouched. ACTUALS OWNER = 15E finalization +
+  PrintLogEntry channels; calibration comparisons/recommendations OWNER =
+  app/lib/ink-calibration.server.ts (pure, read-only, min 3 jobs, never
+  auto-applied). Quote snapshots immutable.

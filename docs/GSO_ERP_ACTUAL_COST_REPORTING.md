@@ -62,3 +62,17 @@ board/CSVs are display-cleaned via the commercial-name resolver; stored
 values unchanged. A read-only dry-run name audit (?nameaudit=1) lists
 malformed historical names with confidence grades; only HIGH-confidence rows
 are eligible for the documented future owner-approved backfill.
+
+## 15F.0G.3 — premium-ink calibration (2026-07-25)
+Premium Mimaki quotes snapshot premiumInkEstimate (estimated white/gloss ml
++ factors used). Finalized RIP actuals (PrintLogEntry white/clear channels
+through the 15E finalization flow) feed app/lib/ink-calibration.server.ts:
+comparePremiumInkEstimateToActual preserves estimate AND actual with ml/%
+variance (quote snapshots never replaced — actuals belong to finalization/
+reporting); buildInkCalibrationRecommendations groups finalized comparable
+jobs (printer + RasterLink profile + ink type + material family), requires
+MIN 3 jobs, reports sample count / estimated ml / actual ml / weighted
+factor (= sum actual ml / sum base estimated ml before factor) / variance /
+confidence (3-4 low, 5-9 medium, 10+ high). NOTHING auto-applies — owner
+approval updates the factor (ownerConfig.inkCalibration, 15F.1) and only
+new quotes use it.

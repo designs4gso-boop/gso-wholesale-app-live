@@ -1,15 +1,15 @@
 # GSO ERP — Acceptance Quote Fixtures (15F.0-FINAL, 2026-07-25)
 
 Machine-checked in tests/calculator-forensic-fixtures.test.ts +
-tests/production-ready-pricing.test.ts (612 total). Sources: Poseidon
+tests/production-ready-pricing.test.ts (621 total). Sources: Poseidon
 $0.3155556/sqft ($213/675 sqft, cmoxmgvx8…); Banner Vinyl $0.2962963;
 Mimaki $0.176/ml, Roland $0.198667/ml; machine = PRINTER-SPECIFIC profiles
 (Mimaki UCJV300-130 = COMBINED RasterLink table, 600x1200 VD / 32-pass /
 Bi-direction / Fast Print High: 1-layer 51.6 / 2-layer 18.2 / 3-layer 11.8
 / 4-layer 8.6 sqft/hr x 1.15 turnaround applied once, owner-verified, 5+
 layers BLOCK; Roland = ADDITIVE, CMYK 150 baseline + Gloss 110 / White HD
-75 sqft/hr PER SELECTED LAYER; Mimaki gloss ink BLOCKED; minutes = hours
-x 60) x $8/hr recovery; square-rect cutting $6.53/54x54
+75 sqft/hr PER SELECTED LAYER; Mimaki gloss ink = PROVISIONAL estimate 0.6 ml/sqft x layers x factor
+1.00 x $0.176/ml (15F.0G.3); minutes = hours x 60) x $8/hr recovery; square-rect cutting $6.53/54x54
 page (owner-documented),
 contour bands x1.15/x1.35/x1.60 PROVISIONAL; packing $2/box (stickers
 5,000/box PROV; jars 100/box PROV; banners $4/tube PROV); banner finishing
@@ -38,6 +38,7 @@ every quote.
 | 12 | 2,500 Spektra DTP 4x5x2 | 1,323.83 landed | — | **owner ladder $0.88 -> $2,200.00** | $500/$350 rules | — | — | **$2,200.00** (DTP owner ladder) | 876.17 | 39.83% | **READY TO QUOTE** (note: below 40% target; meets 35% floor + $500 target) |
 | 13 | 3x6 ft banner, trimmed (Mimaki) | 31.47 | **78.67** @60% | — | 56.47 | 40 | — | **$78.67** (cost-based) | 47.20 | 60% | READY TO QUOTE |
 | 14 | 3x6 ft banner, hems + grommets (Mimaki) | 49.97 | **124.92** @60% | — | 74.97 | 40 | — | **$124.92** (cost-based) | 74.95 | 60% | READY TO QUOTE |
+| 15 | 585 x 7.13x3.13, 3 designs, 3 GLOSS, simple contour (MIMAKI — 15F.0G.3) | 249.65 | 520.10 @52% | 318.12 | 274.65 | 25 | **567.39** @56% | **$567.39** (premium spot-gloss floor) | 317.74 | 56% | READY TO QUOTE (machine $107.76 combined 4-layer; gloss $31.91 provisional estimate) |
 
 ## K. Market calibration — stickers/labels + banner
 

@@ -17,7 +17,7 @@ import {
   stickerMarketFloorPrice,
   stickerMarketFloorRate,
 } from "../app/lib/commercial-pricing-policy.server";
-import { BANNER_FINISHING_STANDARDS, CUT_CONTOUR_MULTIPLIERS, computeProductDrivenCost, CUT_SQUARE_RECT_STANDARD, normalizeCutType, type ProductDrivenInput } from "../app/lib/product-driven-costing.server";
+import { BANNER_FINISHING_STANDARDS, CUT_CONTOUR_MULTIPLIERS, MIMAKI_INK_CALIBRATION, PREMIUM_INK_ESTIMATE_VERSION, buildMimakiPremiumInkEstimate, computeProductDrivenCost, CUT_SQUARE_RECT_STANDARD, normalizeCutType, type ProductDrivenInput } from "../app/lib/product-driven-costing.server";
 import { INK_RATES, resolveMarginFamily } from "../app/lib/calculator-emergency.server";
 import { OWNER_STANDARDS } from "../app/lib/owner-standards";
 
@@ -452,12 +452,14 @@ describe("printer-specific profiles (15F.0G.2 — Mimaki RasterLink)", () => {
     expect(machineLine.note).toContain("Verified Mimaki RasterLink layer profile required");
   });
 
-  it("Mimaki gloss stays BLOCKED with the exact required message; profile speed does not unlock it", () => {
-    const gloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 }));
+  it("15F.0G.3: a supported Mimaki gloss job is READY — provisional gloss ink prices, machine uses the combined profile", () => {
+    const gloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 })); // 3 total layers
+    expect(gloss.missing).toHaveLength(0); // READY — no owner review for routine gloss quotes
     const glossLine = gloss.lines.find((line) => line.key === "ink_gloss")!;
-    expect(glossLine.source).toBe("missing");
-    expect(glossLine.note).toContain("Verified Mimaki gloss production and ink profile required");
-    expect(gloss.missing.length).toBeGreaterThan(0);
+    expect(glossLine.source).toBe("estimated");
+    expect(glossLine.amount).toBeGreaterThan(0);
+    const machineLine = gloss.lines.find((line) => line.key === "machine")!;
+    expect(machineLine.amount).toBeCloseTo(mimakiMachine(6.25 / 0.9, 3), 10); // combined 3-layer 11.8
   });
 
   it("no active 169 throughput anywhere; engine owns the Mimaki profile; save re-fetches records", () => {
@@ -469,6 +471,61 @@ describe("printer-specific profiles (15F.0G.2 — Mimaki RasterLink)", () => {
     expect(engineSrc).toContain("sqftPerHourByTotalLayers: { 1: 51.6, 2: 18.2, 3: 11.8, 4: 8.6 }");
     expect(routeSrc).toContain("mimaki: 0, // engine-owned RasterLink profile governs Mimaki");
     expect(routeSrc).toContain("const printerSpeedsSave = resolvePrinterSpeeds(await db.machine.findMany");
+  });
+});
+
+describe("provisional Mimaki gloss ink + live fixture (15F.0G.3)", () => {
+  const wasteSqft = ((7.13 * 3.13 * 585) / 144) / 0.9; // 100.736007
+
+  it("gloss estimate: 1 layer = sqft x 0.6 x $0.176 x factor 1.00; 3 layers = exactly 3x; owner example ~181.33 ml / ~$31.91", () => {
+    const one = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, glossLayers: 1 }));
+    const three = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, glossLayers: 3 }));
+    const oneGloss = one.lines.find((line) => line.key === "ink_gloss")!;
+    const threeGloss = three.lines.find((line) => line.key === "ink_gloss")!;
+    expect(oneGloss.amount).toBeCloseTo(wasteSqft * 0.6 * 1 * 1.0 * 0.176, 8);
+    expect(threeGloss.amount).toBeCloseTo(oneGloss.amount * 3, 8); // exactly 3x one layer
+    expect(wasteSqft * 0.6 * 3).toBeCloseTo(181.3248, 3); // ~181.33 ml (owner example at 100.74)
+    expect(threeGloss.amount).toBeCloseTo(31.9132, 3); // ~$31.91
+    expect(threeGloss.source).toBe("estimated"); // never verified, never $0
+  });
+
+  it("premiumInkEstimate snapshot metadata: factors 1.00 snapshotted, white and gloss SEPARATE, version recorded", () => {
+    const estimate = buildMimakiPremiumInkEstimate({ wasteAdjustedSqft: wasteSqft, whiteLayers: 1, glossLayers: 3, inkMlPerSqft: 0.6 })!;
+    expect(estimate.glossFactor).toBe(1.0);
+    expect(estimate.whiteFactor).toBe(1.0);
+    expect(estimate.glossFactor).not.toBe(MIMAKI_INK_CALIBRATION.whiteFactor === MIMAKI_INK_CALIBRATION.glossFactor ? 2 : estimate.whiteFactor); // structurally separate fields
+    expect(estimate.estimatedGlossMl).toBeCloseTo(wasteSqft * 0.6 * 3, 8);
+    expect(estimate.estimatedWhiteMl).toBeCloseTo(wasteSqft * 0.6 * 1, 8);
+    expect(estimate.estimatedGlossCost).toBeCloseTo(estimate.estimatedGlossMl * 0.176, 8);
+    expect(estimate.sourceVersion).toBe(PREMIUM_INK_ESTIMATE_VERSION);
+    expect(estimate.profile).toContain("600x1200 VD / 32-pass");
+    expect(buildMimakiPremiumInkEstimate({ wasteAdjustedSqft: wasteSqft, whiteLayers: 0, glossLayers: 0, inkMlPerSqft: 0.6 })).toBeNull(); // no premium layers -> no block
+  });
+
+  it("live fixture (I): 585 x 7.13x3.13, 3 designs, 3 gloss, simple contour on Mimaki — READY at the premium curve", () => {
+    const run = computeProductDrivenCost(stickerInput({
+      quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, glossLayers: 3, cutType: "kiss-simple",
+    }));
+    expect(run.missing).toHaveLength(0); // READY TO QUOTE
+    const machine = run.lines.find((line) => line.key === "machine")!;
+    expect(machine.amount).toBeCloseTo(mimakiMachine(wasteSqft, 4), 6); // combined 4-layer 8.6 x 1.15
+    expect(machine.amount).toBeCloseTo(107.7641, 3); // ~13.47 hr x $8 (owner example)
+    expect((wasteSqft / 8.6) * MIMAKI_TURNAROUND).toBeCloseTo(13.4705, 3);
+    expect(run.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(10.6377, 3); // ~$10.64
+    expect(run.lines.find((line) => line.key === "ink_gloss")!.amount).toBeCloseTo(31.9132, 3); // ~$31.91 estimated
+    expect(run.totalCost).toBeCloseTo(249.6503, 3); // complete cost through the engine
+    const priced = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: run.totalCost, marginRule: resolveMarginFamily("stickers-labels")!, premiumEligible: true, finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal });
+    expect(priced.finalTotalPrice).toBeCloseTo(run.totalCost / 0.44, 6); // premium 56% controls
+    expect(priced.finalTotalPrice).toBeCloseTo(567.3871, 3);
+    expect(priced.finalUnitPrice).toBeCloseTo(0.9699, 4);
+    expect(priced.controllingRule).toContain("Premium finish floor");
+  });
+
+  it("route wires the snapshot metadata and the customer estimated-ink note; DTP untouched", () => {
+    const src = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+    expect(src).toContain("premiumInkEstimate: !savedIsDtpSnapshot && fRead(\"pprinter\") !== \"roland\" && productSnapshot");
+    expect(src).toContain("buildMimakiPremiumInkEstimate({");
+    expect(src).toContain("Premium ink usage is estimated for quoting and reconciled against RIP actuals after production.");
   });
 });
 

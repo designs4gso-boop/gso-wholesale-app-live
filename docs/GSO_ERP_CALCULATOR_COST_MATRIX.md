@@ -13,7 +13,7 @@ BA=Banners, CU=Custom Item, DTP=DTP Bags.
 | Material (media) | INC | INC | INC | INC | INC | INC when dims given | EXC (vendor-finished) |
 | CMYK ink | INC (0.6 ml/sqft PROV) | INC | INC | INC | INC | INC when dims | EXC |
 | White ink | INC (linear PROV) | INC | INC | INC | INC | INC | EXC |
-| Gloss ink | Mimaki BLK / Roland PROV | same | same | same | same | same | EXC |
+| Gloss ink | Mimaki PROV estimate (0.6 ml/sqft x layers x factor 1.00, 15F.0G.3) / Roland PROV | same | same | same | same | same | EXC |
 | Machine recovery | INC ($8/hr x 150 sqft/hr x passes; BLK if no speed) | INC | INC | INC | INC | INC when dims | EXC (outsourced) |
 | Art/design setup | INC $8.33/design | INC | INC | INC | INC | INC | INC (every design) |
 | Print setup | INC $1.00/design | INC | INC | INC | INC | INC | EXC (owner rule — Spektra prints) |

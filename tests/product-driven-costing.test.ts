@@ -45,12 +45,17 @@ describe("layers (14C.1)", () => {
     expect(four.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(one.lines.find((l) => l.key === "ink_cmyk")!.amount, 6);
   });
 
-  it("gloss layers on Mimaki without verified gloss cost are MISSING (never $0-final); Roland gloss is provisional-estimated", () => {
-    const mimaki = computeProductDrivenCost(makeInput({ glossLayers: 7 }));
+  it("15F.0G.3: Mimaki gloss prices PROVISIONALLY on the CMYK basis (never $0, never verified); Roland gloss unchanged", () => {
+    const mimaki = computeProductDrivenCost(makeInput({ glossLayers: 2 }));
     const glossLine = mimaki.lines.find((line) => line.key === "ink_gloss")!;
-    expect(glossLine.source).toBe("missing");
-    expect(glossLine.note).toContain("Verified Mimaki gloss production and ink profile required"); // 15F.0G.1 exact blocker
-    expect(mimaki.missing.length).toBeGreaterThan(0);
+    expect(glossLine.source).toBe("estimated"); // provisional, not verified, not missing
+    expect(glossLine.amount).toBeGreaterThan(0); // never $0
+    expect(glossLine.amount).toBeCloseTo(mimaki.derived.wasteAdjustedSqft * 0.6 * 2 * 1.0 * 0.176, 6);
+    expect(glossLine.note).toContain("Provisional Mimaki gloss estimate");
+    expect(glossLine.formula).toContain("factor 1.00");
+    // missing usage basis still BLOCKS — the estimate never resolves from nothing
+    const noBasis = computeProductDrivenCost(makeInput({ glossLayers: 2, inkMlPerSqft: 0 }));
+    expect(noBasis.lines.find((line) => line.key === "ink_gloss")!.source).toBe("missing");
     const roland = computeProductDrivenCost(makeInput({ printer: "roland", printerHasGloss: true, glossLayers: 2 }));
     expect(roland.lines.find((line) => line.key === "ink_gloss")!.source).toBe("estimated");
   });

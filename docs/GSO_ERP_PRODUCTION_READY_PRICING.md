@@ -183,3 +183,26 @@ save action, snapshots, production estimates all flow through it):
 Displays name the real source ("CMYK machine time — 92.9 min (1.55 hr),
 51.6 sqft/hr" with the full RasterLink profile in the note; "Combined
 2-layer machine time — 18.2 sqft/hr" for two-layer jobs). DTP untouched.
+
+## 15F.0G.3 — provisional Mimaki gloss ink + RIP calibration path (2026-07-25)
+Routine Mimaki gloss quotes no longer block (owner decision): gloss ink =
+adjustedSqft x 0.6 ml/sqft (CMYK basis) x glossLayers x approvedGlossFactor
+(initial 1.00) x $0.176/ml — labeled ESTIMATED with the full formula, never
+verified, never $0. BLOCKS remain for 5+ total layers (no RasterLink
+throughput), missing ink price/usage basis, and every other missing
+component. WHITE keeps its existing VERIFIED rate (the provisional approach
+applies only where a cost is missing); whiteFactor (1.00) exists SEPARATELY
+for calibration. Every premium Mimaki quote snapshots premiumInkEstimate
+(printer, profile, basis, layers, factors, estimated ml/cost, version
+15F.0G.3-provisional-ink-estimate) — the immutable record RIP actuals are
+compared against. app/lib/ink-calibration.server.ts provides READ-ONLY
+comparison (estimate vs actual ml, variance ml/% — quote estimates never
+replaced) and owner-review recommendations grouped by printer/profile/ink
+type/material family: weightedFactor = sum(actualMl) / sum(base estimated
+ml BEFORE factor), minimum 3 finalized comparable jobs, confidence 3-4 low
+/ 5-9 medium / 10+ high. Factors change ONLY by owner approval (future
+ownerConfig.inkCalibration.mimaki.whiteFactor/.glossFactor, 15F.1);
+historical snapshots are never rewritten. Live fixture (585 x 7.13x3.13,
+3 designs, 3 gloss, simple contour, Mimaki): machine 13.47 hr / $107.76
+(4-layer 8.6 x 1.15), CMYK $10.64, gloss $31.91 estimated, complete cost
+$249.65 -> premium 56% -> $567.39 READY TO QUOTE ($0.97/label).

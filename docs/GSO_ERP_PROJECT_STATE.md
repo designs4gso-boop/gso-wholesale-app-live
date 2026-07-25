@@ -1208,3 +1208,24 @@ remains the unchanged ADDITIVE model (150 + 110/75). Owner examples pinned:
 Chiron $2,558.26/$3,060.96; banners $78.67/$124.92; multi-line $202.00
 unchanged). Roland premium fixture stays 3.4191 hr; DTP untouched. Tests
 610 -> 612; tsc 306; build clean.
+
+## Patch 15F.0G.3 — provisional Mimaki gloss ink + RIP calibration (2026-07-25)
+Routine Mimaki gloss quotes are READY (owner decision): provisional gloss
+estimate = adjustedSqft x 0.6 ml/sqft CMYK basis x layers x glossFactor
+1.00 x $0.176/ml, labeled estimated with the full formula (blocks only for
+missing basis/price, 5+ layers, or other missing components). White ink
+stays verified; whiteFactor kept separate. New premium Mimaki quotes
+snapshot premiumInkEstimate (profile, basis, layers, factors, estimated
+ml/costs, source version) — immutable calibration baseline. New
+app/lib/ink-calibration.server.ts: read-only estimate-vs-actual comparison
+(never replaces quote estimates) + owner-review recommendations (group by
+printer/profile/ink type/material family; weighted factor = actual ml /
+base estimated ml; min 3 finalized jobs; confidence low/medium/high) —
+never auto-applied; factors become editable via
+ownerConfig.inkCalibration.mimaki.* in 15F.1. Customer summary notes
+"Premium ink usage is estimated for quoting and reconciled against RIP
+actuals after production." Live fixture: 585 x 7.13x3.13 x 3 gloss contour
+on Mimaki = $249.65 cost -> $567.39 premium READY ($107.76 machine, $10.64
+CMYK, $31.91 gloss est.). Tests 612 -> 621 (new ink-calibration suite +
+G.3 fixtures; two obsolete gloss-block pins rewritten); tsc 306; build
+clean; no migration; Roland/DTP untouched.

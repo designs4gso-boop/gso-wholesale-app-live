@@ -60,6 +60,59 @@ export const MIMAKI_UCJV_RASTERLINK_PROFILE = {
   sqftPerHourByTotalLayers: { 1: 51.6, 2: 18.2, 3: 11.8, 4: 8.6 } as Record<number, number>,
 } as const;
 
+// 15F.0G.3 — PROVISIONAL Mimaki premium-ink estimate (owner decision
+// 2026-07-25): routine gloss quotes must not block waiting for RIP actuals.
+// Gloss estimate = adjustedSqft x CMYK ml/sqft basis (0.6) x glossLayers x
+// approvedGlossFactor x $0.176/ml — labeled estimated, NEVER verified.
+// White keeps its existing VERIFIED rate (mimakiWhitePerMl): the provisional
+// approach applies only where a cost is missing. whiteFactor exists
+// SEPARATELY for calibration metadata and the future editable settings
+// (ownerConfig.inkCalibration.mimaki.whiteFactor / .glossFactor, 15F.1).
+// Finalized RIP actuals feed READ-ONLY calibration recommendations
+// (app/lib/ink-calibration.server.ts); factors change only by owner
+// approval; every quote snapshots the factor used; historical snapshots are
+// never rewritten.
+export const PREMIUM_INK_ESTIMATE_VERSION = "15F.0G.3-provisional-ink-estimate";
+export const MIMAKI_INK_CALIBRATION = {
+  whiteFactor: 1.0, // separate from gloss; code-backed default until 15F.1 ownerConfig
+  glossFactor: 1.0,
+} as const;
+
+// Snapshot metadata for premium (white/gloss) Mimaki quotes — the record RIP
+// actuals are later compared against. Returns null when no premium layers.
+export function buildMimakiPremiumInkEstimate(input: {
+  wasteAdjustedSqft: number;
+  whiteLayers: number;
+  glossLayers: number;
+  inkMlPerSqft: number;
+}): {
+  printer: string; profile: string; baseMlPerSqft: number; inkCostPerMl: number;
+  whiteLayers: number; glossLayers: number; whiteFactor: number; glossFactor: number;
+  estimatedWhiteMl: number; estimatedGlossMl: number;
+  estimatedWhiteCost: number; estimatedGlossCost: number; sourceVersion: string;
+} | null {
+  const whiteLayers = Math.max(0, Math.floor(input.whiteLayers));
+  const glossLayers = Math.max(0, Math.floor(input.glossLayers));
+  if (whiteLayers <= 0 && glossLayers <= 0) return null;
+  const sqft = Math.max(0, input.wasteAdjustedSqft);
+  const basis = Math.max(0, input.inkMlPerSqft);
+  const estimatedWhiteMl = sqft * basis * whiteLayers * MIMAKI_INK_CALIBRATION.whiteFactor;
+  const estimatedGlossMl = sqft * basis * glossLayers * MIMAKI_INK_CALIBRATION.glossFactor;
+  return {
+    printer: "Mimaki UCJV300-130",
+    profile: MIMAKI_UCJV_RASTERLINK_PROFILE.label,
+    baseMlPerSqft: basis,
+    inkCostPerMl: INK_RATES.mimakiCmykPerMl,
+    whiteLayers, glossLayers,
+    whiteFactor: MIMAKI_INK_CALIBRATION.whiteFactor,
+    glossFactor: MIMAKI_INK_CALIBRATION.glossFactor,
+    estimatedWhiteMl, estimatedGlossMl,
+    estimatedWhiteCost: estimatedWhiteMl * INK_RATES.mimakiWhitePerMl,
+    estimatedGlossCost: estimatedGlossMl * INK_RATES.mimakiCmykPerMl,
+    sourceVersion: PREMIUM_INK_ESTIMATE_VERSION,
+  };
+}
+
 // Owner-documented cutting standards (15F.0-E). Square/rectangle: the owner
 // measured 15.7 minutes = $6.53 at the applicable labor standard; applied per
 // 54x54in production page (the same page unit as weeding) so cost scales
@@ -489,7 +542,23 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
     if (glossLayers > 0) {
       const glossRate = input.printer === "mimaki" ? INK_RATES.mimakiGlossPerMl : INK_RATES.rolandPerMl;
       if (glossRate == null) {
-        lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s)`, amount: 0, source: "missing", note: "Verified Mimaki gloss production and ink profile required — DRAFT ONLY (never priced as $0-final)." });
+        // 15F.0G.3: Mimaki gloss quotes provisionally on the CMYK basis
+        // (owner decision) — never $0, never blocked merely for missing RIP
+        // actuals, never labeled verified. BLOCKS only if the ink price or
+        // usage basis itself is missing.
+        if (input.inkMlPerSqft > 0 && INK_RATES.mimakiCmykPerMl > 0) {
+          const glossMl = wasteAdjustedSqft * input.inkMlPerSqft * glossLayers * MIMAKI_INK_CALIBRATION.glossFactor;
+          lines.push({
+            key: "ink_gloss",
+            label: `Gloss ink — ${glossLayers} layer(s) — provisional estimate`,
+            amount: glossMl * INK_RATES.mimakiCmykPerMl,
+            source: "estimated",
+            formula: `${wasteAdjustedSqft.toFixed(2)} sqft x ${input.inkMlPerSqft} ml/sqft x ${glossLayers} layer(s) x factor ${MIMAKI_INK_CALIBRATION.glossFactor.toFixed(2)} x $${INK_RATES.mimakiCmykPerMl}/ml`,
+            note: "Provisional Mimaki gloss estimate: CMYK ml/sqft basis x gloss layers x approved gloss factor — reconciled against RIP actuals after production (owner-approved 2026-07-25).",
+          });
+        } else {
+          lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s)`, amount: 0, source: "missing", note: "Mimaki ink price/usage basis missing — gloss cannot be estimated." });
+        }
       } else {
         lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s), provisional linear model`, amount: glossRate * input.inkMlPerSqft * wasteAdjustedSqft * glossLayers, source: "estimated" });
       }
