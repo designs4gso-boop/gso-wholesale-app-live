@@ -1359,3 +1359,17 @@ test-pinned. SCHEMA: focused PrintIntake migration CREATED but NOT applied
 PIPELINE TEST_3X SPOT GLOSS_Roland.pdf" -> Roland GLOSS-3X auto-create,
 test-pinned end-to-end at the pure layer. Tests 651 -> 663; tsc 306; build
 clean; agent self-test 0 failures.
+
+## Patch 15F.0J.5A — print-intake auto-create transaction fix (2026-07-26)
+Live-deploy failures fixed: advisory lock cast to ::text (VOID
+deserialization error gone; lock still held; blanket catch narrowed —
+only SQLite skips, real failures throw advisory_lock_failed); nonexistent
+ProductionJob.source removed from create (PrintIntake owns provenance via
+generatedProductionJobId + created_from_print_intake event + markers).
+Route-plan catch returns actionable safe error codes with connection
+strings redacted. New fixture pinned: "GSO PIPELINE TEST 3_1X SPOT
+GLOSS_Roland.pdf" -> Roland GLOSS-1X (the bare "3" never counts) ->
+GSO-...__ROLAND__GLOSS-1X__...__A1. Rollback-on-failure and duplicate-hash
+reuse re-pinned. Tests 663 -> 665; tsc 306; build clean; agent self-test 0
+failures; no schema change (migration from J.5 unchanged, already applied
+in production).

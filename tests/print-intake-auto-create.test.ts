@@ -114,12 +114,38 @@ describe("route-plan + creator source pins (15F.0J.5)", () => {
     expect(schemaSrc).toContain("@@unique([shop, fileHashSha256])");
   });
 
-  it("test 19: nothing commercial fabricated — quantity 0, $0 prices, UNLINKED status, no paid/approved markers", () => {
+  it("15F.0J.5A-A: advisory lock casts VOID to a supported scalar and stays LOUD on real failures", () => {
+    expect(creatorSrc).toContain("pg_advisory_xact_lock(${Math.trunc(keyA)}, ${Math.trunc(keyB)})::text AS gso_lock"); // no void deserialization
+    expect(creatorSrc).not.toMatch(/pg_advisory_xact_lock\(\$\{Math\.trunc\(keyA\)\}, \$\{Math\.trunc\(keyB\)\}\)`/); // uncast form gone
+    expect(creatorSrc).toContain('gsoCode = "advisory_lock_failed"');
+    expect(creatorSrc).toContain("no such function|not supported on|sqlite"); // ONLY SQLite skips; everything else throws
+  });
+
+  it("test 19 + 15F.0J.5A-B: nothing fabricated AND no nonexistent ProductionJob.source field — PrintIntake owns provenance", () => {
     expect(creatorSrc).toContain("quantity: 0, // unknown — never fabricated");
     expect(creatorSrc).toContain("PRINT INTAKE — UNLINKED");
-    expect(creatorSrc).toContain('source: "print_intake"');
+    expect(creatorSrc).not.toContain('source: "print_intake"'); // Prisma "Unknown argument `source`" fixed
+    expect(creatorSrc).toContain("ProductionJob has NO `source` column");
+    expect(creatorSrc).toContain("created_from_print_intake"); // event carries provenance
     expect(creatorSrc).not.toContain('status: "paid"');
     expect(creatorSrc).toContain('customerName: "Unlinked (print intake)"');
+    const jobBlock = schemaSrc.split("model ProductionJob {")[1].split("\n}")[0]; // scope to THIS model only
+    expect(/\n  source\s+String/.test(jobBlock)).toBe(false); // no `source` column added to ProductionJob
+  });
+
+  it("15F.0J.5A-D/E: actionable error codes; live fixture GSO PIPELINE TEST 3_1X SPOT GLOSS_Roland.pdf -> Roland GLOSS-1X", () => {
+    for (const code of ["advisory_lock_failed", "schema_mismatch", "print_intake_create_failed", "unique_conflict_recovered", "production_job_create_failed"]) {
+      expect(routeSrc).toContain(code);
+    }
+    expect(routeSrc).toContain("errorCode: code");
+    expect(routeSrc).toContain("[redacted-connection]"); // no credentials in messages
+    const fixture = "GSO PIPELINE TEST 3_1X SPOT GLOSS_Roland.pdf";
+    const hints = parseFilenamePrintHints(fixture);
+    expect(hints.glossLayers).toBe(1); // the bare "3" in "TEST 3" never counts
+    expect(hints.mode).toBe("GLOSS-1X");
+    const machine = decideMachineFromFilename(fixture);
+    expect(machine.machine).toBe("roland");
+    expect(buildIntakeRipName("GSO-20260726-0050", "roland", "GLOSS-1X", fixture)).toBe("GSO-20260726-0050__ROLAND__GLOSS-1X__GSO-PIPELINE-TEST-3-1X-SPOT-GLOSS-ROLAND__A1");
   });
 
   it("tests 12/14/15: agent preserves the original and archives ONLY after a verified routed copy; failure leaves it in place", () => {

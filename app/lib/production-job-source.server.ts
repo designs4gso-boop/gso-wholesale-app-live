@@ -46,11 +46,21 @@ export function advisoryLockKeys(shop: string, sourceType: string, sourceId: str
 async function acquireSourceLock(tx: any, shop: string, sourceType: string, sourceId: string) {
   const [keyA, keyB] = advisoryLockKeys(shop, sourceType, sourceId);
   try {
-    // numeric parameters only — no string interpolation into SQL
-    await tx.$queryRawUnsafe(`SELECT pg_advisory_xact_lock(${Math.trunc(keyA)}, ${Math.trunc(keyB)})`);
-  } catch {
-    // Non-Postgres dev database (SQLite): advisory locks unsupported. Dev is
-    // single-instance; production (Postgres) always takes the lock.
+    // numeric parameters only — no string interpolation into SQL.
+    // 15F.0J.5A: pg_advisory_xact_lock returns VOID, which Prisma cannot
+    // deserialize ("Failed to deserialize column of type 'void'"). The ::text
+    // cast runs AFTER the lock is acquired and yields a supported scalar, so
+    // the lock is held AND the client call succeeds.
+    await tx.$queryRawUnsafe(`SELECT pg_advisory_xact_lock(${Math.trunc(keyA)}, ${Math.trunc(keyB)})::text AS gso_lock`);
+  } catch (error: any) {
+    const message = String((error as Error)?.message || error || "");
+    // ONLY a non-Postgres dev database (SQLite) may skip locking — any other
+    // failure is a real concurrency-safety error and must be loud (the old
+    // blanket catch silently swallowed lock failures; 15F.0J.5A narrows it).
+    if (/no such function|not supported on|sqlite/i.test(message)) return;
+    const lockError = new Error(`advisory_lock_failed: ${message.slice(0, 160)}`);
+    (lockError as any).gsoCode = "advisory_lock_failed";
+    throw lockError;
   }
 }
 
@@ -686,12 +696,15 @@ export async function createOrReusePrintIntakeJob(dbClient: any, input: PrintInt
       }
       const jobTicket = await buildNextJobTicket(tx, shop);
       const ripName = buildIntakeRipNameLocal(jobTicket, input.machine, input.mode, cleanedName);
+      // 15F.0J.5A: ProductionJob has NO `source` column — PrintIntake is the
+      // authoritative source record (generatedProductionJobId + the
+      // created_from_print_intake event + notes/customer markers carry the
+      // provenance; the board infers "Print Intake" from those).
       const job = await tx.productionJob.create({
         data: {
           shop,
           jobTicket,
           assetInboxKey: jobTicket,
-          source: "print_intake",
           customerName: "Unlinked (print intake)",
           status: "new",
           priority: "normal",

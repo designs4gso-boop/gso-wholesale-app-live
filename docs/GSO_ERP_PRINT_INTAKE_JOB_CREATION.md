@@ -48,3 +48,19 @@ from this session (local env points at production Postgres) — it applies at
 deploy via `npm run setup` (prisma migrate deploy). Rollback: DROP TABLE
 "PrintIntake". No historical rewrites; no mass backfill (optional
 owner-triggered backfill limited to unresolved current inbox files).
+
+## 15F.0J.5A hotfix (2026-07-26) — transaction fixed after live deploy
+Two live failures corrected: (1) the advisory lock now selects
+pg_advisory_xact_lock(...)::text (Prisma cannot deserialize VOID) — the
+lock is still acquired transaction-scoped with the same two-int keys, and
+the old blanket catch is NARROWED so only a SQLite dev database may skip
+locking; any real lock failure throws advisory_lock_failed loudly. (2)
+ProductionJob.create no longer sends the nonexistent `source` field —
+PrintIntake remains the authoritative source record (generatedProductionJobId
++ created_from_print_intake event + notes/customer markers carry
+provenance; the board infers Print Intake from those). Transaction order
+verified lock -> recheck -> ticket -> job(+item) -> intake -> event; any
+failure rolls back everything (no ticket consumed, file left for retry) and
+the route-plan now returns actionable, credential-safe error codes:
+advisory_lock_failed / schema_mismatch / print_intake_create_failed /
+unique_conflict_recovered / production_job_create_failed.

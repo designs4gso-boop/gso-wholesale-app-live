@@ -154,8 +154,20 @@ export async function action({ request }: { request: Request }) {
         },
       });
     } catch (error) {
-      // Ticket/DB failure is a ROUTING BLOCKER — leave the file for retry.
-      return json({ ok: true, fileName, plan: { ...plan, reasons: [...plan.reasons, `print_intake_creation_failed: ${String((error as Error)?.message || error).slice(0, 160)}`], autoCreated: false } });
+      // 15F.0J.5A: ticket/DB failure is a ROUTING BLOCKER — leave the file
+      // for retry with an ACTIONABLE, credential-safe error code + message.
+      const message = String((error as Error)?.message || error || "");
+      const code = (error as any)?.gsoCode === "advisory_lock_failed" || /advisory_lock_failed|deserialize.*void/i.test(message)
+        ? "advisory_lock_failed"
+        : /unknown argument|unknown field|unknown arg/i.test(message)
+          ? "schema_mismatch"
+          : /printIntake/i.test(message)
+            ? "print_intake_create_failed"
+            : /unique constraint|p2002/i.test(message)
+              ? "unique_conflict_recovered"
+              : "production_job_create_failed";
+      const safeMessage = message.replace(/postgres(ql)?:\/\/\S+/gi, "[redacted-connection]").slice(0, 200);
+      return json({ ok: true, fileName, plan: { ...plan, reasons: [...plan.reasons, `${code}: ${safeMessage}`], errorCode: code, autoCreated: false } });
     }
   }
   return json({ ok: true, fileName, plan: { ...plan, autoCreated: false } });
