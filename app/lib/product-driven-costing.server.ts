@@ -54,6 +54,30 @@ export const ROLAND_PRINT_MODE_SQFT_PER_HOUR = {
   glossPerLayer: 110,
   whitePerLayer: 75,
 } as const;
+
+// 15F.0J.3 — Roland LG-640 MEASURED ink calibration (owner-ratified
+// provisional). Source: Roland VersaWorks all-time job log forensic
+// analysis, 2026-03-26..2026-07-24 (docs/GSO_ERP_ROLAND_LOG_FORENSIC_
+// ANALYSIS.md; median ml per RIP-layout sqft from accepted completion
+// records). Replaces the generic 0.6 ml/sqft basis for ROLAND ONLY —
+// Mimaki keeps its own paths. Area basis at quote time: the engine's
+// waste-adjusted sqft as the QUOTE-TIME LAYOUT PROXY (measured layout
+// utilization ~99%, so no second hidden multiplier is added; the basis is
+// labeled and snapshotted). Coverage factors default 1.00 (coverage % is
+// not collected yet — exposed in the breakdown). RUNTIME stays on the
+// existing provisional model — ink and runtime calibration are separate.
+// Future refinements come only from new measured actuals + owner approval.
+export const ROLAND_INK_CALIBRATION = {
+  version: "15F.0J.3-roland-measured-ink",
+  printerModel: "Roland TrueVIS LG-640",
+  source: "Roland VersaWorks all-time job log forensic analysis (2026-03-26..2026-07-24)",
+  areaBasis: "waste-adjusted sqft (quote-time layout proxy; measured layout utilization ~99%)",
+  cmykMlPerSqft: 1.05, // n=127, HIGH confidence (median 1.052)
+  whiteMlPerSqftPerLayer: 1.9, // n=14-21, MEDIUM confidence (combined-stage median 1.92)
+  glossMlPerSqftPerStage: 2.83, // n=164, HIGH confidence (median 2.834; per selected gloss STAGE)
+  coverageFactor: 1.0, // documented default until coverage % is collected
+  status: "measured provisional (owner-ratified 2026-07-26)",
+} as const;
 export const MIMAKI_UCJV_RASTERLINK_PROFILE = {
   label: "600x1200 VD / 32-pass / Bi-direction / Fast Print High (LUS-170)",
   turnaroundFactor: 1.15, // UCJV300-130 physical carriage/turnaround, once per job
@@ -534,13 +558,53 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
       lines.push({ key: "material", label: input.material?.name || "Material", amount: 0, source: "missing", note: "Select a verified material." });
     }
     const cmykRate = input.printer === "mimaki" ? INK_RATES.mimakiCmykPerMl : INK_RATES.rolandPerMl;
-    lines.push({ key: "ink_cmyk", label: `CMYK ink — base print (${input.inkMlPerSqft} ml/sqft)`, amount: cmykRate * input.inkMlPerSqft * wasteAdjustedSqft, source: input.printer === "roland" ? "estimated" : "verified", note: input.printer === "roland" ? "Roland uniform rate — owner-approved provisional." : undefined });
+    // 15F.0J.3: ROLAND uses the MEASURED ink calibration (per-printer
+    // profile) — never the generic 0.6 ml/sqft basis. Mimaki paths unchanged.
+    const isRolandInk = input.printer === "roland";
+    if (isRolandInk) {
+      const cal = ROLAND_INK_CALIBRATION;
+      const cmykMl = wasteAdjustedSqft * cal.cmykMlPerSqft;
+      lines.push({
+        key: "ink_cmyk",
+        label: `CMYK ink — ${cmykMl.toFixed(1)} ml (measured ${cal.cmykMlPerSqft} ml/sqft)`,
+        amount: cmykMl * INK_RATES.rolandPerMl,
+        source: "estimated",
+        formula: `${wasteAdjustedSqft.toFixed(2)} sqft (layout proxy) x ${cal.cmykMlPerSqft} ml/sqft x $${INK_RATES.rolandPerMl.toFixed(4)}/ml`,
+        note: `${cal.printerModel} ${cal.version}: MEASURED provisional CMYK rate (HIGH confidence, n=127; ${cal.source}); area basis = ${cal.areaBasis}.`,
+      });
+    } else {
+      lines.push({ key: "ink_cmyk", label: `CMYK ink — base print (${input.inkMlPerSqft} ml/sqft)`, amount: cmykRate * input.inkMlPerSqft * wasteAdjustedSqft, source: "verified" });
+    }
     if (whiteLayers > 0) {
-      const whiteRate = input.printer === "mimaki" ? INK_RATES.mimakiWhitePerMl : INK_RATES.rolandPerMl;
-      lines.push({ key: "ink_white", label: `White ink — ${whiteLayers} layer(s), provisional linear model`, amount: whiteRate * input.inkMlPerSqft * wasteAdjustedSqft * whiteLayers, source: input.printer === "mimaki" ? "verified" : "estimated" });
+      if (isRolandInk) {
+        const cal = ROLAND_INK_CALIBRATION;
+        const whiteMl = wasteAdjustedSqft * cal.coverageFactor * whiteLayers * cal.whiteMlPerSqftPerLayer;
+        lines.push({
+          key: "ink_white",
+          label: `White ink — ${whiteLayers} layer(s) — ${whiteMl.toFixed(1)} ml (measured ${cal.whiteMlPerSqftPerLayer} ml/sqft/layer)`,
+          amount: whiteMl * INK_RATES.rolandPerMl,
+          source: "estimated",
+          formula: `${wasteAdjustedSqft.toFixed(2)} sqft x coverage ${cal.coverageFactor.toFixed(2)} x ${whiteLayers} layer(s) x ${cal.whiteMlPerSqftPerLayer} ml/sqft x $${INK_RATES.rolandPerMl.toFixed(4)}/ml`,
+          note: `${cal.version}: MEASURED provisional white rate (MEDIUM confidence, n=14-21) — the SELECTED layer count only, never an assumed 3X; coverage factor ${cal.coverageFactor.toFixed(2)} (documented default).`,
+        });
+      } else {
+        lines.push({ key: "ink_white", label: `White ink — ${whiteLayers} layer(s), provisional linear model`, amount: INK_RATES.mimakiWhitePerMl * input.inkMlPerSqft * wasteAdjustedSqft * whiteLayers, source: "verified" });
+      }
     }
     if (glossLayers > 0) {
-      const glossRate = input.printer === "mimaki" ? INK_RATES.mimakiGlossPerMl : INK_RATES.rolandPerMl;
+      if (isRolandInk) {
+        const cal = ROLAND_INK_CALIBRATION;
+        const glossMl = wasteAdjustedSqft * cal.coverageFactor * glossLayers * cal.glossMlPerSqftPerStage;
+        lines.push({
+          key: "ink_gloss",
+          label: `Gloss ink — ${glossLayers} stage(s) — ${glossMl.toFixed(1)} ml (measured ${cal.glossMlPerSqftPerStage} ml/sqft/stage)`,
+          amount: glossMl * INK_RATES.rolandPerMl,
+          source: "estimated",
+          formula: `${wasteAdjustedSqft.toFixed(2)} sqft x coverage ${cal.coverageFactor.toFixed(2)} x ${glossLayers} stage(s) x ${cal.glossMlPerSqftPerStage} ml/sqft x $${INK_RATES.rolandPerMl.toFixed(4)}/ml`,
+          note: `${cal.version}: MEASURED provisional gloss rate (HIGH confidence, n=164) per selected gloss STAGE — one multiplier per stage, never doubled through mode logic; coverage ${cal.coverageFactor.toFixed(2)}.`,
+        });
+      } else {
+      const glossRate = INK_RATES.mimakiGlossPerMl;
       if (glossRate == null) {
         // 15F.0G.3: Mimaki gloss quotes provisionally on the CMYK basis
         // (owner decision) — never $0, never blocked merely for missing RIP
@@ -560,7 +624,9 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
           lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s)`, amount: 0, source: "missing", note: "Mimaki ink price/usage basis missing — gloss cannot be estimated." });
         }
       } else {
+        // Defensive: a future verified Mimaki gloss rate prices linearly.
         lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s), provisional linear model`, amount: glossRate * input.inkMlPerSqft * wasteAdjustedSqft * glossLayers, source: "estimated" });
+      }
       }
     }
     const passes = 1 + whiteLayers + glossLayers;

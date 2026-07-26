@@ -56,3 +56,9 @@ Machine occupancy row: MEASURED — LG-640 CMYK median 18.8 sqft/hr
 (p75 40.4), gloss stage 6.6 (p75 11.9) vs assumed 150/110: premium Roland
 work consumes 10-16x the assumed machine time; occupancy pricing and the
 min-profit-per-machine-hour candidate move from recommended to REQUIRED.
+
+## 15F.0J.3 update (2026-07-26)
+Roland ink row: now QUOTED at the measured rates (EST-MEASURED — CMYK 1.05
+HIGH / white 1.90 MEDIUM / gloss 2.83-per-stage HIGH), snapshot-versioned
+15F.0J.3-roland-measured-ink. Machine occupancy row unchanged (provisional
+runtime pending J.2). Mimaki rows untouched.

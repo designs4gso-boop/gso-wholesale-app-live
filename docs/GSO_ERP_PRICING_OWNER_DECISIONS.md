@@ -66,3 +66,9 @@ RATIFY (numbers before J.5/J.6 implement):
 20. Top-tier margin floors by finish (bags matte >=55%, spot gloss >=60%,
     sticker volume >=55%) after the manual competitor captures (8-10
     configurator quotes; template in GSO_ERP_COMPETITOR_MARGIN_STUDY.md).
+
+## 15F.0J.3 note (2026-07-26)
+Roland measured ink rates (1.05/1.90/2.83) are LIVE as owner-ratified
+provisional. Remaining on this thread: white coverage % collection
+(MEDIUM->HIGH), Roland RUNTIME adoption after the J.2 attended-time split,
+and any future rate change only via new measured actuals + owner approval.

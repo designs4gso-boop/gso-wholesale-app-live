@@ -21,7 +21,7 @@ import {
   type FamilyMarginRule,
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
-import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
+import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, ROLAND_INK_CALIBRATION, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
 import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginPctForQuantity, normalizeAdditionalLineCount, validateStickerLine } from "../lib/commercial-pricing-policy.server";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
@@ -1913,6 +1913,22 @@ export async function action({ request }: { request: Request }) {
       // 15F.0G.3-E: calibration metadata for premium Mimaki quotes — the
       // immutable record RIP actuals are later compared against (read-only
       // calibration; historical snapshots never rewritten).
+      // 15F.0J.3-F: the Roland measured ink calibration used by this quote
+      // (version, area basis, rates) — recorded whenever any line printed on
+      // Roland (primary or an additional multi-line row).
+      inkCalibration: !savedIsDtpSnapshot && productSnapshot && (fRead("pprinter") === "roland" || fReadAll("pslprinter").includes("roland"))
+        ? {
+            version: ROLAND_INK_CALIBRATION.version,
+            printerModel: ROLAND_INK_CALIBRATION.printerModel,
+            source: ROLAND_INK_CALIBRATION.source,
+            areaBasis: ROLAND_INK_CALIBRATION.areaBasis,
+            cmykMlPerSqft: ROLAND_INK_CALIBRATION.cmykMlPerSqft,
+            whiteMlPerSqftPerLayer: ROLAND_INK_CALIBRATION.whiteMlPerSqftPerLayer,
+            glossMlPerSqftPerStage: ROLAND_INK_CALIBRATION.glossMlPerSqftPerStage,
+            coverageFactor: ROLAND_INK_CALIBRATION.coverageFactor,
+            status: ROLAND_INK_CALIBRATION.status,
+          }
+        : null,
       premiumInkEstimate: !savedIsDtpSnapshot && fRead("pprinter") !== "roland" && productSnapshot
         ? buildMimakiPremiumInkEstimate({
             wasteAdjustedSqft: productSnapshot.derived.wasteAdjustedSqft,

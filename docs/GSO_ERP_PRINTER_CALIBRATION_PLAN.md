@@ -66,3 +66,10 @@ measured wall-clock data; ink findings are safe to adopt now (owner
 approval), runtime needs the attended-vs-idle split (J.2) before final
 rates — quote with fixed+p75+safety meanwhile. Remaining J-phases
 unchanged; J.1 multi-line safety is still the first CODE patch.
+
+## 15F.0J.3 IMPLEMENTED (2026-07-26)
+Roland measured INK calibration is live in the calculator (see
+ROLAND_PROFILE_CALIBRATION). Runtime rates remain provisional/unchanged —
+next in sequence: J.2 capture widening (attended-vs-idle + layout fields),
+then Roland runtime adoption, J.4 PrintIntake records, J.5 operator labor,
+J.6 owner bag ladder.

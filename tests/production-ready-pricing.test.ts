@@ -19,7 +19,7 @@ import {
   stickerMarketFloorRate,
   validateStickerLine,
 } from "../app/lib/commercial-pricing-policy.server";
-import { BANNER_FINISHING_STANDARDS, CUT_CONTOUR_MULTIPLIERS, MIMAKI_INK_CALIBRATION, PREMIUM_INK_ESTIMATE_VERSION, buildMimakiPremiumInkEstimate, computeProductDrivenCost, CUT_SQUARE_RECT_STANDARD, normalizeCutType, type ProductDrivenInput } from "../app/lib/product-driven-costing.server";
+import { BANNER_FINISHING_STANDARDS, CUT_CONTOUR_MULTIPLIERS, MIMAKI_INK_CALIBRATION, PREMIUM_INK_ESTIMATE_VERSION, ROLAND_INK_CALIBRATION, buildMimakiPremiumInkEstimate, computeProductDrivenCost, CUT_SQUARE_RECT_STANDARD, normalizeCutType, type ProductDrivenInput } from "../app/lib/product-driven-costing.server";
 import { INK_RATES, resolveMarginFamily } from "../app/lib/calculator-emergency.server";
 import { OWNER_STANDARDS } from "../app/lib/owner-standards";
 
@@ -152,23 +152,28 @@ describe("multi-design stickers (15F.0-J)", () => {
     const machineLine = gloss.lines.find((line) => line.key === "machine")!;
     expect(machineLine.amount).toBeCloseTo(machineHours * MACHINE_RATE, 6);
     expect(machineLine.label).toContain(`${(machineHours * 60).toFixed(1)} min`); // 205.1 — hours x60, never x6
+    // 15F.0J.3: Roland MEASURED ink calibration — CMYK 1.05, gloss 2.83
+    // ml/sqft PER STAGE (never the generic 0.6 basis).
     const expectedGloss = POSEIDON_PER_SQFT * wasteSqft
-      + rolandRate * 0.6 * wasteSqft // CMYK
-      + rolandRate * 0.6 * wasteSqft * 3 // 3 gloss layers (provisional linear)
+      + rolandRate * 1.05 * wasteSqft // CMYK measured
+      + rolandRate * 2.83 * wasteSqft * 3 // 3 gloss stages measured
       + machineHours * MACHINE_RATE
       + CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(baseSqft / 20.25) // 5 pages
       + 2 + 3 * (25 / 3 + 1);
+    const glossInkLine = gloss.lines.find((line) => line.key === "ink_gloss")!;
+    expect(glossInkLine.amount).toBeCloseTo(rolandRate * 2.83 * wasteSqft * 3, 4); // 855.2 ml -> $169.91
+    expect(glossInkLine.note).toContain("15F.0J.3-roland-measured-ink");
     expect(gloss.totalCost).toBeCloseTo(expectedGloss, 4);
-    expect(gloss.totalCost).toBeCloseTo(169.8200, 3);
+    expect(gloss.totalCost).toBeCloseTo(312.7120, 3);
     expect(gloss.missing).toHaveLength(0);
     const plain = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, printer: "roland", printerHasGloss: true, glossLayers: 0, machineSqftPerHour: SPEED }));
-    expect(plain.totalCost).toBeCloseTo(111.8181, 3);
+    expect(plain.totalCost).toBeCloseTo(120.8239, 3); // CMYK measured 1.05 (was 111.82 at 0.6)
     // commercial: premium 56% vs basic 52% at 585
     const stickersRule = resolveMarginFamily("stickers-labels")!;
     const glossPrice = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: gloss.totalCost, marginRule: stickersRule, premiumEligible: true });
     const plainPrice = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: plain.totalCost, marginRule: stickersRule, premiumEligible: false });
-    expect(glossPrice.finalTotalPrice).toBeCloseTo(385.9546, 3);
-    expect(plainPrice.finalTotalPrice).toBeCloseTo(232.9543, 3);
+    expect(glossPrice.finalTotalPrice).toBeCloseTo(710.7091, 3); // 312.71 / 0.44 premium
+    expect(plainPrice.finalTotalPrice).toBeCloseTo(251.7165, 3); // 120.82 / 0.48
   });
 
   it("owner white-layer examples: 1 layer = sqft/75 hours exactly (never a hidden 3x); 3 layers = 3x that", () => {
@@ -197,9 +202,9 @@ describe("multi-design stickers (15F.0-J)", () => {
     }));
     expect(contour.missing).toHaveLength(0); // READY — simple contour quotes automatically
     expect(contour.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(5 * 6.53 * 1.15, 5); // 37.5475
-    expect(contour.totalCost).toBeCloseTo(169.82 + 5 * 6.53 * 0.15, 3); // 174.7175 (mode-speed machine)
+    expect(contour.totalCost).toBeCloseTo(312.712 + 5 * 6.53 * 0.15, 3); // 317.6095 (measured Roland ink)
     const priced = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: contour.totalCost, marginRule: resolveMarginFamily("stickers-labels")!, premiumEligible: true, finishedSqft: contour.derived.baseSqft, setupTotal: contour.setupTotal });
-    expect(priced.finalTotalPrice).toBeCloseTo(contour.totalCost / 0.44, 4); // 397.0853 — premium 56%
+    expect(priced.finalTotalPrice).toBeCloseTo(contour.totalCost / 0.44, 4); // 721.8398 — premium 56%
     expect(priced.controllingRule).toContain("Premium finish floor");
   });
 });
@@ -330,6 +335,64 @@ describe("fixtures 8/9 (N): Chiron 150ml jars", () => {
     expect(run.totalCost).toBeCloseTo(1530.4818, 3);
     const priced = computeCommercialPrice({ familyKey: "premium-jars", quantity: 585, completeCost: run.totalCost, marginRule: resolveMarginFamily("chiron-jars")!, premiumEligible: false });
     expect(priced.finalTotalPrice).toBeCloseTo(3060.9637, 3);
+  });
+});
+
+describe("Roland measured ink calibration (15F.0J.3)", () => {
+  const wasteSqft = 6.25 / 0.9;
+  const roland = (over: any = {}) => computeProductDrivenCost(stickerInput({ printer: "roland", printerHasGloss: true, machineSqftPerHour: SPEED, ...over }));
+
+  it("profile constants: CMYK 1.05 HIGH / white 1.90 MEDIUM / gloss 2.83 per stage HIGH; versioned + sourced, never magic numbers", () => {
+    expect(ROLAND_INK_CALIBRATION.cmykMlPerSqft).toBe(1.05);
+    expect(ROLAND_INK_CALIBRATION.whiteMlPerSqftPerLayer).toBe(1.9);
+    expect(ROLAND_INK_CALIBRATION.glossMlPerSqftPerStage).toBe(2.83);
+    expect(ROLAND_INK_CALIBRATION.version).toBe("15F.0J.3-roland-measured-ink");
+    expect(ROLAND_INK_CALIBRATION.source).toContain("VersaWorks all-time job log");
+    expect(ROLAND_INK_CALIBRATION.areaBasis).toContain("layout proxy");
+    expect(ROLAND_INK_CALIBRATION.coverageFactor).toBe(1.0);
+  });
+
+  it("CMYK uses 1.05 x layout proxy; 0 gloss = $0 gloss; white uses SELECTED layers (never assumed 3X)", () => {
+    const cmykOnly = roland();
+    expect(cmykOnly.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(INK_RATES.rolandPerMl * 1.05 * wasteSqft, 10);
+    expect(cmykOnly.lines.some((line) => line.key === "ink_gloss")).toBe(false);
+    expect(cmykOnly.lines.some((line) => line.key === "ink_white")).toBe(false);
+    const oneWhite = roland({ whiteLayers: 1 });
+    const threeWhite = roland({ whiteLayers: 3 });
+    expect(oneWhite.lines.find((line) => line.key === "ink_white")!.amount).toBeCloseTo(INK_RATES.rolandPerMl * 1.9 * wasteSqft * 1, 10);
+    expect(threeWhite.lines.find((line) => line.key === "ink_white")!.amount).toBeCloseTo(oneWhite.lines.find((line) => line.key === "ink_white")!.amount * 3, 10);
+  });
+
+  it("gloss scales EXACTLY by selected stage count (1X vs 3X) — one multiplier per stage, never doubled", () => {
+    const one = roland({ glossLayers: 1 }).lines.find((line) => line.key === "ink_gloss")!;
+    const three = roland({ glossLayers: 3 }).lines.find((line) => line.key === "ink_gloss")!;
+    expect(one.amount).toBeCloseTo(INK_RATES.rolandPerMl * 2.83 * wasteSqft, 10);
+    expect(three.amount).toBeCloseTo(one.amount * 3, 10);
+    expect(one.label).toContain("1 stage(s)");
+    expect(one.formula).toContain("coverage 1.00");
+  });
+
+  it("Mimaki remains unchanged: CMYK 0.6 basis, white verified rate, gloss provisional G.3 estimate", () => {
+    const mimaki = computeProductDrivenCost(stickerInput({}));
+    expect(mimaki.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(0.176 * 0.6 * wasteSqft, 10);
+    const mimakiGloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 })).lines.find((line) => line.key === "ink_gloss")!;
+    expect(mimakiGloss.amount).toBeCloseTo(wasteSqft * 0.6 * 2 * 1.0 * 0.176, 10); // G.3 provisional, untouched
+    const mimakiWhite = computeProductDrivenCost(stickerInput({ whiteLayers: 2 })).lines.find((line) => line.key === "ink_white")!;
+    expect(mimakiWhite.amount).toBeCloseTo(0.176 * 0.6 * wasteSqft * 2, 10);
+  });
+
+  it("snapshot records the calibration version/basis for Roland saves (route pin); historical parsing untouched", () => {
+    const src = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+    expect(src).toContain('inkCalibration: !savedIsDtpSnapshot && productSnapshot && (fRead("pprinter") === "roland" || fReadAll("pslprinter").includes("roland"))');
+    expect(src).toContain("version: ROLAND_INK_CALIBRATION.version");
+    expect(src).toContain("areaBasis: ROLAND_INK_CALIBRATION.areaBasis");
+  });
+
+  it("multi-line mixed printers: each line prices ink through its own printer profile", () => {
+    const mimakiLine = computeProductDrivenCost(stickerInput({ quantity: 100 }));
+    const rolandLine = roland({ quantity: 100, glossLayers: 1 });
+    expect(mimakiLine.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(0.176 * 0.6 * wasteSqft, 10);
+    expect(rolandLine.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(INK_RATES.rolandPerMl * 1.05 * wasteSqft, 10);
   });
 });
 

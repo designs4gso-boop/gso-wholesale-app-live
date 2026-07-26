@@ -1288,3 +1288,19 @@ Save mirrors the loader (normalizeAdditionalLineCount + validateStickerLine
 shared); snapshot multiLine block now includes Line 1 and the totals; no
 schema change; DTP/other families untouched. Tests 621 -> 629; tsc 306;
 build clean.
+
+## Patch 15F.0J.3 — Roland measured ink calibration (2026-07-26)
+Quote-time Roland LG-640 ink now uses the MEASURED forensic medians via the
+printer-specific ROLAND_INK_CALIBRATION profile (version
+15F.0J.3-roland-measured-ink; source + period + confidence + area basis
+documented in the constant and every ink line's formula/note): CMYK 1.05
+(HIGH n=127) / white 1.90 x SELECTED layers (MEDIUM n=14-21, never assumed
+3X) / gloss 2.83 x selected STAGES (HIGH n=164) ml per layout-proxy sqft
+(waste-adjusted sqft, labeled; no second multiplier), coverage 1.00
+default exposed. Generic 0.6 basis retired for Roland; Mimaki paths
+byte-identical (test-pinned); runtime untouched. Snapshots record the
+inkCalibration block whenever any line prints Roland (primary or
+multi-line row). Fixture impacts: 585-label 3X gloss job $169.82 ->
+$312.71 cost / premium price $385.95 -> $710.71; plain Roland CMYK
++$9.01/100.7 sqft; 0 gloss stays $0. Tests 629 -> 635; tsc 306; build
+clean; no migration.

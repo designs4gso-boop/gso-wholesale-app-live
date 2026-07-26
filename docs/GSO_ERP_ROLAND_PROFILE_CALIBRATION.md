@@ -51,3 +51,16 @@ conclusions; LG-640 drives the calculator.
 | Outliers | exclude elapsed>4h + IQR fence in calibration | methodology | YES |
 Additional data needed: attended-vs-idle split (J.2 capture), gloss layer
 count per job (RIP-side capture or routed-name mode token), coverage %.
+
+## 15F.0J.3 IMPLEMENTED — measured ink rates LIVE (2026-07-26)
+The measured ink medians are now the quote-time Roland profile
+(ROLAND_INK_CALIBRATION, version 15F.0J.3-roland-measured-ink): CMYK 1.05
+(HIGH, n=127) / white 1.90 per selected layer (MEDIUM, n=14-21) / gloss
+2.83 per selected STAGE (HIGH, n=164) ml per layout-proxy sqft (the
+engine's waste-adjusted sqft — utilization ~99% measured, no second
+multiplier), coverage factor 1.00 (documented default until coverage is
+collected). The generic 0.6 basis no longer applies to Roland. RUNTIME
+stays on the provisional 150/110/75 model UNCHANGED pending the
+attended-vs-idle capture (J.2) — ink and runtime calibration are separate.
+White stays MEDIUM confidence; future refinements come only from new
+measured actuals with owner approval; historical quotes unchanged.
