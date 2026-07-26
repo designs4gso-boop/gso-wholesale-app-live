@@ -211,3 +211,17 @@ all three (Phase 15B/15E).
   PrintLogEntry channels; calibration comparisons/recommendations OWNER =
   app/lib/ink-calibration.server.ts (pure, read-only, min 3 jobs, never
   auto-applied). Quote snapshots immutable.
+
+## 15F.0J update (2026-07-25)
+- Print intake OWNER = tools/gso-print-intake-agent.ps1 (scheduled task on
+  the RasterLink PC) + app/lib/print-intake-routing.server.ts (route
+  decisions) + PrintLogAutoImportSetting.notes (rolling outcomes — to be
+  replaced by PrintIntake records, 15F.0J.4). Tickets OWNER =
+  createProductionJobFromSource (advisory-locked) — never a second system.
+- RIP actuals OWNER = PrintLogImport/PrintLogEntry (rawText/rawRow
+  immutable source); extended layout/profile fields ride rawRow JSON until
+  the deferred migration. Roland actuals: manual VersaWorks export (no
+  watcher yet). JobInfo->CSV converter: EXTERNAL/UNLOCATED (owner question).
+- Calibration truth: GSO measured logs ONLY (official specs and RIP
+  estimates are separate labeled layers); provisional printer tables remain
+  code-owned until n>=3 groups + owner approval (15F.0G.3 machinery).

@@ -123,3 +123,15 @@ basis; NO unit-price floors by design), contour cutting bands (x1.15/1.35/
 banner finishing + tube packing, job-level minimums once for multi-line.
 All provisional values labeled + listed for ratification in
 GSO_ERP_PRICING_OWNER_DECISIONS.md; 15F.1 makes them editable.
+
+## 15F.0J AUDIT (2026-07-25) — calibration + pipeline sequence
+Ground-truth audit complete (13 docs). Sequence before further pricing
+changes: 15F.0J.1 multi-line safety -> J.2 capture widening (layout/pass/
+copies/cut/RIP-est + dual white channels; Roland export cadence) -> J.3
+Roland CSV forensics (methodology locked; data pending) -> J.4 PrintIntake
+records + routed-name/sidecar contract (first migration candidate) -> J.5
+operator labor + RIP-layout area model -> J.6 owner 4x5 bag ladder +
+margin-floor ratification + min-profit-per-machine-hour candidate -> then
+15F.1 editable settings. Mimaki combined-layer table and 0.6 ml/sqft basis
+stay PROVISIONAL: first real sample measured 3x slower and 2.6x more ink
+than assumed — do not re-tune from n=1; collect data per the plan.

@@ -46,3 +46,23 @@ routine owner review of ordinary quotes.
 
 All RATIFY values land in ownerConfig (ErpAdminSetting) during 15F.1/15F.2
 per GSO_ERP_SETTINGS_OWNERSHIP_PLAN.md.
+
+## 15F.0J additions (2026-07-25)
+PROVIDE (data/answers):
+13. Roland all-time CSV to a repo-visible path (forensics blocked on it).
+14. Locate/confirm the JobInfo->CSV converter + rasterlink-sync host
+    machine; confirm whether output W x L, copies, pass/resolution, cut
+    time, and BOTH white channels can be included in the incoming CSV.
+15. _routed-archive filename listing (read-only) for the compatibility
+    corpus; confirm VersaWorks weekly export cadence for Roland actuals.
+16. Holographic media: add the Material record + verified cost (holo
+    quoting is BLOCKED without it).
+RATIFY (numbers before J.5/J.6 implement):
+17. Operator-labor model values (fixedSetup ~10-15 min, unload/QC ~5-10,
+    attended 10-20%, per-design 1-2, special-mode ~5; $25/hr basis).
+18. 4x5 double-sided bag ladder transcription (matte 1.80/1.65/1.50/1.35/
+    1.25 ... 4X 2.85-2.05 + holo rows) as the bag commercial ladder.
+19. Min gross profit per MACHINE HOUR candidate (provisional $75/hr).
+20. Top-tier margin floors by finish (bags matte >=55%, spot gloss >=60%,
+    sticker volume >=55%) after the manual competitor captures (8-10
+    configurator quotes; template in GSO_ERP_COMPETITOR_MARGIN_STUDY.md).

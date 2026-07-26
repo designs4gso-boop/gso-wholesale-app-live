@@ -1229,3 +1229,28 @@ on Mimaki = $249.65 cost -> $567.39 premium READY ($107.76 machine, $10.64
 CMYK, $31.91 gloss est.). Tests 612 -> 621 (new ink-calibration suite +
 G.3 fixtures; two obsolete gloss-block pins rewritten); tsc 306; build
 clean; no migration; Roland/DTP untouched.
+
+## Phase 15F.0J — print pipeline + calibration ground-truth AUDIT (2026-07-25)
+Audit-only. Verified: the intake pipeline is REAL and largely built —
+scheduled task "GSO Print Intake Agent" (this RasterLink PC) + deterministic
+ERP route-plan (ticket-first matching, white/gloss->Roland LG-640 rules,
+Roland hot folder ENABLED at VersaWorks7 Input-A), SHA-256 ledger dedupe,
+originals preserved in _routed-archive; RasterLink result sync uploads CSVs
+into PrintLogImport/Entry with raw text/rows retained; ONE authoritative
+advisory-locked ticket generator (15D.1). Gaps: no Roland result watcher
+(manual export only); JobInfo->CSV converter unlocated (owner question);
+no PrintIntake DB record/ticket for unmatched files; layout/pass/copies/cut
+fields not explicitly parsed. Measured Mimaki sample (owner data): 2-layer
+job ran 6.08 sqft/hr vs the 18.2 provisional (3x slower, feed-length
+dominated) and CMYK ~1.54 ml/sqft vs the 0.6 basis — calibration data
+collection is the priority; combined-layer table stays provisional.
+Multi-line sticker defects CONFIRMED (lines silently ignored below count 2;
+qty-0 lines vanish; primary-line replacement unstated) -> smallest first
+patch 15F.0J.1. 4x5 owner-truth matrix: engine underprices the owner bag
+sheet at every cell ($0.29-$1.25/bag; owner-implied margins 58-68%) ->
+recommend owner 4x5 ladder as a commercial candidate + operator-labor
+model + min-profit-per-machine-hour. Roland all-time CSV NOT present in
+this environment — forensic methodology locked, measured tables PENDING
+DATA. 13 new docs (see GSO_ERP_PRINTER_CALIBRATION_PLAN.md for the phased
+roadmap). Tests 621; tsc 306; build clean; git diff --check clean; no code
+or data changed.
