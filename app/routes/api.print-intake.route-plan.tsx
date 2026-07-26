@@ -2,16 +2,22 @@ import db from "../db.server";
 import {
   basenameOf,
   decideIntakeRoute,
+  decideMachineFromFilename,
   eligibleJobsWhere,
+  parseFilenamePrintHints,
   type IntakeJob,
 } from "../lib/print-intake-routing.server";
+import { createOrReusePrintIntakeJob } from "../lib/production-job-source.server";
 
-// Print Intake plan endpoint (13A.6G): READ-ONLY. The local intake agent
-// posts a filename (+ optional immediate subfolder name — basenames only,
-// never full local paths) and receives a deterministic routing decision with
-// the exact ERP RIP name and a machine KEY. Hot-folder paths never appear
-// here — they live exclusively in the agent's local config. Token-authenticated
-// with the existing upload token; shop-scoped; zero writes.
+// Print Intake plan endpoint. 13A.6G behavior preserved for MATCHED files
+// (deterministic hierarchy, machine key only, no local paths). 15F.0J.5:
+// an UNMATCHED file with a full SHA-256 and a deterministic printer/mode is
+// no longer parked as needs_review — the endpoint AUTO-CREATES a controlled
+// print-intake ProductionJob (advisory-locked authoritative ticket,
+// idempotent on shop+hash) and returns a routeable plan carrying linkage
+// warnings. Commercial/linkage review never blocks deterministic routing;
+// true routing blockers (conflicting printer tokens, unsupported modes)
+// still review. Token-authenticated; shop-scoped.
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -63,7 +69,96 @@ export async function action({ request }: { request: Request }) {
   }));
 
   const plan = decideIntakeRoute({ fileName, subfolder, jobs: intakeJobs });
-  return json({ ok: true, fileName, plan });
+  const fileHash = String(body.fileHash || "").trim().toLowerCase();
+  const fileSize = Math.max(0, Math.floor(Number(body.fileSize || 0)));
+  const hasFullHash = /^[0-9a-f]{64}$/.test(fileHash);
+
+  // Matched existing job: record/refresh the PrintIntake linkage (best-effort;
+  // the plan itself is unchanged 13A.6G behavior).
+  if (plan.decision === "route" && hasFullHash) {
+    try {
+      await db.printIntake.upsert({
+        where: { shop_fileHashSha256: { shop: setting.shop, fileHashSha256: fileHash } },
+        update: { matchedProductionJobId: plan.jobId, authoritativeTicket: plan.itemTicket || plan.jobTicket, printer: plan.machine, routingRule: plan.rule, routedFilename: plan.ripName, status: "routed" },
+        create: {
+          shop: setting.shop,
+          originalFilename: fileName,
+          originalSubfolder: subfolder || null,
+          fileHashSha256: fileHash,
+          fileSize,
+          status: "routed",
+          matchedProductionJobId: plan.jobId,
+          authoritativeTicket: plan.itemTicket || plan.jobTicket,
+          printer: plan.machine,
+          printMode: null,
+          routingRule: plan.rule,
+          routedFilename: plan.ripName,
+          rawParsedHints: JSON.stringify({ matched: true, rule: plan.rule }),
+        },
+      });
+    } catch {
+      // linkage recording must never break routing (e.g. migration not yet applied)
+    }
+    return json({ ok: true, fileName, plan: { ...plan, autoCreated: false, matchedExisting: true } });
+  }
+
+  // 15F.0J.5-D: unmatched (or ambiguous-candidate) file — printer/mode from
+  // SAFE filename hints. Deterministic -> auto-create + route; conflicts or
+  // unsupported modes stay review (true routing blockers).
+  const unmatchedReasons = ["no_deterministic_match"];
+  const isUnmatched = plan.decision === "review" && plan.reasons.some((reason) => unmatchedReasons.includes(reason) || reason.includes("_not_found_in_eligible_jobs"));
+  const isAmbiguousCandidates = plan.decision === "review" && plan.candidates.length > 1;
+  if ((isUnmatched || isAmbiguousCandidates) && hasFullHash) {
+    const machineDecision = decideMachineFromFilename(fileName);
+    if (!machineDecision.machine) {
+      return json({ ok: true, fileName, plan: { ...plan, reasons: [...plan.reasons, ...machineDecision.reasons], autoCreated: false } });
+    }
+    const hints = parseFilenamePrintHints(fileName);
+    const linkageWarnings = [
+      isAmbiguousCandidates
+        ? "Ambiguous existing production candidates — production linkage needs review (routed to a controlled print-intake job meanwhile)."
+        : "Commercial linkage pending: no quote/order/customer attached (link later from the Production Board).",
+    ];
+    try {
+      const created = await createOrReusePrintIntakeJob(db, {
+        shop: setting.shop,
+        fileName,
+        subfolder,
+        fileHash,
+        fileSize,
+        machine: machineDecision.machine,
+        machineRule: String(machineDecision.machineRule || "default_cmyk"),
+        mode: machineDecision.mode,
+        hints,
+        reviewWarnings: linkageWarnings,
+      });
+      return json({
+        ok: true,
+        fileName,
+        plan: {
+          decision: "route",
+          rule: "print_intake_auto_created",
+          jobId: created.productionJobId,
+          itemId: null,
+          jobTicket: created.jobTicket,
+          itemTicket: null,
+          ripName: created.ripName,
+          machine: machineDecision.machine,
+          machineRule: machineDecision.machineRule,
+          reasons: machineDecision.reasons,
+          candidates: plan.candidates,
+          autoCreated: created.created,
+          matchedExisting: false,
+          printIntakeId: created.printIntakeId,
+          reviewWarnings: linkageWarnings,
+        },
+      });
+    } catch (error) {
+      // Ticket/DB failure is a ROUTING BLOCKER — leave the file for retry.
+      return json({ ok: true, fileName, plan: { ...plan, reasons: [...plan.reasons, `print_intake_creation_failed: ${String((error as Error)?.message || error).slice(0, 160)}`], autoCreated: false } });
+    }
+  }
+  return json({ ok: true, fileName, plan: { ...plan, autoCreated: false } });
 }
 
 export const loader = () =>

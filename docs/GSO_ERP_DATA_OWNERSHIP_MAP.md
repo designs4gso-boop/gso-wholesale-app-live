@@ -236,3 +236,12 @@ all three (Phase 15B/15E).
   written once at import). Roland ingestion = rip-logs/roland/* NAS folders
   + a second config instance of tools/gso-rasterlink-sync.ps1 (example
   config in repo; task install owner-authorized separately).
+
+## 15F.0J.5 update (2026-07-26)
+- Print-intake identity OWNER = PrintIntake table (unique shop+SHA-256;
+  original->routed mapping, ticket, printer/mode, review reasons) +
+  createOrReusePrintIntakeJob in production-job-source.server.ts (the ONE
+  ticket generator — print_intake joins erp_quote/shopify_order/
+  manual_admin as a source). Filename print hints OWNER =
+  parseFilenamePrintHints/decideMachineFromFilename in
+  print-intake-routing.server.ts (safe context-anchored parsing).

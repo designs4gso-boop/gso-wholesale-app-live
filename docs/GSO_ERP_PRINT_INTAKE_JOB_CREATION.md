@@ -1,0 +1,50 @@
+# GSO ERP — Print Intake Job Creation (15F.0J.5, 2026-07-26)
+
+## Final employee workflow (nothing manual beyond the drop)
+Drop a NORMAL file into Prints For Today (root)
+-> agent hashes it (full SHA-256) and asks the route-plan API
+-> EXACT existing production match reuses that job + ticket (13A.6G ladder
+   unchanged: item ticket > job ticket > stored filename > job file >
+   subfolder identity)
+-> otherwise the server AUTO-CREATES a controlled print-intake ProductionJob
+   through the SAME advisory-locked ticket generator (GSO-YYYYMMDD-NNNN;
+   never a second sequence) + one PrintIntake identity record
+-> printer/mode from SAFE filename hints (premium gloss/white -> Roland;
+   explicit ROLAND/MIMAKI word tokens; default CMYK -> Mimaki; a bare "3x"
+   or "White Widow" never mis-routes; conflicts BLOCK)
+-> routed copy named <TICKET>__<PRINTER>__<MODE>__<SAFE-ORIGINAL>__A1
+-> original preserved and archived ONLY after the routed copy verifies
+-> RIP actuals match back by the exact leading ticket
+-> quote/order/customer linked LATER from the Production Board.
+
+## Review split (H)
+ROUTING BLOCKERS (file stays for review/retry): conflicting printer tokens,
+premium-mode + Mimaki-token contradiction, unsupported mode, ticket/DB
+creation failure, unreachable destination. COMMERCIAL/LINKAGE REVIEW
+(warnings on a ROUTED job — never blocks): unknown customer/quote/order/
+quantity/price, ambiguous existing candidates (job still auto-creates; the
+ambiguity note rides the intake record for later resolution).
+
+## Identity + idempotency (B/G/K)
+PrintIntake is unique on (shop, full SHA-256): same file dropped twice
+reuses the record/job/ticket (agent ledger already prevents the re-drop
+reaching the API; the server is idempotent anyway — advisory lock keyed on
+the hash, in-transaction recheck, P2002 backstop). Different hash = new
+record (revision relationships resolved in review). Reprints act on the
+existing ticket with attempt/reprint counters. Failed route retries reuse
+the same intake/job/ticket.
+
+## What the auto-created job is (C)
+source=print_intake, status new, customerName "Unlinked (print intake)",
+item quantity 0 / $0 prices (NOTHING fabricated — no revenue, payment,
+approval), productTitle "PRINT INTAKE — <original name>", internal notes +
+created_from_print_intake event carry the full story. Visible on the
+Production Board immediately; linkable to quote/order/customer later.
+
+## Schema decision (M)
+One focused migration: prisma/migrations/20260726120000_add_print_intake
+(PrintIntake table + unique(shop,fileHashSha256) + indexes). NOT applied
+from this session (local env points at production Postgres) — it applies at
+deploy via `npm run setup` (prisma migrate deploy). Rollback: DROP TABLE
+"PrintIntake". No historical rewrites; no mass backfill (optional
+owner-triggered backfill limited to unresolved current inbox files).

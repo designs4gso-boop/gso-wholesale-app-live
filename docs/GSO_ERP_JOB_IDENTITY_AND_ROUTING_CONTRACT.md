@@ -85,3 +85,12 @@ ticket; calibration factor approvals owner-gated (15F.1 ownerConfig);
 pricing versioned (already: engine/version strings in snapshots); quote
 snapshots immutable (already enforced); upload tokens rotate + mask (known
 15A finding).
+
+## 15F.0J.5 IMPLEMENTED (2026-07-26)
+The unmatched-file gap is closed: PrintIntake records + auto-created
+print-intake ProductionJobs through the SAME advisory-locked generator
+(design above now live; see GSO_ERP_PRINT_INTAKE_JOB_CREATION.md). Routed
+names follow the contract (<TICKET>__<PRINTER>__<MODE>__<SAFE>__A1, <=120
+chars, ticket-led so result watchers match automatically). The
+"needs_review because no quote exists" behavior is retired — commercial
+linkage is a warning on a routed job, never a routing blocker.

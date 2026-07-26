@@ -1337,3 +1337,25 @@ pdf/ai/tiff/png eligible; 1-level and deep subfolder files ignored; 200
 nested files leave the scan result unchanged; cutoff/reservation/claims
 intact) — 0 failures; repo pin test added. Tests 650 -> 651; tsc 306;
 build clean. Deploy by replacing the live task's script.
+
+## Patch 15F.0J.5 — automatic print-intake job creation + linking (2026-07-26)
+Dropped files no longer require ANY pre-existing quote/job: exact matches
+reuse the existing job/ticket (13A.6G ladder unchanged); unmatched files
+with deterministic printer/mode (safe filename hints — premium -> Roland,
+explicit tokens, default CMYK -> Mimaki; bare "3x"/"White Widow" hazards
+protected; conflicts block) AUTO-CREATE one PrintIntake record + one
+controlled ProductionJob via the SAME advisory-locked ticket generator
+(idempotent on shop+full-SHA-256: lock + in-transaction recheck + P2002
+backstop). Nothing commercial fabricated (qty 0, $0, "Unlinked (print
+intake)", source=print_intake, event logged); jobs appear on the Production
+Board for later quote/order/customer linkage; routed copies named
+<TICKET>__<PRINTER>__<MODE>__<SAFE-ORIGINAL>__A1 so RIP actuals match by
+ticket automatically. Route-plan API records matched-file linkage and
+returns routeable auto-created plans with linkage WARNINGS (needs_review
+retired for deterministic files; true blockers still review). Agent v1.5
+sends full hash+size on the plan call; archive-after-verified-route order
+test-pinned. SCHEMA: focused PrintIntake migration CREATED but NOT applied
+(deploys via npm run setup; rollback = drop table). Live fixture "GSO
+PIPELINE TEST_3X SPOT GLOSS_Roland.pdf" -> Roland GLOSS-3X auto-create,
+test-pinned end-to-end at the pure layer. Tests 651 -> 663; tsc 306; build
+clean; agent self-test 0 failures.

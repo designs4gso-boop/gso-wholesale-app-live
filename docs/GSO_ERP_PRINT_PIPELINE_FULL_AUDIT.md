@@ -57,3 +57,9 @@ confirmation.
 Intake scan converted to non-recursive (agent v1.4): root = inbox,
 subfolders never scanned. Fixes the observed backlog (81 files in
 "PRINTS FOR TODAY" + 3 in "600ppi" delaying 3 root files).
+
+## 15F.0J.5 update (2026-07-26)
+Gap 3 (no PrintIntake record / no ticket for print-only work) CLOSED:
+PrintIntake table + auto-created print-intake ProductionJobs (same
+advisory-locked ticket generator). Route-plan API now writes linkage
+records for matched files and creates identity for unmatched ones.

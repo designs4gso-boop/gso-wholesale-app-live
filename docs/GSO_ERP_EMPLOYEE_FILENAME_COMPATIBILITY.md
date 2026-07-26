@@ -48,3 +48,10 @@ routing. Employees are never asked to change anything.
 Filename habits unchanged; FOLDER contract clarified: drop new printable
 files DIRECTLY into Prints For Today (the root). Files placed in any
 subfolder are treated as storage/work copies and are not auto-routed.
+
+## 15F.0J.5 — the compat parser is LIVE (2026-07-26)
+parseFilenamePrintHints now routes unmatched files: NX counts only with
+gloss/uv/emboss context; "white" only with finish adjacency (ink/layer/hd/
+holo/Nx); ROLAND/MIMAKI word-boundary tokens; conflicts block. Employees
+change NOTHING — a plain "Customer_Product_matte.pdf" auto-creates a
+Mimaki CMYK print-intake job with its own GSO ticket.

@@ -344,3 +344,99 @@ export function encodeIntakeOutcomes(existingNotes: string | null, outcome: Inta
 export function eligibleJobsWhere(shop: string): { shop: string; active: boolean } {
   return { shop, active: true };
 }
+
+// ---------- 15F.0J.5: filename-only print hints (compat parser) ----------
+// SAFE context-anchored parsing per GSO_ERP_EMPLOYEE_FILENAME_COMPATIBILITY:
+// - NX counts ONLY with a finish context ("3X SPOT GLOSS", "gloss 2x") — a
+//   bare "3x" in a strain/product name NEVER routes;
+// - "white" counts only with finish adjacency (white ink/layer/hd, Nx white,
+//   holo white) — "White Widow" stays an ordinary CMYK name;
+// - printer words match on word boundaries only (existing ROLAND rule; the
+//   MIMAKI mirror added here).
+export type FilenamePrintHints = {
+  printerToken: "roland" | "mimaki" | null;
+  printerConflict: boolean;
+  glossLayers: number;
+  whiteLayers: number;
+  mode: string; // CMYK | GLOSS-NX | WHITE-NX | WHITE-NXGLOSS-MX
+  deterministic: boolean; // printer+mode resolvable without review
+  reasons: string[];
+};
+
+export function hasMimakiFilenameTag(fileName: string): boolean {
+  return /(?<![A-Za-z])(MIMAKI|UCJV)(?![A-Za-z])/i.test(String(fileName || ""));
+}
+
+export function parseFilenamePrintHints(fileName: string): FilenamePrintHints {
+  const text = String(fileName || "").replace(/\.[a-z0-9]{1,5}$/i, "");
+  const reasons: string[] = [];
+  const roland = hasRolandFilenameTag(text);
+  const mimaki = hasMimakiFilenameTag(text);
+  const printerConflict = roland && mimaki;
+  const printerToken = printerConflict ? null : roland ? "roland" : mimaki ? "mimaki" : null;
+  if (printerConflict) reasons.push("conflicting_printer_tokens_in_filename");
+
+  // gloss: NX before or after a gloss/uv/emboss context; bare "spot gloss"/
+  // "emboss" without a count = 1 layer
+  let glossLayers = 0;
+  const glossBefore = text.match(/(?<![a-z0-9])([1-9])\s*x[\s_-]*(?:spot[\s_-]*)?(?:gloss|uv|emboss)/i);
+  const glossAfter = text.match(/(?:gloss|uv|emboss)[\s_-]*([1-9])\s*x(?![a-z0-9])/i);
+  if (glossBefore) glossLayers = Number(glossBefore[1]);
+  else if (glossAfter) glossLayers = Number(glossAfter[1]);
+  else if (/(?:spot[\s_-]*gloss|emboss)(?![a-z])/i.test(text)) glossLayers = 1;
+
+  // white: only with finish adjacency (never a bare strain word)
+  let whiteLayers = 0;
+  const whiteCount = text.match(/(?<![a-z0-9])([1-9])\s*x[\s_-]*white(?![a-z])/i) || text.match(/white[\s_-]*([1-9])\s*x(?![a-z0-9])/i);
+  if (whiteCount) whiteLayers = Number(whiteCount[1]);
+  else if (/white[\s_-]*(ink|layer|hd)(?![a-z])/i.test(text) || /holo(?:graphic)?[\s_-]*white(?![a-z])/i.test(text)) whiteLayers = 1;
+
+  const mode = glossLayers > 0 && whiteLayers > 0
+    ? `WHITE-${whiteLayers}XGLOSS-${glossLayers}X`
+    : glossLayers > 0 ? `GLOSS-${glossLayers}X`
+    : whiteLayers > 0 ? `WHITE-${whiteLayers}X`
+    : "CMYK";
+  const premium = glossLayers > 0 || whiteLayers > 0;
+  // premium + explicit Mimaki = contradiction (Mimaki premium unsupported here)
+  const premiumConflict = premium && printerToken === "mimaki";
+  if (premiumConflict) reasons.push("premium_mode_but_mimaki_token_contradiction");
+  return {
+    printerToken,
+    printerConflict,
+    glossLayers,
+    whiteLayers,
+    mode,
+    deterministic: !printerConflict && !premiumConflict,
+    reasons,
+  };
+}
+
+// Filename-only machine decision for UNMATCHED files (no quote/job required —
+// spec 15F.0J.5-D). Same precedence family as decideMachine: premium ->
+// Roland; explicit token; default CMYK -> Mimaki; conflicts review.
+export function decideMachineFromFilename(fileName: string): { machine: "mimaki" | "roland" | null; machineRule: IntakeDecision["machineRule"]; mode: string; reasons: string[] } {
+  const hints = parseFilenamePrintHints(fileName);
+  if (!hints.deterministic) return { machine: null, machineRule: null, mode: hints.mode, reasons: hints.reasons };
+  if (hints.glossLayers > 0 || hints.whiteLayers > 0) {
+    return { machine: "roland", machineRule: "white_or_gloss", mode: hints.mode, reasons: ["white_or_gloss_requires_roland"] };
+  }
+  if (hints.printerToken === "roland") return { machine: "roland", machineRule: "explicit_roland_tag", mode: "CMYK", reasons: ["standalone_roland_tag_in_filename"] };
+  if (hints.printerToken === "mimaki") return { machine: "mimaki", machineRule: "explicit_erp_machine", mode: "CMYK", reasons: ["standalone_mimaki_tag_in_filename"] };
+  return { machine: "mimaki", machineRule: "default_cmyk", mode: "CMYK", reasons: ["default_cmyk_to_mimaki"] };
+}
+
+// Structured routed RIP name for auto-created intake jobs (contract F/E):
+// <TICKET>__<PRINTER>__<MODE>__<SAFE-ORIGINAL>__A1 — system-generated only,
+// safe charset, <=120 chars, ticket exactly parseable by the result watchers.
+export function buildIntakeRipName(ticket: string, machine: string, mode: string, originalFileName: string, attempt = 1): string {
+  const base = String(originalFileName || "").replace(/\.[a-z0-9]{1,5}$/i, "");
+  const safe = base
+    .toUpperCase()
+    .replace(/[^A-Z0-9.]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/g, "") || "FILE";
+  const name = `${ticket}__${machine.toUpperCase()}__${mode}__${safe}__A${Math.max(1, Math.floor(attempt))}`;
+  return name.slice(0, 120);
+}

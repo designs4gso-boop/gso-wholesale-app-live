@@ -633,3 +633,142 @@ export async function createProductionJobFromSource(
     return { job, created: true, reason: "Manual production job created." };
   });
 }
+
+// ---------- 15F.0J.5: automatic PRINT-INTAKE job creation ----------
+// For a genuinely new dropped file with a DETERMINISTIC printer/mode and no
+// exact production match: create ONE PrintIntake record + ONE controlled
+// ProductionJob through the SAME advisory-locked ticket generator (never a
+// second sequence). Idempotent on (shop, full SHA-256): the advisory lock is
+// keyed on the hash, the unique constraint backstops races, and a repeat
+// call returns the existing identity. NOTHING commercial is fabricated —
+// no revenue, price, payment, approval, or customer beyond parsed hints;
+// the job is explicitly UNLINKED until quote/order/customer are attached.
+export type PrintIntakeCreateInput = {
+  shop: string;
+  fileName: string;
+  subfolder?: string | null;
+  fileHash: string; // full SHA-256 (lowercase hex)
+  fileSize?: number;
+  machine: "mimaki" | "roland";
+  machineRule: string;
+  mode: string; // CMYK | GLOSS-NX | WHITE-NX | combined
+  hints?: unknown;
+  reviewWarnings?: string[];
+};
+
+export async function createOrReusePrintIntakeJob(dbClient: any, input: PrintIntakeCreateInput): Promise<{
+  created: boolean;
+  printIntakeId: string;
+  productionJobId: string;
+  jobTicket: string;
+  ripName: string;
+}> {
+  const shop = input.shop;
+  const fileHash = String(input.fileHash || "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(fileHash)) throw new Error("createOrReusePrintIntakeJob requires a full SHA-256 hash.");
+  // Fast path outside the transaction (same result the lock would produce).
+  const existing = await dbClient.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
+  if (existing && existing.generatedProductionJobId && existing.authoritativeTicket) {
+    return { created: false, printIntakeId: existing.id, productionJobId: existing.generatedProductionJobId, jobTicket: existing.authoritativeTicket, ripName: existing.routedFilename || existing.authoritativeTicket };
+  }
+  const cleanedName = String(input.fileName || "").slice(0, 200);
+  const warnings = input.reviewWarnings && input.reviewWarnings.length
+    ? input.reviewWarnings
+    : ["Commercial linkage pending: no quote/order/customer attached (link later from the Production Board)."];
+  try {
+    return await dbClient.$transaction(async (tx: any) => {
+      // Concurrency: one lock per file content — two simultaneous plans for
+      // the same hash serialize here (15D.1 advisory-lock strategy).
+      await acquireSourceLock(tx, shop, "print_intake", fileHash);
+      const inside = await tx.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
+      if (inside && inside.generatedProductionJobId && inside.authoritativeTicket) {
+        return { created: false, printIntakeId: inside.id, productionJobId: inside.generatedProductionJobId, jobTicket: inside.authoritativeTicket, ripName: inside.routedFilename || inside.authoritativeTicket };
+      }
+      const jobTicket = await buildNextJobTicket(tx, shop);
+      const ripName = buildIntakeRipNameLocal(jobTicket, input.machine, input.mode, cleanedName);
+      const job = await tx.productionJob.create({
+        data: {
+          shop,
+          jobTicket,
+          assetInboxKey: jobTicket,
+          source: "print_intake",
+          customerName: "Unlinked (print intake)",
+          status: "new",
+          priority: "normal",
+          internalNotes: [
+            "PRINT INTAKE — UNLINKED. Auto-created from a dropped file; no quote/order/payment exists.",
+            `Original file: ${cleanedName}`,
+            `Printer: ${input.machine} (${input.machineRule}) — mode ${input.mode}.`,
+            ...warnings,
+          ].join("\n"),
+          items: {
+            create: [{
+              shop,
+              itemTicket: itemTicketFor(jobTicket, 0),
+              ripJobName: ripName,
+              suggestedFileName: ripName,
+              productTitle: `PRINT INTAKE — ${cleanedName.replace(/\.[a-z0-9]{1,5}$/i, "").slice(0, 80)}`,
+              quantity: 0, // unknown — never fabricated; set at commercial linkage
+              unitPrice: 0,
+              unitCost: 0,
+              selectedFinish: input.mode,
+              machineSummary: input.machine === "roland" ? "Roland LG-640" : "Mimaki UCJV300-130",
+              productionNotes: `Auto-created by print intake. Routed as ${ripName}. Quantity/pricing unknown until linked.`,
+              costSnapshot: JSON.stringify({ source: "print_intake_auto_created", note: "No cost/revenue data — commercial linkage pending.", hints: input.hints ?? null }),
+              sortOrder: 1,
+            }],
+          },
+        },
+      });
+      const intake = inside
+        ? await tx.printIntake.update({
+            where: { id: inside.id },
+            data: { generatedProductionJobId: job.id, authoritativeTicket: jobTicket, printer: input.machine, printMode: input.mode, routingRule: input.machineRule, routedFilename: ripName, status: "routed", reviewReason: warnings.join(" | ") },
+          })
+        : await tx.printIntake.create({
+            data: {
+              shop,
+              originalFilename: cleanedName,
+              originalSubfolder: input.subfolder || null,
+              fileHashSha256: fileHash,
+              fileSize: Math.max(0, Math.floor(input.fileSize || 0)),
+              status: "routed",
+              generatedProductionJobId: job.id,
+              authoritativeTicket: jobTicket,
+              printer: input.machine,
+              printMode: input.mode,
+              routingRule: input.machineRule,
+              routedFilename: ripName,
+              reviewReason: warnings.join(" | "),
+              rawParsedHints: JSON.stringify({ hints: input.hints ?? null, warnings }),
+            },
+          });
+      await tx.productionJobEvent.create({
+        data: {
+          shop,
+          jobId: job.id,
+          eventType: "created_from_print_intake",
+          message: `Print-intake job auto-created from "${cleanedName}" (hash ${fileHash.slice(0, 8)}). Routed to ${input.machine} as ${ripName}. Commercial linkage pending.`,
+        },
+      });
+      return { created: true, printIntakeId: intake.id, productionJobId: job.id, jobTicket, ripName };
+    });
+  } catch (error: any) {
+    // Unique-constraint race backstop: the other request won — return its identity.
+    if (String(error?.code) === "P2002") {
+      const winner = await dbClient.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
+      if (winner && winner.generatedProductionJobId && winner.authoritativeTicket) {
+        return { created: false, printIntakeId: winner.id, productionJobId: winner.generatedProductionJobId, jobTicket: winner.authoritativeTicket, ripName: winner.routedFilename || winner.authoritativeTicket };
+      }
+    }
+    throw error;
+  }
+}
+
+// Local copy of the routed-name contract (print-intake-routing owns the
+// canonical builder; duplicated shape kept in sync by tests).
+function buildIntakeRipNameLocal(ticket: string, machine: string, mode: string, originalFileName: string, attempt = 1): string {
+  const base = String(originalFileName || "").replace(/\.[a-z0-9]{1,5}$/i, "");
+  const safe = base.toUpperCase().replace(/[^A-Z0-9.]+/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/g, "") || "FILE";
+  return `${ticket}__${machine.toUpperCase()}__${mode}__${safe}__A${Math.max(1, Math.floor(attempt))}`.slice(0, 120);
+}

@@ -26,7 +26,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.4 (15F.0J.4A non-recursive inbox)"
+$ScriptVersion = "gso-print-intake-agent/1.5 (15F.0J.5 auto job creation)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -175,8 +175,10 @@ function Invoke-IntakeJsonPost($Config, [string]$Url, [hashtable]$Payload, [int]
   }
 }
 
-function Get-RoutePlan($Config, [string]$FileName, [string]$Subfolder) {
-  return Invoke-IntakeJsonPost $Config $Config.PlanUrl @{ token = $Config.UploadToken; fileName = $FileName; subfolder = $Subfolder } 60
+function Get-RoutePlan($Config, [string]$FileName, [string]$Subfolder, [string]$FileHash, [long]$FileSize) {
+  # 15F.0J.5: the full SHA-256 + size ride the PLAN request so the server can
+  # match-or-AUTO-CREATE the print-intake identity idempotently.
+  return Invoke-IntakeJsonPost $Config $Config.PlanUrl @{ token = $Config.UploadToken; fileName = $FileName; subfolder = $Subfolder; fileHash = $FileHash; fileSize = $FileSize } 60
 }
 
 function Send-IntakeReport($Config, [hashtable]$Outcome) {
@@ -307,7 +309,7 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
     $parent = Split-Path -Path $File.FullName -Parent
     if ($parent -and ($parent.TrimEnd('\') -ne $Config.PrintsForTodayFolder.TrimEnd('\'))) { $subfolder = Split-Path -Path $parent -Leaf }
 
-    $planResult = Get-RoutePlan $Config $File.Name $subfolder
+    $planResult = Get-RoutePlan $Config $File.Name $subfolder $hash $File.Length
     if ($planResult.exception -or $planResult.status -eq 0 -or $planResult.status -ge 500) {
       Write-IntakeLog $Config "plan_unreachable" $File.Name "status=$($planResult.status) exception=$($planResult.exception); will retry next pass"
       return

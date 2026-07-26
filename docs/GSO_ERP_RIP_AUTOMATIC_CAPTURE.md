@@ -57,3 +57,11 @@ thousands of nested files cannot delay a new root file (previous recursive
 scan queued one new file behind 84 archived ones). Hashing/ledger lookups
 run only for top-level eligible files; SHA-256 dedupe, routing, and archive
 behavior unchanged. Deploy = replace the script the existing task runs.
+
+## 15F.0J.5 update (2026-07-26)
+Agent v1.5 sends the full SHA-256 + size on the PLAN call; unmatched
+deterministic files now route into auto-created print-intake jobs instead
+of parking as needs_review. Deploy: replace the live task's script (v1.5)
+AND deploy the app (the PrintIntake migration applies via npm run setup)
+BEFORE the new agent goes live — v1.5 against an un-migrated server safely
+falls back to review (creation failure is a retryable blocker).

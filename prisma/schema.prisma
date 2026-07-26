@@ -1611,3 +1611,41 @@ model ConfiguratorPricingRule {
   @@index([shop, material, finish])
   @@index([shop, minQty, maxQty])
 }
+
+// 15F.0J.5 — Print Intake identity: ONE record per unique dropped file
+// (shop + full SHA-256). Links the original employee file to its routed
+// copy, the authoritative ticket, and the matched-or-auto-created
+// ProductionJob. Revisions (different hash) create NEW records; reprints
+// act on the existing record via attempt/reprint counters.
+model PrintIntake {
+  id                       String   @id @default(cuid())
+  shop                     String
+  originalFilename         String
+  originalSubfolder        String?
+  fileHashSha256           String
+  fileSize                 Int      @default(0)
+  receivedAt               DateTime @default(now())
+  status                   String   @default("routed") // routed, review, failed
+  matchedProductionJobId   String?
+  generatedProductionJobId String?
+  authoritativeTicket      String?
+  printer                  String?
+  printMode                String?
+  routingRule              String?
+  routingConfidence        String?  @default("deterministic")
+  routedFilename           String?
+  attemptNumber            Int      @default(1)
+  revisionNumber           Int      @default(1)
+  reprintNumber            Int      @default(0)
+  reviewReason             String?
+  rawParsedHints           String?  // JSON: FilenamePrintHints + linkage warnings
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@unique([shop, fileHashSha256])
+  @@index([shop])
+  @@index([shop, status])
+  @@index([authoritativeTicket])
+  @@index([matchedProductionJobId])
+  @@index([generatedProductionJobId])
+}
