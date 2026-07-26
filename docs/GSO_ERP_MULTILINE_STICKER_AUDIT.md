@@ -28,3 +28,21 @@
 - Tests: "01" one-line job prices the extra line; qty-blank line blocks
   with a named field error; primary+2 lines totals include all three (or
   the replacement banner asserts).
+
+## 15F.0J.2 FIXED (2026-07-26)
+All audited defects closed: (1) pslcount now counts ADDITIONAL lines and
+>=1 activates ("01" = exactly one line; invalid counts REJECTED with
+messages via normalizeAdditionalLineCount — never clamped); (2) the primary
+form is ALWAYS Line 1 and additional lines start at Line 2 (stated in the
+UI — nothing is replaced); (3) active-but-incomplete lines stay visible
+with exact field-level errors (validateStickerLine), price $0, force
+BLOCKED, and REFUSE the save until fixed or removed — the silent qty>0
+filter in combineStickerLines is dead (qty-0 without errors still
+blocks); (4) explicit Remove line / Add line buttons (hidden pslcount
+always posts rows.length); (5) totals panel shows active lines, pieces,
+designs, finished + adjusted sqft, machine, ink, cutting, line costs,
+job packing (once), job cost, selling price; per-line table shows number,
+qty, size, designs, finish, printer, sqft, adjusted sqft, machine, ink,
+cutting, subtotal. Save/psearch replay preserved; snapshots carry the
+combined lines/totals; historical snapshots untouched. 8 regression tests
+(incl. the exact 585 + blank-lid-quantity scenario). Tests 621 -> 629.

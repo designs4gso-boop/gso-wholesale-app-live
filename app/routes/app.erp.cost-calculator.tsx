@@ -22,7 +22,11 @@ import {
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
 import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
-import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginPctForQuantity } from "../lib/commercial-pricing-policy.server";
+import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginPctForQuantity, normalizeAdditionalLineCount, validateStickerLine } from "../lib/commercial-pricing-policy.server";
+
+// UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
+// owns the value; client components cannot import .server modules).
+const MAX_ADDITIONAL_LINES_UI = 8;
 import { calculatorFamilies, calculatorFamilyValues, familyByKeyOrAlias } from "../lib/product-family-registry";
 import { resolveProductDisplayName } from "../lib/commercial-name-resolver.server";
 import { OWNER_STANDARDS } from "../lib/owner-standards";
@@ -1109,14 +1113,15 @@ export async function loader({ request }: { request: Request }) {
         };
       });
     }
-    // 15F.0-K: multi-line sticker jobs — every line runs the SAME engine
-    // independently (own material/printer/layers/cut/quantity band); job-level
-    // packing is charged once and allocated by cost share; the combined price
-    // is the sum of per-line commercial prices (premium lines stay premium).
-    const lineCountK = Math.floor(Number(eparams.get("pslcount") || 0));
-    if (engineFamilyP === "stickers-labels" && lineCountK >= 2) {
+    // 15F.0J.2: multi-line sticker jobs. The PRIMARY sticker form is ALWAYS
+    // Line 1; pslcount counts ADDITIONAL lines (>=1 activates multi-line —
+    // "01" = exactly one additional line, never ignored). Every ACTIVE
+    // additional line either validates and prices or surfaces field errors
+    // and BLOCKS — no line silently disappears. Job packing charges once.
+    const lineCountParsed = normalizeAdditionalLineCount(eparams.get("pslcount"));
+    if (engineFamilyP === "stickers-labels" && (lineCountParsed.count >= 1 || lineCountParsed.error) && productCost && requestedQtyP > 0) {
       const lineInputs = buildStickerLines({
-        count: lineCountK,
+        count: lineCountParsed.count,
         names: eparams.getAll("pslname").map(String),
         quantities: eparams.getAll("pslqty").map(Number),
         designs: eparams.getAll("psldesigns").map(Number),
@@ -1128,10 +1133,12 @@ export async function loader({ request }: { request: Request }) {
         glosses: eparams.getAll("pslgloss").map(Number),
         cuts: eparams.getAll("pslcut").map(String),
       });
-      const lineResults = lineInputs.map((line) => {
+      const rawNames = eparams.getAll("pslname").map(String);
+      const additionalResults = lineInputs.map((line, index) => {
+        const fieldErrors = validateStickerLine(line);
         const lineMaterial = materialById.get(line.materialId);
         const run = computeProductDrivenCost({
-          family: "stickers-labels", quantity: Math.max(1, line.quantity), designs: line.designs,
+          family: "stickers-labels", quantity: Math.max(1, line.quantity), designs: Math.max(1, line.designs),
           facesPerUnit: 1, widthIn: line.widthIn, heightIn: line.heightIn, labelRows: null, dtp: null,
           blank: null, lid: null, mironTop: null,
           material: lineMaterial ? { name: lineMaterial.name, costPerSqft: lineMaterial.displayCostPerSqft > 0 ? lineMaterial.displayCostPerSqft : null } : null,
@@ -1144,23 +1151,79 @@ export async function loader({ request }: { request: Request }) {
           recipeWastePct: null, wasteOverride: null, boxOverride: null,
         });
         const packingAmount = run.lines.find((engineLine) => engineLine.key === "packing")?.amount || 0;
+        const invalid = fieldErrors.length > 0;
         return {
+          lineNumber: index + 2, // primary = Line 1; additional lines start at Line 2
           name: line.name, quantity: line.quantity, designs: line.designs,
+          widthIn: line.widthIn, heightIn: line.heightIn, printer: line.printer,
+          finish: line.glossLayers > 0 ? `gloss x${line.glossLayers}` : line.whiteLayers > 0 ? `white x${line.whiteLayers}` : "matte/CMYK",
           glossOrWhite: line.whiteLayers > 0 || line.glossLayers > 0,
-          lineCost: run.totalCost - packingAmount, // packing charged ONCE at job level below
-          missing: run.missing,
-          finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL floor inputs
+          lineCost: invalid ? 0 : run.totalCost - packingAmount, // packing charged ONCE at job level
+          missing: invalid ? [] : run.missing,
+          fieldErrors,
+          finishedSqft: invalid ? 0 : run.derived.baseSqft,
+          adjustedSqft: invalid ? 0 : run.derived.wasteAdjustedSqft,
+          machineCost: invalid ? 0 : run.lines.find((engineLine) => engineLine.key === "machine")?.amount || 0,
+          inkCost: invalid ? 0 : run.lines.filter((engineLine) => engineLine.key.startsWith("ink_")).reduce((sum, engineLine) => sum + engineLine.amount, 0),
+          cuttingCost: invalid ? 0 : run.lines.find((engineLine) => engineLine.key === "cutting")?.amount || 0,
+          setupTotal: invalid ? 0 : run.setupTotal,
           splitText: designSplit(line.quantity, line.designs).text,
         };
       });
-      const totalUnitsK = lineInputs.reduce((sum, line) => sum + Math.max(0, line.quantity), 0);
+      // A line is ACTIVE when the employee filled ANY field — fully blank
+      // rows drop; partially-filled rows stay visible with errors.
+      const activeAdditional = additionalResults.filter((_line, index) => {
+        const src = lineInputs[index];
+        return src.quantity > 0 || src.designs > 0 || src.widthIn > 0 || src.heightIn > 0 || src.materialId !== "" || String(rawNames[index] || "").trim() !== "";
+      });
+      // 15F.0J.2-B: the primary form IS Line 1 — from the already-computed
+      // main engine run; its packing moves to job level like every line.
+      const primaryPacking = productCost.lines.find((engineLine) => engineLine.key === "packing")?.amount || 0;
+      const primaryLine = {
+        lineNumber: 1,
+        name: "Line 1 (main sticker entry)",
+        quantity: requestedQtyP, designs: Number(eparams.get("pdesigns") || 0),
+        widthIn: Number(eparams.get("pwidth") || 0), heightIn: Number(eparams.get("pheight") || 0),
+        printer, finish: Number(eparams.get("pglosslayers") || 0) > 0 ? `gloss x${Number(eparams.get("pglosslayers"))}` : Number(eparams.get("pwhitelayers") || 0) > 0 ? `white x${Number(eparams.get("pwhitelayers"))}` : "matte/CMYK",
+        glossOrWhite: Number(eparams.get("pwhitelayers") || 0) > 0 || Number(eparams.get("pglosslayers") || 0) > 0,
+        lineCost: productCost.totalCost - primaryPacking,
+        missing: productCost.missing,
+        fieldErrors: [] as string[],
+        finishedSqft: productCost.derived.baseSqft,
+        adjustedSqft: productCost.derived.wasteAdjustedSqft,
+        machineCost: productCost.lines.find((engineLine) => engineLine.key === "machine")?.amount || 0,
+        inkCost: productCost.lines.filter((engineLine) => engineLine.key.startsWith("ink_")).reduce((sum, engineLine) => sum + engineLine.amount, 0),
+        cuttingCost: productCost.lines.find((engineLine) => engineLine.key === "cutting")?.amount || 0,
+        setupTotal: productCost.setupTotal,
+        splitText: designSplit(requestedQtyP, Number(eparams.get("pdesigns") || 1)).text,
+      };
+      const allLines = [primaryLine, ...activeAdditional];
+      const totalUnitsK = allLines.reduce((sum, line) => sum + Math.max(0, line.quantity), 0);
+      const jobPackingK = OWNER_STANDARDS.packoutPerBox.value * Math.max(1, Math.ceil(totalUnitsK / 5000));
       const combined = combineStickerLines({
-        lines: lineResults,
-        // 15F.0-FINAL-H: one job-level packout on the combined units (sticker density rule)
-        jobPackingCost: OWNER_STANDARDS.packoutPerBox.value * Math.max(1, Math.ceil(totalUnitsK / 5000)),
+        lines: allLines,
+        jobPackingCost: jobPackingK, // 15F.0-FINAL-H: once on combined units
         marginRule: resolveMarginFamily("stickers-labels"),
       });
-      productMultiLine = { perLine: lineResults, combined, packingNote: "Packing charged once at job level — single-box floor of the $2 owner standard." };
+      if (lineCountParsed.error) combined.blockers.unshift(lineCountParsed.error);
+      productMultiLine = {
+        perLine: allLines,
+        combined,
+        countError: lineCountParsed.error,
+        totals: {
+          activeLines: allLines.length,
+          totalPieces: totalUnitsK,
+          totalDesigns: allLines.reduce((sum, line) => sum + Math.max(0, line.designs), 0),
+          totalFinishedSqft: allLines.reduce((sum, line) => sum + line.finishedSqft, 0),
+          totalAdjustedSqft: allLines.reduce((sum, line) => sum + line.adjustedSqft, 0),
+          totalMachineCost: allLines.reduce((sum, line) => sum + line.machineCost, 0),
+          totalInkCost: allLines.reduce((sum, line) => sum + line.inkCost, 0),
+          totalCuttingCost: allLines.reduce((sum, line) => sum + line.cuttingCost, 0),
+          totalLineCost: allLines.reduce((sum, line) => sum + line.lineCost, 0),
+          jobPackingCost: jobPackingK,
+        },
+        packingNote: "Packing charged once at job level (5,000/box provisional density, $2 owner standard).",
+      };
     }
   }
   const freight = computeFreight(
@@ -1679,12 +1742,16 @@ export async function action({ request }: { request: Request }) {
     savedSelectedTier = savedTiers.find((tier) => tier.quantity === selectedTierQty)
       || savedTiers.find((tier) => tier.requested)
       || savedTiers[savedTiers.length - 1];
-    // 15F.0-K: multi-line sticker jobs — recompute the SAME combined quote at
-    // save (posted totals ignored) and make it the selected/customer figure.
-    const lineCountSave = Math.floor(Number(fRead("pslcount") || 0));
-    if (savedEngineFamily === "stickers-labels" && lineCountSave >= 2) {
+    // 15F.0J.2: multi-line sticker jobs — recompute the SAME combined quote at
+    // save (posted totals ignored). Primary form = Line 1; pslcount counts
+    // ADDITIONAL lines (>=1 activates); invalid active lines REFUSE the save.
+    const lineCountSaveParsed = normalizeAdditionalLineCount(fRead("pslcount"));
+    if (savedEngineFamily === "stickers-labels" && (lineCountSaveParsed.count >= 1 || lineCountSaveParsed.error) && productSnapshot) {
+      if (lineCountSaveParsed.error) {
+        return Response.json({ ok: false, message: `Multi-line sticker job cannot save: ${lineCountSaveParsed.error}` });
+      }
       const lineInputsSave = buildStickerLines({
-        count: lineCountSave,
+        count: lineCountSaveParsed.count,
         names: fReadAll("pslname"),
         quantities: fReadAll("pslqty").map(Number),
         designs: fReadAll("psldesigns").map(Number),
@@ -1696,13 +1763,15 @@ export async function action({ request }: { request: Request }) {
         glosses: fReadAll("pslgloss").map(Number),
         cuts: fReadAll("pslcut"),
       });
+      const rawNamesSave = fReadAll("pslname");
       const lineMaterialRecords = await db.material.findMany({ where: { shop, id: { in: lineInputsSave.map((line) => line.materialId).filter(Boolean) } } });
       const lineMaterialByIdSave = new Map(lineMaterialRecords.map((record) => [record.id, record]));
-      const lineResultsSave = lineInputsSave.map((line) => {
+      const additionalResultsSave = lineInputsSave.map((line, index) => {
+        const fieldErrors = validateStickerLine(line);
         const record = lineMaterialByIdSave.get(line.materialId);
         const resolved = record ? resolvePrintMaterialCostPerSqft(record) : null;
         const run = computeProductDrivenCost({
-          family: "stickers-labels", quantity: Math.max(1, line.quantity), designs: line.designs,
+          family: "stickers-labels", quantity: Math.max(1, line.quantity), designs: Math.max(1, line.designs),
           facesPerUnit: 1, widthIn: line.widthIn, heightIn: line.heightIn, labelRows: null, dtp: null,
           blank: null, lid: null, mironTop: null,
           material: record ? { name: record.name, costPerSqft: resolved && resolved.unitCost > 0 ? resolved.unitCost : null } : null,
@@ -1715,17 +1784,42 @@ export async function action({ request }: { request: Request }) {
           recipeWastePct: null, wasteOverride: null, boxOverride: null,
         });
         const packingAmount = run.lines.find((engineLine) => engineLine.key === "packing")?.amount || 0;
+        const invalid = fieldErrors.length > 0;
         return {
+          lineNumber: index + 2,
           name: line.name, quantity: line.quantity, designs: line.designs,
           glossOrWhite: line.whiteLayers > 0 || line.glossLayers > 0,
-          lineCost: run.totalCost - packingAmount,
-          missing: run.missing,
-          finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL floor inputs
+          lineCost: invalid ? 0 : run.totalCost - packingAmount,
+          missing: invalid ? [] : run.missing,
+          fieldErrors,
+          finishedSqft: invalid ? 0 : run.derived.baseSqft, setupTotal: invalid ? 0 : run.setupTotal, // 15F.0-FINAL floor inputs
         };
       });
-      const totalUnitsSave = lineInputsSave.reduce((sum, line) => sum + Math.max(0, line.quantity), 0);
+      const activeAdditionalSave = additionalResultsSave.filter((_line, index) => {
+        const src = lineInputsSave[index];
+        return src.quantity > 0 || src.designs > 0 || src.widthIn > 0 || src.heightIn > 0 || src.materialId !== "" || String(rawNamesSave[index] || "").trim() !== "";
+      });
+      // 15F.0J.2-C: invalid ACTIVE lines refuse the save with the exact
+      // field errors — never a silently reduced quote.
+      const saveFieldErrors = activeAdditionalSave.flatMap((line) => line.fieldErrors.map((error) => `Line ${line.lineNumber}: ${error}`));
+      if (saveFieldErrors.length) {
+        return Response.json({ ok: false, message: `Multi-line sticker job cannot save until every active line is complete or removed: ${saveFieldErrors.join(" | ")}` });
+      }
+      const primaryPackingSave = productSnapshot.lines.find((engineLine) => engineLine.key === "packing")?.amount || 0;
+      const primaryLineSave = {
+        lineNumber: 1,
+        name: "Line 1 (main sticker entry)",
+        quantity: savedRequestedQty, designs: Number(fRead("pdesigns") || 0),
+        glossOrWhite: Number(fRead("pwhitelayers") || 0) > 0 || Number(fRead("pglosslayers") || 0) > 0,
+        lineCost: productSnapshot.totalCost - primaryPackingSave,
+        missing: productSnapshot.missing,
+        fieldErrors: [] as string[],
+        finishedSqft: productSnapshot.derived.baseSqft, setupTotal: productSnapshot.setupTotal,
+      };
+      const allLinesSave = [primaryLineSave, ...activeAdditionalSave];
+      const totalUnitsSave = allLinesSave.reduce((sum, line) => sum + Math.max(0, line.quantity), 0);
       savedMultiLine = combineStickerLines({
-        lines: lineResultsSave,
+        lines: allLinesSave,
         jobPackingCost: OWNER_STANDARDS.packoutPerBox.value * Math.max(1, Math.ceil(totalUnitsSave / 5000)),
         marginRule: resolveMarginFamily("stickers-labels"),
       });
@@ -1746,7 +1840,7 @@ export async function action({ request }: { request: Request }) {
         freightSource: "estimated",
         setupTotal: 0,
         blockers: savedMultiLine.blockers,
-        commercial: { version: COMMERCIAL_PRICING_VERSION, candidates: null, controllingRule: `Multi-line sticker job — ${savedMultiLine.controllingRule}`, marginSource: "per-line researched quantity bands + area floors", premiumApplied: lineResultsSave.some((line) => line.glossOrWhite) },
+        commercial: { version: COMMERCIAL_PRICING_VERSION, candidates: null, controllingRule: `Multi-line sticker job — ${savedMultiLine.controllingRule}`, marginSource: "per-line researched quantity bands + area floors", premiumApplied: allLinesSave.some((line) => line.glossOrWhite) },
         status: savedMultiLine.blockers.length ? "BLOCKED" : "READY TO QUOTE",
         multiLine: savedMultiLine,
       };
@@ -2871,39 +2965,69 @@ function MultiLineStickerRows() {
   const { emergency } = useLoaderData<typeof loader>() as any;
   const pm = emergency.productMode;
   const params = new URLSearchParams(useLocation().search);
-  const initialCount = Math.max(0, Math.floor(Number(params.get("pslcount") || 0)));
-  const [count, setCount] = useState<number>(initialCount);
+  const initialCount = Math.max(0, Math.min(8, Math.floor(Number(params.get("pslcount") || 0)) || 0));
   const readAll = (key: string) => params.getAll(key);
+  // 15F.0J.2-D: managed rows with explicit Add/Remove (no manual count entry
+  // — the hidden pslcount always posts rows.length, so "01" ambiguity cannot
+  // occur from the UI; the server still validates hand-edited URLs).
+  const [rows, setRows] = useState<Array<{ name: string; qty: string; designs: string; w: string; h: string; mat: string; printer: string; white: string; gloss: string; cut: string }>>(() =>
+    Array.from({ length: initialCount }, (_v, index) => ({
+      name: readAll("pslname")[index] || "",
+      qty: readAll("pslqty")[index] || "",
+      designs: readAll("psldesigns")[index] || "1",
+      w: readAll("pslw")[index] || "",
+      h: readAll("pslh")[index] || "",
+      mat: readAll("pslmat")[index] || "",
+      printer: readAll("pslprinter")[index] || "mimaki",
+      white: readAll("pslwhite")[index] || "0",
+      gloss: readAll("pslgloss")[index] || "0",
+      cut: readAll("pslcut")[index] || "square-rect",
+    })));
+  const update = (index: number, patch: Partial<(typeof rows)[number]>) => setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  const perLineErrors: Array<{ lineNumber: number; fieldErrors: string[] }> = (pm?.multiLine?.perLine || []).filter((line: any) => line.fieldErrors?.length);
   if (!pm) return null;
   return (
-    <details open={count >= 2} style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
-      <summary style={{ fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Multiple sticker/label lines (different sizes or finishes)</summary>
-      <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0" }}>
-        Each line calculates independently (own size, material, printer, layers, cut) and prices on its own quantity band — premium gloss/white lines use the premium curve. Packing is charged once at job level. Same size + same finish with several designs? Keep ONE line and set "Number of designs".
+    <details open={rows.length >= 1} style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+      <summary style={{ fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Additional sticker/label lines (different sizes or finishes)</summary>
+      <p style={{ fontSize: 12, color: "#1e40af", margin: "6px 0", fontWeight: 600 }}>
+        Your main sticker entry above stays LINE 1 — lines added here are ADDITIONAL (Line 2+) and combine with it into one job. Nothing is replaced.
       </p>
-      <label style={{ fontSize: 12 }}>Number of lines (2–8; 0 = single-line job)
-        <input name="pslcount" type="number" min={0} max={8} value={count} onChange={(event) => setCount(Math.max(0, Math.min(8, Math.floor(Number(event.currentTarget.value) || 0))))} style={inputStyle} />
-      </label>
-      {Array.from({ length: Math.min(Math.max(count, 0), 8) }, (_v, index) => (
-        <div key={index} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6, border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, marginTop: 6, background: "#f9fafb" }}>
-          <label style={{ fontSize: 11 }}>Line name<input name="pslname" defaultValue={readAll("pslname")[index] || ""} placeholder={`Line ${index + 1}`} style={inputStyle} /></label>
-          <label style={{ fontSize: 11 }}>* Quantity<input name="pslqty" type="number" min={1} defaultValue={readAll("pslqty")[index] || ""} style={inputStyle} /></label>
-          <label style={{ fontSize: 11 }}>* Designs<input name="psldesigns" type="number" min={1} defaultValue={readAll("psldesigns")[index] || "1"} style={inputStyle} /></label>
-          <label style={{ fontSize: 11 }}>* Width (in)<input name="pslw" type="number" step="0.01" min={0.01} defaultValue={readAll("pslw")[index] || ""} style={inputStyle} /></label>
-          <label style={{ fontSize: 11 }}>* Height (in)<input name="pslh" type="number" step="0.01" min={0.01} defaultValue={readAll("pslh")[index] || ""} style={inputStyle} /></label>
+      <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0" }}>
+        Each line calculates independently (own size, material, printer, layers, cut) and prices on its own quantity band; packing is charged once at job level. Same size + same finish with several designs? Keep ONE line and set "Number of designs". An incomplete line blocks the quote until fixed or removed.
+      </p>
+      <input type="hidden" name="pslcount" value={rows.length} />
+      {rows.map((row, index) => {
+        const errors = perLineErrors.find((line) => line.lineNumber === index + 2)?.fieldErrors || [];
+        return (
+        <div key={index} style={{ border: errors.length ? "2px solid #dc2626" : "1px solid #e5e7eb", borderRadius: 8, padding: 8, marginTop: 6, background: "#f9fafb" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <b style={{ fontSize: 12 }}>Line {index + 2}</b>
+            <button type="button" onClick={() => setRows((prev) => prev.filter((_r, i) => i !== index))} style={{ fontSize: 11, border: "1px solid #fca5a5", background: "#fef2f2", color: "#991b1b", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}>Remove line</button>
+          </div>
+          {errors.length ? (
+            <ul style={{ margin: "0 0 6px", paddingLeft: 16, fontSize: 11, color: "#991b1b", fontWeight: 600 }}>
+              {errors.map((error) => <li key={error}>{error}</li>)}
+            </ul>
+          ) : null}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6 }}>
+          <label style={{ fontSize: 11 }}>Line name<input name="pslname" value={row.name} onChange={(event) => update(index, { name: event.currentTarget.value })} placeholder={`Line ${index + 2}`} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>* Quantity<input name="pslqty" type="number" min={1} value={row.qty} onChange={(event) => update(index, { qty: event.currentTarget.value })} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>* Designs<input name="psldesigns" type="number" min={1} value={row.designs} onChange={(event) => update(index, { designs: event.currentTarget.value })} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>* Width (in)<input name="pslw" type="number" step="0.01" min={0.01} value={row.w} onChange={(event) => update(index, { w: event.currentTarget.value })} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>* Height (in)<input name="pslh" type="number" step="0.01" min={0.01} value={row.h} onChange={(event) => update(index, { h: event.currentTarget.value })} style={inputStyle} /></label>
           <label style={{ fontSize: 11 }}>* Material
-            <select name="pslmat" defaultValue={readAll("pslmat")[index] || ""} style={inputStyle}>
+            <select name="pslmat" value={row.mat} onChange={(event) => update(index, { mat: event.currentTarget.value })} style={inputStyle}>
               <option value="">— select —</option>
               {(pm.materialOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           <label style={{ fontSize: 11 }}>Printer
-            <select name="pslprinter" defaultValue={readAll("pslprinter")[index] || "mimaki"} style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select>
+            <select name="pslprinter" value={row.printer} onChange={(event) => update(index, { printer: event.currentTarget.value })} style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select>
           </label>
-          <label style={{ fontSize: 11 }}>White layers<input name="pslwhite" type="number" min={0} max={14} defaultValue={readAll("pslwhite")[index] || "0"} style={inputStyle} /></label>
-          <label style={{ fontSize: 11 }}>Gloss layers<input name="pslgloss" type="number" min={0} max={14} defaultValue={readAll("pslgloss")[index] || "0"} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>White layers<input name="pslwhite" type="number" min={0} max={14} value={row.white} onChange={(event) => update(index, { white: event.currentTarget.value })} style={inputStyle} /></label>
+          <label style={{ fontSize: 11 }}>Gloss layers<input name="pslgloss" type="number" min={0} max={14} value={row.gloss} onChange={(event) => update(index, { gloss: event.currentTarget.value })} style={inputStyle} /></label>
           <label style={{ fontSize: 11 }}>Cut type
-            <select name="pslcut" defaultValue={readAll("pslcut")[index] || "square-rect"} style={inputStyle}>
+            <select name="pslcut" value={row.cut} onChange={(event) => update(index, { cut: event.currentTarget.value })} style={inputStyle}>
               <option value="square-rect">Square / rectangle</option>
               <option value="kiss-simple">Kiss — simple contour</option>
               <option value="kiss-moderate">Kiss — moderate contour</option>
@@ -2912,8 +3036,14 @@ function MultiLineStickerRows() {
               <option value="none">No cutting</option>
             </select>
           </label>
+          </div>
         </div>
-      ))}
+        );
+      })}
+      <button type="button" onClick={() => setRows((prev) => (prev.length >= MAX_ADDITIONAL_LINES_UI ? prev : [...prev, { name: "", qty: "", designs: "1", w: "", h: "", mat: "", printer: "mimaki", white: "0", gloss: "0", cut: "square-rect" }]))} style={{ marginTop: 8, fontSize: 12, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontWeight: 700 }}>
+        + Add line {rows.length + 2} (max {MAX_ADDITIONAL_LINES_UI} additional)
+      </button>
+      <p style={{ fontSize: 11, color: "#6b7280", margin: "6px 0 0" }}>Recalculate (CALCULATE COST) after adding, editing, or removing lines to refresh totals.</p>
     </details>
   );
 }
@@ -2987,13 +3117,55 @@ function ProductTiers() {
   // combined job quote (per-line detail + job totals + save).
   if (multiLine?.combined) {
     const combined = multiLine.combined;
+    const totals = multiLine.totals;
     const blocked = combined.blockers.length > 0;
     return (
       <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
-        <b style={{ fontSize: 13 }}>Multi-line sticker job — {combined.lines.length} line(s), {combined.totalQuantity.toLocaleString()} total labels</b>
+        <b style={{ fontSize: 13 }}>Multi-line sticker job — Line 1 (main entry) + {Math.max(0, (multiLine.perLine || []).length - 1)} additional line(s)</b>
+        {totals ? (
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 8, padding: 8, margin: "6px 0", fontSize: 12, fontWeight: 600 }}>
+            <span>Active lines: {totals.activeLines}</span>
+            <span>Total pieces: {totals.totalPieces.toLocaleString()}</span>
+            <span>Total designs: {totals.totalDesigns}</span>
+            <span>Finished sqft: {totals.totalFinishedSqft.toFixed(2)}</span>
+            <span>Adjusted sqft: {totals.totalAdjustedSqft.toFixed(2)}</span>
+            <span>Machine: {money2(totals.totalMachineCost)}</span>
+            <span>Ink: {money2(totals.totalInkCost)}</span>
+            <span>Cutting: {money2(totals.totalCuttingCost)}</span>
+            <span>Line costs: {money2(totals.totalLineCost)}</span>
+            <span>Job packing (once): {money2(totals.jobPackingCost)}</span>
+            <span>Job cost: {money2(combined.totalCost)}</span>
+            <span style={{ color: "#166534" }}>Selling price: {money2(combined.finalTotalPrice)}</span>
+          </div>
+        ) : null}
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 6 }}>
-            <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 5 }}>Line</th><th>Quantity</th><th>Line cost</th><th>Margin band</th><th>Line price</th><th>Unit price</th><th align="left">Pricing rule</th></tr></thead>
+            <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 5 }}>Line</th><th>Qty</th><th>Size</th><th>Designs</th><th>Finish</th><th>Printer</th><th>Sqft</th><th>Adj sqft</th><th>Machine</th><th>Ink</th><th>Cutting</th><th>Subtotal</th></tr></thead>
+            <tbody>
+              {(multiLine.perLine || []).map((line: any) => (
+                <tr key={line.lineNumber} style={{ borderTop: "1px solid #e5e7eb", background: line.fieldErrors?.length ? "#fef2f2" : undefined }}>
+                  <td style={{ padding: 5 }}><b>Line {line.lineNumber}</b> {line.name}{line.glossOrWhite ? <span style={{ color: "#7c2d12" }}> (premium)</span> : null}
+                    {line.fieldErrors?.length ? <div style={{ color: "#991b1b", fontWeight: 700, fontSize: 11 }}>{line.fieldErrors.join(" ")}</div> : null}
+                  </td>
+                  <td align="center">{line.quantity ? line.quantity.toLocaleString() : "—"}</td>
+                  <td align="center">{line.widthIn && line.heightIn ? `${line.widthIn}x${line.heightIn}` : "—"}</td>
+                  <td align="center">{line.designs || "—"}</td>
+                  <td align="center">{line.finish}</td>
+                  <td align="center">{line.printer}</td>
+                  <td align="center">{line.finishedSqft.toFixed(2)}</td>
+                  <td align="center">{line.adjustedSqft.toFixed(2)}</td>
+                  <td align="center">{money2(line.machineCost)}</td>
+                  <td align="center">{money2(line.inkCost)}</td>
+                  <td align="center">{money2(line.cuttingCost)}</td>
+                  <td align="center"><b>{money2(line.lineCost)}</b></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 6 }}>
+            <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 5 }}>Priced line</th><th>Quantity</th><th>Line cost</th><th>Margin band</th><th>Line price</th><th>Unit price</th><th align="left">Pricing rule</th></tr></thead>
             <tbody>
               {combined.lines.map((line: any) => (
                 <tr key={line.name} style={{ borderTop: "1px solid #e5e7eb" }}>

@@ -1274,3 +1274,17 @@ Anonymized derived outputs committed under analysis-output/roland/ (8
 files). Docs: ROLAND_LOG_FORENSIC_ANALYSIS + ROLAND_PROFILE_CALIBRATION
 rewritten with measured tables; CALIBRATION_PLAN + COST_COMPLETENESS
 updated. Tests 621; tsc 306; build clean; app behavior unchanged.
+
+## Patch 15F.0J.2 — multi-line sticker quote safety (2026-07-26)
+The audited silent-loss defects are fixed: additional lines activate at
+count >= 1 ("01" works; invalid counts rejected with messages); the main
+sticker form is ALWAYS Line 1 (additional = Line 2+, stated in the UI);
+active incomplete lines surface exact field errors, block READY TO QUOTE,
+and refuse the save (never silently dropped — the qty>0 silent filter is
+removed from combineStickerLines); explicit Add/Remove line buttons; full
+totals panel (lines/pieces/designs/sqft/adjusted/machine/ink/cutting/
+line costs/job packing once/job cost/price) + per-line detail table.
+Save mirrors the loader (normalizeAdditionalLineCount + validateStickerLine
+shared); snapshot multiLine block now includes Line 1 and the totals; no
+schema change; DTP/other families untouched. Tests 621 -> 629; tsc 306;
+build clean.

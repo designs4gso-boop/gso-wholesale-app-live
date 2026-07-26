@@ -14,8 +14,10 @@ import {
   computeCommercialPrice,
   designSplit,
   marginPctForQuantity,
+  normalizeAdditionalLineCount,
   stickerMarketFloorPrice,
   stickerMarketFloorRate,
+  validateStickerLine,
 } from "../app/lib/commercial-pricing-policy.server";
 import { BANNER_FINISHING_STANDARDS, CUT_CONTOUR_MULTIPLIERS, MIMAKI_INK_CALIBRATION, PREMIUM_INK_ESTIMATE_VERSION, buildMimakiPremiumInkEstimate, computeProductDrivenCost, CUT_SQUARE_RECT_STANDARD, normalizeCutType, type ProductDrivenInput } from "../app/lib/product-driven-costing.server";
 import { INK_RATES, resolveMarginFamily } from "../app/lib/calculator-emergency.server";
@@ -328,6 +330,94 @@ describe("fixtures 8/9 (N): Chiron 150ml jars", () => {
     expect(run.totalCost).toBeCloseTo(1530.4818, 3);
     const priced = computeCommercialPrice({ familyKey: "premium-jars", quantity: 585, completeCost: run.totalCost, marginRule: resolveMarginFamily("chiron-jars")!, premiumEligible: false });
     expect(priced.finalTotalPrice).toBeCloseTo(3060.9637, 3);
+  });
+});
+
+describe("multi-line sticker safety (15F.0J.2)", () => {
+  const rule = resolveMarginFamily("stickers-labels")!;
+  const validLine = (over: any = {}) => ({ name: "Line 2", quantity: 250, designs: 1, glossOrWhite: false, lineCost: 40, missing: [], fieldErrors: [] as string[], finishedSqft: 10, setupTotal: 9.33, ...over });
+  const primary = (over: any = {}) => ({ name: "Line 1 (main sticker entry)", quantity: 585, designs: 3, glossOrWhite: false, lineCost: 100, missing: [], fieldErrors: [] as string[], finishedSqft: 90, setupTotal: 28, ...over });
+
+  it("scenario 10 (A): '01' normalizes to exactly ONE additional line; invalid counts REJECT with messages", () => {
+    expect(normalizeAdditionalLineCount("01")).toEqual({ count: 1, error: null });
+    expect(normalizeAdditionalLineCount("")).toEqual({ count: 0, error: null }); // blank = single-line mode
+    expect(normalizeAdditionalLineCount("2")).toEqual({ count: 2, error: null });
+    expect(normalizeAdditionalLineCount("-1").error).toContain("cannot be negative");
+    expect(normalizeAdditionalLineCount("abc").error).toContain("not a number");
+    expect(normalizeAdditionalLineCount("9").error).toContain("cannot exceed 8");
+  });
+
+  it("scenarios 6/7/8/9 (C): blank quantity, zero quantity, missing dims, missing material each produce exact field errors", () => {
+    const base = { name: "L", quantity: 0, designs: 0, widthIn: 0, heightIn: 0, materialId: "", printer: "mimaki" as const, whiteLayers: 0, glossLayers: 0, cutType: "square-rect" };
+    const errors = validateStickerLine(base);
+    expect(errors).toContain("Quantity is required (must be greater than 0).");
+    expect(errors).toContain("Designs is required (must be at least 1).");
+    expect(errors).toContain("Width (in) is required.");
+    expect(errors).toContain("Height (in) is required.");
+    expect(errors).toContain("Material is required.");
+    expect(validateStickerLine({ ...base, quantity: 100, designs: 1, widthIn: 2.5, heightIn: 2.5, materialId: "m1" })).toHaveLength(0);
+  });
+
+  it("scenario 16 + exact 585 case: an active lid line with BLANK quantity blocks the JOB — never silently disappears; fixed, both lines price", () => {
+    // primary 585 x 3 designs 7.13x3.13 + additional lid 2.5x2.5, qty blank
+    const lidBlank = validLine({ name: "Line 2", quantity: 0, lineCost: 0, fieldErrors: ["Quantity is required (must be greater than 0)."], finishedSqft: 0 });
+    const blocked = combineStickerLines({ lines: [primary(), lidBlank], jobPackingCost: 2, marginRule: rule });
+    expect(blocked.blockers.some((blocker) => blocker.includes("Line 2") && blocker.includes("Quantity is required"))).toBe(true); // visible blocking error
+    expect(blocked.lines.some((line) => line.name === "Line 2")).toBe(false); // not priced while invalid
+    // READY TO QUOTE must be false while blockers exist (route derives status from blockers)
+    expect(blocked.blockers.length).toBeGreaterThan(0);
+    // quantity entered -> both lines price and totals include both
+    const lidFixed = validLine({ name: "Line 2", quantity: 300, lineCost: 25, fieldErrors: [], finishedSqft: 13.02 });
+    const ready = combineStickerLines({ lines: [primary(), lidFixed], jobPackingCost: 2, marginRule: rule });
+    expect(ready.blockers).toHaveLength(0);
+    expect(ready.totalQuantity).toBe(585 + 300); // scenario 15: every physical piece included
+    expect(ready.lines).toHaveLength(2);
+    expect(ready.totalCost).toBeCloseTo(100 + 25 + 2, 10);
+  });
+
+  it("scenarios 1/2/14 (B/F): primary-only vs primary+valid additional; job packing charged exactly once", () => {
+    const single = combineStickerLines({ lines: [primary()], jobPackingCost: 2, marginRule: rule });
+    expect(single.totalQuantity).toBe(585);
+    const two = combineStickerLines({ lines: [primary(), validLine()], jobPackingCost: 2, marginRule: rule });
+    expect(two.totalQuantity).toBe(835);
+    expect(two.lines.reduce((sum, line) => sum + line.allocatedPacking, 0)).toBeCloseTo(2, 10); // packing once, allocated
+    expect(two.totalCost).toBeCloseTo(100 + 40 + 2, 10);
+  });
+
+  it("scenario 7 legacy behavior is DEAD: a passed qty-0 line without fieldErrors still blocks (never silently filtered)", () => {
+    const sneaky = combineStickerLines({ lines: [primary(), validLine({ quantity: 0, lineCost: 0 })], jobPackingCost: 2, marginRule: rule });
+    expect(sneaky.blockers.some((blocker) => blocker.includes("Quantity is required"))).toBe(true);
+  });
+
+  it("scenarios 3/4/5 (route pins): different sizes/quantities/printers flow per line; loader includes the primary as Line 1", () => {
+    const src = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+    expect(src).toContain("normalizeAdditionalLineCount(eparams.get(\"pslcount\"))");
+    expect(src).toContain("lineCountParsed.count >= 1 || lineCountParsed.error"); // >=1 activates (defect 1 dead)
+    expect(src).toContain("lineNumber: index + 2, // primary = Line 1; additional lines start at Line 2");
+    expect(src).toContain("name: \"Line 1 (main sticker entry)\"");
+    expect(src).toContain("Your main sticker entry above stays LINE 1"); // defect 3: replacement is gone + stated
+    expect(src).toContain("Remove line"); // scenario 11 (D): explicit removal
+    expect(src).toContain("+ Add line");
+    expect(src).toContain("fieldErrors: validateStickerLine(line)".replace("fieldErrors: ", "const fieldErrors = ")); // validation wired
+  });
+
+  it("scenarios 12/13 (G): save mirrors the loader — refuses on field errors, includes Line 1, snapshot totals from combined", () => {
+    const src = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+    expect(src).toContain("normalizeAdditionalLineCount(fRead(\"pslcount\"))");
+    expect(src).toContain("Multi-line sticker job cannot save until every active line is complete or removed");
+    expect(src).toContain("const primaryLineSave = {");
+    expect(src).toContain("const allLinesSave = [primaryLineSave, ...activeAdditionalSave]");
+    expect(src).toContain("multiLine: savedMultiLine ? { lines: savedMultiLine.lines, totalQuantity: savedMultiLine.totalQuantity"); // snapshot carries combined totals
+    expect(src).toContain('name="psearch"'); // save/reopen replay preserved
+  });
+
+  it("totals panel (E) renders active lines / pieces / designs / sqft / machine / ink / cutting / packing-once", () => {
+    const src = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
+    for (const label of ["Active lines:", "Total pieces:", "Total designs:", "Finished sqft:", "Adjusted sqft:", "Job packing (once):", "Selling price:"]) {
+      expect(src).toContain(label);
+    }
+    expect(src).toContain("totalMachineCost");
+    expect(src).toContain("totalCuttingCost");
   });
 });
 

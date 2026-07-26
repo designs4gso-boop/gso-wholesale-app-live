@@ -275,6 +275,23 @@ export type StickerLineInput = {
   cutType: string;
 };
 
+// 15F.0J.2-A: deterministic ADDITIONAL-line count normalization. The field
+// counts ADDITIONAL lines (the primary sticker form is ALWAYS Line 1);
+// 0/blank = single-line job. "01" parses to exactly 1 additional line —
+// never ignored. Invalid values are REJECTED with a message, never clamped
+// silently.
+export const MAX_ADDITIONAL_STICKER_LINES = 8;
+export function normalizeAdditionalLineCount(raw: string | null | undefined): { count: number; error: string | null } {
+  const text = String(raw ?? "").trim();
+  if (text === "") return { count: 0, error: null }; // multi-line not enabled
+  const value = Number(text);
+  if (!Number.isFinite(value)) return { count: 0, error: `Number of additional lines "${text}" is not a number.` };
+  const count = Math.floor(value);
+  if (count < 0) return { count: 0, error: "Number of additional lines cannot be negative." };
+  if (count > MAX_ADDITIONAL_STICKER_LINES) return { count: 0, error: `Number of additional lines cannot exceed ${MAX_ADDITIONAL_STICKER_LINES}.` };
+  return { count, error: null };
+}
+
 export function buildStickerLines(params: {
   count: number;
   names: string[];
@@ -288,9 +305,9 @@ export function buildStickerLines(params: {
   glosses: number[];
   cuts: string[];
 }): StickerLineInput[] {
-  const count = Math.min(Math.max(0, Math.floor(params.count || 0)), 8);
+  const count = Math.min(Math.max(0, Math.floor(params.count || 0)), MAX_ADDITIONAL_STICKER_LINES);
   return Array.from({ length: count }, (_v, index) => ({
-    name: String(params.names[index] || `Line ${index + 1}`).slice(0, 80),
+    name: String(params.names[index] || `Line ${index + 2}`).slice(0, 80), // additional lines start at Line 2 (primary = Line 1)
     quantity: Math.max(0, Math.floor(Number(params.quantities[index]) || 0)),
     designs: Math.max(0, Math.floor(Number(params.designs[index]) || 0)),
     widthIn: Number(params.widths[index]) > 0 ? Number(params.widths[index]) : 0,
@@ -301,6 +318,19 @@ export function buildStickerLines(params: {
     glossLayers: Math.max(0, Math.floor(Number(params.glosses[index]) || 0)),
     cutType: String(params.cuts[index] || "square-rect"),
   }));
+}
+
+// 15F.0J.2-C: field-level validation for an ACTIVE line. An active line that
+// fails validation must surface these errors and BLOCK — never be silently
+// dropped from the calculation.
+export function validateStickerLine(line: StickerLineInput): string[] {
+  const errors: string[] = [];
+  if (!(line.quantity > 0)) errors.push("Quantity is required (must be greater than 0).");
+  if (!(line.designs > 0)) errors.push("Designs is required (must be at least 1).");
+  if (!(line.widthIn > 0)) errors.push("Width (in) is required.");
+  if (!(line.heightIn > 0)) errors.push("Height (in) is required.");
+  if (!line.materialId) errors.push("Material is required.");
+  return errors;
 }
 
 // Combine independently-computed line results into one job quote. Inputs are
@@ -315,6 +345,10 @@ export function combineStickerLines(input: {
     glossOrWhite: boolean;
     lineCost: number; // line's own direct cost WITHOUT job-level packing
     missing: string[];
+    // 15F.0J.2-C: field-level validation errors (validateStickerLine). A line
+    // with errors is NEVER silently dropped: it contributes $0 but forces
+    // job-level blockers until fixed or removed.
+    fieldErrors?: string[];
     // 15F.0-FINAL: per-line area + setup feed the sticker market floor
     finishedSqft?: number;
     setupTotal?: number;
@@ -331,9 +365,17 @@ export function combineStickerLines(input: {
   controllingRule: string;
   blockers: string[];
 } {
-  const activeLines = input.lines.filter((line) => line.quantity > 0);
+  // 15F.0J.2: NO silent quantity filter — every passed line either prices
+  // (valid) or blocks (invalid). Callers pass only ACTIVE lines.
+  const invalidBlockers = input.lines.flatMap((line) =>
+    (line.fieldErrors && line.fieldErrors.length ? line.fieldErrors : line.quantity > 0 ? [] : ["Quantity is required (must be greater than 0)."])
+      .map((reason) => `${line.name}: ${reason}`));
+  const activeLines = input.lines.filter((line) => line.quantity > 0 && !(line.fieldErrors && line.fieldErrors.length));
   const directTotal = activeLines.reduce((sum, line) => sum + line.lineCost, 0);
-  const blockers = activeLines.flatMap((line) => line.missing.map((reason) => `${line.name}: ${reason}`));
+  const blockers = [
+    ...invalidBlockers,
+    ...activeLines.flatMap((line) => line.missing.map((reason) => `${line.name}: ${reason}`)),
+  ];
   const priced = activeLines.map((line) => {
     const share = directTotal > 0 ? line.lineCost / directTotal : 1 / Math.max(1, activeLines.length);
     const allocatedPacking = input.jobPackingCost * share;
