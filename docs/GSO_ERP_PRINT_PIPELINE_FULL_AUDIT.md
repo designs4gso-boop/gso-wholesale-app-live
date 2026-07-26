@@ -52,3 +52,8 @@ agent v1.3; review page surfaces quality/eligibility/match warnings.
 Still open: PrintIntake DB records + print-only tickets (J-phase pending),
 JobInfo converter location (contract published), rasterlink-sync host
 confirmation.
+
+## 15F.0J.4A update (2026-07-26)
+Intake scan converted to non-recursive (agent v1.4): root = inbox,
+subfolders never scanned. Fixes the observed backlog (81 files in
+"PRINTS FOR TODAY" + 3 in "600ppi" delaying 3 root files).

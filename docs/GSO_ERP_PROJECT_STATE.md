@@ -1325,3 +1325,15 @@ job-log export — no supported export API). Agent v1.3 reports full SHA-256
 JobInfo converter still unlocated (negative machine search documented);
 required contract published. Pricing outputs byte-identical (test 20 +
 unchanged calculator suites). Tests 635 -> 650; tsc 306; build clean.
+
+## Patch 15F.0J.4A — non-recursive print intake inbox (2026-07-26)
+Root cause: the agent's recursive scan treated archive/work subfolders as
+intake, so one new test file waited behind 84 unrelated files. Fix: agent
+v1.4 scans Get-ChildItem -LiteralPath <root> -File (no -Recurse) — root =
+inbox, subfolders never traversed regardless of name; hashing/ledger only
+for top-level files; routing, ticket generation, SHA-256 dedupe, archive
+moves, destinations, API all unchanged. Self-test rewritten (root
+pdf/ai/tiff/png eligible; 1-level and deep subfolder files ignored; 200
+nested files leave the scan result unchanged; cutoff/reservation/claims
+intact) — 0 failures; repo pin test added. Tests 650 -> 651; tsc 306;
+build clean. Deploy by replacing the live task's script.

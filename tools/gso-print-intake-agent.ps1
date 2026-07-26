@@ -26,7 +26,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.3 (15F.0J.4 full-hash reporting)"
+$ScriptVersion = "gso-print-intake-agent/1.4 (15F.0J.4A non-recursive inbox)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -215,10 +215,17 @@ function Test-PathIsReserved([string]$FullName, $Config) {
 # count of historical files ignored by the cutoff. Ignored files are filtered
 # HERE, before detection logging, claims, hashing, ledger lookups, plan calls,
 # copies, moves, or reports - they never enter the per-file pipeline at all.
+# 15F.0J.4A INBOX CONTRACT: the configured PrintsForTodayFolder is a
+# NON-RECURSIVE inbox. Only files DIRECTLY inside the root are processed;
+# subfolders (production/archive/work areas like "PRINTS FOR TODAY",
+# "600ppi", review/sent/customer folders) are NEVER traversed, regardless of
+# name - one new root file is detected on the next poll no matter how many
+# thousands of files the subfolders hold. Hashing/ledger lookups happen only
+# for top-level eligible files.
 function Get-EligibleArtworkFiles($Config) {
   $eligible = @()
   $ignoredHistorical = 0
-  $all = @(Get-ChildItem -Path $Config.PrintsForTodayFolder -File -Recurse -ErrorAction SilentlyContinue)
+  $all = @(Get-ChildItem -LiteralPath $Config.PrintsForTodayFolder -File -ErrorAction SilentlyContinue)
   foreach ($file in $all) {
     if ($ArtworkExtensions -notcontains $file.Extension.ToLowerInvariant()) { continue }
     if (Test-PathIsReserved $file.FullName $Config) { continue }
@@ -493,15 +500,29 @@ function Invoke-IntakeSelfTest {
     Assert "no cutoff leaves files eligible" (Test-FileEligibleByCutoff $cutoff $null)
 
     $scanRoot = Join-Path $temp "prints"
-    foreach ($sub in @("", "_agent-test", "_routed-archive", "jobsub")) { New-Item -ItemType Directory -Path (Join-Path $scanRoot $sub) -Force | Out-Null }
+    foreach ($sub in @("", "_agent-test", "_routed-archive", "jobsub", "PRINTS FOR TODAY", "PRINTS FOR TODAY\600ppi", "deep\a\b\c")) { New-Item -ItemType Directory -Path (Join-Path $scanRoot $sub) -Force | Out-Null }
     $scanConfig = @{ PrintsForTodayFolder = $scanRoot; RoutedArchiveFolder = (Join-Path $temp "archive"); ErrorFolder = (Join-Path $temp "err"); LogFolder = (Join-Path $temp "logs"); CutoffUtc = $cutoff }
     New-Item -ItemType Directory -Path $scanConfig.RoutedArchiveFolder -Force | Out-Null
     $old = Join-Path $scanRoot "historical.pdf"; Set-Content -Path $old -Value "old"
     (Get-Item $old).LastWriteTimeUtc = $cutoff.AddDays(-30)
     $atCutoff = Join-Path $scanRoot "at-cutoff.pdf"; Set-Content -Path $atCutoff -Value "edge"
     (Get-Item $atCutoff).LastWriteTimeUtc = $cutoff
-    $fresh = Join-Path $scanRoot "jobsub\new art.pdf"; Set-Content -Path $fresh -Value "new"
+    # 15F.0J.4A: ROOT files are the inbox - eligible in every artwork format.
+    $fresh = Join-Path $scanRoot "new art.pdf"; Set-Content -Path $fresh -Value "new"
     (Get-Item $fresh).LastWriteTimeUtc = $cutoff.AddMinutes(5)
+    $freshAi = Join-Path $scanRoot "vector.ai"; Set-Content -Path $freshAi -Value "v"
+    (Get-Item $freshAi).LastWriteTimeUtc = $cutoff.AddMinutes(6)
+    $freshTif = Join-Path $scanRoot "raster.tiff"; Set-Content -Path $freshTif -Value "r"
+    (Get-Item $freshTif).LastWriteTimeUtc = $cutoff.AddMinutes(7)
+    $freshPng = Join-Path $scanRoot "image.png"; Set-Content -Path $freshPng -Value "p"
+    (Get-Item $freshPng).LastWriteTimeUtc = $cutoff.AddMinutes(8)
+    # subfolder files (one level and several levels deep) are NEVER scanned
+    $inSub = Join-Path $scanRoot "jobsub\sub art.pdf"; Set-Content -Path $inSub -Value "s"
+    (Get-Item $inSub).LastWriteTimeUtc = $cutoff.AddMinutes(5)
+    $inProd = Join-Path $scanRoot "PRINTS FOR TODAY\working.pdf"; Set-Content -Path $inProd -Value "w"
+    (Get-Item $inProd).LastWriteTimeUtc = $cutoff.AddMinutes(5)
+    $inDeep = Join-Path $scanRoot "deep\a\b\c\deep.pdf"; Set-Content -Path $inDeep -Value "x"
+    (Get-Item $inDeep).LastWriteTimeUtc = $cutoff.AddMinutes(5)
     $inTest = Join-Path $scanRoot "_agent-test\test.pdf"; Set-Content -Path $inTest -Value "t"
     (Get-Item $inTest).LastWriteTimeUtc = $cutoff.AddMinutes(5)
     $inRoutedName = Join-Path $scanRoot "_routed-archive\done.pdf"; Set-Content -Path $inRoutedName -Value "d"
@@ -510,10 +531,16 @@ function Invoke-IntakeSelfTest {
     (Get-Item $inArchiveRoot).LastWriteTimeUtc = $cutoff.AddMinutes(5)
     $notArt = Join-Path $scanRoot "notes.txt"; Set-Content -Path $notArt -Value "n"
     $scanOut = Get-EligibleArtworkFiles $scanConfig
-    Assert "only the fresh file is eligible (older + at-cutoff ignored)" (($scanOut.files.Count -eq 1) -and ($scanOut.files[0].Name -eq "new art.pdf"))
-    Assert "historical count covers older and at-cutoff files" ($scanOut.ignoredHistorical -eq 2)
+    Assert "root artwork files (pdf/ai/tiff/png) are eligible; nothing else" (($scanOut.files.Count -eq 4) -and (@($scanOut.files | Where-Object { $_.Name -in @("new art.pdf","vector.ai","raster.tiff","image.png") }).Count -eq 4))
+    Assert "one-level and multi-level subfolder files are ignored (non-recursive inbox)" (@($scanOut.files | Where-Object { $_.FullName -match "jobsub|PRINTS FOR TODAY|deep" }).Count -eq 0)
+    Assert "historical count covers older and at-cutoff ROOT files" ($scanOut.ignoredHistorical -eq 2)
     Assert "reserved folder names and configured roots are never scanned" (@($scanOut.files | Where-Object { $_.FullName -match "_agent-test|_routed-archive" -or $_.FullName.StartsWith($scanConfig.RoutedArchiveFolder) }).Count -eq 0)
-    Assert "path reservation matches names and configured roots" ((Test-PathIsReserved $inTest $scanConfig) -and (Test-PathIsReserved $inRoutedName $scanConfig) -and (Test-PathIsReserved $inArchiveRoot $scanConfig) -and (-not (Test-PathIsReserved $fresh $scanConfig)))
+    Assert "path reservation logic unchanged (defense in depth under non-recursive scan)" ((Test-PathIsReserved $inTest $scanConfig) -and (Test-PathIsReserved $inRoutedName $scanConfig) -and (Test-PathIsReserved $inArchiveRoot $scanConfig) -and (-not (Test-PathIsReserved $fresh $scanConfig)))
+    # many nested files never slow or leak into the scan: only root files return
+    $bulkDir = Join-Path $scanRoot "PRINTS FOR TODAY\600ppi"
+    for ($i = 1; $i -le 200; $i++) { Set-Content -Path (Join-Path $bulkDir "bulk-$i.pdf") -Value "b" }
+    $scanOut2 = Get-EligibleArtworkFiles $scanConfig
+    Assert "hundreds of nested files do not enter the scan (root-only result unchanged)" ($scanOut2.files.Count -eq 4)
     # Ignored files never reach claims/hash/API/report: the scan result is the
     # ONLY input to the processing loop, and scanning created no claim files.
     Assert "scan itself creates no claim files for ignored files" (@(Get-ChildItem -Path $scanRoot -Recurse -Filter "*.gsoclaim" -File).Count -eq 0)

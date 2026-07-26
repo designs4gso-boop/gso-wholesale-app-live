@@ -47,3 +47,13 @@ Claims are stale-reclaimed after 30 min; error files carry .error.json
 sidecars; re-uploading any file is safe (file-hash + row dedupe); raw
 source rows/files retained on every import (PrintLogImport.rawText,
 PrintLogEntry.rawRow immutable).
+
+## 15F.0J.4A — non-recursive inbox (2026-07-26)
+The agent (v1.4) scans ONLY files directly inside Prints For Today. INBOX
+CONTRACT: employees drop new printable files at the ROOT; subfolders
+("PRINTS FOR TODAY", "600ppi", review/sent/customer/archive areas) are
+storage/work areas OUTSIDE automatic intake and are never traversed —
+thousands of nested files cannot delay a new root file (previous recursive
+scan queued one new file behind 84 archived ones). Hashing/ledger lookups
+run only for top-level eligible files; SHA-256 dedupe, routing, and archive
+behavior unchanged. Deploy = replace the script the existing task runs.

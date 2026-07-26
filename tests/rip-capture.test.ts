@@ -198,6 +198,19 @@ describe("import + review integration (15F.0J.4)", () => {
     expect(warnings.join(" ")).toContain("Quality flags:");
   });
 
+  it("15F.0J.4A: intake agent is a NON-RECURSIVE inbox — root-only scan; routing/dedupe/archive unchanged", () => {
+    const agent = readFileSync(new URL("../tools/gso-print-intake-agent.ps1", import.meta.url), "utf8");
+    expect(agent).toContain("Get-ChildItem -LiteralPath $Config.PrintsForTodayFolder -File -ErrorAction SilentlyContinue");
+    // the eligible-files scan never recurses (self-test recursion for claim checks is separate)
+    expect(agent).not.toContain("Get-ChildItem -Path $Config.PrintsForTodayFolder -File -Recurse");
+    expect(agent).toContain("NON-RECURSIVE inbox");
+    expect(agent).toContain("gso-print-intake-agent/1.4");
+    // unchanged behaviors: content-ledger dedupe, archive move, routing plan call
+    expect(agent).toContain("ledger_skip");
+    expect(agent).toContain("original_archived");
+    expect(agent).toContain("Get-RoutePlan $Config $File.Name $subfolder");
+  });
+
   it("test 20: no pricing output changes — calculator modules are untouched by capture code", () => {
     const src = readFileSync(new URL("../app/lib/rip-capture.server.ts", import.meta.url), "utf8");
     expect(src).not.toContain("commercial-pricing-policy");

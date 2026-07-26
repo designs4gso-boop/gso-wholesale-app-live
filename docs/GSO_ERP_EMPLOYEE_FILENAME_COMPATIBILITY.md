@@ -43,3 +43,8 @@ confidence } — pure, test-covered against a REAL corpus fixture file before
 enabling; used ONLY at precedence levels 3-4 (after ERP metadata and
 explicit tokens) and any sub-high confidence result quarantines instead of
 routing. Employees are never asked to change anything.
+
+## 15F.0J.4A inbox note (2026-07-26)
+Filename habits unchanged; FOLDER contract clarified: drop new printable
+files DIRECTLY into Prints For Today (the root). Files placed in any
+subfolder are treated as storage/work copies and are not auto-routed.
