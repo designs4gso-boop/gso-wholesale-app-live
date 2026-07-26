@@ -686,8 +686,12 @@ describe("route parity + presentation pins (15F.0-L/M/P)", () => {
   const src = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
 
   it("loader and save action use the SAME quantity-band resolver and commercial module", () => {
-    expect(src).toContain("marginPctForQuantity(marginRuleForPricingP, qty)");
-    expect(src).toContain("marginPctForQuantity(marginRuleForPricingSave, qty)");
+    // 15F.0K.2-A: the shared resolver replaced the direct positional calls —
+    // the parity invariant is unchanged (identical resolver + rule on both
+    // sides); Stage-A defaults reproduce the positional math exactly
+    // (tests/margin-curve-equivalence.test.ts proves old == new per boundary).
+    expect(src).toContain("resolveMarginPctForQuantity(pricingPolicy.values, marginCurveKeyP, marginRuleForPricingP, qty)");
+    expect(src).toContain("resolveMarginPctForQuantity(pricingPolicy.values, marginCurveKeySave, marginRuleForPricingSave, qty)");
     const commercialCalls = src.match(/computeCommercialPrice\(\{/g) || [];
     expect(commercialCalls.length).toBeGreaterThanOrEqual(2); // loader + action (+ multi-line via combineStickerLines)
   });

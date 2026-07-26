@@ -16,7 +16,9 @@
 // docs/GSO_ERP_PRICING_OWNER_DECISIONS.md), NEVER invented here.
 
 import {
+  FAMILY_MARGIN_RULES,
   MARGIN_FLOOR_PCT,
+  SUGGESTED_QUANTITIES,
   marginMath,
   resolveMarginFamily,
   type FamilyMarginRule,
@@ -126,13 +128,106 @@ export function commercialPolicyFor(familyKey: string): FamilyCommercialPolicy |
 // defaults below are built from the SAME constants as before, so behavior is
 // byte-for-byte identical (test-pinned equivalence).
 export type FamilyMoneyMap = Record<string, number | null>;
+
+// ---------- 15F.0K.2-A: per-family margin bands + tier ladders ----------
+// Band semantics: the LAST band whose minQty <= quantity wins. The Stage-A
+// defaults translate the positional 5-point curves at the global edges
+// [64,128,256,640,1000] EXACTLY: quantities 1-127 always took curve[0], so
+// the equivalent band starts at minQty 1 (never 64) — proven old-vs-new at
+// every boundary by tests/margin-curve-equivalence.test.ts.
+export type MarginBand = { minQty: number; targetPct: number };
+export type FamilyMarginCurveConfig = { familyMinPct: number; bands: MarginBand[] };
+export type MarginCurvesValues = { families: Record<string, FamilyMarginCurveConfig> };
+export type TierLaddersValues = { defaultLadder: number[]; families: Record<string, number[]> };
+
+// Stage-A band starts equivalent to MARGIN_BAND_QUANTITIES [64,128,256,640,1000].
+export const EQUIVALENT_BAND_MIN_QTYS = [1, 128, 256, 640, 1000];
+// DTP margins price through dtpMarginPctForQuantity (code) — the dtp-pouches
+// curve is deliberately NOT owner-configurable, and the provisional-universal
+// fallback stays code-only by definition.
+export const MARGIN_CURVE_EXCLUDED_KEYS = ["dtp-pouches", "provisional-universal"];
+// Optional variant curve keys (Stage B data): resolution falls back to the
+// base key when the variant has no config entry, so absence = base behavior.
+export const MARGIN_CURVE_VARIANT_BASE: Record<string, string> = { "bags-4x5-double": "bags-4x5" };
+export const MARGIN_CURVE_CONFIGURABLE_KEYS = FAMILY_MARGIN_RULES
+  .map((rule) => rule.key)
+  .filter((key) => !MARGIN_CURVE_EXCLUDED_KEYS.includes(key));
+
+export function defaultMarginCurvesValues(): MarginCurvesValues {
+  const families: Record<string, FamilyMarginCurveConfig> = {};
+  for (const rule of FAMILY_MARGIN_RULES) {
+    if (MARGIN_CURVE_EXCLUDED_KEYS.includes(rule.key)) continue;
+    families[rule.key] = {
+      familyMinPct: rule.familyMinPct,
+      bands: rule.curve.map((targetPct, index) => ({ minQty: EQUIVALENT_BAND_MIN_QTYS[index] ?? EQUIVALENT_BAND_MIN_QTYS[EQUIVALENT_BAND_MIN_QTYS.length - 1], targetPct })),
+    };
+  }
+  return { families };
+}
+
+// Stage A: today's family-blind display default for every non-DTP family
+// (SUGGESTED_QUANTITIES.slice(0,5) = [64,128,256,640,1000]); the DTP ladder
+// stays DTP_LADDER_QUANTITIES in code and is NOT configurable here.
+export function defaultTierLaddersValues(): TierLaddersValues {
+  const ladder = SUGGESTED_QUANTITIES.slice(0, 5);
+  const families: Record<string, number[]> = {};
+  for (const policy of FAMILY_COMMERCIAL_POLICIES) families[policy.familyKey] = [...ladder];
+  return { defaultLadder: [...ladder], families };
+}
+
+export function marginPctForQuantityBands(config: FamilyMarginCurveConfig, quantity: number): number {
+  const qty = Math.max(1, Math.floor(quantity));
+  let pct = config.bands.length ? config.bands[0].targetPct : config.familyMinPct;
+  for (const band of config.bands) {
+    if (qty >= band.minQty) pct = band.targetPct;
+  }
+  return Math.max(pct, config.familyMinPct);
+}
+
+// Single/double-sided 4x5 bags: the double variant key applies only when the
+// job actually prints two faces. With no "bags-4x5-double" config entry
+// (Stage A defaults) resolution falls back to bags-4x5 — sides price
+// identically, exactly today's behavior (test-pinned).
+export function marginCurveKeyFor(ruleKey: string | null | undefined, facesPerUnit: number): string | null {
+  const key = String(ruleKey || "") || null;
+  if (key === "bags-4x5" && Math.floor(facesPerUnit) >= 2) return "bags-4x5-double";
+  return key;
+}
+
+export function marginCurveConfigFor(values: PricingPolicyValues, curveKey: string | null | undefined): FamilyMarginCurveConfig | null {
+  const key = String(curveKey || "") || null;
+  if (!key) return null;
+  const direct = values.marginCurves.families[key];
+  if (direct) return direct;
+  const base = MARGIN_CURVE_VARIANT_BASE[key];
+  return base ? values.marginCurves.families[base] ?? null : null;
+}
+
+// ONE margin resolution used by computeCommercialPrice AND the route's tier
+// defaults (no drift): config bands when the key has an entry -> legacy
+// positional rule math -> 40% floor.
+export function resolveMarginPctForQuantity(
+  values: PricingPolicyValues,
+  curveKey: string | null | undefined,
+  rule: FamilyMarginRule | null,
+  quantity: number,
+): number {
+  const config = marginCurveConfigFor(values, curveKey ?? rule?.key ?? null);
+  if (config) return marginPctForQuantityBands(config, quantity);
+  if (rule) return marginPctForQuantity(rule, quantity);
+  return Math.max(MARGIN_FLOOR_PCT, 40);
+}
+
 export type PricingPolicyValues = {
   minimumGrossProfit: FamilyMoneyMap;
   minimumOrderTotals: FamilyMoneyMap;
   // K.1: unit-price floors stay all-null (current behavior) — the resolver
-  // never reads a config key for them until 15F.0K.2 activates the feature.
+  // never reads a config key for them until unit floors are activated.
   minimumUnitPrices: FamilyMoneyMap;
   areaFloorBands: AreaFloorBand[];
+  // 15F.0K.2-A: per-family margin bands + display tier ladders.
+  marginCurves: MarginCurvesValues;
+  tierLadders: TierLaddersValues;
 };
 
 export function defaultPricingPolicyValues(): PricingPolicyValues {
@@ -149,6 +244,8 @@ export function defaultPricingPolicyValues(): PricingPolicyValues {
     minimumOrderTotals,
     minimumUnitPrices,
     areaFloorBands: STICKER_MARKET_FLOOR_BANDS.map((band) => ({ ...band })),
+    marginCurves: defaultMarginCurvesValues(),
+    tierLadders: defaultTierLaddersValues(),
   };
 }
 
@@ -201,6 +298,10 @@ export function computeCommercialPrice(input: {
   // 15F.0K.1: ownerConfig-resolved policy values. Absent = code constants
   // (byte-identical behavior, equivalence test-pinned).
   policyValues?: PricingPolicyValues;
+  // 15F.0K.2-A: explicit curve key for variant lookups (bags single vs
+  // double). Absent = the margin rule's own key; a variant with no config
+  // entry falls back to its base key, then to the positional rule math.
+  marginCurveKey?: string | null;
 }): CommercialPriceResult {
   const quantity = Math.max(1, Math.floor(input.quantity));
   const completeCost = Math.max(0, input.completeCost);
@@ -212,12 +313,13 @@ export function computeCommercialPrice(input: {
   };
   const rule = input.marginRule;
   const premiumRule = input.premiumEligible ? resolveMarginFamily(PREMIUM_FINISH_MARGIN_KEY) : null;
+  // 15F.0K.2-A: one shared resolution (config bands -> positional rule -> 40).
+  const curveKey = input.marginCurveKey ?? rule?.key ?? null;
+  const curveConfig = marginCurveConfigFor(values, curveKey);
 
   const baseMarginPct = input.marginPctOverride != null && Number.isFinite(input.marginPctOverride) && input.marginPctOverride > 0
     ? input.marginPctOverride
-    : rule
-      ? marginPctForQuantity(rule, quantity)
-      : Math.max(MARGIN_FLOOR_PCT, 40);
+    : resolveMarginPctForQuantity(values, curveKey, rule, quantity);
   const marginSource = input.marginPctOverride != null && Number.isFinite(input.marginPctOverride) && input.marginPctOverride > 0
     ? "owner per-tier margin edit (Advanced Pricing Controls)"
     : rule
@@ -225,10 +327,16 @@ export function computeCommercialPrice(input: {
       : `provisional universal curve — FAMILY MARGIN RULE NOT CONFIGURED (${MARGIN_FLOOR_PCT}% floor)`;
 
   const costBasedPrice = marginMath(completeCost, baseMarginPct).price;
-  const floorPct = Math.max(rule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
+  // Family minimum: config entry wins when present (Stage-A defaults carry
+  // the identical familyMinPct values), else the rule constant.
+  const floorPct = Math.max(curveConfig?.familyMinPct ?? rule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
   const marginFloorPrice = marginMath(completeCost, floorPct).price;
+  const premiumConfig = premiumRule ? marginCurveConfigFor(values, PREMIUM_FINISH_MARGIN_KEY) : null;
   const premiumFinishFloorPrice = premiumRule
-    ? marginMath(completeCost, Math.max(marginPctForQuantity(premiumRule, quantity), premiumRule.familyMinPct)).price
+    ? marginMath(completeCost, Math.max(
+        resolveMarginPctForQuantity(values, PREMIUM_FINISH_MARGIN_KEY, premiumRule, quantity),
+        premiumConfig?.familyMinPct ?? premiumRule.familyMinPct,
+      )).price
     : null;
   const suppress = Boolean(input.suppressJobMinimums);
   const minimumGrossProfitPrice = !suppress && policy?.minimumGrossProfit != null ? completeCost + policy.minimumGrossProfit : null;

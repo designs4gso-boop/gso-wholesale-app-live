@@ -22,7 +22,7 @@ import {
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
 import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, ROLAND_INK_CALIBRATION, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
-import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginPctForQuantity, normalizeAdditionalLineCount, validateStickerLine } from "../lib/commercial-pricing-policy.server";
+import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginCurveConfigFor, marginCurveKeyFor, normalizeAdditionalLineCount, resolveMarginPctForQuantity, validateStickerLine } from "../lib/commercial-pricing-policy.server";
 import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
@@ -1011,7 +1011,12 @@ export async function loader({ request }: { request: Request }) {
     if (requestedQtyP > 0) {
       productMarginKey = marginFamilyKeyFor(pFamily, selectedClass, pickedBlank?.name || (autoBag ? autoBag.name : ""));
       productMarginRule = productMarginKey ? resolveMarginFamily(productMarginKey) : null;
-      const baseTierQuantities = isDtpP && !eparams.get("eqty") ? DTP_LADDER_QUANTITIES : eQuantities; // 15C.2: DTP rows = owner ladder quantities (1000/2500/5000/7500/10000)
+      // 15F.0K.2-A: with no manual eqty list the display ladder comes from
+      // ownerConfig tierLadders (per canonical family; Stage-A defaults are
+      // the long-standing [64,128,256,640,1000]); DTP keeps its code ladder
+      // (1000/2500/5000/7500/10000) and is not configurable.
+      const configLadderP = pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamily)] ?? pricingPolicy.values.tierLadders.defaultLadder;
+      const baseTierQuantities = !eparams.get("eqty") ? (isDtpP ? DTP_LADDER_QUANTITIES : configLadderP) : eQuantities;
       const tierQuantities = [...new Set([...baseTierQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b);
       // 15F.0-C: margin comes from each row's QUANTITY (researched band), never
       // from row count/position — adding the requested row cannot shift the
@@ -1019,10 +1024,14 @@ export async function loader({ request }: { request: Request }) {
       // stay on the provisional universal curve, quantity-banded and labeled.
       const provisionalRuleP: FamilyMarginRule = { key: "provisional-universal", label: "Provisional universal curve", curve: [...PROVISIONAL_MARGIN_CURVE], familyMinPct: MARGIN_FLOOR_PCT, aliases: [] };
       const marginRuleForPricingP = productMarginRule ?? provisionalRuleP;
+      // 15F.0K.2-A: bags-4x5 double-sided jobs use the variant curve key —
+      // with no config entry for it (Stage A) resolution falls back to
+      // bags-4x5, so sides price identically (test-pinned).
+      const marginCurveKeyP = marginCurveKeyFor(marginRuleForPricingP.key, Number(eparams.get("pfaces") || 1));
       const premiumEligibleP = engineFamilyP === "stickers-labels" && (Number(eparams.get("pwhitelayers") || 0) > 0 || Number(eparams.get("pglosslayers") || 0) > 0);
       const curveDefaults = isDtpP
         ? tierQuantities.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: quantity-threshold rule, never row-position
-        : tierQuantities.map((qty) => marginPctForQuantity(marginRuleForPricingP, qty));
+        : tierQuantities.map((qty) => resolveMarginPctForQuantity(pricingPolicy.values, marginCurveKeyP, marginRuleForPricingP, qty)); // 15F.0K.2-A shared resolver (config bands -> rule -> floor)
       const tierMargins = eMarginsRaw.length === tierQuantities.length ? eMarginsRaw : curveDefaults;
       const freightInputsP = {
         actualFreight: Number(eparams.get("efactual") || 0),
@@ -1032,7 +1041,7 @@ export async function loader({ request }: { request: Request }) {
         allocation: ((eparams.get("efalloc") as any) || "per_unit") as "per_unit" | "by_value" | "manual",
         manualPerUnit: Number(eparams.get("efmanual") || 0),
       };
-      const floorForFamily = Math.max(productMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
+      const floorForFamily = Math.max(marginCurveConfigFor(pricingPolicy.values, marginCurveKeyP)?.familyMinPct ?? productMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
       productTiers = tierQuantities.map((qty, index) => {
         const run = qty === productInput.quantity ? productCost! : computeProductDrivenCost({ ...productInput, quantity: qty });
         // 15C: DTP freight is a flat per-PO line INSIDE the engine run — the
@@ -1096,6 +1105,7 @@ export async function loader({ request }: { request: Request }) {
           marginPctOverride: overrideMargin,
           finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
           policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
+          marginCurveKey: marginCurveKeyP, // 15F.0K.2-A variant-aware curve lookup
         });
         const belowFloor = commercial.marginPctApplied < floorForFamily;
         return {
@@ -1665,22 +1675,25 @@ export async function action({ request }: { request: Request }) {
     // selected customer tier by QUANTITY — posted tier totals are ignored.
     savedMarginKey = marginFamilyKeyFor(pFamilySave, savedClassification ? savedClassification.klass : null, savedBlank?.name || "");
     savedMarginRule = savedMarginKey ? resolveMarginFamily(savedMarginKey) : null;
-    const baseQuantitiesSave = savedIsDtp && !fRead("eqty") ? DTP_LADDER_QUANTITIES : quantities;
+    // 15F.0K.2-A: same ownerConfig ladder resolution as the loader (parity).
+    const configLadderSave = pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamilySave)] ?? pricingPolicy.values.tierLadders.defaultLadder;
+    const baseQuantitiesSave = !fRead("eqty") ? (savedIsDtp ? DTP_LADDER_QUANTITIES : configLadderSave) : quantities;
     const tierQuantitiesSave = [...new Set([...baseQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b);
     const validMargins = margins.filter((value) => Number.isFinite(value) && value > 0);
     // 15F.0-C: quantity-band margins at save — identical resolver to the loader.
     const provisionalRuleSave: FamilyMarginRule = { key: "provisional-universal", label: "Provisional universal curve", curve: [...PROVISIONAL_MARGIN_CURVE], familyMinPct: MARGIN_FLOOR_PCT, aliases: [] };
     const marginRuleForPricingSave = savedMarginRule ?? provisionalRuleSave;
+    const marginCurveKeySave = marginCurveKeyFor(marginRuleForPricingSave.key, Number(fRead("pfaces") || 1)); // 15F.0K.2-A loader parity
     const premiumEligibleSave = savedEngineFamily === "stickers-labels" && (Number(fRead("pwhitelayers") || 0) > 0 || Number(fRead("pglosslayers") || 0) > 0);
     const curveDefaultsSave = savedIsDtp
       ? tierQuantitiesSave.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: same quantity-threshold rule at save
-      : tierQuantitiesSave.map((qty) => marginPctForQuantity(marginRuleForPricingSave, qty));
+      : tierQuantitiesSave.map((qty) => resolveMarginPctForQuantity(pricingPolicy.values, marginCurveKeySave, marginRuleForPricingSave, qty)); // 15F.0K.2-A shared resolver
     const tierMarginsSave = validMargins.length === tierQuantitiesSave.length ? validMargins : curveDefaultsSave;
     const freightInputsSave = {
       actualFreight: Number(fRead("efactual") || 0), handling: Number(fRead("efhandling") || 0), otherFees: Number(fRead("effees") || 0),
       estimatedAllowance: Number(fRead("efallow") || 0), allocation: ((fRead("efalloc") as any) || "per_unit") as "per_unit" | "by_value" | "manual", manualPerUnit: Number(fRead("efmanual") || 0),
     };
-    const floorForFamilySave = Math.max(savedMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
+    const floorForFamilySave = Math.max(marginCurveConfigFor(pricingPolicy.values, marginCurveKeySave)?.familyMinPct ?? savedMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
     savedTiers = tierQuantitiesSave.map((qty, index) => {
       const run = qty === savedRequestedQty ? productSnapshot! : computeProductDrivenCost({ ...productInputSave, quantity: qty });
       const tierFreight = savedIsDtp ? { total: 0, perUnit: 0, source: "verified" as const, note: "" } : computeFreight(freightInputsSave, qty, 0);
@@ -1738,6 +1751,7 @@ export async function action({ request }: { request: Request }) {
         marginPctOverride: overrideMarginSave,
         finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
         policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
+        marginCurveKey: marginCurveKeySave, // 15F.0K.2-A variant-aware curve lookup
       });
       const belowFloor = commercial.marginPctApplied < floorForFamilySave;
       return {

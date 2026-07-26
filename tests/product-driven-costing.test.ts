@@ -607,9 +607,14 @@ describe("automatic tier flow pins (14C.2)", () => {
   });
 
   it("researched family curves and the 40% floor are preserved — never invented; margin family derived from the product", () => {
-    expect(src3).toContain("marginPctForQuantity(marginRuleForPricingP, qty)"); // 15F.0-C: quantity bands, never row position
+    // 15F.0K.2-A: the shared config-aware resolver replaced the direct
+    // positional call; invariant unchanged (quantity bands, never row
+    // position — Stage-A defaults reproduce the positional math exactly,
+    // proven per boundary in tests/margin-curve-equivalence.test.ts).
+    expect(src3).toContain("resolveMarginPctForQuantity(pricingPolicy.values, marginCurveKeyP, marginRuleForPricingP, qty)"); // 15F.0-C: quantity bands, never row position
     expect(src3).toContain("marginFamilyKeyFor(pFamily, selectedClass,");
-    expect(src3).toContain("Math.max(productMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT)");
+    // family minimum: config familyMinPct (Stage-A defaults = same values) -> rule -> 40% floor, never invented
+    expect(src3).toContain("Math.max(marginCurveConfigFor(pricingPolicy.values, marginCurveKeyP)?.familyMinPct ?? productMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT)");
     expect(src3).toContain("FAMILY MARGIN RULE NOT CONFIGURED");
   });
 

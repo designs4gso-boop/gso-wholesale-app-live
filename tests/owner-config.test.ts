@@ -8,9 +8,11 @@ import {
   OWNER_CONFIG_CATEGORY,
   OWNER_CONFIG_KEY_DEFINITIONS,
   PRICING_AREA_FLOOR_BANDS_KEY,
+  PRICING_MARGIN_CURVES_KEY,
   PRICING_MIN_GROSS_PROFIT_KEY,
   PRICING_MIN_ORDER_TOTALS_KEY,
   PRICING_POLICY_KEYS,
+  PRICING_TIER_LADDERS_KEY,
   clearOwnerConfigKey,
   parseOwnerConfigValue,
   resolvePricingPolicyConfig,
@@ -18,13 +20,17 @@ import {
   saveOwnerConfigKey,
   validateAreaFloorBands,
   validateFamilyMoneyMap,
+  validateMarginCurves,
+  validateTierLadders,
 } from "../app/lib/owner-config.server";
 import {
   FAMILY_COMMERCIAL_POLICIES,
   STICKER_MARKET_FLOOR_BANDS,
   combineStickerLines,
   computeCommercialPrice,
+  defaultMarginCurvesValues,
   defaultPricingPolicyValues,
+  defaultTierLaddersValues,
 } from "../app/lib/commercial-pricing-policy.server";
 import { resolveMarginFamily } from "../app/lib/calculator-emergency.server";
 
@@ -83,13 +89,69 @@ describe("owner-config defaults mirror the code constants exactly", () => {
     expect(defaults.areaFloorBands[0]).not.toBe(STICKER_MARKET_FLOOR_BANDS[0]);
   });
 
-  it("K.1 reads exactly three keys — unit-price floors are NOT configurable yet", () => {
+  it("K.1+K.2-A reads exactly five keys — unit-price floors are STILL not configurable", () => {
     expect([...PRICING_POLICY_KEYS]).toEqual([
       PRICING_MIN_GROSS_PROFIT_KEY,
       PRICING_MIN_ORDER_TOTALS_KEY,
       PRICING_AREA_FLOOR_BANDS_KEY,
+      PRICING_MARGIN_CURVES_KEY,
+      PRICING_TIER_LADDERS_KEY,
     ]);
     expect(OWNER_CONFIG_KEY_DEFINITIONS.map((definition) => definition.key)).toEqual([...PRICING_POLICY_KEYS]);
+  });
+
+  it("15F.0K.2-A validators: accept the Stage-A defaults, reject DTP keys, malformed bands, and gap-below-1 curves", () => {
+    expect(validateMarginCurves(defaultMarginCurvesValues()).ok).toBe(true);
+    expect(validateTierLadders(defaultTierLaddersValues()).ok).toBe(true);
+
+    const good = () => defaultMarginCurvesValues();
+    // DTP + provisional are code-only; unknown keys reject
+    for (const forbidden of ["dtp-pouches", "provisional-universal", "not-a-family"]) {
+      const withKey: any = good();
+      withKey.families[forbidden] = { familyMinPct: 40, bands: [{ minQty: 1, targetPct: 50 }] };
+      expect(validateMarginCurves(withKey).ok).toBe(false);
+    }
+    // missing required family rejects
+    const missing: any = good();
+    delete missing.families["banners"];
+    expect(validateMarginCurves(missing).ok).toBe(false);
+    // first band must start at minQty 1 (coverage), ascending, pct bounds, >= familyMin
+    const startAt64: any = good();
+    startAt64.families["bags-4x5"].bands[0].minQty = 64;
+    expect(validateMarginCurves(startAt64).ok).toBe(false);
+    const descending: any = good();
+    descending.families["bags-4x5"].bands[2].minQty = 5;
+    expect(validateMarginCurves(descending).ok).toBe(false);
+    const belowFloor: any = good();
+    belowFloor.families["bags-4x5"].bands[0].targetPct = 30;
+    expect(validateMarginCurves(belowFloor).ok).toBe(false);
+    const belowFamilyMin: any = good();
+    belowFamilyMin.families["bags-4x5"].bands[4].targetPct = 44; // familyMinPct 45
+    expect(validateMarginCurves(belowFamilyMin).ok).toBe(false);
+    const nanMin: any = good();
+    nanMin.families["boxes"].familyMinPct = Number.NaN;
+    expect(validateMarginCurves(nanMin).ok).toBe(false);
+    // optional variant key IS accepted when valid
+    const withVariant: any = good();
+    withVariant.families["bags-4x5-double"] = { familyMinPct: 40, bands: [{ minQty: 1, targetPct: 61 }, { minQty: 1000, targetPct: 52 }] };
+    expect(validateMarginCurves(withVariant).ok).toBe(true);
+
+    // ladders: dtp-bags rejected; non-ascending, floats, missing family reject
+    const ladderDtp: any = defaultTierLaddersValues();
+    ladderDtp.families["dtp-bags"] = [1000, 2500];
+    expect(validateTierLadders(ladderDtp).ok).toBe(false);
+    const ladderDescending: any = defaultTierLaddersValues();
+    ladderDescending.families["sticker-bags"] = [64, 32];
+    expect(validateTierLadders(ladderDescending).ok).toBe(false);
+    const ladderFloat: any = defaultTierLaddersValues();
+    ladderFloat.families["banners"] = [64, 128.5];
+    expect(validateTierLadders(ladderFloat).ok).toBe(false);
+    const ladderMissing: any = defaultTierLaddersValues();
+    delete ladderMissing.families["custom-item"];
+    expect(validateTierLadders(ladderMissing).ok).toBe(false);
+    const ladderEmpty: any = defaultTierLaddersValues();
+    ladderEmpty.families["banners"] = [];
+    expect(validateTierLadders(ladderEmpty).ok).toBe(false);
   });
 });
 

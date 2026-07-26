@@ -1405,3 +1405,36 @@ shop-scoping + rogue-key ignore + db-failure fallback, save/restore/clear
 audit + one-step previous, computeCommercialPrice/combineStickerLines
 equivalence, wiring direction proof). Full suite 684; build clean; no
 migration; no Shopify/intake/production/DTP surface touched.
+
+## Patch 15F.0K.2 Stage A — config margin bands + tier ladders, equivalence-locked (2026-07-26)
+Structural stage ONLY (research calibration = Stage B, NOT started). Margin
+resolution is now per-family quantity BANDS resolvable through ownerConfig:
+NEW keys ownerConfig.pricing.marginCurves ({families:{key:{familyMinPct,
+bands:[{minQty,targetPct}]}}}) and ownerConfig.pricing.tierLadders
+({defaultLadder, families:{canonical-ui-family:[qty...]}}) with strict
+validators (curves: exactly the 8 configurable families required —
+dtp-pouches + provisional-universal REJECTED (code-only), optional
+allowlisted variant bags-4x5-double, first band minQty MUST be 1, strictly
+ascending, targetPct 40-95 and >= familyMinPct; ladders: the 6 calculator
+families required, dtp-bags REJECTED, 1-16 strictly ascending integers).
+Stage-A defaults are the EXACT positional translation of the five-point
+curves at the global edges: bands at minQty [1,128,256,640,1000] (1, not 64
+— quantities 1-127 always took curve[0]) with every familyMinPct preserved;
+ladders [64,128,256,640,1000] for every family. ONE shared resolver
+(resolveMarginPctForQuantity: config bands -> positional rule ->
+40% floor) now feeds computeCommercialPrice AND both route tier-default
+maps (loader/save parity); marginCurveKeyFor gives double-sided 4x5 bags
+the bags-4x5-double variant key, which falls back to bags-4x5 while no
+config entry exists — sides price identically (test-pinned). DTP ladder
+stays DTP_LADDER_QUANTITIES in code; a posted eqty list still overrides
+config ladders. Pricing Settings gained editors for both keys (band text
+format minQty:targetPct, per-family ladders, note/restore/reset). NO
+research values loaded — with no saved config every price, candidate,
+controlling rule, and snapshot field is byte-identical (oracles: untouched
+dollar-pinned forensic/production-ready/DTP suites + NEW
+tests/margin-curve-equivalence.test.ts proving old==new at every band
+boundary for all nine families). Three obsolete STRUCTURE pins updated to
+the new mechanism with the same invariants (production-ready loader/save
+parity pin, dtp ladder-branch pin, product-driven curve/floor pin) — no
+numeric expectation changed anywhere. Tests 684 -> 698; build clean; tsc
+306 = baseline; no migration.

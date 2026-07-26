@@ -5,8 +5,10 @@ import db from "../db.server";
 import {
   OWNER_CONFIG_MIN_NOTE_LENGTH,
   PRICING_AREA_FLOOR_BANDS_KEY,
+  PRICING_MARGIN_CURVES_KEY,
   PRICING_MIN_GROSS_PROFIT_KEY,
   PRICING_MIN_ORDER_TOTALS_KEY,
+  PRICING_TIER_LADDERS_KEY,
   clearOwnerConfigKey,
   ownerConfigKeyDefinition,
   resolvePricingPolicyConfig,
@@ -15,8 +17,11 @@ import {
 } from "../lib/owner-config.server";
 import {
   FAMILY_COMMERCIAL_POLICIES,
+  MARGIN_CURVE_CONFIGURABLE_KEYS,
+  MARGIN_CURVE_VARIANT_BASE,
   defaultPricingPolicyValues,
 } from "../lib/commercial-pricing-policy.server";
+import { FAMILY_MARGIN_RULES } from "../lib/calculator-emergency.server";
 import { resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 
 // Pricing Settings (15F.0K.1) — the FIRST ownerConfig surface. Scope is
@@ -38,19 +43,71 @@ export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const resolved = await resolvePricingPolicyConfig(db, shop);
+  const ruleLabel = (key: string) => FAMILY_MARGIN_RULES.find((rule) => rule.key === key)?.label || key;
   return {
     resolutions: resolved.resolutions,
     effective: resolved.values,
     defaults: defaultPricingPolicyValues(),
     families: FAMILY_COMMERCIAL_POLICIES.map((policy) => ({ key: policy.familyKey, label: policy.label })),
+    // 15F.0K.2-A: configurable margin families (DTP + provisional excluded)
+    // plus the optional allowlisted variant rows (bags-4x5-double).
+    marginFamilies: MARGIN_CURVE_CONFIGURABLE_KEYS.map((key) => ({ key, label: ruleLabel(key), optional: false })),
+    marginVariants: Object.entries(MARGIN_CURVE_VARIANT_BASE).map(([key, baseKey]) => ({ key, baseKey, label: `${ruleLabel(baseKey)} — DOUBLE-SIDED variant (optional; blank = use the base curve)`, optional: true })),
     minNoteLength: OWNER_CONFIG_MIN_NOTE_LENGTH,
     keys: {
       minGrossProfit: PRICING_MIN_GROSS_PROFIT_KEY,
       minOrderTotals: PRICING_MIN_ORDER_TOTALS_KEY,
       areaFloorBands: PRICING_AREA_FLOOR_BANDS_KEY,
+      marginCurves: PRICING_MARGIN_CURVES_KEY,
+      tierLadders: PRICING_TIER_LADDERS_KEY,
     },
     maxBandRows: MAX_BAND_ROWS,
   };
+}
+
+// "1:65, 128:58, 256:52" -> [{minQty:1,targetPct:65}, ...]; malformed tokens
+// become NaN fields the validator rejects with an exact message.
+function parseBandPairsText(text: string): unknown[] {
+  return String(text || "")
+    .split(",")
+    .map((token) => token.trim())
+    .filter((token) => token !== "")
+    .map((token) => {
+      const [minRaw, pctRaw] = token.split(":").map((part) => String(part ?? "").trim());
+      return { minQty: minRaw === "" ? Number.NaN : Number(minRaw), targetPct: pctRaw == null || pctRaw === "" ? Number.NaN : Number(pctRaw) };
+    });
+}
+
+function parseMarginCurvesForm(form: FormData): unknown {
+  const families: Record<string, unknown> = {};
+  for (const key of MARGIN_CURVE_CONFIGURABLE_KEYS) {
+    const minRaw = String(form.get(`curve_min_${key}`) ?? "").trim();
+    families[key] = {
+      familyMinPct: minRaw === "" ? Number.NaN : Number(minRaw),
+      bands: parseBandPairsText(String(form.get(`curve_bands_${key}`) ?? "")),
+    };
+  }
+  for (const key of Object.keys(MARGIN_CURVE_VARIANT_BASE)) {
+    const minRaw = String(form.get(`curve_min_${key}`) ?? "").trim();
+    const bandsRaw = String(form.get(`curve_bands_${key}`) ?? "").trim();
+    if (minRaw === "" && bandsRaw === "") continue; // optional variant left absent
+    families[key] = { familyMinPct: minRaw === "" ? Number.NaN : Number(minRaw), bands: parseBandPairsText(bandsRaw) };
+  }
+  return { families };
+}
+
+function parseLadderText(text: string): unknown[] {
+  return String(text || "")
+    .split(",")
+    .map((token) => token.trim())
+    .filter((token) => token !== "")
+    .map((token) => Number(token));
+}
+
+function parseTierLaddersForm(form: FormData, familyKeys: string[]): unknown {
+  const families: Record<string, unknown> = {};
+  for (const family of familyKeys) families[family] = parseLadderText(String(form.get(`ladder_${family}`) ?? ""));
+  return { defaultLadder: parseLadderText(String(form.get("ladder_default") ?? "")), families };
 }
 
 function parseMoneyMapForm(form: FormData, families: string[]): Record<string, unknown> {
@@ -93,7 +150,13 @@ export async function action({ request }: { request: Request }) {
   if (intent === "save") {
     const note = String(form.get("note") || "");
     const familyKeys = FAMILY_COMMERCIAL_POLICIES.map((policy) => policy.familyKey);
-    const payload = key === PRICING_AREA_FLOOR_BANDS_KEY ? parseBandsForm(form) : parseMoneyMapForm(form, familyKeys);
+    const payload = key === PRICING_AREA_FLOOR_BANDS_KEY
+      ? parseBandsForm(form)
+      : key === PRICING_MARGIN_CURVES_KEY
+        ? parseMarginCurvesForm(form)
+        : key === PRICING_TIER_LADDERS_KEY
+          ? parseTierLaddersForm(form, familyKeys)
+          : parseMoneyMapForm(form, familyKeys);
     const result = await saveOwnerConfigKey(db, { shop, key, payload, note, actor });
     return Response.json(result);
   }
@@ -215,7 +278,7 @@ function MoneyMapSection({ title, keyName, resolution, effective, defaults, fami
 }
 
 export default function PricingSettings() {
-  const { resolutions, effective, defaults, families, minNoteLength, keys, maxBandRows } = useLoaderData<typeof loader>();
+  const { resolutions, effective, defaults, families, marginFamilies, marginVariants, minNoteLength, keys, maxBandRows } = useLoaderData<typeof loader>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -244,11 +307,12 @@ export default function PricingSettings() {
       ) : null}
 
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
-        <b>What is editable in this phase (15F.0K.1)</b>
+        <b>What is editable (15F.0K.1 + 15F.0K.2 Stage A)</b>
         <ul style={{ fontSize: 13, margin: "6px 0 0", paddingLeft: 20, lineHeight: 1.8 }}>
-          <li>Minimum gross-profit floors, minimum order totals, and the sticker area-floor bands — the values the commercial price policy already uses today.</li>
-          <li><b>Not yet editable</b> (later phases, deliberately): margin curves and quantity ladders (15F.0K.2), minimum unit-price floors (15F.0K.2), market targets and crossover warnings (15F.0K.3), rounding and override rules (15F.0K.3/4).</li>
-          <li>DTP pouch pricing (owner ladders, floors, design fees) is untouched by this page.</li>
+          <li>Minimum gross-profit floors, minimum order totals, and the sticker area-floor bands (15F.0K.1).</li>
+          <li>Per-family margin curves (quantity bands) and displayed tier quantity ladders (15F.0K.2 Stage A) — defaults reproduce today's behavior exactly; the approved research values load in a separate reviewed step.</li>
+          <li><b>Not yet editable</b> (later phases, deliberately): minimum unit-price floors, market targets and crossover warnings (15F.0K.3), rounding and override rules (15F.0K.3/4).</li>
+          <li>DTP pouch pricing (owner ladders, floors, margin thresholds, design fees) is completely untouched by this page — DTP keys are rejected by validation.</li>
           <li>Changing a value here changes live quote prices for new calculations. Historical quotes and snapshots are never rewritten.</li>
         </ul>
       </section>
@@ -322,6 +386,83 @@ export default function PricingSettings() {
           </div>
         </Form>
         <EnvelopeActions keyName={keys.areaFloorBands} resolution={bandsResolution} busy={busy} />
+      </section>
+
+      <section style={card}>
+        <h2 style={{ margin: "0 0 6px" }}>Per-family margin curves (quantity bands)</h2>
+        <SourceBadge resolution={resolutions[keys.marginCurves]} />
+        <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
+          Bands format: <code>minQty:targetPct, minQty:targetPct, …</code> — the last band whose minQty ≤ the quote
+          quantity applies. The first band must start at minQty 1; targets are 40–95% and never below the family
+          minimum. Stage-A defaults reproduce the current five-point curves exactly (bands at 1/128/256/640/1000).
+          DTP margins are code-only and deliberately not listed. The double-sided variant row is optional — leave it
+          blank and double-sided 4x5 bags keep pricing on the single-sided curve (current behavior).
+        </p>
+        <Form method="post">
+          <input type="hidden" name="intent" value="save" />
+          <input type="hidden" name="key" value={keys.marginCurves} />
+          <div style={{ display: "grid", gap: 10 }}>
+            {[...marginFamilies, ...marginVariants].map((family) => {
+              const entry = effective.marginCurves.families[family.key];
+              return (
+                <div key={family.key} style={{ display: "grid", gridTemplateColumns: "260px 140px 1fr", gap: 10, alignItems: "end" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{family.label}{family.optional ? "" : ""}</div>
+                  <label style={{ fontSize: 12 }}>
+                    Family min %
+                    <input name={`curve_min_${family.key}`} defaultValue={entry ? String(entry.familyMinPct) : ""} placeholder={family.optional ? "blank = not set" : ""} inputMode="decimal" style={inputStyle} />
+                  </label>
+                  <label style={{ fontSize: 12 }}>
+                    Bands (minQty:targetPct, …)
+                    <input name={`curve_bands_${family.key}`} defaultValue={entry ? entry.bands.map((band) => `${band.minQty}:${band.targetPct}`).join(", ") : ""} placeholder={family.optional ? "blank = use base curve" : ""} style={inputStyle} />
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+          <label style={{ display: "block", fontSize: 13, marginTop: 10, maxWidth: 640 }}>
+            Change note (required, min {minNoteLength} characters)
+            <input name="note" style={inputStyle} placeholder="e.g. Stage-B research calibration for 4x5 bags (approved)" />
+          </label>
+          <div style={{ marginTop: 10 }}>
+            <button type="submit" style={buttonStyle} disabled={busy}>Save margin curves</button>
+          </div>
+        </Form>
+        <EnvelopeActions keyName={keys.marginCurves} resolution={resolutions[keys.marginCurves]} busy={busy} />
+      </section>
+
+      <section style={card}>
+        <h2 style={{ margin: "0 0 6px" }}>Displayed tier quantity ladders</h2>
+        <SourceBadge resolution={resolutions[keys.tierLadders]} />
+        <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
+          Comma-separated quantities shown as tier rows when no manual "Tier quantities" list is entered in the
+          calculator's Advanced controls (a manual list still wins). The requested quantity is always added as its own
+          row. Stage-A default for every family: 64, 128, 256, 640, 1000. The DTP ladder (1000/2500/5000/7500/10000)
+          is code-only.
+        </p>
+        <Form method="post">
+          <input type="hidden" name="intent" value="save" />
+          <input type="hidden" name="key" value={keys.tierLadders} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
+            <label style={{ fontSize: 13 }}>
+              Default ladder (fallback)
+              <input name="ladder_default" defaultValue={effective.tierLadders.defaultLadder.join(", ")} style={inputStyle} />
+            </label>
+            {families.map((family) => (
+              <label key={family.key} style={{ fontSize: 13 }}>
+                {family.label}
+                <input name={`ladder_${family.key}`} defaultValue={(effective.tierLadders.families[family.key] || effective.tierLadders.defaultLadder).join(", ")} style={inputStyle} />
+              </label>
+            ))}
+          </div>
+          <label style={{ display: "block", fontSize: 13, marginTop: 10, maxWidth: 640 }}>
+            Change note (required, min {minNoteLength} characters)
+            <input name="note" style={inputStyle} placeholder="e.g. Added approved 11-point bag ladder (Stage B)" />
+          </label>
+          <div style={{ marginTop: 10 }}>
+            <button type="submit" style={buttonStyle} disabled={busy}>Save tier ladders</button>
+          </div>
+        </Form>
+        <EnvelopeActions keyName={keys.tierLadders} resolution={resolutions[keys.tierLadders]} busy={busy} />
       </section>
 
       <section style={card}>

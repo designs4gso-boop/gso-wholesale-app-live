@@ -188,8 +188,11 @@ describe("DTP route pins (15C)", () => {
   });
 
   it("automatic tiers use DTP vendor quantities + requested qty; freight never double-added; save recomputes with the 15C engine", () => {
-    expect(src).toContain("DTP_LADDER_QUANTITIES : eQuantities"); // 15C.2: ladder quantities incl. 10,000
-    expect(src).toContain("DTP_LADDER_QUANTITIES : quantities");
+    // 15F.0K.2-A: the ladder branch was restructured for ownerConfig tier
+    // ladders — the invariant is unchanged: DTP rows ALWAYS come from the
+    // code DTP_LADDER_QUANTITIES, never from config or the generic list.
+    expect(src).toContain("(isDtpP ? DTP_LADDER_QUANTITIES : configLadderP)"); // 15C.2: ladder quantities incl. 10,000
+    expect(src).toContain("(savedIsDtp ? DTP_LADDER_QUANTITIES : configLadderSave)");
     expect((src.match(/isDtpP \? \{ total: 0, perUnit: 0/g) || []).length).toBe(1); // loader tier pipeline skips freight for DTP
     expect((src.match(/savedIsDtp \? \{ total: 0, perUnit: 0/g) || []).length).toBe(1); // save pipeline too
     expect(src).toContain("savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : PRODUCTION_READY_ENGINE_VERSION"); // 15C.2 pricing engine preserved for DTP; 15F.0 engine for the rest

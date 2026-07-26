@@ -23,11 +23,18 @@
 
 import {
   FAMILY_COMMERCIAL_POLICIES,
+  MARGIN_CURVE_CONFIGURABLE_KEYS,
+  MARGIN_CURVE_VARIANT_BASE,
   STICKER_MARKET_FLOOR_BANDS,
+  defaultMarginCurvesValues,
   defaultPricingPolicyValues,
+  defaultTierLaddersValues,
   type AreaFloorBand,
+  type FamilyMarginCurveConfig,
   type FamilyMoneyMap,
+  type MarginCurvesValues,
   type PricingPolicyValues,
+  type TierLaddersValues,
 } from "./commercial-pricing-policy.server";
 
 export const OWNER_CONFIG_CATEGORY = "OwnerConfig";
@@ -37,13 +44,18 @@ export const OWNER_CONFIG_MIN_NOTE_LENGTH = 5;
 export const PRICING_MIN_GROSS_PROFIT_KEY = "ownerConfig.pricing.minimumGrossProfit";
 export const PRICING_MIN_ORDER_TOTALS_KEY = "ownerConfig.pricing.minimumOrderTotals";
 export const PRICING_AREA_FLOOR_BANDS_KEY = "ownerConfig.pricing.areaFloorBands";
+// 15F.0K.2-A: per-family margin bands + display tier ladders.
+export const PRICING_MARGIN_CURVES_KEY = "ownerConfig.pricing.marginCurves";
+export const PRICING_TIER_LADDERS_KEY = "ownerConfig.pricing.tierLadders";
 
-// The ONLY keys the resolver reads in 15F.0K.1 (pinned by test — unit-price
-// floors are absent on purpose).
+// The ONLY keys the resolver reads (pinned by test — unit-price floors are
+// still absent on purpose; they activate in a later approved phase).
 export const PRICING_POLICY_KEYS = [
   PRICING_MIN_GROSS_PROFIT_KEY,
   PRICING_MIN_ORDER_TOTALS_KEY,
   PRICING_AREA_FLOOR_BANDS_KEY,
+  PRICING_MARGIN_CURVES_KEY,
+  PRICING_TIER_LADDERS_KEY,
 ] as const;
 
 export type OwnerConfigSource = "owner_config" | "code_fallback" | "invalid_config_fallback";
@@ -132,7 +144,113 @@ export function validateAreaFloorBands(payload: unknown): ValidationResult<AreaF
   return { ok: true, value: bands };
 }
 
-// ---------- key registry (K.1) ----------
+// 15F.0K.2-A margin curves: object { families: { <key>: { familyMinPct,
+// bands: [{minQty, targetPct}] } } }. EVERY configurable margin family
+// (FAMILY_MARGIN_RULES minus the excluded dtp-pouches/provisional-universal)
+// must be present; the ONLY optional extras are the allowlisted variant keys
+// (bags-4x5-double). DTP keys and unknowns reject the whole payload. Bands:
+// 1..16 rows, integer minQty strictly ascending with the FIRST band at
+// minQty 1 (no coverage gap below), targetPct 40..95 and >= familyMinPct,
+// familyMinPct 40..95 (the 40% global floor always stands beneath).
+const MAX_MARGIN_BANDS = 16;
+const MIN_MARGIN_PCT = 40;
+const MAX_MARGIN_PCT = 95;
+const MAX_LADDER_ENTRIES = 16;
+const MAX_LADDER_QTY = 1000000;
+
+function validateCurveEntry(key: string, entry: unknown): ValidationResult<FamilyMarginCurveConfig> {
+  if (!isPlainObject(entry)) return { ok: false, reason: `"${key}" must be an object { familyMinPct, bands }.` };
+  const familyMinPct = entry.familyMinPct;
+  if (typeof familyMinPct !== "number" || !Number.isFinite(familyMinPct) || familyMinPct < MIN_MARGIN_PCT || familyMinPct > MAX_MARGIN_PCT) {
+    return { ok: false, reason: `"${key}": familyMinPct must be a number between ${MIN_MARGIN_PCT} and ${MAX_MARGIN_PCT}.` };
+  }
+  const bands = entry.bands;
+  if (!Array.isArray(bands) || bands.length < 1) return { ok: false, reason: `"${key}": bands must be a non-empty array.` };
+  if (bands.length > MAX_MARGIN_BANDS) return { ok: false, reason: `"${key}": no more than ${MAX_MARGIN_BANDS} bands.` };
+  let lastMinQty = 0;
+  const cleanBands = [];
+  for (let index = 0; index < bands.length; index += 1) {
+    const band = bands[index];
+    if (!isPlainObject(band)) return { ok: false, reason: `"${key}" band ${index + 1} must be an object { minQty, targetPct }.` };
+    const minQty = band.minQty;
+    if (typeof minQty !== "number" || !Number.isInteger(minQty) || minQty < 1 || minQty > MAX_LADDER_QTY) {
+      return { ok: false, reason: `"${key}" band ${index + 1}: minQty must be an integer between 1 and ${MAX_LADDER_QTY.toLocaleString()}.` };
+    }
+    if (index === 0 && minQty !== 1) return { ok: false, reason: `"${key}": the first band must start at minQty 1 (no quantity may be left without a margin).` };
+    if (minQty <= lastMinQty && index > 0) return { ok: false, reason: `"${key}" band ${index + 1}: minQty must be strictly ascending.` };
+    const targetPct = band.targetPct;
+    if (typeof targetPct !== "number" || !Number.isFinite(targetPct) || targetPct < MIN_MARGIN_PCT || targetPct > MAX_MARGIN_PCT) {
+      return { ok: false, reason: `"${key}" band ${index + 1}: targetPct must be a number between ${MIN_MARGIN_PCT} and ${MAX_MARGIN_PCT}.` };
+    }
+    if (targetPct < familyMinPct) return { ok: false, reason: `"${key}" band ${index + 1}: targetPct ${targetPct} is below the familyMinPct ${familyMinPct}.` };
+    cleanBands.push({ minQty, targetPct });
+    lastMinQty = minQty;
+  }
+  return { ok: true, value: { familyMinPct, bands: cleanBands } };
+}
+
+export function validateMarginCurves(payload: unknown): ValidationResult<MarginCurvesValues> {
+  if (!isPlainObject(payload) || !isPlainObject(payload.families)) return { ok: false, reason: "Payload must be an object { families: { ... } }." };
+  const families = payload.families as Record<string, unknown>;
+  const allowedOptional = Object.keys(MARGIN_CURVE_VARIANT_BASE);
+  for (const key of Object.keys(families)) {
+    if (!MARGIN_CURVE_CONFIGURABLE_KEYS.includes(key) && !allowedOptional.includes(key)) {
+      return { ok: false, reason: `Unknown or non-configurable margin family "${key}" (DTP and the provisional fallback are code-only).` };
+    }
+  }
+  for (const key of MARGIN_CURVE_CONFIGURABLE_KEYS) {
+    if (!(key in families)) return { ok: false, reason: `Missing margin family "${key}" — every configurable family must be listed.` };
+  }
+  const result: Record<string, FamilyMarginCurveConfig> = {};
+  for (const [key, entry] of Object.entries(families)) {
+    const validated = validateCurveEntry(key, entry);
+    if (!validated.ok) return validated;
+    result[key] = validated.value;
+  }
+  return { ok: true, value: { families: result } };
+}
+
+// 15F.0K.2-A tier ladders: { defaultLadder: [qty...], families: { <canonical
+// UI family>: [qty...] } } — exactly the six calculator families
+// (dtp-bags is code-only and rejected). Ladders: 1..16 strictly ascending
+// positive integers.
+function validateLadderArray(label: string, value: unknown): ValidationResult<number[]> {
+  if (!Array.isArray(value) || value.length < 1) return { ok: false, reason: `${label} must be a non-empty array of quantities.` };
+  if (value.length > MAX_LADDER_ENTRIES) return { ok: false, reason: `${label}: no more than ${MAX_LADDER_ENTRIES} quantities.` };
+  let last = 0;
+  const clean: number[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const qty = value[index];
+    if (typeof qty !== "number" || !Number.isInteger(qty) || qty < 1 || qty > MAX_LADDER_QTY) {
+      return { ok: false, reason: `${label} entry ${index + 1}: quantities must be integers between 1 and ${MAX_LADDER_QTY.toLocaleString()}.` };
+    }
+    if (qty <= last) return { ok: false, reason: `${label} entry ${index + 1}: quantities must be strictly ascending.` };
+    clean.push(qty);
+    last = qty;
+  }
+  return { ok: true, value: clean };
+}
+
+export function validateTierLadders(payload: unknown): ValidationResult<TierLaddersValues> {
+  if (!isPlainObject(payload)) return { ok: false, reason: "Payload must be an object { defaultLadder, families }." };
+  const defaultLadder = validateLadderArray("defaultLadder", payload.defaultLadder);
+  if (!defaultLadder.ok) return defaultLadder;
+  if (!isPlainObject(payload.families)) return { ok: false, reason: "families must be an object of familyKey -> ladder." };
+  const families = payload.families as Record<string, unknown>;
+  for (const key of Object.keys(families)) {
+    if (!KNOWN_FAMILY_KEYS.includes(key)) return { ok: false, reason: `Unknown or non-configurable ladder family "${key}" (the DTP ladder is code-only).` };
+  }
+  const result: Record<string, number[]> = {};
+  for (const family of KNOWN_FAMILY_KEYS) {
+    if (!(family in families)) return { ok: false, reason: `Missing ladder for family "${family}" — every calculator family must be listed.` };
+    const ladder = validateLadderArray(`"${family}" ladder`, families[family]);
+    if (!ladder.ok) return ladder;
+    result[family] = ladder.value;
+  }
+  return { ok: true, value: { defaultLadder: defaultLadder.value, families: result } };
+}
+
+// ---------- key registry (K.1 + K.2-A) ----------
 
 export type OwnerConfigKeyDefinition = {
   key: string;
@@ -163,6 +281,20 @@ export const OWNER_CONFIG_KEY_DEFINITIONS: OwnerConfigKeyDefinition[] = [
     description: "Stickers & Labels area floor: $/sqft banded by total finished sqft, plus full setup recovery. Code fallback: 15F.0-FINAL provisional anchors.",
     validate: validateAreaFloorBands,
     codeFallback: () => STICKER_MARKET_FLOOR_BANDS.map((band) => ({ ...band })),
+  },
+  {
+    key: PRICING_MARGIN_CURVES_KEY,
+    label: "Pricing — per-family margin curves (quantity bands)",
+    description: "Target margin % by quantity band per margin family, plus the family minimum. DTP and the provisional fallback are code-only. Code fallback: the researched 5-point curves at the Stage-A equivalent bands (1/128/256/640/1000).",
+    validate: validateMarginCurves,
+    codeFallback: () => defaultMarginCurvesValues(),
+  },
+  {
+    key: PRICING_TIER_LADDERS_KEY,
+    label: "Pricing — displayed tier quantity ladders (per calculator family)",
+    description: "Default tier-table quantities per calculator family when no manual list is entered. The DTP ladder is code-only. Code fallback: [64, 128, 256, 640, 1000] for every family.",
+    validate: validateTierLadders,
+    codeFallback: () => defaultTierLaddersValues(),
   },
 ];
 
@@ -249,10 +381,12 @@ export async function resolvePricingPolicyConfig(dbClient: any, shop: string): P
   const values: PricingPolicyValues = {
     minimumGrossProfit: resolutions[PRICING_MIN_GROSS_PROFIT_KEY].value as FamilyMoneyMap,
     minimumOrderTotals: resolutions[PRICING_MIN_ORDER_TOTALS_KEY].value as FamilyMoneyMap,
-    // 15F.0K.1: unit-price floors are NOT configurable yet — always code
-    // defaults (all null) regardless of any stored row. Activates in 15F.0K.2.
+    // Unit-price floors are STILL not configurable (activates in a later
+    // approved phase) — always code defaults (all null) regardless of rows.
     minimumUnitPrices: defaults.minimumUnitPrices,
     areaFloorBands: resolutions[PRICING_AREA_FLOOR_BANDS_KEY].value as AreaFloorBand[],
+    marginCurves: resolutions[PRICING_MARGIN_CURVES_KEY].value as MarginCurvesValues,
+    tierLadders: resolutions[PRICING_TIER_LADDERS_KEY].value as TierLaddersValues,
   };
   return { values, resolutions };
 }
