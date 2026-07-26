@@ -61,24 +61,27 @@ export const PREMIUM_FINISH_MARGIN_KEY = "spot-gloss-labels";
 // candidates (real material $/sqft + spot-gloss curve), so the floor itself
 // stays material-neutral — it is the "never below this for the area" line.
 export const STICKER_MARKET_FLOOR_SOURCE = "15F.0 forensic market references (low end) + linear interpolation — PROVISIONAL, owner ratification pending";
-export const STICKER_MARKET_FLOOR_BANDS: Array<{ maxSqft: number | null; ratePerSqft: number }> = [
+export type AreaFloorBand = { maxSqft: number | null; ratePerSqft: number };
+export const STICKER_MARKET_FLOOR_BANDS: AreaFloorBand[] = [
   { maxSqft: 10, ratePerSqft: 8.0 },
   { maxSqft: 25, ratePerSqft: 6.4 },
   { maxSqft: 50, ratePerSqft: 4.8 },
   { maxSqft: 62.5, ratePerSqft: 4.0 },
   { maxSqft: null, ratePerSqft: 3.2 },
 ];
-export function stickerMarketFloorRate(finishedSqft: number): number {
-  for (const band of STICKER_MARKET_FLOOR_BANDS) {
+// 15F.0K.1: bands default to the code constant — an ownerConfig caller passes
+// its resolved bands; absent = byte-identical current behavior.
+export function stickerMarketFloorRate(finishedSqft: number, bands: AreaFloorBand[] = STICKER_MARKET_FLOOR_BANDS): number {
+  for (const band of bands) {
     if (band.maxSqft == null || finishedSqft < band.maxSqft) return band.ratePerSqft;
   }
-  return STICKER_MARKET_FLOOR_BANDS[STICKER_MARKET_FLOOR_BANDS.length - 1].ratePerSqft;
+  return bands[bands.length - 1].ratePerSqft;
 }
 // floor = area rate x finished sqft + full setup recovery (art + print per
 // design) so multi-design jobs never eat setup out of the floor.
-export function stickerMarketFloorPrice(finishedSqft: number, setupTotal: number): number | null {
+export function stickerMarketFloorPrice(finishedSqft: number, setupTotal: number, bands: AreaFloorBand[] = STICKER_MARKET_FLOOR_BANDS): number | null {
   if (!(finishedSqft > 0)) return null;
-  return stickerMarketFloorRate(finishedSqft) * finishedSqft + Math.max(0, setupTotal);
+  return stickerMarketFloorRate(finishedSqft, bands) * finishedSqft + Math.max(0, setupTotal);
 }
 
 export type FamilyCommercialPolicy = {
@@ -116,6 +119,40 @@ export const FAMILY_COMMERCIAL_POLICIES: FamilyCommercialPolicy[] = [
 export function commercialPolicyFor(familyKey: string): FamilyCommercialPolicy | null {
   return FAMILY_COMMERCIAL_POLICIES.find((policy) => policy.familyKey === familyKey) || null;
 }
+
+// ---------- 15F.0K.1: owner-config value plumbing ----------
+// The pricing math stays pure: callers (the calculator route) resolve
+// ownerConfig ONCE per request and pass the values in. When absent, the
+// defaults below are built from the SAME constants as before, so behavior is
+// byte-for-byte identical (test-pinned equivalence).
+export type FamilyMoneyMap = Record<string, number | null>;
+export type PricingPolicyValues = {
+  minimumGrossProfit: FamilyMoneyMap;
+  minimumOrderTotals: FamilyMoneyMap;
+  // K.1: unit-price floors stay all-null (current behavior) — the resolver
+  // never reads a config key for them until 15F.0K.2 activates the feature.
+  minimumUnitPrices: FamilyMoneyMap;
+  areaFloorBands: AreaFloorBand[];
+};
+
+export function defaultPricingPolicyValues(): PricingPolicyValues {
+  const minimumGrossProfit: FamilyMoneyMap = {};
+  const minimumOrderTotals: FamilyMoneyMap = {};
+  const minimumUnitPrices: FamilyMoneyMap = {};
+  for (const policy of FAMILY_COMMERCIAL_POLICIES) {
+    minimumGrossProfit[policy.familyKey] = policy.minimumGrossProfit;
+    minimumOrderTotals[policy.familyKey] = policy.minimumOrderTotal;
+    minimumUnitPrices[policy.familyKey] = policy.minimumUnitPrice;
+  }
+  return {
+    minimumGrossProfit,
+    minimumOrderTotals,
+    minimumUnitPrices,
+    areaFloorBands: STICKER_MARKET_FLOOR_BANDS.map((band) => ({ ...band })),
+  };
+}
+
+const DEFAULT_PRICING_POLICY_VALUES = defaultPricingPolicyValues();
 
 export type CommercialCandidates = {
   costBasedPrice: number;
@@ -161,10 +198,18 @@ export function computeCommercialPrice(input: {
   // 15F.0-FINAL: per-line calls in multi-line jobs suppress the JOB-level
   // minimum-profit/order candidates (applied once on the combined total).
   suppressJobMinimums?: boolean;
+  // 15F.0K.1: ownerConfig-resolved policy values. Absent = code constants
+  // (byte-identical behavior, equivalence test-pinned).
+  policyValues?: PricingPolicyValues;
 }): CommercialPriceResult {
   const quantity = Math.max(1, Math.floor(input.quantity));
   const completeCost = Math.max(0, input.completeCost);
-  const policy = commercialPolicyFor(input.familyKey);
+  const values = input.policyValues ?? DEFAULT_PRICING_POLICY_VALUES;
+  const policy = {
+    minimumGrossProfit: values.minimumGrossProfit[input.familyKey] ?? null,
+    minimumOrderTotal: values.minimumOrderTotals[input.familyKey] ?? null,
+    minimumUnitPrice: values.minimumUnitPrices[input.familyKey] ?? null,
+  };
   const rule = input.marginRule;
   const premiumRule = input.premiumEligible ? resolveMarginFamily(PREMIUM_FINISH_MARGIN_KEY) : null;
 
@@ -192,7 +237,7 @@ export function computeCommercialPrice(input: {
   // 15F.0-FINAL-A: the sticker AREA market floor fills the market-ladder
   // candidate slot for stickers & labels (provisional research anchors).
   const ownerMarketLadderPrice = input.ownerMarketLadderTotal
-    ?? (input.familyKey === "stickers-labels" ? stickerMarketFloorPrice(input.finishedSqft ?? 0, input.setupTotal ?? 0) : null);
+    ?? (input.familyKey === "stickers-labels" ? stickerMarketFloorPrice(input.finishedSqft ?? 0, input.setupTotal ?? 0, values.areaFloorBands) : null);
 
   const contenders: Array<{ rule: string; price: number | null }> = [
     { rule: `Cost-based price — ${baseMarginPct}% quantity-band margin`, price: costBasedPrice },
@@ -355,6 +400,8 @@ export function combineStickerLines(input: {
   }>;
   jobPackingCost: number;
   marginRule: FamilyMarginRule | null;
+  // 15F.0K.1: ownerConfig-resolved policy values (absent = code constants).
+  policyValues?: PricingPolicyValues;
 }): {
   lines: Array<{ name: string; quantity: number; lineCost: number; allocatedPacking: number; pricedCost: number; finalPrice: number; unitPrice: number; marginPctApplied: number; controllingRule: string; premiumApplied: boolean }>;
   totalQuantity: number;
@@ -389,6 +436,7 @@ export function combineStickerLines(input: {
       finishedSqft: line.finishedSqft ?? 0,
       setupTotal: line.setupTotal ?? 0,
       suppressJobMinimums: true, // job-level minimums apply ONCE below
+      policyValues: input.policyValues,
     });
     return {
       name: line.name,
@@ -407,15 +455,17 @@ export function combineStickerLines(input: {
   const lineSum = priced.reduce((sum, line) => sum + line.finalPrice, 0);
   // 15F.0-FINAL: job-level minimum-profit/order candidates on the COMBINED
   // total (never per line — that would multiply shop minimums).
-  const policy = commercialPolicyFor("stickers-labels");
+  const values = input.policyValues ?? DEFAULT_PRICING_POLICY_VALUES;
+  const jobMinimumGrossProfit = values.minimumGrossProfit["stickers-labels"] ?? null;
+  const jobMinimumOrderTotal = values.minimumOrderTotals["stickers-labels"] ?? null;
   let finalTotalPrice = lineSum;
   let controllingRule = "Sum of per-line commercial prices";
-  if (policy?.minimumGrossProfit != null && totalCost + policy.minimumGrossProfit > finalTotalPrice) {
-    finalTotalPrice = totalCost + policy.minimumGrossProfit;
+  if (jobMinimumGrossProfit != null && totalCost + jobMinimumGrossProfit > finalTotalPrice) {
+    finalTotalPrice = totalCost + jobMinimumGrossProfit;
     controllingRule = "Minimum gross-profit floor (owner, provisional) on the combined job";
   }
-  if (policy?.minimumOrderTotal != null && policy.minimumOrderTotal > finalTotalPrice) {
-    finalTotalPrice = policy.minimumOrderTotal;
+  if (jobMinimumOrderTotal != null && jobMinimumOrderTotal > finalTotalPrice) {
+    finalTotalPrice = jobMinimumOrderTotal;
     controllingRule = "Minimum order total (owner, provisional)";
   }
   const achievedProfit = finalTotalPrice - totalCost;

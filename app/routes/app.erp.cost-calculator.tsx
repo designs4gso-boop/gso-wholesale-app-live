@@ -23,6 +23,7 @@ import {
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
 import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, ROLAND_INK_CALIBRATION, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
 import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginPctForQuantity, normalizeAdditionalLineCount, validateStickerLine } from "../lib/commercial-pricing-policy.server";
+import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
 // owns the value; client components cannot import .server modules).
@@ -443,6 +444,10 @@ export async function loader({ request }: { request: Request }) {
   const shop = session.shop;
   const url = new URL(request.url);
   const appOrigin = new URL(request.url).origin;
+  // 15F.0K.1: ownerConfig pricing policy (min profits / order totals / area
+  // floor bands). Missing or invalid config resolves to the code constants,
+  // so pricing is byte-identical until the owner edits Pricing Settings.
+  const pricingPolicy = await resolvePricingPolicyConfig(db, shop);
 
   // Read-only since 12B.1a: the RIP sync settings row is created by the RIP
   // Imports / Print Intake / Print Log Settings pages, never by this route.
@@ -1090,6 +1095,7 @@ export async function loader({ request }: { request: Request }) {
           marginRule: marginRuleForPricingP, premiumEligible: premiumEligibleP,
           marginPctOverride: overrideMargin,
           finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
+          policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
         });
         const belowFloor = commercial.marginPctApplied < floorForFamily;
         return {
@@ -1204,6 +1210,7 @@ export async function loader({ request }: { request: Request }) {
         lines: allLines,
         jobPackingCost: jobPackingK, // 15F.0-FINAL-H: once on combined units
         marginRule: resolveMarginFamily("stickers-labels"),
+        policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
       });
       if (lineCountParsed.error) combined.blockers.unshift(lineCountParsed.error);
       productMultiLine = {
@@ -1436,6 +1443,9 @@ export async function action({ request }: { request: Request }) {
   const shop = session.shop;
   const form = await request.formData();
   if (String(form.get("intent")) !== "saveEmergencyQuoteDraft") return Response.json({ ok: false, message: "Unknown action." });
+  // 15F.0K.1: same ownerConfig policy resolution as the loader (save/loader
+  // parity) — missing/invalid config = code constants, byte-identical pricing.
+  const pricingPolicy = await resolvePricingPolicyConfig(db, shop);
   // 14C.2: the product-flow save form posts ONE hidden "psearch" field holding
   // the calculated GET state (React Router location.search — identical on
   // server and client). Reads fall back to it; multi-value label-row params
@@ -1727,6 +1737,7 @@ export async function action({ request }: { request: Request }) {
         marginRule: marginRuleForPricingSave, premiumEligible: premiumEligibleSave,
         marginPctOverride: overrideMarginSave,
         finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
+        policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
       });
       const belowFloor = commercial.marginPctApplied < floorForFamilySave;
       return {
@@ -1822,6 +1833,7 @@ export async function action({ request }: { request: Request }) {
         lines: allLinesSave,
         jobPackingCost: OWNER_STANDARDS.packoutPerBox.value * Math.max(1, Math.ceil(totalUnitsSave / 5000)),
         marginRule: resolveMarginFamily("stickers-labels"),
+        policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
       });
       const combinedQty = Math.max(1, savedMultiLine.totalQuantity);
       savedSelectedTier = {

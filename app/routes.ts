@@ -26,6 +26,7 @@ export default [
     route("erp/products/new", "routes/app.erp.products.new.tsx"),
     route("erp/shopify-links", "routes/app.erp.shopify-links.tsx"),
     route("erp/cost-calculator", "routes/app.erp.cost-calculator.tsx"),
+    route("erp/pricing-settings", "routes/app.erp.pricing-settings.tsx"),
     route("erp/cost-health", "routes/app.erp.cost-health.tsx"),
     route("erp/cost-verification", "routes/app.erp.cost-verification.tsx"),
     route("erp/actual-costs", "routes/app.erp.actual-costs.tsx"),

@@ -1373,3 +1373,35 @@ GSO-...__ROLAND__GLOSS-1X__...__A1. Rollback-on-failure and duplicate-hash
 reuse re-pinned. Tests 663 -> 665; tsc 306; build clean; agent self-test 0
 failures; no schema change (migration from J.5 unchanged, already applied
 in production).
+
+## Patch 15F.0K.1 — ownerConfig plumbing + Pricing Settings (2026-07-26)
+First slice of the 15F.0K market-calibration plan (audit approved; K.2-K.5
+NOT started). NEW app/lib/owner-config.server.ts: validated JSON envelopes
+in ErpAdminSetting (category OwnerConfig, valueType json, @@unique shop_key)
+— { schemaVersion:1, payload, updatedAt, updatedBy (resolveActorFromSession),
+note (required >=5 chars), previous (last-good envelope minus its own
+previous; one-step restore) }. Fail-closed contract: missing row ->
+code_fallback, corrupt/invalid -> invalid_config_fallback with exact reason;
+validation all-or-nothing per key (no partial merges); validators reject
+non-finite/zero/negative/over-cap values so a bad config can never zero or
+corrupt a price; db failure -> code constants. K.1 wires EXACTLY three keys:
+ownerConfig.pricing.minimumGrossProfit / .minimumOrderTotals /
+.areaFloorBands. minimumUnitPrices is deliberately NOT read (unit floors
+activate in K.2 — a rogue row is ignored, test-pinned). Commercial pricing
+stays pure: computeCommercialPrice/combineStickerLines gained OPTIONAL
+policyValues (absent = code constants, byte-identical — equivalence
+test-pinned); the calculator loader AND save action resolve config once via
+resolvePricingPolicyConfig and pass it through (loader/save parity). New
+staff page /app/erp/pricing-settings (route registered + nav link): per-key
+source badge (owner_config / code_fallback / invalid_config_fallback +
+reason), effective values, edit forms with required change note, Restore
+previous, and confirm-gated Reset to code defaults; component consumes
+loader data only (no .server import in the client graph). Research margin
+curves, market targets, unit floors, rounding, and override changes are NOT
+loaded — with no saved config every price output is unchanged. DTP pipeline
+untouched. Tests 665 -> 684 (19 new: defaults mirror constants, K.1
+key-scope pin, validator rejections, envelope fail-closed parsing, resolver
+shop-scoping + rogue-key ignore + db-failure fallback, save/restore/clear
+audit + one-step previous, computeCommercialPrice/combineStickerLines
+equivalence, wiring direction proof). Full suite 684; build clean; no
+migration; no Shopify/intake/production/DTP surface touched.
