@@ -72,3 +72,19 @@ Roland measured ink rates (1.05/1.90/2.83) are LIVE as owner-ratified
 provisional. Remaining on this thread: white coverage % collection
 (MEDIUM->HIGH), Roland RUNTIME adoption after the J.2 attended-time split,
 and any future rate change only via new measured actuals + owner approval.
+
+## 15F.0K.2-B ratification (2026-07-26)
+Item 18 (4x5 bag ladder) PARTIALLY LANDED: the owner ratified the
+study-calibrated MARGIN curves for 4x5 sticker-applied bags — single
+bags-4x5 (1:65 / 128:64 / 256:61 / 500:58 / 640:57 / 1000:55 / 1500:52 /
+5000:50, familyMinPct 45) and the NEW double-sided variant bags-4x5-double
+(1:65 / 128:61 / 256:58 / 500:54 / 1000:52 / 1500:49 / 5000:47,
+familyMinPct 45), plus the 11-point sticker-bag display ladder
+(64/128/256/500/640/1000/1500/2000/2500/5000/10000). Band 1 held at 65 on
+both curves (owner decision: small runs never repriced; no decreases
+anywhere). STILL PENDING from the study: minimum unit-price floors
+(research floors sit ~2-9% above the calibrated cost-based prices at
+500-1500 — activates with the unit-floor phase), market targets +
+above-market warnings, and the 2,500/5,000 direct-print crossover
+advisories (K.3). Jar tables, label-only curve, and finish add-on floors
+remain deferred per the 15F.0K audit.

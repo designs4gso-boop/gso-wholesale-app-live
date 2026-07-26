@@ -153,6 +153,31 @@ export const MARGIN_CURVE_CONFIGURABLE_KEYS = FAMILY_MARGIN_RULES
   .map((rule) => rule.key)
   .filter((key) => !MARGIN_CURVE_EXCLUDED_KEYS.includes(key));
 
+// ---------- 15F.0K.2-B: research-calibrated 4x5 bag curves ----------
+// OWNER-APPROVED 2026-07-26 from the GSO competitor-pricing study (Stage B).
+// DELIBERATE repricing of 4x5 sticker-applied bags ONLY: raises volume-tier
+// margins that the study proved under-market (e.g. 1,000 single-sided
+// $577.59 -> $705.95 at 55%). Band 1 stays 65% on BOTH curves so quantities
+// 1-127 never reprice (the min-profit candidate controls the small-run zone;
+// no Stage-B price ever DECREASES). familyMinPct stays 45; the 40% global
+// floor is untouched; every other family keeps the Stage-A equivalent
+// translation of its positional curve. The legacy positional
+// FAMILY_MARGIN_RULES entry is deliberately unchanged (fallback-panel
+// reference only — these bands are the live pricing path).
+export const BAGS_4X5_SINGLE_BANDS: MarginBand[] = [
+  { minQty: 1, targetPct: 65 }, { minQty: 128, targetPct: 64 }, { minQty: 256, targetPct: 61 },
+  { minQty: 500, targetPct: 58 }, { minQty: 640, targetPct: 57 }, { minQty: 1000, targetPct: 55 },
+  { minQty: 1500, targetPct: 52 }, { minQty: 5000, targetPct: 50 },
+];
+export const BAGS_4X5_DOUBLE_BANDS: MarginBand[] = [
+  { minQty: 1, targetPct: 65 }, { minQty: 128, targetPct: 61 }, { minQty: 256, targetPct: 58 },
+  { minQty: 500, targetPct: 54 }, { minQty: 1000, targetPct: 52 },
+  { minQty: 1500, targetPct: 49 }, { minQty: 5000, targetPct: 47 },
+];
+// Approved 11-point display ladder for sticker bags (display only — margins
+// come from the quantity bands at ANY requested quantity).
+export const STICKER_BAG_DISPLAY_LADDER = [64, 128, 256, 500, 640, 1000, 1500, 2000, 2500, 5000, 10000];
+
 export function defaultMarginCurvesValues(): MarginCurvesValues {
   const families: Record<string, FamilyMarginCurveConfig> = {};
   for (const rule of FAMILY_MARGIN_RULES) {
@@ -162,16 +187,22 @@ export function defaultMarginCurvesValues(): MarginCurvesValues {
       bands: rule.curve.map((targetPct, index) => ({ minQty: EQUIVALENT_BAND_MIN_QTYS[index] ?? EQUIVALENT_BAND_MIN_QTYS[EQUIVALENT_BAND_MIN_QTYS.length - 1], targetPct })),
     };
   }
+  // 15F.0K.2-B: owner-approved research calibration replaces the Stage-A
+  // translation for 4x5 bags (single + the new double-sided variant).
+  families["bags-4x5"] = { familyMinPct: 45, bands: BAGS_4X5_SINGLE_BANDS.map((band) => ({ ...band })) };
+  families["bags-4x5-double"] = { familyMinPct: 45, bands: BAGS_4X5_DOUBLE_BANDS.map((band) => ({ ...band })) };
   return { families };
 }
 
-// Stage A: today's family-blind display default for every non-DTP family
-// (SUGGESTED_QUANTITIES.slice(0,5) = [64,128,256,640,1000]); the DTP ladder
-// stays DTP_LADDER_QUANTITIES in code and is NOT configurable here.
+// Display defaults: the long-standing family-blind [64,128,256,640,1000]
+// (SUGGESTED_QUANTITIES.slice(0,5)) — except sticker-bags, which uses the
+// owner-approved 11-point research ladder (15F.0K.2-B). The DTP ladder stays
+// DTP_LADDER_QUANTITIES in code and is NOT configurable here.
 export function defaultTierLaddersValues(): TierLaddersValues {
   const ladder = SUGGESTED_QUANTITIES.slice(0, 5);
   const families: Record<string, number[]> = {};
   for (const policy of FAMILY_COMMERCIAL_POLICIES) families[policy.familyKey] = [...ladder];
+  families["sticker-bags"] = [...STICKER_BAG_DISPLAY_LADDER];
   return { defaultLadder: [...ladder], families };
 }
 

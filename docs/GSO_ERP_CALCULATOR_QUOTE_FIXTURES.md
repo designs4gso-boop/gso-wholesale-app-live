@@ -31,14 +31,29 @@ every quote.
 | 5 | 585 x 7.13x3.13, 3 designs, 3 gloss (square) | 169.82 | 353.79 @52% | 318.12 | 194.82 | 25 | **385.95** @56% | **$385.95** (premium spot-gloss floor) | 216.13 | 56% | READY TO QUOTE |
 | 6 | same, simple contour | 174.72 | 364.00 | 318.12 | 199.72 | 25 | **397.09** | **$397.09** (premium floor) | 222.37 | 56% | READY TO QUOTE |
 | 7 | multi-line: 100x3x3 Mimaki + 250x4x4 one-gloss Roland | 65.41 | per line | A **59.33** + B **142.67** | 90.41 (job) | 25 (job) | B base | **$202.00** (sum of line prices; both floor-controlled) | 136.59 | 67.6% | READY TO QUOTE |
-| 8 | 1,000 x 4x5 bags, one-sided (Mimaki) | 317.68 | **577.59** @45% | — | 392.68 | — | — | **$577.59** (cost-based) | 259.92 | 45% | READY TO QUOTE |
-| 9 | 1,000 x 4x5 bags, double-sided (Mimaki) | 534.02 | **970.94** @45% | — | 609.02 | — | — | **$970.94** (cost-based) | 436.92 | 45% | READY TO QUOTE |
+| 8 | 1,000 x 4x5 bags, one-sided (Mimaki) | 317.68 | **705.95** @55% | — | 392.68 | — | — | **$705.95** (cost-based) | 388.27 | 55% | READY TO QUOTE |
+| 9 | 1,000 x 4x5 bags, double-sided (Mimaki) | 534.02 | **1,112.54** @52% | — | 609.02 | — | — | **$1,112.54** (cost-based) | 578.52 | 52% | READY TO QUOTE |
 | 10 | 585 Chiron 150 ml, one 3x2 label (Mimaki) | 1,279.13 | **2,558.26** @50% | — | 1,379.13 | — | — | **$2,558.26** (cost-based) | 1,279.13 | 50% | READY TO QUOTE |
 | 11 | 585 jars, three labels (2x2/2x2/2x1, Mimaki) | 1,530.48 | **3,060.96** @50% | — | 1,630.48 | — | — | **$3,060.96** (cost-based) | 1,530.48 | 50% | READY TO QUOTE |
 | 12 | 2,500 Spektra DTP 4x5x2 | 1,323.83 landed | — | **owner ladder $0.88 -> $2,200.00** | $500/$350 rules | — | — | **$2,200.00** (DTP owner ladder) | 876.17 | 39.83% | **READY TO QUOTE** (note: below 40% target; meets 35% floor + $500 target) |
 | 13 | 3x6 ft banner, trimmed (Mimaki) | 31.47 | **78.67** @60% | — | 56.47 | 40 | — | **$78.67** (cost-based) | 47.20 | 60% | READY TO QUOTE |
 | 14 | 3x6 ft banner, hems + grommets (Mimaki) | 49.97 | **124.92** @60% | — | 74.97 | 40 | — | **$124.92** (cost-based) | 74.95 | 60% | READY TO QUOTE |
 | 15 | 585 x 7.13x3.13, 3 designs, 3 GLOSS, simple contour (MIMAKI — 15F.0G.3) | 249.65 | 520.10 @52% | 318.12 | 274.65 | 25 | **567.39** @56% | **$567.39** (premium spot-gloss floor) | 317.74 | 56% | READY TO QUOTE (machine $107.76 combined 4-layer; gloss $31.91 provisional estimate) |
+
+### 15F.0K.2-B — INTENTIONAL 4x5 bag repricing (research calibration, owner-approved 2026-07-26)
+
+Fixtures 8/9 changed DELIBERATELY: the competitor-pricing study proved 4x5 bag
+volume tiers were priced under market, so the bag margin bands were calibrated
+(single 1:65/128:64/256:61/500:58/640:57/1000:55/1500:52/5000:50; double-sided
+variant 1:65/128:61/256:58/500:54/1000:52/1500:49/5000:47; familyMinPct 45;
+40% global floor untouched). Costs did NOT change — margin-only. Exact
+before -> after at 1,000: single **$577.59 @45% -> $705.95 @55%**
+(+$128.35, +22.2%); double **$970.94 @45% -> $1,112.54 @52%** (+$141.60,
++14.6%). Band 1 stays 65% on both curves, so quantities 1–127 (including the
+64-unit fixtures) are UNCHANGED, and no price decreased at any quantity
+(test-pinned in tests/margin-curve-equivalence.test.ts). Other families, DTP,
+and all non-bag fixtures are byte-identical. Research unit-price floors and
+market/crossover warnings arrive in later approved phases.
 
 ## K. Market calibration — stickers/labels + banner
 

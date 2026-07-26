@@ -1,9 +1,14 @@
-// 15F.0K.2 Stage A equivalence proof: per-family margin BANDS + config tier
-// ladders must reproduce the positional five-point curves at the global
-// edges [64,128,256,640,1000] EXACTLY (quantities 1-127 always took
-// curve[0], so the equivalent band starts at minQty 1). Old-vs-new margin
-// math is compared at every boundary; the dollar-pinned fixture suites
-// remain the primary oracle and are untouched.
+// 15F.0K.2 margin-band correctness suite.
+// Stage A (fc1a6bb): per-family BANDS must reproduce the positional
+// five-point curves EXACTLY — still enforced below for every family EXCEPT
+// 4x5 bags (quantities 1-127 always took curve[0], so equivalent bands
+// start at minQty 1).
+// Stage B (owner-approved 2026-07-26): 4x5 bags are DELIBERATELY
+// research-calibrated — single (bags-4x5) and double-sided
+// (bags-4x5-double) carry the approved study curves, band 1 stays 65% so
+// no small-run price changes, and NO price decreases anywhere (proven
+// old-vs-new per boundary below). All other families, DTP, and every bag
+// COST pin remain byte-identical.
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -31,7 +36,8 @@ import {
   resolveMarginFamily,
   type FamilyMarginRule,
 } from "../app/lib/calculator-emergency.server";
-import { dtpMarginPctForQuantity } from "../app/lib/product-driven-costing.server";
+import { computeProductDrivenCost, dtpMarginPctForQuantity, type ProductDrivenInput } from "../app/lib/product-driven-costing.server";
+import { OWNER_STANDARDS } from "../app/lib/owner-standards";
 import {
   PRICING_MARGIN_CURVES_KEY,
   PRICING_TIER_LADDERS_KEY,
@@ -46,18 +52,20 @@ const BOUNDARY_QUANTITIES = [1, 2, 63, 64, 65, 127, 128, 129, 255, 256, 257, 500
 const defaults = defaultPricingPolicyValues();
 const provisionalRule: FamilyMarginRule = { key: "provisional-universal", label: "Provisional universal curve", curve: [...PROVISIONAL_MARGIN_CURVE], familyMinPct: MARGIN_FLOOR_PCT, aliases: [] };
 
-describe("1. exhaustive old-vs-new margin equivalence (every family x every boundary)", () => {
-  it("band resolution equals positional resolution for all nine FAMILY_MARGIN_RULES", () => {
+describe("1. old-vs-new margin equivalence (every NON-BAG family x every boundary; bags deliberately calibrated)", () => {
+  it("band resolution equals positional resolution for every family except the calibrated bags-4x5", () => {
     for (const rule of FAMILY_MARGIN_RULES) {
+      if (rule.key === "bags-4x5") continue; // 15F.0K.2-B deliberate research calibration (pinned below)
       for (const qty of BOUNDARY_QUANTITIES) {
         expect(resolveMarginPctForQuantity(defaults, rule.key, rule, qty), `${rule.key} @ ${qty}`).toBe(marginPctForQuantity(rule, qty));
       }
     }
   });
 
-  it("direct band math equals positional math for every configurable family", () => {
+  it("direct band math equals positional math for every configurable non-bag family", () => {
     const curves = defaultMarginCurvesValues();
     for (const key of MARGIN_CURVE_CONFIGURABLE_KEYS) {
+      if (key === "bags-4x5") continue; // calibrated (Stage B)
       const rule = resolveMarginFamily(key)!;
       for (const qty of BOUNDARY_QUANTITIES) {
         expect(marginPctForQuantityBands(curves.families[key], qty), `${key} @ ${qty}`).toBe(marginPctForQuantity(rule, qty));
@@ -72,11 +80,31 @@ describe("1. exhaustive old-vs-new margin equivalence (every family x every boun
     }
   });
 
-  it("Stage-A band starts are the exact positional translation (1, not 64)", () => {
+  it("non-bag band starts keep the exact positional translation (1, not 64)", () => {
     expect(EQUIVALENT_BAND_MIN_QTYS).toEqual([1, 128, 256, 640, 1000]);
-    expect(defaults.marginCurves.families["bags-4x5"].bands.map((band) => band.minQty)).toEqual([1, 128, 256, 640, 1000]);
-    expect(defaults.marginCurves.families["bags-4x5"].bands.map((band) => band.targetPct)).toEqual([65, 58, 52, 47, 45]);
-    expect(defaults.marginCurves.families["bags-4x5"].familyMinPct).toBe(45);
+    expect(defaults.marginCurves.families["stickers-labels"].bands.map((band) => band.minQty)).toEqual([1, 128, 256, 640, 1000]);
+    expect(defaults.marginCurves.families["stickers-labels"].bands.map((band) => band.targetPct)).toEqual([65, 58, 52, 46, 40]);
+    expect(defaults.marginCurves.families["miron-jars"].bands.map((band) => band.targetPct)).toEqual([65, 58, 52, 47, 45]);
+  });
+
+  it("15F.0K.2-B: bag curves are EXACTLY the owner-approved research values; legacy positional rule untouched", () => {
+    const single = defaults.marginCurves.families["bags-4x5"];
+    expect(single.familyMinPct).toBe(45);
+    expect(single.bands).toEqual([
+      { minQty: 1, targetPct: 65 }, { minQty: 128, targetPct: 64 }, { minQty: 256, targetPct: 61 },
+      { minQty: 500, targetPct: 58 }, { minQty: 640, targetPct: 57 }, { minQty: 1000, targetPct: 55 },
+      { minQty: 1500, targetPct: 52 }, { minQty: 5000, targetPct: 50 },
+    ]);
+    const double = defaults.marginCurves.families["bags-4x5-double"];
+    expect(double.familyMinPct).toBe(45);
+    expect(double.bands).toEqual([
+      { minQty: 1, targetPct: 65 }, { minQty: 128, targetPct: 61 }, { minQty: 256, targetPct: 58 },
+      { minQty: 500, targetPct: 54 }, { minQty: 1000, targetPct: 52 },
+      { minQty: 1500, targetPct: 49 }, { minQty: 5000, targetPct: 47 },
+    ]);
+    // fallback-panel reference deliberately unchanged
+    expect(resolveMarginFamily("bags-4x5")!.curve).toEqual([65, 58, 52, 47, 45]);
+    expect(resolveMarginFamily("bags-4x5")!.familyMinPct).toBe(45);
   });
 });
 
@@ -112,8 +140,10 @@ describe("5. full-result deep equality with and without explicit Stage-A default
   });
 });
 
-describe("6. bags-4x5-double falls back to bags-4x5 (sides price identically in Stage A)", () => {
+describe("6. bags-4x5-double: approved deliberate spread (15F.0K.2-B) + fallback still safe", () => {
   const bags = resolveMarginFamily("bags-4x5")!;
+  const marginAt = (faces: number, qty: number) =>
+    computeCommercialPrice({ familyKey: "sticker-bags", quantity: qty, completeCost: qty * 0.5 + 9.33, marginRule: bags, premiumEligible: false, policyValues: defaults, marginCurveKey: marginCurveKeyFor("bags-4x5", faces) }).marginPctApplied;
 
   it("variant key mapping is exactly bags-4x5 + faces>=2, nothing else", () => {
     expect(marginCurveKeyFor("bags-4x5", 1)).toBe("bags-4x5");
@@ -124,14 +154,35 @@ describe("6. bags-4x5-double falls back to bags-4x5 (sides price identically in 
     expect(MARGIN_CURVE_VARIANT_BASE["bags-4x5-double"]).toBe("bags-4x5");
   });
 
-  it("with no double entry the variant resolves to the base config and prices identically at every boundary", () => {
-    expect(defaults.marginCurves.families["bags-4x5-double"]).toBeUndefined();
-    expect(marginCurveConfigFor(defaults, "bags-4x5-double")).toEqual(defaults.marginCurves.families["bags-4x5"]);
-    for (const qty of BOUNDARY_QUANTITIES) {
-      const single = computeCommercialPrice({ familyKey: "sticker-bags", quantity: qty, completeCost: qty * 0.4 + 9.33, marginRule: bags, premiumEligible: false, policyValues: defaults, marginCurveKey: marginCurveKeyFor("bags-4x5", 1) });
-      const double = computeCommercialPrice({ familyKey: "sticker-bags", quantity: qty, completeCost: qty * 0.4 + 9.33, marginRule: bags, premiumEligible: false, policyValues: defaults, marginCurveKey: marginCurveKeyFor("bags-4x5", 2) });
-      expect(double).toEqual(single);
+  it("the double entry now EXISTS and resolves directly (no fallback needed)", () => {
+    expect(defaults.marginCurves.families["bags-4x5-double"]).toBeDefined();
+    expect(marginCurveConfigFor(defaults, "bags-4x5-double")).toEqual(defaults.marginCurves.families["bags-4x5-double"]);
+  });
+
+  it("quantities 1-127 stay side-parity at 65% (owner rule: small runs never repriced)", () => {
+    for (const qty of [1, 64, 100, 127]) {
+      expect(marginAt(1, qty)).toBe(65);
+      expect(marginAt(2, qty)).toBe(65);
     }
+  });
+
+  it("128+ carries the approved single-vs-double spread", () => {
+    const expectations: Array<[number, number, number]> = [
+      [128, 64, 61], [256, 61, 58], [500, 58, 54], [640, 57, 54], [1000, 55, 52],
+      [1500, 52, 49], [2000, 52, 49], [2500, 52, 49], [5000, 50, 47], [10000, 50, 47],
+    ];
+    for (const [qty, singlePct, doublePct] of expectations) {
+      expect(marginAt(1, qty), `single @ ${qty}`).toBe(singlePct);
+      expect(marginAt(2, qty), `double @ ${qty}`).toBe(doublePct);
+    }
+  });
+
+  it("if an owner-config clears the double entry, the variant still falls back to bags-4x5 (never crashes, never 0)", () => {
+    const cleared = defaultPricingPolicyValues();
+    delete cleared.marginCurves.families["bags-4x5-double"];
+    expect(marginCurveConfigFor(cleared, "bags-4x5-double")).toEqual(cleared.marginCurves.families["bags-4x5"]);
+    const price = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: 534.02, marginRule: bags, premiumEligible: false, policyValues: cleared, marginCurveKey: "bags-4x5-double" });
+    expect(price.marginPctApplied).toBe(55); // single curve at 1000
   });
 });
 
@@ -177,23 +228,26 @@ describe("9. a custom valid config changes ONLY the intended non-DTP margin", ()
     };
     expect(resolveMarginPctForQuantity(custom, "stickers-labels", stickers, 1000)).toBe(55);
     expect(resolveMarginPctForQuantity(custom, "stickers-labels", stickers, 999)).toBe(46); // neighbor band untouched
-    expect(resolveMarginPctForQuantity(custom, "bags-4x5", bags, 1000)).toBe(45); // other family untouched
+    expect(resolveMarginPctForQuantity(custom, "bags-4x5", bags, 1000)).toBe(55); // other family untouched (bags stays at its own 15F.0K.2-B calibrated value)
     expect(dtpMarginPctForQuantity(1000)).toBe(65); // DTP untouched
     const priced = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 1000, completeCost: 500, marginRule: stickers, premiumEligible: false, finishedSqft: 0, setupTotal: 0, policyValues: custom });
     expect(priced.marginPctApplied).toBe(55);
   });
 });
 
-describe("10. display-default behavior pins (no eqty -> today's rows)", () => {
-  it("Stage-A ladders are [64,128,256,640,1000] for the default and every family", () => {
+describe("10. display-default behavior pins (no eqty -> configured rows)", () => {
+  it("ladders: sticker-bags carries the approved 11-point research ladder; every other family keeps [64,128,256,640,1000]", () => {
     const ladders = defaultTierLaddersValues();
     expect(ladders.defaultLadder).toEqual([64, 128, 256, 640, 1000]);
     expect(ladders.defaultLadder).toEqual(SUGGESTED_QUANTITIES.slice(0, 5));
-    for (const family of Object.keys(ladders.families)) expect(ladders.families[family]).toEqual([64, 128, 256, 640, 1000]);
+    expect(ladders.families["sticker-bags"]).toEqual([64, 128, 256, 500, 640, 1000, 1500, 2000, 2500, 5000, 10000]); // 15F.0K.2-B owner-approved
+    for (const family of ["standard-jars", "premium-jars", "stickers-labels", "banners", "custom-item"]) {
+      expect(ladders.families[family]).toEqual([64, 128, 256, 640, 1000]);
+    }
     expect(Object.keys(ladders.families).sort()).toEqual(["banners", "custom-item", "premium-jars", "standard-jars", "sticker-bags", "stickers-labels"]);
   });
 
-  it("route source pins: ladder + shared margin resolver wired in loader AND save; no direct positional calls remain", () => {
+  it("route source pins (part of describe 10): ladder + shared margin resolver wired in loader AND save; no direct positional calls remain", () => {
     const source = readFileSync("app/routes/app.erp.cost-calculator.tsx", "utf8");
     expect(source).toContain("pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamily)]");
     expect(source).toContain("pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamilySave)]");
@@ -204,5 +258,90 @@ describe("10. display-default behavior pins (no eqty -> today's rows)", () => {
     // DTP ladder stays code-only in both branches
     expect(source).toContain("(isDtpP ? DTP_LADDER_QUANTITIES : configLadderP)");
     expect(source).toContain("(savedIsDtp ? DTP_LADDER_QUANTITIES : configLadderSave)");
+  });
+});
+
+// ---------- 15F.0K.2 Stage B: deliberate research calibration pins ----------
+// Owner-approved 2026-07-26. These pins document the INTENTIONAL 4x5-bag
+// repricing (research calibration) with exact before/after dollars computed
+// through the live engine, and prove NO price decreased anywhere. Bag COSTS
+// are pinned unchanged (the calibration is margin-only).
+describe("15F.0K.2-B deliberate bag calibration (exact prices; no decreases)", () => {
+  const POSEIDON_PER_SQFT = 213 / ((54 / 12) * 150);
+  const MACHINE_RATE = OWNER_STANDARDS.machineRecoveryPerHour.value;
+  const bagsRule = resolveMarginFamily("bags-4x5")!;
+
+  function bagInput(overrides: Partial<ProductDrivenInput>): ProductDrivenInput {
+    return {
+      family: "bags-4x5", quantity: 1000, designs: 1, facesPerUnit: 1,
+      widthIn: 4, heightIn: 5, labelRows: null, dtp: null,
+      blank: { name: "4x5 Blank Bag", unitCost: 0.09, tiers: [], status: "verified" }, lid: null, mironTop: null,
+      material: { name: "Poseidon Matte Roll Media", costPerSqft: POSEIDON_PER_SQFT },
+      printer: "mimaki", printerHasWhite: true, printerHasGloss: false,
+      whiteLayers: 0, glossLayers: 0, inkMlPerSqft: 0.6,
+      machineMinutesPerSqft: 0, machineSqftPerHour: 0, machineRatePerHour: MACHINE_RATE,
+      cutType: "square-rect", cutRequiresWeeding: false, hemming: false, grommets: false,
+      freightPerUnit: 0, freightSource: "estimated", recipeWastePct: null, wasteOverride: null, boxOverride: null,
+      ...overrides,
+    };
+  }
+
+  // Stage-A translation of the untouched positional rule = the pre-B behavior.
+  function stageAValues() {
+    const values = defaultPricingPolicyValues();
+    values.marginCurves.families["bags-4x5"] = {
+      familyMinPct: bagsRule.familyMinPct,
+      bands: bagsRule.curve.map((targetPct, index) => ({ minQty: EQUIVALENT_BAND_MIN_QTYS[index], targetPct })),
+    };
+    delete values.marginCurves.families["bags-4x5-double"];
+    return values;
+  }
+
+  const priceAt = (faces: number, qty: number, values: ReturnType<typeof defaultPricingPolicyValues>) => {
+    const run = computeProductDrivenCost(bagInput({ quantity: qty, facesPerUnit: faces }));
+    return {
+      cost: run.totalCost,
+      result: computeCommercialPrice({ familyKey: "sticker-bags", quantity: qty, completeCost: run.totalCost, marginRule: bagsRule, premiumEligible: false, policyValues: values, marginCurveKey: marginCurveKeyFor("bags-4x5", faces) }),
+    };
+  };
+
+  it("bag COSTS are unchanged (margin-only calibration): fixture cost pins hold", () => {
+    expect(computeProductDrivenCost(bagInput({ quantity: 1000, facesPerUnit: 1 })).totalCost).toBeCloseTo(317.6761, 3);
+    expect(computeProductDrivenCost(bagInput({ quantity: 1000, facesPerUnit: 2 })).totalCost).toBeCloseTo(534.0188, 3);
+  });
+
+  it("exact calibrated prices at 1,000 (the fixture-book anchors): single 577.59 -> 705.95 @55%; double 970.94 -> 1112.54 @52%", () => {
+    const single = priceAt(1, 1000, defaults);
+    expect(single.result.marginPctApplied).toBe(55);
+    expect(single.result.finalTotalPrice).toBeCloseTo(single.cost / 0.45, 10);
+    expect(single.result.finalTotalPrice).toBeCloseTo(705.9468, 3);
+    expect(single.result.controllingRule).toContain("Cost-based");
+    const double = priceAt(2, 1000, defaults);
+    expect(double.result.marginPctApplied).toBe(52);
+    expect(double.result.finalTotalPrice).toBeCloseTo(double.cost / 0.48, 10);
+    expect(double.result.finalTotalPrice).toBeCloseTo(1112.5392, 3);
+  });
+
+  it("64-unit prices are UNCHANGED from pre-B behavior on both sides (owner rule)", () => {
+    for (const faces of [1, 2]) {
+      const before = priceAt(faces, 64, stageAValues());
+      const after = priceAt(faces, 64, defaults);
+      expect(after.result.finalTotalPrice).toBeCloseTo(before.result.finalTotalPrice, 10);
+    }
+    // single 64 stays min-profit-controlled ($75 over cost)
+    const single64 = priceAt(1, 64, defaults);
+    expect(single64.result.controllingRule).toContain("gross-profit");
+    expect(single64.result.finalTotalPrice).toBeCloseTo(single64.cost + 75, 10);
+  });
+
+  it("NO price decreases anywhere: after >= before for both sides at every approved ladder quantity", () => {
+    const before = stageAValues();
+    for (const qty of [64, 128, 256, 500, 640, 1000, 1500, 2000, 2500, 5000, 10000]) {
+      for (const faces of [1, 2]) {
+        const beforePrice = priceAt(faces, qty, before).result.finalTotalPrice;
+        const afterPrice = priceAt(faces, qty, defaults).result.finalTotalPrice;
+        expect(afterPrice, `faces ${faces} @ ${qty}`).toBeGreaterThanOrEqual(beforePrice - 1e-9);
+      }
+    }
   });
 });

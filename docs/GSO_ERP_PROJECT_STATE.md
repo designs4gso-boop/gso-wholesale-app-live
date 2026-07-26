@@ -1438,3 +1438,29 @@ the new mechanism with the same invariants (production-ready loader/save
 parity pin, dtp ladder-branch pin, product-driven curve/floor pin) — no
 numeric expectation changed anywhere. Tests 684 -> 698; build clean; tsc
 306 = baseline; no migration.
+
+## Patch 15F.0K.2 Stage B — 4x5 bag research calibration (2026-07-26)
+DELIBERATE repricing, owner-approved values only — 4x5 sticker-applied bags
+and their display ladder; NOTHING else. Code defaults now carry the
+study-calibrated curves: bags-4x5 single 1:65/128:64/256:61/500:58/640:57/
+1000:55/1500:52/5000:50 and NEW bags-4x5-double 1:65/128:61/256:58/500:54/
+1000:52/1500:49/5000:47 (both familyMinPct 45; 40% global floor untouched;
+band 1 held at 65 so quantities 1-127 never reprice and NO price decreases
+anywhere — engine-proven old-vs-new per approved ladder quantity,
+test-pinned). Double-sided jobs (pfaces>=2) now price on their own curve
+via the K.2-A variant key; clearing the config entry still falls back to
+the single curve. Display ladder: sticker-bags 11-point
+64/128/256/500/640/1000/1500/2000/2500/5000/10000 (other families + DTP
+ladders unchanged). Exact anchors at 1,000 (costs UNCHANGED 317.68/534.02
+— margin-only): single $577.59@45% -> $705.95@55%; double $970.94@45% ->
+$1,112.54@52%. Positional FAMILY_MARGIN_RULES deliberately untouched
+(legacy fallback-panel reference); ownerConfig overrides keep working; no
+unit floors, market targets, crossover warnings, rounding, rush, holo, or
+override changes; jars/DTP/labels/banners byte-identical (dollar-pinned
+suites untouched except the two bag fixture rows). Fixture book rows 8/9
+updated with the intentional-calibration note; owner-decisions ledger
+updated (item 18 partially landed; unit floors pending).
+margin-curve-equivalence suite restructured: non-bag equivalence still
+enforced per boundary; new Stage-B pins (exact curve values, side spread,
+64-unit unchanged, no-decrease proof, cleared-config fallback). Tests 698
+-> 706; build clean; tsc 306 = baseline; no migration.
