@@ -42,3 +42,13 @@ session — NAS-side facts come from configs/scripts).
 4. Original SHA-256 is computed but only hash8 reaches the ERP outcomes.
 5. rasterlink-sync host machine + schedule unconfirmed.
 6. Legacy watcher script still present (retire).
+
+## 15F.0J.4 update (2026-07-26)
+Gap closures: Roland actuals pipeline designed + shipped (drop-folder +
+reused watcher + hardened widened import branch); capture gaps closed
+(elapsed print/rip seconds, copies, dims, layout sqft, dual-channel sums,
+event classes, fingerprints, quality flags); full SHA-256 now reported by
+agent v1.3; review page surfaces quality/eligibility/match warnings.
+Still open: PrintIntake DB records + print-only tickets (J-phase pending),
+JobInfo converter location (contract published), rasterlink-sync host
+confirmation.

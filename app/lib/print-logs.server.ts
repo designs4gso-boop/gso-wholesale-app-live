@@ -1,4 +1,12 @@
 import db from "../db.server";
+import {
+  extractMimakiExtended,
+  isVersaWorksJobLogRow,
+  parseVersaWorksRow,
+  runtimeQualityFlags,
+  sourceRecordFingerprint,
+  RIP_CAPTURE_VERSION,
+} from "./rip-capture.server";
 
 export const printLogSourceOptions = [
   { label: "VersaWorks CSV/XML", value: "versaworks" },
@@ -152,14 +160,76 @@ export function parsePrintLogText(text: string) {
   const rawRows = /<\/?[A-Za-z][\s\S]*>/.test(trimmed) ? extractXmlJobs(trimmed) : parseDelimited(trimmed);
 
   return rawRows.map((row, index) => {
+    // 15F.0J.4: VersaWorks job-log rows (Roland) get the dedicated parser —
+    // colon ink arrays mapped BY NAME, mm dims, per-stage events, quality
+    // flags, and a source-record fingerprint. Raw source preserved verbatim.
+    if (isVersaWorksJobLogRow(row)) {
+      const parsed = parseVersaWorksRow(row);
+      const quality = runtimeQualityFlags(parsed);
+      const fingerprint = sourceRecordFingerprint(parsed);
+      const extended = {
+        captureVersion: RIP_CAPTURE_VERSION,
+        sourceRecordFingerprint: fingerprint,
+        event: parsed.event,
+        eventClass: parsed.eventClass,
+        normalizedJobName: parsed.normalizedJobName,
+        profile: parsed.profile,
+        copies: parsed.copies,
+        pageWidthIn: parsed.pageWidthIn,
+        pageFeedIn: parsed.pageFeedIn,
+        outputWidthIn: parsed.outputWidthIn,
+        outputFeedIn: parsed.outputFeedIn,
+        layoutSqft: parsed.layoutSqft,
+        ripSeconds: parsed.ripSeconds,
+        printSeconds: parsed.printSeconds,
+        inkByChannel: parsed.inkByChannel,
+        channelNames: parsed.channelNames,
+        otherMl: parsed.otherMl,
+        unknownChannels: parsed.unknownChannels,
+        inkArrayMismatch: parsed.inkArrayMismatch,
+        qualityFlags: quality.flags,
+        calibrationEligible: quality.calibrationEligible,
+        actualCostEligible: quality.actualCostEligible,
+        exclusionReason: quality.exclusionReason,
+      };
+      return {
+        rowNumber: index + 1,
+        itemTicket: parsed.itemTicket,
+        jobTicket: parsed.jobTicket || parsed.itemTicket,
+        sourceJobName: parsed.jobName,
+        machineName: parsed.printer,
+        mediaName: parsed.profile,
+        status: parsed.event,
+        sqft: parsed.layoutSqft,
+        inkMl: parsed.totalMl,
+        cmykInkMl: parsed.cmykMl,
+        whiteInkMl: parsed.whiteMl,
+        glossInkMl: parsed.glossMl,
+        printMinutes: parsed.printSeconds != null ? parsed.printSeconds / 60 : 0,
+        startedAt: parsed.printStart,
+        completedAt: parsed.printEnd,
+        sourceFingerprint: fingerprint,
+        eventClass: parsed.eventClass,
+        rawRow: JSON.stringify({ ...row, _gso: extended }),
+      };
+    }
     const rowText = JSON.stringify(row);
     const sourceJobName = findField(row, "jobName") || rowText.slice(0, 140);
     const itemTicket = extractItemTicket(sourceJobName) || extractItemTicket(rowText);
     const jobTicket = itemTicket || extractJobTicket(sourceJobName) || extractJobTicket(rowText);
     const inkMl = numberFromPrintLog(findField(row, "inkMl"));
     const cmykInkMl = numberFromPrintLog(findField(row, "cmykInkMl"));
-    const whiteInkMl = numberFromPrintLog(findField(row, "whiteInkMl"));
-    const glossInkMl = numberFromPrintLog(findField(row, "glossInkMl"));
+    let whiteInkMl = numberFromPrintLog(findField(row, "whiteInkMl"));
+    let glossInkMl = numberFromPrintLog(findField(row, "glossInkMl"));
+    // 15F.0J.4-F: widened Mimaki fields (resolution/passes/copies/output dims/
+    // cut+spool times/dual white+clear channels) captured WHEN the converter
+    // provides them; dual channels sum into the normalized totals. Old CSVs
+    // without these columns parse byte-identically.
+    const mimakiExtended = extractMimakiExtended(row);
+    if (mimakiExtended) {
+      if (typeof mimakiExtended.whiteSummedMl === "number" && mimakiExtended.whiteSummedMl > 0 && !whiteInkMl) whiteInkMl = mimakiExtended.whiteSummedMl;
+      if (typeof mimakiExtended.clearSummedMl === "number" && mimakiExtended.clearSummedMl > 0 && !glossInkMl) glossInkMl = mimakiExtended.clearSummedMl;
+    }
 
     return {
       rowNumber: index + 1,
@@ -177,12 +247,19 @@ export function parsePrintLogText(text: string) {
       printMinutes: minutesFrom(findField(row, "printMinutes")),
       startedAt: dateFrom(findField(row, "startedAt")),
       completedAt: dateFrom(findField(row, "completedAt")),
-      rawRow: rowText,
+      sourceFingerprint: null as string | null,
+      eventClass: null as string | null,
+      rawRow: mimakiExtended ? JSON.stringify({ ...row, _gso: { captureVersion: RIP_CAPTURE_VERSION, ...mimakiExtended } }) : rowText,
     };
   });
 }
 
-export async function findMatchingProductionJob(shop: string, row: any) {
+// 15F.0J.4-G: returns the match METHOD alongside the match. Ladder:
+// EXACT_TICKET (system ticket in the routed RIP name) > EXACT_NORMALIZED_
+// FILENAME (stored rip/item names) > PROBABLE_METADATA (contains fallbacks —
+// review-only for actuals; the writeback additionally sits behind the owner
+// phrase). MANUAL matches record their own method at review time.
+export async function findMatchingProductionJob(shop: string, row: any): Promise<{ job: any; item: any; method: string }> {
   const ticket = row.jobTicket;
   const itemTicket = row.itemTicket || ticket;
   const sourceJobName = row.sourceJobName || "";
@@ -192,12 +269,12 @@ export async function findMatchingProductionJob(shop: string, row: any) {
       where: { shop, OR: [{ itemTicket }, { ripJobName: itemTicket }] },
       include: { job: true },
     });
-    if (exactItem?.job) return { job: exactItem.job, item: exactItem };
+    if (exactItem?.job) return { job: exactItem.job, item: exactItem, method: "EXACT_TICKET" };
   }
 
   if (ticket) {
     const exact = await db.productionJob.findFirst({ where: { shop, jobTicket: ticket } });
-    if (exact) return { job: exact, item: null };
+    if (exact) return { job: exact, item: null, method: "EXACT_TICKET" };
 
     const itemContains = await db.productionJobItem.findFirst({
       where: {
@@ -209,10 +286,10 @@ export async function findMatchingProductionJob(shop: string, row: any) {
       },
       include: { job: true },
     });
-    if (itemContains?.job) return { job: itemContains.job, item: itemContains };
+    if (itemContains?.job) return { job: itemContains.job, item: itemContains, method: "EXACT_TICKET" };
 
     const contains = await db.productionJob.findFirst({ where: { shop, jobTicket: { contains: ticket } } });
-    if (contains) return { job: contains, item: null };
+    if (contains) return { job: contains, item: null, method: "EXACT_TICKET" };
   }
 
   const jobs = await db.productionJob.findMany({
@@ -228,12 +305,12 @@ export async function findMatchingProductionJob(shop: string, row: any) {
       if (item.ripJobName && sourceJobName.includes(item.ripJobName)) return true;
       return false;
     });
-    if (matchedItem) return { job, item: matchedItem };
-    if (job.jobTicket && sourceJobName.includes(job.jobTicket)) return { job, item: null };
-    if (job.id && sourceJobName.includes(job.id)) return { job, item: null };
+    if (matchedItem) return { job, item: matchedItem, method: "EXACT_NORMALIZED_FILENAME" };
+    if (job.jobTicket && sourceJobName.includes(job.jobTicket)) return { job, item: null, method: "PROBABLE_METADATA" };
+    if (job.id && sourceJobName.includes(job.id)) return { job, item: null, method: "PROBABLE_METADATA" };
   }
 
-  return { job: null, item: null };
+  return { job: null, item: null, method: "UNMATCHED" };
 }
 
 export async function createProductionEvent(shop: string, jobId: string, eventType: string, message: string, data?: { oldValue?: string; newValue?: string }) {
@@ -267,6 +344,7 @@ export async function importPrintLogText({
   const rows = parsePrintLogText(rawText);
   let matchedCount = 0;
   let unmatchedCount = 0;
+  let skippedDuplicates = 0;
   let totalSqft = 0;
   let totalInkMl = 0;
   let totalPrintMinutes = 0;
@@ -286,7 +364,30 @@ export async function importPrintLogText({
   });
 
   for (const row of rows) {
-    const match = await findMatchingProductionJob(shop, row);
+    // 15F.0J.4-D: incremental dedupe on the SOURCE-RECORD identity (indexed
+    // fields sourceJobName + start/end + machine), never row position — a
+    // cumulative/regenerated export imports only genuinely new events.
+    if (row.sourceJobName && (row.startedAt || row.completedAt)) {
+      const existing = await db.printLogEntry.findFirst({
+        where: {
+          shop,
+          sourceJobName: row.sourceJobName,
+          startedAt: row.startedAt,
+          completedAt: row.completedAt,
+          machineName: row.machineName || null,
+          status: row.status || null,
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        skippedDuplicates += 1;
+        continue;
+      }
+    }
+    // Canceled/error events are retained for audit but never matched as
+    // production actuals (no job link, no production event).
+    const isCanceledOrError = row.eventClass === "canceled" || row.eventClass === "error";
+    const match = isCanceledOrError ? { job: null, item: null, method: "UNMATCHED" as const } : await findMatchingProductionJob(shop, row);
     const matchedJob = match.job;
     const matchedItem = match.item;
     const matchedJobId = matchedJob?.id || null;
@@ -297,6 +398,18 @@ export async function importPrintLogText({
     totalSqft += Number(row.sqft || 0);
     totalInkMl += Number(row.inkMl || 0);
     totalPrintMinutes += Number(row.printMinutes || 0);
+
+    // 15F.0J.4-G: record the match method inside the immutable raw payload.
+    let rawRowOut = row.rawRow || null;
+    if (rawRowOut) {
+      try {
+        const parsedRaw = JSON.parse(rawRowOut);
+        parsedRaw._gso = { ...(parsedRaw._gso || {}), matchMethod: (match as any).method || (matchedJobId ? "PROBABLE_METADATA" : "UNMATCHED") };
+        rawRowOut = JSON.stringify(parsedRaw);
+      } catch {
+        // non-JSON raw rows stay verbatim
+      }
+    }
 
     await db.printLogEntry.create({
       data: {
@@ -318,7 +431,7 @@ export async function importPrintLogText({
         printMinutes: row.printMinutes || 0,
         startedAt: row.startedAt || null,
         completedAt: row.completedAt || null,
-        rawRow: row.rawRow || null,
+        rawRow: rawRowOut,
       },
     });
 
@@ -336,10 +449,11 @@ export async function importPrintLogText({
     where: { id: createdImport.id },
     data: {
       matchedCount,
-      unmatchedCount,
+      unmatchedCount: Math.max(0, unmatchedCount),
       totalSqft,
       totalInkMl,
       totalPrintMinutes,
+      notes: skippedDuplicates ? `${notes ? `${notes} | ` : ""}${skippedDuplicates} duplicate source record(s) skipped (15F.0J.4 fingerprint dedupe).` : notes || null,
     },
   });
 
@@ -348,6 +462,7 @@ export async function importPrintLogText({
     rowCount: rows.length,
     matchedCount,
     unmatchedCount,
+    skippedDuplicates,
     totalSqft,
     totalInkMl,
     totalPrintMinutes,

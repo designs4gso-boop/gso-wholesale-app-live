@@ -306,6 +306,7 @@ export type IntakeOutcome = {
   ripName: string | null;
   machine: string | null;
   fileHash8: string | null;
+  fileHash?: string | null; // 15F.0J.4: full SHA-256 (agent >= 1.3); hash8 kept for back-compat
 };
 
 // The notes column may contain operator text; our block is namespaced by a

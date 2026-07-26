@@ -26,7 +26,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.2 (13A.6G go-live cutoff)"
+$ScriptVersion = "gso-print-intake-agent/1.3 (15F.0J.4 full-hash reporting)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -350,7 +350,7 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
         return
       }
       Write-IntakeLog $Config "routed_to_hot_folder" $File.Name "as=$([System.IO.Path]::GetFileName($dest)) machine=$($plan.machine) rule=$($plan.machineRule) matchedBy=$($plan.rule)"
-      Send-IntakeReport $Config @{ fileName = $File.Name; decision = "routed"; rule = [string]$plan.rule; jobId = [string]$plan.jobId; jobTicket = [string]$plan.jobTicket; itemTicket = [string]$plan.itemTicket; ripName = [string]$plan.ripName; machine = [string]$plan.machine; fileHash8 = $sha8 } | Out-Null
+      Send-IntakeReport $Config @{ fileName = $File.Name; decision = "routed"; rule = [string]$plan.rule; jobId = [string]$plan.jobId; jobTicket = [string]$plan.jobTicket; itemTicket = [string]$plan.itemTicket; ripName = [string]$plan.ripName; machine = [string]$plan.machine; fileHash8 = $sha8; fileHash = $hash } | Out-Null
       # Preserve the original: move (never delete) into the routed archive.
       if (!(Test-Path $Config.RoutedArchiveFolder)) { New-Item -ItemType Directory -Path $Config.RoutedArchiveFolder -Force | Out-Null }
       $archiveDest = Get-CollisionSafeIntakeDestination $Config.RoutedArchiveFolder $File.Name $sha8
@@ -364,7 +364,7 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
     # Review: the original STAYS EXACTLY WHERE STAFF PUT IT. No moves.
     $reason = ($plan.reasons -join "|")
     Write-IntakeLog $Config "needs_review" $File.Name "reasons=$reason"
-    Send-IntakeReport $Config @{ fileName = $File.Name; decision = "needs_review"; reason = $reason; fileHash8 = $sha8 } | Out-Null
+    Send-IntakeReport $Config @{ fileName = $File.Name; decision = "needs_review"; reason = $reason; fileHash8 = $sha8; fileHash = $hash } | Out-Null
     Add-IntakeLedgerEntry $Config $hash $File.Name "needs_review"
     $Ledger[$hash] = "needs_review"
   } finally {

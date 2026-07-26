@@ -64,6 +64,7 @@ export async function action({ request }: { request: Request }) {
     ripName: safeText(body.ripName, 130),
     machine: safeText(body.machine, 20),
     fileHash8: safeText(body.fileHash8, 8),
+    fileHash: safeText(body.fileHash, 64) || null, // 15F.0J.4 full SHA-256
   };
 
   // Idempotency check before writing anything.

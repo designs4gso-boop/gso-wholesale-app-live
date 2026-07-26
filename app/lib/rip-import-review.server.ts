@@ -81,6 +81,16 @@ export function entryWarnings(entry: Pick<ReviewEntryInput, "jobTicket" | "rawRo
     warnings.push("Raw row is not parseable JSON — details unavailable.");
   }
   if (!entry.jobTicket && !entry.productionJobId) warnings.push("No GSO ticket detected in the RIP job name.");
+  // 15F.0J.4: widened-capture quality flags + match method (stored in the
+  // immutable _gso block at import time) surface directly in review.
+  const gso = raw && raw._gso && typeof raw._gso === "object" ? (raw._gso as Record<string, unknown>) : null;
+  if (gso) {
+    if (Array.isArray(gso.qualityFlags) && gso.qualityFlags.length) warnings.push(`Quality flags: ${(gso.qualityFlags as string[]).join(", ")}.`);
+    if (gso.calibrationEligible === false && gso.actualCostEligible === true) warnings.push("Occupancy-cost eligible but EXCLUDED from speed calibration.");
+    if (gso.eventClass === "canceled") warnings.push("CANCELED event — retained for audit, never a production actual.");
+    if (gso.eventClass === "error") warnings.push("ERROR event — retained for audit, never a production actual.");
+    if (typeof gso.matchMethod === "string" && gso.matchMethod === "PROBABLE_METADATA") warnings.push("PROBABLE match — review-only; cannot feed finalized actuals without manual approval.");
+  }
   return warnings;
 }
 

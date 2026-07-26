@@ -1,0 +1,15 @@
+{
+  "_comment": "15F.0J.4 Roland VersaWorks result sync — SECOND INSTANCE of tools/gso-rasterlink-sync.ps1 (same script, this config). Drop VersaWorks job-log CSV exports into IncomingFolder; the ERP parser auto-detects the format, maps ink by name, fingerprints rows, and skips duplicates. Copy to gso-roland-sync.config.json, paste the upload token from /app/erp/print-intake, then install per docs/GSO_ERP_ROLAND_RESULT_IMPORT.md (no task is installed by the repo).",
+  "ApiBaseUrl": "https://gso-wholesale-app-live.onrender.com",
+  "UploadToken": "PASTE_TOKEN_FROM_PRINT_INTAKE_PAGE",
+  "IncomingFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\roland\\incoming",
+  "ProcessedFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\roland\\processed",
+  "ErrorFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\roland\\error",
+  "LogFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\sync-logs",
+  "Source": "versaworks",
+  "PollSeconds": 60,
+  "StableFileSeconds": 20,
+  "MaxRetries": 4,
+  "RetryDelaySeconds": 10,
+  "ClaimsStaleMinutes": 30
+}

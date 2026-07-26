@@ -73,3 +73,14 @@ ROLAND_PROFILE_CALIBRATION). Runtime rates remain provisional/unchanged —
 next in sequence: J.2 capture widening (attended-vs-idle + layout fields),
 then Roland runtime adoption, J.4 PrintIntake records, J.5 operator labor,
 J.6 owner bag ladder.
+
+## 15F.0J.4 IMPLEMENTED (2026-07-26)
+Capture widening + Roland pipeline delivered: widened VersaWorks branch
+(elapsed seconds now captured — printMinutes was 0 before), Mimaki widened
+contract + parser, fingerprints + quality flags + eligibility split,
+calibration candidate builder, review-page flag surfacing, Roland sync
+config (second instance of the existing watcher; install steps in
+GSO_ERP_RIP_AUTOMATIC_CAPTURE.md — task NOT installed by the patch), agent
+v1.3 full-hash reporting. Remaining before Roland RUNTIME adoption: deploy
+the Roland sync + weekly export, accumulate n>=3 clean uninterrupted
+candidates per group, then owner review.

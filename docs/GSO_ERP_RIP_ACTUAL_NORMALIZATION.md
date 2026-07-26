@@ -35,3 +35,18 @@ vs actual material; est runtime vs RIP est vs actual; est vs actual CMYK/
 white/gloss ml; est vs actual cut time; est vs actual labor; est vs actual
 total cost; quoted price vs invoice; quoted vs actual margin. The
 premiumInkEstimate snapshot (15F.0G.3) is the quote-side anchor.
+
+## 15F.0J.4 update (2026-07-26) — IMPLEMENTED capture widening
+The normalized contract now materializes: VersaWorks rows store the full E
+field set (dims/copies/elapsed/channels/fingerprints/quality/eligibility/
+matchMethod) in normalized columns + the immutable rawRow._gso block;
+Mimaki rows gain the widened fields whenever the converter supplies them
+(dual channels summed). Match ladder labels live in code
+(rip-capture.server matchMethodAllowsActuals): only EXACT_*/MANUAL feed
+actuals; PROBABLE stays review-only (the writeback additionally sits
+behind the owner phrase). Calibration eligibility is SEPARATE from
+actual-cost inclusion (runtimeQualityFlags): completed idle-contaminated
+stages count as occupancy cost but never as speed-calibration samples.
+buildRipCalibrationCandidate emits the K candidate records (factors,
+flags, eligibility, exclusion reasons) — nothing auto-applies; the >=3
+comparable-jobs rule stands.

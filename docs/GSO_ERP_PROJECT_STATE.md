@@ -1304,3 +1304,24 @@ multi-line row). Fixture impacts: 585-label 3X gloss job $169.82 ->
 $312.71 cost / premium price $385.95 -> $710.71; plain Roland CMYK
 +$9.01/100.7 sqft; 0 gloss stays $0. Tests 629 -> 635; tsc 306; build
 clean; no migration.
+
+## Patch 15F.0J.4 — RIP capture widening + Roland actuals pipeline (2026-07-26)
+Shipped without schema changes: NEW app/lib/rip-capture.server.ts (pure
+VersaWorks all-time parser with name-mapped colon ink arrays + dual-channel
+sums, event classes, mm->in dims, elapsed seconds, source-record
+fingerprints, runtime quality flags with calibration-vs-occupancy
+eligibility split, calibration candidate builder, Mimaki converter
+contract + widened-field extractor). Active upload branch (13A.6D)
+widened: elapsed print time now captured (printMinutes was 0), _gso block
+(fingerprint/flags/eligibility/matchMethod) in every VersaWorks rawRow;
+manual import path gains fingerprint dedupe + canceled/error audit
+handling + match-method recording; review page surfaces quality flags,
+eligibility split, canceled/error audit notes, and PROBABLE-match
+warnings. Roland pipeline: NAS drop folders + SECOND instance of the
+existing sync watcher (tools/gso-roland-sync-config.example.json; install
+steps documented, task NOT installed); one manual step remains (VersaWorks
+job-log export — no supported export API). Agent v1.3 reports full SHA-256
+(fileHash) alongside hash8; live task deploys by script replacement.
+JobInfo converter still unlocated (negative machine search documented);
+required contract published. Pricing outputs byte-identical (test 20 +
+unchanged calculator suites). Tests 635 -> 650; tsc 306; build clean.

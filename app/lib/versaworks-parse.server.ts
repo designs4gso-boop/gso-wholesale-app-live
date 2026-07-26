@@ -10,6 +10,8 @@
 // first-match-wins, never contains), and transparent matchMeta in rawRow that
 // the 13A.6C review page already understands (top-level matchFlag).
 
+import { classifyVersaWorksEvent, runtimeQualityFlags, sourceRecordFingerprint, RIP_CAPTURE_VERSION } from "./rip-capture.server";
+
 export const VERSAWORKS_SOURCE = "versaworks";
 // Same flag the RasterLink branch and the 13A.6C review page use — the review
 // page classifies on rawRow.matchFlag, so VersaWorks ambiguity shows up there
@@ -100,6 +102,7 @@ export function looksLikeVersaworksCsv(text: string): boolean {
 export type VersaworksEntry = {
   jobName: string;
   event: string;
+  eventClass: "completed" | "canceled" | "error" | "queue" | "other"; // 15F.0J.4
   machineName: string;
   mediaName: string;
   sqft: number;
@@ -110,6 +113,16 @@ export type VersaworksEntry = {
   jobTicket: string;
   startedAt: Date | null;
   completedAt: Date | null;
+  // 15F.0J.4 widened capture (E): dims in inches, copies, elapsed seconds,
+  // and the stable source-record fingerprint.
+  copies: number;
+  pageWidthIn: number;
+  pageFeedIn: number;
+  outputWidthIn: number;
+  outputFeedIn: number;
+  printSeconds: number | null;
+  ripSeconds: number | null;
+  fingerprint: string;
   timingBasis: "print_times" | "rip_times_fallback" | "no_times";
   warnings: string[];
   raw: Record<string, string>;
@@ -131,20 +144,51 @@ export function parseVersaworksRows(text: string, fileName: string): VersaworksE
     if (!jobName) warnings.push("no_job_name");
     if (timingBasis === "rip_times_fallback") warnings.push("rip_times_fallback");
     if (timingBasis === "no_times") warnings.push("no_times");
-    return {
+    // 15F.0J.4 widened capture: elapsed seconds (midnight-corrected), copies,
+    // dims in inches, event class, and the source-record fingerprint.
+    const elapsed = (start: Date | null, end: Date | null) => {
+      if (!start || !end) return null;
+      let seconds = (end.getTime() - start.getTime()) / 1000;
+      if (seconds < 0) seconds += 86400;
+      return seconds;
+    };
+    const pStart = parseDate(row["Print Start Time"]);
+    const pEnd = parseDate(row["Print End Time"]);
+    const rStart = parseDate(row["RIP Start Time"]);
+    const rEnd = parseDate(row["RIP End Time"]);
+    const outputWidthIn = x / 25.4;
+    const outputFeedIn = y / 25.4;
+    const ink = inkSplit(row);
+    const entryBase = {
       event: cleanText(row.Event),
+      eventClass: classifyVersaWorksEvent(cleanText(row.Event)),
       machineName: cleanText(row["Nick Name"]),
       jobName,
       mediaName: cleanText(row["Media Name"]),
       sqft: x > 0 && y > 0 ? (x / 25.4) * (y / 25.4) / 144 : 0,
-      ...inkSplit(row),
+      ...ink,
       jobTicket: extractVersaworksTicket(jobName, fileName),
       startedAt: parseDate(row["Print Start Time"] || row["RIP Start Time"]),
       completedAt: parseDate(row["Print End Time"] || row["RIP End Time"]),
+      copies: Math.max(0, Math.floor(parseNumber(row.Copy))),
+      pageWidthIn: parseNumber(row["Page Size_X[mm]"]) / 25.4,
+      pageFeedIn: parseNumber(row["Page Size_Y[mm]"]) / 25.4,
+      outputWidthIn,
+      outputFeedIn,
+      printSeconds: elapsed(pStart, pEnd),
+      ripSeconds: elapsed(rStart, rEnd),
       timingBasis,
       warnings,
       raw: row,
     };
+    const fingerprint = sourceRecordFingerprint({
+      printer: entryBase.machineName, event: entryBase.event, jobName,
+      printStart: pStart, printEnd: pEnd, outputWidthIn, outputFeedIn,
+      copies: entryBase.copies,
+      channelNames: cleanText(row["Ink Name"]).split(":").map((name) => name.trim().toLowerCase()).filter(Boolean),
+      inkByChannel: { cmyk: ink.cmykInkMl, white: ink.whiteInkMl, gloss: ink.glossInkMl },
+    });
+    return { ...entryBase, fingerprint };
   });
 }
 
@@ -245,10 +289,37 @@ export function ripNameJobIdsFor(
 // top-level matchFlag keeps 13A.6C review-page classification working; the
 // matchMeta block is additive forensic detail.
 export function buildVersaworksRawRow(entry: VersaworksEntry, decision: VersaworksMatchDecision): Record<string, unknown> {
+  // 15F.0J.4: widened-capture block. Quality/eligibility computed ONCE at
+  // import; calibration eligibility is separate from actual-cost inclusion.
+  const quality = runtimeQualityFlags({
+    eventClass: entry.eventClass,
+    printSeconds: entry.printSeconds,
+    layoutSqft: entry.sqft,
+    printStart: entry.startedAt,
+    printEnd: entry.completedAt,
+  });
   return {
     ...entry.raw,
     ...(decision.matchFlag ? { matchFlag: decision.matchFlag } : {}),
     timingBasis: entry.timingBasis,
+    _gso: {
+      captureVersion: RIP_CAPTURE_VERSION,
+      sourceRecordFingerprint: entry.fingerprint,
+      eventClass: entry.eventClass,
+      copies: entry.copies,
+      pageWidthIn: entry.pageWidthIn,
+      pageFeedIn: entry.pageFeedIn,
+      outputWidthIn: entry.outputWidthIn,
+      outputFeedIn: entry.outputFeedIn,
+      layoutSqft: entry.sqft,
+      printSeconds: entry.printSeconds,
+      ripSeconds: entry.ripSeconds,
+      qualityFlags: quality.flags,
+      calibrationEligible: quality.calibrationEligible,
+      actualCostEligible: quality.actualCostEligible,
+      exclusionReason: quality.exclusionReason,
+      matchMethod: decision.matchMethod === "ticket_exact" ? "EXACT_TICKET" : decision.matchMethod === "rip_job_name_exact" ? "EXACT_NORMALIZED_FILENAME" : decision.matchFlag ? "PROBABLE_METADATA" : "UNMATCHED",
+    },
     matchMeta: {
       matchMethod: decision.matchMethod,
       normalizedTicket: entry.jobTicket || null,

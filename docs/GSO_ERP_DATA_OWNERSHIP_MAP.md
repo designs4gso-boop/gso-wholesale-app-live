@@ -225,3 +225,14 @@ all three (Phase 15B/15E).
 - Calibration truth: GSO measured logs ONLY (official specs and RIP
   estimates are separate labeled layers); provisional printer tables remain
   code-owned until n>=3 groups + owner approval (15F.0G.3 machinery).
+
+## 15F.0J.4 update (2026-07-26)
+- RIP capture OWNER = app/lib/rip-capture.server.ts (VersaWorks parsing,
+  fingerprints, quality flags, eligibility, calibration candidates, Mimaki
+  widened contract) + app/lib/versaworks-parse.server.ts (active upload
+  branch, widened) + print-logs.server.ts (manual path + Mimaki widening +
+  fingerprint dedupe + match methods). Raw source stays immutable in
+  PrintLogImport.rawText / PrintLogEntry.rawRow (_gso block is additive,
+  written once at import). Roland ingestion = rip-logs/roland/* NAS folders
+  + a second config instance of tools/gso-rasterlink-sync.ps1 (example
+  config in repo; task install owner-authorized separately).

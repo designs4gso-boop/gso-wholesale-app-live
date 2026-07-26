@@ -339,7 +339,7 @@ export async function action({ request }: { request: Request }) {
           cmykInkMl: entry.cmykInkMl,
           whiteInkMl: entry.whiteInkMl,
           glossInkMl: entry.glossInkMl,
-          printMinutes: 0,
+          printMinutes: entry.printSeconds != null ? entry.printSeconds / 60 : 0, // 15F.0J.4: elapsed print time captured (was 0)
           startedAt: entry.startedAt,
           completedAt: entry.completedAt,
           rawRow: JSON.stringify(buildVersaworksRawRow(entry, decision)).slice(0, 12000),
