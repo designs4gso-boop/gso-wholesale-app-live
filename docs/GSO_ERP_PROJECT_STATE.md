@@ -1254,3 +1254,23 @@ this environment — forensic methodology locked, measured tables PENDING
 DATA. 13 new docs (see GSO_ERP_PRINTER_CALIBRATION_PLAN.md for the phased
 roadmap). Tests 621; tsc 306; build clean; git diff --check clean; no code
 or data changed.
+
+## Phase 15F.0J.1 — Roland LG-640 all-time log forensics (2026-07-26)
+Read the NAS CSV in place (1.1MB, 5,219 rows, 2026-03-26..07-24; source
+untouched, never copied into the repo). 695 accepted completion records
+(dupes/cancels/queue events excluded; 1,125 duplicate-completion rows +
+483 exact dupes detected). MEASURED LG-640: CMYK median 18.8 sqft/hr (p75
+40.4, n=127 HIGH) vs assumed 150; gloss stage 6.6 (p75 11.9, n=164 HIGH)
+vs assumed 110/layer; white ~5 (n=7-14) vs 75; ink CMYK 1.05 / white 1.9 /
+gloss 2.83 ml/sqft vs the 0.6 basis. Utilization ~99% (layout ~= artwork;
+feed-length-driven, fixed 5-50 min per stage present; stages additive;
+gloss LAYER count not inferable from logs). Elapsed is wall-clock —
+medians = occupancy truth, p75 ~= run speed; final runtime rates await the
+attended-vs-idle capture (J.2). Fixture impact (calibration-fixtures.csv):
+1,000 4x5 +3X gloss = 5.24 assumed hr vs 42.7 (p75) - 78.4 (median) hr
+occupancy; ink $73.58 assumed vs $292 measured — confirms Roland premium
+work is severely underquoted; owner-ladder + occupancy pricing justified.
+Anonymized derived outputs committed under analysis-output/roland/ (8
+files). Docs: ROLAND_LOG_FORENSIC_ANALYSIS + ROLAND_PROFILE_CALIBRATION
+rewritten with measured tables; CALIBRATION_PLAN + COST_COMPLETENESS
+updated. Tests 621; tsc 306; build clean; app behavior unchanged.

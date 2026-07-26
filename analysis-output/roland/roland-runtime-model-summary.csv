@@ -1,0 +1,6 @@
+group,n,model,fixed_min,variable_sqfthr,R2,note
+LG640_CMYK_ONLY,127,fixed+variable,5.2,13.9,0.166,"wall-clock elapsed; low R2 = idle contamination; median rate 18.8, p75 40.4"
+LG640_CMYK_WHITE_COMBINED,14,fixed+variable,14.9,14.3,0.437,combined stage
+LG640_GLOSS_ONLY,164,fixed+variable,50.8,12.9,0.163,gloss stage wall time carries heavy setup/idle; median rate 6.6
+LG640_WHITE_ONLY,7,fixed+variable,28.4,0.0,0.012,n too small; fixed-dominated
+all,-,layout-sqft vs feed-length,-,-,-,areaX ~ constant 40in media => layout sqft proportional to feed length; models 3/4 equivalent to 1/2 here

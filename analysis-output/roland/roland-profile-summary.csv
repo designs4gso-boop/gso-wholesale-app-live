@@ -1,0 +1,12 @@
+printer,klass,profile,n,tot_sqft,tot_hr,weighted_sqfthr,median_sqfthr,p25,p75,confidence
+LG-540,LG540_GLOSS_ONLY,Special Effects,197,2393.3,324.55,7.4,6.6,4.2,11.7,high
+LG-540,LG540_CMYK_ONLY,Generic Sign Production,181,3084.0,145.59,21.2,45.2,17.0,47.7,high
+LG-640,LG640_GLOSS_ONLY,Special Effects,164,1954.8,290.63,6.7,6.6,4.7,11.9,high
+LG-640,LG640_CMYK_ONLY,Generic Sign Production,126,1819.7,142.12,12.8,18.7,7.9,40.8,high
+LG-640,LG640_CMYK_WHITE_COMBINED,Generic Sign Production,7,64.1,6.15,10.4,8.2,4.7,17.5,medium
+LG-640,LG640_CMYK_WHITE_COMBINED,Generic Label,7,8.9,2.43,3.7,3.2,2.7,8.6,medium
+LG-640,LG640_WHITE_ONLY,Generic Sign Production,5,5.7,1.32,4.3,5.3,5.1,5.4,medium
+LG-540,LG540_CMYK_WHITE_COMBINED,Generic Sign Production,4,44.9,4.91,9.1,12.3,4.4,27.0,low
+LG-640,LG640_WHITE_ONLY,Generic Label,2,2.6,0.76,3.4,4.1,3.2,5.0,low
+LG-640,LG640_CMYK_ONLY,Generic Label,1,1.3,0.06,20.4,20.4,20.4,20.4,low
+LG-540,LG540_CMYK_ONLY,Generic Sign Quality,1,21.4,0.48,44.6,44.6,44.6,44.6,low

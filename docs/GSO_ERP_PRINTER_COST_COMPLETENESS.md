@@ -48,3 +48,11 @@ area (scan W x feed L; sample A shows near-100% utilization on a full-width
 nest, but narrow/odd jobs will differ), CUTTING from layout pages, WASTE =
 measured layout minus finished (replaces the flat 10% once captured),
 CALIBRATION strictly layout-based. Requires layout capture (converter).
+
+## 15F.0J.1 measured update (2026-07-26)
+Roland ink row: MEASURED (n=127-164 HIGH) — CMYK 1.05 / white 1.9 / gloss
+2.83 ml/sqft medians vs the 0.6 quote basis (1.8-4.7x under-costed).
+Machine occupancy row: MEASURED — LG-640 CMYK median 18.8 sqft/hr
+(p75 40.4), gloss stage 6.6 (p75 11.9) vs assumed 150/110: premium Roland
+work consumes 10-16x the assumed machine time; occupancy pricing and the
+min-profit-per-machine-hour candidate move from recommended to REQUIRED.

@@ -56,3 +56,13 @@ fixes silent money loss employees can hit TODAY. Exact prompt:
 > Run the full battery (tests, tsc vs 306, build, git diff --check) and
 > report with the standard completion format including the commit command
 > not run.
+
+## 15F.0J.1 EXECUTED (2026-07-26) — Roland forensics complete
+Phase J.3 (Roland forensics) is DONE ahead of J.2: 695 accepted records
+measured; LG-640 tables published in GSO_ERP_ROLAND_PROFILE_CALIBRATION.md;
+derived outputs in analysis-output/roland/. Headline: every Roland runtime
+assumption is 4-16x TOO FAST and every ink basis 1.8-4.7x TOO LOW vs
+measured wall-clock data; ink findings are safe to adopt now (owner
+approval), runtime needs the attended-vs-idle split (J.2) before final
+rates — quote with fixed+p75+safety meanwhile. Remaining J-phases
+unchanged; J.1 multi-line safety is still the first CODE patch.
