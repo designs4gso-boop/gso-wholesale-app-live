@@ -31,8 +31,8 @@ every quote.
 | 5 | 585 x 7.13x3.13, 3 designs, 3 gloss (square) | 169.82 | 353.79 @52% | 318.12 | 194.82 | 25 | **385.95** @56% | **$385.95** (premium spot-gloss floor) | 216.13 | 56% | READY TO QUOTE |
 | 6 | same, simple contour | 174.72 | 364.00 | 318.12 | 199.72 | 25 | **397.09** | **$397.09** (premium floor) | 222.37 | 56% | READY TO QUOTE |
 | 7 | multi-line: 100x3x3 Mimaki + 250x4x4 one-gloss Roland | 65.41 | per line | A **59.33** + B **142.67** | 90.41 (job) | 25 (job) | B base | **$202.00** (sum of line prices; both floor-controlled) | 136.59 | 67.6% | READY TO QUOTE |
-| 8 | 1,000 x 4x5 bags, one-sided (Mimaki) | 317.68 | **705.95** @55% | — | 392.68 | — | — | **$705.95** (cost-based) | 388.27 | 55% | READY TO QUOTE |
-| 9 | 1,000 x 4x5 bags, double-sided (Mimaki) | 534.02 | **1,112.54** @52% | — | 609.02 | — | — | **$1,112.54** (cost-based) | 578.52 | 52% | READY TO QUOTE |
+| 8 | 1,000 x 4x5 bags, one-sided (Mimaki) | 317.68 | 705.95 @55% | **mkt target 850.00** | 392.68 | — | — | **$850.00** (verified market target) | 532.32 | 62.6% | READY TO QUOTE |
+| 9 | 1,000 x 4x5 bags, double-sided (Mimaki) | 534.02 | 1,112.54 @52% | **mkt target 1,130.00** | 609.02 | — | — | **$1,130.00** (verified market target) | 595.98 | 52.7% | READY TO QUOTE |
 | 10 | 585 Chiron 150 ml, one 3x2 label (Mimaki) | 1,279.13 | **2,558.26** @50% | — | 1,379.13 | — | — | **$2,558.26** (cost-based) | 1,279.13 | 50% | READY TO QUOTE |
 | 11 | 585 jars, three labels (2x2/2x2/2x1, Mimaki) | 1,530.48 | **3,060.96** @50% | — | 1,630.48 | — | — | **$3,060.96** (cost-based) | 1,530.48 | 50% | READY TO QUOTE |
 | 12 | 2,500 Spektra DTP 4x5x2 | 1,323.83 landed | — | **owner ladder $0.88 -> $2,200.00** | $500/$350 rules | — | — | **$2,200.00** (DTP owner ladder) | 876.17 | 39.83% | **READY TO QUOTE** (note: below 40% target; meets 35% floor + $500 target) |
@@ -54,6 +54,25 @@ before -> after at 1,000: single **$577.59 @45% -> $705.95 @55%**
 (test-pinned in tests/margin-curve-equivalence.test.ts). Other families, DTP,
 and all non-bag fixtures are byte-identical. Research unit-price floors and
 market/crossover warnings arrive in later approved phases.
+
+### 15F.0K.3 — verified market targets for 4x5 bags (owner-approved 2026-07-26)
+
+Fixtures 8/9 changed a second time, DELIBERATELY: owner decision — standard
+4x5 sticker-applied bags normally target the VERIFIED competitor median, not
+a cost-based price materially below market. The market target is a
+RAISING-ONLY candidate (bags-4x5 / bags-4x5-double only; every other family
+rejected): 1,000 single **$705.95 -> $850.00** ($0.85/unit at the median,
+62.6% margin); 1,000 double **$1,112.54 -> $1,130.00** ($1.13/unit, 52.7%).
+Cost-based candidates and all COSTS unchanged. Targets are OFF (null) at
+5,000+ so they never hide the direct-print crossover — those tiers stay
+cost-based with a STRONG advisory + live Spektra DTP comparison; 2,500 shows
+the mild "price check" advisory. Researched floors ride along as
+negotiation-floor DISPLAY data (below-floor = stronger warning, never a
+block/raise). An explicit staff per-tier margin edit takes command: the
+target stops contending and below-target/below-negotiation-floor warnings
+show instead (margin floors + OWNER MARGIN OVERRIDE gate unchanged).
+Disabling the family on Pricing Settings restores the Stage-B outputs
+exactly (test-pinned in tests/market-targets.test.ts).
 
 ## K. Market calibration — stickers/labels + banner
 

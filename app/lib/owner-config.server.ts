@@ -25,14 +25,19 @@ import {
   FAMILY_COMMERCIAL_POLICIES,
   MARGIN_CURVE_CONFIGURABLE_KEYS,
   MARGIN_CURVE_VARIANT_BASE,
+  MARKET_TARGET_ALLOWED_KEYS,
   STICKER_MARKET_FLOOR_BANDS,
   defaultMarginCurvesValues,
+  defaultMarketTargetsValues,
   defaultPricingPolicyValues,
   defaultTierLaddersValues,
   type AreaFloorBand,
   type FamilyMarginCurveConfig,
+  type FamilyMarketTargets,
   type FamilyMoneyMap,
   type MarginCurvesValues,
+  type MarketTargetBand,
+  type MarketTargetsValues,
   type PricingPolicyValues,
   type TierLaddersValues,
 } from "./commercial-pricing-policy.server";
@@ -47,15 +52,18 @@ export const PRICING_AREA_FLOOR_BANDS_KEY = "ownerConfig.pricing.areaFloorBands"
 // 15F.0K.2-A: per-family margin bands + display tier ladders.
 export const PRICING_MARGIN_CURVES_KEY = "ownerConfig.pricing.marginCurves";
 export const PRICING_TIER_LADDERS_KEY = "ownerConfig.pricing.tierLadders";
+// 15F.0K.3: verified market targets (bags-4x5 families only).
+export const PRICING_MARKET_TARGETS_KEY = "ownerConfig.pricing.marketTargets";
 
 // The ONLY keys the resolver reads (pinned by test — unit-price floors are
-// still absent on purpose; they activate in a later approved phase).
+// still absent on purpose; owner decision K.3-1 keeps them inactive).
 export const PRICING_POLICY_KEYS = [
   PRICING_MIN_GROSS_PROFIT_KEY,
   PRICING_MIN_ORDER_TOTALS_KEY,
   PRICING_AREA_FLOOR_BANDS_KEY,
   PRICING_MARGIN_CURVES_KEY,
   PRICING_TIER_LADDERS_KEY,
+  PRICING_MARKET_TARGETS_KEY,
 ] as const;
 
 export type OwnerConfigSource = "owner_config" | "code_fallback" | "invalid_config_fallback";
@@ -250,7 +258,92 @@ export function validateTierLadders(payload: unknown): ValidationResult<TierLadd
   return { ok: true, value: { defaultLadder: defaultLadder.value, families: result } };
 }
 
-// ---------- key registry (K.1 + K.2-A) ----------
+// 15F.0K.3 market targets: { families: { bags-4x5 | bags-4x5-double:
+// { active, sourceDate, source, confidence, bands: [{minQty, low, median,
+// high, target, negotiationFloor, premiumTarget, crossover?}] } } }.
+// EXACTLY the two allowlisted keys — every other family (jars, DTP, direct
+// print, labels, banners, specialty, low-confidence) is REJECTED so market
+// pricing cannot silently spread. Numeric fields: null or finite > 0
+// <= $1000/unit; low <= median <= high; low <= target <= high when present
+// (target: null = candidate skipped — the crossover tiers). negotiationFloor
+// only needs to be <= high: the researched floor legitimately sits ABOVE
+// the collapsing median in the direct-print crossover squeeze. active must
+// be a boolean; bands 1..24, integer minQty strictly ascending from 1.
+const MAX_MARKET_BANDS = 24;
+const MAX_MARKET_UNIT_PRICE = 1000;
+
+function validMarketMoney(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value) && value > 0 && value <= MAX_MARKET_UNIT_PRICE);
+}
+
+function validateMarketFamily(key: string, entry: unknown): ValidationResult<FamilyMarketTargets> {
+  if (!isPlainObject(entry)) return { ok: false, reason: `"${key}" must be an object { active, sourceDate, source, confidence, bands }.` };
+  if (typeof entry.active !== "boolean") return { ok: false, reason: `"${key}": active must be true or false.` };
+  const sourceDate = String(entry.sourceDate ?? "").trim();
+  const source = String(entry.source ?? "").trim();
+  const confidence = String(entry.confidence ?? "").trim();
+  if (!sourceDate) return { ok: false, reason: `"${key}": sourceDate is required (when was the market data captured?).` };
+  if (!source) return { ok: false, reason: `"${key}": source is required.` };
+  if (!confidence || confidence.length > 40) return { ok: false, reason: `"${key}": confidence is required (max 40 chars).` };
+  const bands = entry.bands;
+  if (!Array.isArray(bands) || bands.length < 1) return { ok: false, reason: `"${key}": bands must be a non-empty array.` };
+  if (bands.length > MAX_MARKET_BANDS) return { ok: false, reason: `"${key}": no more than ${MAX_MARKET_BANDS} bands.` };
+  let lastMinQty = 0;
+  const cleanBands: MarketTargetBand[] = [];
+  for (let index = 0; index < bands.length; index += 1) {
+    const band = bands[index];
+    const where = `"${key}" band ${index + 1}`;
+    if (!isPlainObject(band)) return { ok: false, reason: `${where} must be an object.` };
+    const minQty = band.minQty;
+    if (typeof minQty !== "number" || !Number.isInteger(minQty) || minQty < 1) return { ok: false, reason: `${where}: minQty must be a positive integer.` };
+    if (index === 0 && minQty !== 1) return { ok: false, reason: `"${key}": the first band must start at minQty 1.` };
+    if (index > 0 && minQty <= lastMinQty) return { ok: false, reason: `${where}: minQty must be strictly ascending.` };
+    for (const field of ["low", "median", "high", "target", "negotiationFloor", "premiumTarget"] as const) {
+      if (!validMarketMoney(band[field] ?? null)) return { ok: false, reason: `${where}: ${field} must be null or a number between 0 and ${MAX_MARKET_UNIT_PRICE}.` };
+    }
+    const low = (band.low ?? null) as number | null;
+    const median = (band.median ?? null) as number | null;
+    const high = (band.high ?? null) as number | null;
+    const target = (band.target ?? null) as number | null;
+    const negotiationFloor = (band.negotiationFloor ?? null) as number | null;
+    if (low != null && median != null && low > median) return { ok: false, reason: `${where}: low must be <= median.` };
+    if (median != null && high != null && median > high) return { ok: false, reason: `${where}: median must be <= high.` };
+    if (target != null && low != null && target < low) return { ok: false, reason: `${where}: target must be >= market low.` };
+    if (target != null && high != null && target > high) return { ok: false, reason: `${where}: target must be <= market high.` };
+    // negotiationFloor is GSO's OWN floor, not a market statistic — in the
+    // direct-print crossover squeeze it legitimately sits above the entire
+    // collapsed market range (research data: single 10k floor 0.61 > high
+    // 0.60; double 10k floor 1.04 > high 0.93), so it is bound only by the
+    // positivity/cap check above, never by the market band.
+    const crossover = band.crossover == null ? null : band.crossover;
+    if (crossover !== null && crossover !== "mild" && crossover !== "strong") return { ok: false, reason: `${where}: crossover must be "mild", "strong", or absent.` };
+    cleanBands.push({ minQty, low, median, high, target, negotiationFloor, premiumTarget: (band.premiumTarget ?? null) as number | null, crossover });
+    lastMinQty = minQty;
+  }
+  return { ok: true, value: { active: entry.active, sourceDate, source, confidence, bands: cleanBands } };
+}
+
+export function validateMarketTargets(payload: unknown): ValidationResult<MarketTargetsValues> {
+  if (!isPlainObject(payload) || !isPlainObject(payload.families)) return { ok: false, reason: "Payload must be an object { families: { ... } }." };
+  const families = payload.families as Record<string, unknown>;
+  for (const key of Object.keys(families)) {
+    if (!MARKET_TARGET_ALLOWED_KEYS.includes(key)) {
+      return { ok: false, reason: `Market targets are not allowed for "${key}" — only verified standard 4x5 sticker-applied bag families (${MARKET_TARGET_ALLOWED_KEYS.join(", ")}) may carry market pricing.` };
+    }
+  }
+  for (const key of MARKET_TARGET_ALLOWED_KEYS) {
+    if (!(key in families)) return { ok: false, reason: `Missing market-target family "${key}" (set active:false to disable it — never delete the entry).` };
+  }
+  const result: Record<string, FamilyMarketTargets> = {};
+  for (const [key, entry] of Object.entries(families)) {
+    const validated = validateMarketFamily(key, entry);
+    if (!validated.ok) return validated;
+    result[key] = validated.value;
+  }
+  return { ok: true, value: { families: result } };
+}
+
+// ---------- key registry (K.1 + K.2-A + K.3) ----------
 
 export type OwnerConfigKeyDefinition = {
   key: string;
@@ -295,6 +388,13 @@ export const OWNER_CONFIG_KEY_DEFINITIONS: OwnerConfigKeyDefinition[] = [
     description: "Default tier-table quantities per calculator family when no manual list is entered. The DTP ladder is code-only. Code fallback: [64, 128, 256, 640, 1000] for every family.",
     validate: validateTierLadders,
     codeFallback: () => defaultTierLaddersValues(),
+  },
+  {
+    key: PRICING_MARKET_TARGETS_KEY,
+    label: "Pricing — verified market targets (4x5 sticker-applied bags only)",
+    description: "Raising-only market-target price candidate + negotiation-floor display data for bags-4x5 / bags-4x5-double. target null = candidate skipped (crossover tiers). Code fallback: the 2026-07-26 competitor study values, ACTIVE.",
+    validate: validateMarketTargets,
+    codeFallback: () => defaultMarketTargetsValues(),
   },
 ];
 
@@ -387,6 +487,7 @@ export async function resolvePricingPolicyConfig(dbClient: any, shop: string): P
     areaFloorBands: resolutions[PRICING_AREA_FLOOR_BANDS_KEY].value as AreaFloorBand[],
     marginCurves: resolutions[PRICING_MARGIN_CURVES_KEY].value as MarginCurvesValues,
     tierLadders: resolutions[PRICING_TIER_LADDERS_KEY].value as TierLaddersValues,
+    marketTargets: resolutions[PRICING_MARKET_TARGETS_KEY].value as MarketTargetsValues,
   };
   return { values, resolutions };
 }

@@ -1464,3 +1464,37 @@ margin-curve-equivalence suite restructured: non-bag equivalence still
 enforced per boundary; new Stage-B pins (exact curve values, side spread,
 64-unit unchanged, no-decrease proof, cleared-config fallback). Tests 698
 -> 706; build clean; tsc 306 = baseline; no migration.
+
+## Patch 15F.0K.3 — verified market targets for 4x5 bags (2026-07-26)
+Owner decision implemented: standard 4x5 sticker-applied bags normally
+target the VERIFIED competitor median — a RAISING-ONLY market-target
+candidate in the commercial max() for EXACTLY bags-4x5 + bags-4x5-double
+(validator rejects every other family; jars/DTP/direct-print/labels/
+banners/specialty carry no market pricing). NEW key
+ownerConfig.pricing.marketTargets (active/sourceDate/source/confidence per
+family; bands minQty/low/median/high/target/negotiationFloor/premiumTarget/
+crossover; strict validation, fail-closed to the ACTIVE code defaults from
+the 2026-07-26 study). Shipped ACTIVE: anchors at 1,000 = single $0.85/unit
+($850.00; cost-based candidate 705.95 unchanged) and double $1.13/unit
+($1,130.00; cost-based 1,112.54). Targets are NULL at 5,000+ so they never
+hide the direct-print crossover — cost-based pricing + STRONG advisory +
+LIVE Spektra DTP 4x5x2 comparison (ownerPriceForQuantity, display only, no
+auto-conversion); 2,500 = mild "price check" advisory. Researched floors =
+negotiation-floor DISPLAY data only (below-floor -> stronger warning; never
+a block or auto-raise — owner decision keeps unit floors inactive). An
+explicit staff per-tier margin edit takes command: the target stops
+contending and below-target/below-negotiation-floor badges show
+(marketPosition block on every commercial result + quote snapshot);
+margin floors and the OWNER MARGIN OVERRIDE gate unchanged. Disabling a
+family restores Stage-B outputs exactly (test-pinned). UI: tier-row market
+line + AT MARKET TARGET / ABOVE MARKET / BELOW MARKET TARGET / BELOW
+NEGOTIATION FLOOR badges, customer-summary market-position line, crossover
+banner, Pricing Settings market-target editor. Candidate validator lesson:
+negotiationFloor is GSO's own floor and legitimately exceeds the collapsed
+market band at crossover tiers — bounded only by positivity/cap. Fixture
+book rows 8/9 updated (second deliberate bag change, documented); DTP/
+jars/stickers/banners and all COST pins byte-identical. Tests 706 -> 722
+(new tests/market-targets.test.ts: anchors, raising-only proof,
+disable-restores-Stage-B, allowlist, crossover skip, warnings-never-price,
+override-takes-command, validator + squeeze-data acceptance, fail-closed
+fallback, resolver); build clean; tsc 306 = baseline; no migration.

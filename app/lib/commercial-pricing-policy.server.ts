@@ -249,16 +249,124 @@ export function resolveMarginPctForQuantity(
   return Math.max(MARGIN_FLOOR_PCT, 40);
 }
 
+// ---------- 15F.0K.3: verified market targets (owner-approved 2026-07-26) ----------
+// OWNER DECISION: standard 4x5 sticker-applied bags normally target the
+// VERIFIED competitor median — the market target is a RAISING-ONLY price
+// candidate inside max() for exactly two allowlisted families
+// (bags-4x5 / bags-4x5-double). It can never lower the cost-based price;
+// every other family is validator-rejected (jars, DTP, direct print,
+// labels, banners, specialty = no market pricing). `target: null` on a band
+// skips the candidate — used at the 5,000+ direct-print CROSSOVER tiers so
+// a sticker-bag target never hides the crossover (advisories + the live
+// Spektra DTP comparison surface it instead). The researched floors ride
+// along as NEGOTIATION-FLOOR DISPLAY DATA ONLY (below-floor = stronger
+// warning, never a block, never an automatic raise — owner decision:
+// existing cost/margin/override protections remain authoritative).
+export type MarketTargetBand = {
+  minQty: number;
+  low: number | null;
+  median: number | null;
+  high: number | null;
+  target: number | null; // per-unit candidate value; null = candidate skipped
+  negotiationFloor: number | null; // display/warning datum, NEVER a candidate
+  premiumTarget: number | null; // display-only reference (finish work, later phases)
+  crossover?: "mild" | "strong" | null;
+};
+export type FamilyMarketTargets = {
+  active: boolean;
+  sourceDate: string;
+  source: string;
+  confidence: string;
+  bands: MarketTargetBand[];
+};
+export type MarketTargetsValues = { families: Record<string, FamilyMarketTargets> };
+
+export const MARKET_TARGET_ALLOWED_KEYS = ["bags-4x5", "bags-4x5-double"];
+export const MARKET_TARGET_SOURCE = "GSO normalized competitor pricing study (2026-07-26)";
+
+const BAGS_4X5_SINGLE_MARKET_BANDS: MarketTargetBand[] = [
+  { minQty: 1, low: 0.89, median: 1.35, high: 1.43, target: 1.35, negotiationFloor: 1.22, premiumTarget: 1.6 },
+  { minQty: 128, low: 0.79, median: 1.2, high: 1.27, target: 1.2, negotiationFloor: 1.04, premiumTarget: 1.37 },
+  { minQty: 256, low: 0.7, median: 1.07, high: 1.13, target: 1.07, negotiationFloor: 0.91, premiumTarget: 1.18 },
+  { minQty: 500, low: 0.63, median: 0.95, high: 1.01, target: 0.95, negotiationFloor: 0.81, premiumTarget: 1.01 },
+  { minQty: 640, low: 0.6, median: 0.91, high: 0.96, target: 0.91, negotiationFloor: 0.78, premiumTarget: 1.0 },
+  { minQty: 1000, low: 0.56, median: 0.85, high: 0.89, target: 0.85, negotiationFloor: 0.72, premiumTarget: 0.94 },
+  { minQty: 1500, low: 0.52, median: 0.79, high: 0.83, target: 0.79, negotiationFloor: 0.67, premiumTarget: 0.86 },
+  { minQty: 2000, low: 0.5, median: 0.75, high: 0.79, target: 0.75, negotiationFloor: 0.64, premiumTarget: 0.86 },
+  { minQty: 2500, low: 0.48, median: 0.72, high: 0.77, target: 0.72, negotiationFloor: 0.64, premiumTarget: 0.86, crossover: "mild" },
+  { minQty: 5000, low: 0.42, median: 0.64, high: 0.68, target: null, negotiationFloor: 0.61, premiumTarget: 0.82, crossover: "strong" },
+  { minQty: 10000, low: 0.38, median: 0.57, high: 0.6, target: null, negotiationFloor: 0.61, premiumTarget: 0.81, crossover: "strong" },
+];
+const BAGS_4X5_DOUBLE_MARKET_BANDS: MarketTargetBand[] = [
+  { minQty: 1, low: 1.78, median: 1.79, high: 2.15, target: 1.79, negotiationFloor: 1.7, premiumTarget: 2.19 },
+  { minQty: 128, low: 1.59, median: 1.59, high: 1.92, target: 1.59, negotiationFloor: 1.54, premiumTarget: 1.98 },
+  { minQty: 256, low: 1.41, median: 1.42, high: 1.71, target: 1.42, negotiationFloor: 1.37, premiumTarget: 1.78 },
+  { minQty: 500, low: 1.26, median: 1.27, high: 1.53, target: 1.27, negotiationFloor: 1.21, premiumTarget: 1.56 },
+  { minQty: 640, low: 1.21, median: 1.22, high: 1.47, target: 1.22, negotiationFloor: 1.2, premiumTarget: 1.55 },
+  { minQty: 1000, low: 1.13, median: 1.13, high: 1.36, target: 1.13, negotiationFloor: 1.09, premiumTarget: 1.47 },
+  { minQty: 1500, low: 1.05, median: 1.06, high: 1.27, target: 1.06, negotiationFloor: 1.05, premiumTarget: 1.36 },
+  { minQty: 2000, low: 1.0, median: 1.01, high: 1.21, target: 1.01, negotiationFloor: 1.04, premiumTarget: 1.36 },
+  { minQty: 2500, low: 0.97, median: 0.97, high: 1.17, target: 0.97, negotiationFloor: 1.04, premiumTarget: 1.36, crossover: "mild" },
+  { minQty: 5000, low: 0.86, median: 0.87, high: 1.04, target: null, negotiationFloor: 1.04, premiumTarget: 1.3, crossover: "strong" },
+  { minQty: 10000, low: 0.77, median: 0.77, high: 0.93, target: null, negotiationFloor: 1.04, premiumTarget: 1.3, crossover: "strong" },
+];
+
+// ACTIVE by default (owner decision 2): disable or edit via
+// ownerConfig.pricing.marketTargets on Pricing Settings.
+export function defaultMarketTargetsValues(): MarketTargetsValues {
+  return {
+    families: {
+      "bags-4x5": { active: true, sourceDate: "2026-07-26", source: MARKET_TARGET_SOURCE, confidence: "medium", bands: BAGS_4X5_SINGLE_MARKET_BANDS.map((band) => ({ ...band })) },
+      "bags-4x5-double": { active: true, sourceDate: "2026-07-26", source: MARKET_TARGET_SOURCE, confidence: "medium", bands: BAGS_4X5_DOUBLE_MARKET_BANDS.map((band) => ({ ...band })) },
+    },
+  };
+}
+
+// Last band whose minQty <= quantity, from the family's ACTIVE entry only.
+// No variant fallback on purpose: double-sided market data is NOT single-
+// sided data — an absent/inactive family simply has no market layer.
+export function marketTargetBandFor(values: PricingPolicyValues, curveKey: string | null | undefined, quantity: number): MarketTargetBand | null {
+  const key = String(curveKey || "") || null;
+  if (!key) return null;
+  const family = values.marketTargets.families[key];
+  if (!family || !family.active || !family.bands.length) return null;
+  const qty = Math.max(1, Math.floor(quantity));
+  let found: MarketTargetBand | null = null;
+  for (const band of family.bands) {
+    if (qty >= band.minQty) found = band;
+  }
+  return found;
+}
+
+export type MarketPosition = {
+  familyKey: string;
+  bandMinQty: number;
+  low: number | null;
+  median: number | null;
+  high: number | null;
+  targetUnit: number | null;
+  negotiationFloorUnit: number | null;
+  premiumTargetUnit: number | null;
+  crossover: "mild" | "strong" | null;
+  finalVsMedianPct: number | null; // (finalUnit/median - 1) * 100
+  aboveMarket: boolean; // final unit > median * 1.10
+  belowTarget: boolean; // final unit < target (allowed; warning only)
+  belowNegotiationFloor: boolean; // final unit < negotiation floor (stronger warning only)
+  targetApplied: boolean; // the market-target candidate is the controlling rule
+};
+
 export type PricingPolicyValues = {
   minimumGrossProfit: FamilyMoneyMap;
   minimumOrderTotals: FamilyMoneyMap;
-  // K.1: unit-price floors stay all-null (current behavior) — the resolver
-  // never reads a config key for them until unit floors are activated.
+  // Unit-price floors stay all-null — K.3 owner decision 1: the researched
+  // floors are negotiation-floor DISPLAY data, never a hard candidate.
   minimumUnitPrices: FamilyMoneyMap;
   areaFloorBands: AreaFloorBand[];
   // 15F.0K.2-A: per-family margin bands + display tier ladders.
   marginCurves: MarginCurvesValues;
   tierLadders: TierLaddersValues;
+  // 15F.0K.3: verified market targets (bags-4x5 families only).
+  marketTargets: MarketTargetsValues;
 };
 
 export function defaultPricingPolicyValues(): PricingPolicyValues {
@@ -277,6 +385,7 @@ export function defaultPricingPolicyValues(): PricingPolicyValues {
     areaFloorBands: STICKER_MARKET_FLOOR_BANDS.map((band) => ({ ...band })),
     marginCurves: defaultMarginCurvesValues(),
     tierLadders: defaultTierLaddersValues(),
+    marketTargets: defaultMarketTargetsValues(),
   };
 }
 
@@ -290,6 +399,8 @@ export type CommercialCandidates = {
   minimumUnitPriceTotal: number | null;
   ownerMarketLadderPrice: number | null;
   premiumFinishFloorPrice: number | null;
+  // 15F.0K.3: verified market target (bags-4x5 families only; raising-only)
+  verifiedMarketTargetPrice: number | null;
 };
 
 export type CommercialPriceResult = {
@@ -306,6 +417,9 @@ export type CommercialPriceResult = {
   controllingRule: string;
   achievedProfit: number;
   achievedMarginPct: number;
+  // 15F.0K.3: market context for badges/snapshots — INFORMATION ONLY, never
+  // feeds back into the price (warnings never alter price; test-pinned).
+  marketPosition: MarketPosition | null;
 };
 
 // One quote -> one customer-ready price. `marginRule` = the resolved
@@ -377,6 +491,16 @@ export function computeCommercialPrice(input: {
   // candidate slot for stickers & labels (provisional research anchors).
   const ownerMarketLadderPrice = input.ownerMarketLadderTotal
     ?? (input.familyKey === "stickers-labels" ? stickerMarketFloorPrice(input.finishedSqft ?? 0, input.setupTotal ?? 0, values.areaFloorBands) : null);
+  // 15F.0K.3: verified market target — allowlisted bag families only; a null
+  // band target (crossover tiers) or inactive family skips the candidate.
+  // OWNER RULE: quotes below target stay ALLOWED with a warning — so an
+  // EXPLICIT staff per-tier margin edit (Advanced Pricing Controls) takes
+  // command: the target stops contending and becomes advisory (the
+  // below-target / below-negotiation-floor badges fire via marketPosition).
+  // The margin floors and the OWNER MARGIN OVERRIDE gate stay authoritative.
+  const staffMarginOverrideActive = input.marginPctOverride != null && Number.isFinite(input.marginPctOverride) && input.marginPctOverride > 0;
+  const marketBand = marketTargetBandFor(values, curveKey, quantity);
+  const verifiedMarketTargetPrice = !suppress && !staffMarginOverrideActive && marketBand?.target != null ? marketBand.target * quantity : null;
 
   const contenders: Array<{ rule: string; price: number | null }> = [
     { rule: `Cost-based price — ${baseMarginPct}% quantity-band margin`, price: costBasedPrice },
@@ -385,6 +509,7 @@ export function computeCommercialPrice(input: {
     { rule: "Minimum unit price (owner)", price: minimumUnitPriceTotal },
     { rule: input.familyKey === "stickers-labels" && input.ownerMarketLadderTotal == null ? "Sticker market floor (area-banded, provisional research anchors)" : "Owner market price ladder", price: ownerMarketLadderPrice },
     { rule: "Premium finish floor (spot-gloss researched curve)", price: premiumFinishFloorPrice },
+    { rule: "Verified market target (owner config)", price: verifiedMarketTargetPrice },
   ];
   let finalTotalPrice = 0;
   let controllingRule = contenders[0].rule;
@@ -413,12 +538,35 @@ export function computeCommercialPrice(input: {
       minimumUnitPriceTotal,
       ownerMarketLadderPrice,
       premiumFinishFloorPrice,
+      verifiedMarketTargetPrice,
     },
     finalTotalPrice,
     finalUnitPrice: quantity > 0 ? finalTotalPrice / quantity : finalTotalPrice,
     controllingRule,
     achievedProfit,
     achievedMarginPct,
+    // 15F.0K.3: computed AFTER price selection — display/snapshot info only.
+    marketPosition: marketBand
+      ? (() => {
+          const finalUnit = quantity > 0 ? finalTotalPrice / quantity : finalTotalPrice;
+          return {
+            familyKey: String(curveKey || input.familyKey),
+            bandMinQty: marketBand.minQty,
+            low: marketBand.low,
+            median: marketBand.median,
+            high: marketBand.high,
+            targetUnit: marketBand.target,
+            negotiationFloorUnit: marketBand.negotiationFloor,
+            premiumTargetUnit: marketBand.premiumTarget,
+            crossover: marketBand.crossover ?? null,
+            finalVsMedianPct: marketBand.median != null && marketBand.median > 0 ? ((finalUnit / marketBand.median) - 1) * 100 : null,
+            aboveMarket: marketBand.median != null && finalUnit > marketBand.median * 1.1,
+            belowTarget: marketBand.target != null && finalUnit < marketBand.target - 1e-9,
+            belowNegotiationFloor: marketBand.negotiationFloor != null && finalUnit < marketBand.negotiationFloor - 1e-9,
+            targetApplied: controllingRule === "Verified market target (owner config)",
+          };
+        })()
+      : null,
   };
 }
 

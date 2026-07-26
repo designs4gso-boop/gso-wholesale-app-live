@@ -6,6 +6,7 @@ import {
   OWNER_CONFIG_MIN_NOTE_LENGTH,
   PRICING_AREA_FLOOR_BANDS_KEY,
   PRICING_MARGIN_CURVES_KEY,
+  PRICING_MARKET_TARGETS_KEY,
   PRICING_MIN_GROSS_PROFIT_KEY,
   PRICING_MIN_ORDER_TOTALS_KEY,
   PRICING_TIER_LADDERS_KEY,
@@ -19,6 +20,7 @@ import {
   FAMILY_COMMERCIAL_POLICIES,
   MARGIN_CURVE_CONFIGURABLE_KEYS,
   MARGIN_CURVE_VARIANT_BASE,
+  MARKET_TARGET_ALLOWED_KEYS,
   defaultPricingPolicyValues,
 } from "../lib/commercial-pricing-policy.server";
 import { FAMILY_MARGIN_RULES } from "../lib/calculator-emergency.server";
@@ -60,9 +62,48 @@ export async function loader({ request }: { request: Request }) {
       areaFloorBands: PRICING_AREA_FLOOR_BANDS_KEY,
       marginCurves: PRICING_MARGIN_CURVES_KEY,
       tierLadders: PRICING_TIER_LADDERS_KEY,
+      marketTargets: PRICING_MARKET_TARGETS_KEY,
     },
+    // 15F.0K.3: only verified standard 4x5 bag families may carry market targets.
+    marketTargetFamilies: [
+      { key: "bags-4x5", label: "4x5 sticker bags — single-sided" },
+      { key: "bags-4x5-double", label: "4x5 sticker bags — double-sided" },
+    ],
     maxBandRows: MAX_BAND_ROWS,
+    maxMarketBandRows: MAX_MARKET_BAND_ROWS,
   };
+}
+
+const MAX_MARKET_BAND_ROWS = 12;
+
+function parseMarketTargetsForm(form: FormData): unknown {
+  const families: Record<string, unknown> = {};
+  for (const key of MARKET_TARGET_ALLOWED_KEYS) {
+    const bands: unknown[] = [];
+    for (let index = 0; index < MAX_MARKET_BAND_ROWS; index += 1) {
+      const minRaw = String(form.get(`mt_${key}_min_${index}`) ?? "").trim();
+      if (minRaw === "") continue; // untouched row
+      const num = (name: string) => {
+        const raw = String(form.get(`mt_${key}_${name}_${index}`) ?? "").trim();
+        return raw === "" ? null : Number(raw); // NaN flows to the validator
+      };
+      const crossRaw = String(form.get(`mt_${key}_cross_${index}`) ?? "").trim();
+      bands.push({
+        minQty: Number(minRaw),
+        low: num("low"), median: num("med"), high: num("high"),
+        target: num("tgt"), negotiationFloor: num("nf"), premiumTarget: num("prem"),
+        crossover: crossRaw === "mild" || crossRaw === "strong" ? crossRaw : null,
+      });
+    }
+    families[key] = {
+      active: String(form.get(`mt_${key}_active`) ?? "") === "on",
+      sourceDate: String(form.get(`mt_${key}_sourcedate`) ?? "").trim(),
+      source: String(form.get(`mt_${key}_source`) ?? "").trim(),
+      confidence: String(form.get(`mt_${key}_confidence`) ?? "").trim(),
+      bands,
+    };
+  }
+  return { families };
 }
 
 // "1:65, 128:58, 256:52" -> [{minQty:1,targetPct:65}, ...]; malformed tokens
@@ -156,7 +197,9 @@ export async function action({ request }: { request: Request }) {
         ? parseMarginCurvesForm(form)
         : key === PRICING_TIER_LADDERS_KEY
           ? parseTierLaddersForm(form, familyKeys)
-          : parseMoneyMapForm(form, familyKeys);
+          : key === PRICING_MARKET_TARGETS_KEY
+            ? parseMarketTargetsForm(form)
+            : parseMoneyMapForm(form, familyKeys);
     const result = await saveOwnerConfigKey(db, { shop, key, payload, note, actor });
     return Response.json(result);
   }
@@ -278,7 +321,7 @@ function MoneyMapSection({ title, keyName, resolution, effective, defaults, fami
 }
 
 export default function PricingSettings() {
-  const { resolutions, effective, defaults, families, marginFamilies, marginVariants, minNoteLength, keys, maxBandRows } = useLoaderData<typeof loader>();
+  const { resolutions, effective, defaults, families, marginFamilies, marginVariants, marketTargetFamilies, minNoteLength, keys, maxBandRows, maxMarketBandRows } = useLoaderData<typeof loader>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -310,8 +353,9 @@ export default function PricingSettings() {
         <b>What is editable (15F.0K.1 + 15F.0K.2 Stage A)</b>
         <ul style={{ fontSize: 13, margin: "6px 0 0", paddingLeft: 20, lineHeight: 1.8 }}>
           <li>Minimum gross-profit floors, minimum order totals, and the sticker area-floor bands (15F.0K.1).</li>
-          <li>Per-family margin curves (quantity bands) and displayed tier quantity ladders (15F.0K.2 Stage A) — defaults reproduce today's behavior exactly; the approved research values load in a separate reviewed step.</li>
-          <li><b>Not yet editable</b> (later phases, deliberately): minimum unit-price floors, market targets and crossover warnings (15F.0K.3), rounding and override rules (15F.0K.3/4).</li>
+          <li>Per-family margin curves (quantity bands) and displayed tier quantity ladders (15F.0K.2).</li>
+          <li>Verified market targets for standard 4x5 sticker-applied bags (15F.0K.3) — raising-only candidate + negotiation-floor display data + crossover flags; ACTIVE by owner decision 2026-07-26.</li>
+          <li><b>Not yet editable</b> (later phases, deliberately): minimum unit-price floors (kept inactive by owner decision), rounding and override rules (15F.0K.4).</li>
           <li>DTP pouch pricing (owner ladders, floors, margin thresholds, design fees) is completely untouched by this page — DTP keys are rejected by validation.</li>
           <li>Changing a value here changes live quote prices for new calculations. Historical quotes and snapshots are never rewritten.</li>
         </ul>
@@ -463,6 +507,83 @@ export default function PricingSettings() {
           </div>
         </Form>
         <EnvelopeActions keyName={keys.tierLadders} resolution={resolutions[keys.tierLadders]} busy={busy} />
+      </section>
+
+      <section style={card}>
+        <h2 style={{ margin: "0 0 6px" }}>Verified market targets — 4x5 sticker-applied bags ONLY (15F.0K.3)</h2>
+        <SourceBadge resolution={resolutions[keys.marketTargets]} />
+        <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
+          Owner decision 2026-07-26: standard 4x5 sticker-applied bags normally target the verified competitor median.
+          The <b>Target</b> column is a <b>raising-only</b> price candidate (it can never lower the cost-based price);
+          blank Target = candidate OFF for that band (used at the 5,000+ direct-print crossover tiers). <b>Neg. floor</b>
+          is display/warning data only — it never blocks and never auto-raises. Only these two verified families may
+          carry market targets; every other family is rejected by validation. Untick Active to disable a family
+          entirely (restores pure cost-based pricing).
+        </p>
+        <Form method="post">
+          <input type="hidden" name="intent" value="save" />
+          <input type="hidden" name="key" value={keys.marketTargets} />
+          {marketTargetFamilies.map((family) => {
+            const entry = effective.marketTargets.families[family.key];
+            return (
+              <div key={family.key} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, marginBottom: 12 }}>
+                <div style={{ display: "flex", gap: 14, alignItems: "end", flexWrap: "wrap", marginBottom: 8 }}>
+                  <b style={{ fontSize: 13 }}>{family.label}</b>
+                  <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center" }}>
+                    <input type="checkbox" name={`mt_${family.key}_active`} defaultChecked={entry ? entry.active : false} /> Active
+                  </label>
+                  <label style={{ fontSize: 12 }}>Source date<input name={`mt_${family.key}_sourcedate`} defaultValue={entry?.sourceDate || ""} style={{ ...inputStyle, width: 120 }} /></label>
+                  <label style={{ fontSize: 12 }}>Source<input name={`mt_${family.key}_source`} defaultValue={entry?.source || ""} style={{ ...inputStyle, width: 320 }} /></label>
+                  <label style={{ fontSize: 12 }}>Confidence<input name={`mt_${family.key}_confidence`} defaultValue={entry?.confidence || ""} style={{ ...inputStyle, width: 110 }} /></label>
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: "#f3f4f6" }}>
+                        <th style={{ padding: 4, textAlign: "left" }}>Min qty</th><th>Mkt low</th><th>Median</th><th>Mkt high</th>
+                        <th>Target (candidate)</th><th>Neg. floor</th><th>Premium tgt</th><th>Crossover</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.from({ length: maxMarketBandRows }, (_v, index) => {
+                        const band = entry?.bands?.[index];
+                        const cell = (name: string, value: number | null | undefined, width = 84) => (
+                          <td style={{ padding: 3 }}><input name={`mt_${family.key}_${name}_${index}`} defaultValue={value == null ? "" : String(value)} inputMode="decimal" style={{ ...inputStyle, width, padding: 6 }} /></td>
+                        );
+                        return (
+                          <tr key={index} style={{ borderTop: "1px solid #e5e7eb" }}>
+                            {cell("min", band?.minQty, 76)}
+                            {cell("low", band?.low)}
+                            {cell("med", band?.median)}
+                            {cell("high", band?.high)}
+                            {cell("tgt", band?.target)}
+                            {cell("nf", band?.negotiationFloor)}
+                            {cell("prem", band?.premiumTarget)}
+                            <td style={{ padding: 3 }}>
+                              <select name={`mt_${family.key}_cross_${index}`} defaultValue={band?.crossover || ""} style={{ ...inputStyle, width: 92, padding: 6 }}>
+                                <option value="">none</option>
+                                <option value="mild">mild</option>
+                                <option value="strong">strong</option>
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+          <label style={{ display: "block", fontSize: 13, marginTop: 6, maxWidth: 640 }}>
+            Change note (required, min {minNoteLength} characters)
+            <input name="note" style={inputStyle} placeholder="e.g. Refreshed market medians after Q4 competitor re-check" />
+          </label>
+          <div style={{ marginTop: 10 }}>
+            <button type="submit" style={buttonStyle} disabled={busy}>Save market targets</button>
+          </div>
+        </Form>
+        <EnvelopeActions keyName={keys.marketTargets} resolution={resolutions[keys.marketTargets]} busy={busy} />
       </section>
 
       <section style={card}>

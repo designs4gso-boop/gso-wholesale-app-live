@@ -286,7 +286,8 @@ describe("15F.0K.2-B deliberate bag calibration (exact prices; no decreases)", (
     };
   }
 
-  // Stage-A translation of the untouched positional rule = the pre-B behavior.
+  // Stage-A translation of the untouched positional rule, with the K.3
+  // market targets deactivated = the exact pre-Stage-B behavior baseline.
   function stageAValues() {
     const values = defaultPricingPolicyValues();
     values.marginCurves.families["bags-4x5"] = {
@@ -294,6 +295,7 @@ describe("15F.0K.2-B deliberate bag calibration (exact prices; no decreases)", (
       bands: bagsRule.curve.map((targetPct, index) => ({ minQty: EQUIVALENT_BAND_MIN_QTYS[index], targetPct })),
     };
     delete values.marginCurves.families["bags-4x5-double"];
+    for (const key of Object.keys(values.marketTargets.families)) values.marketTargets.families[key].active = false;
     return values;
   }
 
@@ -310,16 +312,19 @@ describe("15F.0K.2-B deliberate bag calibration (exact prices; no decreases)", (
     expect(computeProductDrivenCost(bagInput({ quantity: 1000, facesPerUnit: 2 })).totalCost).toBeCloseTo(534.0188, 3);
   });
 
-  it("exact calibrated prices at 1,000 (the fixture-book anchors): single 577.59 -> 705.95 @55%; double 970.94 -> 1112.54 @52%", () => {
+  it("exact anchors at 1,000: Stage-B cost-based candidates 705.95/1112.54; K.3 market target lifts the FINAL to $850.00 / $1,130.00", () => {
     const single = priceAt(1, 1000, defaults);
     expect(single.result.marginPctApplied).toBe(55);
-    expect(single.result.finalTotalPrice).toBeCloseTo(single.cost / 0.45, 10);
-    expect(single.result.finalTotalPrice).toBeCloseTo(705.9468, 3);
-    expect(single.result.controllingRule).toContain("Cost-based");
+    expect(single.result.candidates.costBasedPrice).toBeCloseTo(single.cost / 0.45, 10);
+    expect(single.result.candidates.costBasedPrice).toBeCloseTo(705.9468, 3); // Stage-B cost-based (unchanged by K.3)
+    expect(single.result.finalTotalPrice).toBeCloseTo(850, 6); // owner-approved: $0.85/unit at 1,000
+    expect(single.result.controllingRule).toBe("Verified market target (owner config)");
     const double = priceAt(2, 1000, defaults);
     expect(double.result.marginPctApplied).toBe(52);
-    expect(double.result.finalTotalPrice).toBeCloseTo(double.cost / 0.48, 10);
-    expect(double.result.finalTotalPrice).toBeCloseTo(1112.5392, 3);
+    expect(double.result.candidates.costBasedPrice).toBeCloseTo(double.cost / 0.48, 10);
+    expect(double.result.candidates.costBasedPrice).toBeCloseTo(1112.5392, 3);
+    expect(double.result.finalTotalPrice).toBeCloseTo(1130, 6); // owner-approved: $1.13/unit at 1,000
+    expect(double.result.controllingRule).toBe("Verified market target (owner config)");
   });
 
   it("64-unit prices are UNCHANGED from pre-B behavior on both sides (owner rule)", () => {

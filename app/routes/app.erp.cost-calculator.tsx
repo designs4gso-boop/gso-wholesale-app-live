@@ -32,7 +32,7 @@ import { calculatorFamilies, calculatorFamilyValues, familyByKeyOrAlias } from "
 import { resolveProductDisplayName } from "../lib/commercial-name-resolver.server";
 import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { officialMoqForFamily } from "../lib/product-family-sales-rules";
-import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
+import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, ownerPriceForQuantity, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -1124,7 +1124,7 @@ export async function loader({ request }: { request: Request }) {
           freightSource: tierFreight.source,
           setupTotal: run.setupTotal,
           blockers: run.missing,
-          commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP },
+          commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP, marketPosition: commercial.marketPosition }, // 15F.0K.3
           status: run.missing.length ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
         };
       });
@@ -1279,6 +1279,14 @@ export async function loader({ request }: { request: Request }) {
       // reloads; the save form posts the same GET state via psearch).
       tiers: productTiers,
       requestedQty: requestedQtyP,
+      // 15F.0K.3: live Spektra DTP comparison for the bag crossover advisory
+      // (display only — the owner chooses the product; nothing converts).
+      dtpCrossoverCompare: pFamily && canonicalUiFamily(pFamily) === "sticker-bags" && requestedQtyP >= 2500
+        ? (() => {
+            const ladder = ownerPriceForQuantity("spektra-dtp-4x5x2", requestedQtyP);
+            return ladder.unitPrice != null ? { qty: requestedQtyP, unitPrice: ladder.unitPrice, total: ladder.unitPrice * requestedQtyP, tierUsed: ladder.tierUsed } : null;
+          })()
+        : null,
       marginFamily: productMarginRule
         ? { key: productMarginRule.key, label: productMarginRule.label, curve: productMarginRule.curve, minPct: productMarginRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
         : { key: productMarginKey || "", label: "FAMILY MARGIN RULE NOT CONFIGURED", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
@@ -1759,7 +1767,7 @@ export async function action({ request }: { request: Request }) {
         unitPrice: commercial.finalUnitPrice, totalPrice: commercial.finalTotalPrice, profit: commercial.achievedProfit, actualMarginPct: commercial.achievedMarginPct, belowFloor,
         draftOnly: run.missing.length > 0, freightTotal: tierFreight.total, freightSource: tierFreight.source, setupTotal: run.setupTotal,
         blockers: run.missing,
-        commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave },
+        commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave, marketPosition: commercial.marketPosition }, // 15F.0K.3
         status: run.missing.length ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
       };
     });
@@ -1926,6 +1934,8 @@ export async function action({ request }: { request: Request }) {
         marginSource: savedSelectedTier.commercial.marginSource,
         premiumApplied: savedSelectedTier.commercial.premiumApplied,
         candidates: savedSelectedTier.commercial.candidates,
+        // 15F.0K.3: market context recorded with the quote (info only)
+        marketPosition: savedSelectedTier.commercial.marketPosition ?? null,
         finalTotalPrice: savedSelectedTier.totalPrice,
         finalUnitPrice: savedSelectedTier.unitPrice,
         achievedProfit: savedSelectedTier.profit,
@@ -3308,6 +3318,22 @@ function ProductTiers() {
                   <td style={{ color: tier.draftOnly || tier.belowFloor ? "#991b1b" : "#166534", fontWeight: 700 }}>
                     {tier.status}
                     {tier.commercial && !tier.draftOnly ? <div style={{ fontWeight: 400, color: "#6b7280", fontSize: 11 }}>{tier.commercial.controllingRule}</div> : null}
+                    {/* 15F.0K.3: market position line + badges (info only — never changes price) */}
+                    {tier.commercial?.marketPosition && !tier.draftOnly ? (() => {
+                      const pos = tier.commercial.marketPosition;
+                      return (
+                        <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2 }}>
+                          <span style={{ color: "#6b7280" }}>
+                            Mkt med {pos.median != null ? money2(pos.median) : "—"}
+                            {pos.targetUnit != null ? ` · target ${money2(pos.targetUnit)}` : " · target OFF (crossover)"}
+                            {pos.negotiationFloorUnit != null ? ` · neg. floor ${money2(pos.negotiationFloorUnit)}` : ""}
+                          </span>
+                          {pos.targetApplied ? <span style={{ color: "#166534", fontWeight: 700 }}> AT MARKET TARGET</span> : null}
+                          {pos.aboveMarket ? <span style={{ color: "#92400e", fontWeight: 700 }}> ABOVE MARKET{pos.finalVsMedianPct != null ? ` +${pos.finalVsMedianPct.toFixed(0)}%` : ""}</span> : null}
+                          {pos.belowNegotiationFloor ? <span style={{ color: "#991b1b", fontWeight: 700 }}> BELOW NEGOTIATION FLOOR</span> : pos.belowTarget ? <span style={{ color: "#b45309", fontWeight: 700 }}> BELOW MARKET TARGET</span> : null}
+                        </div>
+                      );
+                    })() : null}
                   </td>
                 </>)}
               </tr>
@@ -3318,6 +3344,30 @@ function ProductTiers() {
       {pm.isDtp ? (
         <p style={smallHelp}>Owner ladder prices (DTP pricing study, owner-approved 2026-07-24). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
       ) : null}
+      {/* 15F.0K.3: direct-print crossover advisory (requested-quantity row) —
+          advisory + live DTP comparison only; the owner chooses the product. */}
+      {(() => {
+        const requested = (tiers || []).find((tier: any) => tier.requested);
+        const pos = requested?.commercial?.marketPosition;
+        if (!pos || !pos.crossover) return null;
+        const strong = pos.crossover === "strong";
+        return (
+          <div style={{ border: `1px solid ${strong ? "#fecaca" : "#fde68a"}`, background: strong ? "#fef2f2" : "#fffbeb", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 8 }}>
+            <b style={{ color: strong ? "#991b1b" : "#92400e" }}>
+              {strong
+                ? "DIRECT-PRINT CROSSOVER — sticker-applied bags are likely above the direct-print market at this volume."
+                : "Direct-print price check recommended at 2,500+ units."}
+            </b>
+            <div style={{ marginTop: 4 }}>
+              {strong ? "The market-target candidate is deliberately OFF at 5,000+ so it never hides this crossover; this price is cost-based. " : ""}
+              Compare a direct-print (Spektra DTP pouch) quote before finalizing — no automatic product conversion.
+              {pm.dtpCrossoverCompare ? (
+                <> Live DTP comparison (4x5x2 pouch, owner ladder): <b>{money2(pm.dtpCrossoverCompare.unitPrice)}/unit ≈ {money2(pm.dtpCrossoverCompare.total)} total</b> at {pm.dtpCrossoverCompare.qty.toLocaleString()} units (ladder tier {Number(pm.dtpCrossoverCompare.tierUsed || 0).toLocaleString()}).</>
+              ) : null}
+            </div>
+          </div>
+        );
+      })()}
       <button type="button" onClick={() => setSelectedQty(selected.quantity)} style={{ ...secondaryButtonStyle, marginTop: 8, fontWeight: 700 }}>
         Use this price — {selected.quantity.toLocaleString()} @ {money2(selected.unitPrice)}/unit
       </button>
@@ -3349,6 +3399,12 @@ Total: ${money2(selected.totalPrice)}`}
             <div style={{ fontWeight: 800, color: "#166534", fontSize: 15 }}>READY TO QUOTE</div>
             <div style={{ fontSize: 16, fontWeight: 800, marginTop: 2 }}>Recommended customer price: {money2(selected.totalPrice)} total · {money2(selected.unitPrice)} per unit</div>
             {selected.commercial ? <div style={{ fontSize: 12, marginTop: 2 }}>Price based on: {selected.commercial.controllingRule}</div> : null}
+            {selected.commercial?.marketPosition?.median != null ? (
+              <div style={{ fontSize: 12, marginTop: 2 }}>
+                Market position: {selected.commercial.marketPosition.finalVsMedianPct != null ? `${selected.commercial.marketPosition.finalVsMedianPct >= 0 ? "+" : ""}${selected.commercial.marketPosition.finalVsMedianPct.toFixed(1)}% vs competitor median ${money2(selected.commercial.marketPosition.median)}` : "n/a"}
+                {selected.commercial.marketPosition.belowNegotiationFloor ? " · BELOW NEGOTIATION FLOOR (allowed — margin rules still apply)" : selected.commercial.marketPosition.belowTarget ? " · BELOW MARKET TARGET (allowed)" : ""}
+              </div>
+            ) : null}
           </div>
         )}
         <pre style={{ margin: "6px 0 0", fontSize: 12, background: "white", padding: 8, borderRadius: 6, whiteSpace: "pre-wrap" }}>

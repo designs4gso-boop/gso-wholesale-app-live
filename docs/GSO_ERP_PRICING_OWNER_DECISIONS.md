@@ -88,3 +88,21 @@ anywhere). STILL PENDING from the study: minimum unit-price floors
 above-market warnings, and the 2,500/5,000 direct-print crossover
 advisories (K.3). Jar tables, label-only curve, and finish add-on floors
 remain deferred per the 15F.0K audit.
+
+## 15F.0K.3 ratification (2026-07-26)
+Owner decisions: (1) minimum unit-price floors stay INACTIVE as hard
+candidates — the researched floors are negotiation-floor DISPLAY data with
+below-floor warnings only; cost/margin/override protections remain
+authoritative. (2) Verified market targets for standard 4x5 sticker-applied
+bags ship ACTIVE by default: normal position = the verified competitor
+median (raising-only candidate; bags-4x5 + bags-4x5-double ONLY — validator
+rejects every other family). Targets are null at 5,000+ (direct-print
+crossover: strong advisory + live Spektra DTP comparison; mild advisory at
+2,500). Anchors at 1,000: single $0.85/unit ($850), double $1.13/unit
+($1,130). Staff margin edits take command with below-target /
+below-negotiation-floor warnings; disabling a family restores pure
+cost-based pricing. Editable at /app/erp/pricing-settings
+(ownerConfig.pricing.marketTargets: sourceDate/source/confidence per
+family, per-band low/median/high/target/negotiationFloor/premiumTarget/
+crossover). STILL PENDING: rounding + override-ladder work (K.4), jar
+tables (display-only research), premium/finish floors (K.5).
