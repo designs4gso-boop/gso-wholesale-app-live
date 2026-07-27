@@ -1581,3 +1581,43 @@ market table or invented 1X-7X medians. Standard bags unchanged
 matrix, per-X skip proofs, white/holo skips, cost-led retention,
 no-misleading-percentage, standard+crossover regression, route wiring +
 message pins); build clean; tsc 306; no migration; no DB changes.
+
+## Patch 15F.0K.4D — Pricing Intelligence evidence capture foundation (2026-07-26)
+Minimum safe foundation so every future quote becomes usable pricing
+evidence — NO automatic targeting, NO tiny-sample statistics, NO Shopify
+order ingestion yet. SCHEMA (migration
+20260726230000_add_quote_outcome_fields, two nullable Quote columns,
+applied + verified: 5 quotes readable): outcomeAt / outcomeReason. QUOTE
+OUTCOMES: status vocabulary gains won/lost/canceled/expired via the pure
+resolveQuoteOutcomeChange helper — lost/canceled REQUIRE a reason (>=3
+chars, server-enforced), won/expired stamp outcomeAt (reason optional),
+draft/sent CLEAR outcome fields, existing ladder statuses untouched;
+marking WON respects the low-margin acceptance gate (same as
+sent/approved), NEVER creates a production job, NEVER sends email; the
+paid->production conversion behavior is unchanged (test-pinned). Quotes
+board UI: Mark Sent/Won/Lost/Canceled/Expired buttons + required-reason
+field + outcome display. NEW app/lib/pricing-intelligence.server.ts: ONE
+conservative shared test-data exclusion (test_ source ids, ALL-CAPS TEST
+token, known audit artifacts incl. CMYK Routing Test / NoProduction /
+PIPELINE TEST, test emails, [TEST DATA] markers, non-positive qty/price;
+reasons returned; common words like "Taste Test Kit" NEVER silently
+excluded), conservative basket classification (family/size/finished-vs-
+labels/sides/material/white/gloss-stage/qty-band; snapshot selections win;
+4X never equals 3X; unknown is its own segment and can never contaminate a
+precise basket), hashed customerKey (sha256, identities never leave the
+loader), and THRESHOLD-GATED aggregation: accepted low/median/high are
+withheld until >=5 accepted + >=3 distinct customers + >=2 distinct months
+("Not enough verified sales history yet" / "Insufficient customer
+diversity" / "Insufficient time coverage"); eligibility is ADVISORY-ONLY
+and creates no market target (pinned). NEW read-only page
+/app/erp/pricing-intelligence (route + nav; loader-only, zero writes):
+summary cards (reviewed / eligible / excluded / won / lost / open /
+distinct-customer COUNT), per-basket readiness table, excluded-records
+audit list, and the visible notice "Shopify historical-order evidence is
+not yet connected. Current counts are based only on locally stored ERP
+records." The evidence-record type carries source erp_quote /
+production_job / shopify_order (reserved) so the later Shopify source slots
+in without redesign. WHY THRESHOLD-GATED: the 2026-07-26 audit found only
+~5-7 genuine accepted line items in all history — tiny-n medians would be
+misleading. Tests 751 -> 771 (20 new); build clean; prisma validate clean;
+tsc 306 = baseline.

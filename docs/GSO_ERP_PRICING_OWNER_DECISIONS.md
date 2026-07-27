@@ -119,3 +119,12 @@ via ownerConfig, LG-640 rename, blank-pouch "(unprinted)" clarity). Items
 8/8b (die-cut model, Mimaki gloss actuals) — Mimaki gloss is now moot
 (CMYK-only); die-cut model still PROVIDE. White coverage % collection and
 Roland runtime adoption remain open calibration threads.
+
+## 15F.0K.4D note (2026-07-26)
+Pricing Intelligence foundation shipped: quote outcomes (won/lost/canceled/
+expired + reasons) are the evidence-capture mechanism; statistics stay
+threshold-gated (5 accepted / 3 customers / 2 months) because current real
+history is ~5-7 accepted items; test data is excluded by one conservative
+shared helper; Shopify order-history ingestion is the NEXT evidence source
+(owner decision needed on read_all_orders scope for >60-day history); no
+automatic pricing from evidence — advisory only.

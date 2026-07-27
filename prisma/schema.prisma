@@ -175,6 +175,13 @@ model Quote {
   customerTier      String  @default("standard")
   customerTierLabel String?
 
+  // 15F.0K.4D: pricing-intelligence outcome capture. Status vocabulary gains
+  // won/lost/canceled/expired alongside the existing ladder; outcomeAt stamps
+  // won/lost/canceled/expired, outcomeReason is REQUIRED for lost/canceled,
+  // optional for expired; returning to draft/sent clears both.
+  outcomeAt     DateTime?
+  outcomeReason String?
+
   @@index([shop, status])
   @@index([shop, createdAt])
 }

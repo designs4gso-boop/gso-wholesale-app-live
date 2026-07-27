@@ -26,6 +26,7 @@ import {
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
 import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "../lib/quote-margin.server";
+import { QUOTE_OUTCOME_STATUSES, resolveQuoteOutcomeChange } from "../lib/pricing-intelligence.server";
 import { CUSTOMER_TIERS, customerTierDisplayLabel, isCustomerTier, tierRule } from "../lib/customer-tiers";
 
 type QuoteItemInput = {
@@ -87,6 +88,12 @@ const statuses = [
   { label: "Paid", value: "paid" },
   { label: "In Production", value: "production" },
   { label: "Completed", value: "completed" },
+  // 15F.0K.4D: pricing-intelligence outcomes. Lost/Canceled require a reason
+  // (server-enforced); Won/Expired stamp outcomeAt; Draft/Sent clear it.
+  { label: "Won", value: "won" },
+  { label: "Lost", value: "lost" },
+  { label: "Canceled", value: "canceled" },
+  { label: "Expired", value: "expired" },
 ];
 
 function uid() {
@@ -687,7 +694,10 @@ export async function action({ request }: { request: Request }) {
   if (payload.intent === "status") {
     const nextStatus = String(payload.status || "");
 
-    if (nextStatus === "sent" || nextStatus === "approved") {
+    // 15F.0K.4D: marking WON is a price acceptance — it respects the same
+    // low-margin approval gate as sent/approved (a below-floor price cannot
+    // be recorded as accepted without the owner approval).
+    if (nextStatus === "sent" || nextStatus === "approved" || nextStatus === "won") {
       const quote = await db.quote.findFirst({
         where: { id: payload.id, shop },
         include: { items: true },
@@ -702,9 +712,24 @@ export async function action({ request }: { request: Request }) {
       }
     }
 
+    // 15F.0K.4D: outcome resolution — lost/canceled REQUIRE a reason;
+    // won/expired stamp outcomeAt (optional reason); draft/sent clear the
+    // outcome fields; every other ladder move leaves them untouched. Marking
+    // won NEVER creates a production job and NEVER sends email.
+    const outcome = resolveQuoteOutcomeChange({ nextStatus, reason: payload.reason });
+    if (!outcome.ok) {
+      const quotes = await getQuotes(shop);
+      return Response.json({ intent: "status", ok: false, error: outcome.message, quotes });
+    }
+    const outcomeData = QUOTE_OUTCOME_STATUSES.includes(nextStatus as any)
+      ? { outcomeAt: outcome.outcomeAt, outcomeReason: outcome.outcomeReason }
+      : outcome.clearsOutcome
+        ? { outcomeAt: null, outcomeReason: null }
+        : {};
+
     await db.quote.updateMany({
       where: { id: payload.id, shop, status: { not: "paid" } },
-      data: { status: nextStatus },
+      data: { status: nextStatus, ...outcomeData },
     });
 
     const quotes = await getQuotes(shop);
@@ -1356,6 +1381,8 @@ export default function QuotesPage() {
   const [items, setItems] = useState<QuoteItemInput[]>([emptyItem()]);
   const [lastMessage, setLastMessage] = useState("");
   const [lowMarginReasons, setLowMarginReasons] = useState<Record<string, string>>({});
+  // 15F.0K.4D: per-quote outcome reason drafts (required for Lost/Canceled)
+  const [outcomeReasons, setOutcomeReasons] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (fetcher.data?.quotes) setQuotes(fetcher.data.quotes);
@@ -1757,9 +1784,9 @@ export default function QuotesPage() {
     if (editingId === id) resetQuote();
   }
 
-  function updateQuoteStatus(id: string, nextStatus: string) {
+  function updateQuoteStatus(id: string, nextStatus: string, reason?: string) {
     fetcher.submit(
-      { intent: "status", id, status: nextStatus },
+      { intent: "status", id, status: nextStatus, reason: reason || outcomeReasons[id] || "" },
       { method: "post", encType: "application/json" }
     );
   }
@@ -2214,6 +2241,35 @@ export default function QuotesPage() {
                                     </InlineStack>
                                   ) : null}
                                   <Select label="Move" value={quote.status} disabled={isPaid} onChange={(value) => updateQuoteStatus(quote.id, value)} options={statuses} />
+                                  {/* 15F.0K.4D: outcome capture — every future quote becomes
+                                      pricing-intelligence evidence. Lost/Canceled REQUIRE a
+                                      reason (server-enforced); no production job or email is
+                                      ever created by an outcome change. */}
+                                  <BlockStack gap="100">
+                                    {quote.outcomeAt ? (
+                                      <Text as="p" tone={quote.status === "won" ? "success" : "subdued"} variant="bodySm">
+                                        Outcome: {quote.status.toUpperCase()} on {new Date(quote.outcomeAt).toLocaleDateString()}
+                                        {quote.outcomeReason ? ` — ${quote.outcomeReason}` : ""}
+                                      </Text>
+                                    ) : null}
+                                    {!isPaid ? (
+                                      <InlineStack gap="150" blockAlign="center" wrap>
+                                        <Button size="slim" onClick={() => updateQuoteStatus(quote.id, "sent")}>Mark Sent</Button>
+                                        <Button size="slim" tone="success" onClick={() => updateQuoteStatus(quote.id, "won")}>Mark Won</Button>
+                                        <Button size="slim" onClick={() => updateQuoteStatus(quote.id, "lost")}>Mark Lost</Button>
+                                        <Button size="slim" onClick={() => updateQuoteStatus(quote.id, "canceled")}>Mark Canceled</Button>
+                                        <Button size="slim" onClick={() => updateQuoteStatus(quote.id, "expired")}>Mark Expired</Button>
+                                        <TextField
+                                          label="Outcome reason"
+                                          labelHidden
+                                          placeholder="Reason (required for Lost/Canceled)"
+                                          value={outcomeReasons[quote.id] || ""}
+                                          onChange={(value) => setOutcomeReasons((current) => ({ ...current, [quote.id]: value }))}
+                                          autoComplete="off"
+                                        />
+                                      </InlineStack>
+                                    ) : null}
+                                  </BlockStack>
                                   <InlineStack gap="200">
                                     <Button onClick={() => loadQuote(quote)}>Open</Button>
                                     {productionJob ? (

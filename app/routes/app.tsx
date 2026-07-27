@@ -37,6 +37,7 @@ export default function App() {
         <s-link href="/app/erp/print-intake">Print Intake</s-link>
         <s-link href="/app/erp/cost-calculator">Cost Calculator</s-link>
         <s-link href="/app/erp/pricing-settings">Pricing Settings</s-link>
+        <s-link href="/app/erp/pricing-intelligence">Pricing Intelligence</s-link>
         <s-link href="/app/erp/product-setup">Setup · Product Setup</s-link>
         <s-link href="/app/erp/products/new">Setup · Add Product</s-link>
         <s-link href="/app/erp/materials">Setup · Materials</s-link>
