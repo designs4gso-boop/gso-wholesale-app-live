@@ -1621,3 +1621,51 @@ in without redesign. WHY THRESHOLD-GATED: the 2026-07-26 audit found only
 ~5-7 genuine accepted line items in all history — tiny-n medians would be
 misleading. Tests 751 -> 771 (20 new); build clean; prisma validate clean;
 tsc 306 = baseline.
+
+## Patch 15F.0K.4E — Shopify historical-order evidence pull (2026-07-26)
+Adds the Shopify order history as a SECOND read-only evidence source for
+/app/erp/pricing-intelligence. SCOPE: shopify.app.toml scopes gain
+read_all_orders (owner-approved; write_orders deliberately ABSENT and
+test-pinned absent). NOT YET LIVE until the owner runs `shopify app
+deploy` and reauthorizes the app in admin; until then order queries still
+work under read_orders but only cover Shopify's recent (~60-day) window —
+the page states this and degrades gracefully (no auth loop: the installed
+token already authorizes the orders resource; this mirrors the 12B.2b.1
+lesson). NEW app/lib/shopify-pricing-evidence.server.ts (read-only):
+cursor-paginated Admin GraphQL order pull (50/page, 20-page defensive cap
+with visible TRUNCATED flag; minimal fields — no addresses/phone, pinned),
+normalization into the SAME 4D evidence records: order-level rules (test
+orders / canceled / non-PAID+PARTIALLY_REFUNDED financial statuses / fully
+refunded orders excluded with reasons; PARTIALLY_PAID excluded — no owner
+policy), line-level rules (gift cards, refunded lines excluded
+conservatively even when partial, shared 4D test-data exclusion, free/
+zero-net lines, unclassifiable lines kept out of every basket), NET
+selling price = gross line total − ALL allocated discounts (line + order
+level; shipping/tax never included); missing price/discount data marks the
+line pricingIncomplete and it NEVER enters medians. Classification reuses
+the 4D classifier with new structured attributeText input (line
+customAttributes + productType beat title inference; 4X≠3X, sides/finish/
+form never mix — pinned). PRIVACY: customer id/email are hashed
+server-side during normalization (guest orders get a stable per-order
+key); raw identity never leaves the module, never serialized (pinned).
+STORAGE: normalized summary cached in ErpAdminSetting
+(pricingIntelligence.shopifyEvidence, JSON) — chosen over a new Prisma
+model because volume is tiny, JSON-in-ErpAdminSetting is established
+precedent (ownerConfig), no migration needed, and cached rows are already
+normalized + privacy-safe; corrupt cache degrades to "not refreshed",
+never breaks the page. PAGE: staff-triggered "Refresh Shopify evidence"
+action (the ONLY fetch path — nothing automatic), last-refreshed timestamp
+with STALE flag at 7+ days, per-source basket columns (ERP vs Shopify stay
+distinguishable while combining toward the SAME 4D thresholds), summary
+counts (local eligible, Shopify eligible/excluded/incomplete, evidence
+window earliest→latest), access-blocked state shows the exact required
+message ("Historical Shopify order access is not yet authorized.
+Reauthorize the app with read_all_orders to include orders older than
+Shopify's standard recent-order window."), refresh failures are cached as
+a visible failed state and the rest of the page keeps working. NO Shopify
+writes anywhere (query-only, pinned), NO automatic pricing from evidence,
+thresholds/advisory-only behavior unchanged. Tests 771 -> 805 (34 new:
+scope pins, order/line eligibility, net-price math, attribute
+classification, privacy, combined-threshold aggregation, pagination cap,
+blocked-state detection, cache round-trip + corruption, page wiring pins);
+build clean; tsc 306 = baseline; no migration.

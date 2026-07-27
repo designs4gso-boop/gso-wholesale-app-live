@@ -33,7 +33,13 @@ uri = "/webhooks/orders_paid"
 # granular permission. The Shopify Cost Audit page probes for cost access and
 # degrades with a banner, so no new required scope is needed.
 # Owner must run `shopify app deploy` after changing this line to publish it.
-scopes = "read_customers,read_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms"
+# 15F.0K.4E: read_all_orders added for Pricing Intelligence historical-order
+# evidence (owner-approved 2026-07-26). READ-ONLY — write_orders is
+# deliberately absent. Until the owner deploys + reauthorizes, order queries
+# still work under read_orders but only cover Shopify's recent (~60-day)
+# window; the Pricing Intelligence page states this and degrades gracefully
+# (no auth loop: the existing token already authorizes the orders resource).
+scopes = "read_customers,read_orders,read_all_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

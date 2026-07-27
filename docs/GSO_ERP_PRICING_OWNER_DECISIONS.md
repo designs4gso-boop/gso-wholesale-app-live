@@ -128,3 +128,19 @@ history is ~5-7 accepted items; test data is excluded by one conservative
 shared helper; Shopify order-history ingestion is the NEXT evidence source
 (owner decision needed on read_all_orders scope for >60-day history); no
 automatic pricing from evidence — advisory only.
+
+## 15F.0K.4E note (2026-07-26)
+OWNER DECISION: read_all_orders APPROVED (read-only history; write_orders
+deliberately never added; no Shopify edits of any kind; no sensitive
+customer info stored or displayed — identities hashed). Shopify orders now
+feed Pricing Intelligence as a second evidence source: accepted evidence =
+paid (PAID / PARTIALLY_REFUNDED) non-test, non-canceled, not fully
+refunded orders; refunded/gift-card/free lines excluded; evidence price =
+REALIZED net after all allocated discounts (list price is not evidence of
+acceptance); incomplete pricing never enters medians. Refresh is
+staff-triggered only (button on the page) and cached; nothing runs
+automatically and nothing reprices anything — same 4D thresholds and
+advisory-only stance. ACTIVATION STEP OWED BY OWNER: run `shopify app
+deploy`, then reopen the embedded admin and accept the new-permissions
+prompt; until then the pull covers only Shopify's recent (~60-day)
+order window and the page says so.

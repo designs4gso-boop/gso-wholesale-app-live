@@ -126,9 +126,13 @@ export function classifyEvidenceBasket(input: {
   variantTitle?: string | null;
   selectedFinish?: string | null;
   costSnapshot?: string | null; // QuoteItem.costSnapshot JSON string
+  // 15F.0K.4E: Shopify line-item custom attributes / product type — treated
+  // as STRUCTURED text (properties beat title inference simply because they
+  // carry the configurator vocabulary verbatim).
+  attributeText?: string | null;
   quantity: number;
 }): EvidenceBasket {
-  const text = [input.productName, input.variantTitle, input.selectedFinish].map((value) => String(value || "")).join(" | ");
+  const text = [input.attributeText, input.productName, input.variantTitle, input.selectedFinish].map((value) => String(value || "")).join(" | ");
   const lowered = text.toLowerCase();
 
   let family = "unknown";
@@ -225,15 +229,17 @@ export function evidenceConfidence(input: { accepted: number; distinctCustomers:
 
 // ---------- evidence records + aggregation (D) ----------
 export type EvidenceRecord = {
-  source: "erp_quote" | "production_job" | "shopify_order"; // shopify_order reserved for a later phase
+  source: "erp_quote" | "production_job" | "shopify_order"; // shopify_order live since 15F.0K.4E
   basket: EvidenceBasket;
   key: string;
   quantity: number;
-  unitPrice: number;
+  unitPrice: number; // for shopify_order: REALIZED net unit price after all allocated discounts
   state: "accepted" | "lost" | "open";
   customerKey: string; // hashed — raw identity never leaves the loader
   evidenceAt: Date;
   exactSnapshot: boolean; // true when classified from a structured snapshot (exact match capable)
+  // 15F.0K.4E: Shopify discount detail (gross/allocated/net) — audit only
+  pricing?: { grossLineTotal: number; allocatedDiscount: number; netLineTotal: number; netUnitPrice: number };
 };
 
 export type BasketAggregate = {
@@ -248,6 +254,9 @@ export type BasketAggregate = {
   distinctMonths: number;
   earliest: string | null;
   latest: string | null;
+  // 15F.0K.4E: accepted evidence per source (local ERP vs Shopify stay
+  // distinguishable while combining for the thresholds)
+  sourceCounts: { erp_quote: number; production_job: number; shopify_order: number };
   confidence: EvidenceConfidence;
   // present ONLY when confidence.eligible (threshold-gated; advisory only)
   acceptedLow: number | null;
@@ -293,6 +302,11 @@ export function aggregateEvidence(records: EvidenceRecord[]): BasketAggregate[] 
       distinctMonths: months.size,
       earliest: dates.length ? new Date(Math.min(...dates)).toISOString().slice(0, 10) : null,
       latest: dates.length ? new Date(Math.max(...dates)).toISOString().slice(0, 10) : null,
+      sourceCounts: {
+        erp_quote: accepted.filter((record) => record.source === "erp_quote").length,
+        production_job: accepted.filter((record) => record.source === "production_job").length,
+        shopify_order: accepted.filter((record) => record.source === "shopify_order").length,
+      },
       confidence,
       acceptedLow: confidence.eligible ? Math.min(...prices) : null,
       acceptedMedian: confidence.eligible ? median(prices) : null,

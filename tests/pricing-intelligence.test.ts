@@ -241,6 +241,11 @@ describe("privacy (D6)", () => {
     expect(src).toContain("distinctCustomers");
     expect(src.includes("customerName")).toBe(false);
     expect(src.includes(".email")).toBe(false);
-    expect(src).toContain("Shopify historical-order evidence is not yet connected. Current counts are based only on locally stored ERP records.");
+    // 15F.0K.4E replaced the "not yet connected" notice with the live
+    // Shopify section — same invariant, new mechanism: the page renders the
+    // Shopify source read-only and surfaces the blocked state, still with
+    // zero identity fields.
+    expect(src).toContain("Shopify historical-order evidence (15F.0K.4E — read-only)");
+    expect(src).toContain("SHOPIFY_ACCESS_BLOCKED_MESSAGE");
   });
 });
