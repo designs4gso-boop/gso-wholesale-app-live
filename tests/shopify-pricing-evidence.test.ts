@@ -570,9 +570,90 @@ describe("reclassification detection (4G-G)", () => {
   it("page shows the exact reclassification notice and passes dedup context into gathering (source pins)", () => {
     const page = readFileSync("app/routes/app.erp.pricing-intelligence.tsx", "utf8");
     expect(page).toContain("Historical evidence was reclassified using updated deterministic rules.");
-    expect(page).toContain("buildShopifyEvidenceContext(shopify.cache, shopify.records)");
+    // 15F.0K.4H: the context is built from the cutoff-filtered records so
+    // pre-launch Shopify lines can no longer anchor dedup — their job twins
+    // fall through to the cutoff exclusion instead.
+    expect(page).toContain("buildShopifyEvidenceContext(shopify.cache, keptShopifyRecords)");
     expect(page).toContain("testOrders: normalized.testOrders");
     expect(page).toContain("Staff review");
+  });
+});
+
+// ---------- 15F.0K.4H: live-sales cutoff on the Shopify source ----------
+
+describe("live-sales cutoff (4H) — Shopify orders", () => {
+  const LIVE_FROM = new Date("2026-07-27T12:00:00Z"); // fixture order is 2026-05-10
+
+  it("orders before the cutoff are excluded with the exact reason and leave the evidence window empty", () => {
+    const result = normalizeShopifyOrderEvidence([makeOrder()], { liveFrom: LIVE_FROM });
+    expect(result.records).toHaveLength(0);
+    expect(result.excluded).toHaveLength(1);
+    expect(result.excluded[0].reasons).toEqual(["Pre-launch test evidence — before owner-approved live-sales start date"]);
+    expect(result.earliest).toBeNull();
+    expect(result.latest).toBeNull();
+  });
+
+  it("orders exactly at and after the cutoff stay eligible under all existing rules", () => {
+    const atCutoff = normalizeShopifyOrderEvidence([makeOrder({ processedAt: "2026-07-27T12:00:00Z" })], { liveFrom: LIVE_FROM });
+    expect(atCutoff.records).toHaveLength(1);
+    const after = normalizeShopifyOrderEvidence([makeOrder({ processedAt: "2026-08-01T00:00:00Z" })], { liveFrom: LIVE_FROM });
+    expect(after.records).toHaveLength(1);
+    expect(after.records[0].state).toBe("accepted");
+  });
+
+  it("processedAt governs; createdAt is only the fallback", () => {
+    const processedAfter = normalizeShopifyOrderEvidence(
+      [makeOrder({ createdAt: "2026-05-01T00:00:00Z", processedAt: "2026-08-01T00:00:00Z" })],
+      { liveFrom: LIVE_FROM },
+    );
+    expect(processedAfter.records).toHaveLength(1);
+    const fallbackBefore = normalizeShopifyOrderEvidence(
+      [makeOrder({ processedAt: null, createdAt: "2026-05-01T00:00:00Z" })],
+      { liveFrom: LIVE_FROM },
+    );
+    expect(fallbackBefore.records).toHaveLength(0);
+  });
+
+  it("the cutoff does not replace normal detection: test orders keep their reason and refund/gift rules still run after the date", () => {
+    const futureTest = normalizeShopifyOrderEvidence(
+      [makeOrder({ test: true, processedAt: "2026-08-01T00:00:00Z", id: "gid://shopify/Order/8888", name: "#2001" })],
+      { liveFrom: LIVE_FROM },
+    );
+    expect(futureTest.records).toHaveLength(0);
+    expect(futureTest.excluded[0].reasons.join(" ")).toContain("Shopify test order");
+    expect(futureTest.testOrders).toEqual([{ id: "8888", name: "#2001" }]);
+    const futureRefunded = normalizeShopifyOrderEvidence(
+      [makeOrder({ processedAt: "2026-08-01T00:00:00Z", displayFinancialStatus: "REFUNDED" })],
+      { liveFrom: LIVE_FROM },
+    );
+    expect(futureRefunded.records).toHaveLength(0);
+    expect(futureRefunded.excluded[0].reasons.join(" ")).toContain("REFUNDED");
+  });
+
+  it("pre-cutoff TEST orders still land in testOrders (job propagation keeps working)", () => {
+    const result = normalizeShopifyOrderEvidence(
+      [makeOrder({ test: true, id: "gid://shopify/Order/7777", name: "#1007" })],
+      { liveFrom: LIVE_FROM },
+    );
+    expect(result.testOrders).toEqual([{ id: "7777", name: "#1007" }]);
+  });
+
+  it("no cutoff (null / omitted) keeps pre-4H behavior", () => {
+    expect(normalizeShopifyOrderEvidence([makeOrder()], { liveFrom: null }).records).toHaveLength(1);
+    expect(normalizeShopifyOrderEvidence([makeOrder()]).records).toHaveLength(1);
+  });
+
+  it("page pins: live-from notice, pre-launch card, re-evaluation message, cutoff wiring (source pins)", () => {
+    const page = readFileSync("app/routes/app.erp.pricing-intelligence.tsx", "utf8");
+    expect(page).toContain("Live sales evidence begins:");
+    expect(page).toContain("Pre-launch test evidence");
+    expect(page).toContain("Historical evidence was re-evaluated using the owner-approved live-sales start date.");
+    expect(page).toContain("loadPricingEvidenceLiveFrom");
+    expect(page).toContain("normalizeShopifyOrderEvidence(orders, { liveFrom: liveFrom?.date ?? null })");
+    expect(page).toContain("isPreLaunchEvidence(record.evidenceAt, liveFrom?.date ?? null)"); // stale-cache defense
+    const settings = readFileSync("app/routes/app.erp.pricing-settings.tsx", "utf8");
+    expect(settings).toContain("READ-ONLY here");
+    expect(settings).toContain("tools/apply-15f0k4h-live-from.mjs");
   });
 });
 
@@ -591,7 +672,10 @@ describe("pricing-intelligence page wiring (structure pins)", () => {
   });
 
   it("page combines local + Shopify records into ONE aggregation (thresholds see both)", () => {
-    expect(page).toContain("[...local.records, ...shopify.records]");
+    // 15F.0K.4H: the combined list uses the cutoff-filtered Shopify records
+    // (keptShopifyRecords) — same one-aggregation invariant, plus the
+    // guarantee that stale pre-4H caches cannot keep pre-launch rows eligible.
+    expect(page).toContain("[...local.records, ...keptShopifyRecords]");
     expect(page).toContain("aggregateEvidence(combined)");
   });
 

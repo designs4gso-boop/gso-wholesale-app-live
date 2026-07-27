@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACCEPTED_EVIDENCE_STATUSES,
   DEDUP_REASON,
+  PRE_LAUNCH_REASON,
   EVIDENCE_MIN_ACCEPTED,
   MSG_INSUFFICIENT_CUSTOMERS,
   MSG_INSUFFICIENT_MONTHS,
@@ -21,6 +22,8 @@ import {
   evidenceConfidence,
   evidenceExclusion,
   gatherPricingEvidence,
+  isPreLaunchEvidence,
+  loadPricingEvidenceLiveFrom,
   qtyBandFor,
   resolveQuoteOutcomeChange,
   shopifyRefsFromJobItem,
@@ -499,6 +502,130 @@ describe("material summary classification (4G-F)", () => {
     expect(gloss.glossStage).toBe("unknown");
     const white = classifyEvidenceBasket({ productName: "Bag", attributeText: "Material: Matte | Bag Color: White", quantity: 10 });
     expect(white.whiteLayers).toBe("unknown");
+  });
+});
+
+// ---------- 15F.0K.4H — live-sales evidence cutoff ----------
+
+describe("live-sales evidence cutoff (4H)", () => {
+  const LIVE_FROM = new Date("2026-07-27T12:00:00Z");
+  const BEFORE = new Date("2026-07-01T00:00:00Z");
+  const AFTER = new Date("2026-08-01T00:00:00Z");
+
+  const quoteRow = (over: Record<string, any> = {}) => ({
+    id: "cmq_real", status: "paid", email: "buyer@client.com", customerName: "Buyer",
+    createdAt: BEFORE, updatedAt: BEFORE, outcomeAt: null, notes: null,
+    items: [{ productName: "Custom Sticker Bag (4x5)", variant: "Double Sided / Matte", sku: null, quantity: 500, unitPrice: 1.2, selectedFinish: null, costSnapshot: null }],
+    ...over,
+  });
+  const jobRow = (over: Record<string, any> = {}) => ({
+    productTitle: "Custom Sticker Bag (4x5)", variantTitle: "Double Sided / Matte", quantity: 250,
+    unitPrice: 1.1, selectedFinish: null, costSnapshot: null, createdAt: BEFORE,
+    priceSnapshot: null, materialSummary: null,
+    job: { shop: "shop", quoteId: "shopify_order_777", status: "new", customerName: "B", email: "b@client.com" },
+    ...over,
+  });
+  const fakeDb = (quotes: any[] = [], jobs: any[] = []) => ({
+    quote: { findMany: async () => quotes },
+    productionJobItem: { findMany: async () => jobs },
+  });
+
+  it("isPreLaunchEvidence: before => excluded; exactly at or after => eligible; no cutoff => eligible", () => {
+    expect(isPreLaunchEvidence(BEFORE, LIVE_FROM)).toBe(true);
+    expect(isPreLaunchEvidence(LIVE_FROM, LIVE_FROM)).toBe(false);
+    expect(isPreLaunchEvidence(AFTER, LIVE_FROM)).toBe(false);
+    expect(isPreLaunchEvidence(BEFORE, null)).toBe(false);
+  });
+
+  it("accepted quote before the cutoff is excluded with the EXACT reason and counts nothing", async () => {
+    const local = await gatherPricingEvidence(fakeDb([quoteRow()]), "shop", undefined, { liveFrom: LIVE_FROM });
+    expect(local.records).toHaveLength(0);
+    expect(local.excluded).toHaveLength(1);
+    expect(local.excluded[0].reasons).toEqual([PRE_LAUNCH_REASON]);
+    expect(PRE_LAUNCH_REASON).toBe("Pre-launch test evidence — before owner-approved live-sales start date");
+    expect(local.totals.won).toBe(0);
+    expect(local.totals.distinctCustomers).toBe(0); // no customer, no month, no median input
+    expect(aggregateEvidence(local.records)).toHaveLength(0);
+  });
+
+  it("quotes exactly at and after the cutoff are eligible", async () => {
+    const atCutoff = await gatherPricingEvidence(fakeDb([quoteRow({ outcomeAt: LIVE_FROM })]), "shop", undefined, { liveFrom: LIVE_FROM });
+    expect(atCutoff.records).toHaveLength(1);
+    const after = await gatherPricingEvidence(fakeDb([quoteRow({ outcomeAt: AFTER })]), "shop", undefined, { liveFrom: LIVE_FROM });
+    expect(after.records).toHaveLength(1);
+    expect(after.records[0].state).toBe("accepted");
+  });
+
+  it("quote date rule: outcomeAt first; updatedAt only for accepted; createdAt final fallback", async () => {
+    // accepted, created before cutoff but outcome after -> ELIGIBLE (real post-launch acceptance)
+    const outcomeWins = await gatherPricingEvidence(fakeDb([quoteRow({ createdAt: BEFORE, updatedAt: BEFORE, outcomeAt: AFTER })]), "shop", undefined, { liveFrom: LIVE_FROM });
+    expect(outcomeWins.records).toHaveLength(1);
+    // open quote created before cutoff but touched after -> updatedAt must NOT rescue it
+    const openQuote = await gatherPricingEvidence(fakeDb([quoteRow({ status: "draft", createdAt: BEFORE, updatedAt: AFTER, outcomeAt: null })]), "shop", undefined, { liveFrom: LIVE_FROM });
+    expect(openQuote.records).toHaveLength(0);
+    expect(openQuote.excluded[0].reasons).toEqual([PRE_LAUNCH_REASON]);
+  });
+
+  it("production job before the cutoff is excluded; after stays eligible", async () => {
+    const before = await gatherPricingEvidence(fakeDb([], [jobRow()]), "shop", undefined, { liveFrom: LIVE_FROM });
+    expect(before.records).toHaveLength(0);
+    expect(before.excluded[0].reasons).toEqual([PRE_LAUNCH_REASON]);
+    const after = await gatherPricingEvidence(fakeDb([], [jobRow({ createdAt: AFTER })]), "shop", undefined, { liveFrom: LIVE_FROM });
+    expect(after.records).toHaveLength(1);
+  });
+
+  it("5 pre-cutoff accepted quotes can never unlock a median", async () => {
+    const quotes = [1, 2, 3, 4, 5].map((index) => quoteRow({ id: `cmq_${index}`, email: `buyer${index}@client.com`, outcomeAt: new Date(2026, index, 10) }));
+    const local = await gatherPricingEvidence(fakeDb(quotes), "shop", undefined, { liveFrom: LIVE_FROM });
+    expect(local.records).toHaveLength(0);
+    expect(local.excluded).toHaveLength(5);
+    expect(aggregateEvidence(local.records)).toHaveLength(0);
+  });
+
+  it("the cutoff does NOT replace normal test detection after the date", async () => {
+    const testArtifact = await gatherPricingEvidence(
+      fakeDb([quoteRow({ outcomeAt: AFTER, items: [{ productName: "CMYK Routing Test", variant: null, sku: null, quantity: 5, unitPrice: 1, selectedFinish: null, costSnapshot: null }] })]),
+      "shop", undefined, { liveFrom: LIVE_FROM },
+    );
+    expect(testArtifact.records).toHaveLength(0);
+    expect(testArtifact.excluded[0].reasons.join(" ")).toContain("test artifact");
+    const testMarker = await gatherPricingEvidence(
+      fakeDb([quoteRow({ id: "test_replay_9", outcomeAt: AFTER })]),
+      "shop", undefined, { liveFrom: LIVE_FROM },
+    );
+    expect(testMarker.records).toHaveLength(0);
+    expect(testMarker.excluded[0].reasons.join(" ")).toContain("test source id");
+  });
+
+  it("staff review skips pre-cutoff quotes (already deterministically excluded) but still flags post-cutoff ones", async () => {
+    const context: ShopifyEvidenceContext = { lineItemIds: new Set(), orderIds: new Set(), keysByLineItemId: new Map(), testOrders: [{ id: "9", name: "#1010" }] };
+    const notes = "[GSO] Full payment invoice paid (Shopify order #1010).";
+    const pre = await gatherPricingEvidence(fakeDb([quoteRow({ notes, outcomeAt: BEFORE })]), "shop", context, { liveFrom: LIVE_FROM });
+    expect(pre.review).toHaveLength(0);
+    expect(pre.excluded[0].reasons).toEqual([PRE_LAUNCH_REASON]);
+    const post = await gatherPricingEvidence(fakeDb([quoteRow({ notes, outcomeAt: AFTER })]), "shop", context, { liveFrom: LIVE_FROM });
+    expect(post.review).toHaveLength(1);
+    expect(post.records).toHaveLength(1); // flagged, never auto-excluded
+  });
+
+  it("loadPricingEvidenceLiveFrom: valid envelope loads; missing/corrupt/invalid-iso resolve to null", async () => {
+    const rows = new Map<string, any>();
+    const db = {
+      erpAdminSetting: {
+        findUnique: async ({ where }: any) => rows.get(where.shop_key.key) ?? null,
+      },
+    };
+    expect(await loadPricingEvidenceLiveFrom(db, "shop")).toBeNull();
+    rows.set("pricingIntelligence.liveFrom", { value: JSON.stringify({ iso: "2026-07-27T12:00:00.000Z", note: "owner note", changedAt: "2026-07-27T12:00:00.000Z", source: "script" }) });
+    const loaded = await loadPricingEvidenceLiveFrom(db, "shop");
+    expect(loaded?.iso).toBe("2026-07-27T12:00:00.000Z");
+    expect(loaded?.date.getTime()).toBe(LIVE_FROM.getTime());
+    expect(loaded?.note).toBe("owner note");
+    rows.set("pricingIntelligence.liveFrom", { value: "{corrupt" });
+    expect(await loadPricingEvidenceLiveFrom(db, "shop")).toBeNull();
+    rows.set("pricingIntelligence.liveFrom", { value: JSON.stringify({ iso: "not-a-date" }) });
+    expect(await loadPricingEvidenceLiveFrom(db, "shop")).toBeNull();
+    expect(await loadPricingEvidenceLiveFrom({}, "shop")).toBeNull(); // fake db without the model never throws
   });
 });
 

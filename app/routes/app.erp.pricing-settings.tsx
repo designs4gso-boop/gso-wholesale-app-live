@@ -25,6 +25,7 @@ import {
 } from "../lib/commercial-pricing-policy.server";
 import { FAMILY_MARGIN_RULES } from "../lib/calculator-emergency.server";
 import { resolveActorFromSession } from "../lib/actual-cost-finalize.server";
+import { loadPricingEvidenceLiveFrom } from "../lib/pricing-intelligence.server";
 
 // Pricing Settings (15F.0K.1) — the FIRST ownerConfig surface. Scope is
 // deliberately narrow: the three provisional value groups the commercial
@@ -71,6 +72,12 @@ export async function loader({ request }: { request: Request }) {
     ],
     maxBandRows: MAX_BAND_ROWS,
     maxMarketBandRows: MAX_MARKET_BAND_ROWS,
+    // 15F.0K.4H: read-only display of the live-sales evidence cutoff — this
+    // page cannot edit it (owner action/script only; casually moving the
+    // date would change historical evidence counts).
+    evidenceLiveFrom: await loadPricingEvidenceLiveFrom(db, shop).then((value) =>
+      value ? { iso: value.iso, note: value.note, changedAt: value.changedAt, source: value.source } : null,
+    ),
   };
 }
 
@@ -321,7 +328,7 @@ function MoneyMapSection({ title, keyName, resolution, effective, defaults, fami
 }
 
 export default function PricingSettings() {
-  const { resolutions, effective, defaults, families, marginFamilies, marginVariants, marketTargetFamilies, minNoteLength, keys, maxBandRows, maxMarketBandRows } = useLoaderData<typeof loader>();
+  const { resolutions, effective, defaults, families, marginFamilies, marginVariants, marketTargetFamilies, minNoteLength, keys, maxBandRows, maxMarketBandRows, evidenceLiveFrom } = useLoaderData<typeof loader>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -348,6 +355,27 @@ export default function PricingSettings() {
           <b style={{ color: actionData.ok ? "#166534" : "#991b1b" }}>{actionData.message}</b>
         </section>
       ) : null}
+
+      <section style={{ ...card, borderColor: evidenceLiveFrom ? "#bbf7d0" : "#fecaca", background: evidenceLiveFrom ? "#f0fdf4" : "#fef2f2" }}>
+        <b>Pricing evidence live-from date (15F.0K.4H — READ-ONLY here)</b>
+        <p style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.7 }}>
+          {evidenceLiveFrom ? (
+            <>
+              Live sales evidence begins <b>{new Date(evidenceLiveFrom.iso).toLocaleString()}</b>
+              {evidenceLiveFrom.changedAt ? <> (set {new Date(evidenceLiveFrom.changedAt).toLocaleString()}{evidenceLiveFrom.source ? ` via ${evidenceLiveFrom.source}` : ""})</> : null}.
+              {evidenceLiveFrom.note ? <><br />Owner note: <i>{evidenceLiveFrom.note}</i></> : null}
+              <br />This date is deliberately NOT editable on this page: moving it changes historical evidence counts.
+              Changing it requires an explicit owner action (audited script) with a reason — never a casual edit, and it
+              can never be cleared without explicit owner confirmation.
+            </>
+          ) : (
+            <b style={{ color: "#991b1b" }}>
+              Not set — Pricing Intelligence may count pre-launch test transactions as evidence. Run the owner
+              activation script (tools/apply-15f0k4h-live-from.mjs) to set it.
+            </b>
+          )}
+        </p>
+      </section>
 
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
         <b>What is editable (15F.0K.1 + 15F.0K.2 Stage A)</b>

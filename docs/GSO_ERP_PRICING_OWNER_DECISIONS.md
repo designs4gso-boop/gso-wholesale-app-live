@@ -129,6 +129,23 @@ shared helper; Shopify order-history ingestion is the NEXT evidence source
 (owner decision needed on read_all_orders scope for >60-day history); no
 automatic pricing from evidence — advisory only.
 
+## 15F.0K.4H note (2026-07-27)
+OWNER DECISION: all Shopify/ERP sales existing before Pricing Intelligence
+activation were TEST transactions — no real storefront sales ever occurred
+before the live-sales start date. pricingEvidenceLiveFrom (audited owner
+config, `pricingIntelligence.liveFrom`) now excludes everything dated
+before it as "Pre-launch test evidence — before owner-approved live-sales
+start date": retained and listed, never counted (no accepted evidence, no
+customers, no months, no medians, no market input). Consequence: Pricing
+Intelligence currently has ZERO accepted evidence and NO historical market
+medians exist — statistics stay withheld until real post-launch sales
+accumulate past the thresholds (5 accepted / 3 customers / 2 months).
+Future test transactions must STILL be marked (Shopify test flag, test_
+ids, [TEST DATA]) — the date cutoff never replaces explicit test
+detection. Moving or clearing the date is an explicit owner action with a
+reason (script refuses silent changes); ordinary staff cannot edit it.
+Pricing remains advisory-only: no automatic targets, no repricing.
+
 ## 15F.0K.4G note (2026-07-27)
 Evidence accuracy decisions, owner-approved: (1) generic "white" is COLOR
 vocabulary, not white ink — the Zakeke variant middle slot, "Black/White"

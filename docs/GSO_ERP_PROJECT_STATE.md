@@ -1725,3 +1725,48 @@ accepted but stays WITHHELD (1/3 customers, 1/2 months); every basket
 ineligible, every median withheld, no market target, no repricing, no
 Shopify writes, no migration. Tests 805 -> 833; build clean; tsc 306 =
 baseline.
+
+## Patch 15F.0K.4H — live sales evidence cutoff (2026-07-27)
+OWNER CONFIRMATION: every Shopify order, paid quote, and production job
+visible in Pricing Intelligence at activation was a TEST — zero real
+storefront sales existed. New owner-controlled cutoff
+pricingEvidenceLiveFrom (ErpAdminSetting `pricingIntelligence.liveFrom`,
+audited JSON envelope: iso / owner note / changedAt / source / previous;
+NO migration). Evidence dated STRICTLY BEFORE the cutoff is excluded from
+every source (Shopify order lines during normalization; quotes and
+production-job items during gathering — and any future source through the
+same isPreLaunchEvidence helper) with the exact reason "Pre-launch test
+evidence — before owner-approved live-sales start date": it never counts
+as accepted evidence, a distinct customer, a distinct month, an
+exact/near match, or a median input, and never feeds a market target.
+Records are RETAINED (nothing deleted) and stay visible in the excluded
+audit list plus a new "Pre-launch test evidence" summary card. Evidence
+exactly AT or after the cutoff is eligible under all existing rules — the
+cutoff is NOT a replacement for normal test detection (Shopify test
+flags, test_ ids, [TEST DATA], shared helper, refund/cancel/dedup rules
+all still apply afterward). DATE BASIS: Shopify processedAt (createdAt
+fallback); quotes outcomeAt -> updatedAt ONLY for accepted/paid ->
+createdAt (an open quote touched after launch can NOT be rescued by
+updatedAt); jobs createdAt (their Shopify-linked orders govern the
+Shopify record itself). STALE-CACHE DEFENSE: the page loader re-applies
+the cutoff to cached Shopify records, so a cache refreshed before 4H can
+never keep pre-launch rows eligible; the next staff refresh rebuilds the
+cache and appends "Historical evidence was re-evaluated using the
+owner-approved live-sales start date." STAFF REVIEW: pre-cutoff records
+are no longer flagged for manual judgment (the cutoff already
+deterministically excludes them) — the two 4G-flagged quotes (#1010/
+#1011 payments) and Apples Banana Pebbles need no individual [TEST DATA]
+notes for Pricing Intelligence anymore; [TEST DATA] remains supported for
+future isolated tests. SETTINGS: read-only display on
+/app/erp/pricing-settings (value + owner note + changedAt + source) with
+explicit copy that moving the date is an owner action; the activation
+script tools/apply-15f0k4h-live-from.mjs REFUSES to overwrite an existing
+value without FORCE_15F0K4H=1 + a >=5-char CHANGE_NOTE, keeps one-step
+`previous`, and can never clear the value. Missing/corrupt config
+resolves to NO cutoff with a loud red warning on both pages (never a
+silent exclude-everything). PRODUCTION ACTIVATION: script run once —
+stored iso pins the live-from moment; verified read-back plus a read-only
+pipeline simulation confirming Shopify eligible 0, local accepted 0,
+combined accepted 0, distinct customers 0, all historical records listed
+as pre-launch excluded, every median withheld. Nothing repriced; $0.85/
+$1.13 @1,000 bag pins unchanged. Tests 833 -> 849.

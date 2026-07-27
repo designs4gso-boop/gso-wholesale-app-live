@@ -310,6 +310,58 @@ export type EvidenceReviewItem = {
 export const DEDUP_REASON = "Duplicate of Shopify order-line evidence";
 export const TEST_ORDER_REASON = "Paid by Shopify test order";
 
+// ---------- live-sales evidence cutoff (15F.0K.4H) ----------
+// Owner confirmed (2026-07-27) that EVERY Shopify order, paid quote, and
+// production job before activation was a test transaction — zero real
+// storefront sales existed. Evidence dated before pricingEvidenceLiveFrom is
+// excluded as pre-launch test evidence: it never counts as accepted evidence,
+// a distinct customer, a distinct month, an exact/near match, or a median
+// input. Records are NEVER deleted — they stay visible in the excluded audit
+// list. The cutoff is NOT a replacement for normal test detection: Shopify
+// test flags, test_ source ids, [TEST DATA] markers, and the shared helper
+// still apply to everything dated after the cutoff.
+export const PRICING_EVIDENCE_LIVE_FROM_KEY = "pricingIntelligence.liveFrom";
+export const PRE_LAUNCH_REASON = "Pre-launch test evidence — before owner-approved live-sales start date";
+
+export type PricingEvidenceLiveFrom = {
+  iso: string;
+  date: Date;
+  note: string | null;
+  changedAt: string | null;
+  source: string | null;
+};
+
+// Missing/corrupt config resolves to null (no cutoff) — the page shows a
+// visible warning in that state instead of silently excluding everything.
+export async function loadPricingEvidenceLiveFrom(dbClient: any, shop: string): Promise<PricingEvidenceLiveFrom | null> {
+  try {
+    const row = await dbClient.erpAdminSetting.findUnique({
+      where: { shop_key: { shop, key: PRICING_EVIDENCE_LIVE_FROM_KEY } },
+      select: { value: true },
+    });
+    if (!row?.value) return null;
+    const parsed = JSON.parse(row.value);
+    const iso = String(parsed?.iso || "");
+    const date = new Date(iso);
+    if (!iso || !Number.isFinite(date.getTime())) return null;
+    return {
+      iso,
+      date,
+      note: parsed?.note ? String(parsed.note) : null,
+      changedAt: parsed?.changedAt ? String(parsed.changedAt) : null,
+      source: parsed?.source ? String(parsed.source) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// exclude strictly-before; evidence exactly AT the cutoff is eligible
+export function isPreLaunchEvidence(evidenceAt: Date, liveFrom: Date | null | undefined): boolean {
+  if (!liveFrom) return false;
+  return evidenceAt.getTime() < liveFrom.getTime();
+}
+
 // Exact source refs of a production-job item: primary = priceSnapshot
 // lineItemId/orderId written by the paid-order webhook; fallback = the job's
 // quoteId ("shopify_order_<numeric id>" or "shopify_order_gid://shopify/Order/<id>").
@@ -412,12 +464,20 @@ export function aggregateEvidence(records: EvidenceRecord[]): BasketAggregate[] 
 }
 
 // ---------- gather (thin DB wrapper; identities hashed before return) ----------
-export async function gatherPricingEvidence(dbClient: any, shop: string, shopifyContext?: ShopifyEvidenceContext): Promise<{
+export async function gatherPricingEvidence(
+  dbClient: any,
+  shop: string,
+  shopifyContext?: ShopifyEvidenceContext,
+  options?: { liveFrom?: Date | null }, // omit -> loaded from owner config; pass explicitly in tests
+): Promise<{
   records: EvidenceRecord[];
   excluded: Array<{ label: string; source: string; reasons: string[] }>;
   review: EvidenceReviewItem[];
   totals: { reviewed: number; eligible: number; excluded: number; won: number; lost: number; open: number; distinctCustomers: number };
 }> {
+  const liveFrom = options && "liveFrom" in options
+    ? options.liveFrom ?? null
+    : (await loadPricingEvidenceLiveFrom(dbClient, shop))?.date ?? null;
   const [quotes, jobItems] = await Promise.all([
     dbClient.quote.findMany({
       where: { shop },
@@ -445,11 +505,16 @@ export async function gatherPricingEvidence(dbClient: any, shop: string, shopify
   let won = 0; let lost = 0; let open = 0;
 
   for (const quote of quotes) {
+    const quoteAccepted = ACCEPTED_EVIDENCE_STATUSES.includes(quote.status);
+    // 15F.0K.4H evidence date rule: outcomeAt first; updatedAt fallback ONLY
+    // for accepted/paid statuses; createdAt as the final fallback.
+    const quoteEvidenceAt: Date = quote.outcomeAt ?? (quoteAccepted ? quote.updatedAt : null) ?? quote.createdAt;
+    const quotePreLaunch = isPreLaunchEvidence(quoteEvidenceAt, liveFrom);
     // 15F.0K.4G staff-review flag (never an automatic exclusion): an
     // accepted-status quote whose payment note references a Shopify TEST
-    // order name. The name link is not a deterministic id join, so this is
-    // surfaced for review instead of excluded.
-    if (ACCEPTED_EVIDENCE_STATUSES.includes(quote.status)) {
+    // order name. 4H: pre-launch quotes are already deterministically
+    // excluded by the cutoff, so they need no manual-judgment flag.
+    if (quoteAccepted && !quotePreLaunch) {
       const notes = String(quote.notes || "");
       const testHit = (shopifyContext?.testOrders ?? []).find((order) => order.name && notes.includes(`Shopify order ${order.name})`));
       if (testHit) {
@@ -464,12 +529,13 @@ export async function gatherPricingEvidence(dbClient: any, shop: string, shopify
     for (const item of quote.items) {
       const exclusion = evidenceExclusion({ sourceId: quote.id, productName: item.productName, customerName: quote.customerName, email: quote.email, notes: null, quantity: item.quantity, unitPrice: item.unitPrice });
       if (exclusion.excluded) { excluded.push({ label: String(item.productName || "").slice(0, 48), source: "erp_quote", reasons: exclusion.reasons }); continue; }
-      const state: EvidenceRecord["state"] = ACCEPTED_EVIDENCE_STATUSES.includes(quote.status) ? "accepted" : LOST_EVIDENCE_STATUSES.includes(quote.status) ? "lost" : "open";
+      if (quotePreLaunch) { excluded.push({ label: String(item.productName || "").slice(0, 48), source: "erp_quote", reasons: [PRE_LAUNCH_REASON] }); continue; }
+      const state: EvidenceRecord["state"] = quoteAccepted ? "accepted" : LOST_EVIDENCE_STATUSES.includes(quote.status) ? "lost" : "open";
       const basket = classifyEvidenceBasket({ productName: item.productName, variantTitle: item.variant, selectedFinish: item.selectedFinish, costSnapshot: item.costSnapshot, quantity: item.quantity });
       const key = customerKey(quote.email, quote.customerName);
       allCustomers.add(key);
       if (state === "accepted") won += 1; else if (state === "lost") lost += 1; else open += 1;
-      records.push({ source: "erp_quote", basket, key: basketKey(basket), quantity: item.quantity, unitPrice: item.unitPrice, state, customerKey: key, evidenceAt: quote.outcomeAt ?? quote.updatedAt ?? quote.createdAt, exactSnapshot: Boolean(item.costSnapshot) });
+      records.push({ source: "erp_quote", basket, key: basketKey(basket), quantity: item.quantity, unitPrice: item.unitPrice, state, customerKey: key, evidenceAt: quoteEvidenceAt, exactSnapshot: Boolean(item.costSnapshot) });
     }
   }
 
@@ -506,6 +572,14 @@ export async function gatherPricingEvidence(dbClient: any, shop: string, shopify
         });
       }
       excluded.push({ label, source: "production_job", reasons: [DEDUP_REASON] });
+      continue;
+    }
+    // 15F.0K.4H: job evidence date = createdAt (the linked Shopify processed
+    // date, when one exists, governs the Shopify record itself — pre-launch
+    // Shopify lines are excluded during normalization, so their job twins
+    // land here and are excluded by the same cutoff).
+    if (isPreLaunchEvidence(item.createdAt, liveFrom)) {
+      excluded.push({ label, source: "production_job", reasons: [PRE_LAUNCH_REASON] });
       continue;
     }
     const state: EvidenceRecord["state"] = quoteRef.startsWith("shopify_order_") ? "accepted" : "open";

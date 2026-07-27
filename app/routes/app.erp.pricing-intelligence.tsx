@@ -2,7 +2,13 @@ import type React from "react";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { aggregateEvidence, gatherPricingEvidence } from "../lib/pricing-intelligence.server";
+import {
+  PRE_LAUNCH_REASON,
+  aggregateEvidence,
+  gatherPricingEvidence,
+  isPreLaunchEvidence,
+  loadPricingEvidenceLiveFrom,
+} from "../lib/pricing-intelligence.server";
 import {
   SHOPIFY_ACCESS_BLOCKED_MESSAGE,
   buildShopifyEvidenceContext,
@@ -29,10 +35,17 @@ export async function loader({ request }: { request: Request }) {
   // 15F.0K.4G: cache loads FIRST so gathering can deduplicate production-job
   // twins of Shopify sales and exclude ERP evidence paid by Shopify test
   // orders (exact id joins only — Shopify record wins).
+  const liveFrom = await loadPricingEvidenceLiveFrom(db, shop);
   const shopify = await loadShopifyEvidenceCache(db, shop);
-  const local = await gatherPricingEvidence(db, shop, buildShopifyEvidenceContext(shopify.cache, shopify.records));
-  const combined = [...local.records, ...shopify.records];
+  // 15F.0K.4H: re-apply the live-sales cutoff to the cached records too, so a
+  // cache refreshed BEFORE 4H can never keep pre-launch evidence eligible.
+  const keptShopifyRecords = shopify.records.filter((record) => !isPreLaunchEvidence(record.evidenceAt, liveFrom?.date ?? null));
+  const staleShopifyPreLaunch = shopify.records.length - keptShopifyRecords.length;
+  const local = await gatherPricingEvidence(db, shop, buildShopifyEvidenceContext(shopify.cache, keptShopifyRecords), { liveFrom: liveFrom?.date ?? null });
+  const combined = [...local.records, ...keptShopifyRecords];
   const baskets = aggregateEvidence(combined);
+  const localPreLaunch = local.excluded.filter((row) => row.reasons.includes(PRE_LAUNCH_REASON)).length;
+  const cachedShopifyPreLaunch = (shopify.cache?.excluded ?? []).filter((row) => row.reasons.includes(PRE_LAUNCH_REASON)).length;
   const cacheAgeDays = shopify.cache?.capturedAt
     ? Math.floor((Date.now() - new Date(shopify.cache.capturedAt).getTime()) / (1000 * 60 * 60 * 24))
     : null;
@@ -41,6 +54,12 @@ export async function loader({ request }: { request: Request }) {
     excluded: local.excluded.slice(0, 50),
     review: local.review.slice(0, 50),
     baskets: baskets.slice(0, 100),
+    liveFrom: liveFrom ? { iso: liveFrom.iso, note: liveFrom.note, changedAt: liveFrom.changedAt } : null,
+    preLaunch: {
+      total: localPreLaunch + cachedShopifyPreLaunch + staleShopifyPreLaunch,
+      local: localPreLaunch,
+      shopify: cachedShopifyPreLaunch + staleShopifyPreLaunch,
+    },
     shopify: {
       connected: Boolean(shopify.cache),
       ok: shopify.cache?.ok ?? false,
@@ -53,7 +72,7 @@ export async function loader({ request }: { request: Request }) {
       orderCount: shopify.cache?.orderCount ?? 0,
       pagesFetched: shopify.cache?.pagesFetched ?? 0,
       truncated: shopify.cache?.truncated ?? false,
-      eligible: shopify.records.length,
+      eligible: keptShopifyRecords.length,
       excluded: (shopify.cache?.excluded ?? []).slice(0, 50),
       incomplete: (shopify.cache?.incomplete ?? []).slice(0, 50),
       earliest: shopify.cache?.earliest ?? null,
@@ -72,9 +91,10 @@ export async function action({ request }: { request: Request }) {
   // READ-ONLY refresh: fetch -> normalize -> cache. Errors are cached as a
   // clear state (blocked/failed) so the rest of the page keeps working.
   try {
+    const liveFrom = await loadPricingEvidenceLiveFrom(db, shop);
     const previous = await loadShopifyEvidenceCache(db, shop);
     const { orders, pagesFetched, truncated } = await fetchShopifyOrderEvidence(admin);
-    const normalized = normalizeShopifyOrderEvidence(orders);
+    const normalized = normalizeShopifyOrderEvidence(orders, { liveFrom: liveFrom?.date ?? null });
     await saveShopifyEvidenceCache(db, shop, {
       capturedAt: new Date().toISOString(),
       ok: true,
@@ -90,12 +110,19 @@ export async function action({ request }: { request: Request }) {
       incomplete: normalized.incomplete,
       testOrders: normalized.testOrders,
     });
+    // 15F.0K.4H: when the cutoff newly re-evaluated previously-cached
+    // evidence, say so with the owner-approved wording; otherwise fall back
+    // to the 4G reclassification notice when basket keys changed.
+    const liveFromApplied = Boolean(liveFrom) &&
+      previous.records.some((record) => isPreLaunchEvidence(record.evidenceAt, liveFrom!.date));
     const reclassified = Boolean(previous.cache) &&
       evidenceKeysChanged(previous.records.map((record) => record.key), normalized.records.map((record) => record.key));
     return Response.json({
       ok: true,
       message: `Shopify evidence refreshed: ${normalized.records.length} accepted line(s) from ${normalized.orderCount} order(s).` +
-        (reclassified ? " Historical evidence was reclassified using updated deterministic rules." : ""),
+        (liveFromApplied
+          ? " Historical evidence was re-evaluated using the owner-approved live-sales start date."
+          : reclassified ? " Historical evidence was reclassified using updated deterministic rules." : ""),
     });
   } catch (error: any) {
     const message = String(error?.message || error || "Shopify refresh failed.");
@@ -122,7 +149,7 @@ const card: React.CSSProperties = { marginTop: 16, border: "1px solid #e5e7eb", 
 const stat: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px", minWidth: 150, background: "#f9fafb" };
 
 export default function PricingIntelligence() {
-  const { totals, excluded, review, baskets, shopify } = useLoaderData<typeof loader>();
+  const { totals, excluded, review, baskets, shopify, liveFrom, preLaunch } = useLoaderData<typeof loader>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -165,6 +192,21 @@ export default function PricingIntelligence() {
             <span style={{ color: "#991b1b" }}>Last refresh failed: {shopify.error}</span>
           )}
         </div>
+        <div style={{ fontSize: 13, marginTop: 10, padding: "8px 10px", borderRadius: 8, background: liveFrom ? "#f0fdf4" : "#fef2f2", border: `1px solid ${liveFrom ? "#bbf7d0" : "#fecaca"}` }}>
+          {liveFrom ? (
+            <>
+              <b>Live sales evidence begins: {new Date(liveFrom.iso).toLocaleString()}.</b>{" "}
+              Earlier Shopify, quote, and production records are retained as pre-launch test evidence but do not
+              affect pricing statistics.
+              {liveFrom.note ? <div style={{ color: "#166534", marginTop: 4 }}>{liveFrom.note}</div> : null}
+            </>
+          ) : (
+            <b style={{ color: "#991b1b" }}>
+              No live-sales start date is set — pre-launch test transactions could be counted as evidence. Set
+              pricingEvidenceLiveFrom (owner action) before trusting any counts here.
+            </b>
+          )}
+        </div>
         <Form method="post" style={{ marginTop: 10 }}>
           <input type="hidden" name="intent" value="refreshShopifyEvidence" />
           <button type="submit" disabled={busy} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", background: "#111827", color: "white", fontWeight: 600 }}>
@@ -181,6 +223,7 @@ export default function PricingIntelligence() {
           <div style={stat}><b>{shopify.eligible}</b><div style={{ fontSize: 12, color: "#6b7280" }}>Shopify eligible evidence</div></div>
           <div style={stat}><b>{shopify.excluded.length}</b><div style={{ fontSize: 12, color: "#6b7280" }}>Shopify excluded</div></div>
           <div style={stat}><b>{shopify.incomplete.length}</b><div style={{ fontSize: 12, color: "#6b7280" }}>Shopify incomplete price</div></div>
+          <div style={{ ...stat, borderColor: "#fde68a", background: "#fffbeb" }}><b>{preLaunch.total}</b><div style={{ fontSize: 12, color: "#92400e" }}>Pre-launch test evidence</div></div>
           <div style={stat}><b>{totals.excluded}</b><div style={{ fontSize: 12, color: "#6b7280" }}>Local excluded test records</div></div>
           <div style={stat}><b>{totals.won}</b><div style={{ fontSize: 12, color: "#6b7280" }}>Local accepted / won</div></div>
           <div style={stat}><b>{totals.lost}</b><div style={{ fontSize: 12, color: "#6b7280" }}>Local lost / canceled / expired</div></div>

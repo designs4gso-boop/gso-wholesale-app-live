@@ -17,6 +17,8 @@ import {
   basketKey,
   customerKey,
   evidenceExclusion,
+  isPreLaunchEvidence,
+  PRE_LAUNCH_REASON,
   type EvidenceRecord,
   type ShopifyEvidenceContext,
 } from "./pricing-intelligence.server";
@@ -109,7 +111,8 @@ const money = (set: any): number | null => {
 // plus the fully-refunded order rule below.
 const ACCEPTED_FINANCIAL = ["PAID", "PARTIALLY_REFUNDED"];
 
-export function normalizeShopifyOrderEvidence(orders: any[]): ShopifyEvidenceNormalization {
+export function normalizeShopifyOrderEvidence(orders: any[], options?: { liveFrom?: Date | null }): ShopifyEvidenceNormalization {
+  const liveFrom = options?.liveFrom ?? null;
   const records: EvidenceRecord[] = [];
   const excluded: NormalizedNote[] = [];
   const incomplete: NormalizedNote[] = [];
@@ -151,6 +154,13 @@ export function normalizeShopifyOrderEvidence(orders: any[]): ShopifyEvidenceNor
 
     const evidenceAtIso = String(order?.processedAt || order?.createdAt || "");
     const evidenceAt = evidenceAtIso ? new Date(evidenceAtIso) : new Date();
+    // 15F.0K.4H: orders processed before the owner-approved live-sales start
+    // date are pre-launch test evidence — retained in the excluded audit
+    // list, never counted, and kept OUT of the evidence date window.
+    if (isPreLaunchEvidence(evidenceAt, liveFrom)) {
+      excludeOrder(PRE_LAUNCH_REASON);
+      continue;
+    }
     const dateSlice = evidenceAt.toISOString().slice(0, 10);
     if (!earliest || dateSlice < earliest) earliest = dateSlice;
     if (!latest || dateSlice > latest) latest = dateSlice;
