@@ -93,9 +93,12 @@ export function evidenceExclusion(record: {
 // never contaminate a narrowly defined basket. 4X is never treated as 3X.
 export type EvidenceBasket = {
   family: string; // sticker-bags | stickers-labels | premium-jars | standard-jars | banners | dtp-bags | custom-item | unknown
-  sizeToken: string; // e.g. 4x5 | 100ml | unknown
+  sizeToken: string; // e.g. 4x5 | 14x18.6 | 100ml-tall | unknown
   productForm: "finished_applied" | "labels_only" | "jar_labels" | "finished_jar_set" | "unknown";
-  sides: "1" | "2" | "unknown";
+  // bags use 1/2; jar families use explicit label-zone values (15F.0K.4G) —
+  // jars NEVER take 1/2 because webhook priceSnapshot.sides carries a
+  // meaningless "Double Sided" default on jar jobs (4F audit finding)
+  sides: "1" | "2" | "side" | "lid" | "side_lid" | "side_lid_bottom" | "side_lid_lidside" | "unknown";
   materialClass: "matte" | "gloss" | "holographic" | "clear" | "unknown";
   whiteLayers: string; // "0" | "1".. | "unknown"
   glossStage: string; // "0" | "1" | "3" | "4" | "5" | "7" | "unknown"
@@ -119,7 +122,33 @@ export function qtyBandFor(quantity: number): string {
   return "unknown";
 }
 
-const SIZE_RE = /(\d{1,2}\s*[xX]\s*\d{1,2})|((?:50|100|150|250)\s*ml)|([345]\s*oz)/;
+// 15F.0K.4G: case-insensitive (the 4F audit found "100ML Tall" failing while
+// "jar_100ml_tall" matched), decimal-aware dimensions (14x18.6 is not 14x18),
+// and ml sizes keep their tall/wide orientation (100ml-tall never collapses
+// into 100ml-wide; bare "100ml" stays its own segment).
+const SIZE_RE = /(\d{1,2}(?:\.\d+)?\s*x\s*\d{1,2}(?:\.\d+)?)|((?:50|100|150|250)\s*ml(?:[\s_-]*(?:tall|wide))?)|([345]\s*oz)/i;
+
+function sizeTokenFrom(text: string): string {
+  const match = text.match(SIZE_RE);
+  if (!match) return "unknown";
+  const raw = match[0].toLowerCase();
+  if (match[2]) {
+    const ml = raw.match(/(50|100|150|250)/)?.[1] ?? "";
+    const orientation = /tall/.test(raw) ? "-tall" : /wide/.test(raw) ? "-wide" : "";
+    return `${ml}ml${orientation}`;
+  }
+  return raw.replace(/\s+/g, "");
+}
+
+// Explicit jar label-zone vocabulary (15F.0K.4G) — longest match first so
+// "Side + Lid + Bottom" never degrades to "side_lid". Sets never merge.
+const JAR_LABEL_ZONES: Array<[RegExp, EvidenceBasket["sides"]]> = [
+  [/side\s*\+\s*lid\s*\+\s*bottom/i, "side_lid_bottom"],
+  [/side\s*\+\s*lid\s*\+\s*lid\s*side/i, "side_lid_lidside"],
+  [/side\s*\+\s*lid/i, "side_lid"],
+  [/\bside\s*only\b/i, "side"],
+  [/\blid\s*only\b/i, "lid"],
+];
 
 export function classifyEvidenceBasket(input: {
   productName?: string | null;
@@ -163,8 +192,8 @@ export function classifyEvidenceBasket(input: {
 
   // 2) conservative text parsing (configurator variant vocabulary)
   if (family === "unknown") {
-    if (/\bbag\b/i.test(text)) family = "sticker-bags";
-    else if (/\bjar\b|\bmiron\b|\bchiron\b/i.test(text)) family = /miron|chiron/i.test(text) ? "premium-jars" : "standard-jars";
+    if (/\bbags?\b/i.test(text)) family = "sticker-bags";
+    else if (/\bjars?\b|\bmiron\b|\bchiron\b/i.test(text)) family = /miron|chiron/i.test(text) ? "premium-jars" : "standard-jars";
     else if (/sticker|label/i.test(text)) family = "stickers-labels";
     else if (/banner/i.test(text)) family = "banners";
     else if (/pouch|dtp/i.test(text)) family = "dtp-bags";
@@ -180,13 +209,29 @@ export function classifyEvidenceBasket(input: {
     if (spot) glossStage = spot[1];
     else if (/no\s*spot\s*gloss/i.test(text)) glossStage = "0";
   }
-  if (whiteLayers === "unknown" && /white/i.test(text) && materialClass !== "unknown") {
-    // "Holo + White + 4X Spot Gloss" style — presence known, count not
-    whiteLayers = /white/i.test(text) ? "1+" : "unknown";
+  // 15F.0K.4G: white ink ONLY from explicit ink/layer context. The 4F audit
+  // proved bare "white" is usually COLOR vocabulary — "Matte Vinyl / White /
+  // Front Only" is a white BAG, "3oz Black/White Jar" is the jar color
+  // program, "Bag Color: White" / "Jar Color: White" are color fields. None
+  // of those may ever imply white ink; missing information stays unknown and
+  // is never assumed to be zero.
+  if (whiteLayers === "unknown") {
+    const numeric = text.match(/white\s*layers?\s*[:=]\s*(\d+)/i);
+    if (numeric) whiteLayers = String(Math.floor(Number(numeric[1])));
+    else if (/white\s*ink\b|\+\s*white\b|white\s*underbase\b|\bwhite\s*layers?\b/i.test(text)) whiteLayers = "1+";
   }
   if (sides === "unknown") {
     if (/double|front\s*(and|\+|&)\s*back|both sides/i.test(text)) sides = "2";
     else if (/single|front only|one side/i.test(text)) sides = "1";
+  }
+  // 15F.0K.4G: jar families take sides ONLY from the explicit label-zone
+  // vocabulary (Label Set attribute / materialSummary / exact configurator
+  // tokens). Generic double/single tokens and snapshot faces are IGNORED for
+  // jars — the 4F audit found the paid-order webhook stamps a meaningless
+  // "Double Sided" default into jar priceSnapshots. Absent zone => unknown.
+  if (family === "premium-jars" || family === "standard-jars") {
+    const zone = JAR_LABEL_ZONES.find(([pattern]) => pattern.test(text));
+    sides = zone ? zone[1] : "unknown";
   }
   if (productForm === "unknown") {
     if (/side\s*\+\s*lid|jar/i.test(text) && family.includes("jar")) productForm = /label only|labels only/i.test(text) ? "jar_labels" : "finished_jar_set";
@@ -194,10 +239,7 @@ export function classifyEvidenceBasket(input: {
     else if (family === "stickers-labels") productForm = "labels_only";
   }
 
-  const sizeMatch = text.match(SIZE_RE);
-  const sizeToken = sizeMatch ? sizeMatch[0].toLowerCase().replace(/\s+/g, "") : "unknown";
-
-  return { family, sizeToken, productForm, sides, materialClass, whiteLayers, glossStage, qtyBand: qtyBandFor(input.quantity) };
+  return { family, sizeToken: sizeTokenFrom(text), productForm, sides, materialClass, whiteLayers, glossStage, qtyBand: qtyBandFor(input.quantity) };
 }
 
 export function basketKey(basket: EvidenceBasket): string {
@@ -240,7 +282,59 @@ export type EvidenceRecord = {
   exactSnapshot: boolean; // true when classified from a structured snapshot (exact match capable)
   // 15F.0K.4E: Shopify discount detail (gross/allocated/net) — audit only
   pricing?: { grossLineTotal: number; allocatedDiscount: number; netLineTotal: number; netUnitPrice: number };
+  // 15F.0K.4G: Shopify OBJECT ids (order/line digit tails) for exact
+  // dedup joins — never customer identity, safe to cache and serialize
+  refs?: { orderId?: string | null; lineItemId?: string | null };
 };
+
+// ---------- Shopify dedup / test-propagation context (15F.0K.4G) ----------
+// Built from the cached Shopify evidence. gatherPricingEvidence uses it so a
+// sale that already exists as a shopify_order record is never ALSO counted
+// through its webhook-created production-job twin, and so ERP jobs paid by
+// Shopify TEST orders are excluded. Shopify wins over the job twin because it
+// carries the realized net price, discounts, the test flag, and refund state.
+export type ShopifyEvidenceContext = {
+  lineItemIds: Set<string>;
+  orderIds: Set<string>;
+  keysByLineItemId: Map<string, string>;
+  testOrders: Array<{ id: string; name: string }>;
+};
+
+export type EvidenceReviewItem = {
+  source: "erp_quote" | "production_job";
+  id: string; // quote id / job source ref — never a customer identity
+  reason: string;
+  suggestedAction: string;
+};
+
+export const DEDUP_REASON = "Duplicate of Shopify order-line evidence";
+export const TEST_ORDER_REASON = "Paid by Shopify test order";
+
+// Exact source refs of a production-job item: primary = priceSnapshot
+// lineItemId/orderId written by the paid-order webhook; fallback = the job's
+// quoteId ("shopify_order_<numeric id>" or "shopify_order_gid://shopify/Order/<id>").
+export function shopifyRefsFromJobItem(quoteRef?: string | null, priceSnapshot?: string | null): { orderId: string | null; lineItemId: string | null } {
+  const digitTail = (value: any): string | null => {
+    const raw = String(value || "");
+    const tail = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+    const digits = tail.replace(/\D/g, "");
+    return digits || null;
+  };
+  let orderId: string | null = null;
+  let lineItemId: string | null = null;
+  const ref = String(quoteRef || "");
+  if (ref.startsWith("shopify_order_")) orderId = digitTail(ref.slice("shopify_order_".length));
+  if (priceSnapshot) {
+    try {
+      const parsed = JSON.parse(priceSnapshot);
+      orderId = orderId || digitTail(parsed?.orderId);
+      lineItemId = digitTail(parsed?.lineItemId);
+    } catch {
+      // unreadable snapshot -> fall back to the quoteId-derived order id only
+    }
+  }
+  return { orderId, lineItemId };
+}
 
 export type BasketAggregate = {
   key: string;
@@ -318,9 +412,10 @@ export function aggregateEvidence(records: EvidenceRecord[]): BasketAggregate[] 
 }
 
 // ---------- gather (thin DB wrapper; identities hashed before return) ----------
-export async function gatherPricingEvidence(dbClient: any, shop: string): Promise<{
+export async function gatherPricingEvidence(dbClient: any, shop: string, shopifyContext?: ShopifyEvidenceContext): Promise<{
   records: EvidenceRecord[];
   excluded: Array<{ label: string; source: string; reasons: string[] }>;
+  review: EvidenceReviewItem[];
   totals: { reviewed: number; eligible: number; excluded: number; won: number; lost: number; open: number; distinctCustomers: number };
 }> {
   const [quotes, jobItems] = await Promise.all([
@@ -335,6 +430,7 @@ export async function gatherPricingEvidence(dbClient: any, shop: string): Promis
     dbClient.productionJobItem.findMany({
       select: {
         productTitle: true, variantTitle: true, quantity: true, unitPrice: true, selectedFinish: true, costSnapshot: true, createdAt: true,
+        priceSnapshot: true, materialSummary: true,
         job: { select: { shop: true, quoteId: true, status: true, customerName: true, email: true } },
       },
       take: 2000,
@@ -343,10 +439,28 @@ export async function gatherPricingEvidence(dbClient: any, shop: string): Promis
 
   const records: EvidenceRecord[] = [];
   const excluded: Array<{ label: string; source: string; reasons: string[] }> = [];
+  const review: EvidenceReviewItem[] = [];
   const allCustomers = new Set<string>();
+  const testOrderIds = new Set((shopifyContext?.testOrders ?? []).map((order) => order.id));
   let won = 0; let lost = 0; let open = 0;
 
   for (const quote of quotes) {
+    // 15F.0K.4G staff-review flag (never an automatic exclusion): an
+    // accepted-status quote whose payment note references a Shopify TEST
+    // order name. The name link is not a deterministic id join, so this is
+    // surfaced for review instead of excluded.
+    if (ACCEPTED_EVIDENCE_STATUSES.includes(quote.status)) {
+      const notes = String(quote.notes || "");
+      const testHit = (shopifyContext?.testOrders ?? []).find((order) => order.name && notes.includes(`Shopify order ${order.name})`));
+      if (testHit) {
+        review.push({
+          source: "erp_quote",
+          id: String(quote.id),
+          reason: `Quote payment note references Shopify test order ${testHit.name}`,
+          suggestedAction: "If this was a test payment, add [TEST DATA] to the quote notes so its items stop counting as evidence",
+        });
+      }
+    }
     for (const item of quote.items) {
       const exclusion = evidenceExclusion({ sourceId: quote.id, productName: item.productName, customerName: quote.customerName, email: quote.email, notes: null, quantity: item.quantity, unitPrice: item.unitPrice });
       if (exclusion.excluded) { excluded.push({ label: String(item.productName || "").slice(0, 48), source: "erp_quote", reasons: exclusion.reasons }); continue; }
@@ -363,19 +477,48 @@ export async function gatherPricingEvidence(dbClient: any, shop: string): Promis
     if (item.job?.shop && item.job.shop !== shop) continue;
     const quoteRef = String(item.job?.quoteId || "");
     if (quoteRef && !quoteRef.startsWith("shopify_order_") && !quoteRef.startsWith("manual_") && !quoteRef.startsWith("test_")) continue; // quote-linked items already counted via the quote
+    const label = String(item.productTitle || "").slice(0, 48);
     const exclusion = evidenceExclusion({ sourceId: quoteRef || "no-source", productName: item.productTitle, customerName: item.job?.customerName, email: item.job?.email, notes: null, quantity: item.quantity, unitPrice: item.unitPrice });
-    if (exclusion.excluded) { excluded.push({ label: String(item.productTitle || "").slice(0, 48), source: "production_job", reasons: exclusion.reasons }); continue; }
+    if (exclusion.excluded) { excluded.push({ label, source: "production_job", reasons: exclusion.reasons }); continue; }
+
+    // 15F.0K.4G: materialSummary is the webhook's clean structured echo of
+    // the real line properties ("Key: Value | ..."), so it feeds the same
+    // classification path as Shopify custom attributes. priceSnapshot is
+    // used ONLY for exact id joins — never for classification (its jar
+    // `sides` value is a meaningless default per the 4F audit).
+    const basket = classifyEvidenceBasket({
+      productName: item.productTitle, variantTitle: item.variantTitle, selectedFinish: item.selectedFinish,
+      costSnapshot: item.costSnapshot, attributeText: item.materialSummary, quantity: item.quantity,
+    });
+    const refs = shopifyRefsFromJobItem(quoteRef, item.priceSnapshot);
+    if (refs.orderId && testOrderIds.has(refs.orderId)) {
+      excluded.push({ label, source: "production_job", reasons: [TEST_ORDER_REASON] });
+      continue;
+    }
+    if (shopifyContext && ((refs.lineItemId && shopifyContext.lineItemIds.has(refs.lineItemId)) || (refs.orderId && shopifyContext.orderIds.has(refs.orderId)))) {
+      const shopifyKey = refs.lineItemId ? shopifyContext.keysByLineItemId.get(refs.lineItemId) : undefined;
+      if (shopifyKey && shopifyKey !== basketKey(basket)) {
+        review.push({
+          source: "production_job",
+          id: quoteRef || "no-source",
+          reason: `Classification conflict with the counted Shopify line (job: ${basketKey(basket)} vs Shopify: ${shopifyKey})`,
+          suggestedAction: "Shopify record is counted. Refresh Shopify evidence to rebuild classifications, then re-check",
+        });
+      }
+      excluded.push({ label, source: "production_job", reasons: [DEDUP_REASON] });
+      continue;
+    }
     const state: EvidenceRecord["state"] = quoteRef.startsWith("shopify_order_") ? "accepted" : "open";
-    const basket = classifyEvidenceBasket({ productName: item.productTitle, variantTitle: item.variantTitle, selectedFinish: item.selectedFinish, costSnapshot: item.costSnapshot, quantity: item.quantity });
     const key = customerKey(item.job?.email, item.job?.customerName);
     allCustomers.add(key);
     if (state === "accepted") won += 1; else open += 1;
-    records.push({ source: "production_job", basket, key: basketKey(basket), quantity: item.quantity, unitPrice: item.unitPrice, state, customerKey: key, evidenceAt: item.createdAt, exactSnapshot: Boolean(item.costSnapshot) });
+    records.push({ source: "production_job", basket, key: basketKey(basket), quantity: item.quantity, unitPrice: item.unitPrice, state, customerKey: key, evidenceAt: item.createdAt, exactSnapshot: Boolean(item.costSnapshot), refs });
   }
 
   return {
     records,
     excluded,
+    review,
     totals: { reviewed: records.length + excluded.length, eligible: records.length, excluded: excluded.length, won, lost, open, distinctCustomers: allCustomers.size },
   };
 }

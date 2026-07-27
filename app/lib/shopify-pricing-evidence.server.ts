@@ -18,6 +18,7 @@ import {
   customerKey,
   evidenceExclusion,
   type EvidenceRecord,
+  type ShopifyEvidenceContext,
 } from "./pricing-intelligence.server";
 
 export const SHOPIFY_EVIDENCE_SETTING_KEY = "pricingIntelligence.shopifyEvidence";
@@ -79,9 +80,21 @@ export type ShopifyEvidenceNormalization = {
   records: EvidenceRecord[];
   excluded: NormalizedNote[];
   incomplete: NormalizedNote[]; // pricingIncomplete — never enters medians
+  // 15F.0K.4G: excluded TEST orders (id digit-tail + order name, both
+  // privacy-safe) so ERP job/quote evidence paid by them can be excluded
+  // or flagged during gathering.
+  testOrders: Array<{ id: string; name: string }>;
   orderCount: number;
   earliest: string | null;
   latest: string | null;
+};
+
+// digit tail of a Shopify gid/id ("gid://shopify/Order/123" -> "123")
+const idTail = (value: any): string | null => {
+  const raw = String(value || "");
+  const tail = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+  const digits = tail.replace(/\D/g, "");
+  return digits || null;
 };
 
 const money = (set: any): number | null => {
@@ -100,6 +113,7 @@ export function normalizeShopifyOrderEvidence(orders: any[]): ShopifyEvidenceNor
   const records: EvidenceRecord[] = [];
   const excluded: NormalizedNote[] = [];
   const incomplete: NormalizedNote[] = [];
+  const testOrders: Array<{ id: string; name: string }> = [];
   let earliest: string | null = null;
   let latest: string | null = null;
 
@@ -110,7 +124,12 @@ export function normalizeShopifyOrderEvidence(orders: any[]): ShopifyEvidenceNor
       excluded.push({ label: `${orderLabel} (${lines.length} line(s))`, source: "shopify_order", reasons: [reason] });
     };
 
-    if (order?.test === true) { excludeOrder("Shopify test order"); continue; }
+    if (order?.test === true) {
+      const testId = idTail(order?.id);
+      if (testId) testOrders.push({ id: testId, name: orderLabel });
+      excludeOrder("Shopify test order");
+      continue;
+    }
     if (order?.cancelledAt) { excludeOrder("canceled order"); continue; }
     const financial = String(order?.displayFinancialStatus || "").toUpperCase();
     if (!ACCEPTED_FINANCIAL.includes(financial)) {
@@ -204,11 +223,12 @@ export function normalizeShopifyOrderEvidence(orders: any[]): ShopifyEvidenceNor
         evidenceAt,
         exactSnapshot: (line?.customAttributes || []).length > 0,
         pricing: { grossLineTotal: gross, allocatedDiscount, netLineTotal: net, netUnitPrice: netUnit },
+        refs: { orderId: idTail(order?.id), lineItemId: idTail(line?.id) },
       });
     }
   }
 
-  return { records, excluded, incomplete, orderCount: (orders || []).length, earliest, latest };
+  return { records, excluded, incomplete, testOrders, orderCount: (orders || []).length, earliest, latest };
 }
 
 // ---------- paginated fetch (read-only; defensive caps) ----------
@@ -251,7 +271,35 @@ export type ShopifyEvidenceCache = {
   records: Array<Omit<EvidenceRecord, "evidenceAt"> & { evidenceAt: string }>;
   excluded: NormalizedNote[];
   incomplete: NormalizedNote[];
+  // 15F.0K.4G — optional so caches written before 4G still load cleanly
+  testOrders?: Array<{ id: string; name: string }>;
 };
+
+// 15F.0K.4G: dedup/test-propagation context for gatherPricingEvidence,
+// built entirely from the privacy-safe cache (object ids + basket keys).
+export function buildShopifyEvidenceContext(cache: ShopifyEvidenceCache | null, records: EvidenceRecord[]): ShopifyEvidenceContext {
+  const lineItemIds = new Set<string>();
+  const orderIds = new Set<string>();
+  const keysByLineItemId = new Map<string, string>();
+  for (const record of records) {
+    if (record.refs?.lineItemId) {
+      lineItemIds.add(record.refs.lineItemId);
+      keysByLineItemId.set(record.refs.lineItemId, record.key);
+    }
+    if (record.refs?.orderId) orderIds.add(record.refs.orderId);
+  }
+  return { lineItemIds, orderIds, keysByLineItemId, testOrders: cache?.testOrders ?? [] };
+}
+
+// Order-insensitive basket-key multiset comparison — used by the refresh
+// action to show the reclassification notice when updated deterministic
+// rules changed how cached history classifies.
+export function evidenceKeysChanged(previous: string[], next: string[]): boolean {
+  if (previous.length !== next.length) return true;
+  const sortedPrevious = [...previous].sort();
+  const sortedNext = [...next].sort();
+  return sortedPrevious.some((key, index) => key !== sortedNext[index]);
+}
 
 export function isAccessDeniedError(message: string): boolean {
   return /access\s*denied|not\s*approved|read_all_orders|unauthorized|403/i.test(String(message || ""));

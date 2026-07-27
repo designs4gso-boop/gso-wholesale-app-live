@@ -5,6 +5,8 @@ import db from "../db.server";
 import { aggregateEvidence, gatherPricingEvidence } from "../lib/pricing-intelligence.server";
 import {
   SHOPIFY_ACCESS_BLOCKED_MESSAGE,
+  buildShopifyEvidenceContext,
+  evidenceKeysChanged,
   fetchShopifyOrderEvidence,
   isAccessDeniedError,
   loadShopifyEvidenceCache,
@@ -24,10 +26,11 @@ import {
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
-  const [local, shopify] = await Promise.all([
-    gatherPricingEvidence(db, shop),
-    loadShopifyEvidenceCache(db, shop),
-  ]);
+  // 15F.0K.4G: cache loads FIRST so gathering can deduplicate production-job
+  // twins of Shopify sales and exclude ERP evidence paid by Shopify test
+  // orders (exact id joins only — Shopify record wins).
+  const shopify = await loadShopifyEvidenceCache(db, shop);
+  const local = await gatherPricingEvidence(db, shop, buildShopifyEvidenceContext(shopify.cache, shopify.records));
   const combined = [...local.records, ...shopify.records];
   const baskets = aggregateEvidence(combined);
   const cacheAgeDays = shopify.cache?.capturedAt
@@ -36,6 +39,7 @@ export async function loader({ request }: { request: Request }) {
   return {
     totals: local.totals,
     excluded: local.excluded.slice(0, 50),
+    review: local.review.slice(0, 50),
     baskets: baskets.slice(0, 100),
     shopify: {
       connected: Boolean(shopify.cache),
@@ -68,6 +72,7 @@ export async function action({ request }: { request: Request }) {
   // READ-ONLY refresh: fetch -> normalize -> cache. Errors are cached as a
   // clear state (blocked/failed) so the rest of the page keeps working.
   try {
+    const previous = await loadShopifyEvidenceCache(db, shop);
     const { orders, pagesFetched, truncated } = await fetchShopifyOrderEvidence(admin);
     const normalized = normalizeShopifyOrderEvidence(orders);
     await saveShopifyEvidenceCache(db, shop, {
@@ -83,8 +88,15 @@ export async function action({ request }: { request: Request }) {
       records: normalized.records.map((record) => ({ ...record, evidenceAt: record.evidenceAt.toISOString() })),
       excluded: normalized.excluded,
       incomplete: normalized.incomplete,
+      testOrders: normalized.testOrders,
     });
-    return Response.json({ ok: true, message: `Shopify evidence refreshed: ${normalized.records.length} accepted line(s) from ${normalized.orderCount} order(s).` });
+    const reclassified = Boolean(previous.cache) &&
+      evidenceKeysChanged(previous.records.map((record) => record.key), normalized.records.map((record) => record.key));
+    return Response.json({
+      ok: true,
+      message: `Shopify evidence refreshed: ${normalized.records.length} accepted line(s) from ${normalized.orderCount} order(s).` +
+        (reclassified ? " Historical evidence was reclassified using updated deterministic rules." : ""),
+    });
   } catch (error: any) {
     const message = String(error?.message || error || "Shopify refresh failed.");
     const accessBlocked = isAccessDeniedError(message);
@@ -110,7 +122,7 @@ const card: React.CSSProperties = { marginTop: 16, border: "1px solid #e5e7eb", 
 const stat: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px", minWidth: 150, background: "#f9fafb" };
 
 export default function PricingIntelligence() {
-  const { totals, excluded, baskets, shopify } = useLoaderData<typeof loader>();
+  const { totals, excluded, review, baskets, shopify } = useLoaderData<typeof loader>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -177,6 +189,23 @@ export default function PricingIntelligence() {
         </div>
       </section>
 
+      {review.length > 0 ? (
+        <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
+          <h2 style={{ margin: "0 0 6px" }}>Staff review — suspicious but not auto-excluded</h2>
+          <p style={{ fontSize: 13, color: "#92400e", margin: "0 0 8px" }}>
+            These records STILL COUNT as evidence. Only deterministic rules exclude automatically; anything that
+            needs judgment lands here instead. No customer names or emails are shown — identifiers are internal ids.
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.8 }}>
+            {review.map((item: any, index: number) => (
+              <li key={index}>
+                <b>[{item.source}]</b> {item.id} — {item.reason}. <i>Suggested: {item.suggestedAction}.</i>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <section style={card}>
         <h2 style={{ margin: "0 0 6px" }}>Evidence readiness by basket</h2>
         <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
@@ -235,6 +264,9 @@ export default function PricingIntelligence() {
           Conservative shared exclusion (one helper everywhere) plus Shopify-specific rules: test orders, canceled,
           not-paid financial statuses, fully refunded orders, refunded lines, gift cards, free/zero-net lines, and
           unclassifiable lines. Incomplete-price rows (discount allocation unavailable) NEVER enter medians.
+          Since 15F.0K.4G, production-job twins of counted Shopify sales are excluded as "Duplicate of Shopify
+          order-line evidence" (one sale = one row; Shopify wins with its realized net price), and ERP jobs created
+          by Shopify TEST orders are excluded as "Paid by Shopify test order" via exact id joins.
         </p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 14, fontSize: 12 }}>
           <div>

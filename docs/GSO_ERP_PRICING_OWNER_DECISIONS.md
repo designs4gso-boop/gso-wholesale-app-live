@@ -129,6 +129,32 @@ shared helper; Shopify order-history ingestion is the NEXT evidence source
 (owner decision needed on read_all_orders scope for >60-day history); no
 automatic pricing from evidence — advisory only.
 
+## 15F.0K.4G note (2026-07-27)
+Evidence accuracy decisions, owner-approved: (1) generic "white" is COLOR
+vocabulary, not white ink — the Zakeke variant middle slot, "Black/White"
+product names, and Bag Color / Jar Color fields never imply ink; white ink
+classifies only from explicit ink/layer context or numeric whiteLayers, and
+missing information stays unknown (never assumed zero). (2) Authoritative
+source hierarchy: explicit configurator snapshot/attributes >
+materialSummary (webhook echo of real line properties) > exact variant
+tokens > title inference; priceSnapshot serves id joins only — its jar
+`sides` value is a meaningless webhook default and is never read. (3) One
+Shopify sale = one evidence row: production-job twins of counted Shopify
+lines are deduplicated by exact lineItemId/orderId joins, Shopify wins
+(realized net price, test flag, refund state), jobs are never deleted.
+(4) Shopify test orders propagate: ERP jobs paid by them are excluded
+("Paid by Shopify test order") by exact id, never by product-name
+guessing — Apples Banana Pebbles stays counted unless the owner marks it
+[TEST DATA]. (5) Jar label zones map explicitly (side / lid / side_lid /
+side_lid_bottom / side_lid_lidside) and never merge. (6) Historical
+unknowns stay unknown: 2024 Zakeke rows have NO gloss-stage or white-ink
+data anywhere — unrecoverable, honestly unclassified. (7) After all
+corrections the honest evidence count DROPS (17 -> 14 accepted) and every
+basket stays below thresholds — statistics remain withheld and nothing
+automatic prices anything. Staff-review section lists suspicious but
+non-deterministic cases (2 paid quotes referencing test orders #1010/
+#1011) without removing them.
+
 ## 15F.0K.4E note (2026-07-26)
 OWNER DECISION: read_all_orders APPROVED (read-only history; write_orders
 deliberately never added; no Shopify edits of any kind; no sensitive

@@ -1669,3 +1669,59 @@ scope pins, order/line eligibility, net-price math, attribute
 classification, privacy, combined-threshold aggregation, pagination cap,
 blocked-state detection, cache round-trip + corruption, page wiring pins);
 build clean; tsc 306 = baseline; no migration.
+
+## Patch 15F.0K.4G — correct pricing evidence classification (2026-07-27)
+Accuracy corrections from the 4F audit — evidence gets MORE honest, never
+more invented. WHITE INK: bare "white" is COLOR vocabulary ("Matte Vinyl /
+White / Front Only" is a white BAG; "3oz Black/White Jar" is the jar color
+program; Bag Color / Jar Color values are colors) and NEVER implies white
+ink; white classifies ONLY from explicit ink/layer context (white ink,
+white layer(s), "+ White", white underbase, numeric whiteLayers, snapshot
+selections). Explicit whiteLayers 0 stays 0; missing stays unknown, never
+assumed zero. The 4 false white:1+ rows found in 4F all correct to
+unknown (verified against production read-back: 0 white:1+ remain). JAR
+LABEL ZONES: jar families take sides ONLY from the explicit label-zone
+vocabulary (Label Set attribute / materialSummary / exact configurator
+tokens): Side Only -> side, Lid Only -> lid, Side + Lid -> side_lid,
+Side + Lid + Bottom -> side_lid_bottom, Side + Lid + Lid Side ->
+side_lid_lidside; zones never merge; generic double/single tokens and
+snapshot faces are IGNORED for jars because the paid-order webhook stamps
+a meaningless "Double Sided" default into jar priceSnapshots (4F
+finding). Both historical jar rows recover side_lid. SIZE: SIZE_RE is now
+case-insensitive ("100ML Tall" parses), ml sizes keep orientation
+(100ml-tall / 100ml-wide / bare 100ml are three segments), and decimal
+dimensions are preserved (the 14x18 rows correctly become 14x18.6 —
+distinct from a true 14x18). DEDUP: one Shopify sale = ONE accepted row.
+gatherPricingEvidence takes a ShopifyEvidenceContext (built from the
+cache); production-job twins of counted Shopify lines are excluded as
+"Duplicate of Shopify order-line evidence" via exact id joins (primary:
+priceSnapshot.lineItemId vs the Shopify line id digit-tail; fallback:
+order id from quoteId shopify_order_<id>, both numeric and gid forms).
+Shopify wins (realized net price, discounts, test flag, refund state).
+Fixes the #1008/#1009 double count AND the doubled distinct-customer
+counts (per-source hashes differed). Jobs are never deleted — dedup lives
+only inside evidence gathering. TEST PROPAGATION: normalization now
+returns excluded test orders (id digit-tail + order name, privacy-safe;
+cached as testOrders); ERP jobs whose exact ids match are excluded as
+"Paid by Shopify test order" (the Ritz #1007 leak). Names are NEVER used
+to auto-exclude — "Apples Banana Pebbles" stays counted. STAFF REVIEW:
+new page section for suspicious-but-not-deterministic evidence (still
+counted): accepted quotes whose payment notes reference a Shopify test
+order name (production read-back flags 2 quotes, #1010/#1011 payments),
+and classification conflicts between a deduped twin and its Shopify line.
+No customer names/emails anywhere. MATERIAL SUMMARY: job records feed
+materialSummary (the webhook's clean "Key: Value | ..." echo of real line
+properties) through the same classifier path as Shopify attributes;
+priceSnapshot is used ONLY for id joins, never classification. REFRESH:
+next staff refresh rebuilds classifications; the action compares basket-
+key multisets and appends "Historical evidence was reclassified using
+updated deterministic rules." when history reclassified. Old caches load
+cleanly (testOrders optional). VERIFIED against production (read-only
+simulation): 12 Shopify rows -> sides unknown 2->0, white:1+ 4->0 (all
+unknown now — no real white evidence exists), gloss unknown stays 10
+(2024 rows are honestly unrecoverable); 2 job twins deduped; 1 test-order
+job excluded; combined accepted 17 -> 14; 4x5 gloss basket reaches 5
+accepted but stays WITHHELD (1/3 customers, 1/2 months); every basket
+ineligible, every median withheld, no market target, no repricing, no
+Shopify writes, no migration. Tests 805 -> 833; build clean; tsc 306 =
+baseline.

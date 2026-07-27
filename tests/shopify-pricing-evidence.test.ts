@@ -11,6 +11,8 @@ import {
   SHOPIFY_EVIDENCE_MAX_PAGES,
   SHOPIFY_EVIDENCE_SETTING_KEY,
   SHOPIFY_ORDER_EVIDENCE_QUERY,
+  buildShopifyEvidenceContext,
+  evidenceKeysChanged,
   fetchShopifyOrderEvidence,
   isAccessDeniedError,
   loadShopifyEvidenceCache,
@@ -492,6 +494,85 @@ describe("evidence cache (K)", () => {
     const loaded = await loadShopifyEvidenceCache(db, "shop1.myshopify.com");
     expect(loaded.cache?.accessBlocked).toBe(true);
     expect(loaded.records).toHaveLength(0);
+  });
+});
+
+// ---------- 15F.0K.4G: refs, test orders, dedup context, reclassification ----------
+
+describe("evidence refs + test-order capture (4G)", () => {
+  it("eligible records carry Shopify OBJECT id digit-tails for exact dedup joins", () => {
+    const result = normalizeShopifyOrderEvidence([makeOrder()]);
+    expect(result.records[0].refs).toEqual({ orderId: "1001", lineItemId: "1" });
+  });
+
+  it("test orders are listed with privacy-safe id + name; real orders are not", () => {
+    const result = normalizeShopifyOrderEvidence([
+      makeOrder(),
+      makeOrder({ id: "gid://shopify/Order/9999", name: "#1099", test: true }),
+    ]);
+    expect(result.testOrders).toEqual([{ id: "9999", name: "#1099" }]);
+    expect(JSON.stringify(result.testOrders)).not.toContain("1001");
+  });
+
+  it("buildShopifyEvidenceContext exposes id sets, key lookup, and test orders", () => {
+    const normalized = normalizeShopifyOrderEvidence([
+      makeOrder(),
+      makeOrder({ id: "gid://shopify/Order/9999", name: "#1099", test: true }),
+    ]);
+    const cache = { testOrders: normalized.testOrders } as ShopifyEvidenceCache;
+    const context = buildShopifyEvidenceContext(cache, normalized.records);
+    expect(context.lineItemIds.has("1")).toBe(true);
+    expect(context.orderIds.has("1001")).toBe(true);
+    expect(context.keysByLineItemId.get("1")).toBe(normalized.records[0].key);
+    expect(context.testOrders).toEqual([{ id: "9999", name: "#1099" }]);
+  });
+
+  it("a legacy pre-4G cache (no testOrders field) builds an empty-test context without crashing", () => {
+    const legacy = { records: [] } as unknown as ShopifyEvidenceCache;
+    const context = buildShopifyEvidenceContext(legacy, []);
+    expect(context.testOrders).toEqual([]);
+    expect(context.lineItemIds.size).toBe(0);
+    expect(buildShopifyEvidenceContext(null, []).testOrders).toEqual([]);
+  });
+
+  it("cache round-trips refs and testOrders", async () => {
+    const rows = new Map<string, any>();
+    const db = {
+      erpAdminSetting: {
+        upsert: async ({ where, update, create }: any) => {
+          const key = `${where.shop_key.shop}:${where.shop_key.key}`;
+          rows.set(key, rows.has(key) ? { ...rows.get(key), ...update } : create);
+        },
+        findUnique: async ({ where }: any) => rows.get(`${where.shop_key.shop}:${where.shop_key.key}`) ?? null,
+      },
+    };
+    const normalized = normalizeShopifyOrderEvidence([makeOrder(), makeOrder({ id: "gid://shopify/Order/9999", name: "#1099", test: true })]);
+    await saveShopifyEvidenceCache(db, "s.myshopify.com", {
+      capturedAt: "2026-07-27T00:00:00.000Z", ok: true, error: null, accessBlocked: false,
+      orderCount: 2, pagesFetched: 1, truncated: false, earliest: normalized.earliest, latest: normalized.latest,
+      records: normalized.records.map((record) => ({ ...record, evidenceAt: record.evidenceAt.toISOString() })),
+      excluded: normalized.excluded, incomplete: normalized.incomplete, testOrders: normalized.testOrders,
+    });
+    const loaded = await loadShopifyEvidenceCache(db, "s.myshopify.com");
+    expect(loaded.records[0].refs).toEqual({ orderId: "1001", lineItemId: "1" });
+    expect(loaded.cache?.testOrders).toEqual([{ id: "9999", name: "#1099" }]);
+  });
+});
+
+describe("reclassification detection (4G-G)", () => {
+  it("same multiset of keys (any order) => unchanged; different keys or counts => changed", () => {
+    expect(evidenceKeysChanged(["a", "b"], ["b", "a"])).toBe(false);
+    expect(evidenceKeysChanged(["a", "b"], ["a", "c"])).toBe(true);
+    expect(evidenceKeysChanged(["a"], ["a", "a"])).toBe(true);
+    expect(evidenceKeysChanged([], [])).toBe(false);
+  });
+
+  it("page shows the exact reclassification notice and passes dedup context into gathering (source pins)", () => {
+    const page = readFileSync("app/routes/app.erp.pricing-intelligence.tsx", "utf8");
+    expect(page).toContain("Historical evidence was reclassified using updated deterministic rules.");
+    expect(page).toContain("buildShopifyEvidenceContext(shopify.cache, shopify.records)");
+    expect(page).toContain("testOrders: normalized.testOrders");
+    expect(page).toContain("Staff review");
   });
 });
 
