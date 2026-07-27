@@ -1560,3 +1560,24 @@ tests/specialty-print-standards.test.ts (22: routing matrix, setup
 once-per-design proofs, coverage validation/monotonicity, recipe-$8 proof,
 preset pins, $45 config resolution, bag regression). Tests 722 -> 744;
 build clean; tsc 306 = baseline; no migration.
+
+## Patch 15F.0K.4C — specialty jobs vs standard market targets (2026-07-26)
+The verified 4x5 market table is STANDARD matte/gloss data — premium
+specialty jobs must never be compared against it. NEW pure classifier
+specialtyFinishReasons (white ink / gloss stages / holographic-or-specialty
+material; Poseidon matte+gloss = standard) feeds
+computeCommercialPrice.marketTargetSpecialtyReasons (loader + save parity).
+When non-empty: the market-target candidate stops contending (cost-led
+premium pricing controls), comparison flags are suppressed (no
+ABOVE MARKET +86/97/129% badges, finalVsMedianPct null, no below-target/
+negotiation-floor warnings), and marketPosition carries applicable:false +
+reasons + the exact messages ("Specialty finish selected — standard 4x5
+market comparison is not applicable..." / "Standard matte reference only —
+not a like-for-like specialty comparison."), with low/median/high preserved
+as labeled reference data. Crossover advisories, costs, margin curves,
+15F.0K.4B gloss setup/coverage, and DTP are byte-untouched; NO specialty
+market table or invented 1X-7X medians. Standard bags unchanged
+($0.85/$1.13 at 1,000 re-pinned). Tests 744 -> 751 (7 new: classifier
+matrix, per-X skip proofs, white/holo skips, cost-led retention,
+no-misleading-percentage, standard+crossover regression, route wiring +
+message pins); build clean; tsc 306; no migration; no DB changes.

@@ -5,15 +5,19 @@
 // anchors ($850 single / $1,130 double); negotiation floors are display data.
 // Bag COSTS are pinned in tests/margin-curve-equivalence.test.ts (unchanged).
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
   MARKET_TARGET_ALLOWED_KEYS,
+  SPECIALTY_MARKET_NOT_APPLICABLE_MESSAGE,
+  STANDARD_MATTE_REFERENCE_NOTE,
   computeCommercialPrice,
   defaultMarketTargetsValues,
   defaultPricingPolicyValues,
   marginCurveKeyFor,
   marketTargetBandFor,
+  specialtyFinishReasons,
 } from "../app/lib/commercial-pricing-policy.server";
 import { resolveMarginFamily } from "../app/lib/calculator-emergency.server";
 import {
@@ -245,5 +249,93 @@ describe("config plumbing: validator details + fail-closed fallback + resolver",
     const db = { erpAdminSetting: { findMany: async () => [{ key: PRICING_MARKET_TARGETS_KEY, value: envelope(disabled) }] } };
     const resolvedDisabled = await resolvePricingPolicyConfig(db, "test-shop.myshopify.com");
     expect((resolvedDisabled.values.marketTargets.families["bags-4x5"] as any).active).toBe(false);
+  });
+});
+
+// ---------- 15F.0K.4C: specialty jobs never compare against the STANDARD table ----------
+describe("15F.0K.4C: specialty finishes skip the standard 4x5 market table", () => {
+  const specialtyPrice = (side: "single" | "double", qty: number, reasons: string[]) =>
+    computeCommercialPrice({
+      familyKey: "sticker-bags", quantity: qty,
+      completeCost: COST_PER_UNIT[side][qty] * qty * 1.4, // premium jobs cost more; exact factor irrelevant
+      marginRule: bagsRule, premiumEligible: false, policyValues: defaultPricingPolicyValues(),
+      marginCurveKey: marginCurveKeyFor("bags-4x5", side === "double" ? 2 : 1),
+      marketTargetSpecialtyReasons: reasons,
+    });
+
+  it("classifier: standard matte/gloss = no reasons; white, gloss stages, holographic/clear = reasons", () => {
+    expect(specialtyFinishReasons({ whiteLayers: 0, glossLayers: 0, materialName: "Poseidon Matte Roll Media" })).toEqual([]);
+    expect(specialtyFinishReasons({ whiteLayers: 0, glossLayers: 0, materialName: "Poseidon Gloss Roll Media" })).toEqual([]);
+    expect(specialtyFinishReasons({ whiteLayers: 1, glossLayers: 0, materialName: "Poseidon Matte Roll Media" })).toEqual(["white ink"]);
+    expect(specialtyFinishReasons({ whiteLayers: 0, glossLayers: 3, materialName: "Poseidon Matte Roll Media" })).toEqual(["gloss stages"]);
+    expect(specialtyFinishReasons({ whiteLayers: 0, glossLayers: 0, materialName: "Holographic Roll Media" })).toEqual(["holographic or specialty material"]);
+    expect(specialtyFinishReasons({ whiteLayers: 2, glossLayers: 0, materialName: "Holographic Roll Media" })).toEqual(["white ink", "holographic or specialty material"]);
+    expect(specialtyFinishReasons({ whiteLayers: 1, glossLayers: 0, materialName: "Clear Roll Media" })).toEqual(["white ink", "holographic or specialty material"]);
+  });
+
+  it("standard matte bag STILL receives the verified market target ($850 at 1,000)", () => {
+    const standard = computeCommercialPrice({
+      familyKey: "sticker-bags", quantity: 1000, completeCost: SINGLE_COST_1000,
+      marginRule: bagsRule, premiumEligible: false, policyValues: defaultPricingPolicyValues(),
+      marginCurveKey: "bags-4x5", marketTargetSpecialtyReasons: [],
+    });
+    expect(standard.finalTotalPrice).toBeCloseTo(850, 6);
+    expect(standard.controllingRule).toBe("Verified market target (owner config)");
+    expect(standard.marketPosition?.applicable).toBe(true);
+    expect(standard.marketPosition?.notApplicableMessage).toBeNull();
+  });
+
+  it("1X, 3X, 5X, and 7X gloss skip the standard target; cost-led pricing controls; no misleading percentage", () => {
+    for (const stages of [1, 3, 5, 7]) {
+      const result = specialtyPrice("single", 1000, ["gloss stages"]);
+      expect(result.candidates.verifiedMarketTargetPrice, `${stages}X candidate`).toBeNull();
+      expect(result.controllingRule).toContain("Cost-based");
+      const pos = result.marketPosition!;
+      expect(pos.applicable).toBe(false);
+      expect(pos.specialtyReasons).toEqual(["gloss stages"]);
+      expect(pos.aboveMarket).toBe(false); // premium price >> matte median, but NO above-market badge
+      expect(pos.finalVsMedianPct).toBeNull(); // no percentage displayed
+      expect(pos.belowTarget).toBe(false);
+      expect(pos.belowNegotiationFloor).toBe(false);
+      expect(pos.notApplicableMessage).toBe(SPECIALTY_MARKET_NOT_APPLICABLE_MESSAGE);
+      expect(pos.referenceNote).toBe(STANDARD_MATTE_REFERENCE_NOTE);
+      expect(pos.median).toBe(0.85); // reference data preserved, clearly labeled
+    }
+  });
+
+  it("white ink skips it; holographic + white skips it with both reasons recorded", () => {
+    const white = specialtyPrice("single", 1000, ["white ink"]);
+    expect(white.candidates.verifiedMarketTargetPrice).toBeNull();
+    expect(white.marketPosition?.applicable).toBe(false);
+    const holoWhite = specialtyPrice("double", 1000, ["white ink", "holographic or specialty material"]);
+    expect(holoWhite.candidates.verifiedMarketTargetPrice).toBeNull();
+    expect(holoWhite.marketPosition?.specialtyReasons).toEqual(["white ink", "holographic or specialty material"]);
+    expect(holoWhite.controllingRule).toContain("Cost-based");
+  });
+
+  it("specialty jobs retain cost-led pricing: final price = cost-based candidate (margins/floors unchanged)", () => {
+    const result = specialtyPrice("single", 1000, ["gloss stages"]);
+    expect(result.finalTotalPrice).toBeCloseTo(result.candidates.costBasedPrice, 8);
+    expect(result.marginPctApplied).toBe(55); // bag band margin untouched
+  });
+
+  it("standard outputs unchanged ($0.85 / $1.13 at 1,000) and 5,000+ crossover behavior unchanged for specialty jobs", () => {
+    const single = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: SINGLE_COST_1000, marginRule: bagsRule, premiumEligible: false, policyValues: defaultPricingPolicyValues(), marginCurveKey: "bags-4x5" });
+    expect(single.finalUnitPrice).toBeCloseTo(0.85, 10);
+    const double = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: DOUBLE_COST_1000, marginRule: bagsRule, premiumEligible: false, policyValues: defaultPricingPolicyValues(), marginCurveKey: "bags-4x5-double" });
+    expect(double.finalUnitPrice).toBeCloseTo(1.13, 10);
+    const specialtyAt5000 = specialtyPrice("double", 5000, ["gloss stages"]);
+    expect(specialtyAt5000.marketPosition?.crossover).toBe("strong"); // advisory unchanged
+    expect(specialtyAt5000.candidates.verifiedMarketTargetPrice).toBeNull(); // (null at 5,000 regardless)
+    expect(specialtyAt5000.controllingRule).toContain("Cost-based");
+  });
+
+  it("route wires the classifier in loader AND save, and renders the exact not-applicable message", () => {
+    const src = readFileSync("app/routes/app.erp.cost-calculator.tsx", "utf8");
+    expect(src).toContain("marketTargetSpecialtyReasons: specialtyReasonsP");
+    expect(src).toContain("marketTargetSpecialtyReasons: specialtyReasonsSave");
+    expect((src.match(/specialtyFinishReasons\(\{/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect(src).toContain("standard 4x5 market comparison not applicable");
+    expect(src).toContain("notApplicableMessage");
   });
 });

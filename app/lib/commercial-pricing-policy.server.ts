@@ -338,6 +338,29 @@ export function marketTargetBandFor(values: PricingPolicyValues, curveKey: strin
   return found;
 }
 
+// ---------- 15F.0K.4C: specialty jobs vs the STANDARD market table ----------
+// The verified 4x5 market table is STANDARD MATTE/GLOSS data. A job with
+// white ink, gloss stages, or a holographic/specialty material must NOT be
+// compared against it (no target candidate, no "above market %" badges) —
+// cost-led premium pricing controls, and the standard figures survive only
+// as a clearly labeled reference. No specialty market table is invented.
+export const SPECIALTY_MARKET_NOT_APPLICABLE_MESSAGE =
+  "Specialty finish selected — standard 4x5 market comparison is not applicable. Cost-led premium pricing controls until a verified specialty market table is available.";
+export const STANDARD_MATTE_REFERENCE_NOTE =
+  "Standard matte reference only — not a like-for-like specialty comparison.";
+
+// Reasons the standard table is skipped (canonical labels, shown in the UI
+// and recorded in snapshots). Standard matte/gloss roll media produce NO
+// reasons; holographic/clear/metallic-class materials do.
+export function specialtyFinishReasons(input: { whiteLayers: number; glossLayers: number; materialName?: string | null }): string[] {
+  const reasons: string[] = [];
+  if (Math.floor(Number(input.whiteLayers) || 0) > 0) reasons.push("white ink");
+  if (Math.floor(Number(input.glossLayers) || 0) > 0) reasons.push("gloss stages");
+  const name = String(input.materialName || "").toLowerCase();
+  if (name && /holographic|\bholo\b|clear|metallic|chrome|mirror|specialty/.test(name)) reasons.push("holographic or specialty material");
+  return reasons;
+}
+
 export type MarketPosition = {
   familyKey: string;
   bandMinQty: number;
@@ -348,11 +371,16 @@ export type MarketPosition = {
   negotiationFloorUnit: number | null;
   premiumTargetUnit: number | null;
   crossover: "mild" | "strong" | null;
-  finalVsMedianPct: number | null; // (finalUnit/median - 1) * 100
-  aboveMarket: boolean; // final unit > median * 1.10
+  finalVsMedianPct: number | null; // (finalUnit/median - 1) * 100; null when not applicable
+  aboveMarket: boolean; // final unit > median * 1.10 (never true when not applicable)
   belowTarget: boolean; // final unit < target (allowed; warning only)
   belowNegotiationFloor: boolean; // final unit < negotiation floor (stronger warning only)
   targetApplied: boolean; // the market-target candidate is the controlling rule
+  // 15F.0K.4C: false = specialty finish — the standard table is reference-only
+  applicable: boolean;
+  specialtyReasons: string[];
+  notApplicableMessage: string | null;
+  referenceNote: string | null;
 };
 
 export type PricingPolicyValues = {
@@ -447,6 +475,10 @@ export function computeCommercialPrice(input: {
   // double). Absent = the margin rule's own key; a variant with no config
   // entry falls back to its base key, then to the positional rule math.
   marginCurveKey?: string | null;
+  // 15F.0K.4C: non-empty = specialty finish (white ink / gloss stages /
+  // specialty material) — the STANDARD market table stops contending and its
+  // comparisons become reference-only (build via specialtyFinishReasons).
+  marketTargetSpecialtyReasons?: string[] | null;
 }): CommercialPriceResult {
   const quantity = Math.max(1, Math.floor(input.quantity));
   const completeCost = Math.max(0, input.completeCost);
@@ -500,7 +532,11 @@ export function computeCommercialPrice(input: {
   // The margin floors and the OWNER MARGIN OVERRIDE gate stay authoritative.
   const staffMarginOverrideActive = input.marginPctOverride != null && Number.isFinite(input.marginPctOverride) && input.marginPctOverride > 0;
   const marketBand = marketTargetBandFor(values, curveKey, quantity);
-  const verifiedMarketTargetPrice = !suppress && !staffMarginOverrideActive && marketBand?.target != null ? marketBand.target * quantity : null;
+  // 15F.0K.4C: a specialty finish makes the STANDARD table inapplicable —
+  // no candidate, no comparisons; cost-led premium pricing controls.
+  const specialtyReasons = (input.marketTargetSpecialtyReasons ?? []).filter((reason) => String(reason || "").trim() !== "");
+  const marketApplicable = specialtyReasons.length === 0;
+  const verifiedMarketTargetPrice = !suppress && !staffMarginOverrideActive && marketApplicable && marketBand?.target != null ? marketBand.target * quantity : null;
 
   const contenders: Array<{ rule: string; price: number | null }> = [
     { rule: `Cost-based price — ${baseMarginPct}% quantity-band margin`, price: costBasedPrice },
@@ -559,11 +595,18 @@ export function computeCommercialPrice(input: {
             negotiationFloorUnit: marketBand.negotiationFloor,
             premiumTargetUnit: marketBand.premiumTarget,
             crossover: marketBand.crossover ?? null,
-            finalVsMedianPct: marketBand.median != null && marketBand.median > 0 ? ((finalUnit / marketBand.median) - 1) * 100 : null,
-            aboveMarket: marketBand.median != null && finalUnit > marketBand.median * 1.1,
-            belowTarget: marketBand.target != null && finalUnit < marketBand.target - 1e-9,
-            belowNegotiationFloor: marketBand.negotiationFloor != null && finalUnit < marketBand.negotiationFloor - 1e-9,
+            // 15F.0K.4C: comparison flags exist ONLY for standard finishes —
+            // a specialty job keeps low/median/high as labeled reference data
+            // but never an "above market %" or target/floor warning.
+            finalVsMedianPct: marketApplicable && marketBand.median != null && marketBand.median > 0 ? ((finalUnit / marketBand.median) - 1) * 100 : null,
+            aboveMarket: marketApplicable && marketBand.median != null && finalUnit > marketBand.median * 1.1,
+            belowTarget: marketApplicable && marketBand.target != null && finalUnit < marketBand.target - 1e-9,
+            belowNegotiationFloor: marketApplicable && marketBand.negotiationFloor != null && finalUnit < marketBand.negotiationFloor - 1e-9,
             targetApplied: controllingRule === "Verified market target (owner config)",
+            applicable: marketApplicable,
+            specialtyReasons,
+            notApplicableMessage: marketApplicable ? null : SPECIALTY_MARKET_NOT_APPLICABLE_MESSAGE,
+            referenceNote: marketApplicable ? null : STANDARD_MATTE_REFERENCE_NOTE,
           };
         })()
       : null,

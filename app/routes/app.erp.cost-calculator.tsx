@@ -22,7 +22,7 @@ import {
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
 import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, ROLAND_INK_CALIBRATION, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
-import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginCurveConfigFor, marginCurveKeyFor, normalizeAdditionalLineCount, resolveMarginPctForQuantity, validateStickerLine } from "../lib/commercial-pricing-policy.server";
+import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginCurveConfigFor, marginCurveKeyFor, normalizeAdditionalLineCount, resolveMarginPctForQuantity, specialtyFinishReasons, validateStickerLine } from "../lib/commercial-pricing-policy.server";
 import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
@@ -1030,6 +1030,13 @@ export async function loader({ request }: { request: Request }) {
       // with no config entry for it (Stage A) resolution falls back to
       // bags-4x5, so sides price identically (test-pinned).
       const marginCurveKeyP = marginCurveKeyFor(marginRuleForPricingP.key, Number(eparams.get("pfaces") || 1));
+      // 15F.0K.4C: white/gloss/specialty-material jobs must not be compared
+      // with the STANDARD 4x5 market table (cost-led premium pricing rules).
+      const specialtyReasonsP = specialtyFinishReasons({
+        whiteLayers: Number(eparams.get("pwhitelayers") || 0),
+        glossLayers: Number(eparams.get("pglosslayers") || 0),
+        materialName: productInput.material?.name || "",
+      });
       const premiumEligibleP = engineFamilyP === "stickers-labels" && (Number(eparams.get("pwhitelayers") || 0) > 0 || Number(eparams.get("pglosslayers") || 0) > 0);
       const curveDefaults = isDtpP
         ? tierQuantities.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: quantity-threshold rule, never row-position
@@ -1108,6 +1115,7 @@ export async function loader({ request }: { request: Request }) {
           finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
           policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
           marginCurveKey: marginCurveKeyP, // 15F.0K.2-A variant-aware curve lookup
+          marketTargetSpecialtyReasons: specialtyReasonsP, // 15F.0K.4C
         });
         const belowFloor = commercial.marginPctApplied < floorForFamily;
         return {
@@ -1697,6 +1705,11 @@ export async function action({ request }: { request: Request }) {
     const provisionalRuleSave: FamilyMarginRule = { key: "provisional-universal", label: "Provisional universal curve", curve: [...PROVISIONAL_MARGIN_CURVE], familyMinPct: MARGIN_FLOOR_PCT, aliases: [] };
     const marginRuleForPricingSave = savedMarginRule ?? provisionalRuleSave;
     const marginCurveKeySave = marginCurveKeyFor(marginRuleForPricingSave.key, Number(fRead("pfaces") || 1)); // 15F.0K.2-A loader parity
+    const specialtyReasonsSave = specialtyFinishReasons({
+      whiteLayers: Number(fRead("pwhitelayers") || 0),
+      glossLayers: Number(fRead("pglosslayers") || 0),
+      materialName: productInputSave.material?.name || "",
+    }); // 15F.0K.4C loader parity
     const premiumEligibleSave = savedEngineFamily === "stickers-labels" && (Number(fRead("pwhitelayers") || 0) > 0 || Number(fRead("pglosslayers") || 0) > 0);
     const curveDefaultsSave = savedIsDtp
       ? tierQuantitiesSave.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: same quantity-threshold rule at save
@@ -1765,6 +1778,7 @@ export async function action({ request }: { request: Request }) {
         finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
         policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
         marginCurveKey: marginCurveKeySave, // 15F.0K.2-A variant-aware curve lookup
+        marketTargetSpecialtyReasons: specialtyReasonsSave, // 15F.0K.4C
       });
       const belowFloor = commercial.marginPctApplied < floorForFamilySave;
       return {
@@ -3335,6 +3349,18 @@ function ProductTiers() {
                     {/* 15F.0K.3: market position line + badges (info only — never changes price) */}
                     {tier.commercial?.marketPosition && !tier.draftOnly ? (() => {
                       const pos = tier.commercial.marketPosition;
+                      if (pos.applicable === false) {
+                        // 15F.0K.4C: specialty finish — the standard table is
+                        // reference-only; no comparison badges or percentages.
+                        return (
+                          <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2 }}>
+                            <span style={{ color: "#b45309", fontWeight: 700 }}>Specialty finish — standard 4x5 market comparison not applicable ({(pos.specialtyReasons || []).join(", ")})</span>
+                            {pos.median != null ? (
+                              <span style={{ color: "#6b7280" }}> · {pos.referenceNote} Std med {money2(pos.median)}{pos.low != null && pos.high != null ? ` (low ${money2(pos.low)} / high ${money2(pos.high)})` : ""}</span>
+                            ) : null}
+                          </div>
+                        );
+                      }
                       return (
                         <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2 }}>
                           <span style={{ color: "#6b7280" }}>
@@ -3413,7 +3439,15 @@ Total: ${money2(selected.totalPrice)}`}
             <div style={{ fontWeight: 800, color: "#166534", fontSize: 15 }}>READY TO QUOTE</div>
             <div style={{ fontSize: 16, fontWeight: 800, marginTop: 2 }}>Recommended customer price: {money2(selected.totalPrice)} total · {money2(selected.unitPrice)} per unit</div>
             {selected.commercial ? <div style={{ fontSize: 12, marginTop: 2 }}>Price based on: {selected.commercial.controllingRule}</div> : null}
-            {selected.commercial?.marketPosition?.median != null ? (
+            {selected.commercial?.marketPosition?.applicable === false ? (
+              <div style={{ fontSize: 12, marginTop: 2, color: "#92400e" }}>
+                {selected.commercial.marketPosition.notApplicableMessage}
+                {" "}(skipped because: {(selected.commercial.marketPosition.specialtyReasons || []).join(", ")})
+                {selected.commercial.marketPosition.median != null ? (
+                  <span style={{ color: "#6b7280" }}> {selected.commercial.marketPosition.referenceNote} Std med {money2(selected.commercial.marketPosition.median)}.</span>
+                ) : null}
+              </div>
+            ) : selected.commercial?.marketPosition?.median != null ? (
               <div style={{ fontSize: 12, marginTop: 2 }}>
                 Market position: {selected.commercial.marketPosition.finalVsMedianPct != null ? `${selected.commercial.marketPosition.finalVsMedianPct >= 0 ? "+" : ""}${selected.commercial.marketPosition.finalVsMedianPct.toFixed(1)}% vs competitor median ${money2(selected.commercial.marketPosition.median)}` : "n/a"}
                 {selected.commercial.marketPosition.belowNegotiationFloor ? " · BELOW NEGOTIATION FLOOR (allowed — margin rules still apply)" : selected.commercial.marketPosition.belowTarget ? " · BELOW MARKET TARGET (allowed)" : ""}
