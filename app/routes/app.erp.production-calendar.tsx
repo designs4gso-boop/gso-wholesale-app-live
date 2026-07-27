@@ -76,7 +76,9 @@ function suggestedMachine(job: any) {
     .map((item: any) => `${item.productTitle || ""} ${item.recipeName || ""} ${item.machineSummary || ""}`)
     .join(" ")
     .toLowerCase();
-  if (itemText.includes("roland") || itemText.includes("lg-540") || itemText.includes("label")) return "Roland LG-540";
+  // 15F.0K.4B: display label is LG-640 (the shop's actual Roland); the
+  // lg-540 MATCHING token stays so historical records still classify.
+  if (itemText.includes("roland") || itemText.includes("lg-540") || itemText.includes("lg-640") || itemText.includes("label")) return "Roland LG-640";
   if (itemText.includes("mimaki") || itemText.includes("ucjv")) return "Mimaki UCJV300-130";
   if (itemText.includes("box") || itemText.includes("outsource")) return "Outsource / Vendor";
   return "Unassigned machine";

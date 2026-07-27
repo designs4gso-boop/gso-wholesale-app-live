@@ -1498,3 +1498,65 @@ jars/stickers/banners and all COST pins byte-identical. Tests 706 -> 722
 disable-restores-Stage-B, allowlist, crossover skip, warnings-never-price,
 override-takes-command, validator + squeeze-data acceptance, fail-closed
 fallback, resolver); build clean; tsc 306 = baseline; no migration.
+
+## OWNER-VERIFIED SPECIALTY PRINT AND PRICING STANDARDS (2026-07-26)
+Authoritative owner-confirmed standards, implemented in 15F.0K.4B:
+- **Mimaki UCJV300-130 is CMYK ONLY.** It must never price white ink, clear
+  ink, gloss, spot gloss, layered gloss, or raised-gloss work. Any such
+  request BLOCKS with "Mimaki UCJV300-130 is CMYK ONLY" and routes to Roland.
+- **Roland TrueVIS LG-640** handles CMYK, white, clear/gloss, spot gloss,
+  layered gloss, and raised-gloss work.
+- **Standard print setup: $1.00 per design/job** ($25/hr at 25 jobs/hr).
+- **Gloss-layer Illustrator setup: $6.25 per applicable gloss design**
+  ($25/hr at 4 jobs/hr) — charged ONCE per design that needs a gloss mask,
+  NEVER multiplied by stage count (one design at 1X-7X = one $6.25; four
+  gloss designs = $25.00); separate from standard print setup; white-only
+  work does not receive it.
+- **Gloss coverage: 90% ESTIMATED before final artwork/gloss-mask analysis
+  (estimated_pre_art); the ACTUAL artwork percentage overrides when entered
+  (actual_artwork).** Valid range 0-100, never defaulted to 100, out-of-range
+  BLOCKS. Coverage scales gloss INK; stage machine time follows layout area.
+  Lower actual coverage improves realized margin and never retroactively
+  reduces an approved customer price (snapshots are immutable).
+- **Machine recovery: $8/hour** (machineRatePerHour, env-overridable) —
+  now used by BOTH the product-driven calculator AND the recipe-pricing
+  engine (stale Machine.costPerHour can no longer underprice recipe quotes);
+  live Machine records and presets corrected to $8.
+- **Miron 100 ml tall authoritative base jar+lid cost: $2.78** (owner-approved
+  2026-07-17 VendorProduct ladder 2.78/2.54/2.31/2.14/1.99; the stale $2.86
+  Material duplicate is aligned).
+- **Holographic media: $0.714146/sqft is authoritative** ($488 roll at
+  50in x 164ft, owner-approved 13.2.4) — never $0.6624.
+- **Stickers/labels minimum order total: $45** (ownerConfig, audited envelope).
+
+## Patch 15F.0K.4B — Roland gloss routing + verified setup costs (2026-07-26)
+Owner-verified standards above implemented in ONE patch. ENGINE
+(product-driven-costing): Mimaki white/gloss requests BLOCK with the exact
+CMYK-only capability line and layers zero (the 15F.0G.3 provisional Mimaki
+gloss estimate is QUARANTINED/unreachable; Mimaki CMYK costing untouched);
+NEW gloss_setup line $6.25 x designs (once per gloss design, never per
+stage; inside setupTotal; white-only never charged); NEW glossCoveragePct
+input — 90% estimated_pre_art default, actual_artwork override, 0-100
+validated (out-of-range blocks), applied to Roland gloss ink (machine stage
+time stays layout-driven); Roland gloss ink now = adjSqft x coverage x
+stages x 2.83 x $0.19867. RECIPE ENGINE: machineHourlyCost =
+machineRatePerHour() ($8) — stale Machine.costPerHour records can never
+underprice again. ROUTE: pglosscoverage param (loader/save/multi-line
+parity + UI field), snapshot inkCalibration gains
+glossCoveragePctUsed/glossCoverageSource. Machines page presets $5->$8 +
+LG-640; stale LG-540 display strings fixed (calendar label keeps lg-540
+MATCHING for history). DATA (tools/apply-15f0k4b-data-corrections.mjs, run
+once, before/after logged): Miron tall Material 2.86->2.78 (+history),
+4x5 bag Material 0->0.09 (+history), both machines $5->$8 + Roland renamed
+LG-640, ownerConfig minimumOrderTotals stickers-labels=45 (audited
+envelope), blank pouch renamed "(unprinted)". FIXTURE REPRICES (deliberate,
+Roland gloss only): 585x3X job cost 312.71->314.47 (gloss ink -10% coverage
++ $18.75 gloss setup), premium price 710.71->714.71; contour twin
+317.61->319.37 / 725.84; ALL Mimaki premium fixtures now pin the CMYK-only
+block. UNCHANGED (guardrails): 4x5 bag targets ($0.85/$1.13 @1,000
+re-pinned), margin curves, DTP ladders, Chiron, holographic, application
+labor, area floors, crossover behavior. NEW
+tests/specialty-print-standards.test.ts (22: routing matrix, setup
+once-per-design proofs, coverage validation/monotonicity, recipe-$8 proof,
+preset pins, $45 config resolution, bag regression). Tests 722 -> 744;
+build clean; tsc 306 = baseline; no migration.

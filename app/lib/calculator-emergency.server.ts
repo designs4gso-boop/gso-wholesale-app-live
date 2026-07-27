@@ -22,6 +22,7 @@ export const SUGGESTED_QUANTITIES = [64, 128, 256, 640, 1000, 2000, 5000, 10000]
 export const OWNER_LABOR = {
   artSetupPerDesign: OWNER_STANDARDS.artSetupPerDesign.value, // $8.3333 — cut setup included here
   printSetupPerDesign: OWNER_STANDARDS.printSetupPerDesign.value, // $1.00
+  glossLayerSetupPerDesign: OWNER_STANDARDS.glossLayerSetupPerDesign.value, // $6.25 — once per gloss design, never per stage (15F.0K.4B)
   weedingPerPage54x54: OWNER_STANDARDS.weedingPerPage54x54.value, // $1.3333 per 54x54in page
   jarApplicationPer: OWNER_STANDARDS.jarApplicationPerLabel.value, // $0.20
   bagLabelApplicationPer: OWNER_STANDARDS.bagApplicationPerLabel4x5.value, // $0.078125 per applied label

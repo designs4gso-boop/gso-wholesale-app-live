@@ -154,17 +154,22 @@ describe("multi-design stickers (15F.0-J)", () => {
     expect(machineLine.label).toContain(`${(machineHours * 60).toFixed(1)} min`); // 205.1 — hours x60, never x6
     // 15F.0J.3: Roland MEASURED ink calibration — CMYK 1.05, gloss 2.83
     // ml/sqft PER STAGE (never the generic 0.6 basis).
+    // 15F.0K.4B: gloss ink at the 90% pre-art coverage default + the $6.25
+    // gloss-layer Illustrator setup per design (once per design, never per
+    // stage — 3 designs = $18.75 regardless of the 3 stages).
     const expectedGloss = POSEIDON_PER_SQFT * wasteSqft
       + rolandRate * 1.05 * wasteSqft // CMYK measured
-      + rolandRate * 2.83 * wasteSqft * 3 // 3 gloss stages measured
+      + rolandRate * 2.83 * wasteSqft * 3 * 0.9 // 3 gloss stages measured @ 90% est. coverage
       + machineHours * MACHINE_RATE
       + CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(baseSqft / 20.25) // 5 pages
-      + 2 + 3 * (25 / 3 + 1);
+      + 2 + 3 * (25 / 3 + 1)
+      + 3 * 6.25; // gloss-layer Illustrator setup (owner-verified 2026-07-26)
     const glossInkLine = gloss.lines.find((line) => line.key === "ink_gloss")!;
-    expect(glossInkLine.amount).toBeCloseTo(rolandRate * 2.83 * wasteSqft * 3, 4); // 855.2 ml -> $169.91
+    expect(glossInkLine.amount).toBeCloseTo(rolandRate * 2.83 * wasteSqft * 3 * 0.9, 4); // 769.7 ml -> $152.92
     expect(glossInkLine.note).toContain("15F.0J.3-roland-measured-ink");
+    expect(gloss.lines.find((line) => line.key === "gloss_setup")!.amount).toBeCloseTo(18.75, 10);
     expect(gloss.totalCost).toBeCloseTo(expectedGloss, 4);
-    expect(gloss.totalCost).toBeCloseTo(312.7120, 3);
+    expect(gloss.totalCost).toBeCloseTo(314.4711, 3); // was 312.7120 pre-4B (−$16.99 coverage, +$18.75 gloss setup)
     expect(gloss.missing).toHaveLength(0);
     const plain = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, printer: "roland", printerHasGloss: true, glossLayers: 0, machineSqftPerHour: SPEED }));
     expect(plain.totalCost).toBeCloseTo(120.8239, 3); // CMYK measured 1.05 (was 111.82 at 0.6)
@@ -172,8 +177,8 @@ describe("multi-design stickers (15F.0-J)", () => {
     const stickersRule = resolveMarginFamily("stickers-labels")!;
     const glossPrice = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: gloss.totalCost, marginRule: stickersRule, premiumEligible: true });
     const plainPrice = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: plain.totalCost, marginRule: stickersRule, premiumEligible: false });
-    expect(glossPrice.finalTotalPrice).toBeCloseTo(710.7091, 3); // 312.71 / 0.44 premium
-    expect(plainPrice.finalTotalPrice).toBeCloseTo(251.7165, 3); // 120.82 / 0.48
+    expect(glossPrice.finalTotalPrice).toBeCloseTo(314.4711 / 0.44, 3); // 714.71 premium (15F.0K.4B repriced)
+    expect(plainPrice.finalTotalPrice).toBeCloseTo(251.7165, 3); // 120.82 / 0.48 — CMYK path unchanged
   });
 
   it("owner white-layer examples: 1 layer = sqft/75 hours exactly (never a hidden 3x); 3 layers = 3x that", () => {
@@ -202,9 +207,9 @@ describe("multi-design stickers (15F.0-J)", () => {
     }));
     expect(contour.missing).toHaveLength(0); // READY — simple contour quotes automatically
     expect(contour.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(5 * 6.53 * 1.15, 5); // 37.5475
-    expect(contour.totalCost).toBeCloseTo(312.712 + 5 * 6.53 * 0.15, 3); // 317.6095 (measured Roland ink)
+    expect(contour.totalCost).toBeCloseTo(314.4711 + 5 * 6.53 * 0.15, 3); // 319.3686 (15F.0K.4B: 90% coverage + gloss setup)
     const priced = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: contour.totalCost, marginRule: resolveMarginFamily("stickers-labels")!, premiumEligible: true, finishedSqft: contour.derived.baseSqft, setupTotal: contour.setupTotal });
-    expect(priced.finalTotalPrice).toBeCloseTo(contour.totalCost / 0.44, 4); // 721.8398 — premium 56%
+    expect(priced.finalTotalPrice).toBeCloseTo(contour.totalCost / 0.44, 4); // 725.84 — premium 56%
     expect(priced.controllingRule).toContain("Premium finish floor");
   });
 });
@@ -363,22 +368,24 @@ describe("Roland measured ink calibration (15F.0J.3)", () => {
     expect(threeWhite.lines.find((line) => line.key === "ink_white")!.amount).toBeCloseTo(oneWhite.lines.find((line) => line.key === "ink_white")!.amount * 3, 10);
   });
 
-  it("gloss scales EXACTLY by selected stage count (1X vs 3X) — one multiplier per stage, never doubled", () => {
+  it("gloss scales EXACTLY by selected stage count (1X vs 3X) — one multiplier per stage, never doubled (15F.0K.4B: 90% pre-art coverage)", () => {
     const one = roland({ glossLayers: 1 }).lines.find((line) => line.key === "ink_gloss")!;
     const three = roland({ glossLayers: 3 }).lines.find((line) => line.key === "ink_gloss")!;
-    expect(one.amount).toBeCloseTo(INK_RATES.rolandPerMl * 2.83 * wasteSqft, 10);
+    expect(one.amount).toBeCloseTo(INK_RATES.rolandPerMl * 2.83 * wasteSqft * 0.9, 10); // owner-verified 90% pre-art estimate
     expect(three.amount).toBeCloseTo(one.amount * 3, 10);
     expect(one.label).toContain("1 stage(s)");
-    expect(one.formula).toContain("coverage 1.00");
+    expect(one.formula).toContain("coverage 0.90 (estimated_pre_art)");
   });
 
-  it("Mimaki remains unchanged: CMYK 0.6 basis, white verified rate, gloss provisional G.3 estimate", () => {
+  it("15F.0K.4B: Mimaki CMYK basis unchanged; Mimaki white and gloss now BLOCK (CMYK-only, owner-verified)", () => {
     const mimaki = computeProductDrivenCost(stickerInput({}));
     expect(mimaki.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(0.176 * 0.6 * wasteSqft, 10);
-    const mimakiGloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 })).lines.find((line) => line.key === "ink_gloss")!;
-    expect(mimakiGloss.amount).toBeCloseTo(wasteSqft * 0.6 * 2 * 1.0 * 0.176, 10); // G.3 provisional, untouched
-    const mimakiWhite = computeProductDrivenCost(stickerInput({ whiteLayers: 2 })).lines.find((line) => line.key === "ink_white")!;
-    expect(mimakiWhite.amount).toBeCloseTo(0.176 * 0.6 * wasteSqft * 2, 10);
+    const mimakiGloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 }));
+    expect(mimakiGloss.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(mimakiGloss.lines.find((line) => line.key === "ink_gloss")).toBeUndefined();
+    const mimakiWhite = computeProductDrivenCost(stickerInput({ whiteLayers: 2 }));
+    expect(mimakiWhite.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(mimakiWhite.lines.find((line) => line.key === "ink_white")).toBeUndefined();
   });
 
   it("snapshot records the calibration version/basis for Roland saves (route pin); historical parsing untouched", () => {
@@ -580,17 +587,19 @@ describe("printer-specific profiles (15F.0G.2 — Mimaki RasterLink)", () => {
     expect(rolandLine.note).toContain("Roland verified baseline 150 sqft/hr");
   });
 
-  it("Mimaki combined-layer table: 2 layers 18.2, 3 layers 11.8, 4 layers 8.6 — never Roland-additive, 1.15 applied once", () => {
-    const white1 = computeProductDrivenCost(stickerInput({ whiteLayers: 1 })).lines.find((line) => line.key === "machine")!;
-    expect(white1.amount).toBeCloseTo(mimakiMachine(wasteSqft, 2), 10); // COMBINED profile, not cmyk+white sums
-    expect(white1.label).toContain("Combined 2-layer machine time");
-    expect(white1.note).toContain("2-layer throughput 18.2 sqft/hr");
-    const white2 = computeProductDrivenCost(stickerInput({ whiteLayers: 2 })).lines.find((line) => line.key === "machine")!;
-    expect(white2.amount).toBeCloseTo(mimakiMachine(wasteSqft, 3), 10);
-    const white3 = computeProductDrivenCost(stickerInput({ whiteLayers: 3 })).lines.find((line) => line.key === "machine")!;
-    expect(white3.amount).toBeCloseTo(mimakiMachine(wasteSqft, 4), 10);
-    // 1.15 exactly once: back out the factor and the raw hours remain
-    expect(white1.amount / MIMAKI_TURNAROUND).toBeCloseTo((wasteSqft / 18.2) * MACHINE_RATE, 10);
+  it("15F.0K.4B: the Mimaki combined-layer table is QUARANTINED — multi-layer Mimaki requests block CMYK-only; the profile constants remain pinned", () => {
+    // Profile data stays pinned (documentation + any future owner reversal),
+    // but no Mimaki request can reach the 2/3/4-layer rows anymore.
+    expect(MIMAKI_RASTERLINK[2]).toBe(18.2);
+    expect(MIMAKI_RASTERLINK[3]).toBe(11.8);
+    expect(MIMAKI_RASTERLINK[4]).toBe(8.6);
+    for (const layers of [1, 2, 3]) {
+      const run = computeProductDrivenCost(stickerInput({ whiteLayers: layers }));
+      expect(run.missing.join(" "), `white x${layers}`).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+      const machineLine = run.lines.find((line) => line.key === "machine")!;
+      expect(machineLine.amount).toBeCloseTo(mimakiMachine(wasteSqft, 1), 10); // layers zeroed -> 1-layer CMYK profile
+      expect(machineLine.label).toContain("CMYK machine time");
+    }
   });
 
   it("owner-verified examples: 19.26 sqft CMYK ~25.8 min; 19.26 sqft two-layer ~73.0 min", () => {
@@ -598,21 +607,17 @@ describe("printer-specific profiles (15F.0G.2 — Mimaki RasterLink)", () => {
     expect((19.26 / 18.2) * MIMAKI_TURNAROUND * 60).toBeCloseTo(73.02, 2); // ~1 hour 13 minutes display
   });
 
-  it("unsupported Mimaki layer combinations BLOCK with the exact message", () => {
-    const five = computeProductDrivenCost(stickerInput({ whiteLayers: 4 })); // 5 total layers
-    const machineLine = five.lines.find((line) => line.key === "machine")!;
-    expect(machineLine.source).toBe("missing");
-    expect(machineLine.note).toContain("Verified Mimaki RasterLink layer profile required");
+  it("15F.0K.4B: ANY Mimaki layer request blocks CMYK-only (the old 5-layer profile gate is subsumed)", () => {
+    const five = computeProductDrivenCost(stickerInput({ whiteLayers: 4 })); // was the 5-layer profile-gate case
+    expect(five.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(five.lines.find((line) => line.key === "machine")!.source).not.toBe("missing"); // CMYK machine still prices; the CAPABILITY line blocks
   });
 
-  it("15F.0G.3: a supported Mimaki gloss job is READY — provisional gloss ink prices, machine uses the combined profile", () => {
-    const gloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 })); // 3 total layers
-    expect(gloss.missing).toHaveLength(0); // READY — no owner review for routine gloss quotes
-    const glossLine = gloss.lines.find((line) => line.key === "ink_gloss")!;
-    expect(glossLine.source).toBe("estimated");
-    expect(glossLine.amount).toBeGreaterThan(0);
-    const machineLine = gloss.lines.find((line) => line.key === "machine")!;
-    expect(machineLine.amount).toBeCloseTo(mimakiMachine(6.25 / 0.9, 3), 10); // combined 3-layer 11.8
+  it("15F.0K.4B: Mimaki gloss jobs BLOCK (the 15F.0G.3 READY decision is superseded by the owner CMYK-only standard)", () => {
+    const gloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 }));
+    expect(gloss.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(gloss.lines.find((line) => line.key === "ink_gloss")).toBeUndefined(); // the provisional estimate can never price
+    expect(gloss.lines.find((line) => line.key === "machine")!.amount).toBeCloseTo(mimakiMachine(6.25 / 0.9, 1), 10); // 1-layer CMYK only
   });
 
   it("no active 169 throughput anywhere; engine owns the Mimaki profile; save re-fetches records", () => {
@@ -630,16 +635,14 @@ describe("printer-specific profiles (15F.0G.2 — Mimaki RasterLink)", () => {
 describe("provisional Mimaki gloss ink + live fixture (15F.0G.3)", () => {
   const wasteSqft = ((7.13 * 3.13 * 585) / 144) / 0.9; // 100.736007
 
-  it("gloss estimate: 1 layer = sqft x 0.6 x $0.176 x factor 1.00; 3 layers = exactly 3x; owner example ~181.33 ml / ~$31.91", () => {
+  it("15F.0K.4B: the Mimaki provisional gloss estimate is quarantined — gloss requests block CMYK-only and never price", () => {
     const one = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, glossLayers: 1 }));
     const three = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, glossLayers: 3 }));
-    const oneGloss = one.lines.find((line) => line.key === "ink_gloss")!;
-    const threeGloss = three.lines.find((line) => line.key === "ink_gloss")!;
-    expect(oneGloss.amount).toBeCloseTo(wasteSqft * 0.6 * 1 * 1.0 * 0.176, 8);
-    expect(threeGloss.amount).toBeCloseTo(oneGloss.amount * 3, 8); // exactly 3x one layer
-    expect(wasteSqft * 0.6 * 3).toBeCloseTo(181.3248, 3); // ~181.33 ml (owner example at 100.74)
-    expect(threeGloss.amount).toBeCloseTo(31.9132, 3); // ~$31.91
-    expect(threeGloss.source).toBe("estimated"); // never verified, never $0
+    for (const run of [one, three]) {
+      expect(run.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+      expect(run.lines.find((line) => line.key === "ink_gloss")).toBeUndefined();
+      expect(run.lines.find((line) => line.key === "gloss_setup")).toBeUndefined();
+    }
   });
 
   it("premiumInkEstimate snapshot metadata: factors 1.00 snapshotted, white and gloss SEPARATE, version recorded", () => {
@@ -655,23 +658,14 @@ describe("provisional Mimaki gloss ink + live fixture (15F.0G.3)", () => {
     expect(buildMimakiPremiumInkEstimate({ wasteAdjustedSqft: wasteSqft, whiteLayers: 0, glossLayers: 0, inkMlPerSqft: 0.6 })).toBeNull(); // no premium layers -> no block
   });
 
-  it("live fixture (I): 585 x 7.13x3.13, 3 designs, 3 gloss, simple contour on Mimaki — READY at the premium curve", () => {
+  it("15F.0K.4B: the old live Mimaki gloss fixture now BLOCKS with the printer-capability message (route the job to Roland)", () => {
     const run = computeProductDrivenCost(stickerInput({
       quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, glossLayers: 3, cutType: "kiss-simple",
     }));
-    expect(run.missing).toHaveLength(0); // READY TO QUOTE
-    const machine = run.lines.find((line) => line.key === "machine")!;
-    expect(machine.amount).toBeCloseTo(mimakiMachine(wasteSqft, 4), 6); // combined 4-layer 8.6 x 1.15
-    expect(machine.amount).toBeCloseTo(107.7641, 3); // ~13.47 hr x $8 (owner example)
-    expect((wasteSqft / 8.6) * MIMAKI_TURNAROUND).toBeCloseTo(13.4705, 3);
-    expect(run.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(10.6377, 3); // ~$10.64
-    expect(run.lines.find((line) => line.key === "ink_gloss")!.amount).toBeCloseTo(31.9132, 3); // ~$31.91 estimated
-    expect(run.totalCost).toBeCloseTo(249.6503, 3); // complete cost through the engine
-    const priced = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: run.totalCost, marginRule: resolveMarginFamily("stickers-labels")!, premiumEligible: true, finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal });
-    expect(priced.finalTotalPrice).toBeCloseTo(run.totalCost / 0.44, 6); // premium 56% controls
-    expect(priced.finalTotalPrice).toBeCloseTo(567.3871, 3);
-    expect(priced.finalUnitPrice).toBeCloseTo(0.9699, 4);
-    expect(priced.controllingRule).toContain("Premium finish floor");
+    expect(run.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(run.lines.find((line) => line.key === "ink_gloss")).toBeUndefined();
+    // The Roland-routed equivalent of this job prices normally — pinned in
+    // fixture 3/4 (N) and fixture 6 (J) above (314.47 cost / 714.71 premium).
   });
 
   it("route wires the snapshot metadata and the customer estimated-ink note; DTP untouched", () => {

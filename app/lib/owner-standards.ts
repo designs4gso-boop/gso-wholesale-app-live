@@ -43,7 +43,18 @@ export const OWNER_STANDARDS = {
   printSetupPerDesign: {
     value: 25 / 25, // $1.00
     unit: "$ per design",
-    basis: "owner standard",
+    basis: "owner standard — $25/hour at 25 jobs/hour (standard print setup)",
+    status: "owner_verified",
+  } as OwnerStandard,
+  // 15F.0K.4B (owner-verified 2026-07-26): Illustrator gloss-mask preparation
+  // for layered/spot-gloss work. Charged ONCE per design that needs a gloss
+  // mask — NEVER multiplied by the number of gloss stages (1X..7X = one
+  // setup). Separate from standard print setup; white-only work does NOT
+  // receive this charge (no verified white-mask setup rule exists).
+  glossLayerSetupPerDesign: {
+    value: 25 / 4, // $6.25
+    unit: "$ per gloss design (once per design, never per stage)",
+    basis: "$25/hour at 4 jobs/hour — Illustrator gloss-mask preparation (owner-verified 2026-07-26)",
     status: "owner_verified",
   } as OwnerStandard,
   weedingPerPage54x54: {

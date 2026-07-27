@@ -1,4 +1,5 @@
 import { finishPresets } from "./finish-presets";
+import { machineRatePerHour } from "./rip-actual-costs.server";
 
 // Shared quote-ready recipe pricing. Callers must load recipes with
 // QUOTE_RECIPE_PRICING_INCLUDE and gate lookups with QUOTE_READY_RECIPE_WHERE,
@@ -122,7 +123,12 @@ export function calculateInHouseRecipe(recipe: any, quantity: number, selectedFi
   const runHours = sqftPerHour > 0 ? totalSqft / sqftPerHour : 0;
   const setupHours = safeNumber(recipe.laborMinutes) / 60;
   const operatorRate = safeNumber(recipe.operatorLaborPct, 25);
-  const machineHourlyCost = safeNumber(machine?.costPerHour);
+  // 15F.0K.4B (owner-approved): machine recovery uses the ONE authoritative
+  // owner rate ($8/hr via machineRatePerHour, env-overridable) — the stale
+  // Machine.costPerHour column ($5 seeded records) can never silently
+  // underprice recipe-generated quotes again. Machine speed still comes from
+  // the record; only the RATE is centralized.
+  const machineHourlyCost = machineRatePerHour();
 
   let materialCost = 0;
   const materialBreakdown: any[] = [];

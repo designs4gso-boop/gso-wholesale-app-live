@@ -30,7 +30,7 @@ const settingDefinitions: SettingDefinition[] = [
   { category: "Production Cost", key: "defaultPowerRateKwh", label: "Power rate", defaultValue: "0.15", valueType: "number", unit: "$/kWh", description: "Electricity rate used for machine cost estimates." },
   { category: "Production Cost", key: "defaultOverheadPct", label: "Overhead allowance", defaultValue: "10", valueType: "number", unit: "%", description: "Default overhead buffer on production costs." },
 
-  { category: "Ink + Print Defaults", key: "rolandInkCostMl", label: "Roland ink cost", defaultValue: "0.209", valueType: "number", unit: "$/ml", description: "Roland LG-540 EUV5P ink pouch cost per ml." },
+  { category: "Ink + Print Defaults", key: "rolandInkCostMl", label: "Roland ink cost", defaultValue: "0.209", valueType: "number", unit: "$/ml", description: "Roland LG-640 EUV5P ink pouch cost per ml." },
   { category: "Ink + Print Defaults", key: "mimakiInkCostMl", label: "Mimaki ink cost", defaultValue: "0.209", valueType: "number", unit: "$/ml", description: "Default Mimaki ink cost per ml. Update during backend setup." },
   { category: "Ink + Print Defaults", key: "cmykInkMlSqft", label: "CMYK ink usage", defaultValue: "1.2", valueType: "number", unit: "ml/sqft", description: "Default CMYK ink estimate for normal full-color jobs." },
   { category: "Ink + Print Defaults", key: "inkAllowancePct", label: "Ink allowance", defaultValue: "15", valueType: "number", unit: "%", description: "Maintenance/purge allowance added to ink estimates." },

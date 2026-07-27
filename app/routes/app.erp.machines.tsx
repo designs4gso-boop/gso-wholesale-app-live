@@ -68,15 +68,17 @@ const DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL = 0.0075;
 
 const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
   {
-    name: "Roland TrueVIS LG-540",
+    // 15F.0K.4B: LG-640 is the shop's actual Roland (13A.7B operational
+    // evidence); recovery preset = the owner-approved $8/hr, never the stale $5.
+    name: "Roland TrueVIS LG-640",
     machineType: "printer",
     maxWidthIn: 52.9,
-    costPerHour: 5,
+    costPerHour: 8,
     sqftPerHour: 150,
     setupWastePct: 10,
     allowOverflow: true,
     notes:
-      "GSO default for white/gloss/emboss label work. Official usable width is about 52.9 in. Uses 750 ml ECO-UV pouches. Defaults should be tuned with VersaWorks / DG Connect actual job logs.",
+      "GSO default for white/gloss/emboss label work (Mimaki is CMYK ONLY — owner-verified 2026-07-26). Official usable width is about 52.9 in. Uses 750 ml ECO-UV pouches. Defaults should be tuned with VersaWorks / DG Connect actual job logs.",
     inkSlots: [
       { slotNumber: 1, inkName: "Cyan", inkType: "cmyk", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
       { slotNumber: 2, inkName: "Magenta", inkType: "cmyk", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
@@ -92,12 +94,12 @@ const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
     name: "Mimaki UCJV300-130",
     machineType: "printer",
     maxWidthIn: 53.6,
-    costPerHour: 5,
+    costPerHour: 8,
     sqftPerHour: 150,
     setupWastePct: 10,
     allowOverflow: false,
     notes:
-      "GSO default for standard CMYK and white-only work. Official max print/cut width is about 53.6 in. Mimaki LUS-170 bottles are 1 liter; cost defaults are estimates and should be replaced with invoice costs.",
+      "GSO default for standard CMYK work ONLY — the Mimaki never runs white, clear/gloss, spot-gloss, layered-gloss, or raised-gloss pricing (owner-verified 2026-07-26; that work routes to the Roland LG-640). Official max print/cut width is about 53.6 in. Mimaki LUS-170 bottles are 1 liter; cost defaults are estimates and should be replaced with invoice costs.",
     inkSlots: [
       { slotNumber: 1, inkName: "Cyan", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
       { slotNumber: 2, inkName: "Magenta", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
@@ -475,7 +477,7 @@ function permanentDeleteMachine(id: string) {
                 <BlockStack gap="100">
                   <Text as="h2" variant="headingMd">GSO Default Printer Profiles</Text>
                   <Text as="p" tone="subdued">
-                    Install the Roland LG-540 and Mimaki UCJV300-130 with researched starting widths, speeds, ink slots, cartridge sizes, and coverage defaults. Tune these values with your real invoices and print logs.
+                    Install the Roland LG-640 and Mimaki UCJV300-130 with researched starting widths, speeds, ink slots, cartridge sizes, and coverage defaults ($8/hr owner recovery rate; Mimaki is CMYK only). Tune these values with your real invoices and print logs.
                   </Text>
                 </BlockStack>
                 <InlineStack gap="200">

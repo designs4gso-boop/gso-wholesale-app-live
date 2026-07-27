@@ -385,6 +385,10 @@ export type ProductDrivenInput = {
   printerHasGloss: boolean;
   whiteLayers: number;
   glossLayers: number;
+  // 15F.0K.4B: gloss coverage % (0-100). null/absent = 90% ESTIMATED
+  // pre-art default; a supplied value = ACTUAL artwork coverage and
+  // overrides the estimate. Out-of-range values BLOCK (never clamped).
+  glossCoveragePct?: number | null;
   inkMlPerSqft: number; // active base usage assumption (seeded 0.0075-derived / entered)
   machineMinutesPerSqft: number; // Advanced override only (0 = not overridden)
   // 15F.0-D: verified machine production speed (Machine.sqftPerHour; both live
@@ -450,16 +454,33 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   const isDtp = input.family === "dtp-bags";
 
   // ---- layers (validated; capability-gated) ----
-  const white = validateLayers(input.printerHasWhite ? input.whiteLayers : 0);
-  const gloss = validateLayers(input.printerHasGloss || input.printer === "roland" ? input.glossLayers : 0);
+  // 15F.0K.4B (owner-verified 2026-07-26): the Mimaki UCJV300-130 is CMYK
+  // ONLY. White, clear/gloss, spot-gloss, layered-gloss, and raised-gloss
+  // work must run on the Roland TrueVIS LG-640. Requested white/gloss on
+  // Mimaki BLOCKS with an exact printer-capability message and the layers
+  // are zeroed, so no specialty ink line or multi-layer machine time can
+  // ever price on Mimaki (this also quarantines the old 15F.0G.3
+  // provisional Mimaki gloss estimate below — that branch is unreachable).
+  // Standard Mimaki CMYK costing is untouched.
+  const mimakiSpecialtyRequested = input.printer === "mimaki" && (Math.floor(input.whiteLayers) > 0 || Math.floor(input.glossLayers) > 0);
+  if (mimakiSpecialtyRequested) {
+    lines.push({
+      key: "printer_capability",
+      label: "Printer capability — Mimaki UCJV300-130 is CMYK ONLY",
+      amount: 0,
+      source: "missing",
+      note: "White, clear/gloss, spot-gloss, layered-gloss, and raised-gloss work must run on the Roland TrueVIS LG-640. Switch the printer to Roland to quote this job (owner-verified 2026-07-26).",
+    });
+  }
+  const requestedWhite = mimakiSpecialtyRequested ? 0 : input.whiteLayers;
+  const requestedGloss = mimakiSpecialtyRequested ? 0 : input.glossLayers;
+  const white = validateLayers(input.printerHasWhite ? requestedWhite : 0);
+  const gloss = validateLayers(input.printerHasGloss || input.printer === "roland" ? requestedGloss : 0);
   if (white.error) warnings.push(`White layers: ${white.error}`);
   if (gloss.error) warnings.push(`Gloss layers: ${gloss.error}`);
-  if (!input.printerHasWhite && input.whiteLayers > 0) warnings.push("Selected printer has no white channel — white layers ignored.");
-  if (!input.printerHasGloss && input.printer === "mimaki" && input.glossLayers > 0) {
-    // still counted so the MISSING blocker fires (never silently dropped)
-  }
+  if (!mimakiSpecialtyRequested && !input.printerHasWhite && input.whiteLayers > 0) warnings.push("Selected printer has no white channel — white layers ignored.");
   const whiteLayers = white.value;
-  const glossLayers = input.printer === "mimaki" && !input.printerHasGloss ? Math.floor(Math.max(0, Math.min(MAX_LAYERS, input.glossLayers))) : gloss.value;
+  const glossLayers = gloss.value;
 
   // ---- geometry (server-derived; dimensions required for printed families) ----
   // 14C.2: label rows (jars) sum per-row sqft; every row needs positive
@@ -505,6 +526,31 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   }
   const wasteMult = 1 / (1 - Math.min(Math.max(wastePct, 0), 90) / 100);
   const wasteAdjustedSqft = baseSqft * wasteMult;
+
+  // ---- 15F.0K.4B: gloss coverage (owner-verified 2026-07-26) ----
+  // Default = 90% ESTIMATED before final artwork/gloss-mask analysis; an
+  // owner-entered ACTUAL artwork coverage (0-100) overrides it. Applies to
+  // gloss INK usage — gloss stage MACHINE time follows the printed LAYOUT
+  // area (the head traverses the full layout regardless of coverage), so it
+  // is deliberately not coverage-scaled. Out-of-range input BLOCKS, never
+  // clamps. Approved historical quotes are never recomputed (snapshots are
+  // immutable), so a lower actual coverage improves realized margin without
+  // reducing an already approved selling price.
+  let glossCoverageFraction = 0.9;
+  let glossCoverageSource: "estimated_pre_art" | "actual_artwork" = "estimated_pre_art";
+  if (input.glossCoveragePct != null) {
+    if (!Number.isFinite(input.glossCoveragePct) || input.glossCoveragePct < 0 || input.glossCoveragePct > 100) {
+      if (glossLayers > 0) {
+        lines.push({ key: "gloss_coverage", label: "Gloss coverage %", amount: 0, source: "missing", note: `Gloss coverage must be between 0 and 100 (received ${input.glossCoveragePct}). Leave blank for the 90% pre-art estimate.` });
+      }
+    } else {
+      glossCoverageFraction = input.glossCoveragePct / 100;
+      glossCoverageSource = "actual_artwork";
+    }
+  }
+  const glossCoverageLabel = glossCoverageSource === "actual_artwork"
+    ? `ACTUAL artwork coverage ${(glossCoverageFraction * 100).toFixed(0)}%`
+    : "ESTIMATED pre-art coverage 90% (default until gloss-mask analysis)";
 
   // ---- blank/lid components (qty-aware tiers, server-resolved) ----
   const componentLine = (component: ResolvedComponent, key: string, capNote: boolean) => {
@@ -594,14 +640,16 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
     if (glossLayers > 0) {
       if (isRolandInk) {
         const cal = ROLAND_INK_CALIBRATION;
-        const glossMl = wasteAdjustedSqft * cal.coverageFactor * glossLayers * cal.glossMlPerSqftPerStage;
+        // 15F.0K.4B: coverage-aware gloss ink — 90% pre-art estimate or the
+        // owner-entered actual artwork coverage (source shown on the line).
+        const glossMl = wasteAdjustedSqft * glossCoverageFraction * glossLayers * cal.glossMlPerSqftPerStage;
         lines.push({
           key: "ink_gloss",
-          label: `Gloss ink — ${glossLayers} stage(s) — ${glossMl.toFixed(1)} ml (measured ${cal.glossMlPerSqftPerStage} ml/sqft/stage)`,
+          label: `Gloss ink — ${glossLayers} stage(s) — ${glossMl.toFixed(1)} ml (measured ${cal.glossMlPerSqftPerStage} ml/sqft/stage, ${glossCoverageSource === "actual_artwork" ? "actual coverage" : "est. 90% coverage"})`,
           amount: glossMl * INK_RATES.rolandPerMl,
           source: "estimated",
-          formula: `${wasteAdjustedSqft.toFixed(2)} sqft x coverage ${cal.coverageFactor.toFixed(2)} x ${glossLayers} stage(s) x ${cal.glossMlPerSqftPerStage} ml/sqft x $${INK_RATES.rolandPerMl.toFixed(4)}/ml`,
-          note: `${cal.version}: MEASURED provisional gloss rate (HIGH confidence, n=164) per selected gloss STAGE — one multiplier per stage, never doubled through mode logic; coverage ${cal.coverageFactor.toFixed(2)}.`,
+          formula: `${wasteAdjustedSqft.toFixed(2)} sqft x coverage ${glossCoverageFraction.toFixed(2)} (${glossCoverageSource}) x ${glossLayers} stage(s) x ${cal.glossMlPerSqftPerStage} ml/sqft x $${INK_RATES.rolandPerMl.toFixed(4)}/ml`,
+          note: `${cal.version}: MEASURED provisional gloss rate (HIGH confidence, n=164) per selected gloss STAGE — one multiplier per stage, never doubled through mode logic; ${glossCoverageLabel}. Stage machine time follows layout area and is not coverage-scaled.`,
         });
       } else {
       const glossRate = INK_RATES.mimakiGlossPerMl;
@@ -729,12 +777,27 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   // 15C rule (owner-confirmed): outsourced DTP gets the GSO ART/design charge
   // only — the $1.00 in-house PRINT setup standard does not apply to
   // vendor-printed production and is never blindly added.
-  const setupTotal = input.designs > 0
+  // 15F.0K.4B: Gloss-layer Illustrator setup — $6.25 per design that needs a
+  // gloss mask, charged ONCE per design regardless of stage count (1X..7X =
+  // one setup), separate from the $1.00 standard print setup. White-only
+  // work never receives it (no verified white-mask setup rule exists).
+  const glossSetupTotal = !isDtp && glossLayers > 0 && input.designs > 0 ? input.designs * OWNER_LABOR.glossLayerSetupPerDesign : 0;
+  const setupTotal = (input.designs > 0
     ? input.designs * (isDtp ? OWNER_LABOR.artSetupPerDesign : OWNER_LABOR.artSetupPerDesign + OWNER_LABOR.printSetupPerDesign)
-    : 0;
+    : 0) + glossSetupTotal;
   if (input.designs > 0) {
     lines.push({ key: "art_setup", label: `${isDtp ? "GSO design/art charge" : "Art setup"} — ${input.designs} design(s)${isDtp ? "" : ", cut setup included"}`, amount: input.designs * OWNER_LABOR.artSetupPerDesign, source: "owner_standard", note: isDtp ? "Owner standard $8.3333/design. No in-house print setup — Spektra prints the pouches." : undefined });
-    if (!isDtp) lines.push({ key: "print_setup", label: "Print setup", amount: input.designs * OWNER_LABOR.printSetupPerDesign, source: "owner_standard" });
+    if (!isDtp) lines.push({ key: "print_setup", label: "Print setup", amount: input.designs * OWNER_LABOR.printSetupPerDesign, source: "owner_standard", note: "Owner standard $1.00/design ($25/hr at 25 jobs/hr)." });
+    if (glossSetupTotal > 0) {
+      lines.push({
+        key: "gloss_setup",
+        label: `Gloss-layer Illustrator setup — ${input.designs} design(s) @ $${OWNER_LABOR.glossLayerSetupPerDesign.toFixed(2)}`,
+        amount: glossSetupTotal,
+        source: "owner_standard",
+        formula: `${input.designs} design(s) x $${OWNER_LABOR.glossLayerSetupPerDesign.toFixed(2)} — once per gloss design, NEVER per stage`,
+        note: "Owner-verified 2026-07-26: $25/hr at 4 jobs/hr Illustrator gloss-mask preparation. One design at 1X-7X receives exactly one setup; separate from the $1.00 standard print setup.",
+      });
+    }
   } else {
     lines.push({ key: "designs", label: "Number of designs", amount: 0, source: "missing", note: "Required." });
   }

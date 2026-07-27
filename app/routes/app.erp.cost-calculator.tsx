@@ -982,6 +982,8 @@ export async function loader({ request }: { request: Request }) {
       printerHasGloss: printer === "roland",
       whiteLayers: Number(eparams.get("pwhitelayers") || 0),
       glossLayers: Number(eparams.get("pglosslayers") || 0),
+      // 15F.0K.4B: blank = 90% pre-art estimate; entered = actual artwork coverage
+      glossCoveragePct: String(eparams.get("pglosscoverage") ?? "").trim() !== "" ? Number(eparams.get("pglosscoverage")) : null,
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(eparams.get("pmachmin") || 0),
       machineSqftPerHour: printer === "roland" ? printerSqftPerHour.roland : printerSqftPerHour.mimaki, // 15F.0-D verified speed
@@ -1160,6 +1162,7 @@ export async function loader({ request }: { request: Request }) {
           material: lineMaterial ? { name: lineMaterial.name, costPerSqft: lineMaterial.displayCostPerSqft > 0 ? lineMaterial.displayCostPerSqft : null } : null,
           printer: line.printer, printerHasWhite: true, printerHasGloss: line.printer === "roland",
           whiteLayers: line.whiteLayers, glossLayers: line.glossLayers, inkMlPerSqft: 0.6,
+          glossCoveragePct: String(eparams.get("pglosscoverage") ?? "").trim() !== "" ? Number(eparams.get("pglosscoverage")) : null, // 15F.0K.4B job-level coverage
           machineMinutesPerSqft: 0, machineSqftPerHour: line.printer === "roland" ? printerSqftPerHour.roland : printerSqftPerHour.mimaki,
           machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value,
           cutType: normalizeCutType(line.cutType), cutRequiresWeeding: false,
@@ -1662,6 +1665,8 @@ export async function action({ request }: { request: Request }) {
       printerHasGloss: printerSave === "roland",
       whiteLayers: Number(fRead("pwhitelayers") || 0),
       glossLayers: Number(fRead("pglosslayers") || 0),
+      // 15F.0K.4B: same coverage semantics as the loader (parity)
+      glossCoveragePct: fRead("pglosscoverage").trim() !== "" ? Number(fRead("pglosscoverage")) : null,
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(fRead("pmachmin") || 0),
       machineSqftPerHour: printerSave === "roland" ? printerSpeedsSave.roland : printerSpeedsSave.mimaki, // 15F.0-D verified speed
@@ -1810,6 +1815,7 @@ export async function action({ request }: { request: Request }) {
           material: record ? { name: record.name, costPerSqft: resolved && resolved.unitCost > 0 ? resolved.unitCost : null } : null,
           printer: line.printer, printerHasWhite: true, printerHasGloss: line.printer === "roland",
           whiteLayers: line.whiteLayers, glossLayers: line.glossLayers, inkMlPerSqft: 0.6,
+          glossCoveragePct: fRead("pglosscoverage").trim() !== "" ? Number(fRead("pglosscoverage")) : null, // 15F.0K.4B job-level coverage
           machineMinutesPerSqft: 0, machineSqftPerHour: line.printer === "roland" ? printerSpeedsSave.roland : printerSpeedsSave.mimaki,
           machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value,
           cutType: normalizeCutType(line.cutType), cutRequiresWeeding: false,
@@ -1962,6 +1968,13 @@ export async function action({ request }: { request: Request }) {
             whiteMlPerSqftPerLayer: ROLAND_INK_CALIBRATION.whiteMlPerSqftPerLayer,
             glossMlPerSqftPerStage: ROLAND_INK_CALIBRATION.glossMlPerSqftPerStage,
             coverageFactor: ROLAND_INK_CALIBRATION.coverageFactor,
+            // 15F.0K.4B: the gloss coverage actually used by this quote
+            glossCoveragePctUsed: fRead("pglosscoverage").trim() !== "" && Number.isFinite(Number(fRead("pglosscoverage"))) && Number(fRead("pglosscoverage")) >= 0 && Number(fRead("pglosscoverage")) <= 100
+              ? Number(fRead("pglosscoverage"))
+              : 90,
+            glossCoverageSource: fRead("pglosscoverage").trim() !== "" && Number.isFinite(Number(fRead("pglosscoverage"))) && Number(fRead("pglosscoverage")) >= 0 && Number(fRead("pglosscoverage")) <= 100
+              ? "actual_artwork"
+              : "estimated_pre_art",
             status: ROLAND_INK_CALIBRATION.status,
           }
         : null,
@@ -2413,7 +2426,7 @@ Setup/design fee included in pricing.`}
         {/* 14C.2: the full GET state (including multi-value label rows) rides in
             psearch; the single-value hidden inputs below stay for back-compat. */}
         <input type="hidden" name="psearch" value={legacySearch} />
-        {["efamily", "eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason", "pfamily", "pblank", "plid", "pmat", "pqty", "pdesigns", "pfaces", "pwidth", "pheight", "pprinter", "pwhitelayers", "pglosslayers", "pcut", "phem", "pgrommet", "pcustomname", "pcustomcost", "pcustomnote", "pwasteoverride", "pwastereason", "pboxoverride", "pboxreason", "pmachmin"].map((key) => (
+        {["efamily", "eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason", "pfamily", "pblank", "plid", "pmat", "pqty", "pdesigns", "pfaces", "pwidth", "pheight", "pprinter", "pwhitelayers", "pglosslayers", "pglosscoverage", "pcut", "phem", "pgrommet", "pcustomname", "pcustomcost", "pcustomnote", "pwasteoverride", "pwastereason", "pboxoverride", "pboxreason", "pmachmin"].map((key) => (
           <input key={key} type="hidden" name={key} value={new URLSearchParams(legacySearch).get(key) || (key === "eqty" ? emergency.quantities.join(",") : key === "emargin" ? emergency.margins.join(",") : "")} />
         ))}
         <label style={{ fontSize: 12 }}>Product name<input name="eproduct" style={inputStyle} /></label>
@@ -2960,6 +2973,7 @@ function ProductDrivenForm() {
         </label>
         <label style={{ fontSize: 12 }}>White layers (0–14)<input name="pwhitelayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Gloss coverage % (blank = 90% pre-art estimate)<input name="pglosscoverage" type="number" min={0} max={100} step="1" placeholder="90% estimated" style={inputStyle} /></label>
         </>) : null}
         {isStickers ? (
           <label style={{ fontSize: 12 }}>Cut type

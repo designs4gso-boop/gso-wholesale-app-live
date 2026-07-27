@@ -90,7 +90,7 @@ export default function PrintIntake() {
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
         <b>Machine routing (finalized rules).</b>
         <div style={{ fontSize: 13, marginTop: 6 }}>
-          <b>White and/or gloss &rarr; Roland LG-540.</b> CMYK-only jobs explicitly assigned to Roland in the ERP, or
+          <b>White and/or gloss &rarr; Roland LG-640 (the Mimaki is CMYK only).</b> CMYK-only jobs explicitly assigned to Roland in the ERP, or
           named with the standalone <code>ROLAND</code> filename tag, also route to Roland. All other CMYK-only jobs
           default to the <b>Mimaki UCJV300</b> (<code>GSO_MIMAKI_CMYK_STANDARD</code>). Contradictory data (for example
           a white/gloss job explicitly assigned to the CMYK-only Mimaki) goes to Needs review. Copies happen only where

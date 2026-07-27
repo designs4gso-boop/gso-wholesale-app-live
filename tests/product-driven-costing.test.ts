@@ -34,42 +34,43 @@ describe("layers (14C.1)", () => {
     expect(validateLayers(15).value).toBe(MAX_LAYERS);
   });
 
-  it("white layers scale linearly (provisional model, labeled); CMYK stays a separate base line", () => {
-    const four = computeProductDrivenCost(makeInput({ whiteLayers: 4 }));
-    const one = computeProductDrivenCost(makeInput({ whiteLayers: 1 }));
+  // 15F.0K.4B (owner-verified 2026-07-26): the Mimaki is CMYK ONLY — white
+  // and gloss layer behavior is now exercised on the ROLAND, and Mimaki
+  // white/gloss requests BLOCK with the exact capability message.
+  it("Roland white layers scale linearly per layer (measured rate); CMYK stays a separate base line; Mimaki white BLOCKS", () => {
+    const four = computeProductDrivenCost(makeInput({ printer: "roland", whiteLayers: 4 }));
+    const one = computeProductDrivenCost(makeInput({ printer: "roland", whiteLayers: 1 }));
     const whiteFour = four.lines.find((line) => line.key === "ink_white")!;
     const whiteOne = one.lines.find((line) => line.key === "ink_white")!;
     expect(whiteFour.amount).toBeCloseTo(whiteOne.amount * 4, 6);
     expect(whiteFour.label).toContain("4 layer(s)");
-    expect(whiteFour.label).toContain("provisional linear model");
     expect(four.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(one.lines.find((l) => l.key === "ink_cmyk")!.amount, 6);
+    const mimakiWhite = computeProductDrivenCost(makeInput({ whiteLayers: 4 }));
+    expect(mimakiWhite.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(mimakiWhite.lines.find((line) => line.key === "ink_white")).toBeUndefined();
   });
 
-  it("15F.0G.3: Mimaki gloss prices PROVISIONALLY on the CMYK basis (never $0, never verified); Roland gloss unchanged", () => {
+  it("15F.0K.4B: Mimaki gloss BLOCKS (G.3 provisional path quarantined); Roland gloss prices estimated with coverage", () => {
     const mimaki = computeProductDrivenCost(makeInput({ glossLayers: 2 }));
-    const glossLine = mimaki.lines.find((line) => line.key === "ink_gloss")!;
-    expect(glossLine.source).toBe("estimated"); // provisional, not verified, not missing
-    expect(glossLine.amount).toBeGreaterThan(0); // never $0
-    expect(glossLine.amount).toBeCloseTo(mimaki.derived.wasteAdjustedSqft * 0.6 * 2 * 1.0 * 0.176, 6);
-    expect(glossLine.note).toContain("Provisional Mimaki gloss estimate");
-    expect(glossLine.formula).toContain("factor 1.00");
-    // missing usage basis still BLOCKS — the estimate never resolves from nothing
-    const noBasis = computeProductDrivenCost(makeInput({ glossLayers: 2, inkMlPerSqft: 0 }));
-    expect(noBasis.lines.find((line) => line.key === "ink_gloss")!.source).toBe("missing");
+    expect(mimaki.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(mimaki.lines.find((line) => line.key === "ink_gloss")).toBeUndefined(); // never a priced Mimaki gloss line
     const roland = computeProductDrivenCost(makeInput({ printer: "roland", printerHasGloss: true, glossLayers: 2 }));
-    expect(roland.lines.find((line) => line.key === "ink_gloss")!.source).toBe("estimated");
+    const rolandGloss = roland.lines.find((line) => line.key === "ink_gloss")!;
+    expect(rolandGloss.source).toBe("estimated");
+    expect(rolandGloss.amount).toBeGreaterThan(0);
+    expect(rolandGloss.formula).toContain("coverage 0.90 (estimated_pre_art)"); // 15F.0K.4B default
   });
 
-  it("extra passes are represented once via machine time; passes = 1 + white + gloss", () => {
+  it("extra passes are represented once via machine time; passes = 1 + white + gloss (Roland; override path)", () => {
     const base = computeProductDrivenCost(makeInput());
-    const layered = computeProductDrivenCost(makeInput({ whiteLayers: 4, glossLayers: 0 }));
+    const layered = computeProductDrivenCost(makeInput({ printer: "roland", whiteLayers: 4, glossLayers: 0 }));
     expect(layered.derived.printPasses).toBe(5);
     expect(layered.lines.find((line) => line.key === "machine")!.amount).toBeCloseTo(base.lines.find((l) => l.key === "machine")!.amount * 5, 4);
     expect(layered.lines.filter((line) => line.key === "passes")).toHaveLength(1);
   });
 
-  it("white layers on a printer without a white channel are ignored with a warning", () => {
-    const result = computeProductDrivenCost(makeInput({ printerHasWhite: false, whiteLayers: 3 }));
+  it("white layers on a printer without a white channel are ignored with a warning (Roland record without white)", () => {
+    const result = computeProductDrivenCost(makeInput({ printer: "roland", printerHasWhite: false, whiteLayers: 3 }));
     expect(result.lines.some((line) => line.key === "ink_white")).toBe(false);
     expect(result.warnings.some((warning) => warning.includes("no white channel"))).toBe(true);
   });
