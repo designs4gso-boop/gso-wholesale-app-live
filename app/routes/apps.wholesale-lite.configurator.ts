@@ -1,21 +1,17 @@
+import type { LoaderFunctionArgs } from "react-router";
 import { db } from "../db.server";
+import { authenticate } from "../shopify.server";
 import { MIN_QTY } from "../lib/configurator-pricing";
+import { stripInternalCostFields } from "../lib/security-guards-shared";
 
-function corsHeaders() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Cache-Control": "no-store",
-  };
-}
-
+// 15G.1: served only through the signed Shopify app proxy (same-origin from
+// the storefront) — no cross-origin callers exist, so no CORS headers.
 function jsonResponse(data: unknown, init: ResponseInit = {}) {
-  return new Response(JSON.stringify(data), {
+  return new Response(JSON.stringify(stripInternalCostFields(data)), {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...corsHeaders(),
+      "Cache-Control": "no-store",
       ...(init.headers || {}),
     },
   });
@@ -121,14 +117,21 @@ function humanProductType(value: string) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-export async function loader({ request }: { request: Request }) {
-  if (request.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders() });
+export async function loader({ request }: LoaderFunctionArgs) {
+  // 15G.1: require a valid Shopify app-proxy signature. The authorized shop
+  // comes ONLY from the authenticated session — never from request input.
+  // Invalid/missing signatures throw a 4xx inside authenticate (fail closed).
+  const { session } = await authenticate.public.appProxy(request);
+  if (!session) {
+    return jsonResponse(
+      { ok: false, active: false, message: "App is not installed for this shop." },
+      { status: 400 },
+    );
   }
+  const shop = session.shop;
 
   const url = new URL(request.url);
 
-  const shop = clean(url.searchParams.get("shop"));
   const handle = clean(url.searchParams.get("handle"));
   const productGid = clean(url.searchParams.get("productGid"));
   const material = clean(url.searchParams.get("material"));
@@ -145,8 +148,8 @@ export async function loader({ request }: { request: Request }) {
       url.searchParams.get("labelset"),
   );
 
-  if (!shop || (!handle && !productGid)) {
-    return jsonResponse({ ok: false, active: false, message: "Missing shop or product identifier." });
+  if (!handle && !productGid) {
+    return jsonResponse({ ok: false, active: false, message: "Missing product identifier." });
   }
 
   const product = await db.configuratorProduct.findFirst({
@@ -276,12 +279,10 @@ export async function loader({ request }: { request: Request }) {
       priceEach: money(priceRule.priceEach),
     }));
 
+  // 15G.1: the public payload carries customer-facing pricing ONLY. Internal
+  // cost/profit/margin figures never leave the server on a storefront route.
   const priceEach = money(rule?.priceEach ?? 0);
-  const costEach = money(rule?.costEach ?? 0);
   const orderTotal = money(priceEach * quantity);
-  const totalCost = money(costEach * quantity);
-  const totalProfit = money(orderTotal - totalCost);
-  const margin = orderTotal > 0 ? money((totalProfit / orderTotal) * 100) : 0;
 
   return jsonResponse({
     ok: true,
@@ -316,11 +317,7 @@ export async function loader({ request }: { request: Request }) {
       matchedRange: rangeLabel(rule),
       productionFinish: rule?.productionFinish || selectedFinish,
       priceEach,
-      costEach,
       orderTotal,
-      totalCost,
-      totalProfit,
-      margin,
       priceBreaks,
     },
   });

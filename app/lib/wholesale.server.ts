@@ -160,9 +160,13 @@ export async function createRule(
   });
 }
 
-export async function updateRule(id: number, data: any) {
-  return db.wholesaleRule.update({
-    where: { id },
+// 15G.1: WholesaleRule ids are auto-increment integers (trivially
+// enumerable), so every mutation is scoped to the caller's shop and fails
+// closed (count 0) when the record belongs to another shop or is unknown.
+export async function updateRule(shop: string, id: number, data: any) {
+  if (!shop || !Number.isFinite(id)) return { count: 0 };
+  return db.wholesaleRule.updateMany({
+    where: { id, shop },
     data: {
       ...data,
       priority: data.scopeType ? scopePriority(data.scopeType) : undefined,
@@ -170,8 +174,9 @@ export async function updateRule(id: number, data: any) {
   });
 }
 
-export async function deleteRule(id: number) {
-  return db.wholesaleRule.delete({ where: { id } });
+export async function deleteRule(shop: string, id: number) {
+  if (!shop || !Number.isFinite(id)) return { count: 0 };
+  return db.wholesaleRule.deleteMany({ where: { id, shop } });
 }
 
 export async function createWholesaleApplication(

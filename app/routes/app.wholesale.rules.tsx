@@ -83,7 +83,7 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   if (intent === "delete_rule") {
-    await deleteRule(Number(formData.get("ruleId")));
+    await deleteRule(session.shop, Number(formData.get("ruleId")));
     return redirect("/app/wholesale/rules");
   }
 

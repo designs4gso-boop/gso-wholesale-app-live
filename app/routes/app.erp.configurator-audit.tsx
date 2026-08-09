@@ -1,4 +1,5 @@
 import { Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
 
 const STOCK_BAG_PRODUCT_TYPE = "stock_bag_4x5";
@@ -91,11 +92,16 @@ function productStatus(
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // 15G.1: authenticate and scope every read to the current shop — this
+  // loader previously queried with no shop filter at all.
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
   const url = new URL(request.url);
   const productTypeFilter = norm(url.searchParams.get("productType"));
 
   const products = await db.configuratorProduct.findMany({
     where: {
+      shop,
       ...(productTypeFilter ? { productType: productTypeFilter } : {}),
     },
     orderBy: [
@@ -106,6 +112,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const options = await db.configuratorOption.findMany({
     where: {
+      shop,
       active: true,
       ...(productTypeFilter ? { productType: productTypeFilter } : {}),
     },
@@ -118,6 +125,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const pricingRules = await db.configuratorPricingRule.findMany({
     where: {
+      shop,
       active: true,
       ...(productTypeFilter ? { productType: productTypeFilter } : {}),
     },
@@ -141,6 +149,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const shopifyLinks = await db.recipeVariantRule.findMany({
     where: {
+      shop,
       active: true,
     },
     select: {

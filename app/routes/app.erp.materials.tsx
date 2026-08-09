@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { updateOwnedRecord } from "../lib/security-guards-shared";
 
 const defaultMaterialTypes = [
   { label: "Ink / Coating", value: "ink_coating" },
@@ -388,6 +389,11 @@ export async function action({ request }: { request: Request }) {
   ? await db.material.findFirst({ where: { id: payload.id, shop } })
   : null;
 
+    // 15G.1: never update a record the authenticated shop does not own.
+    if (payload.id && !oldMaterial) {
+      return Response.json({ ok: false, error: "Material not found for this shop." }, { status: 404 });
+    }
+
 const calculatedUnitCost = calculateMaterialUnitCost(payload);
 
     let material;
@@ -551,10 +557,8 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
   }
 
   if (payload.intent === "deleteMaterial" || payload.intent === "archiveMaterial") {
-    await db.material.update({
-      where: { id: payload.id },
-      data: { active: false },
-    });
+    const result = await updateOwnedRecord(db.material, shop, payload.id, { active: false });
+    if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
 
     const materials = await db.material.findMany({
       where: { shop },
@@ -574,10 +578,8 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
   }
 
   if (payload.intent === "restoreMaterial") {
-    await db.material.update({
-      where: { id: payload.id },
-      data: { active: true },
-    });
+    const result = await updateOwnedRecord(db.material, shop, payload.id, { active: true });
+    if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
 
     const materials = await db.material.findMany({
       where: { shop },
@@ -610,7 +612,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
 
     const usedCount = recipeCount + productionUsageCount + movementCount + purchaseRequestCount + costBookCount;
     if (usedCount > 0) {
-      await db.material.update({ where: { id: payload.id }, data: { active: false } });
+      await db.material.updateMany({ where: { id: payload.id, shop }, data: { active: false } });
       const materials = await db.material.findMany({
         where: { shop },
         orderBy: { updatedAt: "desc" },
@@ -619,7 +621,7 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
       return Response.json({ ok: false, materials, error: "This material is used by recipes, production, inventory, purchase requests, or cost book records, so it was archived instead of permanently deleted." });
     }
 
-    await db.material.delete({ where: { id: payload.id } });
+    await db.material.deleteMany({ where: { id: payload.id, shop } });
 
     const materials = await db.material.findMany({
       where: { shop },
@@ -639,10 +641,14 @@ const calculatedUnitCost = calculateMaterialUnitCost(payload);
   }
 
   if (payload.intent === "addVendor") {
+    // 15G.1: verify the parent material belongs to the authenticated shop.
+    const parentMaterial = await db.material.findFirst({ where: { id: payload.materialId, shop }, select: { id: true } });
+    if (!parentMaterial) return Response.json({ ok: false, error: "Material not found for this shop." }, { status: 404 });
+
     await db.materialVendor.create({
       data: {
         shop,
-        materialId: payload.materialId,
+        materialId: parentMaterial.id,
         vendorName: payload.vendorName,
         vendorSku: payload.vendorSku || null,
         unitCost: Number(payload.unitCost) || 0,

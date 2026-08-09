@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { updateOwnedRecord } from "../lib/security-guards-shared";
 
 const machineTypes = [
   { label: "Printer", value: "printer" },
@@ -195,11 +196,9 @@ export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const machineCount = await db.machine.count({ where: { shop } });
-  if (machineCount === 0) {
-    await installGsoDefaultMachines(shop, false);
-  }
-
+  // 15G.1: page loads are read-only — no auto-seeding, no silent repair of
+  // zeroed ink-channel costs. Creating/refreshing the GSO defaults is the
+  // explicit "Install Missing Defaults" / "Refresh Defaults" action only.
   const machines = await db.machine.findMany({
     where: { shop },
     orderBy: { updatedAt: "desc" },
@@ -216,19 +215,17 @@ export async function action({ request }: { request: Request }) {
 
   if (payload.intent === "saveMachine") {
     if (payload.id) {
-      await db.machine.update({
-        where: { id: payload.id },
-        data: {
-          name: payload.name,
-          machineType: payload.machineType || "printer",
-          maxWidthIn: payload.maxWidthIn ? Number(payload.maxWidthIn) : null,
-          costPerHour: Number(payload.costPerHour) || 0,
-          sqftPerHour: Number(payload.sqftPerHour) || 0,
-          setupWastePct: Number(payload.setupWastePct) || 0,
-          allowOverflow: Boolean(payload.allowOverflow),
-          active: true,
-        },
+      const result = await updateOwnedRecord(db.machine, shop, payload.id, {
+        name: payload.name,
+        machineType: payload.machineType || "printer",
+        maxWidthIn: payload.maxWidthIn ? Number(payload.maxWidthIn) : null,
+        costPerHour: Number(payload.costPerHour) || 0,
+        sqftPerHour: Number(payload.sqftPerHour) || 0,
+        setupWastePct: Number(payload.setupWastePct) || 0,
+        allowOverflow: Boolean(payload.allowOverflow),
+        active: true,
       });
+      if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
     } else {
       const machine = await db.machine.create({
         data: {
@@ -260,61 +257,56 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "deleteMachine") {
-    await db.machine.update({
-      where: { id: payload.id },
-      data: { active: false },
-    });
+    const result = await updateOwnedRecord(db.machine, shop, payload.id, { active: false });
+    if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
   }
 
   if (payload.intent === "restoreMachine") {
-  await db.machine.update({
-    where: { id: payload.id },
-    data: { active: true },
-  });
-}
+    const result = await updateOwnedRecord(db.machine, shop, payload.id, { active: true });
+    if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
+  }
 
-if (payload.intent === "permanentDeleteMachine") {
-  await db.machineInkChannel.deleteMany({
-    where: { machineId: payload.id },
-  });
-
-  await db.machine.delete({
-    where: { id: payload.id },
-  });
-}
+  if (payload.intent === "permanentDeleteMachine") {
+    // 15G.1: server-enforced confirmation + shop ownership + one transaction.
+    if (payload.confirmPermanentDelete !== true) {
+      return Response.json({ ok: false, error: "Permanent delete requires explicit confirmation." }, { status: 400 });
+    }
+    const owned = await db.machine.findFirst({ where: { id: payload.id, shop }, select: { id: true } });
+    if (!owned) return Response.json({ ok: false, error: "Machine not found for this shop." }, { status: 404 });
+    await db.$transaction([
+      db.machineInkChannel.deleteMany({ where: { machineId: owned.id, shop } }),
+      db.machine.deleteMany({ where: { id: owned.id, shop } }),
+    ]);
+  }
 
   if (payload.intent === "updateSlot") {
     const cartridgeCost = Number(payload.cartridgeCost || 0);
     const cartridgeMl = Number(payload.cartridgeMl || 0);
     const costPerMl = cartridgeMl > 0 ? cartridgeCost / cartridgeMl : 0;
 
-    await db.machineInkChannel.update({
-      where: { id: payload.id },
-      data: {
-        inkName: payload.inkName || "",
-        inkType: payload.inkType || "cmyk",
-        cartridgeCost,
-        cartridgeMl,
-        costPerMl,
-        mlPerSqft1Pct: Number(payload.mlPerSqft1Pct || 0),
-        enabled: true,
-      },
+    const result = await updateOwnedRecord(db.machineInkChannel, shop, payload.id, {
+      inkName: payload.inkName || "",
+      inkType: payload.inkType || "cmyk",
+      cartridgeCost,
+      cartridgeMl,
+      costPerMl,
+      mlPerSqft1Pct: Number(payload.mlPerSqft1Pct || 0),
+      enabled: true,
     });
+    if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
   }
 
   if (payload.intent === "clearSlot") {
-    await db.machineInkChannel.update({
-      where: { id: payload.id },
-      data: {
-        inkName: "",
-        inkType: "cmyk",
-        cartridgeCost: 0,
-        cartridgeMl: 0,
-        costPerMl: 0,
-        mlPerSqft1Pct: 0,
-        enabled: true,
-      },
+    const result = await updateOwnedRecord(db.machineInkChannel, shop, payload.id, {
+      inkName: "",
+      inkType: "cmyk",
+      cartridgeCost: 0,
+      cartridgeMl: 0,
+      costPerMl: 0,
+      mlPerSqft1Pct: 0,
+      enabled: true,
     });
+    if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
   }
 
   if (payload.intent === "installGsoDefaults") {
@@ -410,7 +402,7 @@ function permanentDeleteMachine(id: string) {
   if (!confirm("Permanently delete this machine and all ink slots?")) return;
 
   fetcher.submit(
-    { intent: "permanentDeleteMachine", id },
+    { intent: "permanentDeleteMachine", id, confirmPermanentDelete: true },
     { method: "post", encType: "application/json" }
   );
 }
@@ -538,7 +530,9 @@ function permanentDeleteMachine(id: string) {
               <Divider />
 
               {machines.length === 0 ? (
-                <Text as="p" tone="subdued">No machines yet.</Text>
+                <Text as="p" tone="subdued">
+                  No machines yet. Use "Install Missing Defaults" above to create the GSO Roland LG-640 and Mimaki UCJV300-130 profiles (page loads never create machines automatically).
+                </Text>
               ) : (
                 machines.map((machine) => (
                   <Card key={machine.id}>

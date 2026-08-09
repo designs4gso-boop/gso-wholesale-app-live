@@ -13,6 +13,7 @@ import {
   QTY_RANGES,
   rangeLabelFromRule,
 } from "../lib/configurator-pricing";
+import { RESET_PILOT_DATA_PHRASE, phraseGateOk } from "../lib/security-guards-shared";
 
 const STOCK_PRODUCT_TYPE = PRODUCT_TYPE;
 
@@ -187,26 +188,16 @@ function defaultQtyForProduct(productType: string, profile: any | null) {
 }
 
 async function resetPilotData(shop: string) {
-  await db.configuratorPricingRule.deleteMany({
-    where: { shop, productType: STOCK_PRODUCT_TYPE },
-  });
-  await db.configuratorOption.deleteMany({
-    where: { shop, productType: STOCK_PRODUCT_TYPE },
-  });
-
-  await db.configuratorProduct.createMany({
-    data: PILOT_PRODUCTS.map((title) => ({
-      shop,
-      title,
-      productType: STOCK_PRODUCT_TYPE,
-      defaultSides: "Double Sided",
-      minQuantity: MIN_QTY,
-      pilot: true,
-      active: true,
-      notes: "5-product stock bag configurator pilot",
-    })),
-    skipDuplicates: true,
-  });
+  const productRows = PILOT_PRODUCTS.map((title) => ({
+    shop,
+    title,
+    productType: STOCK_PRODUCT_TYPE,
+    defaultSides: "Double Sided",
+    minQuantity: MIN_QTY,
+    pilot: true,
+    active: true,
+    notes: "5-product stock bag configurator pilot",
+  }));
 
   const optionRows = [
     ...MATERIALS.map((value, index) => ({
@@ -238,11 +229,6 @@ async function resetPilotData(shop: string) {
     })),
   ];
 
-  await db.configuratorOption.createMany({
-    data: optionRows,
-    skipDuplicates: true,
-  });
-
   const pricingRows = FALLBACK_PRICING_ROWS.flatMap((row) =>
     QTY_RANGES.map((range, index) => ({
       shop,
@@ -261,28 +247,23 @@ async function resetPilotData(shop: string) {
     })),
   );
 
-  await db.configuratorPricingRule.createMany({
-    data: pricingRows,
-    skipDuplicates: true,
-  });
+  // 15G.1: delete + reseed run in ONE transaction — a mid-sequence failure
+  // can no longer leave the storefront with pricing rules deleted but not
+  // recreated. This runs ONLY from the explicit phrase-confirmed staff
+  // action; page loads never call it.
+  await db.$transaction([
+    db.configuratorPricingRule.deleteMany({ where: { shop, productType: STOCK_PRODUCT_TYPE } }),
+    db.configuratorOption.deleteMany({ where: { shop, productType: STOCK_PRODUCT_TYPE } }),
+    db.configuratorProduct.createMany({ data: productRows, skipDuplicates: true }),
+    db.configuratorOption.createMany({ data: optionRows, skipDuplicates: true }),
+    db.configuratorPricingRule.createMany({ data: pricingRows, skipDuplicates: true }),
+  ]);
 
   return {
     products: PILOT_PRODUCTS.length,
     options: optionRows.length,
     pricingRules: pricingRows.length,
   };
-}
-
-async function ensureStockPilotData(shop: string) {
-  const [productCount, optionCount, pricingRuleCount] = await Promise.all([
-    db.configuratorProduct.count({ where: { shop, productType: STOCK_PRODUCT_TYPE } }),
-    db.configuratorOption.count({ where: { shop, productType: STOCK_PRODUCT_TYPE } }),
-    db.configuratorPricingRule.count({ where: { shop, productType: STOCK_PRODUCT_TYPE } }),
-  ]);
-
-  if (productCount === 0 || optionCount === 0 || pricingRuleCount === 0) {
-    await resetPilotData(shop);
-  }
 }
 
 async function getDbPricingRule(shop: string, productType: string, material: string, finish: string, qty: number, minQty: number) {
@@ -361,6 +342,15 @@ export async function action({ request }: { request: Request }) {
   const intent = String(formData.get("intent") || "");
 
   if (intent === "resetPilotData") {
+    // 15G.1: destructive reseed of live storefront pricing requires the
+    // typed confirmation phrase — a stray click can never wipe pricing.
+    const phrase = String(formData.get("confirmPhrase") || "");
+    if (!phraseGateOk(phrase, RESET_PILOT_DATA_PHRASE)) {
+      return {
+        ok: false,
+        message: `Reset blocked. Type "${RESET_PILOT_DATA_PHRASE}" in the confirmation box to delete and reseed the stock-bag pilot options and pricing rules.`,
+      };
+    }
     const result = await resetPilotData(session.shop);
     return {
       ok: true,
@@ -373,7 +363,9 @@ export async function action({ request }: { request: Request }) {
 
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
-  await ensureStockPilotData(session.shop);
+  // 15G.1: loaders are read-only. The old auto-reseed (which could DELETE
+  // and recreate live stock-bag pricing on a mere page view) is gone;
+  // missing pilot data now surfaces as a banner + the explicit reset action.
 
   const url = new URL(request.url);
   const productFamily = textParam(url, "productFamily", "stock_bags");
@@ -529,6 +521,13 @@ export default function GsoConfigurator() {
         <div className="notice warning">{data.notice}</div>
       ) : null}
 
+      {!isJar && (data.counts.products === 0 || data.counts.options === 0 || data.counts.pricingRules === 0) ? (
+        <div className="notice warning">
+          Stock-bag pilot data is incomplete (products {data.counts.products}, options {data.counts.options}, pricing rules {data.counts.pricingRules}).
+          Page loads never reseed pricing automatically — use the phrase-confirmed reset action below if this data should be restored.
+        </div>
+      ) : null}
+
       <div className="family-tabs">
         <Link className={data.productFamily === "stock_bags" ? "active" : ""} to="/app/erp/configurator?productFamily=stock_bags">Stock Bags</Link>
         <Link className={data.productFamily === "jars" ? "active" : ""} to="/app/erp/configurator?productFamily=jars">Jars</Link>
@@ -652,6 +651,18 @@ export default function GsoConfigurator() {
             <div className="admin-actions">
               <Form method="post">
                 <input type="hidden" name="intent" value="resetPilotData" />
+                <p style={{ fontSize: 13, color: "#5c5f62", margin: "8px 0 6px" }}>
+                  Owner action: deletes ALL stock-bag pilot options and pricing rules for this shop, then reseeds
+                  {" "}{PILOT_PRODUCTS.length} products, {MATERIALS.length + FINISHES.length + BAG_COLORS.length} options, and
+                  {" "}{FALLBACK_PRICING_ROWS.length * QTY_RANGES.length} pricing rules from the code pilot sheet.
+                  Live storefront pricing changes the moment this runs. Type the phrase to confirm.
+                </p>
+                <input
+                  name="confirmPhrase"
+                  placeholder={`Type ${RESET_PILOT_DATA_PHRASE} to confirm`}
+                  autoComplete="off"
+                  style={{ display: "block", width: "100%", maxWidth: 360, marginBottom: 8, padding: 6 }}
+                />
                 <button className="secondary" type="submit" disabled={isSubmitting}>
                   {isSubmitting ? "Working..." : "Reset stock bag pilot database rules"}
                 </button>

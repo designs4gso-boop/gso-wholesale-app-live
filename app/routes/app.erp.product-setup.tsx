@@ -1059,15 +1059,20 @@ export async function action({ request }: { request: Request }) {
 
   if (intent === "deleteRecipeForever") {
     const recipeId = String(formData.get("recipeId") || "");
-    await db.recipeMaterial.deleteMany({ where: { shop, recipeId } });
-    await db.recipeLabelZone.deleteMany({ where: { shop, recipeId } });
-    await db.recipeMediaOption.deleteMany({ where: { shop, recipeId } });
-    await db.recipeInkRequirement.deleteMany({ where: { shop, recipeId } });
-    await db.recipeMachineRule.deleteMany({ where: { shop, recipeId } });
-    await db.recipeTier.deleteMany({ where: { shop, recipeId } });
-    await db.recipeAddOn.deleteMany({ where: { shop, recipeId } });
-    await db.sourcedCostTier.deleteMany({ where: { shop, recipeId } });
-    await db.productRecipe.deleteMany({ where: { shop, id: recipeId } });
+    if (!recipeId) return Response.json({ ok: false, message: "Missing recipe." }, { status: 400 });
+    // 15G.1: the whole cascade runs in ONE transaction — a mid-sequence
+    // failure can no longer leave a recipe half-deleted (orphaned children).
+    await db.$transaction([
+      db.recipeMaterial.deleteMany({ where: { shop, recipeId } }),
+      db.recipeLabelZone.deleteMany({ where: { shop, recipeId } }),
+      db.recipeMediaOption.deleteMany({ where: { shop, recipeId } }),
+      db.recipeInkRequirement.deleteMany({ where: { shop, recipeId } }),
+      db.recipeMachineRule.deleteMany({ where: { shop, recipeId } }),
+      db.recipeTier.deleteMany({ where: { shop, recipeId } }),
+      db.recipeAddOn.deleteMany({ where: { shop, recipeId } }),
+      db.sourcedCostTier.deleteMany({ where: { shop, recipeId } }),
+      db.productRecipe.deleteMany({ where: { shop, id: recipeId } }),
+    ]);
     return Response.json({ ok: true, message: "Product recipe permanently deleted." });
   }
 

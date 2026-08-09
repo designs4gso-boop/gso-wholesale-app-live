@@ -6,6 +6,9 @@ tools/gso-rasterlink-sync-config.json
 tools/gso-rasterlink-sync.config.json
 tools/gso-print-intake-config.json
 tools/gso-print-intake-agent-config.json
+tools/gso-roland-sync-config.json
+tools/gso-roland-sync.config.json
+tools/*.bak
 dist
 build
 .cache

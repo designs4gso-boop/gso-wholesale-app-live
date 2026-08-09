@@ -2,6 +2,11 @@ import { Page, Layout, Card, Text, Button, Badge, BlockStack, InlineStack } from
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import {
+  OWNER_RESET_SETTINGS_PHRASE,
+  buildAdminResetWhere,
+  phraseGateOk,
+} from "../lib/security-guards-shared";
 
 type SettingDefinition = {
   category: string;
@@ -112,8 +117,26 @@ export async function action({ request }: { request: Request }) {
   const intent = String(formData.get("intent") || "saveSettings");
 
   if (intent === "resetDefaults") {
-    await db.erpAdminSetting.deleteMany({ where: { shop } });
-    return Response.json({ ok: true, message: "Defaults reset. The app is showing built-in defaults again." });
+    // 15G.1: Reset Defaults may only delete this page's OWN setting keys.
+    // Owner pricing envelopes (ownerConfig.*, Pricing Settings) and Pricing
+    // Intelligence records (e.g. the live-sales cutoff) are never touched —
+    // the old unscoped deleteMany({ shop }) wiped every ErpAdminSetting row.
+    const phrase = String(formData.get("confirmPhrase") || "");
+    if (!phraseGateOk(phrase, OWNER_RESET_SETTINGS_PHRASE)) {
+      return Response.json({
+        ok: false,
+        message: `Reset blocked. Type "${OWNER_RESET_SETTINGS_PHRASE}" in the confirmation box to reset the admin defaults listed on this page.`,
+      });
+    }
+    const where = buildAdminResetWhere(shop, settingDefinitions.map((definition) => definition.key));
+    if (!where) {
+      return Response.json({ ok: false, message: "Reset blocked: no resettable settings were found." });
+    }
+    const result = await db.erpAdminSetting.deleteMany({ where });
+    return Response.json({
+      ok: true,
+      message: `Reset ${result.count} saved admin default(s) to built-in values. Owner pricing configuration (Pricing Settings) and the Pricing Intelligence live-sales cutoff were not touched.`,
+    });
   }
 
   let savedCount = 0;
@@ -213,10 +236,25 @@ export default function AdminSettingsPage() {
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">Reset built-in defaults</Text>
-              <Text as="p" tone="subdued">This deletes saved overrides and shows the built-in defaults again. It does not delete jobs, materials, quotes, vendors, or reports.</Text>
+              <Text as="p" tone="subdued">
+                Resets ONLY the setting categories on this page: {Array.from(new Set(settingDefinitions.map((definition) => definition.category))).join(", ")}.
+              </Text>
+              <Text as="p" tone="subdued">
+                Never touched: owner pricing configuration (Pricing Settings / ownerConfig), the Pricing Intelligence live-sales cutoff, jobs, materials, quotes, vendors, or reports.
+              </Text>
               <Form method="post">
-                <input type="hidden" name="intent" value="resetDefaults" />
-                <Button submit tone="critical">Reset saved defaults</Button>
+                <BlockStack gap="200">
+                  <input type="hidden" name="intent" value="resetDefaults" />
+                  <input
+                    name="confirmPhrase"
+                    placeholder={`Type ${OWNER_RESET_SETTINGS_PHRASE} to confirm`}
+                    autoComplete="off"
+                    style={{ width: "100%", maxWidth: 360, padding: 8, borderRadius: 8, border: "1px solid #bbb" }}
+                  />
+                  <InlineStack>
+                    <Button submit tone="critical">Reset saved defaults</Button>
+                  </InlineStack>
+                </BlockStack>
               </Form>
             </BlockStack>
           </Card>

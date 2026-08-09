@@ -1,23 +1,23 @@
-﻿import { db } from "../db.server";
+﻿import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { db } from "../db.server";
+import { authenticate } from "../shopify.server";
 import { MIN_QTY } from "../lib/configurator-pricing";
+import {
+  publicCheckoutFailure,
+  sanitizeDraftOrderUserErrors,
+  stripInternalCostFields,
+} from "../lib/security-guards-shared";
 
 const SHOPIFY_API_VERSION = "2025-10";
 
-function corsHeaders() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Cache-Control": "no-store",
-  };
-}
-
+// 15G.1: served only through the signed Shopify app proxy (same-origin from
+// the storefront) — no cross-origin callers exist, so no CORS headers.
 function jsonResponse(data: unknown, init: ResponseInit = {}) {
-  return new Response(JSON.stringify(data, null, 2), {
+  return new Response(JSON.stringify(stripInternalCostFields(data), null, 2), {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...corsHeaders(),
+      "Cache-Control": "no-store",
       ...(init.headers || {}),
     },
   });
@@ -91,21 +91,14 @@ function findMatchingRule(rules: any[], material: string, finish: string, quanti
   );
 }
 
-async function shopifyGraphql(shop: string, query: string, variables: any) {
-  const session = await db.session.findFirst({
-    where: { shop },
-    orderBy: { id: "asc" },
-  });
-
-  if (!session?.accessToken) {
-    throw new Error(`No Shopify access token found for ${shop}`);
-  }
-
+// 15G.1: the admin token comes ONLY from the authenticated app-proxy session
+// — never looked up from the Session table by an attacker-chosen shop value.
+async function shopifyGraphql(shop: string, accessToken: string, query: string, variables: any) {
   const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Shopify-Access-Token": session.accessToken,
+      "X-Shopify-Access-Token": accessToken,
     },
     body: JSON.stringify({ query, variables }),
   });
@@ -128,9 +121,10 @@ async function shopifyGraphql(shop: string, query: string, variables: any) {
   };
 }
 
-export async function loader({ request }: { request: Request }) {
-  if (request.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders() });
+export async function loader({ request }: LoaderFunctionArgs) {
+  const { session } = await authenticate.public.appProxy(request);
+  if (!session) {
+    return jsonResponse({ ok: false, error: "App is not installed for this shop." }, { status: 400 });
   }
 
   return jsonResponse({
@@ -140,27 +134,22 @@ export async function loader({ request }: { request: Request }) {
   });
 }
 
-export async function action({ request }: { request: Request }) {
-  if (request.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders() });
+export async function action({ request }: ActionFunctionArgs) {
+  // 15G.1: require a valid Shopify app-proxy signature; the authorized shop
+  // and admin token come ONLY from the authenticated session. `shop` in the
+  // request body is ignored. Invalid signatures throw inside authenticate.
+  const { session } = await authenticate.public.appProxy(request);
+  if (!session?.accessToken) {
+    return jsonResponse({ ok: false, error: "App is not installed for this shop." }, { status: 400 });
   }
+  const shop = session.shop;
+  const accessToken = session.accessToken;
 
   try {
     const body = await request.json();
 
     const incomingItems = Array.isArray(body.items) && body.items.length ? body.items : [body];
-    const shop = clean(body.shop || incomingItems[0]?.shop);
     const email = clean(body.email || incomingItems[0]?.email);
-
-    if (!shop) {
-      return jsonResponse(
-        {
-          ok: false,
-          error: "Missing shop.",
-        },
-        { status: 400 },
-      );
-    }
 
     const lineItems: any[] = [];
     const itemSummaries: any[] = [];
@@ -182,7 +171,7 @@ export async function action({ request }: { request: Request }) {
           {
             ok: false,
             error: "Missing product identifier on one cart item.",
-            item: rawItem,
+            item: { handle, productGid, material, finish },
           },
           { status: 400 },
         );
@@ -251,7 +240,7 @@ export async function action({ request }: { request: Request }) {
             {
               ok: false,
               error: "Missing material, finish, or label set on one jar cart item.",
-              item: rawItem,
+              item: { handle, productGid, material, finish, jarColor: selectedJarColor, labelSet: selectedLabelSet, quantity },
             },
             { status: 400 },
           );
@@ -261,7 +250,7 @@ export async function action({ request }: { request: Request }) {
           {
             ok: false,
             error: "Missing material, finish, or bag color on one stock bag cart item.",
-            item: rawItem,
+            item: { handle, productGid, material, finish, bagColor: selectedBagColor, quantity },
           },
           { status: 400 },
         );
@@ -398,6 +387,7 @@ export async function action({ request }: { request: Request }) {
 
     const draftRes = await shopifyGraphql(
       shop,
+      accessToken,
       `#graphql
         mutation CreateConfiguratorDraftOrder($input: DraftOrderInput!) {
           draftOrderCreate(input: $input) {
@@ -423,26 +413,26 @@ export async function action({ request }: { request: Request }) {
     );
 
     if (!draftRes.ok) {
-      return jsonResponse(
-        {
-          ok: false,
-          error: "Shopify draft order GraphQL request failed.",
-          details: draftRes,
-        },
-        { status: 500 },
-      );
+      // 15G.1: log the detailed failure server-side; the customer gets a
+      // generic message — never raw Shopify responses or internals.
+      console.error("[configurator-checkout] Shopify draft order request failed", {
+        shop,
+        status: draftRes.status,
+        errors: draftRes.errors,
+      });
+      return jsonResponse(publicCheckoutFailure(), { status: 500 });
     }
 
     const data = draftRes.raw;
     const errors = data.data?.draftOrderCreate?.userErrors || [];
 
     if (errors.length) {
+      console.error("[configurator-checkout] Shopify draft order userErrors", { shop, errors });
       return jsonResponse(
         {
           ok: false,
-          error: "Shopify draft order returned userErrors.",
-          errors,
-          raw: data,
+          error: "Shopify could not create the draft order.",
+          errors: sanitizeDraftOrderUserErrors(errors),
         },
         { status: 400 },
       );
@@ -460,14 +450,10 @@ export async function action({ request }: { request: Request }) {
       items: itemSummaries,
     });
   } catch (error: any) {
-    return jsonResponse(
-      {
-        ok: false,
-        error: error?.message || "Unknown configurator checkout error.",
-        stack: error?.stack,
-      },
-      { status: 500 },
-    );
+    // 15G.1: never serialize stack traces, tokens, or exception internals to
+    // the public caller — log server-side, return the fixed generic message.
+    console.error("[configurator-checkout] unhandled checkout error", error);
+    return jsonResponse(publicCheckoutFailure(), { status: 500 });
   }
 }
 

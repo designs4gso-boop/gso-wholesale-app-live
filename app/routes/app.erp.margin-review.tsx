@@ -1,6 +1,11 @@
 import { Form, redirect, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import {
+  MARGIN_REVIEW_PUSH_WARNING,
+  OWNER_SHOPIFY_PRICE_PUSH_PHRASE,
+  phraseGateOk,
+} from "../lib/security-guards-shared";
 
 const DEFAULT_SHOP_LABOR_RATE_PER_HOUR = 25;
 const DEFAULT_APPLICATION_LABOR_COST_PER_SIDE = 0.15;
@@ -531,6 +536,19 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (intent === "safeShopifyPriceUpdate") {
+    // 15G.1 safety freeze: Margin Review's private cost model is under
+    // recalibration, so LIVE Shopify price pushes require the exact owner
+    // confirmation phrase. Read-only preview and approvals stay available.
+    const pushPhrase = String(formData.get("pushConfirmPhrase") || "");
+    if (!phraseGateOk(pushPhrase, OWNER_SHOPIFY_PRICE_PUSH_PHRASE)) {
+      nextUrl.searchParams.delete("shopifyUpdated");
+      nextUrl.searchParams.delete("shopifyUpdatedCount");
+      nextUrl.searchParams.delete("shopifyFailedCount");
+      nextUrl.searchParams.set("shopifyPushBlocked", "1");
+      return redirect(`${nextUrl.pathname}${nextUrl.search}`);
+    }
+    nextUrl.searchParams.delete("shopifyPushBlocked");
+
     const approvedRecords = await prisma.priceApprovalRecord.findMany({
       where: {
         shop,
@@ -735,6 +753,7 @@ export async function loader({ request }: { request: Request }) {
   const shopifyUpdated = url.searchParams.get("shopifyUpdated") === "1";
   const shopifyUpdatedCount = Math.max(0, Math.round(numberOr(url.searchParams.get("shopifyUpdatedCount"), 0)));
   const shopifyFailedCount = Math.max(0, Math.round(numberOr(url.searchParams.get("shopifyFailedCount"), 0)));
+  const shopifyPushBlocked = url.searchParams.get("shopifyPushBlocked") === "1";
 
   const approvalStatusCounts = await prisma.priceApprovalRecord.groupBy({
     by: ["status"],
@@ -901,7 +920,7 @@ export async function loader({ request }: { request: Request }) {
     take: 100,
   }).catch(() => []);
 
-  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, savedApprovalRecords, approvalSummary, approvalsCreated, approvalCount, approvalHeld, approvalAction, approvalChanged, approvalBlocked, shopifyUpdated, shopifyUpdatedCount, shopifyFailedCount, assumptions, savedSettings, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview, filters: { search, recipeId, status } });
+  return Response.json({ recipes: allRecipesForFilter, rows: filteredRows, summary, approvalRows, savedApprovalRecords, approvalSummary, approvalsCreated, approvalCount, approvalHeld, approvalAction, approvalChanged, approvalBlocked, shopifyUpdated, shopifyUpdatedCount, shopifyFailedCount, shopifyPushBlocked, assumptions, savedSettings, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview, filters: { search, recipeId, status } });
 }
 
 function Badge({ tone, children }: { tone?: string; children: React.ReactNode }) {
@@ -909,7 +928,7 @@ function Badge({ tone, children }: { tone?: string; children: React.ReactNode })
 }
 
 export default function MarginReviewPage() {
-  const { recipes, rows, summary, approvalRows, savedApprovalRecords, approvalSummary, approvalsCreated, approvalCount, approvalHeld, approvalAction, approvalChanged, approvalBlocked, shopifyUpdated, shopifyUpdatedCount, shopifyFailedCount, filters, assumptions, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview } = useLoaderData<any>();
+  const { recipes, rows, summary, approvalRows, savedApprovalRecords, approvalSummary, approvalsCreated, approvalCount, approvalHeld, approvalAction, approvalChanged, approvalBlocked, shopifyUpdated, shopifyUpdatedCount, shopifyFailedCount, shopifyPushBlocked, filters, assumptions, saved, flagsSynced, syncedFlagged, syncedCleared, recipeFlagPreview } = useLoaderData<any>();
 
   return (
     <div className="page">
@@ -1031,6 +1050,11 @@ export default function MarginReviewPage() {
         ) : null}
         {shopifyUpdated ? (
           <div className="success-note">Shopify price updater ran. Updated {shopifyUpdatedCount} approved record(s). Failed {shopifyFailedCount} record(s).</div>
+        ) : null}
+        {shopifyPushBlocked ? (
+          <div style={{ background: "#fff4f4", border: "1px solid #d82c0d", borderRadius: 8, padding: "10px 12px", margin: "10px 0", color: "#8a2a0b", fontWeight: 600 }}>
+            Live price push blocked. {MARGIN_REVIEW_PUSH_WARNING} Type "{OWNER_SHOPIFY_PRICE_PUSH_PHRASE}" in the confirmation box next to the update button. No Shopify prices were changed.
+          </div>
         ) : null}
         <div className="flag-panel">
           <strong>v8.1 Recipe Cost Review Flags + Details</strong>
@@ -1231,10 +1255,19 @@ export default function MarginReviewPage() {
         ) : (
           <p className="muted" style={{ marginTop: 10 }}>No saved approval records yet. Run the audit, then create approval records.</p>
         )}
+        <div style={{ background: "#fff8f0", border: "1px solid #b98900", borderRadius: 8, padding: "10px 12px", margin: "10px 0", color: "#5c4400" }}>
+          ⚠ {MARGIN_REVIEW_PUSH_WARNING}
+        </div>
         <Form method="post" className="queue-actions">
           <input type="hidden" name="intent" value="safeShopifyPriceUpdate" />
+          <input
+            name="pushConfirmPhrase"
+            placeholder={`Type ${OWNER_SHOPIFY_PRICE_PUSH_PHRASE} to confirm`}
+            autoComplete="off"
+            style={{ minWidth: 280, padding: 6 }}
+          />
           <button type="submit">Update approved Shopify prices</button>
-          <span className="muted">Updates max 25 approved clean records per run. Cost-review holds, rejected rows, skipped rows, and already-updated rows are ignored.</span>
+          <span className="muted">Requires the owner confirmation phrase. Updates max 25 approved clean records per run. Cost-review holds, rejected rows, skipped rows, and already-updated rows are ignored.</span>
         </Form>
       </section>
 

@@ -670,45 +670,48 @@ export async function action({ request }: { request: Request }) {
       };
     }
 
-    await db.pricingRule.deleteMany({
-      where: {
-        shop,
-        customerTag: "gso_tier_rule",
-        title,
-        productTag: fields.productTag || undefined,
-        productGid: fields.productGid || undefined,
-        variantGid: fields.variantGid || undefined,
-      },
-    });
-
-    await db.pricingRule.createMany({
-      data: tierRows.map((tier) => ({
-        shop,
-        title,
-        customerTag: "gso_tier_rule",
-        productTag: fields.productTag,
-        productGid: fields.productGid,
-        variantGid: fields.variantGid,
-        sku: settings,
-        minQty: tier.qty,
-        discountType: mode,
-        sellPrice:
-          mode === "fixed_price"
-            ? tier.fixedPrice
-            : mode === "manual_cost_margin"
-              ? tier.manualCost
-              : null,
-        percentOff:
-          mode === "percent_off"
-            ? tier.discountPct
-            : mode === "cost_margin" || mode === "manual_cost_margin"
-              ? tier.marginPct
-              : null,
-        unitCost: minUnitPrice || null,
-        active,
-        priority,
-      })),
-    });
+    // 15G.1: replace-in-place runs in ONE transaction — a failure between the
+    // delete and the create can no longer leave the rule set half-replaced.
+    await db.$transaction([
+      db.pricingRule.deleteMany({
+        where: {
+          shop,
+          customerTag: "gso_tier_rule",
+          title,
+          productTag: fields.productTag || undefined,
+          productGid: fields.productGid || undefined,
+          variantGid: fields.variantGid || undefined,
+        },
+      }),
+      db.pricingRule.createMany({
+        data: tierRows.map((tier) => ({
+          shop,
+          title,
+          customerTag: "gso_tier_rule",
+          productTag: fields.productTag,
+          productGid: fields.productGid,
+          variantGid: fields.variantGid,
+          sku: settings,
+          minQty: tier.qty,
+          discountType: mode,
+          sellPrice:
+            mode === "fixed_price"
+              ? tier.fixedPrice
+              : mode === "manual_cost_margin"
+                ? tier.manualCost
+                : null,
+          percentOff:
+            mode === "percent_off"
+              ? tier.discountPct
+              : mode === "cost_margin" || mode === "manual_cost_margin"
+                ? tier.marginPct
+                : null,
+          unitCost: minUnitPrice || null,
+          active,
+          priority,
+        })),
+      }),
+    ]);
 
     return {
       ok: true,
