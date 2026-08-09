@@ -67,6 +67,29 @@ export function publicCheckoutFailure(): { ok: false; error: string } {
   return { ok: false, error: PUBLIC_CHECKOUT_ERROR_MESSAGE };
 }
 
+// ---------- 15G.1A: production-agent credential masking ----------
+// Staff/public UI must never render a full print-intake / RIP upload token
+// (or any other production-agent bearer credential). Loaders send only this
+// masked status to the browser; the raw value stays server-side. The suffix
+// reveals at most the LAST 4 characters and only when the credential is long
+// enough (>= 12 chars) that 4 characters cannot help reconstruct it.
+export const CREDENTIAL_PLACEHOLDER = "<PRINT_INTAKE_TOKEN>";
+export const CREDENTIAL_MIN_LENGTH_FOR_SUFFIX = 12;
+
+export type MaskedCredential = { configured: boolean; maskedSuffix: string | null };
+
+export function maskCredential(value: unknown): MaskedCredential {
+  const token = typeof value === "string" ? value.trim() : "";
+  if (!token) return { configured: false, maskedSuffix: null };
+  if (token.length < CREDENTIAL_MIN_LENGTH_FOR_SUFFIX) return { configured: true, maskedSuffix: null };
+  return { configured: true, maskedSuffix: `****${token.slice(-4)}` };
+}
+
+export function credentialStatusLabel(masked: MaskedCredential): string {
+  if (!masked.configured) return "Not configured";
+  return masked.maskedSuffix ? `Configured (${masked.maskedSuffix})` : "Configured";
+}
+
 // ---------- typed confirmation phrases (owner destructive-action gates) ----------
 export const OWNER_SHOPIFY_PRICE_PUSH_PHRASE = "OWNER SHOPIFY PRICE PUSH";
 export const MARGIN_REVIEW_PUSH_WARNING =

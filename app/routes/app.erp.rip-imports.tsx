@@ -2,6 +2,7 @@ import { Form, useActionData, useLoaderData } from "react-router";
 import crypto from "crypto";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
 
 type ParsedRipRow = {
   event: string;
@@ -180,7 +181,17 @@ export async function loader({ request }: { request: Request }) {
     take: 20,
     include: { entries: { take: 5, orderBy: { createdAt: "desc" } } },
   });
-  return { setting, imports };
+  // 15G.1A: never send the raw upload token to the browser — explicit
+  // projection of the display fields plus the masked credential status only.
+  return {
+    setting: {
+      incomingFolder: setting.incomingFolder,
+      versaworksFolder: setting.versaworksFolder,
+      rasterlinkFolder: setting.rasterlinkFolder,
+    },
+    credential: maskCredential(setting.uploadToken),
+    imports,
+  };
 }
 
 export async function action({ request }: { request: Request }) {
@@ -255,7 +266,7 @@ function moneyish(value: number) {
 }
 
 export default function RipImports() {
-  const { setting, imports } = useLoaderData<typeof loader>();
+  const { setting, credential, imports } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   return (
     <main style={{ maxWidth: 1100, margin: "40px auto", padding: 16, fontFamily: "system-ui, sans-serif" }}>
@@ -270,7 +281,7 @@ export default function RipImports() {
           <div><b>Print intake:</b> {setting.incomingFolder}</div>
           <div><b>VersaWorks logs:</b> {setting.versaworksFolder}</div>
           <div><b>RasterLink logs:</b> {setting.rasterlinkFolder}</div>
-          <div><b>Auto-upload token:</b> <code>{setting.uploadToken}</code></div>
+          <div><b>Print Intake Agent Credential:</b> {credentialStatusLabel(credential)} <span style={{ color: "#6b7280" }}>(full token never displayed — rotate on Print Log Settings to reveal a new one once)</span></div>
         </div>
       </section>
 

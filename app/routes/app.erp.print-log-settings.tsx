@@ -15,6 +15,7 @@ import { randomBytes } from "crypto";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { CREDENTIAL_PLACEHOLDER, credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
 
 function makeToken() {
   return `gso_plog_${randomBytes(24).toString("hex")}`;
@@ -61,8 +62,21 @@ export async function loader({ request }: { request: Request }) {
     db.printLogEntry.count({ where: { shop, productionJobId: { not: null } } }),
   ]);
 
+  // 15G.1A: the raw upload token never leaves the server. The browser gets
+  // an explicit projection of the non-secret setting fields plus the masked
+  // credential status — never the whole Prisma row.
   return Response.json({
-    setting,
+    setting: {
+      enabled: setting.enabled,
+      incomingFolder: setting.incomingFolder,
+      versaworksFolder: setting.versaworksFolder,
+      rasterlinkFolder: setting.rasterlinkFolder,
+      processedFolder: setting.processedFolder,
+      errorFolder: setting.errorFolder,
+      expectedTicketPattern: setting.expectedTicketPattern,
+      notes: setting.notes,
+    },
+    credential: maskCredential(setting.uploadToken),
     baseUrl,
     uploadEndpoint: `${baseUrl}/api/print-logs/upload`,
     recentImports,
@@ -108,12 +122,21 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (intent === "rotateToken") {
+    // 15G.1A: the ONLY place a full token is ever sent to the browser is this
+    // one-time rotation response (Agent Security one-time-reveal precedent).
+    // It is never stored in loader data, never logged, and never shown again —
+    // reloading the page loses it. Old token stops working immediately.
+    const rotatedToken = makeToken();
     await db.printLogAutoImportSetting.upsert({
       where: { shop },
-      update: { uploadToken: makeToken() },
-      create: { shop, enabled: true, uploadToken: makeToken() },
+      update: { uploadToken: rotatedToken },
+      create: { shop, enabled: true, uploadToken: rotatedToken },
     });
-    return Response.json({ ok: true, message: "Upload token rotated. Update the local watcher script with the new token." });
+    return Response.json({
+      ok: true,
+      rotatedTokenOnce: rotatedToken,
+      message: "Upload token rotated. The previous token stopped working. Copy the new token NOW — it is shown exactly once and never again.",
+    });
   }
 
   return Response.json({ ok: false, message: "Unknown settings action." }, { status: 400 });
@@ -128,7 +151,8 @@ export default function PrintLogSettingsPage() {
   const setting = data.setting;
 
   const powershellExample = `$Endpoint = "${data.uploadEndpoint}"
-$Token = "${setting.uploadToken}"
+# Replace ${CREDENTIAL_PLACEHOLDER} with the upload token (shown ONCE when you rotate it above).
+$Token = "${CREDENTIAL_PLACEHOLDER}"
 $IncomingFolder = "${setting.incomingFolder || "\\\\SynologyNAS\\GSOP\\GSOP\\print-logs\\incoming"}"
 $ProcessedFolder = "${setting.processedFolder || "\\\\SynologyNAS\\GSOP\\GSOP\\print-logs\\processed"}"
 $ErrorFolder = "${setting.errorFolder || "\\\\SynologyNAS\\GSOP\\GSOP\\print-logs\\errors"}"
@@ -176,8 +200,17 @@ Get-ChildItem -Path $IncomingFolder -File -Include *.csv,*.txt,*.xml -Recurse | 
               <BlockStack gap="200">
                 <Text as="p"><strong>Upload endpoint:</strong></Text>
                 <div style={{ padding: 10, border: "1px solid #ccc", borderRadius: 8, wordBreak: "break-all", background: "#f7f7f7" }}>{data.uploadEndpoint}</div>
-                <Text as="p"><strong>Upload token:</strong></Text>
-                <div style={{ padding: 10, border: "1px solid #ccc", borderRadius: 8, wordBreak: "break-all", background: "#f7f7f7" }}>{setting.uploadToken}</div>
+                <Text as="p"><strong>Print Intake Agent Credential:</strong> {credentialStatusLabel(data.credential)}</Text>
+                <Text as="p" tone="subdued">
+                  The full token is never displayed (15G.1A). Rotating shows the NEW token exactly once so you can paste
+                  it into the agent configs; the old token stops working immediately.
+                </Text>
+                {actionData?.rotatedTokenOnce ? (
+                  <div style={{ padding: 10, border: "2px solid #b98900", borderRadius: 8, wordBreak: "break-all", background: "#fff8f0" }}>
+                    <Text as="p" fontWeight="bold">New token — shown ONCE. Copy it into every agent config now:</Text>
+                    <code>{actionData.rotatedTokenOnce}</code>
+                  </div>
+                ) : null}
                 <Form method="post">
                   <input type="hidden" name="intent" value="rotateToken" />
                   <Button submit tone="critical" loading={busy}>Rotate token</Button>
@@ -251,10 +284,10 @@ Get-ChildItem -Path $IncomingFolder -File -Include *.csv,*.txt,*.xml -Recurse | 
                 <Button onClick={() => navigate("/app/erp/rip-import-review")}>Review unmatched / ambiguous rows (13A.6C)</Button>
               </InlineStack>
               <Text as="p">
-                <b>1. Token:</b> use the upload token shown on this page (also on Print Intake). It is validated before any file is read; logs never
-                contain it. <b>2. Configure:</b> on the print computer, copy tools\gso-rasterlink-sync-config.example.json to
-                gso-rasterlink-sync-config.json next to the script, paste the token, and confirm the four NAS folders (incoming / processed /
-                error / sync-logs). <b>3. Health check (creates no imports):</b>{" "}
+                <b>1. Token:</b> use the upload token revealed once when you rotate it above (the full value is never displayed on any page). It is
+                validated before any file is read; logs never contain it. <b>2. Configure:</b> on the print computer, copy
+                tools\gso-rasterlink-sync-config.example.json to gso-rasterlink-sync-config.json next to the script, set UploadToken in place of
+                {" "}{CREDENTIAL_PLACEHOLDER}, and confirm the four NAS folders (incoming / processed / error / sync-logs). <b>3. Health check (creates no imports):</b>{" "}
                 <code>powershell -ExecutionPolicy Bypass -File .\gso-rasterlink-sync.ps1 -Health</code>. <b>4. Test one pass:</b> drop one result
                 CSV into incoming, then <code>powershell -ExecutionPolicy Bypass -File .\gso-rasterlink-sync.ps1 -Once</code> (add
                 <code> -DryRun</code> first to preview without uploading). <b>5. Scheduled Task:</b>{" "}

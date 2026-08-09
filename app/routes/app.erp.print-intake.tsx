@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { decodeIntakeOutcomes, type IntakeOutcome } from "../lib/print-intake-routing.server";
+import { CREDENTIAL_PLACEHOLDER, credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
 
 // Print Intake (13A.6G): the staff workflow is now automatic — drop artwork in
 // "Prints For Today" and the local intake agent asks the ERP for a
@@ -34,9 +35,11 @@ export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const setting = await ensureSetting(session.shop);
   const { outcomes } = decodeIntakeOutcomes(setting.notes);
+  // 15G.1A: the raw upload token never leaves the server — the browser gets
+  // only the masked configured/not-configured status.
   return {
     incomingFolder: setting.incomingFolder,
-    uploadToken: setting.uploadToken,
+    credential: maskCredential(setting.uploadToken),
     outcomes: outcomes.slice(0, 50),
   };
 }
@@ -59,7 +62,7 @@ const DECISION_LABEL: Record<IntakeOutcome["decision"], string> = {
 };
 
 export default function PrintIntake() {
-  const { incomingFolder, uploadToken, outcomes } = useLoaderData<typeof loader>();
+  const { incomingFolder, credential, outcomes } = useLoaderData<typeof loader>();
   const counts = {
     routed: outcomes.filter((outcome) => outcome.decision === "routed").length,
     needs_review: outcomes.filter((outcome) => outcome.decision === "needs_review").length,
@@ -145,7 +148,7 @@ export default function PrintIntake() {
       <section style={card}>
         <h2 style={{ margin: "0 0 8px" }}>Agent setup (tools/gso-print-intake-agent.ps1)</h2>
         <ol style={{ fontSize: 13, lineHeight: 1.9, margin: 0, paddingLeft: 20 }}>
-          <li>On the shop PC: copy <code>tools\gso-print-intake-agent-config.example.json</code> to <code>gso-print-intake-agent-config.json</code> (git-ignored) and paste the token below.</li>
+          <li>On the shop PC: copy <code>tools\gso-print-intake-agent-config.example.json</code> to <code>gso-print-intake-agent-config.json</code> (git-ignored) and set <code>UploadToken</code> (see the credential card below — the token itself is only shown once, at rotation).</li>
           <li>Health check (writes nothing): <code>powershell -ExecutionPolicy Bypass -File tools\gso-print-intake-agent.ps1 -Health</code></li>
           <li>Dry run (plans only, no copies/moves/reports): <code>... -DryRun</code>, then one real pass: <code>... -Once</code></li>
           <li>Enable routing by setting <code>MimakiRoutingEnabled: true</code> in the config after the dry run looks right.</li>
@@ -158,9 +161,18 @@ export default function PrintIntake() {
       </section>
 
       <section style={{ ...card, borderColor: "#fcd34d", background: "#fffbeb" }}>
-        <b>Agent token</b>
-        <p style={{ fontSize: 13 }}>Paste into <code>UploadToken</code> in the agent config (and the RasterLink sync config). Never commit the real config — it is git-ignored.</p>
-        <pre style={{ background: "white", padding: 12, borderRadius: 8, overflowX: "auto" }}>{uploadToken}</pre>
+        <b>Print Intake Agent Credential: {credentialStatusLabel(credential)}</b>
+        <p style={{ fontSize: 13, marginBottom: 6 }}>
+          The full token is never displayed here (15G.1A). In agent configs, set <code>UploadToken</code> to the value
+          in place of <code>{CREDENTIAL_PLACEHOLDER}</code>. To obtain a value, rotate the token on{" "}
+          <Link to="/app/erp/print-log-settings">Print Log Settings</Link> — the new token is shown exactly once at
+          rotation and never again. Never commit the real config — it is git-ignored.
+        </p>
+        {!credential.configured ? (
+          <p style={{ fontSize: 13, color: "#991b1b" }}>
+            No credential is configured yet — open Print Log Settings and rotate the token to create one.
+          </p>
+        ) : null}
       </section>
     </main>
   );

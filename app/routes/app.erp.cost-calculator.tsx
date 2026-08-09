@@ -1370,7 +1370,8 @@ export async function loader({ request }: { request: Request }) {
     emergency,
     appOrigin,
     syncEndpoint: `${appOrigin}/api/quote-rip-results/sync`,
-    uploadToken: setting?.uploadToken || null,
+    // 15G.1A: the raw upload token never leaves the server — status only.
+    uploadTokenConfigured: Boolean(setting?.uploadToken),
     rows,
     lastAutoImportAt: setting?.lastAutoImportAt ? setting.lastAutoImportAt.toISOString() : null,
     materials,
@@ -2248,7 +2249,7 @@ function LineRow({
 }
 
 export default function ErpCostCalculatorRoute() {
-  const { syncEndpoint, uploadToken, rows, lastAutoImportAt, materials, blankItems, form, calc } = useLoaderData<typeof loader>();
+  const { syncEndpoint, uploadTokenConfigured, rows, lastAutoImportAt, materials, blankItems, form, calc } = useLoaderData<typeof loader>();
   const location = useLocation();
 
   return (
@@ -2268,13 +2269,13 @@ export default function ErpCostCalculatorRoute() {
 
       <section style={{ ...cardStyle, marginTop: 16, borderColor: rows.length ? "#bbf7d0" : "#fde68a", background: rows.length ? "#f0fdf4" : "#fffbeb" }}>
         <h2 style={{ marginTop: 0 }}>Sync control</h2>
-        {uploadToken ? (
+        {uploadTokenConfigured ? (
           <div style={{ display: "grid", gap: 8 }}>
             <div><b>Synced GSOQ results:</b> {rows.length}</div>
             <div><b>Last sync:</b> {lastAutoImportAt ? new Date(lastAutoImportAt).toLocaleString() : "Not synced yet"}</div>
             <div><b>Upload endpoint:</b> <code>{syncEndpoint}</code></div>
-            <div><b>Upload token:</b> <code>{uploadToken}</code></div>
-            <code style={codeStyle}>powershell -ExecutionPolicy Bypass -File .\tools\gso-sync-quote-rip-results-to-app.ps1 -AppUrl "{new URL(syncEndpoint).origin}" -Token "{uploadToken}"</code>
+            <div><b>Print Intake Agent Credential:</b> Configured <span style={{ color: "#92400e" }}>(full token never displayed — rotate on Print Log Settings to reveal a new one once)</span></div>
+            <code style={codeStyle}>powershell -ExecutionPolicy Bypass -File .\tools\gso-sync-quote-rip-results-to-app.ps1 -AppUrl "{new URL(syncEndpoint).origin}" -Token "&lt;PRINT_INTAKE_TOKEN&gt;"</code>
           </div>
         ) : (
           <div style={{ fontSize: 13, color: "#92400e" }}>
