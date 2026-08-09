@@ -30,7 +30,9 @@ import {
   defaultMarginCurvesValues,
   defaultMarketTargetsValues,
   defaultPricingPolicyValues,
+  defaultSpecialtyPricingValues,
   defaultTierLaddersValues,
+  type SpecialtyPricingValues,
   type AreaFloorBand,
   type FamilyMarginCurveConfig,
   type FamilyMarketTargets,
@@ -54,6 +56,8 @@ export const PRICING_MARGIN_CURVES_KEY = "ownerConfig.pricing.marginCurves";
 export const PRICING_TIER_LADDERS_KEY = "ownerConfig.pricing.tierLadders";
 // 15F.0K.3: verified market targets (bags-4x5 families only).
 export const PRICING_MARKET_TARGETS_KEY = "ownerConfig.pricing.marketTargets";
+// 15G.4C: specialty commercial pricing (curve/floor/holo/white/minimums).
+export const PRICING_SPECIALTY_KEY = "ownerConfig.pricing.specialtyPricing";
 
 // The ONLY keys the resolver reads (pinned by test — unit-price floors are
 // still absent on purpose; owner decision K.3-1 keeps them inactive).
@@ -64,6 +68,7 @@ export const PRICING_POLICY_KEYS = [
   PRICING_MARGIN_CURVES_KEY,
   PRICING_TIER_LADDERS_KEY,
   PRICING_MARKET_TARGETS_KEY,
+  PRICING_SPECIALTY_KEY,
 ] as const;
 
 export type OwnerConfigSource = "owner_config" | "code_fallback" | "invalid_config_fallback";
@@ -323,6 +328,64 @@ function validateMarketFamily(key: string, entry: unknown): ValidationResult<Fam
   return { ok: true, value: { active: entry.active, sourceDate, source, confidence, bands: cleanBands } };
 }
 
+// 15G.4C: specialty commercial pricing — strict, fail-closed. A bad row can
+// never zero a premium or drop the floor below 30%.
+export function validateSpecialtyPricing(payload: unknown): ValidationResult<SpecialtyPricingValues> {
+  if (!isPlainObject(payload)) return { ok: false, reason: "Payload must be an object." };
+  const raw = payload as Record<string, any>;
+  const curve: Record<number, number> = {};
+  if (!isPlainObject(raw.curve)) return { ok: false, reason: "curve must map X levels 1-8 to premium percents." };
+  for (let x = 1; x <= 8; x += 1) {
+    const pct = (raw.curve as any)[x] ?? (raw.curve as any)[String(x)];
+    if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 200) {
+      return { ok: false, reason: `curve[${x}] must be a finite percent 0-200.` };
+    }
+    curve[x] = pct;
+  }
+  for (let x = 2; x <= 8; x += 1) {
+    if (curve[x] < curve[x - 1]) return { ok: false, reason: "curve must be non-decreasing from 1X to 8X." };
+  }
+  const floorPct = raw.floorPct;
+  if (typeof floorPct !== "number" || !Number.isFinite(floorPct) || floorPct < 30 || floorPct > 60) {
+    return { ok: false, reason: "floorPct must be 30-60." };
+  }
+  const holoPct = raw.holoPct;
+  if (typeof holoPct !== "number" || !Number.isFinite(holoPct) || holoPct < 0 || holoPct > 100) {
+    return { ok: false, reason: "holoPct must be 0-100." };
+  }
+  const whitePct = raw.decorativeWhiteLayerPct;
+  if (typeof whitePct !== "number" || !Number.isFinite(whitePct) || whitePct < 0 || whitePct > 100) {
+    return { ok: false, reason: "decorativeWhiteLayerPct must be 0-100." };
+  }
+  const minimums = raw.smallRunMinimums;
+  if (!isPlainObject(minimums)) return { ok: false, reason: "smallRunMinimums must be an object { lowMin, lowMaxX, highMin }." };
+  const lowMin = minimums.lowMin;
+  const lowMaxX = minimums.lowMaxX;
+  const highMin = minimums.highMin;
+  if (typeof lowMin !== "number" || !Number.isFinite(lowMin) || lowMin < 0 || lowMin > 500) return { ok: false, reason: "smallRunMinimums.lowMin must be 0-500." };
+  if (typeof highMin !== "number" || !Number.isFinite(highMin) || highMin < lowMin || highMin > 1000) return { ok: false, reason: "smallRunMinimums.highMin must be >= lowMin and <= 1000." };
+  if (typeof lowMaxX !== "number" || !Number.isInteger(lowMaxX) || lowMaxX < 1 || lowMaxX > 8) return { ok: false, reason: "smallRunMinimums.lowMaxX must be an integer 1-8." };
+  const deepFrom = raw.deepBuildCustomQuoteFrom;
+  if (typeof deepFrom !== "number" || !Number.isInteger(deepFrom) || deepFrom < 2 || deepFrom > 20) {
+    return { ok: false, reason: "deepBuildCustomQuoteFrom must be an integer 2-20." };
+  }
+  if (raw.stackingMode !== "additive") return { ok: false, reason: 'stackingMode must be "additive" (compounding is not owner-approved).' };
+  return {
+    ok: true,
+    value: {
+      curve,
+      floorPct,
+      holoPct,
+      decorativeWhiteLayerPct: whitePct,
+      smallRunMinimums: { lowMin, lowMaxX, highMin },
+      stackingMode: "additive",
+      deepBuildCustomQuoteFrom: deepFrom,
+      preArtCoverageMode: "engine_default_90",
+      noPostArtPriceDecrease: true,
+    },
+  };
+}
+
 export function validateMarketTargets(payload: unknown): ValidationResult<MarketTargetsValues> {
   if (!isPlainObject(payload) || !isPlainObject(payload.families)) return { ok: false, reason: "Payload must be an object { families: { ... } }." };
   const families = payload.families as Record<string, unknown>;
@@ -395,6 +458,13 @@ export const OWNER_CONFIG_KEY_DEFINITIONS: OwnerConfigKeyDefinition[] = [
     description: "Raising-only market-target price candidate + negotiation-floor display data for bags-4x5 / bags-4x5-double. target null = candidate skipped (crossover tiers). Code fallback: the 2026-07-26 competitor study values, ACTIVE.",
     validate: validateMarketTargets,
     codeFallback: () => defaultMarketTargetsValues(),
+  },
+  {
+    key: PRICING_SPECIALTY_KEY,
+    label: "Pricing — UV specialty commercial pricing (15G.4C)",
+    description: "Owner-approved specialty tiers over the standard UV base: curve 1X-8X percents, 40% cost-safety floor, holo +20%, decorative white +12%, small-run minimums $35/$60, additive stacking, 9X+ deep-build custom quote. Code fallback: the 2026-08-09 approved policy.",
+    validate: validateSpecialtyPricing,
+    codeFallback: () => defaultSpecialtyPricingValues(),
   },
 ];
 
@@ -488,6 +558,7 @@ export async function resolvePricingPolicyConfig(dbClient: any, shop: string): P
     marginCurves: resolutions[PRICING_MARGIN_CURVES_KEY].value as MarginCurvesValues,
     tierLadders: resolutions[PRICING_TIER_LADDERS_KEY].value as TierLaddersValues,
     marketTargets: resolutions[PRICING_MARKET_TARGETS_KEY].value as MarketTargetsValues,
+    specialtyPricing: resolutions[PRICING_SPECIALTY_KEY].value as SpecialtyPricingValues,
   };
   return { values, resolutions };
 }

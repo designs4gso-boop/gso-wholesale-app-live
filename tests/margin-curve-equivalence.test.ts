@@ -312,31 +312,33 @@ describe("15F.0K.2-B deliberate bag calibration (exact prices; no decreases)", (
     expect(computeProductDrivenCost(bagInput({ quantity: 1000, facesPerUnit: 2 })).totalCost).toBeCloseTo(534.0188, 3);
   });
 
-  it("exact anchors at 1,000: Stage-B cost-based candidates 705.95/1112.54; K.3 market target lifts the FINAL to $850.00 / $1,130.00", () => {
+  it("exact anchors at 1,000: Stage-B cost-based candidates 705.95/1112.54; 15G.4C UV target lifts the FINAL to $1,050.00 / $1,450.00", () => {
     const single = priceAt(1, 1000, defaults);
     expect(single.result.marginPctApplied).toBe(55);
     expect(single.result.candidates.costBasedPrice).toBeCloseTo(single.cost / 0.45, 10);
     expect(single.result.candidates.costBasedPrice).toBeCloseTo(705.9468, 3); // Stage-B cost-based (unchanged by K.3)
-    expect(single.result.finalTotalPrice).toBeCloseTo(850, 6); // owner-approved: $0.85/unit at 1,000
+    expect(single.result.finalTotalPrice).toBeCloseTo(1050, 6); // owner-approved 15G.4C: $1.05/unit at 1,000
     expect(single.result.controllingRule).toBe("Verified market target (owner config)");
     const double = priceAt(2, 1000, defaults);
     expect(double.result.marginPctApplied).toBe(52);
     expect(double.result.candidates.costBasedPrice).toBeCloseTo(double.cost / 0.48, 10);
     expect(double.result.candidates.costBasedPrice).toBeCloseTo(1112.5392, 3);
-    expect(double.result.finalTotalPrice).toBeCloseTo(1130, 6); // owner-approved: $1.13/unit at 1,000
+    expect(double.result.finalTotalPrice).toBeCloseTo(1450, 6); // owner-approved 15G.4C: $1.45/unit at 1,000
     expect(double.result.controllingRule).toBe("Verified market target (owner config)");
   });
 
-  it("64-unit prices are UNCHANGED from pre-B behavior on both sides (owner rule)", () => {
+  it("15G.4C: 64-unit prices now take the UV band-1 target when it beats min-profit (owner ladder starts at 50)", () => {
+    // The July "band 1 never repriced" rule is superseded by the approved
+    // 15G.4C UV ladder (2.15 front / +0.55 back from qty 1) — small runs may
+    // now be market-target-controlled; they can only RAISE vs Stage-A.
     for (const faces of [1, 2]) {
       const before = priceAt(faces, 64, stageAValues());
       const after = priceAt(faces, 64, defaults);
-      expect(after.result.finalTotalPrice).toBeCloseTo(before.result.finalTotalPrice, 10);
+      expect(after.result.finalTotalPrice).toBeGreaterThanOrEqual(before.result.finalTotalPrice - 1e-9);
     }
-    // single 64 stays min-profit-controlled ($75 over cost)
     const single64 = priceAt(1, 64, defaults);
-    expect(single64.result.controllingRule).toContain("gross-profit");
-    expect(single64.result.finalTotalPrice).toBeCloseTo(single64.cost + 75, 10);
+    const target64 = 2.15 * 64;
+    expect(single64.result.finalTotalPrice).toBeCloseTo(Math.max(target64, single64.cost + 75), 6);
   });
 
   it("NO price decreases anywhere: after >= before for both sides at every approved ladder quantity", () => {

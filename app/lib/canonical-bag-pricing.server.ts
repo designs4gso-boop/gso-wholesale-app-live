@@ -150,6 +150,13 @@ export function canonicalStockBagJob(
     policyValues: inputs.policyValues,
     marginCurveKey: marginCurveKeyFor("bags-4x5", Math.max(1, Math.floor(options.faces))),
     marketTargetSpecialtyReasons: specialtyFinishReasons({ whiteLayers, glossLayers, materialName: material.name }),
+    // 15G.4C parity with the calculator route: specialty commercial tiers.
+    specialty: {
+      glossLayers,
+      decorativeWhiteLayers: options.holographic ? 0 : whiteLayers,
+      requiredWhite: Boolean(options.holographic && whiteLayers > 0),
+      holographic: Boolean(options.holographic),
+    },
   });
 
   return {

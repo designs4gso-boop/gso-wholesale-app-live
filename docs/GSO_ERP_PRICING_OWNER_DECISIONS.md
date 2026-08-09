@@ -217,3 +217,27 @@ bagApplicationPerLabel4x5Conservative + BAG_APPLICATION_THROUGHPUT), never
 canonical. Stale texts corrected: cost-verification labor row (said "180
 bags/hr" as current), Margin Review per-side floor copy (diagnostic
 reference only). Item 21 CLOSED.
+
+## 15G.4C ratification (2026-08-09) — SUPERSEDES the July 4x5 market decisions
+The 2026-07-26 blended market targets ($0.85/$1.13 @1,000 and all July bag
+bands, negotiation floors, premium targets) are RETIRED — superseded by the
+UV-only competitor calibration (15G.4A study + 15G.4B decision model, owner
+approved). LIVE POLICY: front-only ladder 50=2.15 / 100=1.30 / 250=1.15 /
+500=1.05 / 1000=1.05 / 2500=0.95; back-label premium .55/.50/.48/.45/.40/
+.37; double target = front + back (never a second hardcoded ladder); 5000+
+has NO fixed target (cost-led + strong crossover advisory + DTP comparison).
+SPECIALTY (4x5 bags): customer tiers over the standard base — 1X+12 2X+20
+3X+28 4X+36 5X+44 6X+50 7X+55 8X+60 (%), ADDITIVE stacking with holo +20%;
+decorative white = one 1X-equivalent layer (+12%); REQUIRED production
+white = bundled, no luxury surcharge, floor-protected; small-run specialty
+minimums $35 (1X-3X) / $60 (4X+); 40% cost-safety floor — FINAL =
+max(market tier, cost/0.60, min-profit/min-order); pre-art floor uses the
+existing 90% internal coverage estimate; actual coverage improves realized
+margin but NEVER lowers a quoted price; 9X+ = Deep Build custom quote (no
+automatic market price). $25 customer file-prep fee ONLY when GSO builds
+the specialty mask (internal $6.25 setup cost unchanged). The old
+full-margin cost-plus path is no longer the primary specialty candidate.
+Editable at ownerConfig.pricing.marketTargets +
+ownerConfig.pricing.specialtyPricing (audited envelopes, fail-closed to
+these approved defaults). VIP/volume program DEFERRED. Storefront
+configurator ladder remains legacy until 15G.5.

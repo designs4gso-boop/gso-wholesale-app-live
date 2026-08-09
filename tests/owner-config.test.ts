@@ -90,7 +90,7 @@ describe("owner-config defaults mirror the code constants exactly", () => {
     expect(defaults.areaFloorBands[0]).not.toBe(STICKER_MARKET_FLOOR_BANDS[0]);
   });
 
-  it("K.1+K.2-A+K.3 reads exactly six keys — unit-price floors are STILL not configurable (owner decision K.3-1)", () => {
+  it("15G.4C reads exactly seven keys — unit-price floors are STILL not configurable (owner decision K.3-1)", () => {
     expect([...PRICING_POLICY_KEYS]).toEqual([
       PRICING_MIN_GROSS_PROFIT_KEY,
       PRICING_MIN_ORDER_TOTALS_KEY,
@@ -98,6 +98,7 @@ describe("owner-config defaults mirror the code constants exactly", () => {
       PRICING_MARGIN_CURVES_KEY,
       PRICING_TIER_LADDERS_KEY,
       PRICING_MARKET_TARGETS_KEY,
+      "ownerConfig.pricing.specialtyPricing",
     ]);
     expect(OWNER_CONFIG_KEY_DEFINITIONS.map((definition) => definition.key)).toEqual([...PRICING_POLICY_KEYS]);
   });

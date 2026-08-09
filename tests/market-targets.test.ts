@@ -62,20 +62,20 @@ function bagPrice(side: "single" | "double", qty: number, values: ReturnType<typ
 }
 
 describe("owner-approved anchors and raising-only behavior", () => {
-  it("1,000 single = $850.00 total ($0.85/unit) via the market target; cost-based candidate untouched", () => {
+  it("15G.4C: 1,000 single = $1,050.00 total ($1.05/unit) via the UV market target; cost-based candidate untouched", () => {
     const result = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: SINGLE_COST_1000, marginRule: bagsRule, premiumEligible: false, policyValues: activeValues(), marginCurveKey: "bags-4x5" });
-    expect(result.finalTotalPrice).toBeCloseTo(850, 6);
-    expect(result.finalUnitPrice).toBeCloseTo(0.85, 10);
+    expect(result.finalTotalPrice).toBeCloseTo(1050, 6);
+    expect(result.finalUnitPrice).toBeCloseTo(1.05, 10);
     expect(result.controllingRule).toBe("Verified market target (owner config)");
-    expect(result.candidates.verifiedMarketTargetPrice).toBeCloseTo(850, 6);
+    expect(result.candidates.verifiedMarketTargetPrice).toBeCloseTo(1050, 6);
     expect(result.candidates.costBasedPrice).toBeCloseTo(SINGLE_COST_1000 / 0.45, 8);
     expect(result.marketPosition?.targetApplied).toBe(true);
     expect(result.marketPosition?.finalVsMedianPct).toBeCloseTo(0, 6); // at the median by design
   });
 
-  it("1,000 double = $1,130.00 total ($1.13/unit)", () => {
+  it("15G.4C: 1,000 double = $1,450.00 total ($1.45/unit = 1.05 front + 0.40 back premium)", () => {
     const result = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: DOUBLE_COST_1000, marginRule: bagsRule, premiumEligible: false, policyValues: activeValues(), marginCurveKey: "bags-4x5-double" });
-    expect(result.finalTotalPrice).toBeCloseTo(1130, 6);
+    expect(result.finalTotalPrice).toBeCloseTo(1450, 6);
     expect(result.controllingRule).toBe("Verified market target (owner config)");
   });
 
@@ -152,12 +152,14 @@ describe("crossover tiers (owner-approved behavior)", () => {
   it("2,500 keeps the target (single: it controls) and flags the MILD advisory", () => {
     const single = bagPrice("single", 2500, activeValues());
     expect(single.marketPosition?.crossover).toBe("mild");
-    expect(single.candidates.verifiedMarketTargetPrice).toBeCloseTo(0.72 * 2500, 6);
+    expect(single.candidates.verifiedMarketTargetPrice).toBeCloseTo(0.95 * 2500, 6);
     expect(single.controllingRule).toBe("Verified market target (owner config)");
     const double = bagPrice("double", 2500, activeValues());
     expect(double.marketPosition?.crossover).toBe("mild");
-    // double 2500: cost-based (49%) exceeds the 0.97 target -> cost-based rules
-    expect(double.controllingRule).toContain("Cost-based");
+    // 15G.4C: the 1.32 UV double target (front 0.95 + back 0.37) now exceeds
+    // the 49% cost-based candidate, so the target controls at 2,500 too.
+    expect(double.candidates.verifiedMarketTargetPrice).toBeCloseTo(1.32 * 2500, 6);
+    expect(double.controllingRule).toBe("Verified market target (owner config)");
   });
 });
 
@@ -186,15 +188,16 @@ describe("warnings are information only — they never alter the price", () => {
     expect(overridden.candidates.verifiedMarketTargetPrice).toBeNull(); // not contending
     expect(overridden.finalTotalPrice).toBeCloseTo((COST_PER_UNIT.single[1000] * 1000) / 0.55, 8);
     expect(overridden.marketPosition?.belowTarget).toBe(true); // warning shows
-    expect(overridden.marketPosition?.targetUnit).toBe(0.85); // target still displayed
-    expect(overridden.marketPosition?.belowNegotiationFloor).toBe(true); // 0.5776 < 0.72 -> stronger warning
+    expect(overridden.marketPosition?.targetUnit).toBe(1.05); // 15G.4C UV target still displayed
+    // 15G.4C: negotiation floors are retired (null) — no stronger warning tier
+    expect(overridden.marketPosition?.belowNegotiationFloor).toBe(false);
     expect(overridden.marginPctApplied).toBe(45); // staff margin applied; existing gates govern below-floor cases
   });
 
-  it("negotiation floor never blocks and never raises: it is absent from candidates entirely", () => {
+  it("negotiation floor never blocks and never raises: absent from candidates; 15G.4C retires the display value to null", () => {
     const result = bagPrice("single", 1000, activeValues());
     expect(Object.keys(result.candidates)).not.toContain("negotiationFloorPrice");
-    expect(result.marketPosition?.negotiationFloorUnit).toBe(0.72); // display data
+    expect(result.marketPosition?.negotiationFloorUnit).toBeNull(); // superseded display data
   });
 });
 
@@ -212,8 +215,8 @@ describe("config plumbing: validator details + fail-closed fallback + resolver",
       (payload) => { payload.families["bags-4x5"].bands[2].minQty = 5; }, // descending
       (payload) => { payload.families["bags-4x5"].bands[0].target = -1; },
       (payload) => { payload.families["bags-4x5"].bands[0].target = Number.NaN; },
-      (payload) => { payload.families["bags-4x5"].bands[0].low = 2; }, // low > median (2 > 1.35)
-      (payload) => { payload.families["bags-4x5"].bands[0].target = 9; }, // target > high
+      (payload) => { payload.families["bags-4x5"].bands[0].low = 9; }, // low > median (9 > 2.15)
+      (payload) => { payload.families["bags-4x5"].bands[0].high = 3; payload.families["bags-4x5"].bands[0].target = 9; }, // target > high
       (payload) => { payload.families["bags-4x5"].bands[0].crossover = "severe"; },
     ];
     for (const mutate of cases) {
@@ -223,11 +226,11 @@ describe("config plumbing: validator details + fail-closed fallback + resolver",
     }
   });
 
-  it("negotiationFloor above the collapsing median is VALID (crossover squeeze — real research data at double 2,000+)", () => {
+  it("negotiationFloor above the collapsing median stays VALID for hand-entered configs (crossover squeeze); shipped defaults retire it to null", () => {
     const payload = defaultMarketTargetsValues();
-    const band = payload.families["bags-4x5-double"].bands.find((candidate) => candidate.minQty === 2000)!;
-    expect(band.negotiationFloor).toBe(1.04);
-    expect(band.median).toBe(1.01);
+    const band = payload.families["bags-4x5-double"].bands.find((candidate) => candidate.minQty === 2500)!;
+    expect(band.negotiationFloor).toBeNull(); // 15G.4C default
+    band.negotiationFloor = 1.5; // above the 1.32 median — legitimate squeeze data
     expect(validateMarketTargets(payload).ok).toBe(true);
   });
 
@@ -273,13 +276,13 @@ describe("15F.0K.4C: specialty finishes skip the standard 4x5 market table", () 
     expect(specialtyFinishReasons({ whiteLayers: 1, glossLayers: 0, materialName: "Clear Roll Media" })).toEqual(["white ink", "holographic or specialty material"]);
   });
 
-  it("standard matte bag STILL receives the verified market target ($850 at 1,000)", () => {
+  it("standard matte bag STILL receives the verified market target ($1,050 at 1,000 — 15G.4C)", () => {
     const standard = computeCommercialPrice({
       familyKey: "sticker-bags", quantity: 1000, completeCost: SINGLE_COST_1000,
       marginRule: bagsRule, premiumEligible: false, policyValues: defaultPricingPolicyValues(),
       marginCurveKey: "bags-4x5", marketTargetSpecialtyReasons: [],
     });
-    expect(standard.finalTotalPrice).toBeCloseTo(850, 6);
+    expect(standard.finalTotalPrice).toBeCloseTo(1050, 6);
     expect(standard.controllingRule).toBe("Verified market target (owner config)");
     expect(standard.marketPosition?.applicable).toBe(true);
     expect(standard.marketPosition?.notApplicableMessage).toBeNull();
@@ -299,7 +302,7 @@ describe("15F.0K.4C: specialty finishes skip the standard 4x5 market table", () 
       expect(pos.belowNegotiationFloor).toBe(false);
       expect(pos.notApplicableMessage).toBe(SPECIALTY_MARKET_NOT_APPLICABLE_MESSAGE);
       expect(pos.referenceNote).toBe(STANDARD_MATTE_REFERENCE_NOTE);
-      expect(pos.median).toBe(0.85); // reference data preserved, clearly labeled
+      expect(pos.median).toBe(1.05); // reference data preserved, clearly labeled (15G.4C UV basis)
     }
   });
 
@@ -319,11 +322,11 @@ describe("15F.0K.4C: specialty finishes skip the standard 4x5 market table", () 
     expect(result.marginPctApplied).toBe(55); // bag band margin untouched
   });
 
-  it("standard outputs unchanged ($0.85 / $1.13 at 1,000) and 5,000+ crossover behavior unchanged for specialty jobs", () => {
+  it("15G.4C standard outputs ($1.05 / $1.45 at 1,000) and 5,000+ crossover behavior unchanged for specialty jobs", () => {
     const single = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: SINGLE_COST_1000, marginRule: bagsRule, premiumEligible: false, policyValues: defaultPricingPolicyValues(), marginCurveKey: "bags-4x5" });
-    expect(single.finalUnitPrice).toBeCloseTo(0.85, 10);
+    expect(single.finalUnitPrice).toBeCloseTo(1.05, 10);
     const double = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: DOUBLE_COST_1000, marginRule: bagsRule, premiumEligible: false, policyValues: defaultPricingPolicyValues(), marginCurveKey: "bags-4x5-double" });
-    expect(double.finalUnitPrice).toBeCloseTo(1.13, 10);
+    expect(double.finalUnitPrice).toBeCloseTo(1.45, 10);
     const specialtyAt5000 = specialtyPrice("double", 5000, ["gloss stages"]);
     expect(specialtyAt5000.marketPosition?.crossover).toBe("strong"); // advisory unchanged
     expect(specialtyAt5000.candidates.verifiedMarketTargetPrice).toBeNull(); // (null at 5,000 regardless)

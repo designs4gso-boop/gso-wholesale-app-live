@@ -218,15 +218,15 @@ describe("regression — verified 4x5 bag outputs are unchanged (CMYK Mimaki pat
       blank: { name: "4x5 Blank Bag", unitCost: 0.09, tiers: [], status: "verified" },
     } as Partial<ProductDrivenInput>);
   }
-  it("1,000 single-sided stays $0.85/unit and double-sided $1.13/unit (market target controlling)", () => {
+  it("15G.4C: 1,000 single-sided = $1.05/unit and double-sided $1.45/unit (UV market target controlling)", () => {
     const defaults = defaultPricingPolicyValues();
     const single = computeProductDrivenCost(bagInput(1));
     expect(single.totalCost).toBeCloseTo(317.6761, 3);
     const singlePrice = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: single.totalCost, marginRule: bagsRule, premiumEligible: false, policyValues: defaults, marginCurveKey: marginCurveKeyFor("bags-4x5", 1) });
-    expect(singlePrice.finalUnitPrice).toBeCloseTo(0.85, 10);
+    expect(singlePrice.finalUnitPrice).toBeCloseTo(1.05, 10);
     const double = computeProductDrivenCost(bagInput(2));
     expect(double.totalCost).toBeCloseTo(534.0188, 3);
     const doublePrice = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: double.totalCost, marginRule: bagsRule, premiumEligible: false, policyValues: defaults, marginCurveKey: marginCurveKeyFor("bags-4x5", 2) });
-    expect(doublePrice.finalUnitPrice).toBeCloseTo(1.13, 10);
+    expect(doublePrice.finalUnitPrice).toBeCloseTo(1.45, 10);
   });
 });

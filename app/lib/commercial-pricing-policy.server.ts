@@ -284,32 +284,77 @@ export type MarketTargetsValues = { families: Record<string, FamilyMarketTargets
 export const MARKET_TARGET_ALLOWED_KEYS = ["bags-4x5", "bags-4x5-double"];
 export const MARKET_TARGET_SOURCE = "GSO normalized competitor pricing study (2026-07-26)";
 
-const BAGS_4X5_SINGLE_MARKET_BANDS: MarketTargetBand[] = [
-  { minQty: 1, low: 0.89, median: 1.35, high: 1.43, target: 1.35, negotiationFloor: 1.22, premiumTarget: 1.6 },
-  { minQty: 128, low: 0.79, median: 1.2, high: 1.27, target: 1.2, negotiationFloor: 1.04, premiumTarget: 1.37 },
-  { minQty: 256, low: 0.7, median: 1.07, high: 1.13, target: 1.07, negotiationFloor: 0.91, premiumTarget: 1.18 },
-  { minQty: 500, low: 0.63, median: 0.95, high: 1.01, target: 0.95, negotiationFloor: 0.81, premiumTarget: 1.01 },
-  { minQty: 640, low: 0.6, median: 0.91, high: 0.96, target: 0.91, negotiationFloor: 0.78, premiumTarget: 1.0 },
-  { minQty: 1000, low: 0.56, median: 0.85, high: 0.89, target: 0.85, negotiationFloor: 0.72, premiumTarget: 0.94 },
-  { minQty: 1500, low: 0.52, median: 0.79, high: 0.83, target: 0.79, negotiationFloor: 0.67, premiumTarget: 0.86 },
-  { minQty: 2000, low: 0.5, median: 0.75, high: 0.79, target: 0.75, negotiationFloor: 0.64, premiumTarget: 0.86 },
-  { minQty: 2500, low: 0.48, median: 0.72, high: 0.77, target: 0.72, negotiationFloor: 0.64, premiumTarget: 0.86, crossover: "mild" },
-  { minQty: 5000, low: 0.42, median: 0.64, high: 0.68, target: null, negotiationFloor: 0.61, premiumTarget: 0.82, crossover: "strong" },
-  { minQty: 10000, low: 0.38, median: 0.57, high: 0.6, target: null, negotiationFloor: 0.61, premiumTarget: 0.81, crossover: "strong" },
+// 15G.4C OWNER-APPROVED UV-only recalibration (2026-08-09): the July blended
+// study bands are superseded. Double-sided targets are DERIVED (front ladder
+// + quantity-sensitive back-label premium) — never a second hardcoded
+// ladder. 5000+ deliberately has NO fixed UV market target (cost-led +
+// crossover advisory preserved). low/median mirror the UV mid basis;
+// negotiationFloor/premiumTarget retired to null (superseded display data).
+export const BAGS_4X5_FRONT_LADDER: Array<{ minQty: number; target: number | null; crossover?: "mild" | "strong" | null }> = [
+  { minQty: 1, target: 2.15 },
+  { minQty: 100, target: 1.3 },
+  { minQty: 250, target: 1.15 },
+  { minQty: 500, target: 1.05 },
+  { minQty: 1000, target: 1.05 },
+  { minQty: 2500, target: 0.95, crossover: "mild" },
+  { minQty: 5000, target: null, crossover: "strong" },
+  { minQty: 10000, target: null, crossover: "strong" },
 ];
-const BAGS_4X5_DOUBLE_MARKET_BANDS: MarketTargetBand[] = [
-  { minQty: 1, low: 1.78, median: 1.79, high: 2.15, target: 1.79, negotiationFloor: 1.7, premiumTarget: 2.19 },
-  { minQty: 128, low: 1.59, median: 1.59, high: 1.92, target: 1.59, negotiationFloor: 1.54, premiumTarget: 1.98 },
-  { minQty: 256, low: 1.41, median: 1.42, high: 1.71, target: 1.42, negotiationFloor: 1.37, premiumTarget: 1.78 },
-  { minQty: 500, low: 1.26, median: 1.27, high: 1.53, target: 1.27, negotiationFloor: 1.21, premiumTarget: 1.56 },
-  { minQty: 640, low: 1.21, median: 1.22, high: 1.47, target: 1.22, negotiationFloor: 1.2, premiumTarget: 1.55 },
-  { minQty: 1000, low: 1.13, median: 1.13, high: 1.36, target: 1.13, negotiationFloor: 1.09, premiumTarget: 1.47 },
-  { minQty: 1500, low: 1.05, median: 1.06, high: 1.27, target: 1.06, negotiationFloor: 1.05, premiumTarget: 1.36 },
-  { minQty: 2000, low: 1.0, median: 1.01, high: 1.21, target: 1.01, negotiationFloor: 1.04, premiumTarget: 1.36 },
-  { minQty: 2500, low: 0.97, median: 0.97, high: 1.17, target: 0.97, negotiationFloor: 1.04, premiumTarget: 1.36, crossover: "mild" },
-  { minQty: 5000, low: 0.86, median: 0.87, high: 1.04, target: null, negotiationFloor: 1.04, premiumTarget: 1.3, crossover: "strong" },
-  { minQty: 10000, low: 0.77, median: 0.77, high: 0.93, target: null, negotiationFloor: 1.04, premiumTarget: 1.3, crossover: "strong" },
+export const BACK_LABEL_PREMIUM_BANDS: Array<{ minQty: number; premium: number }> = [
+  { minQty: 1, premium: 0.55 },
+  { minQty: 100, premium: 0.5 },
+  { minQty: 250, premium: 0.48 },
+  { minQty: 500, premium: 0.45 },
+  { minQty: 1000, premium: 0.4 },
+  { minQty: 2500, premium: 0.37 },
 ];
+export function backLabelPremiumForQuantity(quantity: number, bands: Array<{ minQty: number; premium: number }> = BACK_LABEL_PREMIUM_BANDS): number {
+  const qty = Math.max(1, Math.floor(quantity));
+  let premium = bands.length ? bands[0].premium : 0;
+  for (const band of bands) if (qty >= band.minQty) premium = band.premium;
+  return premium;
+}
+function uvBand(minQty: number, target: number | null, crossover?: "mild" | "strong" | null): MarketTargetBand {
+  return { minQty, low: target, median: target, high: null, target, negotiationFloor: null, premiumTarget: null, crossover: crossover ?? null };
+}
+const BAGS_4X5_SINGLE_MARKET_BANDS: MarketTargetBand[] = BAGS_4X5_FRONT_LADDER.map((band) => uvBand(band.minQty, band.target, band.crossover));
+const BAGS_4X5_DOUBLE_MARKET_BANDS: MarketTargetBand[] = BAGS_4X5_FRONT_LADDER.map((band) =>
+  uvBand(band.minQty, band.target == null ? null : Number((band.target + backLabelPremiumForQuantity(band.minQty)).toFixed(2)), band.crossover),
+);
+
+// ---------- 15G.4C: owner-approved specialty commercial pricing ----------
+// Customer-facing specialty tiers over the STANDARD UV market base with a
+// 40% cost-safety floor. Additive stacking (base x (1 + holo + curve[X])),
+// never compounded; the floor applies AFTER stacking. 9X+ = Deep Build
+// custom quote (no automatic market price). Internal direct-cost math
+// (gloss stages, 90% pre-art coverage, $6.25 setup) is untouched.
+export type SpecialtyPricingValues = {
+  curve: Record<number, number>; // X -> premium pct
+  floorPct: number;
+  holoPct: number;
+  decorativeWhiteLayerPct: number;
+  smallRunMinimums: { lowMin: number; lowMaxX: number; highMin: number };
+  stackingMode: "additive";
+  deepBuildCustomQuoteFrom: number;
+  preArtCoverageMode: "engine_default_90";
+  noPostArtPriceDecrease: true;
+};
+export const DEEP_BUILD_MESSAGE = "Custom Quote Required / Deep Build (9X+) — no automatic market price; owner quotes from direct cost.";
+export const SPECIALTY_FLOOR_RULE = "Specialty cost safety floor (40% margin)";
+export const SPECIALTY_MARKET_RULE = "UV specialty market tier (owner curve over standard base)";
+export function defaultSpecialtyPricingValues(): SpecialtyPricingValues {
+  return {
+    curve: { 1: 12, 2: 20, 3: 28, 4: 36, 5: 44, 6: 50, 7: 55, 8: 60 },
+    floorPct: 40,
+    holoPct: 20,
+    decorativeWhiteLayerPct: 12,
+    smallRunMinimums: { lowMin: 35, lowMaxX: 3, highMin: 60 },
+    stackingMode: "additive",
+    deepBuildCustomQuoteFrom: 9,
+    preArtCoverageMode: "engine_default_90",
+    noPostArtPriceDecrease: true,
+  };
+}
 
 // ACTIVE by default (owner decision 2): disable or edit via
 // ownerConfig.pricing.marketTargets on Pricing Settings.
@@ -395,6 +440,8 @@ export type PricingPolicyValues = {
   tierLadders: TierLaddersValues;
   // 15F.0K.3: verified market targets (bags-4x5 families only).
   marketTargets: MarketTargetsValues;
+  // 15G.4C: specialty commercial pricing (curve/floor/holo/white/minimums).
+  specialtyPricing: SpecialtyPricingValues;
 };
 
 export function defaultPricingPolicyValues(): PricingPolicyValues {
@@ -414,6 +461,7 @@ export function defaultPricingPolicyValues(): PricingPolicyValues {
     marginCurves: defaultMarginCurvesValues(),
     tierLadders: defaultTierLaddersValues(),
     marketTargets: defaultMarketTargetsValues(),
+    specialtyPricing: defaultSpecialtyPricingValues(),
   };
 }
 
@@ -448,6 +496,22 @@ export type CommercialPriceResult = {
   // 15F.0K.3: market context for badges/snapshots — INFORMATION ONLY, never
   // feeds back into the price (warnings never alter price; test-pinned).
   marketPosition: MarketPosition | null;
+  // 15G.4C: specialty commercial context (bags): tier %, holo %, small-run
+  // minimum, floor, deep-build flag — null on standard jobs.
+  specialty?: {
+    active: boolean;
+    x: number;
+    holographic: boolean;
+    requiredWhite: boolean;
+    deepBuild: boolean;
+    baseUnit: number | null;
+    curvePct: number;
+    holoPct: number;
+    premiumApplied: number;
+    smallRunMinimumApplied: boolean;
+    floorPrice: number | null;
+    message: string | null;
+  } | null;
 };
 
 // One quote -> one customer-ready price. `marginRule` = the resolved
@@ -479,6 +543,17 @@ export function computeCommercialPrice(input: {
   // specialty material) — the STANDARD market table stops contending and its
   // comparisons become reference-only (build via specialtyFinishReasons).
   marketTargetSpecialtyReasons?: string[] | null;
+  // 15G.4C: specialty finish context for 4x5 sticker bags. When present with
+  // layers/holo, the commercial candidate = standard UV base x additive
+  // (holo + curve) premium (small-run minimums applied), and the FINAL price
+  // is max(candidate, cost/0.60 floor, min-profit/min-order). The old
+  // full-margin cost-plus path stops being the primary specialty candidate.
+  specialty?: {
+    glossLayers: number;
+    decorativeWhiteLayers: number;
+    requiredWhite: boolean;
+    holographic: boolean;
+  } | null;
 }): CommercialPriceResult {
   const quantity = Math.max(1, Math.floor(input.quantity));
   const completeCost = Math.max(0, input.completeCost);
@@ -538,17 +613,67 @@ export function computeCommercialPrice(input: {
   const marketApplicable = specialtyReasons.length === 0;
   const verifiedMarketTargetPrice = !suppress && !staffMarginOverrideActive && marketApplicable && marketBand?.target != null ? marketBand.target * quantity : null;
 
-  const contenders: Array<{ rule: string; price: number | null }> = [
-    { rule: `Cost-based price — ${baseMarginPct}% quantity-band margin`, price: costBasedPrice },
-    { rule: "Minimum gross-profit floor (owner, provisional)", price: minimumGrossProfitPrice },
-    { rule: "Minimum order total (owner, provisional)", price: minimumOrderTotalPrice },
-    { rule: "Minimum unit price (owner)", price: minimumUnitPriceTotal },
-    { rule: input.familyKey === "stickers-labels" && input.ownerMarketLadderTotal == null ? "Sticker market floor (area-banded, provisional research anchors)" : "Owner market price ladder", price: ownerMarketLadderPrice },
-    { rule: "Premium finish floor (spot-gloss researched curve)", price: premiumFinishFloorPrice },
-    { rule: "Verified market target (owner config)", price: verifiedMarketTargetPrice },
-  ];
+  // 15G.4C: specialty commercial pricing for 4x5 sticker bags.
+  const specialtyValues = values.specialtyPricing;
+  const spec = input.specialty;
+  const specialtyX = spec ? Math.max(0, Math.floor(spec.glossLayers)) + (Math.floor(spec.decorativeWhiteLayers) > 0 ? 1 : 0) : 0;
+  const isBagCurve = String(curveKey || "").startsWith("bags-4x5");
+  const specialtyActive = Boolean(spec && isBagCurve && !suppress && (specialtyX > 0 || spec.holographic));
+  const deepBuild = specialtyActive && specialtyX >= specialtyValues.deepBuildCustomQuoteFrom;
+  let specialtyCandidate: number | null = null;
+  let specialtyFloorPrice: number | null = null;
+  let specialtyInfo: CommercialPriceResult["specialty"] = null;
+  if (specialtyActive) {
+    specialtyFloorPrice = marginMath(completeCost, specialtyValues.floorPct).price; // cost / 0.60 at 40%
+    const baseUnit = marketBand?.target ?? null; // standard UV base at this qty/sides
+    let premiumApplied = 0;
+    let minimumApplied = false;
+    if (!deepBuild && baseUnit != null) {
+      const curvePct = specialtyX > 0 ? specialtyValues.curve[Math.min(specialtyX, 8)] ?? 0 : 0;
+      const holoPct = spec!.holographic ? specialtyValues.holoPct : 0;
+      const baseTotal = baseUnit * quantity;
+      const pctPremium = baseTotal * ((curvePct + holoPct) / 100); // ADDITIVE stacking
+      const minPremium = specialtyX === 0 ? 0 : specialtyX <= specialtyValues.smallRunMinimums.lowMaxX ? specialtyValues.smallRunMinimums.lowMin : specialtyValues.smallRunMinimums.highMin;
+      premiumApplied = Math.max(pctPremium, minPremium);
+      minimumApplied = premiumApplied > pctPremium + 1e-9;
+      specialtyCandidate = baseTotal + premiumApplied;
+    }
+    specialtyInfo = {
+      active: true,
+      x: specialtyX,
+      holographic: Boolean(spec!.holographic),
+      requiredWhite: Boolean(spec!.requiredWhite),
+      deepBuild,
+      baseUnit,
+      curvePct: specialtyX > 0 ? specialtyValues.curve[Math.min(specialtyX, 8)] ?? 0 : 0,
+      holoPct: spec!.holographic ? specialtyValues.holoPct : 0,
+      premiumApplied,
+      smallRunMinimumApplied: minimumApplied,
+      floorPrice: specialtyFloorPrice,
+      message: deepBuild ? DEEP_BUILD_MESSAGE : null,
+    };
+  }
+
+  const contenders: Array<{ rule: string; price: number | null }> = specialtyActive
+    ? [
+        // owner rule: the old full-margin cost-plus path is NOT the primary
+        // specialty candidate — market tier + 40% floor + job minimums only.
+        { rule: deepBuild ? DEEP_BUILD_MESSAGE : SPECIALTY_MARKET_RULE, price: specialtyCandidate },
+        { rule: SPECIALTY_FLOOR_RULE, price: specialtyFloorPrice },
+        { rule: "Minimum gross-profit floor (owner, provisional)", price: minimumGrossProfitPrice },
+        { rule: "Minimum order total (owner, provisional)", price: minimumOrderTotalPrice },
+      ]
+    : [
+        { rule: `Cost-based price — ${baseMarginPct}% quantity-band margin`, price: costBasedPrice },
+        { rule: "Minimum gross-profit floor (owner, provisional)", price: minimumGrossProfitPrice },
+        { rule: "Minimum order total (owner, provisional)", price: minimumOrderTotalPrice },
+        { rule: "Minimum unit price (owner)", price: minimumUnitPriceTotal },
+        { rule: input.familyKey === "stickers-labels" && input.ownerMarketLadderTotal == null ? "Sticker market floor (area-banded, provisional research anchors)" : "Owner market price ladder", price: ownerMarketLadderPrice },
+        { rule: "Premium finish floor (spot-gloss researched curve)", price: premiumFinishFloorPrice },
+        { rule: "Verified market target (owner config)", price: verifiedMarketTargetPrice },
+      ];
   let finalTotalPrice = 0;
-  let controllingRule = contenders[0].rule;
+  let controllingRule = specialtyActive ? SPECIALTY_FLOOR_RULE : contenders[0].rule;
   for (const contender of contenders) {
     if (contender.price != null && contender.price > finalTotalPrice) {
       finalTotalPrice = contender.price;
@@ -581,6 +706,7 @@ export function computeCommercialPrice(input: {
     controllingRule,
     achievedProfit,
     achievedMarginPct,
+    specialty: specialtyInfo,
     // 15F.0K.3: computed AFTER price selection — display/snapshot info only.
     marketPosition: marketBand
       ? (() => {

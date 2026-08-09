@@ -197,18 +197,20 @@ function directCommercial(quantity: number, faces: number, run: ReturnType<typeo
     policyValues: POLICY,
     marginCurveKey: marginCurveKeyFor("bags-4x5", faces),
     marketTargetSpecialtyReasons: specialtyFinishReasons({ whiteLayers: 0, glossLayers, materialName }),
+    // 15G.4C: same specialty context the calculator route passes.
+    specialty: { glossLayers, decorativeWhiteLayers: 0, requiredWhite: false, holographic: /holo/i.test(materialName) },
   });
 }
 
 describe("cross-surface equivalence — 4x5 sticker bags", () => {
-  it("owner pins hold: 1,000 single = $0.85/unit and 1,000 double = $1.13/unit (verified market targets)", () => {
+  it("15G.4C owner recalibration: 1,000 single = $1.05/unit and 1,000 double = $1.45/unit (UV market targets, front + back premium)", () => {
     const single = canonicalStockBagJob(CANONICAL_INPUTS, { quantity: 1000, faces: 1 });
     const double = canonicalStockBagJob(CANONICAL_INPUTS, { quantity: 1000, faces: 2 });
     if (!single.available || !double.available) throw new Error("canonical job unavailable");
-    expect(single.recommendedTotalPrice).toBeCloseTo(850.0, 2);
-    expect(single.recommendedUnitPrice).toBeCloseTo(0.85, 4);
-    expect(double.recommendedTotalPrice).toBeCloseTo(1130.0, 2);
-    expect(double.recommendedUnitPrice).toBeCloseTo(1.13, 4);
+    expect(single.recommendedTotalPrice).toBeCloseTo(1050.0, 2);
+    expect(single.recommendedUnitPrice).toBeCloseTo(1.05, 4);
+    expect(double.recommendedTotalPrice).toBeCloseTo(1450.0, 2);
+    expect(double.recommendedUnitPrice).toBeCloseTo(1.45, 4);
   });
 
   it("the admin-preview helper equals a direct calculator engine run exactly (same inputs → same cost and price)", () => {
@@ -228,13 +230,17 @@ describe("cross-surface equivalence — 4x5 sticker bags", () => {
     }
   });
 
-  it("gloss math unchanged: 500 double 3X @55% coverage pins the audit numbers ($452.37 cost → $983.41 @54%)", () => {
+  it("gloss DIRECT-COST math unchanged ($452.37 @55%); 15G.4C commercial: specialty tier controls (500 dbl 3X → $960 = 1.50 base +28%)", () => {
     const run = computeProductDrivenCost(baseBagInput({ quantity: 500, faces: 2, printer: "roland", glossLayers: 3, glossCoveragePct: 55 }));
-    expect(run.totalCost).toBeCloseTo(452.37, 1);
+    expect(run.totalCost).toBeCloseTo(452.37, 1); // owner gloss math untouched
     const commercial = directCommercial(500, 2, run, 3);
-    expect(commercial.marginPctApplied).toBe(54);
-    expect(commercial.finalTotalPrice).toBeCloseTo(983.41, 1);
-    expect(commercial.marketPosition?.applicable).toBe(false); // specialty suppression preserved
+    expect(commercial.specialty?.active).toBe(true);
+    expect(commercial.specialty?.curvePct).toBe(28);
+    expect(commercial.controllingRule).toContain("UV specialty market tier");
+    expect(commercial.finalTotalPrice).toBeCloseTo(960.0, 2); // 1.50 x 500 x 1.28
+    expect(commercial.marketPosition?.applicable).toBe(false); // comparisons stay suppressed
+    // floor reference: cost/0.60 at 55% actual coverage sits below the tier
+    expect(commercial.specialty?.floorPrice).toBeCloseTo(452.37 / 0.6, 1);
   });
 });
 

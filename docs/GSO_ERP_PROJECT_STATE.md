@@ -1875,3 +1875,27 @@ dollar pins byte-identical ($0.85/$1.13 @1,000; 500 double 3X @55% =
 452.37/983.41; 256 labels/hr; Mimaki CMYK-only). Four stale 14B.1B/14C
 layout pins updated to the new structure. Next: 15G.4 specialty/gloss
 commercial pricing research. Tests 912 -> 921.
+
+## Phase 15G.4C — UV specialty pricing policy (2026-08-09)
+Owner-approved 15G.4B model implemented. commercial-pricing-policy:
+BAGS_4X5_FRONT_LADDER + BACK_LABEL_PREMIUM_BANDS (double = front+back,
+5000+ target null), SpecialtyPricingValues + defaults, computeCommercialPrice
+`specialty` input — specialty candidate = base x additive(holo+curve) with
+$35/$60 small-run minimums, 40% floor (marginMath at floorPct), specialty
+contenders REPLACE the cost-plus primary, DEEP_BUILD_MESSAGE at 9X+;
+result.specialty context block. owner-config: PRICING_SPECIALTY_KEY +
+validateSpecialtyPricing (fail-closed, additive-only, non-decreasing curve).
+Calculator route: specialty context loader+save (holo from material name;
+white = decorative unless holo → requiredWhite), $25 pfileprep customer
+charge (never internal cost), specialty explainer card (base/tier %/holo %/
+candidate/floor/"Cost safety floor controls this quote."/deep-build/file
+prep/required-white notes); canonicalStockBagJob passes the same context
+(admin previews stay parity-equal). DELIBERATE repricing pins updated:
+1,000 single 850→1050, double 1130→1450; 500 dbl 3X commercial 983.41→960
+(direct cost 452.37 UNCHANGED); 2,500 double target now controls (3,300);
+64-unit band-1 rule superseded by the qty-50 ladder start (raising-only
+proven). Direct-cost engine byte-untouched (pinned). New
+tests/uv-specialty-pricing.test.ts (12: ladders, back premiums, 5000+ null,
+1X-8X finals matrix @90 floors, minimums, deep build, holo additive vs
+compound, white treatments, heavy-combo floor, validator, wiring). No
+Shopify/storefront changes (15G.5). Tests 921 -> 933.

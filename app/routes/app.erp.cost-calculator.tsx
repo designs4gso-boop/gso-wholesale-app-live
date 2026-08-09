@@ -1079,17 +1079,30 @@ export async function loader({ request }: { request: Request }) {
           policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
           marginCurveKey: marginCurveKeyP, // 15F.0K.2-A variant-aware curve lookup
           marketTargetSpecialtyReasons: specialtyReasonsP, // 15F.0K.4C
+          // 15G.4C: specialty commercial tiers for 4x5 bags (holo detected
+          // from the selected material; white = decorative unless holo).
+          specialty: {
+            glossLayers: Number(eparams.get("pglosslayers") || 0),
+            decorativeWhiteLayers: /holo/i.test(productInput.material?.name || "") ? 0 : Number(eparams.get("pwhitelayers") || 0),
+            requiredWhite: /holo/i.test(productInput.material?.name || "") && Number(eparams.get("pwhitelayers") || 0) > 0,
+            holographic: /holo/i.test(productInput.material?.name || ""),
+          },
         });
+        // 15G.4C: optional customer-facing specialty file-prep fee — charged
+        // ONLY when staff must build the mask (flag), $25 flat per job,
+        // separate from the internal $6.25 setup cost (never double-counted).
+        const filePrepFeeP = eparams.get("pfileprep") === "1" && (Number(eparams.get("pglosslayers") || 0) > 0 || Number(eparams.get("pwhitelayers") || 0) > 0) ? 25 : 0;
         const belowFloor = commercial.marginPctApplied < floorForFamily;
         return {
           quantity: qty,
           requested: qty === requestedQtyP,
+          filePrepFee: filePrepFeeP,
           jobCost: completeCost,
           unitCost: qty > 0 ? completeCost / qty : completeCost,
           marginPct: commercial.marginPctApplied,
-          unitPrice: commercial.finalUnitPrice,
-          totalPrice: commercial.finalTotalPrice,
-          profit: commercial.achievedProfit,
+          unitPrice: qty > 0 ? (commercial.finalTotalPrice + filePrepFeeP) / qty : commercial.finalUnitPrice,
+          totalPrice: commercial.finalTotalPrice + filePrepFeeP,
+          profit: commercial.achievedProfit + filePrepFeeP,
           actualMarginPct: commercial.achievedMarginPct,
           belowFloor,
           draftOnly: run.missing.length > 0,
@@ -1097,7 +1110,7 @@ export async function loader({ request }: { request: Request }) {
           freightSource: tierFreight.source,
           setupTotal: run.setupTotal,
           blockers: run.missing,
-          commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP, marketPosition: commercial.marketPosition }, // 15F.0K.3
+          commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP, marketPosition: commercial.marketPosition, specialty: commercial.specialty }, // 15F.0K.3 + 15G.4C
           status: run.missing.length ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
         };
       });
@@ -1755,14 +1768,22 @@ export async function action({ request }: { request: Request }) {
         policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
         marginCurveKey: marginCurveKeySave, // 15F.0K.2-A variant-aware curve lookup
         marketTargetSpecialtyReasons: specialtyReasonsSave, // 15F.0K.4C
+        // 15G.4C loader parity: specialty commercial tiers.
+        specialty: {
+          glossLayers: Number(fRead("pglosslayers") || 0),
+          decorativeWhiteLayers: /holo/i.test(productInputSave.material?.name || "") ? 0 : Number(fRead("pwhitelayers") || 0),
+          requiredWhite: /holo/i.test(productInputSave.material?.name || "") && Number(fRead("pwhitelayers") || 0) > 0,
+          holographic: /holo/i.test(productInputSave.material?.name || ""),
+        },
       });
+      const filePrepFeeSave = fRead("pfileprep") === "1" && (Number(fRead("pglosslayers") || 0) > 0 || Number(fRead("pwhitelayers") || 0) > 0) ? 25 : 0;
       const belowFloor = commercial.marginPctApplied < floorForFamilySave;
       return {
-        quantity: qty, requested: qty === savedRequestedQty, jobCost: completeCost, unitCost: qty > 0 ? completeCost / qty : completeCost, marginPct: commercial.marginPctApplied,
-        unitPrice: commercial.finalUnitPrice, totalPrice: commercial.finalTotalPrice, profit: commercial.achievedProfit, actualMarginPct: commercial.achievedMarginPct, belowFloor,
+        quantity: qty, requested: qty === savedRequestedQty, filePrepFee: filePrepFeeSave, jobCost: completeCost, unitCost: qty > 0 ? completeCost / qty : completeCost, marginPct: commercial.marginPctApplied,
+        unitPrice: qty > 0 ? (commercial.finalTotalPrice + filePrepFeeSave) / qty : commercial.finalUnitPrice, totalPrice: commercial.finalTotalPrice + filePrepFeeSave, profit: commercial.achievedProfit + filePrepFeeSave, actualMarginPct: commercial.achievedMarginPct, belowFloor,
         draftOnly: run.missing.length > 0, freightTotal: tierFreight.total, freightSource: tierFreight.source, setupTotal: run.setupTotal,
         blockers: run.missing,
-        commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave, marketPosition: commercial.marketPosition }, // 15F.0K.3
+        commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave, marketPosition: commercial.marketPosition, specialty: commercial.specialty }, // 15F.0K.3 + 15G.4C
         status: run.missing.length ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
       };
     });
@@ -3010,6 +3031,12 @@ function ProductDrivenForm() {
         <label style={{ fontSize: 12 }}>White layers (0–14)<input name="pwhitelayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Gloss coverage % (blank = 90% pre-art estimate)<input name="pglosscoverage" type="number" min={0} max={100} step="1" placeholder="90% estimated" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Specialty file prep (15G.4C)
+          <select name="pfileprep" style={inputStyle}>
+            <option value="">Customer supplied production-ready mask — $0</option>
+            <option value="1">GSO builds the specialty mask — $25/job customer charge</option>
+          </select>
+        </label>
         </>) : null}
         {isStickers ? (
           <label style={{ fontSize: 12 }}>Cut type
@@ -3224,6 +3251,34 @@ function ProductBreakdown() {
         <div><b>Mimaki:</b> CMYK only · <b>Roland LG-640:</b> white + gloss</div>
         <div><b>Pricing policy:</b> owner Pricing Settings (margin bands, floors, market targets)</div>
       </div>
+
+      {/* 15G.4C-J: specialty commercial pricing explainer. */}
+      {(() => {
+        const requestedTier = (emergency.productMode?.tiers || []).find((tier: any) => tier.requested) || null;
+        const spec = requestedTier?.commercial?.specialty;
+        if (!spec?.active) return null;
+        const floorControls = String(requestedTier?.commercial?.controllingRule || "").includes("safety floor");
+        return (
+          <div style={{ border: "1px solid #fbcfe8", background: "#fdf2f8", borderRadius: 8, padding: 8, fontSize: 12, marginTop: 8 }}>
+            <b>UV specialty commercial pricing (15G.4C):</b>{" "}
+            {spec.deepBuild ? (
+              <b style={{ color: "#9d174d" }}>{spec.message}</b>
+            ) : (
+              <>
+                Base UV market price ${Number(spec.baseUnit || 0).toFixed(2)}/unit
+                {spec.curvePct ? <> · specialty tier +{spec.curvePct}%</> : null}
+                {spec.holoPct ? <> · holographic +{spec.holoPct}%</> : null}
+                {" "}(additive) → market candidate ${(Number(spec.baseUnit || 0) * requestedTier.quantity * (1 + (spec.curvePct + spec.holoPct) / 100)).toFixed(2)}
+                {spec.smallRunMinimumApplied ? <> · <b>small-run specialty minimum applied</b></> : null}
+                {" "}· 40% cost floor ${Number(spec.floorPrice || 0).toFixed(2)}
+                {floorControls ? <> · <b style={{ color: "#9d174d" }}>Cost safety floor controls this quote.</b></> : <> · market tier controls.</>}
+              </>
+            )}
+            {requestedTier?.filePrepFee ? <> · Specialty file prep +${Number(requestedTier.filePrepFee).toFixed(2)} (staff-built mask)</> : null}
+            {spec.requiredWhite ? <> · Required production white is bundled (floor-protected, no luxury surcharge).</> : null}
+          </div>
+        );
+      })()}
     </div>
   );
 }
