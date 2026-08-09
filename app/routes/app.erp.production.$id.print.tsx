@@ -1,35 +1,53 @@
 ﻿import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import {
+  buildBrandRates,
+  computeEntryCosts,
+  machineCost,
+  machineRatePerHour,
+  type BrandInkRates,
+} from "../lib/rip-actual-costs.server";
 
 function money(value: any) {
   return (Number(value) || 0).toFixed(2);
 }
 
-const ROLAND_INK_COST_PER_ML = 156.99 / 750;
-const MIMAKI_INK_COST_PER_ML = 190 / 1000;
-const DEFAULT_MACHINE_RECOVERY_PER_HOUR = 5;
-
-function inkCostRateForEntry(entry: any) {
-  const text = `${entry?.printerSoftware || ""} ${entry?.machineName || ""}`.toLowerCase();
-  if (text.includes("mimaki") || text.includes("raster")) return MIMAKI_INK_COST_PER_ML;
-  return ROLAND_INK_COST_PER_ML;
-}
-
-function summarizeActualPrintLogs(job: any, entries: any[]) {
+// 15G.2: the printable work order prices print-log actuals through the SAME
+// canonical helpers as the Production Board and Actual Cost Dashboard —
+// machineRatePerHour() ($8/hr owner standard) + canonical brand ink rates.
+// The retired hardcoded machine/ink rate literals are gone; this page can
+// never again show different actuals than the board for the same job.
+function summarizeActualPrintLogs(job: any, entries: any[], brandRates: BrandInkRates[], ratePerHour: number) {
   const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const estimatedCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
   const actualSqft = entries.reduce((sum, entry) => sum + Number(entry.sqft || 0), 0);
   const actualInkMl = entries.reduce((sum, entry) => sum + Number(entry.inkMl || 0), 0);
   const actualPrintMinutes = entries.reduce((sum, entry) => sum + Number(entry.printMinutes || 0), 0);
-  const actualInkCost = entries.reduce((sum, entry) => sum + Number(entry.inkMl || 0) * inkCostRateForEntry(entry), 0);
-  const actualMachineCost = (actualPrintMinutes / 60) * DEFAULT_MACHINE_RECOVERY_PER_HOUR;
+  const actualInkCost = entries.reduce((sum, entry) => {
+    const costs = computeEntryCosts(
+      {
+        machineName: entry.machineName,
+        printerSoftware: entry.printerSoftware,
+        sourceJobName: entry.sourceJobName,
+        cmykInkMl: Number(entry.cmykInkMl || 0),
+        whiteInkMl: Number(entry.whiteInkMl || 0),
+        glossInkMl: Number(entry.glossInkMl || 0),
+        inkMl: Number(entry.inkMl || 0),
+        printMinutes: Number(entry.printMinutes || 0),
+      },
+      brandRates,
+    );
+    return sum + Number(costs.inkCost || 0);
+  }, 0);
+  const actualMachineCost = machineCost(actualPrintMinutes, ratePerHour);
   const roughActualPrintCost = actualInkCost + actualMachineCost;
   return {
     entryCount: entries.length,
     actualSqft,
     actualInkMl,
     actualPrintMinutes,
+    machineRatePerHourUsed: ratePerHour,
     roughActualPrintCost,
     conservativeProfitAfterLoggedPrintCost: revenue - estimatedCost - roughActualPrintCost,
   };
@@ -146,12 +164,22 @@ export async function loader({ request, params }: { request: Request; params: an
 
   if (!job) throw new Response("Production job not found", { status: 404 });
 
-  const printLogEntries = await db.printLogEntry.findMany({
-    where: { shop, productionJobId: job.id },
-    orderBy: { createdAt: "desc" },
-  });
+  const [printLogEntries, machines] = await Promise.all([
+    db.printLogEntry.findMany({
+      where: { shop, productionJobId: job.id },
+      orderBy: { createdAt: "desc" },
+    }),
+    db.machine.findMany({
+      where: { shop, active: true },
+      select: { name: true, inkChannels: { select: { inkType: true, inkName: true, enabled: true, costPerMl: true, cartridgeCost: true, cartridgeMl: true } } },
+      take: 50,
+    }),
+  ]);
 
-  return Response.json({ job: { ...job, actuals: summarizeActualPrintLogs(job, printLogEntries) } });
+  const brandRates = buildBrandRates(machines);
+  const ratePerHour = machineRatePerHour();
+
+  return Response.json({ job: { ...job, actuals: summarizeActualPrintLogs(job, printLogEntries, brandRates, ratePerHour) } });
 }
 
 export default function PrintProductionJob() {
@@ -298,6 +326,7 @@ export default function PrintProductionJob() {
             <div><strong>Actual sqft:</strong> {Number(job.actuals?.actualSqft || 0).toFixed(2)}</div>
             <div><strong>Actual ink:</strong> {Number(job.actuals?.actualInkMl || 0).toFixed(2)} ml</div>
             <div><strong>Actual print time:</strong> {Number(job.actuals?.actualPrintMinutes || 0).toFixed(2)} min</div>
+            <div><strong>Machine rate:</strong> ${money(job.actuals?.machineRatePerHourUsed)}/hr (owner standard)</div>
             <div><strong>Rough print cost:</strong> ${money(job.actuals?.roughActualPrintCost)}</div>
             <div><strong>Conservative profit after logged print cost:</strong> ${money(job.actuals?.conservativeProfitAfterLoggedPrintCost)}</div>
             <hr />

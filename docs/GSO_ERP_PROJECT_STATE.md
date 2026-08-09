@@ -1770,3 +1770,63 @@ pipeline simulation confirming Shopify eligible 0, local accepted 0,
 combined accepted 0, distinct customers 0, all historical records listed
 as pre-launch excluded, every median withheld. Nothing repriced; $0.85/
 $1.13 @1,000 bag pins unchanged. Tests 833 -> 849.
+
+## Phase 15G.1 + 15G.1A — security/data-safety lockdown (2026-08-09)
+Commits d758e20 + 2f358b6. Both public configurator proxies now require
+authenticate.public.appProxy (shop from session only, wildcard CORS removed,
+cost/margin fields stripped from public payloads, checkout errors sanitized);
+shop-scoping enforced on Machines/Materials/WholesaleRule/configurator-audit;
+phrase gates: OWNER SHOPIFY PRICE PUSH (Margin Review), OWNER RESET SETTINGS
+(Admin Settings — reset now deletes ONLY the page's own keys, never
+ownerConfig.* / pricingIntelligence.*), RESET STOCK BAG PILOT (Configurator
+reseed, now transactional and never loader-triggered); Machines loader no
+longer auto-seeds; recipe delete + pricing-rule replace transactional;
+production-agent credentials masked everywhere (loader JSON carries only
+configured/****suffix; rotation reveals the new token exactly once; owner
+must rotate the audit-exposed token after deploy). Shared helpers:
+app/lib/security-guards-shared.ts. Tests 849 -> 886.
+
+## Phase 15G.2 — single price truth (2026-08-09)
+CANONICAL PRICING AUTHORITY (do not fork): ad-hoc/calculator jobs price via
+computeProductDrivenCost + computeCommercialPrice (ownerConfig via
+resolvePricingPolicyConfig); persisted recipe products price via
+priceRecipeAtQuantity + blockingConversionIssues. Shared authorities under
+both: owner-standards registry (labor/setup/application; machine recovery $8
+— machineRatePerHour() is the one env-aware accessor, MACHINE_RATE_CURRENT is
+bound to it), app/lib/ink-rates-shared.ts (Mimaki 176/1000, Roland 149/750,
+Mimaki gloss null = CMYK-only; buildBrandRates + the recipe engine + the
+calculator all read it), material cost = calculatedUnitCost -> costPerUnit
+ONLY (raw purchaseCost is NEVER a pricing unit cost — fail-closed Cost
+Review; blockingConversionIssues flags purchase-cost-only materials).
+CONVERGED SURFACES: Quotes/CRM no longer loads/consults ProductCost or
+PricingRule — Shopify search resolves quote-ready recipes server-side
+(variant GID -> product GID -> SKU); matched lines auto-price through the
+recipe engine, unmatched lines are explicit manual_unsupported with the
+reason (Shopify list price is reference only, never auto-filled). Printable
+work order actuals use computeEntryCosts + machineRatePerHour (retired $5/hr
++ old ink literals deleted). Margin Review cost/suggested price = canonical
+recipe engine output (its private model is diagnostics-only; per-side
+application floor demoted to reference; purchaseCost fallback removed; 15G.1
+push gate intact). Pricing Rules preview prices from canonicalStockBagJob
+(app/lib/canonical-bag-pricing.server.ts) — its hardcoded cost model
+deleted; rule prices below the canonical recommendation are flagged, never
+silently chosen. Configurator admin shows Canonical ERP Recommendation next
+to the ConfiguratorPricingRule price, which is now labeled Legacy Storefront
+Price (storefront ladder itself BYTE-UNTOUCHED — convergence is 15G.5).
+SNAPSHOT STANDARD: app/lib/pricing-snapshot.ts
+(15G.2-canonical-snapshot-v1) — Quotes recipe lines embed it; historical
+snapshots never rewritten. LEGACY REMAINING (compatibility/history only):
+ProductCost + PricingRule tables (rule metadata still edits via
+/app/erp/pricing-rules; no pricing consumer besides that preview),
+ConfiguratorPricingRule (live storefront until 15G.5), SourcedCostTier,
+erpAdminSetting.defaultMachineRecoveryHr (reference-only, flagged stale in
+Calibration + Admin Settings). Machine seed presets reconciled to canonical
+ink rates (149/176). Owner pins re-proven end to end: 1,000 single $0.85 /
+double $1.13; 500 double 3X @55% = $452.37 cost -> $983.41 @54%; Mimaki
+CMYK-only; specialty market suppression. OPEN OWNER QUESTION: the 15G.2
+brief described 4x5 bag application as 180 bags/hr @ $20 ($0.1111/label) but
+the owner-verified registry (2026-07-24) says 256/hr ($0.078125/label) — the
+registry value remains live; confirm which is correct (one-line
+owner-standards edit if 180/hr is right). Tests 886 -> 906 (rip-actual-costs
+missing-channel pin updated deliberately: canonical rates now price Mimaki
+white actuals). No live Shopify prices changed.

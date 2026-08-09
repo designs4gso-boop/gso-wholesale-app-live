@@ -18,6 +18,8 @@ import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import { createProductionJobFromSource } from "../lib/production-job-source.server";
 import { cleanCommercialName, resolveQuoteDisplayName } from "../lib/commercial-name-resolver.server";
+import { machineRatePerHour } from "../lib/rip-actual-costs.server";
+import { buildCanonicalPricingSnapshot } from "../lib/pricing-snapshot";
 import db from "../db.server";
 import { finishOptions } from "../lib/finish-presets";
 import {
@@ -536,6 +538,27 @@ async function priceRecipeLine(shop: string, payload: any, admin?: any) {
     shopifyVariantGid: shopifyImage.shopifyVariantGid,
     estimate,
     warnings,
+    // 15G.2: normalized canonical block shared with the Cost Calculator and
+    // Margin Review so every persisted price explains itself the same way.
+    canonical: buildCanonicalPricingSnapshot({
+      engine: `recipe-pricing/${estimate.pricingSource}`,
+      family: recipe.productType || null,
+      productName: recipe.name,
+      quantity,
+      dimensions: { widthIn: recipe.widthIn ?? null, heightIn: recipe.heightIn ?? null, facesPerUnit: null },
+      materialCost: (estimate as any).breakdown?.materialCost ?? null,
+      inkCost: (estimate as any).breakdown?.inkCost ?? null,
+      machine: estimate.preferredMachine || null,
+      machineRatePerHour: machineRatePerHour(),
+      wastePct: (estimate as any).breakdown?.wastePct ?? null,
+      setupCost: (estimate as any).breakdown?.setupCost ?? null,
+      totalCost: estimate.totalCost,
+      unitCost,
+      pricingPolicy: fixedPrice != null ? `fixed tier price (${tierLabel})` : `recipe tier margin ${marginPct}% (${tierLabel})`,
+      marginPct,
+      recommendedUnitPrice: unitPrice,
+      recommendedTotalPrice: totalPrice,
+    }),
   };
 
   const priceSnapshot = {
@@ -613,18 +636,10 @@ export async function loader({ request }: { request: Request }) {
 
   const quotes = await getQuotes(session.shop);
   const recipes = await getRecipeSummaries(session.shop);
-  const productCosts = await db.productCost.findMany({
-    where: { shop: session.shop },
-    orderBy: { createdAt: "desc" },
-  });
 
-  const pricingRules = await db.pricingRule.findMany({
-    where: {
-      shop: session.shop,
-      active: true,
-    },
-    orderBy: [{ priority: "asc" }, { minQty: "desc" }],
-  });
+  // 15G.2 single price truth: the legacy ProductCost / PricingRule tables are
+  // no longer loaded or consulted — supported products price ONLY through the
+  // canonical quote-ready recipe engine; everything else is explicit manual.
 
   const productionJobs = await db.productionJob.findMany({
     where: { shop: session.shop, active: true },
@@ -636,8 +651,6 @@ export async function loader({ request }: { request: Request }) {
     quotes,
     recipes,
     productOptions: [],
-    productCosts,
-    pricingRules,
     productionJobs,
   });
 }
@@ -648,8 +661,59 @@ export async function action({ request }: { request: Request }) {
   const payload = await request.json();
 
   if (payload.intent === "searchProducts") {
+    // 15G.2: the Shopify lookup identifies the product ONLY — it never
+    // determines cost or price. Each result is matched to a quote-ready ERP
+    // recipe server-side (variant GID → product GID → SKU); matched options
+    // price through the canonical recipe engine, unmatched options are
+    // explicitly manual with the reason attached.
     const productOptions = await searchShopifyProducts(admin, payload.search || "");
-    return Response.json({ ok: true, productOptions });
+    const variantGids = productOptions.map((option: any) => String(option.value || "")).filter(Boolean);
+    const productGids = [...new Set(productOptions.map((option: any) => String(option.productId || "")).filter(Boolean))];
+    const skus = [...new Set(productOptions.map((option: any) => String(option.sku || "").trim()).filter(Boolean))];
+
+    const [variantRules, recipes] = await Promise.all([
+      db.recipeVariantRule.findMany({
+        where: {
+          shop,
+          active: true,
+          OR: [
+            variantGids.length ? { shopifyVariantGid: { in: variantGids } } : undefined,
+            skus.length ? { sku: { in: skus } } : undefined,
+          ].filter(Boolean) as any,
+        },
+        select: { recipeId: true, shopifyVariantGid: true, sku: true, recipe: { select: { id: true, name: true, active: true, useInQuotes: true, costReviewNeeded: true } } },
+      }),
+      db.productRecipe.findMany({
+        where: {
+          shop,
+          ...QUOTE_READY_RECIPE_WHERE,
+          OR: [
+            variantGids.length ? { variantGid: { in: variantGids } } : undefined,
+            variantGids.length ? { shopifyVariantId: { in: variantGids } } : undefined,
+            productGids.length ? { productGid: { in: productGids } } : undefined,
+            productGids.length ? { shopifyProductId: { in: productGids } } : undefined,
+            skus.length ? { sku: { in: skus } } : undefined,
+          ].filter(Boolean) as any,
+        },
+        select: { id: true, name: true, variantGid: true, shopifyVariantId: true, productGid: true, shopifyProductId: true, sku: true },
+      }),
+    ]);
+
+    const quoteReadyRule = (rule: any) => rule.recipe && rule.recipe.active && rule.recipe.useInQuotes && !rule.recipe.costReviewNeeded;
+    const optionsWithRecipes = productOptions.map((option: any) => {
+      const variantGid = String(option.value || "");
+      const productGid = String(option.productId || "");
+      const sku = String(option.sku || "").trim();
+      const byVariantRule = variantRules.find((rule: any) => quoteReadyRule(rule) && rule.shopifyVariantGid && rule.shopifyVariantGid === variantGid)
+        || (sku ? variantRules.find((rule: any) => quoteReadyRule(rule) && rule.sku && rule.sku === sku) : undefined);
+      const byRecipe = recipes.find((recipe: any) => (recipe.variantGid && recipe.variantGid === variantGid) || (recipe.shopifyVariantId && recipe.shopifyVariantId === variantGid))
+        || recipes.find((recipe: any) => (recipe.productGid && recipe.productGid === productGid) || (recipe.shopifyProductId && recipe.shopifyProductId === productGid))
+        || (sku ? recipes.find((recipe: any) => recipe.sku && recipe.sku === sku) : undefined);
+      const recipeId = byVariantRule?.recipeId || byRecipe?.id || null;
+      const recipeName = byVariantRule?.recipe?.name || byRecipe?.name || null;
+      return { ...option, recipeId, recipeName };
+    });
+    return Response.json({ ok: true, productOptions: optionsWithRecipes });
   }
 
   if (payload.intent === "priceRecipe") {
@@ -1365,8 +1429,6 @@ export default function QuotesPage() {
   const [quotes, setQuotes] = useState<any[]>(loaderData.quotes || []);
   const [recipes, setRecipes] = useState<any[]>(loaderData.recipes || []);
   const [productOptions, setProductOptions] = useState<ShopifyVariantOption[]>(loaderData.productOptions || []);
-  const [productCosts, setProductCosts] = useState<any[]>(loaderData.productCosts || []);
-  const [pricingRules, setPricingRules] = useState<any[]>(loaderData.pricingRules || []);
   const [productionJobs, setProductionJobs] = useState<any[]>(loaderData.productionJobs || []);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState("");
@@ -1388,8 +1450,6 @@ export default function QuotesPage() {
     if (fetcher.data?.quotes) setQuotes(fetcher.data.quotes);
     if (fetcher.data?.recipes) setRecipes(fetcher.data.recipes);
     if (fetcher.data?.productOptions) setProductOptions(fetcher.data.productOptions);
-    if (fetcher.data?.productCosts) setProductCosts(fetcher.data.productCosts);
-    if (fetcher.data?.pricingRules) setPricingRules(fetcher.data.pricingRules);
     if (fetcher.data?.productionJobs) setProductionJobs(fetcher.data.productionJobs);
 
     if (fetcher.data?.intent === "createProductionJobFromQuote") {
@@ -1603,59 +1663,18 @@ export default function QuotesPage() {
     updateItem(item.id, "selectedAddOnIds", next);
   }
 
-  function getMatchedProductCost(selected: ShopifyVariantOption, variantId: string) {
-    return productCosts.find((cost: any) => {
-      const costVariantId = clean(cost.variantId);
-      const selectedVariantId = clean(variantId);
-      const costSku = clean(cost.sku);
-      const selectedSku = clean(selected.sku);
-      const costProductName = clean(cost.productName || cost.name || cost.title || cost.productTitle);
-      const selectedProductTitle = clean(selected.productTitle);
-
-      return (
-        (costVariantId && costVariantId === selectedVariantId) ||
-        (costSku && selectedSku && costSku === selectedSku) ||
-        (costProductName && selectedProductTitle && costProductName === selectedProductTitle)
-      );
-    });
-  }
-
-  function getBestPricingRule(selected: ShopifyVariantOption, variantId: string, qty: string) {
-    const quantity = Number(qty) || 1;
-    const customerKey = clean(email || company || customerName);
-
-    return pricingRules.find((rule: any) => {
-      if (!rule.active) return false;
-      if (quantity < Number(rule.minQty || 1)) return false;
-
-      const matchesCustomer = !rule.customerTag || customerKey.includes(clean(rule.customerTag));
-      const matchesVariant = rule.variantGid && clean(rule.variantGid) === clean(variantId);
-      const matchesSku = rule.sku && clean(rule.sku) === clean(selected.sku);
-      const matchesProduct = rule.productGid && clean(rule.productGid) === clean(selected.productId);
-      const matchesProductTag = rule.productTag && clean(selected.productTitle).includes(clean(rule.productTag));
-      const hasProductMatch = matchesVariant || matchesSku || matchesProduct || matchesProductTag;
-
-      return matchesCustomer && hasProductMatch;
-    });
-  }
-
+  // 15G.2 single price truth: selecting a Shopify product sets IDENTITY only.
+  // A quote-ready ERP recipe match (resolved server-side during search)
+  // prices the line through the canonical recipe engine; without one the
+  // line is explicitly manual — legacy ProductCost / PricingRule fallbacks
+  // are gone, and the Shopify list price never auto-fills the quote price.
   function selectProductVariant(itemId: string | undefined, variantId: string) {
     const selected = productOptions.find((option) => option.value === variantId);
     if (!selected) return;
 
-    const matchedCost = getMatchedProductCost(selected, variantId);
+    const recipeId = (selected as any).recipeId || "";
+    const recipeName = (selected as any).recipeName || "";
     const currentItem = items.find((item) => item.id === itemId);
-    const pricingRule = getBestPricingRule(selected, variantId, currentItem?.quantity || "1");
-
-    const savedUnitCost = matchedCost
-      ? (
-          Number(matchedCost.materialCost || 0) +
-          Number(matchedCost.printCost || 0) +
-          Number(matchedCost.laborCost || 0) +
-          Number(matchedCost.machineCost || 0) +
-          Number(matchedCost.packagingCost || 0)
-        ).toFixed(2)
-      : undefined;
 
     setItems((prev) =>
       prev.map((item) =>
@@ -1668,18 +1687,32 @@ export default function QuotesPage() {
               productImageUrl: selected.variantImageUrl || selected.productImageUrl || item.productImageUrl || "",
               shopifyProductGid: selected.productId,
               shopifyVariantGid: selected.value,
-              unitPrice:
-                pricingRule?.discountType === "percent_off"
-                  ? (Number(selected.price) * (1 - Number(pricingRule.percentOff || 0) / 100)).toFixed(2)
-                  : pricingRule?.sellPrice
-                    ? String(pricingRule.sellPrice)
-                    : selected.price,
-              unitCost: savedUnitCost || item.unitCost,
-              pricingSource: pricingRule ? "shopify_pricing_rule" : "shopify_manual",
+              recipeId: recipeId || item.recipeId,
+              recipeName: recipeName || item.recipeName,
+              pricingSource: recipeId ? "recipe_pending" : "manual_unsupported",
             }
           : item
       )
     );
+
+    if (recipeId) {
+      fetcher.submit(
+        {
+          intent: "priceRecipe",
+          itemId: itemId || "",
+          recipeId,
+          quantity: currentItem?.quantity || "1",
+          selectedFinish: currentItem?.selectedFinish || "base",
+          selectedAddOnIds: JSON.stringify(currentItem?.selectedAddOnIds || []),
+        },
+        { method: "post", encType: "application/json" },
+      );
+      setLastMessage(`Pricing "${selected.productTitle}" through the canonical recipe engine (${recipeName}).`);
+    } else {
+      setLastMessage(
+        `No quote-ready ERP recipe is linked to "${selected.productTitle}" — canonical pricing is unavailable, so this line is MANUAL. Shopify list price ($${selected.price}) is reference only; enter cost and price by hand or link a recipe in Product Setup / Shopify Links.`,
+      );
+    }
   }
 
   function deleteItem(id: string | undefined) {

@@ -1,5 +1,6 @@
 import { safeNumber } from "./recipe-pricing.server";
 import { resolvePrintMaterialCostPerSqft } from "./cost-calculator.server";
+import { channelInkRatePerMl } from "./ink-rates-shared";
 
 // Read-only actual-cost math for the RIP dashboard (13A.5). Pure functions
 // taking data as parameters — no Prisma, no Shopify, no writes. Ink rates
@@ -57,6 +58,11 @@ function averageRate(channels: Array<{ inkType?: string | null; inkName?: string
 }
 
 export function buildBrandRates(machines: Array<{ name?: string | null; inkChannels?: any[] }>): BrandInkRates[] {
+  // 15G.2: the canonical ink $/ml authority (ink-rates-shared) wins so that
+  // estimates and actual-cost reporting price ink identically — variance
+  // reflects USAGE, not the old seeded-channel price mismatch ($156.99/750,
+  // $190/1000). DB channel rates are only a fallback for a channel kind the
+  // canonical table does not define. Mimaki gloss stays null (CMYK-only).
   const out: BrandInkRates[] = [];
   for (const machine of machines) {
     const name = String(machine.name || "");
@@ -66,9 +72,9 @@ export function buildBrandRates(machines: Array<{ name?: string | null; inkChann
     out.push({
       brand,
       machineName: name,
-      cmykPerMl: averageRate(channels, /cmyk|cyan|magenta|yellow|black/i),
-      whitePerMl: averageRate(channels, /white/i),
-      glossPerMl: averageRate(channels, /gloss|clear/i),
+      cmykPerMl: channelInkRatePerMl(brand, "cmyk") ?? averageRate(channels, /cmyk|cyan|magenta|yellow|black/i),
+      whitePerMl: channelInkRatePerMl(brand, "white") ?? averageRate(channels, /white/i),
+      glossPerMl: channelInkRatePerMl(brand, "gloss"),
     });
   }
   return out;

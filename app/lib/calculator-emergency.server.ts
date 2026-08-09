@@ -7,6 +7,7 @@
 import { percentToDivisor, applyWasteDivisor } from "./recipe-pricing.server";
 import { blankItemUnitCostAtQty } from "./cost-calculator.server";
 import { OWNER_STANDARDS } from "./owner-standards";
+import { CANONICAL_INK_RATES } from "./ink-rates-shared";
 
 export const MARGIN_FLOOR_PCT = 40; // absolute minimum gross margin
 export const OVERRIDE_PHRASE = "OWNER MARGIN OVERRIDE"; // exact, case-sensitive
@@ -38,12 +39,15 @@ export const MATERIAL_ROLLS = {
   banner: { widthIn: 54, lengthFt: 150 },
 };
 
-// Verified ink $/ml. Mimaki clear/gloss is UNKNOWN — never guessed.
+// Verified ink $/ml. 15G.2: the NUMBERS live in exactly one place —
+// app/lib/ink-rates-shared.ts (the canonical ink authority shared with
+// actual-cost reporting and the recipe engine). This export keeps the
+// long-standing name/shape; values are byte-identical to before.
 export const INK_RATES = {
-  mimakiCmykPerMl: 176 / 1000,
-  mimakiWhitePerMl: 176 / 1000,
-  mimakiGlossPerMl: null as number | null, // MISSING — warn, never price
-  rolandPerMl: 149 / 750, // owner-approved provisional: same across channels
+  mimakiCmykPerMl: CANONICAL_INK_RATES.mimakiCmykPerMl,
+  mimakiWhitePerMl: CANONICAL_INK_RATES.mimakiWhitePerMl,
+  mimakiGlossPerMl: CANONICAL_INK_RATES.mimakiGlossPerMl, // MISSING — warn, never price
+  rolandPerMl: CANONICAL_INK_RATES.rolandPerMl, // owner-approved provisional: same across channels
 };
 
 // 15F.0: "excluded" = a real-world cost that is DELIBERATELY not part of the

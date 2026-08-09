@@ -1,5 +1,6 @@
 import { finishPresets } from "./finish-presets";
 import { machineRatePerHour } from "./rip-actual-costs.server";
+import { channelInkRatePerMl, inkBrandFromMachineName, normalizeInkChannelKind } from "./ink-rates-shared";
 
 // Shared quote-ready recipe pricing. Callers must load recipes with
 // QUOTE_RECIPE_PRICING_INCLUDE and gate lookups with QUOTE_READY_RECIPE_WHERE,
@@ -77,12 +78,25 @@ export function getBestRange(rows: any[], quantity: number) {
   return fallback || sorted[0] || null;
 }
 
+// 15G.2 (owner-ordered fail-closed rule): a raw purchaseCost is NEVER a
+// pricing unit cost — a $488 roll with only purchaseCost set must not price
+// as $488/sqft. Only calculatedUnitCost or costPerUnit qualify; anything
+// else resolves to 0 with an explicit "unresolved" status so quoting blocks
+// with Cost Review instead of silently substituting a wrong number.
+export function materialUnitCostResolution(material: any): {
+  unitCost: number;
+  source: "calculated" | "cost_per_unit" | "missing";
+  purchaseCostOnly: boolean;
+} {
+  const calculated = safeNumber(material?.calculatedUnitCost);
+  if (calculated > 0) return { unitCost: calculated, source: "calculated", purchaseCostOnly: false };
+  const costPerUnit = safeNumber(material?.costPerUnit);
+  if (costPerUnit > 0) return { unitCost: costPerUnit, source: "cost_per_unit", purchaseCostOnly: false };
+  return { unitCost: 0, source: "missing", purchaseCostOnly: safeNumber(material?.purchaseCost) > 0 };
+}
+
 export function materialUnitCost(material: any) {
-  return (
-    safeNumber(material?.calculatedUnitCost) ||
-    safeNumber(material?.costPerUnit) ||
-    safeNumber(material?.purchaseCost)
-  );
+  return materialUnitCostResolution(material).unitCost;
 }
 
 export function calculateAddOns(addOns: any[], selectedAddOnIds: string[], quantity: number, baseCost: number) {
@@ -135,7 +149,8 @@ export function calculateInHouseRecipe(recipe: any, quantity: number, selectedFi
 
   for (const recipeMaterial of recipe.materials || []) {
     const material = recipeMaterial.material;
-    const unitCost = materialUnitCost(material);
+    const resolution = materialUnitCostResolution(material);
+    const unitCost = resolution.unitCost;
     const multiplier = safeNumber(recipeMaterial.quantity, 1) || 1;
     const unit = String(recipeMaterial.unit || material?.baseUnit || material?.unit || "each").toLowerCase();
     let cost = 0;
@@ -159,6 +174,8 @@ export function calculateInHouseRecipe(recipe: any, quantity: number, selectedFi
       unit,
       unitCost,
       cost,
+      unresolved: resolution.source === "missing",
+      purchaseCostOnly: resolution.purchaseCostOnly,
     });
   }
 
@@ -167,8 +184,16 @@ export function calculateInHouseRecipe(recipe: any, quantity: number, selectedFi
   const whiteChannels = channels.filter((channel: any) => clean(channel.inkType) === "white");
   const glossChannels = channels.filter((channel: any) => clean(channel.inkType) === "gloss");
 
+  // 15G.2: ink $/ml comes from the ONE canonical ink authority
+  // (ink-rates-shared) resolved by machine brand + channel kind — the seeded
+  // MachineInkChannel $/ml values are usage/inventory reference only and can
+  // no longer price quotes independently. Usage (mlPerSqft1Pct) stays DB-driven.
+  const machineBrand = inkBrandFromMachineName(machine?.name);
   const channelCost = (channel: any, coveragePct: number) => {
-    const costPerMl = safeNumber(channel.costPerMl) || safeNumber(channel.cartridgeCost) / Math.max(1, safeNumber(channel.cartridgeMl, 1));
+    const kind = normalizeInkChannelKind(channel.inkType, channel.inkName);
+    const canonicalRate = machineBrand ? channelInkRatePerMl(machineBrand, kind) : null;
+    const fallbackRate = safeNumber(channel.costPerMl) || safeNumber(channel.cartridgeCost) / Math.max(1, safeNumber(channel.cartridgeMl, 1));
+    const costPerMl = canonicalRate ?? fallbackRate;
     return totalSqft * coveragePct * safeNumber(channel.mlPerSqft1Pct) * costPerMl;
   };
 
@@ -203,6 +228,15 @@ export function calculateInHouseRecipe(recipe: any, quantity: number, selectedFi
     setupCost;
 
   const warnings: string[] = [];
+  for (const row of materialBreakdown) {
+    if (row.unresolved) {
+      warnings.push(
+        row.purchaseCostOnly
+          ? `Material "${row.name}" has only a purchase cost — not a pricing unit cost. It contributes $0 until Cost Review sets a verified unit cost.`
+          : `Material "${row.name}" has no verified pricing unit cost — it contributes $0 until Cost Review resolves it.`,
+      );
+    }
+  }
   if (!widthIn || !heightIn) warnings.push("Recipe is missing label width or height.");
   if (!recipe.materials?.length) warnings.push("Recipe has no material attached.");
   if (!machine) warnings.push("Recipe has no preferred machine.");
@@ -356,6 +390,19 @@ export function blockingConversionIssues(recipe: any, priced: PricedRecipe) {
     }
     if (!recipe.machineRules?.[0]?.preferredMachine) {
       issues.push("recipe has no preferred machine");
+    }
+    // 15G.2 fail-closed: a material with no verified pricing unit cost
+    // (including purchase-cost-only rows) blocks conversion — never a
+    // silent $0 or raw-purchaseCost substitution.
+    const breakdown = (priced.estimate as any)?.breakdown?.materialBreakdown || [];
+    for (const row of breakdown) {
+      if (row?.unresolved) {
+        issues.push(
+          row.purchaseCostOnly
+            ? `material "${row.name}" has only a purchase cost — not a usable pricing unit cost (needs Cost Review)`
+            : `material "${row.name}" has no verified pricing unit cost (needs Cost Review)`,
+        );
+      }
     }
   }
 

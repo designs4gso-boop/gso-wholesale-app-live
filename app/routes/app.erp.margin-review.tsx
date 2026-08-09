@@ -6,6 +6,7 @@ import {
   OWNER_SHOPIFY_PRICE_PUSH_PHRASE,
   phraseGateOk,
 } from "../lib/security-guards-shared";
+import { blockingConversionIssues, priceRecipeAtQuantity } from "../lib/recipe-pricing.server";
 
 const DEFAULT_SHOP_LABOR_RATE_PER_HOUR = 25;
 const DEFAULT_APPLICATION_LABOR_COST_PER_SIDE = 0.15;
@@ -44,8 +45,11 @@ function priceForMargin(cost: number, marginPct: number) {
   return cost / (1 - margin);
 }
 
+// 15G.2: same fail-closed material rule as the canonical engine — a raw
+// purchaseCost is never a pricing unit cost (it made $488 rolls price as
+// $488/sqft). Missing costs resolve to 0 and surface as Cost Review.
 function unitCost(material: any) {
-  return numberOr(material?.calculatedUnitCost, 0) || numberOr(material?.costPerUnit, 0) || numberOr(material?.purchaseCost, 0);
+  return numberOr(material?.calculatedUnitCost, 0) || numberOr(material?.costPerUnit, 0);
 }
 
 function zoneSqft(zone: any) {
@@ -152,23 +156,39 @@ function estimateRecipeVariantUnitCost(recipe: any, rule: any, quantityOverride?
   const prepressLaborCostPerUnit = (numberOr(recipe.prepressMinutes, 0) / 60) * laborRate / qty;
   const setupLaborCostPerUnit = (numberOr(recipe.laborMinutes, 0) / 60) * laborRate / qty;
   const setupCostPerUnit = numberOr(recipe.setupCost, 0) / qty;
-  const total = manualMaterialCostPerUnit + labelMediaCostPerUnit + applicationLaborCostPerUnit + packingLaborCostPerUnit + prepressLaborCostPerUnit + setupLaborCostPerUnit + setupCostPerUnit;
+  // 15G.2: the local arithmetic above is now DIAGNOSTICS ONLY (zone/media
+  // completeness review). The priced total comes from the canonical shared
+  // recipe engine — the exact engine Quotes/CRM, Product Setup, and the
+  // Agent Review Queue price with. No private labor rates, application
+  // floors, or waste formulas contribute to the cost that drives suggested
+  // prices or Shopify price approvals.
+  const canonical = priceRecipeAtQuantity(recipe, qty);
+  const canonicalIssues = blockingConversionIssues(recipe, canonical);
+  const legacyDiagnosticTotal = manualMaterialCostPerUnit + labelMediaCostPerUnit + applicationLaborCostPerUnit + packingLaborCostPerUnit + prepressLaborCostPerUnit + setupLaborCostPerUnit + setupCostPerUnit;
+  const total = canonical.unitCost;
 
   const missingBaseCost = baseMaterialCostPerUnit <= 0;
   const missingZones = !selected.length;
   const missingMediaCost = !missingZones && zoneLines.some((line: any) => numberOr(line.cost, 0) <= 0);
   const costReviewReasons = uniqueStrings([
+    ...canonicalIssues.map((issue: string) => `Canonical pricing: ${issue}.`),
     missingBaseCost ? "Missing base/blank cost. Add a blank bag, jar, box, or base material with a real unit cost." : "",
     missingZones ? "Missing active label/application zones. Add active front/back zones so media and application labor can be calculated." : "",
     missingMediaCost ? "One or more active label/media zones has missing or zero media cost." : "",
   ]);
   const costReviewWarnings = uniqueStrings([
-    applicationLaborFloorApplied ? `Warning only: application labor floor applied because zone labor seconds are too low. Current floor: ${money(sideLaborFloor)} per printed side.` : "",
+    applicationLaborFloorApplied ? `Reference-only note: the legacy per-side application floor (${money(sideLaborFloor)}) exceeds zone labor seconds. This floor NO LONGER affects pricing — owner labor standards inside the canonical engine govern.` : "",
+    ...canonical.warnings.map((warning: string) => `Canonical engine: ${warning}`),
   ]);
   const costReviewNeeded = costReviewReasons.length > 0;
 
   return {
     qty,
+    canonicalUnitPrice: canonical.unitPrice,
+    canonicalMarginPct: canonical.marginPct,
+    canonicalTierLabel: canonical.tierLabel,
+    canonicalPricingSource: canonical.pricingSource,
+    legacyDiagnosticTotal,
     manualMaterialCostPerUnit,
     baseMaterialCostPerUnit,
     materialLines,
@@ -772,6 +792,10 @@ export async function loader({ request }: { request: Request }) {
       labelZones: { include: { material: true, mediaOption: { include: { material: true } } }, orderBy: { createdAt: "asc" } },
       mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
       tiers: { orderBy: { minQty: "asc" } },
+      // 15G.2: relations the canonical recipe engine needs to price a row.
+      addOns: { where: { enabled: true }, orderBy: { name: "asc" } },
+      machineRules: { include: { preferredMachine: { include: { inkChannels: true } } } },
+      vendorProduct: { include: { tiers: { orderBy: { minQty: "asc" } }, addOns: { where: { enabled: true }, orderBy: { name: "asc" } } } },
     },
     orderBy: [{ name: "asc" }],
     take: 50,
@@ -801,8 +825,11 @@ export async function loader({ request }: { request: Request }) {
     const cost = estimateRecipeVariantUnitCost(recipe, rule, undefined, assumptions);
     const shopify = variantMap.get(rule.shopifyVariantGid) || null;
     const currentPrice = numberOr(shopify?.price, 0);
-    const targetMargin = numberOr(recipe.targetMarginPct, 40);
-    const suggestedPrice = priceForMargin(cost.total, targetMargin);
+    // 15G.2: the suggested price IS the canonical engine's recommended unit
+    // price (tier fixed price / tier margin — identical to a Quotes line).
+    // The current Shopify price is only the comparison input.
+    const targetMargin = numberOr(cost.canonicalMarginPct, numberOr(recipe.targetMarginPct, 40));
+    const suggestedPrice = numberOr(cost.canonicalUnitPrice, 0) || priceForMargin(cost.total, targetMargin);
     const currentMargin = safeMargin(currentPrice, cost.total);
     const delta = suggestedPrice - currentPrice;
     const statusInfo = statusForMargin(currentMargin, targetMargin, assumptions.warningBandPct);

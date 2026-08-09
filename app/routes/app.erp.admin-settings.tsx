@@ -30,7 +30,7 @@ const settingDefinitions: SettingDefinition[] = [
   { category: "Pricing", key: "roundPricesTo", label: "Round prices to", defaultValue: "0.01", valueType: "number", unit: "$", description: "Smallest price rounding increment." },
 
   { category: "Production Cost", key: "defaultLaborRateHr", label: "Default labor rate", defaultValue: "25", valueType: "number", unit: "$/hr", description: "Used in actual cost finalization when no custom labor rate is entered." },
-  { category: "Production Cost", key: "defaultMachineRecoveryHr", label: "Machine recovery", defaultValue: "5", valueType: "number", unit: "$/hr", description: "Default depreciation/recovery rate used for print cost estimates." },
+  { category: "Production Cost", key: "defaultMachineRecoveryHr", label: "Machine recovery (reference only)", defaultValue: "8", valueType: "number", unit: "$/hr", description: "REFERENCE ONLY (15G.2): pricing and actual costs use the canonical machineRatePerHour() owner standard ($8/hr). This setting never prices anything." },
   { category: "Production Cost", key: "defaultMaintenanceCostSqft", label: "Maintenance allowance", defaultValue: "0.08", valueType: "number", unit: "$/sqft", description: "General maintenance/purge allowance for print jobs." },
   { category: "Production Cost", key: "defaultPowerRateKwh", label: "Power rate", defaultValue: "0.15", valueType: "number", unit: "$/kWh", description: "Electricity rate used for machine cost estimates." },
   { category: "Production Cost", key: "defaultOverheadPct", label: "Overhead allowance", defaultValue: "10", valueType: "number", unit: "%", description: "Default overhead buffer on production costs." },

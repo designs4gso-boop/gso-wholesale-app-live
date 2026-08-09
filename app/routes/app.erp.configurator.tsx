@@ -14,6 +14,7 @@ import {
   rangeLabelFromRule,
 } from "../lib/configurator-pricing";
 import { RESET_PILOT_DATA_PHRASE, phraseGateOk } from "../lib/security-guards-shared";
+import { canonicalStockBagJob, resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 
 const STOCK_PRODUCT_TYPE = PRODUCT_TYPE;
 
@@ -448,6 +449,26 @@ export async function loader({ request }: { request: Request }) {
   const result = await calculate(session.shop, productType, material, finish, qty, minQty);
   const rangeColumns = buildRangeColumns(pricingRules);
 
+  // 15G.2: for stock bags, show the CANONICAL ERP recommendation next to the
+  // legacy storefront matrix price — read-only convergence prep for 15G.5.
+  // The legacy ConfiguratorPricingRule price is never presented as the ERP
+  // price truth; jars have no canonical bag path yet and say so.
+  let canonical: any = { available: false, reasons: ["Canonical preview covers 4x5 stock bags only (jars remain legacy-only until a later phase)."] };
+  if (safeFamily !== "jars") {
+    const canonicalInputs = await resolveCanonicalBagInputs(db, session.shop);
+    const glossMatch = String(finish || "").match(/(\d)\s*x/i);
+    const glossLayers = /no\s+spot/i.test(finish) ? 0 : glossMatch ? Number(glossMatch[1]) : /spot/i.test(finish) ? 1 : 0;
+    const job = canonicalStockBagJob(canonicalInputs, {
+      quantity: qty,
+      faces: 2,
+      glossLayers,
+      holographic: /holo/i.test(material),
+    });
+    canonical = job.available
+      ? { available: true, unitCost: job.unitCost, unitPrice: job.recommendedUnitPrice, totalPrice: job.recommendedTotalPrice, marginPctApplied: job.marginPctApplied, controllingRule: job.controllingRule, blockers: job.blockers }
+      : { available: false, reasons: job.reasons };
+  }
+
   return {
     shop: session.shop,
     productFamily: safeFamily,
@@ -463,6 +484,7 @@ export async function loader({ request }: { request: Request }) {
     minQty,
     notice,
     result,
+    canonical,
     stockProducts,
     jarProfiles,
     pricingRules,
@@ -672,7 +694,11 @@ export default function GsoConfigurator() {
         </div>
 
         <div className="card result-card">
-          <h2>ERP Result</h2>
+          <h2>Legacy Storefront Price (ConfiguratorPricingRule)</h2>
+          <p style={{ fontSize: 13, color: "#5c5f62", marginTop: 0 }}>
+            This is the CURRENT live storefront/matrix price — legacy compatibility data, NOT the ERP price truth.
+            The canonical ERP recommendation is shown below it; storefront convergence is reserved for 15G.5.
+          </p>
           {result.requestedQty < data.minQty ? (
             <div className="warning">Quantity was under {data.minQty}, so ERP priced it at the {data.minQty} minimum.</div>
           ) : null}
@@ -691,6 +717,24 @@ export default function GsoConfigurator() {
             <div><span>Total Profit</span><strong>{money(result.totalProfit)}</strong></div>
             <div><span>Matched Range</span><strong>{result.range.label}</strong></div>
           </div>
+
+          <h2 style={{ marginTop: 14 }}>Canonical ERP Recommendation (15G.2)</h2>
+          {data.canonical?.available ? (
+            <div className="metric-grid">
+              <div><span>Canonical Cost Each</span><strong>{money(data.canonical.unitCost)}</strong></div>
+              <div><span>Canonical Price Each</span><strong>{money(data.canonical.unitPrice)}</strong></div>
+              <div><span>Canonical Order Total</span><strong>{money(data.canonical.totalPrice)}</strong></div>
+              <div><span>Margin Band</span><strong>{pct(data.canonical.marginPctApplied)}</strong></div>
+              <div style={{ gridColumn: "1 / -1" }}><span>Controlling rule</span><strong>{data.canonical.controllingRule}</strong></div>
+              {data.canonical.blockers?.length ? (
+                <div style={{ gridColumn: "1 / -1" }}><span>Blockers</span><strong>{data.canonical.blockers.join("; ")}</strong></div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="warning">
+              Canonical ERP pricing unavailable here: {(data.canonical?.reasons || []).join(" ")}
+            </div>
+          )}
 
           <div className="summary">
             <p><b>Family:</b> {data.productFamilyLabel}</p>

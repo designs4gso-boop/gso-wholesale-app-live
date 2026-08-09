@@ -73,11 +73,20 @@ describe("entry cost computation", () => {
     expect(costs.warnings.some((warning) => warning.includes("could not be attributed"))).toBe(true);
   });
 
-  it("warns when a needed channel cost is missing and excludes that channel", () => {
+  it("15G.2: canonical ink authority prices known channels even when DB channel costs are missing", () => {
+    // Before 15G.2 a missing white channel row meant white ml was excluded
+    // from actual cost. The canonical ink authority (ink-rates-shared) now
+    // defines Mimaki white = $176/1000ml regardless of seeded DB rows, so
+    // actuals and estimates price ink identically. Mimaki gloss stays null
+    // (CMYK-only — no rate may exist).
     const noWhite = buildBrandRates([{ name: "Mimaki UCJV300", inkChannels: [{ inkType: "cmyk", inkName: "Cyan", enabled: true, costPerMl: 0.176 }] }]);
+    expect(noWhite[0].whitePerMl).toBeCloseTo(176 / 1000, 9);
+    expect(noWhite[0].glossPerMl).toBeNull();
     const costs = computeEntryCosts({ machineName: "Mimaki", cmykInkMl: 10, whiteInkMl: 5, glossInkMl: 0, inkMl: 15, printMinutes: 5 }, noWhite);
-    expect(costs.warnings.some((warning) => warning.includes("No white channel cost"))).toBe(true);
-    expect(costs.inkCost).toBeCloseTo(10 * 0.176, 6);
+    expect(costs.inkCost).toBeCloseTo(10 * 0.176 + 5 * 0.176, 6);
+    const glossCosts = computeEntryCosts({ machineName: "Mimaki", cmykInkMl: 10, whiteInkMl: 0, glossInkMl: 5, inkMl: 15, printMinutes: 5 }, noWhite);
+    expect(glossCosts.warnings.some((warning) => warning.includes("No gloss/clear channel cost"))).toBe(true);
+    expect(glossCosts.inkCost).toBeCloseTo(10 * 0.176, 6);
   });
 
   it("flags white/gloss on Mimaki per the routing business rule", () => {

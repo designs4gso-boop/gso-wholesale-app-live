@@ -187,3 +187,21 @@ advisory-only stance. ACTIVATION STEP OWED BY OWNER: run `shopify app
 deploy`, then reopen the embedded admin and accept the new-permissions
 prompt; until then the pull covers only Shopify's recent (~60-day)
 order window and the page says so.
+
+## 15G.2 authority note (2026-08-09)
+Single price truth implemented. Canonical authorities (see
+GSO_ERP_PROJECT_STATE.md 15G.2): product-driven + commercial engines /
+recipe engine over shared owner-standards, machineRatePerHour() ($8),
+ink-rates-shared (Mimaki 176/1000, Roland 149/750, Mimaki gloss none),
+material cost calculatedUnitCost->costPerUnit only (purchaseCost fallback
+REMOVED, fail-closed Cost Review). Deprecated as active pricing sources:
+ProductCost, PricingRule (metadata/preview only), Margin Review private
+model, pricing-rules hardcoded costs, seeded MachineInkChannel $/ml,
+erpAdminSetting.defaultMachineRecoveryHr. ConfiguratorPricingRule remains
+the LIVE storefront ladder until 15G.5 (admin now labels it legacy next to
+the canonical recommendation).
+NEW RATIFY ITEM 21: 4x5 bag application labor — walkthrough said 180
+bags/hr @ $20 ($0.1111/label); the owner-verified registry (2026-07-24,
+live) says 256 labels/hr ($0.078125/label). Registry value kept; owner to
+confirm or correct (one-line owner-standards.ts edit; repricing delta
++~$33/1,000 double-sided bags if 180/hr is ratified).

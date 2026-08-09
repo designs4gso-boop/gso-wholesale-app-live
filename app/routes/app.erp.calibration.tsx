@@ -156,7 +156,7 @@ export async function loader({ request }: { request: Request }) {
       machineRatePerHour: ratePerHour,
       adminDuplicateRate: adminRateValue,
       adminDuplicateFlag: adminRateValue != null && Number(adminRateValue) !== ratePerHour
-        ? `erpAdminSetting.defaultMachineRecoveryHr = ${adminRateValue} contradicts the active $${ratePerHour}/hr source (machineRatePerHour()) — stale duplicate, flagged only.`
+        ? `erpAdminSetting.defaultMachineRecoveryHr = ${adminRateValue} is a STALE reference-only value. The one canonical machine-rate authority is machineRatePerHour() = $${ratePerHour}/hr (owner-standards registry); the admin setting never prices anything and is not a competing source (15G.2).`
         : null,
       seededFingerprint: 0.0075,
       channelRates: rates.map((rate) => `${rate.machineName}: CMYK ${rate.cmykPerMl == null ? "n/a" : `$${rate.cmykPerMl.toFixed(4)}/ml`}`),

@@ -2,6 +2,7 @@ import { Form, Link, useActionData, useLoaderData } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { canonicalStockBagJob, resolveCanonicalBagInputs, type CanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 
 const VERSION = "Tier Rule Manager v1.6";
 const DEFAULT_TIERS = [100, 250, 500, 1000, 2500, 5000, 10000];
@@ -177,12 +178,6 @@ function priceFromMargin(cost: number, marginPct: number) {
   return cost / (1 - margin);
 }
 
-function materialCostSqft(material: string) {
-  const value = String(material || "").toLowerCase();
-  if (value.includes("holo")) return 0.72;
-  if (value.includes("gloss")) return 0.31;
-  return 0.31;
-}
 
 function glossPasses(gloss: string) {
   const value = String(gloss || "").toLowerCase();
@@ -193,13 +188,13 @@ function glossPasses(gloss: string) {
   return 0;
 }
 
-function blankBagCost(color: string) {
-  const value = String(color || "").toLowerCase();
-  if (value.includes("holo")) return 0.16;
-  return 0.09;
-}
-
-function estimateStockBagUnitCost(variant: any, recipe: any, qty: number) {
+// 15G.2 single price truth: the preview's cost is the CANONICAL engine
+// output (computeProductDrivenCost via canonicalStockBagJob) — the old
+// private model (hardcoded $0.18/sqft ink, ×1.1 waste, $0.09/$0.16 blanks,
+// 20s application at $25/hr) is deleted. Rule metadata (quantity bands,
+// discount methods) is still applied ON TOP of the canonical cost; when a
+// canonical input is missing the preview says so instead of inventing one.
+function estimateStockBagUnitCost(canonicalInputs: CanonicalBagInputs, variant: any, recipe: any, qty: number) {
   const materialOption = recipe?.variantMappings?.materialOptionName || "Material";
   const glossOption = recipe?.variantMappings?.glossOptionName || "Gloss";
   const colorOption = recipe?.variantMappings?.bagColorOptionName || "Bag Color";
@@ -208,26 +203,27 @@ function estimateStockBagUnitCost(variant: any, recipe: any, qty: number) {
   const bagColor = getSelectedOption(variant, colorOption) || "White";
   const front = recipe?.stockBag?.front || {};
   const back = recipe?.stockBag?.back || front;
-  const frontSqIn = Number(front.width || 0) * Number(front.height || 0);
-  const backSqIn = Number(back.width || 0) * Number(back.height || 0);
-  const baseSqft = (frontSqIn + backSqIn) / 144;
-  const wasteSqft = baseSqft * 1.1;
-  const mediaCost = wasteSqft * materialCostSqft(material);
-  const cmykCost = wasteSqft * 0.18;
-  const whiteCost = String(material).toLowerCase().includes("holo") ? wasteSqft * 0.18 : 0;
-  const glossCost = wasteSqft * glossPasses(gloss) * 0.19;
-  const applicationSeconds = 20;
-  const laborCost = (applicationSeconds / 3600) * 25;
-  const setupCost = (10 / 60) * 25 / Math.max(Number(qty || 1), 1);
-  const machineSetupCost = (10 / 60) * 8 / Math.max(Number(qty || 1), 1);
-  const blankCost = blankBagCost(bagColor);
-  const estimatedUnitCost = mediaCost + cmykCost + whiteCost + glossCost + laborCost + setupCost + machineSetupCost + blankCost;
+  const faces = (Number(front.width || 0) > 0 ? 1 : 0) + (Number(back.width || 0) > 0 ? 1 : 0) || 2;
+
+  const job = canonicalStockBagJob(canonicalInputs, {
+    quantity: Math.max(1, Number(qty || 1)),
+    faces,
+    glossLayers: glossPasses(gloss),
+    holographic: String(material).toLowerCase().includes("holo"),
+  });
+
+  if (!job.available) {
+    return { estimatedUnitCost: 0, canonicalUnitPrice: 0, canonicalAvailable: false, canonicalReasons: job.reasons, material, gloss, bagColor };
+  }
   return {
-    estimatedUnitCost,
+    estimatedUnitCost: job.unitCost,
+    canonicalUnitPrice: job.recommendedUnitPrice,
+    canonicalControllingRule: job.controllingRule,
+    canonicalAvailable: true,
+    canonicalReasons: job.blockers,
     material,
     gloss,
     bagColor,
-    details: { baseSqft, wasteSqft, mediaCost, cmykCost, whiteCost, glossCost, laborCost, setupCost, machineSetupCost, blankCost },
   };
 }
 
@@ -304,7 +300,7 @@ async function fetchPreviewProducts(admin: any, first: TierRuleRow) {
   return [];
 }
 
-async function buildTierPreviews(admin: any, rules: TierRuleRow[]): Promise<TierPreview[]> {
+async function buildTierPreviews(admin: any, rules: TierRuleRow[], canonicalInputs: CanonicalBagInputs): Promise<TierPreview[]> {
   const grouped = groupRules(rules);
   const previews: TierPreview[] = [];
   for (const { key, group } of grouped.slice(0, 6)) {
@@ -325,10 +321,22 @@ async function buildTierPreviews(admin: any, rules: TierRuleRow[]): Promise<Tier
       for (const variant of variants.slice(0, 8)) {
         const basePrice = Number(variant.price || 0);
         const firstTierQty = group[0]?.minQty || 100;
-        const estimate = estimateStockBagUnitCost(variant, recipe, firstTierQty);
+        const estimate = estimateStockBagUnitCost(canonicalInputs, variant, recipe, firstTierQty);
         const tierPrices = group.map((tier) => {
-          const costAtTier = estimateStockBagUnitCost(variant, recipe, tier.minQty).estimatedUnitCost;
-          return { qty: tier.minQty, ...generatedTierPrice(tier, costAtTier, basePrice) };
+          const tierEstimate = estimateStockBagUnitCost(canonicalInputs, variant, recipe, tier.minQty);
+          const generated = generatedTierPrice(tier, tierEstimate.estimatedUnitCost, basePrice);
+          // 15G.2: flag rule prices sitting below the canonical owner-policy
+          // recommendation — the conflict is reported, never silently chosen.
+          const canonicalUnitPrice = Number(tierEstimate.canonicalUnitPrice || 0);
+          const belowCanonical = canonicalUnitPrice > 0 && generated.price + 0.005 < canonicalUnitPrice;
+          return {
+            qty: tier.minQty,
+            ...generated,
+            canonicalUnitPrice,
+            warning: belowCanonical
+              ? [generated.warning, `Below canonical recommendation ($${canonicalUnitPrice.toFixed(2)}) — owner Pricing Settings policy governs.`].filter(Boolean).join(" ")
+              : generated.warning,
+          };
         });
         rows.push({
           productTitle: product.title,
@@ -512,9 +520,10 @@ export async function loader({ request }: { request: Request }) {
       : await searchShopifyCollections(admin, targetSearch)
     : [];
 
-  const previews = await buildTierPreviews(admin, rules);
+  const canonicalInputs = await resolveCanonicalBagInputs(db, shop);
+  const previews = await buildTierPreviews(admin, rules, canonicalInputs);
 
-  return { version: VERSION, rules, targetSearch, targetType, targetOptions, previews };
+  return { version: VERSION, rules, targetSearch, targetType, targetOptions, previews, canonicalPreview: { available: canonicalInputs.available, reasons: canonicalInputs.reasons } };
 }
 
 export async function action({ request }: { request: Request }) {

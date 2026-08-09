@@ -60,9 +60,13 @@ type DefaultMachinePreset = {
   inkSlots: DefaultInkSlot[];
 };
 
-const ROLAND_POUCH_COST = 156.99;
+// 15G.2: seed values reconciled to the canonical ink authority
+// (app/lib/ink-rates-shared.ts — $149/750ml Roland, $176/1000ml Mimaki) so
+// fresh installs match quote pricing and actual-cost reporting. Channel $/ml
+// is reference data only: pricing paths read the canonical rates directly.
+const ROLAND_POUCH_COST = 149;
 const ROLAND_POUCH_ML = 750;
-const MIMAKI_BOTTLE_COST_ESTIMATE = 190;
+const MIMAKI_BOTTLE_COST_ESTIMATE = 176;
 const MIMAKI_BOTTLE_ML = 1000;
 const DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL = 0.0075;
 const DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL = 0.0075;
