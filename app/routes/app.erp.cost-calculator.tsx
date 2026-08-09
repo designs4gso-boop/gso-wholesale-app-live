@@ -31,6 +31,7 @@ const MAX_ADDITIONAL_LINES_UI = 8;
 import { calculatorFamilies, calculatorFamilyValues, familyByKeyOrAlias } from "../lib/product-family-registry";
 import { resolveProductDisplayName } from "../lib/commercial-name-resolver.server";
 import { OWNER_STANDARDS } from "../lib/owner-standards";
+import { buildCanonicalPricingSnapshot } from "../lib/pricing-snapshot";
 import { officialMoqForFamily } from "../lib/product-family-sales-rules";
 import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, ownerPriceForQuantity, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
 import { materialKind } from "../lib/material-classify";
@@ -270,47 +271,12 @@ const PRESET_LABEL = "[Preset — code price, may be stale]";
 // automatically supersedes code prices. Remaining presets should be entered as
 // Vendor Products with tiers and verified against invoices, then deleted here.
 function presetBlankItems(): BlankItemOption[] {
-  const mironTiers: Record<string, BlankItemTier[]> = {
-    jar50: [
-      { minQty: 1, maxQty: 249, unitCost: 2.46 },
-      { minQty: 250, maxQty: 499, unitCost: 2.24 },
-      { minQty: 500, maxQty: 999, unitCost: 2.03 },
-      { minQty: 1000, maxQty: 2499, unitCost: 1.89 },
-      { minQty: 2500, maxQty: null, unitCost: 1.74 },
-    ],
-    jar100Tall: [
-      { minQty: 1, maxQty: 249, unitCost: 2.86 },
-      { minQty: 250, maxQty: 499, unitCost: 2.63 },
-      { minQty: 500, maxQty: 999, unitCost: 2.41 },
-      { minQty: 1000, maxQty: 2499, unitCost: 2.22 },
-      { minQty: 2500, maxQty: null, unitCost: 2.07 },
-    ],
-    jar100Wide: [
-      { minQty: 1, maxQty: 249, unitCost: 2.90 },
-      { minQty: 250, maxQty: 499, unitCost: 2.67 },
-      { minQty: 500, maxQty: 999, unitCost: 2.44 },
-      { minQty: 1000, maxQty: 2499, unitCost: 2.26 },
-      { minQty: 2500, maxQty: null, unitCost: 2.10 },
-    ],
-    jar150: [
-      { minQty: 1, maxQty: 249, unitCost: 3.26 },
-      { minQty: 250, maxQty: 499, unitCost: 3.00 },
-      { minQty: 500, maxQty: 999, unitCost: 2.76 },
-      { minQty: 1000, maxQty: 2499, unitCost: 2.54 },
-      { minQty: 2500, maxQty: null, unitCost: 2.37 },
-    ],
-    jar250: [
-      { minQty: 1, maxQty: 249, unitCost: 3.92 },
-      { minQty: 250, maxQty: 499, unitCost: 3.60 },
-      { minQty: 500, maxQty: 999, unitCost: 3.32 },
-      { minQty: 1000, maxQty: 2499, unitCost: 3.11 },
-      { minQty: 2500, maxQty: null, unitCost: 2.92 },
-    ],
-  };
+  // 15G.3: the stale Miron preset ladders (incl. the retired $2.86 100ml-tall
+  // base) are DELETED. Miron jars resolve ONLY through the seeded/current
+  // VendorProduct + VendorProductTier records ($2.78 owner-approved ladder);
+  // a stale preset can never reintroduce an obsolete cost.
   const fixed = (id: string, name: string, unitCost: number, productType: string, app: string, key: string, wastePct: number, vendor: string): BlankItemOption =>
     ({ id, source: "preset", isPreset: true, name, productType, unitCost, costWarning: null, defaultApplicationMode: app, applicationKey: key, wastePct, vendor });
-  const tiered = (id: string, name: string, tiers: BlankItemTier[], key: string): BlankItemOption =>
-    ({ id, source: "preset", isPreset: true, name, productType: "jar", unitCost: tiers[0]?.unitCost || 0, costWarning: null, tiers, defaultApplicationMode: "apply-jar", applicationKey: key, wastePct: 2, vendor: "MIRON" });
   return [
     fixed("preset:customer-supplied", "Customer supplied item - $0.00", 0, "customer-supplied", "none", "customer", 0, "Customer"),
     fixed("preset:blank-4x5-bag", "Blank 4x5 bag", 0.09, "bag", "apply-flat-bag", "blank-4x5-bag", 4, "SAFE CARE"),
@@ -322,11 +288,6 @@ function presetBlankItems(): BlankItemOption[] {
     fixed("preset:4oz-jar-black-white", "4oz jar - black/white", 0.65, "jar", "apply-jar", "safe-care-jar", 2, "SAFE CARE"),
     fixed("preset:5oz-jar-clear", "5oz jar - clear", 0.60, "jar", "apply-jar", "safe-care-jar", 2, "SAFE CARE"),
     fixed("preset:soda-can", "Soda can", 0.52, "jar", "apply-jar", "soda-can", 2, "P1"),
-    tiered("preset:miron-50ml", "50ml Miron jar + lid", mironTiers.jar50, "miron-50ml"),
-    tiered("preset:miron-100ml-tall", "100ml tall Miron jar + lid", mironTiers.jar100Tall, "miron-100ml"),
-    tiered("preset:miron-100ml-wide", "100ml wide Miron jar + lid", mironTiers.jar100Wide, "miron-100ml"),
-    tiered("preset:miron-150ml", "150ml Miron jar + lid", mironTiers.jar150, "miron-150ml"),
-    tiered("preset:miron-250ml", "250ml Miron jar + lid", mironTiers.jar250, "miron-250ml"),
   ];
 }
 
@@ -771,7 +732,9 @@ export async function loader({ request }: { request: Request }) {
   const eMargins = eMarginsRaw.length === eQuantities.length ? eMarginsRaw : eDefaults;
   // 14B.1: AUTO mode — compute variable+setup from family inputs through the
   // pure engine (manual entries remain the labeled fallback).
-  const eMode = eparams.get("emode") === "auto" && eFamilyRule ? "auto" : "manual";
+  // 15G.3: the 14B.1 auto-costing path (stale 0.6 ml/sqft generalized model)
+  // engages ONLY inside the opt-in legacy tools — never for normal quoting.
+  const eMode = eparams.get("emode") === "auto" && eparams.get("legacytools") === "1" && eFamilyRule ? "auto" : "manual";
   let eVar = Number(eparams.get("evar") || 0);
   let eSetup = Number(eparams.get("esetup") || 0);
   const eBlank = Number(eparams.get("eblank") || 0);
@@ -1491,7 +1454,7 @@ export async function action({ request }: { request: Request }) {
     const fromSearch = psearchParams.getAll(key);
     return fromSearch.length ? fromSearch.map(String) : form.getAll(key).map(String);
   };
-  const isAuto = fRead("emode") === "auto";
+  const isAuto = fRead("emode") === "auto" && fRead("legacytools") === "1"; // 15G.3: legacy-only
   let quantities = fRead("eqty").split(",").map((value) => Number(value.trim())).filter((value) => value > 0);
   if (!quantities.length) quantities = SUGGESTED_QUANTITIES.slice(0, 5); // same default as the loader
   const margins = fRead("emargin").split(",").map((value) => Number(value.trim()));
@@ -1579,12 +1542,24 @@ export async function action({ request }: { request: Request }) {
           : null;
       }
       if (rawId.startsWith("preset:")) {
-        // presets are code-priced fallbacks still visible in the pickers
-        // (customer-supplied, OZ bag, soda can) — resolve them at save the
-        // same way the loader does so a preset-based draft never loses its blank
+        // 15G.3: a current DB Vendor Product with this vendorSku ALWAYS wins —
+        // a stale bookmarked preset id can never re-resolve an obsolete code
+        // price over the current normalized cost (the Miron $2.86 trap).
+        const seeded = await db.vendorProduct.findFirst({
+          where: { shop, active: true, vendorSku: rawId },
+          include: { tiers: { orderBy: { minQty: "asc" } } },
+        });
+        if (seeded) {
+          return {
+            component: { name: seeded.name, unitCost: Number(seeded.defaultUnitCost) > 0 ? Number(seeded.defaultUnitCost) : null, tiers: seeded.tiers || [], status: "verified" },
+            meta: { name: seeded.name, productType: seeded.productType || undefined, vendor: seeded.vendor || undefined, vendorSku: seeded.vendorSku || undefined },
+          };
+        }
+        // remaining code presets (customer-supplied, OZ bag, soda can) are
+        // ESTIMATED code prices — never labeled verified in a snapshot.
         const preset = presetBlankItems().find((item) => item.id === rawId);
         return preset ? {
-          component: { name: preset.name, unitCost: preset.unitCost > 0 ? preset.unitCost : null, tiers: preset.tiers || [], status: "verified" },
+          component: { name: preset.name, unitCost: preset.unitCost > 0 ? preset.unitCost : null, tiers: preset.tiers || [], status: "estimated", note: "Code preset price — enter as a Vendor Product for a verified cost." },
           meta: { name: preset.name, productType: preset.productType, vendor: preset.vendor, vendorSku: preset.id },
         } : null;
       }
@@ -2065,6 +2040,31 @@ export async function action({ request }: { request: Request }) {
       selections: { blank: fRead("pblank"), lid: fRead("plid"), material: fRead("pmat"), printer: fRead("pprinter") || "mimaki", whiteLayers: Number(fRead("pwhitelayers") || 0), glossLayers: Number(fRead("pglosslayers") || 0), faces: Number(fRead("pfaces") || 1), widthIn: Number(fRead("pwidth") || 0), heightIn: Number(fRead("pheight") || 0), quantity: savedRequestedQty, designs: Number(fRead("pdesigns") || 0) },
     } : null,
     savedAt: new Date().toISOString(), tiers: snapshotTiers, freight, gate,
+    // 15G.3 (L): the normalized 15G.2 canonical snapshot rides on every saved
+    // calculator quote — the saved Quote equals the calculator result because
+    // the action recomputed it through the same engines (posted totals are
+    // never trusted), and this block records that result in the shared shape.
+    canonicalSnapshot: productSnapshot && savedSelectedTier ? buildCanonicalPricingSnapshot({
+      engine: "product-driven/15F.0-production-ready-pricing",
+      family: canonicalUiFamily(pFamilySave),
+      productName: fRead("pcustomer") ? String(fRead("pcustomer")) : null,
+      quantity: savedSelectedTier.quantity,
+      dimensions: { widthIn: Number(fRead("pwidth") || 0) || null, heightIn: Number(fRead("pheight") || 0) || null, facesPerUnit: Number(fRead("pfaces") || 1) || null },
+      whiteLayers: Number(fRead("pwhitelayers") || 0),
+      glossLayers: Number(fRead("pglosslayers") || 0),
+      glossCoveragePct: fRead("pglosscoverage") ? Number(fRead("pglosscoverage")) : null,
+      machine: String(fRead("pprinter") || "mimaki") === "roland" ? "Roland TrueVIS LG-640" : "Mimaki UCJV300-130",
+      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value,
+      wastePct: productSnapshot.derived?.wastePct ?? null,
+      totalCost: savedSelectedTier.jobCost ?? savedSelectedTier.unitCost * savedSelectedTier.quantity,
+      unitCost: savedSelectedTier.unitCost,
+      pricingPolicy: (savedSelectedTier as any).commercial?.marginSource || null,
+      marginPct: savedSelectedTier.marginPct,
+      minimumApplied: (savedSelectedTier as any).commercial?.controllingRule || null,
+      marketAdvisory: (savedSelectedTier as any).commercial?.marketPosition?.applicable === false ? "Standard market comparison suppressed for specialty finish." : null,
+      recommendedUnitPrice: savedSelectedTier.unitPrice,
+      recommendedTotalPrice: savedSelectedTier.totalPrice,
+    }) : null,
     marginRules: {
       family: ruleForSave ? ruleForSave.key : "unknown", familyLabel: ruleForSave?.label || "FAMILY MARGIN RULE NOT CONFIGURED",
       curveUsed: ruleForSave ? ruleForSave.curve : "provisional-universal", researchedDefaultsPerTier: familyDefaults,
@@ -2251,12 +2251,25 @@ function LineRow({
 export default function ErpCostCalculatorRoute() {
   const { syncEndpoint, uploadTokenConfigured, rows, lastAutoImportAt, materials, blankItems, form, calc } = useLoaderData<typeof loader>();
   const location = useLocation();
+  // 15G.3: legacy/unsupported tooling renders ONLY on explicit opt-in — it is
+  // never a normal way to price supported ERP products and never auto-opens.
+  const legacyTools = new URLSearchParams(location.search).get("legacytools") === "1";
 
   return (
     <main style={{ maxWidth: 1280, margin: "32px auto", padding: 20, fontFamily: "system-ui, sans-serif", background: "#f9fafb" }}>
       <EmergencySection />
-      <details style={{ marginTop: 18, border: "1px solid #d1d5db", borderRadius: 12, padding: 12 }}>
-        <summary style={{ fontWeight: 700, cursor: "pointer" }}>Advanced Pricing Tools</summary>
+      {!legacyTools ? (
+        <section style={{ marginTop: 18, border: "1px dashed #d1d5db", borderRadius: 12, padding: 12, fontSize: 13, color: "#6b7280" }}>
+          <b>Legacy / Unsupported Job Calculator</b> — hidden. It is NOT canonical pricing for supported ERP products.
+          {" "}<a href="?legacytools=1">Open intentionally</a> only for special jobs the canonical engine cannot price (also reveals the GSOQ RIP sync diagnostics).
+        </section>
+      ) : (
+      <details style={{ marginTop: 18, border: "2px solid #f59e0b", background: "#fffbeb", borderRadius: 12, padding: 12 }}>
+        <summary style={{ fontWeight: 700, cursor: "pointer", color: "#92400e" }}>Legacy / Unsupported Job Calculator — NOT canonical pricing for supported ERP products</summary>
+        <p style={{ color: "#92400e", fontSize: 13, fontWeight: 600 }}>
+          Opt-in fallback for jobs the canonical engine cannot price. Numbers here use retired heuristics and never
+          override the canonical result above. <a href="/app/erp/cost-calculator">Hide legacy tools</a>.
+        </p>
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a> · <a href="/app/erp/cost-health">Cost Health</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
@@ -2301,10 +2314,7 @@ export default function ErpCostCalculatorRoute() {
         </table>
       </section>
       </details>
-      <details style={{ marginTop: 18, border: "1px solid #d1d5db", borderRadius: 12, padding: 12 }}>
-        <summary style={{ fontWeight: 700, cursor: "pointer" }}>Legacy Manual Calculator — Fallback Only</summary>
-        <p style={{ color: "#92400e", fontSize: 13 }}>Use only for unsupported products or special jobs that cannot yet be calculated automatically.</p>
-      </details>
+      )}
     </main>
   );
 }
@@ -2360,7 +2370,7 @@ Setup/design fee included in pricing.`}
           </div>
         ) : null}
       </div>
-      <details style={{ marginTop: 12 }}><summary style={{ fontWeight: 700, cursor: "pointer", fontSize: 13 }}>Advanced Pricing Controls (custom tier quantities, target-margin edits, freight/handling, owner override)</summary>
+      <details style={{ marginTop: 12 }}><summary style={{ fontWeight: 700, cursor: "pointer", fontSize: 13 }}>Advanced Overrides (tier quantities, per-tier margin edits, freight/handling, owner override — job-level only, never global standards)</summary>
       <h2 style={{ marginTop: 0 }}>Pricing Tiers &amp; Margin Review — family curves, {emergency.floor}% margin floor</h2>
       <p style={smallHelp}>
         PROVISIONAL margin curve (60/55/50/45/40 — editable per tier) until competitor research is done. Setup spreads
@@ -2393,10 +2403,17 @@ Setup/design fee included in pricing.`}
         </label>
         <label style={{ fontSize: 12 }}>Tier quantities (comma list)<input name="eqty" defaultValue={emergency.quantities.join(",")} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Tier margins % (comma list, blank = curve)<input name="emargin" defaultValue={emergency.margins.join(",")} style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Per-unit variable cost $ (material+ink+labor+machine)<input name="evar" type="number" step="0.0001" style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Setup total $ (art+print, spreads by qty)<input name="esetup" type="number" step="0.01" style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Blank unit cost $ (e.g. 0.09 4x5 bag)<input name="eblank" type="number" step="0.0001" style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Waste %<input name="ewaste" type="number" step="0.1" style={inputStyle} /></label>
+        {!emergency.productMode ? (
+          <>
+            {/* 15G.3: manual cost entry exists ONLY for unsupported/manual jobs.
+                With a supported product selected the canonical engine derives
+                every one of these and ignores manual values entirely. */}
+            <label style={{ fontSize: 12 }}>Per-unit variable cost $ (manual/unsupported jobs only)<input name="evar" type="number" step="0.0001" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Setup total $ (manual/unsupported jobs only)<input name="esetup" type="number" step="0.01" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Blank unit cost $ (manual/unsupported jobs only)<input name="eblank" type="number" step="0.0001" style={inputStyle} /></label>
+            <label style={{ fontSize: 12 }}>Waste % (manual/unsupported jobs only)<input name="ewaste" type="number" step="0.1" style={inputStyle} /></label>
+          </>
+        ) : null}
         <label style={{ fontSize: 12 }}>Actual freight $<input name="efactual" type="number" step="0.01" style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Handling $<input name="efhandling" type="number" step="0.01" style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Other landed fees $<input name="effees" type="number" step="0.01" style={inputStyle} /></label>
@@ -2412,8 +2429,12 @@ Setup/design fee included in pricing.`}
         Freight: {emergency.freight.note} — total {money2(emergency.freight.total)}, per unit {money2(emergency.freight.perUnit)} ({emergency.freight.source.toUpperCase()}).
         {emergency.gate.belowFloor ? ` MARGIN GATE: ${emergency.gate.reason}` : ""}
       </p>
-      {emergency.tiers.some((tier) => tier.unitCost > 0) ? (
+      {/* 15G.3: for supported products the CANONICAL tier table above is the
+          only tier output — this manual/emergency generator renders solely
+          for unsupported/manual jobs (no product family engaged). */}
+      {!emergency.productMode && emergency.tiers.some((tier) => tier.unitCost > 0) ? (
       <div style={{ overflowX: "auto", marginTop: 8 }}>
+        <p style={{ fontSize: 12, color: "#92400e", fontWeight: 700, margin: "0 0 4px" }}>Manual / unsupported-job tiers — NOT canonical pricing (no commercial floors or market targets applied).</p>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 6 }}>Qty</th><th>Blank/unit</th><th>Setup/unit</th><th>Unit cost</th><th>Margin %</th><th>Unit price</th><th>Total price</th><th>Profit</th><th align="left">Warnings</th></tr></thead>
           <tbody>
@@ -3175,6 +3196,34 @@ function ProductBreakdown() {
         </div>
       ) : <div style={{ color: "#166534", fontSize: 13, fontWeight: 700, marginTop: 6 }}>Finalizable: Yes</div>}
       <p style={smallHelp}>Total cost ${result.totalCost.toFixed(2)} · Unit cost ${result.unitCost.toFixed(4)} — the automatic pricing tiers below are generated from these values.</p>
+
+      {/* 15G.3-I: specialty finish explanation — display only, math unchanged. */}
+      {(() => {
+        const glossLine = result.lines.find((line: any) => line.key === "ink_gloss");
+        const glossSetupLine = result.lines.find((line: any) => line.key === "gloss_setup");
+        const glossMachine = result.lines.find((line: any) => line.key === "machine");
+        if (!glossLine) return null;
+        const stageMatch = String(glossLine.label || "").match(/(\d+)\s*stage/i);
+        const actualCoverage = /actual coverage/i.test(String(glossLine.label || ""));
+        return (
+          <div style={{ border: "1px solid #ddd6fe", background: "#f5f3ff", borderRadius: 8, padding: 8, fontSize: 12, marginTop: 8 }}>
+            <b>Specialty gloss explained:</b> {stageMatch ? `${stageMatch[1]} gloss stage(s)` : "Gloss selected"} ·
+            {" "}Coverage basis: {actualCoverage ? "ACTUAL artwork mask coverage (post-art)" : "90% planning default (pre-art — enter the actual mask % when artwork is final)"} ·
+            {" "}Gloss ink ${glossLine.amount.toFixed(2)}{glossMachine ? ` · gloss stage machine time is inside "${"Machine recovery"}" ($${glossMachine.amount.toFixed(2)} total)` : ""}.
+            {glossSetupLine ? <> Gloss Illustrator setup <b>${glossSetupLine.amount.toFixed(2)} charged ONCE per design</b> — a 3X job does NOT pay setup three times.</> : null}
+          </div>
+        );
+      })()}
+
+      {/* 15G.3-M: compact trust/source card — why this number is trusted. */}
+      <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 4 }}>
+        <div><b>Pricing engine:</b> Canonical Product Engine ({emergency.productMode?.isDtp ? "15C Spektra DTP ladder" : "15F.0 production-ready + owner policy"})</div>
+        <div><b>Machine rate:</b> Owner standard — $8/hr</div>
+        <div><b>4x5 application:</b> 256 labels/hr @ $20/hr ($0.078125/label)</div>
+        <div><b>Cost sources:</b> {result.missing.length ? `${result.missing.length} UNVERIFIED — draft only` : "Verified / owner standards"}</div>
+        <div><b>Mimaki:</b> CMYK only · <b>Roland LG-640:</b> white + gloss</div>
+        <div><b>Pricing policy:</b> owner Pricing Settings (margin bands, floors, market targets)</div>
+      </div>
     </div>
   );
 }

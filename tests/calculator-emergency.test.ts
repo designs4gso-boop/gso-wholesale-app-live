@@ -308,10 +308,11 @@ describe("automatic full costing (14B.1)", () => {
 import { readFileSync } from "node:fs";
 describe("calculator usability (14B.1B)", () => {
   const src = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
-  it("legacy calculator is collapsed behind a fallback-only details section below the new tools", () => {
-    expect(src).toContain("Legacy Manual Calculator — Fallback Only");
-    expect(src).toContain("Use only for unsupported products or special jobs");
-    expect(src.indexOf("<EmergencySection />")).toBeLessThan(src.indexOf("Legacy Manual Calculator — Fallback Only"));
+  it("15G.3: legacy calculator is opt-in only, clearly labeled non-canonical, below the canonical section", () => {
+    expect(src).toContain("Legacy / Unsupported Job Calculator");
+    expect(src).toContain("NOT canonical pricing for supported ERP products");
+    expect(src).toContain('get("legacytools") === "1"');
+    expect(src.indexOf("<EmergencySection />")).toBeLessThan(src.indexOf("Legacy / Unsupported Job Calculator"));
   });
   it("renames applied: Cost Calculator primary, Pricing Tiers & Margin Review, begin prompt shown", () => {
     expect(src).toContain("Pricing Tiers &amp; Margin Review");
@@ -322,13 +323,13 @@ describe("calculator usability (14B.1B)", () => {
 
 describe("daily-use layout (14C)", () => {
   const src14c = readFileSync(new URL("../app/routes/app.erp.cost-calculator.tsx", import.meta.url), "utf8");
-  it("calculator-first order: auto form before tier controls, EmergencySection before Advanced tools and legacy", () => {
-    expect(src14c.indexOf("14B.1a: Automatic Costing form")).toBeLessThan(src14c.indexOf("Advanced Pricing Controls (custom tier quantities")); // full summary label (15C.2 gate messages also mention the section)
-    expect(src14c.indexOf("<EmergencySection />")).toBeLessThan(src14c.indexOf("Advanced Pricing Tools"));
-    expect(src14c.indexOf("Advanced Pricing Tools")).toBeLessThan(src14c.indexOf("Legacy Manual Calculator"));
+  it("15G.3 calculator-first order: auto form before overrides, EmergencySection before the opt-in legacy gate", () => {
+    expect(src14c.indexOf("14B.1a: Automatic Costing form")).toBeLessThan(src14c.indexOf("Advanced Overrides (tier quantities"));
+    expect(src14c.indexOf("<EmergencySection />")).toBeLessThan(src14c.indexOf("Legacy / Unsupported Job Calculator"));
   });
-  it("sync/token/manual controls sit behind collapsed sections", () => {
-    expect(src14c).toContain("Advanced Pricing Controls"); // renamed in 14C.2 — manual tier fields stay collapsed
-    expect(src14c).toContain("Advanced Pricing Tools");
+  it("15G.3: overrides collapsed; sync/GSOQ diagnostics live inside the opt-in legacy gate", () => {
+    expect(src14c).toContain("Advanced Overrides");
+    const legacyBlock = src14c.split("Legacy / Unsupported Job Calculator — NOT canonical")[1] || "";
+    expect(legacyBlock).toContain("Sync control");
   });
 });

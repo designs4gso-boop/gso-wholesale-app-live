@@ -1844,3 +1844,34 @@ Review assumption copy + floor row labeled diagnostic-reference-only.
 Example math pinned in tests/bag-application-standard.test.ts (500x1 =
 $39.0625, 500x2 = $78.125, 1000x2 = $156.25; conservative 55.5556/111.1111/
 222.2222). Tests 906 -> 912 (one stale cost-verification pin updated deliberately).
+
+## Phase 15G.3 — canonical cost calculator simplification (2026-08-09)
+/app/erp/cost-calculator is now SINGLE-ENGINE for staff: the canonical
+product-driven flow (product -> job specs -> Calculate -> cost breakdown ->
+commercial price -> tiers -> save) is the only normal path. Legacy tooling
+(legacy per-line calculator, GSOQ sync diagnostics, 14B.1 auto-costing mode)
+renders ONLY behind the explicit ?legacytools=1 opt-in, labeled "Legacy /
+Unsupported Job Calculator — NOT canonical pricing"; the auto mode is
+inert without the flag (loader + save parity). The emergency/manual tier
+generator renders only when NO product family is engaged (labeled
+manual/unsupported, no floors/market targets) — supported products show the
+canonical tier table only. Manual cost-entry fields (variable/setup/blank/
+waste) hide whenever a product drives the engine; the details section is
+renamed "Advanced Overrides" (tier quantities, per-tier margins, freight,
+owner override — job-level only). STALE PRESETS: the five Miron code
+ladders (incl. the retired $2.86 100ml-tall base) are DELETED — Miron
+resolves only through VendorProduct tiers ($2.78 approved ladder); the save
+action now prefers a current DB Vendor Product for any preset: id and never
+labels a code preset "verified" (remaining presets: customer-supplied, 4x5/
+OZ/pound bags, SAFE CARE jars, soda can — all marked estimated at save).
+NEW result-card blocks: specialty-gloss explainer (coverage basis 90%
+pre-art vs actual mask; $6.25 Illustrator setup charged ONCE per design
+never per stage; stage machine time location) and a compact trust card
+(engine, $8/hr machine standard, 256 labels/hr application, cost-source
+status, Mimaki CMYK-only / Roland specialty, policy source). Saved
+calculator quotes embed the 15G.2 canonical snapshot (recomputed by the
+action — posted totals still never trusted). No formula changes: all
+dollar pins byte-identical ($0.85/$1.13 @1,000; 500 double 3X @55% =
+452.37/983.41; 256 labels/hr; Mimaki CMYK-only). Four stale 14B.1B/14C
+layout pins updated to the new structure. Next: 15G.4 specialty/gloss
+commercial pricing research. Tests 912 -> 921.

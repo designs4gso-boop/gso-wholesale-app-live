@@ -619,9 +619,10 @@ describe("automatic tier flow pins (14C.2)", () => {
     expect(src3).toContain("FAMILY MARGIN RULE NOT CONFIGURED");
   });
 
-  it("no duplicate pricing inputs in the normal flow — manual fields live in collapsed Advanced Pricing Controls; zero rows suppressed", () => {
-    expect(src3).toContain("Advanced Pricing Controls (custom tier quantities, target-margin edits, freight/handling, owner override)");
-    expect(src3).toContain("emergency.tiers.some((tier) => tier.unitCost > 0)"); // manual tier table zero-state
+  it("no duplicate pricing inputs in the normal flow — manual fields live in collapsed Advanced Overrides; zero rows suppressed (15G.3)", () => {
+    expect(src3).toContain("Advanced Overrides (tier quantities, per-tier margin edits, freight/handling, owner override");
+    // 15G.3: the manual/emergency tier table renders ONLY without a product
+    expect(src3).toContain("!emergency.productMode && emergency.tiers.some((tier) => tier.unitCost > 0)");
     expect(src3).toContain("Zero-value rows are never shown");
   });
 
