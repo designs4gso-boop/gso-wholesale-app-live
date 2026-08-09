@@ -1065,7 +1065,11 @@ export default function MarginReviewPage() {
           </div>
           <div><button type="submit">Save assumptions</button></div>
         </Form>
-        <p className="muted" style={{ marginTop: 8 }}>Current audit assumptions: {money(assumptions.laborRatePerHour)}/hr labor, {money(assumptions.applicationLaborCostPerSide)} per printed side floor, {assumptions.auditLimit} rows max, {assumptions.warningBandPct}% warning band.</p>
+        <p className="muted" style={{ marginTop: 8 }}>
+          Current audit assumptions: {money(assumptions.laborRatePerHour)}/hr labor, {money(assumptions.applicationLaborCostPerSide)} per printed side floor, {assumptions.auditLimit} rows max, {assumptions.warningBandPct}% warning band.
+          These are DIAGNOSTIC REFERENCES only — never a pricing authority. Canonical application labor is the owner standard per applied LABEL
+          (4x5 bags: $0.078125/label at 256 labels/hr; conservative planning reference 180 labels/hr = $0.1111/label; jars: $0.20/label), applied inside the canonical engine (15G.2A).
+        </p>
         {flagsSynced ? (
           <div className="success-note">Recipe cost review flags synced. Flagged {syncedFlagged} recipe(s) and cleared {syncedCleared} recipe(s) from the current audit.</div>
         ) : null}
@@ -1346,7 +1350,7 @@ export default function MarginReviewPage() {
                         <div className="cost-line child" key={`labor-${index}`}><span>↳ {line.side} application labor ({line.applicationSeconds.toFixed(1)} sec; floor {money(line.floorCost)})</span><strong>{money(line.appliedCost)}</strong></div>
                       ))}
                       <div className="cost-line note"><span>Application by seconds total ({row.cost.applicationSecondsPerUnit.toFixed(1)} sec @ {money(row.cost.laborRate)}/hr)</span><strong>{money(row.cost.applicationLaborFromSeconds)}</strong></div>
-                      <div className="cost-line note"><span>Per-side labor floor total</span><strong>{money(row.cost.applicationLaborFloor)}</strong></div>
+                      <div className="cost-line note"><span>Per-side labor floor total (diagnostic reference — never priced)</span><strong>{money(row.cost.applicationLaborFloor)}</strong></div>
                       <div className="cost-line"><span>Packing labor</span><strong>{money(row.cost.packingLaborCostPerUnit)}</strong></div>
                       <div className="cost-line"><span>Prepress labor / unit</span><strong>{money(row.cost.prepressLaborCostPerUnit)}</strong></div>
                       <div className="cost-line"><span>Setup labor / unit</span><strong>{money(row.cost.setupLaborCostPerUnit)}</strong></div>

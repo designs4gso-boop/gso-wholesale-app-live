@@ -15,11 +15,30 @@ export type OwnerStandard = {
   status: "owner_verified" | "provisional";
 };
 
+// 15G.2A owner-confirmed 4x5 bag application throughput (LABELS per hour —
+// never bags per hour; a front+back bag is 2 applied labels). Only `normal`
+// controls canonical quoting; `conservative` is a planning reference.
+export const BAG_APPLICATION_THROUGHPUT = {
+  laborRatePerHour: 20,
+  unit: "labels/hour (labels, not bags)",
+  normalLabelsPerHour: 256,
+  conservativeLabelsPerHour: 180,
+} as const;
+
 export const OWNER_STANDARDS = {
   bagApplicationPerLabel4x5: {
     value: 20 / 256, // $0.078125
     unit: "$ per applied label (4x5 sticker bag)",
-    basis: "$20/hour at 256 labels/hour — owner-authoritative 2026-07-24 (Phase 15B confirmation)",
+    basis: "$20/hour at 256 LABELS/hour (labels, not bags — front+back = 2 labels/bag) — owner-confirmed 2026-08-09 (15G.2A) reaffirming the 2026-07-24 standard. NORMAL trained-operator throughput; this is the ONLY rate canonical quoting uses.",
+    status: "owner_verified",
+  } as OwnerStandard,
+  // 15G.2A: conservative / new-operator PLANNING REFERENCE only. Canonical
+  // quoting NEVER uses this rate — it exists for capacity planning and
+  // conservative what-if displays. Same $20/hr basis, slower throughput.
+  bagApplicationPerLabel4x5Conservative: {
+    value: 20 / 180, // $0.1111 per applied label
+    unit: "$ per applied label (4x5 sticker bag) — conservative reference, never canonical",
+    basis: "$20/hour at 180 LABELS/hour (labels, not bags) — owner-confirmed conservative/new-operator reference 2026-08-09 (15G.2A). NOT used in canonical quoting.",
     status: "owner_verified",
   } as OwnerStandard,
   bagApplicationPerLabel14x16: {
@@ -84,7 +103,8 @@ export const LEGACY_CONFLICTING_RATES = {
   bag4x5PerSideLegacy: {
     value: 20 / 180, // $0.1111 — WIRED_LABOR.bag4x5PerSide (13A.3 era)
     location: "app/lib/cost-calculator.server.ts WIRED_LABOR.bag4x5PerSide (legacy calculator only)",
-    supersededBy: "OWNER_STANDARDS.bagApplicationPerLabel4x5 ($0.078125)",
+    supersededBy:
+      "OWNER_STANDARDS.bagApplicationPerLabel4x5 ($0.078125 normal). 15G.2A: the number coincides with the owner's CONSERVATIVE reference (180 labels/hr, bagApplicationPerLabel4x5Conservative) but the legacy path treated it per SIDE-era semantics; canonical quoting uses the normal 256 labels/hr rate only.",
   },
   marginReviewLaborPerHour: {
     value: 25,

@@ -505,8 +505,13 @@ describe("labor standards (13A.1)", () => {
     expect(byKey("weeding").unitCost).toBe(20 / 15);
     expect(byKey("weeding").unitCost).toBeCloseTo(1.333333, 5);
     expect(byKey("jar-application").unitCost).toBe(0.2);
-    expect(byKey("bag-4x5-application").unitCost).toBe(20 / 180);
-    expect(byKey("bag-4x5-application").unitCost).toBeCloseTo(0.111111, 5);
+    // 15G.2A owner clarification: canonical bag application is the NORMAL
+    // 256 LABELS/hr standard ($0.078125/label); 180 labels/hr ($0.1111) is
+    // the conservative planning reference recorded in the row note only.
+    expect(byKey("bag-4x5-application").unitCost).toBe(20 / 256);
+    expect(byKey("bag-4x5-application").unitCost).toBeCloseTo(0.078125, 9);
+    expect(byKey("bag-4x5-application").basis).toContain("LABEL");
+    expect(byKey("bag-4x5-application").note).toContain("180 labels/hr");
     expect(byKey("bag-14x16-application").unitCost).toBe(1);
     expect(byKey("packout").unitCost).toBe(2);
     expect(byKey("gloss-white-setup").unitCost).toBe(25 / 3);

@@ -1830,3 +1830,17 @@ registry value remains live; confirm which is correct (one-line
 owner-standards edit if 180/hr is right). Tests 886 -> 906 (rip-actual-costs
 missing-channel pin updated deliberately: canonical rates now price Mimaki
 white actuals). No live Shopify prices changed.
+
+## Phase 15G.2A — bag application throughput clarification (2026-08-09)
+Owner-confirmed: application unit = applied LABEL (front+back bag = 2
+labels). NORMAL 256 labels/hr @ $20 = $0.078125/label stays the one
+canonical rate (engine already charged rate x quantity x faces — verified,
+no pricing change). NEW conservative reference 180 labels/hr =
+$0.111111/label added as owner-standards
+bagApplicationPerLabel4x5Conservative + BAG_APPLICATION_THROUGHPUT (never
+used in quoting). Corrected stale references: cost-verification-shared
+LABOR_STANDARDS bag row (was "180 bags/hr" with per-side math), Margin
+Review assumption copy + floor row labeled diagnostic-reference-only.
+Example math pinned in tests/bag-application-standard.test.ts (500x1 =
+$39.0625, 500x2 = $78.125, 1000x2 = $156.25; conservative 55.5556/111.1111/
+222.2222). Tests 906 -> 912 (one stale cost-verification pin updated deliberately).

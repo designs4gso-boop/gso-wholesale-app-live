@@ -205,3 +205,15 @@ bags/hr @ $20 ($0.1111/label); the owner-verified registry (2026-07-24,
 live) says 256 labels/hr ($0.078125/label). Registry value kept; owner to
 confirm or correct (one-line owner-standards.ts edit; repricing delta
 +~$33/1,000 double-sided bags if 180/hr is ratified).
+
+## 15G.2A resolution of RATIFY item 21 (2026-08-09)
+OWNER-CONFIRMED: 4x5 bag application unit = applied LABEL (never bags or
+sides; front-only = 1 label/bag, front+back = 2 labels/bag). Labor $20/hr.
+NORMAL trained-operator throughput 256 LABELS/hr = $0.078125/label — the
+ONLY rate canonical quoting uses (unchanged; all price pins hold).
+CONSERVATIVE new-operator throughput 180 LABELS/hr = $0.111111/label —
+planning REFERENCE only (owner-standards
+bagApplicationPerLabel4x5Conservative + BAG_APPLICATION_THROUGHPUT), never
+canonical. Stale texts corrected: cost-verification labor row (said "180
+bags/hr" as current), Margin Review per-side floor copy (diagnostic
+reference only). Item 21 CLOSED.
