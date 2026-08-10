@@ -254,3 +254,21 @@ approved qty-100 double target $1.80 is below the 65% band cost-based price
 $1.93 and the market-target candidate is raising-only — storefront charges
 $1.93. To realize $1.80, ratify a 100-band margin edit; otherwise accept
 $1.93. Small-run rise flagged: 64 dbl 1.75 → 2.70 (+54%, band-1 ladder).
+
+## 15G.5A ratification (2026-08-10) — item 22 CLOSED + launch calibration
+Owner ratified qty-100 double-sided = $1.80 (front $1.30 + back $0.50).
+Implemented as the SMALLEST margin-policy change: BAGS_4X5_DOUBLE_BANDS 61%
+band now starts at minQty 100 (was 128) — cost-based at 100 becomes $173.13
+so the $1.80 target controls (62.5% margin, $112.48 profit); quantities
+1-99 keep 65%; the single curve and every other family are untouched.
+Storefront launch calibration: 4x5 configurator minimum = 50 (server-
+enforced in proxy + checkout; jars keep their own MOQs); approved quantity
+ladder [50,100,250,500,1000,2500] served as quantityOptions; 5,000+ returns
+"request a volume quote" (never a fixed online price; ERP keeps cost-led +
+crossover); customer finish ladder 0X-8X served FROM CODE
+(CANONICAL_FINISH_OPTIONS — No Specialty / Spot Gloss 1X / Raised Gloss 2X /
+Raised Gloss+ 3X / High Raised 4X / High Raised+ 5X / Ultra Raised 6X /
+Ultra Raised+ 7X / Extreme Raised 8X / Deep Build 9X+ Request Custom Quote)
+— no production ConfiguratorOption writes performed or needed; Deep Build
+stays non-checkout. Small-run safety intact: 50/100 clear cost + the $75
+min-profit floor (pinned). Jars, cart transform, Shopify prices untouched.

@@ -98,7 +98,7 @@ describe("1. old-vs-new margin equivalence (every NON-BAG family x every boundar
     const double = defaults.marginCurves.families["bags-4x5-double"];
     expect(double.familyMinPct).toBe(45);
     expect(double.bands).toEqual([
-      { minQty: 1, targetPct: 65 }, { minQty: 128, targetPct: 61 }, { minQty: 256, targetPct: 58 },
+      { minQty: 1, targetPct: 65 }, { minQty: 100, targetPct: 61 }, { minQty: 256, targetPct: 58 }, // 15G.5A: 61% band starts at 100
       { minQty: 500, targetPct: 54 }, { minQty: 1000, targetPct: 52 },
       { minQty: 1500, targetPct: 49 }, { minQty: 5000, targetPct: 47 },
     ]);
@@ -159,10 +159,16 @@ describe("6. bags-4x5-double: approved deliberate spread (15F.0K.2-B) + fallback
     expect(marginCurveConfigFor(defaults, "bags-4x5-double")).toEqual(defaults.marginCurves.families["bags-4x5-double"]);
   });
 
-  it("quantities 1-127 stay side-parity at 65% (owner rule: small runs never repriced)", () => {
-    for (const qty of [1, 64, 100, 127]) {
+  it("15G.5A: quantities 1-99 stay side-parity at 65%; the double 61% band now starts at 100 (ratified $1.80 target)", () => {
+    for (const qty of [1, 64, 99]) {
       expect(marginAt(1, qty)).toBe(65);
       expect(marginAt(2, qty)).toBe(65);
+    }
+    // owner ratification 15G.5A: qty 100-127 double drops to 61% so the
+    // approved $1.80 market target can control; single stays 65% until 128.
+    for (const qty of [100, 127]) {
+      expect(marginAt(1, qty)).toBe(65);
+      expect(marginAt(2, qty)).toBe(61);
     }
   });
 

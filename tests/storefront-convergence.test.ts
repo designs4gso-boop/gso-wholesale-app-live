@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { canonicalStockBagJob, type CanonicalBagInputs } from "../app/lib/canonical-bag-pricing.server";
 import {
+  CANONICAL_FINISH_OPTIONS,
   DEEP_BUILD_STOREFRONT_MESSAGE,
   STOREFRONT_PRICE_BREAK_QUANTITIES,
   parseStorefrontFinish,
@@ -110,12 +111,9 @@ describe("storefront == canonical ERP engine (L parity matrix)", () => {
     expect(STOREFRONT_PRICE_BREAK_QUANTITIES).toEqual([50, 100, 250, 500, 1000, 2500]);
     const breaks = storefrontPriceBreaks(INPUTS, { faces: 2, material: "Matte", finish: "No Spot Gloss" });
     expect(breaks.map((entry) => entry.minQty)).toEqual([50, 100, 250, 500, 1000, 2500]);
-    // NOTE (owner visibility): at qty 100 double the raising-only market
-    // target ($1.80) is BELOW the 65% band cost-based price ($1.93), so the
-    // approved 4B "decrease to 1.80" cannot materialize through the target
-    // candidate — realizing it would need a margin-band edit (flagged in the
-    // 15G.5 report; current behavior charges the higher cost-based price).
-    expect(breaks.map((entry) => entry.priceEach)).toEqual([2.7, 1.93, 1.63, 1.5, 1.45, 1.32]);
+    // 15G.5A: the owner ratified $1.80 at qty-100 double — the 61% margin
+    // band now starts at 100, so the market target controls (was $1.93).
+    expect(breaks.map((entry) => entry.priceEach)).toEqual([2.7, 1.8, 1.63, 1.5, 1.45, 1.32]);
   });
 
   it("exact quantities price through the band step function — never silently under the band (D)", () => {
@@ -160,6 +158,37 @@ describe("tamper + safety (M)", () => {
 });
 
 describe("rollout delta awareness (S)", () => {
+  it("15G.5A launch calibration: qty-100 double = $1.80 (ratified), min qty 50, 5,000+ = volume quote, finishes 0X-8X", () => {
+    expect(storefront({ quantity: 100, faces: 2 })).toMatchObject({ ok: true, unitPrice: 1.8 });
+    expect(storefront({ quantity: 100, faces: 1 })).toMatchObject({ ok: true, unitPrice: 1.3 });
+    // 5,000+ never gets a fixed online price
+    const volume = storefront({ quantity: 5000, faces: 2 });
+    expect(volume).toMatchObject({ ok: false, requestQuote: true });
+    // small-run safety: 50/100 clear cost + the $75 min-profit floor
+    for (const fixture of [
+      { quantity: 50, faces: 2 as const, cost: 39.43 },
+      { quantity: 100, faces: 2 as const, cost: 67.52 },
+    ]) {
+      const priced = storefront(fixture);
+      if (!priced.ok) throw new Error("unpriceable");
+      expect(priced.totalPrice).toBeGreaterThan(fixture.cost + 75);
+    }
+    // canonical finish ladder served from code — 0X-8X + quote-only deep build
+    expect(CANONICAL_FINISH_OPTIONS).toHaveLength(10);
+    for (const [index, label] of CANONICAL_FINISH_OPTIONS.entries()) {
+      const parsed = parseStorefrontFinish(label);
+      if (index < 9) expect(parsed).toEqual({ glossLayers: index, deepBuild: false });
+      else expect(parsed.deepBuild).toBe(true);
+    }
+    // proxy + checkout wire the ladder minimum and canonical options
+    const proxySrc = readFileSync("app/routes/apps.wholesale-lite.configurator.ts", "utf8");
+    expect(proxySrc).toContain("STOREFRONT_BAG_MIN_QTY");
+    expect(proxySrc).toContain("CANONICAL_FINISH_OPTIONS");
+    expect(proxySrc).toContain("quantityOptions");
+    const checkoutSrc = readFileSync("app/routes/apps.wholesale-lite.configurator-checkout.ts", "utf8");
+    expect(checkoutSrc).toContain("STOREFRONT_BAG_MIN_QTY");
+  });
+
   it("legacy pilot matrix vs canonical: documented deltas hold (small-run rise flagged; volume tiers drop slightly)", () => {
     const legacyMatteNoGloss = FALLBACK_PRICING_ROWS.find((row) => row.material === "Matte" && row.finish === "No Spot Gloss")!;
     expect(legacyMatteNoGloss.prices).toEqual([1.75, 1.65, 1.55, 1.45, 1.35]);

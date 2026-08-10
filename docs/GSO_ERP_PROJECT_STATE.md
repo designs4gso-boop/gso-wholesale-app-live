@@ -1938,3 +1938,14 @@ Tests 933 -> 944 (tests/storefront-convergence.test.ts: finish mapping,
 parity matrix standard/specialty/holo/combo, approved breaks, band step
 function, deep-build/tamper/auth/no-variant-write pins, webhook superset,
 rollout deltas). Next: Ticket-First Production Intake (owner review first).
+
+## Phase 15G.5A — storefront launch calibration (2026-08-10)
+Qty-100 double ratified at $1.80: BAGS_4X5_DOUBLE_BANDS 61% band starts at
+100 (was 128); 1-99 unchanged at 65%. Storefront: bag minimum 50, approved
+quantity ladder exposed as quantityOptions, 5,000+ = volume-quote response,
+canonical 0X-8X finish options served from code (no DB writes), Deep Build
+9X+ remains quote-only. Parity re-pinned across engine/admin/proxy/checkout
+(double 2.70/1.80/1.63/1.50/1.45/1.32; front 2.15/1.30/1.15/1.05/1.05/0.95).
+Deliberate pin updates: storefront-convergence qty-100 (1.93→1.80),
+margin-curve-equivalence side-parity (100-127 double now 61%). Tests 944 ->
+945. NOT customer-live until Render deploys this commit.

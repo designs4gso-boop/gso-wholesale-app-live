@@ -8,7 +8,7 @@ import {
   stripInternalCostFields,
 } from "../lib/security-guards-shared";
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
-import { buildCanonicalLineMetadata, priceStorefrontConfiguration } from "../lib/storefront-canonical-pricing.server";
+import { STOREFRONT_BAG_MIN_QTY, buildCanonicalLineMetadata, priceStorefrontConfiguration } from "../lib/storefront-canonical-pricing.server";
 
 const SHOPIFY_API_VERSION = "2025-10";
 
@@ -238,7 +238,9 @@ export async function action({ request }: ActionFunctionArgs) {
       const selectedBagColor = isJar ? "" : bagColor;
       const selectedLabelSet = isJar ? labelSet || "Side + Lid" : "";
       const defaultSides = effectiveProduct.defaultSides || "Double Sided";
-      const minQuantity = Number(effectiveProduct.minQuantity || MIN_QTY);
+      // 15G.5A: bags floor at the approved ladder minimum (50); jars keep
+      // their own product MOQ. The clamp can only RAISE a posted quantity.
+      const minQuantity = isJar ? Number(effectiveProduct.minQuantity || MIN_QTY) : STOREFRONT_BAG_MIN_QTY;
       const quantity = Math.max(numberValue(rawItem.quantity, minQuantity), minQuantity);
 
       if (isJar) {

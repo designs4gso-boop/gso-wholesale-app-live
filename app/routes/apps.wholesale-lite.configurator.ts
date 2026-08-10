@@ -5,6 +5,10 @@ import { MIN_QTY } from "../lib/configurator-pricing";
 import { stripInternalCostFields } from "../lib/security-guards-shared";
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 import {
+  CANONICAL_FINISH_OPTIONS,
+  STOREFRONT_BAG_MIN_QTY,
+  STOREFRONT_PRICE_BREAK_QUANTITIES,
+  VOLUME_QUOTE_FROM,
   priceStorefrontConfiguration,
   storefrontPriceBreaks,
 } from "../lib/storefront-canonical-pricing.server";
@@ -196,7 +200,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
           },
         })) || product
       : product;
-  const minQuantity = Number(effectiveProduct.minQuantity || MIN_QTY);
+  // 15G.5A: the 4x5 configurator flow starts at the approved ladder minimum
+  // of 50 (server-enforced); jars keep their own product MOQ untouched.
+  const minQuantity = isJar ? Number(effectiveProduct.minQuantity || MIN_QTY) : STOREFRONT_BAG_MIN_QTY;
   const quantity = Math.max(numberValue(url.searchParams.get("quantity"), minQuantity), minQuantity);
 
   const [options, rules] = await Promise.all([
@@ -255,7 +261,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   ];
 
   const materials = optionMaterials.length ? optionMaterials : ruleMaterials;
-  const finishes = optionFinishes.length ? optionFinishes : ruleFinishes;
+  // 15G.5A: supported bags serve the canonical 0X-8X finish ladder from code
+  // (deterministic X mapping; Deep Build 9X+ is quote-only) — no production
+  // ConfiguratorOption rows required. Jars keep their DB options.
+  const finishes = isJar ? (optionFinishes.length ? optionFinishes : ruleFinishes) : CANONICAL_FINISH_OPTIONS;
   const bagColors = optionBagColors.length ? optionBagColors : defaultBagColors;
   const jarColors = hasJarColorVariants ? ["Clear", "Black", "White"] : [];
   const labelSets = optionLabelSets;
@@ -340,6 +349,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       defaultSides: effectiveProduct.defaultSides || "Double Sided",
     },
     options: { materials, finishes, bagColors, jarColors, labelSets },
+    // 15G.5A: approved storefront quantity ladder + volume-quote threshold
+    // (5,000+ is never priced online). Themes may render these as choices;
+    // arbitrary quantities >= minQuantity still price via the band step fn.
+    quantityOptions: isJar ? [] : STOREFRONT_PRICE_BREAK_QUANTITIES,
+    volumeQuoteFrom: isJar ? null : VOLUME_QUOTE_FROM,
     selected: {
       material: selectedMaterial,
       finish: selectedFinish,

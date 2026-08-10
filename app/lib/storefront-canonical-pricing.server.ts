@@ -24,6 +24,28 @@ export const UNSUPPORTED_CONFIG_MESSAGE =
 // Approved customer-facing quantity ladder for price breaks (5,000+ stays
 // quote/cost-led — deliberately not shown as a fixed break).
 export const STOREFRONT_PRICE_BREAK_QUANTITIES = [50, 100, 250, 500, 1000, 2500];
+// 15G.5A: storefront minimum for the 4x5 configurator flow (owner-approved
+// ladder starts at 50; other product families keep their own MOQs).
+export const STOREFRONT_BAG_MIN_QTY = 50;
+// 15G.5A: 5,000+ never shows an invented fixed market price online.
+export const VOLUME_QUOTE_FROM = 5000;
+export const VOLUME_QUOTE_MESSAGE =
+  "Volume orders of 5,000+ are quoted individually — request a volume quote and we'll price it for you.";
+// 15G.5A: customer-visible finish ladder served from CODE (no production
+// ConfiguratorOption rows required). Every label parses deterministically to
+// its exact X count via parseStorefrontFinish; Deep Build is quote-only.
+export const CANONICAL_FINISH_OPTIONS = [
+  "No Specialty — 0X",
+  "Spot Gloss — 1X",
+  "Raised Gloss — 2X",
+  "Raised Gloss+ — 3X",
+  "High Raised — 4X",
+  "High Raised+ — 5X",
+  "Ultra Raised — 6X",
+  "Ultra Raised+ — 7X",
+  "Extreme Raised — 8X",
+  "Deep Build 9X+ — Request Custom Quote",
+];
 
 export function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -65,6 +87,9 @@ export function priceStorefrontConfiguration(
 ): StorefrontPriceResult {
   const quantity = Math.max(0, Math.floor(Number(selection.quantity) || 0));
   if (quantity < 1) return { ok: false, requestQuote: false, reason: "Quantity is required." };
+  // 15G.5A: 5,000+ is a volume quote — the storefront never exposes a fixed
+  // price beyond the approved 2,500 band (cost-led/crossover stays ERP-side).
+  if (quantity >= VOLUME_QUOTE_FROM) return { ok: false, requestQuote: true, reason: VOLUME_QUOTE_MESSAGE };
 
   const { glossLayers, deepBuild } = parseStorefrontFinish(selection.finish);
   if (deepBuild) return { ok: false, requestQuote: true, reason: DEEP_BUILD_STOREFRONT_MESSAGE };

@@ -170,7 +170,11 @@ export const BAGS_4X5_SINGLE_BANDS: MarginBand[] = [
   { minQty: 1500, targetPct: 52 }, { minQty: 5000, targetPct: 50 },
 ];
 export const BAGS_4X5_DOUBLE_BANDS: MarginBand[] = [
-  { minQty: 1, targetPct: 65 }, { minQty: 128, targetPct: 61 }, { minQty: 256, targetPct: 58 },
+  // 15G.5A owner ratification: the 61% band starts at 100 (was 128) so the
+  // approved $1.80 qty-100 double market target can control (cost-based at
+  // 61% = $173.13 < $180; at the old 65% it was $192.91 and blocked the
+  // target). Quantities 1-99 keep 65%; nothing else moves.
+  { minQty: 1, targetPct: 65 }, { minQty: 100, targetPct: 61 }, { minQty: 256, targetPct: 58 },
   { minQty: 500, targetPct: 54 }, { minQty: 1000, targetPct: 52 },
   { minQty: 1500, targetPct: 49 }, { minQty: 5000, targetPct: 47 },
 ];
