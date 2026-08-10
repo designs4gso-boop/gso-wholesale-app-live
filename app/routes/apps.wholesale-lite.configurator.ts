@@ -3,6 +3,11 @@ import { db } from "../db.server";
 import { authenticate } from "../shopify.server";
 import { MIN_QTY } from "../lib/configurator-pricing";
 import { stripInternalCostFields } from "../lib/security-guards-shared";
+import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
+import {
+  priceStorefrontConfiguration,
+  storefrontPriceBreaks,
+} from "../lib/storefront-canonical-pricing.server";
 
 // 15G.1: served only through the signed Shopify app proxy (same-origin from
 // the storefront) — no cross-origin callers exist, so no CORS headers.
@@ -265,23 +270,55 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const rule = findMatchingRule(rules, selectedMaterial, selectedFinish, quantity);
 
-  const priceBreaks = rules
-    .filter((priceRule) => {
-      const materialOk = String(priceRule.material || "").toLowerCase() === selectedMaterial.toLowerCase();
-      const finishOk = String(priceRule.finish || "").toLowerCase() === selectedFinish.toLowerCase();
-      return materialOk && finishOk && priceRule.active !== false;
-    })
-    .sort((a, b) => Number(a.minQty || 0) - Number(b.minQty || 0))
-    .map((priceRule) => ({
-      range: rangeLabel(priceRule),
-      minQty: Number(priceRule.minQty || 0),
-      maxQty: priceRule.maxQty == null ? null : Number(priceRule.maxQty),
-      priceEach: money(priceRule.priceEach),
-    }));
+  // 15G.5: supported stock bags price through the CANONICAL ERP engine — the
+  // same authority as the Cost Calculator, quotes, and checkout. The legacy
+  // ConfiguratorPricingRule matrix remains only for jars (legacy_rule) and
+  // never silently prices a supported bag. Payload stays customer-facing
+  // pricing ONLY (15G.1) — no cost/margin/floor internals.
+  let pricingSource: "canonical_erp" | "legacy_rule" = "legacy_rule";
+  let matched = Boolean(rule);
+  let requestQuote = false;
+  let pricingMessage: string | null = null;
+  let priceEach = 0;
+  let priceBreaks: Array<{ range: string; minQty: number; maxQty: number | null; priceEach: number }> = [];
 
-  // 15G.1: the public payload carries customer-facing pricing ONLY. Internal
-  // cost/profit/margin figures never leave the server on a storefront route.
-  const priceEach = money(rule?.priceEach ?? 0);
+  if (!isJar) {
+    pricingSource = "canonical_erp";
+    const canonicalInputs = await resolveCanonicalBagInputs(db, shop);
+    const faces = /single|front\s*only/i.test(String(effectiveProduct.defaultSides || "")) ? 1 : 2;
+    const priced = priceStorefrontConfiguration(canonicalInputs, {
+      quantity,
+      faces,
+      material: selectedMaterial,
+      finish: selectedFinish,
+    });
+    priceBreaks = storefrontPriceBreaks(canonicalInputs, { faces, material: selectedMaterial, finish: selectedFinish })
+      .map((entry) => ({ range: `${entry.minQty}+`, minQty: entry.minQty, maxQty: null, priceEach: entry.priceEach }));
+    if (priced.ok) {
+      matched = true;
+      priceEach = priced.unitPrice;
+    } else {
+      matched = false;
+      requestQuote = priced.requestQuote;
+      pricingMessage = priced.reason;
+    }
+  } else {
+    priceBreaks = rules
+      .filter((priceRule) => {
+        const materialOk = String(priceRule.material || "").toLowerCase() === selectedMaterial.toLowerCase();
+        const finishOk = String(priceRule.finish || "").toLowerCase() === selectedFinish.toLowerCase();
+        return materialOk && finishOk && priceRule.active !== false;
+      })
+      .sort((a, b) => Number(a.minQty || 0) - Number(b.minQty || 0))
+      .map((priceRule) => ({
+        range: rangeLabel(priceRule),
+        minQty: Number(priceRule.minQty || 0),
+        maxQty: priceRule.maxQty == null ? null : Number(priceRule.maxQty),
+        priceEach: money(priceRule.priceEach),
+      }));
+    priceEach = money(rule?.priceEach ?? 0);
+  }
+
   const orderTotal = money(priceEach * quantity);
 
   return jsonResponse({
@@ -313,8 +350,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       sides: selectedSides,
     },
     pricing: {
-      matched: Boolean(rule),
-      matchedRange: rangeLabel(rule),
+      matched,
+      pricingSource,
+      requestQuote,
+      message: pricingMessage,
+      matchedRange: pricingSource === "canonical_erp"
+        ? `${[...priceBreaks].reverse().find((entry) => quantity >= entry.minQty)?.minQty ?? priceBreaks[0]?.minQty ?? 1}+`
+        : rangeLabel(rule),
       productionFinish: rule?.productionFinish || selectedFinish,
       priceEach,
       orderTotal,

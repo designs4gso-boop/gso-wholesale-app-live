@@ -694,11 +694,21 @@ export default function GsoConfigurator() {
         </div>
 
         <div className="card result-card">
-          <h2>Legacy Storefront Price (ConfiguratorPricingRule)</h2>
+          <h2>Deprecated / Compatibility — Legacy ConfiguratorPricingRule</h2>
           <p style={{ fontSize: 13, color: "#5c5f62", marginTop: 0 }}>
-            This is the CURRENT live storefront/matrix price — legacy compatibility data, NOT the ERP price truth.
-            The canonical ERP recommendation is shown below it; storefront convergence is reserved for 15G.5.
+            15G.5: the storefront no longer prices supported stock bags from this matrix — the public configurator and
+            checkout serve the CANONICAL ERP price below. These rows remain as deprecated compatibility/audit data
+            (jars still use them until their canonical phase). Do not treat this number as a recommendation.
           </p>
+          {!isJar ? (
+            <p style={{ fontSize: 13, fontWeight: 700, color: data.canonical?.available ? "#166534" : "#92400e", marginTop: 4 }}>
+              Storefront price source: Canonical ERP engine · Parity: {data.canonical?.available ? "MATCH (storefront serves the canonical price below)" : "UNAVAILABLE — storefront fails closed (no legacy fallback for bags)"}
+            </p>
+          ) : (
+            <p style={{ fontSize: 13, fontWeight: 700, color: "#92400e", marginTop: 4 }}>
+              Jars: storefront still serves this legacy matrix (canonical jar pricing is a later phase).
+            </p>
+          )}
           {result.requestedQty < data.minQty ? (
             <div className="warning">Quantity was under {data.minQty}, so ERP priced it at the {data.minQty} minimum.</div>
           ) : null}

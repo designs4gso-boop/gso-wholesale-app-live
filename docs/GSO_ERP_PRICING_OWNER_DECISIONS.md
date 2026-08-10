@@ -241,3 +241,16 @@ Editable at ownerConfig.pricing.marketTargets +
 ownerConfig.pricing.specialtyPricing (audited envelopes, fail-closed to
 these approved defaults). VIP/volume program DEFERRED. Storefront
 configurator ladder remains legacy until 15G.5.
+
+## 15G.5 note (2026-08-10)
+Storefront convergence LIVE-ON-DEPLOY: public configurator + checkout price
+supported 4x5 bags through the canonical engine (draft-order custom lines;
+posted prices never read; 9X+ = Request Custom Quote; holo bundles required
+white; exact-qty band pricing). ConfiguratorPricingRule demoted to
+deprecated compatibility for bags (jars still legacy until their phase).
+Cart-transform extension remains inert/dead — Option B chosen; removal is a
+future extension-deploy decision. NEW OWNER DECISION NEEDED (item 22): the
+approved qty-100 double target $1.80 is below the 65% band cost-based price
+$1.93 and the market-target candidate is raising-only — storefront charges
+$1.93. To realize $1.80, ratify a 100-band margin edit; otherwise accept
+$1.93. Small-run rise flagged: 64 dbl 1.75 → 2.70 (+54%, band-1 ladder).

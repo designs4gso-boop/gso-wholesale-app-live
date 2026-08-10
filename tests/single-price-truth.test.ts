@@ -315,15 +315,17 @@ describe("source pins — surfaces consume the canonical engines", () => {
     expect(source).toContain("Below canonical recommendation");
   });
 
-  it("Configurator admin labels legacy vs canonical; storefront ladder untouched", () => {
+  it("15G.5: Configurator admin marks the matrix Deprecated/Compatibility; storefront serves the canonical engine", () => {
     const source = readSource("app/routes/app.erp.configurator.tsx");
-    expect(source).toContain("Legacy Storefront Price (ConfiguratorPricingRule)");
+    expect(source).toContain("Deprecated / Compatibility — Legacy ConfiguratorPricingRule");
     expect(source).toContain("Canonical ERP Recommendation");
-    // O: no storefront price change — the pilot matrix and the public proxy
-    // are byte-level untouched by this phase.
+    expect(source).toContain("Parity:");
+    // the legacy pilot matrix data itself is unchanged (compatibility/audit)
     expect(FALLBACK_PRICING_ROWS[0].prices[0]).toBe(1.75);
+    // the public proxy now prices supported bags through the canonical path
     const proxy = readSource("app/routes/apps.wholesale-lite.configurator.ts");
-    expect(proxy.includes("canonicalStockBagJob")).toBe(false);
+    expect(proxy).toContain("priceStorefrontConfiguration");
+    expect(proxy).toContain('pricingSource = "canonical_erp"');
   });
 });
 

@@ -1899,3 +1899,42 @@ tests/uv-specialty-pricing.test.ts (12: ladders, back premiums, 5000+ null,
 1X-8X finals matrix @90 floors, minimums, deep build, holo additive vs
 compound, white treatments, heavy-combo floor, validator, wiring). No
 Shopify/storefront changes (15G.5). Tests 921 -> 933.
+
+## Phase 15G.5 — storefront single-price-truth convergence (2026-08-10)
+The public storefront now prices supported 4x5 stock bags through the SAME
+canonical engine as the ERP. NEW app/lib/storefront-canonical-pricing.server.ts
+(parseStorefrontFinish 0X-8X + Deep Build detection; priceStorefrontConfiguration
+wraps canonicalStockBagJob — holo implies the REQUIRED white underbase bundled,
+90% pre-art coverage internal, round-to-cents unit price, exact-quantity band
+pricing so odd quantities can never undercharge; storefrontPriceBreaks at the
+approved ladder 50/100/250/500/1000/2500 — no invented 5000+ break).
+apps.wholesale-lite.configurator: bags return pricingSource "canonical_erp"
+(fail-closed message when canonical inputs unavailable — NO silent legacy
+fallback); jars stay "legacy_rule". apps.wholesale-lite.configurator-checkout:
+every bag line is REPRICED canonically server-side (posted prices were never
+read; unchanged), Deep Build 9X+ and malformed/unsupported combos rejected,
+draft-order custom lines remain THE checkout mechanism (Option B — the dead
+cart-transform extension stays inert/never used by the supported path;
+physical removal deferred to an extension-deploy decision), and each line
+carries a hidden `_GSO Canonical` JSON snapshot (profile/qty/faces/material/
+bagColor/holo/whiteRequired/glossX/finishLabel/unitPrice/engine) for paid-
+order production and future Ticket-First intake. Visible Material/Finish/
+Bag Color attributes unchanged — the paid webhook's isConfiguratorLine
+contract is a superset (pinned). Admin Configurator: matrix relabeled
+"Deprecated / Compatibility"; parity line shows storefront = canonical
+(MATCH) for bags, legacy-only for jars. ConfiguratorPricingRule = deprecated
+compatibility/audit data for bags (still live for jars). One base Shopify
+variant retained; ZERO Shopify price writes. ROLLOUT DELTAS (dbl matte):
+64: 1.75→2.70 (+54% FLAG small runs), 100: 1.65-range→1.93 (cost-led; see
+note), 250: 1.75→1.63, 500: 1.65→1.50, 1000: 1.55→1.45, 2500: 1.35→1.32;
+specialty/holo now tier+floor-priced (e.g. 1000 dbl holo+3X = $2.24/unit
+floor-controlled incl. white underbase + gloss setup). OWNER NOTE: the 4B
+"qty-100 double decrease to $1.80" cannot materialize — the market target is
+raising-only and the 65% band cost-based price ($1.93) wins; realizing 1.80
+needs a margin-band edit (owner decision). ACTIVATION: web (Render) deploy
+only — the theme block/JS payload shape is unchanged and no theme/extension
+deploy is required; prices change the moment Render serves this commit.
+Tests 933 -> 944 (tests/storefront-convergence.test.ts: finish mapping,
+parity matrix standard/specialty/holo/combo, approved breaks, band step
+function, deep-build/tamper/auth/no-variant-write pins, webhook superset,
+rollout deltas). Next: Ticket-First Production Intake (owner review first).

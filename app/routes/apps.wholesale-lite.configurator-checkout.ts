@@ -7,6 +7,8 @@ import {
   sanitizeDraftOrderUserErrors,
   stripInternalCostFields,
 } from "../lib/security-guards-shared";
+import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
+import { buildCanonicalLineMetadata, priceStorefrontConfiguration } from "../lib/storefront-canonical-pricing.server";
 
 const SHOPIFY_API_VERSION = "2025-10";
 
@@ -151,6 +153,11 @@ export async function action({ request }: ActionFunctionArgs) {
     const incomingItems = Array.isArray(body.items) && body.items.length ? body.items : [body];
     const email = clean(body.email || incomingItems[0]?.email);
 
+    // 15G.5: canonical inputs resolved ONCE per checkout — every supported
+    // stock-bag line is repriced server-side through the canonical engine.
+    // Posted/browser prices are never read (unchanged contract).
+    const canonicalInputs = await resolveCanonicalBagInputs(db, shop);
+
     const lineItems: any[] = [];
     const itemSummaries: any[] = [];
     let cartTotal = 0;
@@ -269,30 +276,62 @@ export async function action({ request }: ActionFunctionArgs) {
 
       const rule = findMatchingRule(rules, material, finish, quantity);
 
-      if (!rule) {
-        return jsonResponse(
-          {
-            ok: false,
-            error: "No matching ERP pricing rule found for one cart item.",
-            item: {
-              title: effectiveProduct.title,
-              productType,
-              handle,
-              material,
-              finish,
-              bagColor: selectedBagColor,
-              jarColor: selectedJarColor,
-              labelSet: selectedLabelSet,
-              quantity,
+      // 15G.5: supported stock bags are repriced through the CANONICAL
+      // engine at checkout — the line price is server-derived from the
+      // configuration alone (posted prices are never read); malformed,
+      // unsupported, and Deep Build (9X+) combinations are rejected.
+      // Jars remain on the legacy rule path until their canonical phase.
+      let priceEach = 0;
+      let matchedRange = "";
+      let canonicalMeta: string | null = null;
+      if (!isJar) {
+        const faces = /single|front\s*only/i.test(String(defaultSides || "")) ? 1 : 2;
+        const priced = priceStorefrontConfiguration(canonicalInputs, { quantity, faces, material, finish });
+        if (!priced.ok) {
+          return jsonResponse(
+            {
+              ok: false,
+              requestQuote: priced.requestQuote,
+              error: priced.reason,
+              item: { title: effectiveProduct.title, productType, handle, material, finish, bagColor: selectedBagColor, quantity },
             },
-          },
-          { status: 400 },
-        );
+            { status: 400 },
+          );
+        }
+        priceEach = priced.unitPrice;
+        matchedRange = "canonical";
+        canonicalMeta = buildCanonicalLineMetadata({
+          profileType: productType,
+          selection: { quantity, faces, material, finish, bagColor: selectedBagColor },
+          priced,
+          finishLabel: finish,
+        });
+      } else {
+        if (!rule) {
+          return jsonResponse(
+            {
+              ok: false,
+              error: "No matching ERP pricing rule found for one cart item.",
+              item: {
+                title: effectiveProduct.title,
+                productType,
+                handle,
+                material,
+                finish,
+                bagColor: selectedBagColor,
+                jarColor: selectedJarColor,
+                labelSet: selectedLabelSet,
+                quantity,
+              },
+            },
+            { status: 400 },
+          );
+        }
+        priceEach = money(rule.priceEach);
+        matchedRange = rangeLabel(rule);
       }
 
-      const priceEach = money(rule.priceEach);
       const orderTotal = money(priceEach * quantity);
-      const matchedRange = rangeLabel(rule);
 
       if (!priceEach || priceEach <= 0) {
         return jsonResponse(
@@ -338,6 +377,9 @@ export async function action({ request }: ActionFunctionArgs) {
               { key: "Sides", value: String(defaultSides) },
             ]),
         { key: "_GSO Product Image", value: productImageUrl },
+        // 15G.5 (O): hidden canonical configuration snapshot for paid-order
+        // production creation and future Ticket-First intake.
+        ...(canonicalMeta ? [{ key: "_GSO Canonical", value: canonicalMeta }] : []),
       ];
 
       lineItems.push({
