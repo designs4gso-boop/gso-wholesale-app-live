@@ -162,21 +162,36 @@ function normalizeIdentity(value: string | null | undefined): string {
 // Strict, equality-only attribution. Never contains, fuzzy, partial, or
 // first-match: two or more candidates at any tier stay unresolved.
 export function attributeEntryToItem(
-  entry: { productionJobItemId?: string | null; jobTicket: string | null; sourceJobName: string | null },
+  entry: { productionJobItemId?: string | null; jobTicket: string | null; sourceJobName: string | null; rawRow?: string | null },
   job: AttributionJob,
 ): ItemAttribution {
   const warnings: string[] = [];
 
-  // Already attributed (legacy import or previous backfill): respect it.
+  // Already attributed (legacy import or previous backfill): respect the id,
+  // but NEVER launder confidence (15H.2-H): a stored id whose provenance
+  // block says it was persisted via the single-item fallback stays
+  // "fallback" — saving a weak match must not upgrade it to exact.
   if (entry.productionJobItemId) {
     const known = job.items.find((item) => item.id === entry.productionJobItemId);
+    const storedProvenance = (() => {
+      try {
+        const parsed = entry.rawRow ? JSON.parse(entry.rawRow) : null;
+        return parsed?.itemAttributionBackfill || null;
+      } catch {
+        return null;
+      }
+    })();
+    const laundered = storedProvenance && String(storedProvenance.confidence || "") === "fallback";
     return {
       productionJobId: job.id,
       productionJobItemId: entry.productionJobItemId,
-      method: "item_ticket",
+      method: laundered ? "single_item_fallback" : "item_ticket",
       candidateCount: known ? 1 : 0,
-      confidence: "exact",
-      warnings: known ? [] : ["Stored productionJobItemId does not match a current job item — verify manually."],
+      confidence: laundered ? "fallback" : "exact",
+      warnings: [
+        ...(known ? [] : ["Stored productionJobItemId does not match a current job item — verify manually."]),
+        ...(laundered ? ["Stored item id came from a single-item FALLBACK backfill — owner confirmation required before it counts as exact."] : []),
+      ],
     };
   }
 

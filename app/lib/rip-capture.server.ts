@@ -249,11 +249,26 @@ export function runtimeQualityFlags(parsed: Pick<VersaWorksParsedRow, "eventClas
 // ---------- match method ladder (15F.0J.4-G) ----------
 export type RipMatchMethod = "EXACT_TICKET" | "EXACT_MANIFEST" | "EXACT_HASH" | "EXACT_ROUTED_FILENAME" | "EXACT_NORMALIZED_FILENAME" | "PROBABLE_METADATA" | "MANUAL" | "UNMATCHED";
 
-// Only EXACT_* or approved MANUAL matches may feed finalized actual cost;
-// PROBABLE stays review-only (the writeback path additionally sits behind
-// the owner phrase).
-export function matchMethodAllowsActuals(method: RipMatchMethod): boolean {
-  return method.startsWith("EXACT_") || method === "MANUAL";
+// 15H.2: EXPLICIT allowlist (no prefix tricks — historical loose matchers
+// mislabeled contains/substring hits as EXACT_*, so new-style shared-matcher
+// confidences are listed alongside the legitimate legacy capture methods).
+// Suggestions, ambiguity, fallbacks, and unmatched NEVER authorize actuals.
+const ACTUALS_ALLOWED_METHODS = new Set<string>([
+  "EXACT_TICKET",
+  "EXACT_MANIFEST",
+  "EXACT_HASH",
+  "EXACT_ROUTED_FILENAME",
+  "EXACT_NORMALIZED_FILENAME",
+  "MANUAL",
+  "exact_item_ticket",
+  "exact_rip_job_name",
+  "exact_job_ticket",
+  "exact_stored_filename",
+  "manual_owner_assignment",
+]);
+
+export function matchMethodAllowsActuals(method: RipMatchMethod | string): boolean {
+  return ACTUALS_ALLOWED_METHODS.has(String(method));
 }
 
 // ---------- calibration candidate (15F.0J.4-K) ----------

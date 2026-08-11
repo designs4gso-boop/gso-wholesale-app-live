@@ -26,6 +26,7 @@ import {
   type VarianceJobInput,
 } from "./actual-variance.server";
 import { computeEntryCosts, type BrandInkRates } from "./rip-actual-costs.server";
+import { assessEntryIdentityTrust } from "./rip-identity-match.server";
 import { resolvePrintDuration } from "./rip-duration.server";
 
 // Client-safe constants live in print-log-writeback-shared.ts (the board
@@ -113,6 +114,19 @@ export function computePrintLogWriteback(params: {
   });
   if (ambiguous.length) {
     return { ok: false, blockedReason: `${ambiguous.length} attached row(s) still carry the ambiguous-match flag — resolve them in RIP Import Review before writing costs.`, warnings };
+  }
+  // 15H.2-I: identity trust is RE-VERIFIED against the job itself, never
+  // believed from stored method labels (historical loose matchers mislabeled
+  // contains/substring hits as EXACT_*). Untrusted rows block writeback —
+  // confirm them via an explicit rematch in RIP Import Review (manual
+  // owner assignment is always trusted).
+  const untrusted = params.entries.filter((entry) => !assessEntryIdentityTrust(entry, params.job).trusted);
+  if (untrusted.length) {
+    return {
+      ok: false,
+      blockedReason: `${untrusted.length} attached row(s) cannot be identity-verified against this job (ticket/RIP-name mismatch — likely a legacy loose match). Re-confirm them via rematch in RIP Import Review before writing costs.`,
+      warnings,
+    };
   }
 
   const { unique, duplicatesIgnored } = dedupeVarianceEntries(params.entries);

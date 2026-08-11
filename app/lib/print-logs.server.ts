@@ -1,4 +1,5 @@
 import db from "../db.server";
+import { resolveRipIdentity } from "./rip-identity-match.server";
 import {
   extractMimakiExtended,
   isVersaWorksJobLogRow,
@@ -254,63 +255,37 @@ export function parsePrintLogText(text: string) {
   });
 }
 
-// 15F.0J.4-G: returns the match METHOD alongside the match. Ladder:
-// EXACT_TICKET (system ticket in the routed RIP name) > EXACT_NORMALIZED_
-// FILENAME (stored rip/item names) > PROBABLE_METADATA (contains fallbacks —
-// review-only for actuals; the writeback additionally sits behind the owner
-// phrase). MANUAL matches record their own method at review time.
-export async function findMatchingProductionJob(shop: string, row: any): Promise<{ job: any; item: any; method: string }> {
-  const ticket = row.jobTicket;
-  const itemTicket = row.itemTicket || ticket;
-  const sourceJobName = row.sourceJobName || "";
-
-  if (itemTicket) {
-    const exactItem = await db.productionJobItem.findFirst({
-      where: { shop, OR: [{ itemTicket }, { ripJobName: itemTicket }] },
-      include: { job: true },
-    });
-    if (exactItem?.job) return { job: exactItem.job, item: exactItem, method: "EXACT_TICKET" };
-  }
-
-  if (ticket) {
-    const exact = await db.productionJob.findFirst({ where: { shop, jobTicket: ticket } });
-    if (exact) return { job: exact, item: null, method: "EXACT_TICKET" };
-
-    const itemContains = await db.productionJobItem.findFirst({
-      where: {
-        shop,
-        OR: [
-          { itemTicket: { contains: ticket } },
-          { ripJobName: { contains: ticket } },
-        ],
-      },
-      include: { job: true },
-    });
-    if (itemContains?.job) return { job: itemContains.job, item: itemContains, method: "EXACT_TICKET" };
-
-    const contains = await db.productionJob.findFirst({ where: { shop, jobTicket: { contains: ticket } } });
-    if (contains) return { job: contains, item: null, method: "EXACT_TICKET" };
-  }
-
-  const jobs = await db.productionJob.findMany({
-    where: { shop, active: true },
-    orderBy: { updatedAt: "desc" },
-    take: 100,
-    include: { items: true },
+// 15H.2: automatic linking goes through the ONE strict shared resolver.
+// The old ladder's contains/substring/first-match tiers (which mislabeled
+// themselves as exact and probable-metadata matches) are
+// REMOVED from automatic linking entirely — suggestion territory belongs to
+// the RIP Import Review page, which requires an explicit operator click.
+// Method values are the shared confidence names; AMBIGUOUS never attaches.
+export async function findMatchingProductionJob(
+  shop: string,
+  row: any,
+): Promise<{ job: any; item: any; method: string; reasons: string[]; ambiguous: boolean }> {
+  const identity = await resolveRipIdentity(db, shop, {
+    jobName: row.sourceJobName || "",
+    // Pre-parsed row tickets (XML/VersaWorks job-log parsers) ride along so a
+    // canonical ticket carried outside the name still resolves exactly.
+    fileName: [row.itemTicket, row.jobTicket].filter(Boolean).join(" "),
   });
-
-  for (const job of jobs as any[]) {
-    const matchedItem = (job.items || []).find((item: any) => {
-      if (item.itemTicket && sourceJobName.includes(item.itemTicket)) return true;
-      if (item.ripJobName && sourceJobName.includes(item.ripJobName)) return true;
-      return false;
-    });
-    if (matchedItem) return { job, item: matchedItem, method: "EXACT_NORMALIZED_FILENAME" };
-    if (job.jobTicket && sourceJobName.includes(job.jobTicket)) return { job, item: null, method: "PROBABLE_METADATA" };
-    if (job.id && sourceJobName.includes(job.id)) return { job, item: null, method: "PROBABLE_METADATA" };
+  if (identity.status !== "matched" || !identity.productionJobId) {
+    return {
+      job: null,
+      item: null,
+      method: identity.status === "ambiguous" ? "AMBIGUOUS" : "UNMATCHED",
+      reasons: identity.reasons,
+      ambiguous: identity.status === "ambiguous",
+    };
   }
-
-  return { job: null, item: null, method: "UNMATCHED" };
+  const job = await db.productionJob.findFirst({ where: { shop, id: identity.productionJobId } });
+  const item = identity.productionJobItemId
+    ? await db.productionJobItem.findFirst({ where: { shop, id: identity.productionJobItemId } })
+    : null;
+  if (!job) return { job: null, item: null, method: "UNMATCHED", reasons: [...identity.reasons, "matched_job_not_found"], ambiguous: false };
+  return { job, item, method: identity.confidence, reasons: identity.reasons, ambiguous: false };
 }
 
 export async function createProductionEvent(shop: string, jobId: string, eventType: string, message: string, data?: { oldValue?: string; newValue?: string }) {
@@ -387,7 +362,9 @@ export async function importPrintLogText({
     // Canceled/error events are retained for audit but never matched as
     // production actuals (no job link, no production event).
     const isCanceledOrError = row.eventClass === "canceled" || row.eventClass === "error";
-    const match = isCanceledOrError ? { job: null, item: null, method: "UNMATCHED" as const } : await findMatchingProductionJob(shop, row);
+    const match = isCanceledOrError
+      ? { job: null, item: null, method: "UNMATCHED", reasons: ["canceled_or_error_event"], ambiguous: false }
+      : await findMatchingProductionJob(shop, row);
     const matchedJob = match.job;
     const matchedItem = match.item;
     const matchedJobId = matchedJob?.id || null;
@@ -399,12 +376,15 @@ export async function importPrintLogText({
     totalInkMl += Number(row.inkMl || 0);
     totalPrintMinutes += Number(row.printMinutes || 0);
 
-    // 15F.0J.4-G: record the match method inside the immutable raw payload.
+    // 15H.2: record method + structured reasons inside the immutable raw
+    // payload; ambiguous rows carry the shared top-level matchFlag so the
+    // review page classifies them and the writeback belt-and-braces blocks.
     let rawRowOut = row.rawRow || null;
     if (rawRowOut) {
       try {
         const parsedRaw = JSON.parse(rawRowOut);
-        parsedRaw._gso = { ...(parsedRaw._gso || {}), matchMethod: (match as any).method || (matchedJobId ? "PROBABLE_METADATA" : "UNMATCHED") };
+        parsedRaw._gso = { ...(parsedRaw._gso || {}), matchMethod: match.method, matchReasons: match.reasons };
+        if (match.ambiguous) parsedRaw.matchFlag = "ambiguous_ticket_needs_review";
         rawRowOut = JSON.stringify(parsedRaw);
       } catch {
         // non-JSON raw rows stay verbatim

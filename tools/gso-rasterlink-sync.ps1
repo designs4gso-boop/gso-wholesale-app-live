@@ -24,7 +24,15 @@ $ErrorActionPreference = "Stop"
 # ---------- config ----------
 
 function Read-SyncConfig([string]$Path) {
-  if (!(Test-Path $Path)) { throw "Config not found: $Path. Copy gso-rasterlink-sync-config.example.json, fill in the token from /app/erp/print-intake, and save as gso-rasterlink-sync-config.json." }
+  # 15H.2-K: both filename conventions exist in the wild — the docs say
+  # "gso-rasterlink-sync-config.json" (dash) while the live machines use
+  # "gso-rasterlink-sync.config.json" (dot). Accept whichever exists so the
+  # watcher never silently fails to start over a naming mismatch.
+  if (!(Test-Path $Path)) {
+    $alternate = if ($Path -match "-config\.json$") { $Path -replace "-config\.json$", ".config.json" } else { $Path -replace "\.config\.json$", "-config.json" }
+    if ($alternate -and (Test-Path $alternate)) { $Path = $alternate }
+  }
+  if (!(Test-Path $Path)) { throw "Config not found: $Path (also tried the -config.json/.config.json alternate). Copy gso-rasterlink-sync-config.example.json, fill in the token from /app/erp/print-intake, and save next to this script." }
   $raw = Get-Content $Path -Raw | ConvertFrom-Json
   $config = @{
     ApiBaseUrl        = [string]$raw.ApiBaseUrl
@@ -38,7 +46,9 @@ function Read-SyncConfig([string]$Path) {
     StableFileSeconds = if ($raw.StableFileSeconds) { [int]$raw.StableFileSeconds } else { 20 }
     MaxRetries        = if ($raw.MaxRetries) { [int]$raw.MaxRetries } else { 4 }
     RetryDelaySeconds = if ($raw.RetryDelaySeconds) { [int]$raw.RetryDelaySeconds } else { 10 }
-    ClaimStaleMinutes = if ($raw.ClaimStaleMinutes) { [int]$raw.ClaimStaleMinutes } else { 30 }
+    # 15H.2-K: the Roland example config shipped with a "ClaimsStaleMinutes"
+    # spelling — accept both so a copied config never silently falls back.
+    ClaimStaleMinutes = if ($raw.ClaimStaleMinutes) { [int]$raw.ClaimStaleMinutes } elseif ($raw.ClaimsStaleMinutes) { [int]$raw.ClaimsStaleMinutes } else { 30 }
   }
   foreach ($key in @("ApiBaseUrl","UploadToken","IncomingFolder","ProcessedFolder","ErrorFolder","LogFolder")) {
     if ([string]::IsNullOrWhiteSpace($config[$key])) { throw "Config missing required value: $key" }

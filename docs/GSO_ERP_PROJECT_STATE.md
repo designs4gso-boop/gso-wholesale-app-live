@@ -2119,3 +2119,24 @@ ticket race resolving to distinct tickets). NO production data changed; NO
 routing/RIP/intake behavior changed; migration NOT applied. Phase 16
 Shopify Store Rebuild roadmap (16A-16I) unchanged. Next: 15H.2 RIP
 Identity Repair.
+
+## Phase 15H.2 — RIP identity repair (2026-08-11)
+The active Mimaki defect is fixed: RasterLink results whose routed names
+carry ITEM tickets now resolve job + item exactly (they previously
+searched only jobTicket and imported silently unmatched with no flag).
+One strict shared matcher (rip-identity-match.server.ts) now backs all
+five ingestion paths with take:2 ambiguity detection, structured
+unmatched/ambiguous reasons in rawRow (surfaced in review), and
+productionJobItemId population. Loose contains/substring/first-match
+linking is deleted from print-logs and the legacy CSV branch; the manual
+RIP Imports UI uses the shared matcher. Actual-cost writeback re-verifies
+every attached row against the job (ticket/name equality or manual
+rematch audit) and blocks anything unverifiable; fallback item
+attributions are never persisted and never launder into exact.
+Historical unmatched audit: 9 rows total, 8 unmatched, 0 recoverable, 0
+ambiguous, 0 laundered — no relinking needed or performed. Watcher config
+defects fixed script-side (filename convention + ClaimStaleMinutes
+spelling; no Scheduled Task or token changes). Machine routing, pricing,
+intake, and ticket allocation untouched. Tests 972 -> 985; tsc 306 -> 304
+(two pre-existing errors cleaned). Phase 16 roadmap unchanged. Next:
+15H.3 Intake Review + Retry.

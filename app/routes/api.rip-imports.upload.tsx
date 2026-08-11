@@ -1,7 +1,6 @@
 import db from "../db.server";
 import {
   RASTERLINK_SOURCE,
-  decideMatch,
   fileHashMarker,
   looksLikeRasterlinkCsv,
   parseRasterlinkRows,
@@ -10,15 +9,15 @@ import {
   rowDedupeWhere,
 } from "../lib/rasterlink-parse.server";
 import {
+  VERSAWORKS_AMBIGUOUS_FLAG,
   VERSAWORKS_SOURCE,
   buildVersaworksRawRow,
-  decideVersaworksMatch,
   looksLikeVersaworksCsv,
   parseVersaworksRows,
-  ripNameJobIdsFor,
   versaworksParseWarningCount,
   versaworksRowDedupeWhere,
 } from "../lib/versaworks-parse.server";
+import { loadRipNameIndex, resolveRipIdentity } from "../lib/rip-identity-match.server";
 import {
   buildJobInfoEnrichment,
   decideJobInfoPairing,
@@ -95,7 +94,7 @@ function inkSplit(row: Record<string, string>) {
 
 function parseRows(text: string, fileName: string, source: string) {
   if (!fileName.toLowerCase().endsWith(".csv")) {
-    return [{ event: `${source} file`, machineName: source, jobName: fileName, mediaName: "", sqft: 0, ...{ inkMl: 0, cmykInkMl: 0, whiteInkMl: 0, glossInkMl: 0 }, jobTicket: extractTicket(fileName, fileName), raw: { fileName } }];
+    return [{ event: `${source} file`, machineName: source, jobName: fileName, mediaName: "", sqft: 0, ...{ inkMl: 0, cmykInkMl: 0, whiteInkMl: 0, glossInkMl: 0 }, jobTicket: extractTicket(fileName, fileName), startedAt: null as Date | null, completedAt: null as Date | null, raw: { fileName } }];
   }
   return parseCsv(text).map((row) => {
     const x = parseNumber(row["Print Area_X[mm]"]);
@@ -197,26 +196,28 @@ export async function action({ request }: { request: Request }) {
     let skippedDuplicates = 0;
     let matchedCount = 0;
     let ambiguousCount = 0;
+    // 15H.2: ONE bounded rip-name index per file + the shared strict resolver
+    // — this closes the silent Mimaki gap where an ITEM ticket in the routed
+    // name (GSO-YYYYMMDD-NNNN-01) was searched only against JOB tickets and
+    // quietly imported unmatched with no flag.
+    const ripNameIndex = await loadRipNameIndex(db, setting.shop);
 
     for (const entry of entries) {
       const existing = await db.printLogEntry.findFirst({ where: rowDedupeWhere(setting.shop, entry) as any });
       if (existing) { skippedDuplicates += 1; continue; }
 
-      let productionJobId: string | undefined;
-      let matchFlag: string | null = null;
-      if (entry.jobTicket) {
-        const jobs = await db.productionJob.findMany({ where: { shop: setting.shop, jobTicket: entry.jobTicket }, select: { id: true }, take: 2 });
-        const decision = decideMatch(jobs);
-        if (decision.productionJobId) { productionJobId = decision.productionJobId; matchedCount += 1; }
-        else if (decision.ambiguous) { ambiguousCount += 1; matchFlag = "ambiguous_ticket_needs_review"; }
-      }
+      const identity = await resolveRipIdentity(db, setting.shop, { jobName: entry.fileName, fileName: file.name }, { ripNameIndex });
+      if (identity.status === "matched") matchedCount += 1;
+      if (identity.status === "ambiguous") ambiguousCount += 1;
+      const matchFlag = identity.status === "ambiguous" ? "ambiguous_ticket_needs_review" : null;
 
       await db.printLogEntry.create({
         data: {
           shop: setting.shop,
           importId: importRecord.id,
-          productionJobId,
-          jobTicket: entry.jobTicket || null,
+          productionJobId: identity.productionJobId || undefined,
+          productionJobItemId: identity.productionJobItemId || undefined,
+          jobTicket: identity.itemTicket || identity.jobTicket || entry.jobTicket || null,
           sourceJobName: entry.fileName,
           printerSoftware: RASTERLINK_SOURCE,
           machineName: "",
@@ -230,7 +231,14 @@ export async function action({ request }: { request: Request }) {
           printMinutes: entry.printMinutes,
           startedAt: entry.startedAt,
           completedAt: entry.completedAt,
-          rawRow: JSON.stringify({ ...entry.raw, resultKey: resultKeyOf(entry), ...(matchFlag ? { matchFlag } : {}) }).slice(0, 12000),
+          rawRow: JSON.stringify({
+            ...entry.raw,
+            resultKey: resultKeyOf(entry),
+            ...(matchFlag ? { matchFlag } : {}),
+            matchMethod: identity.matchMethod,
+            matchReasons: identity.reasons,
+            matchCandidateJobIds: identity.candidateJobIds,
+          }).slice(0, 12000),
         },
       });
       created += 1;
@@ -297,12 +305,10 @@ export async function action({ request }: { request: Request }) {
       },
     });
 
-    // One bounded ripJobName index per file for the exact second-stage key.
-    const ripItems = await db.productionJobItem.findMany({
-      where: { shop: setting.shop, ripJobName: { not: null } },
-      select: { jobId: true, ripJobName: true },
-      take: 300,
-    });
+    // 15H.2: same shared strict resolver as RasterLink (one bounded rip-name
+    // index per file). Roland keeps its exact normalized-name strength and
+    // additionally gains item-ticket resolution + productionJobItemId.
+    const ripNameIndex = await loadRipNameIndex(db, setting.shop);
 
     let created = 0;
     let skippedDuplicates = 0;
@@ -313,22 +319,26 @@ export async function action({ request }: { request: Request }) {
       const existing = await db.printLogEntry.findFirst({ where: versaworksRowDedupeWhere(setting.shop, entry) as any });
       if (existing) { skippedDuplicates += 1; continue; }
 
-      const ticketCandidates = entry.jobTicket
-        ? await db.productionJob.findMany({ where: { shop: setting.shop, jobTicket: entry.jobTicket }, select: { id: true }, take: 5 })
-        : [];
-      const decision = decideVersaworksMatch({
-        ticketCandidates,
-        ripNameJobIds: ticketCandidates.length ? [] : ripNameJobIdsFor(entry.jobName, ripItems),
-      });
-      if (decision.productionJobId) matchedCount += 1;
-      if (decision.matchFlag) ambiguousCount += 1;
+      const identity = await resolveRipIdentity(db, setting.shop, { jobName: entry.jobName, fileName: file.name }, { ripNameIndex });
+      if (identity.status === "matched") matchedCount += 1;
+      if (identity.status === "ambiguous") ambiguousCount += 1;
+      const decision = {
+        productionJobId: identity.productionJobId,
+        matchMethod: identity.matchMethod,
+        matchFlag: identity.status === "ambiguous" ? VERSAWORKS_AMBIGUOUS_FLAG : null,
+        candidateJobIds: identity.candidateJobIds,
+        ticketCandidateCount: identity.matchMethod === "exact_job_ticket" || identity.matchMethod === "exact_item_ticket" ? 1 : 0,
+        ripNameCandidateCount: identity.matchMethod === "exact_rip_job_name" || identity.matchMethod === "exact_stored_filename" ? 1 : 0,
+        matchReasons: identity.reasons,
+      };
 
       await db.printLogEntry.create({
         data: {
           shop: setting.shop,
           importId: importRecord.id,
-          productionJobId: decision.productionJobId || undefined,
-          jobTicket: entry.jobTicket || null,
+          productionJobId: identity.productionJobId || undefined,
+          productionJobItemId: identity.productionJobItemId || undefined,
+          jobTicket: identity.itemTicket || identity.jobTicket || entry.jobTicket || null,
           sourceJobName: entry.jobName,
           printerSoftware: VERSAWORKS_SOURCE,
           machineName: entry.machineName,
@@ -376,16 +386,17 @@ export async function action({ request }: { request: Request }) {
     });
   }
 
+  // 15H.2: the legacy fallback branch uses the SAME strict shared resolver —
+  // the old bare findFirst(jobTicket) first-match-wins linking is gone.
   const rows = parseRows(rawText, file.name, source);
   let matchedCount = 0;
   const importRecord = await db.printLogImport.create({ data: { shop: setting.shop, source, fileName: file.name, rawText: rawText.slice(0, 250000), rowCount: rows.length, totalSqft: rows.reduce((s, r) => s + r.sqft, 0), totalInkMl: rows.reduce((s, r) => s + r.inkMl, 0), status: "auto_imported" } });
+  const legacyRipNameIndex = await loadRipNameIndex(db, setting.shop);
   for (const row of rows) {
-    let productionJobId: string | undefined;
-    if (row.jobTicket) {
-      const job = await db.productionJob.findFirst({ where: { shop: setting.shop, jobTicket: row.jobTicket } });
-      if (job) { productionJobId = job.id; matchedCount += 1; }
-    }
-    await db.printLogEntry.create({ data: { shop: setting.shop, importId: importRecord.id, productionJobId, jobTicket: row.jobTicket || null, sourceJobName: row.jobName, printerSoftware: source, machineName: row.machineName, mediaName: row.mediaName, status: row.event, sqft: row.sqft, inkMl: row.inkMl, cmykInkMl: row.cmykInkMl, whiteInkMl: row.whiteInkMl, glossInkMl: row.glossInkMl, startedAt: row.startedAt || null, completedAt: row.completedAt || null, rawRow: JSON.stringify(row.raw).slice(0, 12000) } });
+    const identity = await resolveRipIdentity(db, setting.shop, { jobName: row.jobName, fileName: file.name }, { ripNameIndex: legacyRipNameIndex });
+    if (identity.status === "matched") matchedCount += 1;
+    const matchFlag = identity.status === "ambiguous" ? "ambiguous_ticket_needs_review" : null;
+    await db.printLogEntry.create({ data: { shop: setting.shop, importId: importRecord.id, productionJobId: identity.productionJobId || undefined, productionJobItemId: identity.productionJobItemId || undefined, jobTicket: identity.itemTicket || identity.jobTicket || row.jobTicket || null, sourceJobName: row.jobName, printerSoftware: source, machineName: row.machineName, mediaName: row.mediaName, status: row.event, sqft: row.sqft, inkMl: row.inkMl, cmykInkMl: row.cmykInkMl, whiteInkMl: row.whiteInkMl, glossInkMl: row.glossInkMl, startedAt: row.startedAt || null, completedAt: row.completedAt || null, rawRow: JSON.stringify({ ...row.raw, ...(matchFlag ? { matchFlag } : {}), matchMethod: identity.matchMethod, matchReasons: identity.reasons }).slice(0, 12000) } });
   }
   await db.printLogImport.update({ where: { id: importRecord.id }, data: { matchedCount, unmatchedCount: Math.max(0, rows.length - matchedCount), status: "processed" } });
   await db.printLogAutoImportSetting.update({ where: { id: setting.id }, data: { lastAutoImportAt: new Date() } });

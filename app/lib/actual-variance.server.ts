@@ -156,7 +156,11 @@ export function matchMethodOf(entry: Pick<VarianceEntryInput, "productionJobItem
     try { return entry.rawRow ? JSON.parse(entry.rawRow) : null; } catch { return null; }
   })();
   if (raw && Array.isArray(raw.rematchAudit) && raw.rematchAudit.length) return "manual_review";
-  if (entry.productionJobItemId) return "item_ticket";
+  // 15H.2-H: a stored item id persisted via the single-item FALLBACK backfill
+  // reports honestly instead of masquerading as an exact item-ticket match.
+  if (entry.productionJobItemId) {
+    return raw?.itemAttributionBackfill?.confidence === "fallback" ? "item_fallback" : "item_ticket";
+  }
   const ticket = String(entry.jobTicket || "").toUpperCase();
   if (ticket && job.items.some((item) => String(item.itemTicket || "").toUpperCase() === ticket)) return "item_ticket";
   if (ticket && ticket === String(job.jobTicket || "").toUpperCase()) return "job_ticket";

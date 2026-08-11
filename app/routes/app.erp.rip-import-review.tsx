@@ -115,7 +115,9 @@ async function computeRipBackfillAudit(shop: string) {
       fills.push("duration");
       counts.durationEligible += 1;
     }
-    if (!entry.productionJobItemId && attribution.productionJobItemId && (attribution.confidence === "exact" || attribution.confidence === "fallback")) {
+    // 15H.2-H: EXACT only — a single-item fallback guess is never persisted
+    // (persisting it used to launder into "exact" on the next pass).
+    if (!entry.productionJobItemId && attribution.productionJobItemId && attribution.confidence === "exact") {
       data.productionJobItemId = attribution.productionJobItemId;
       rawRowNext = appendRawRowBlock(rawRowNext, "itemAttributionBackfill", {
         engine: "13A.7C", method: attribution.method, confidence: attribution.confidence,

@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
+import { loadRipNameIndex, resolveRipIdentity } from "../lib/rip-identity-match.server";
 
 type ParsedRipRow = {
   event: string;
@@ -220,21 +221,19 @@ export async function action({ request }: { request: Request }) {
     },
   });
 
+  // 15H.2: manual uploads use the same strict shared resolver (the old bare
+  // findFirst(jobTicket) first-match-wins linking is gone).
+  const ripNameIndex = await loadRipNameIndex(db, shop);
   for (const row of rows) {
-    let productionJobId: string | undefined;
-    if (row.jobTicket) {
-      const job = await db.productionJob.findFirst({ where: { shop, jobTicket: row.jobTicket } });
-      if (job) {
-        productionJobId = job.id;
-        matchedCount += 1;
-      }
-    }
+    const identity = await resolveRipIdentity(db, shop, { jobName: row.jobName, fileName: fileName || "" }, { ripNameIndex });
+    if (identity.status === "matched") matchedCount += 1;
     await db.printLogEntry.create({
       data: {
         shop,
         importId: importRecord.id,
-        productionJobId,
-        jobTicket: row.jobTicket || null,
+        productionJobId: identity.productionJobId || undefined,
+        productionJobItemId: identity.productionJobItemId || undefined,
+        jobTicket: identity.itemTicket || identity.jobTicket || row.jobTicket || null,
         sourceJobName: row.jobName,
         printerSoftware: source,
         machineName: row.machineName,
@@ -248,7 +247,12 @@ export async function action({ request }: { request: Request }) {
         printMinutes: 0,
         startedAt: parseDate(row.printStartTime || row.ripStartTime),
         completedAt: parseDate(row.printEndTime || row.ripEndTime),
-        rawRow: JSON.stringify(row.raw).slice(0, 12000),
+        rawRow: JSON.stringify({
+          ...row.raw,
+          ...(identity.status === "ambiguous" ? { matchFlag: "ambiguous_ticket_needs_review" } : {}),
+          matchMethod: identity.matchMethod,
+          matchReasons: identity.reasons,
+        }).slice(0, 12000),
       },
     });
   }

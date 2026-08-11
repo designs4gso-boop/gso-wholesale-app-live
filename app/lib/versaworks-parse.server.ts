@@ -232,11 +232,15 @@ export function normalizeJobName(value: string | null | undefined): string {
 
 export type VersaworksMatchDecision = {
   productionJobId: string | null;
-  matchMethod: "ticket_exact" | "rip_job_name_exact" | null;
+  // 15H.2: widened — the shared strict resolver supplies its canonical
+  // confidence names (exact_item_ticket / exact_rip_job_name / ...) while the
+  // legacy pure decider keeps emitting ticket_exact / rip_job_name_exact.
+  matchMethod: string | null;
   matchFlag: string | null;
   candidateJobIds: string[];
   ticketCandidateCount: number;
   ripNameCandidateCount: number;
+  matchReasons?: string[];
 };
 
 // Two-stage, exact-only decision:
@@ -318,10 +322,18 @@ export function buildVersaworksRawRow(entry: VersaworksEntry, decision: Versawor
       calibrationEligible: quality.calibrationEligible,
       actualCostEligible: quality.actualCostEligible,
       exclusionReason: quality.exclusionReason,
-      matchMethod: decision.matchMethod === "ticket_exact" ? "EXACT_TICKET" : decision.matchMethod === "rip_job_name_exact" ? "EXACT_NORMALIZED_FILENAME" : decision.matchFlag ? "PROBABLE_METADATA" : "UNMATCHED",
+      matchMethod:
+        decision.matchMethod === "ticket_exact" || decision.matchMethod === "exact_job_ticket" || decision.matchMethod === "exact_item_ticket"
+          ? "EXACT_TICKET"
+          : decision.matchMethod === "rip_job_name_exact" || decision.matchMethod === "exact_rip_job_name" || decision.matchMethod === "exact_stored_filename"
+            ? "EXACT_NORMALIZED_FILENAME"
+            : decision.matchFlag
+              ? "PROBABLE_METADATA"
+              : "UNMATCHED",
     },
     matchMeta: {
       matchMethod: decision.matchMethod,
+      matchReasons: decision.matchReasons || [],
       normalizedTicket: entry.jobTicket || null,
       normalizedJobName: normalizeJobName(entry.jobName) || null,
       ticketCandidateCount: decision.ticketCandidateCount,

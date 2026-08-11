@@ -129,3 +129,43 @@ admin_graphql_api_id/id FAILS CLOSED (no unidempotent job can ever mint).
 
 NEXT: 15H.2 — RIP Identity Repair (RasterLink item-ticket stage-2 matching,
 matcher unification, loose-path quarantine, unmatched flagging).
+
+## 15H.2 IMPLEMENTED (2026-08-11) — strict RIP identity matching
+ONE shared matcher (app/lib/rip-identity-match.server.ts) now serves every
+result-ingestion path: RasterLink, VersaWorks, the legacy CSV fallback,
+print-log uploads, and the manual RIP Imports UI. Deterministic order:
+exact ProductionJobItem.itemTicket -> exact ripJobName (raw, then
+normalized equality over a bounded newest-300 index) -> exact
+ProductionJob.jobTicket (explicit or derived from an unknown item ticket)
+-> exact stored suggestedFileName. Every lookup is take:2/ambiguity-aware;
+two-plus candidates NEVER auto-attach (status ambiguous + shared
+matchFlag). Canonical tickets are lifted exactly from decorated names
+(bare, .pdf, TICKET_Customer, TICKET__MACHINE__MODE__X__A1). THE MIMAKI
+FIX: item-ticket routed names (GSO-YYYYMMDD-NNNN-01) previously searched
+only ProductionJob.jobTicket and imported silently unmatched — they now
+resolve the ITEM first and populate productionJobItemId on all paths.
+Roland kept its normalized-name strength (applied everywhere now) and
+gained item resolution. Loose matching is GONE from automatic linking:
+print-logs' contains/substring/first-match tiers (which mislabeled
+themselves as exact) are deleted; suggestions live only in the review
+page's candidate ranking behind an explicit operator click.
+
+Structured reasons ride the immutable rawRow (top-level matchReasons /
+matchMeta.matchReasons / _gso.matchReasons): unknown_item_ticket:<T>,
+unknown_job_ticket:<T>, ambiguous_*:<T>, no_ticket_identity,
+noncanonical_ticket_identity:<token> — surfaced in RIP Import Review via
+entryWarnings. ACTUALS POLICY: only exact_item_ticket / exact_rip_job_name
+/ exact_job_ticket / exact_stored_filename / manual_owner_assignment (and
+the legitimate legacy EXACT_* capture methods) may authorize actual-cost
+writeback; writeback additionally RE-VERIFIES every attached row's
+identity against the job itself (assessEntryIdentityTrust) instead of
+believing stored labels, and blocks untrusted rows with a rematch
+instruction. NO-LAUNDERING: single_item_fallback attributions are no
+longer persisted by backfill (exact only), and a historically persisted
+fallback id keeps reporting fallback (provenance block read back) — saving
+a weak match can never upgrade it. Historical audit (read-only): 9
+PrintLogEntry rows, 8 unmatched, 0 recoverable (7 no-ticket, 1 unknown
+ticket), 0 ambiguous, 0 laundered — nothing to relink; the repair protects
+FUTURE imports. Watcher fixes: the sync script accepts both
+-config.json/.config.json filenames and both ClaimStaleMinutes spellings.
+NEXT: 15H.3 — Intake Review + Retry.

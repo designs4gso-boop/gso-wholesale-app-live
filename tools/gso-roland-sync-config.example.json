@@ -11,5 +11,5 @@
   "StableFileSeconds": 20,
   "MaxRetries": 4,
   "RetryDelaySeconds": 10,
-  "ClaimsStaleMinutes": 30
+  "ClaimStaleMinutes": 30
 }

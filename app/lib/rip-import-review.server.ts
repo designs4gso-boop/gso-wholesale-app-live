@@ -91,7 +91,46 @@ export function entryWarnings(entry: Pick<ReviewEntryInput, "jobTicket" | "rawRo
     if (gso.eventClass === "error") warnings.push("ERROR event — retained for audit, never a production actual.");
     if (typeof gso.matchMethod === "string" && gso.matchMethod === "PROBABLE_METADATA") warnings.push("PROBABLE match — review-only; cannot feed finalized actuals without manual approval.");
   }
+  // 15H.2-G: structured why-not-attached reasons from the shared strict
+  // matcher (top-level for RasterLink/legacy/manual imports, matchMeta for
+  // VersaWorks, _gso for print-log uploads).
+  for (const reason of matchReasonsOf(entry)) {
+    warnings.push(`Match: ${describeMatchReason(reason)}`);
+  }
   return warnings;
+}
+
+// Extracts the shared matcher's structured reasons wherever the import path
+// stored them. Display-only.
+export function matchReasonsOf(entry: Pick<ReviewEntryInput, "rawRow">): string[] {
+  const raw = parseRawRow(entry.rawRow);
+  if (!raw) return [];
+  const buckets = [
+    raw.matchReasons,
+    raw.matchMeta && typeof raw.matchMeta === "object" ? (raw.matchMeta as Record<string, unknown>).matchReasons : null,
+    raw._gso && typeof raw._gso === "object" ? (raw._gso as Record<string, unknown>).matchReasons : null,
+  ];
+  const reasons: string[] = [];
+  for (const bucket of buckets) {
+    if (Array.isArray(bucket)) for (const reason of bucket) if (typeof reason === "string" && reason && !reasons.includes(reason)) reasons.push(reason);
+  }
+  return reasons;
+}
+
+export function describeMatchReason(reason: string): string {
+  const [code, value] = reason.split(":", 2);
+  switch (code) {
+    case "unknown_item_ticket": return `item ticket ${value} is not on any production item.`;
+    case "unknown_job_ticket": return `job ticket ${value} is not on any production job.`;
+    case "ambiguous_item_ticket": return `item ticket ${value} matches MULTIPLE items — pick manually.`;
+    case "ambiguous_job_ticket": return `job ticket ${value} matches MULTIPLE jobs — pick manually.`;
+    case "ambiguous_rip_job_name": return `RIP name matches MULTIPLE items — pick manually.`;
+    case "ambiguous_stored_filename": return `stored filename matches MULTIPLE items — pick manually.`;
+    case "no_ticket_identity": return "no GSO ticket in the RIP name.";
+    case "noncanonical_ticket_identity": return `"${value}" is GSO-prefixed but not a canonical ticket.`;
+    case "canceled_or_error_event": return "canceled/error event — never matched as a production actual.";
+    default: return reason;
+  }
 }
 
 // Timing details for display, covering both stored formats: RasterLink rows
