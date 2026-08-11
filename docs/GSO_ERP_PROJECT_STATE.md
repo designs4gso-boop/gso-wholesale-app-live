@@ -2140,3 +2140,26 @@ spelling; no Scheduled Task or token changes). Machine routing, pricing,
 intake, and ticket allocation untouched. Tests 972 -> 985; tsc 306 -> 304
 (two pre-existing errors cleaned). Phase 16 roadmap unchanged. Next:
 15H.3 Intake Review + Retry.
+
+## Phase 15H.3 — intake review + retry (2026-08-11)
+Server-authoritative intake dispositions: PrintIntake.status now carries
+routed/review/failed/retry_allowed/assigned/rejected; the agent ledger is
+a CACHE reconciled through the new token-authenticated
+/api/print-intake/status endpoint (fail-closed offline; routed entries
+stay pure local skips; unknown ledgered hashes auto-surface as
+legacy_ledger_blocked review rows). The /app/erp/print-intake page gained
+the review queue with RELEASE/RETRY, ASSIGN (exact job/item, validated,
+finalized/completed refuse), and confirmation-gated REJECT — all audited
+in rawParsedHints JSON + ProductionJobEvent; files are never deleted or
+moved by the server. Matched-row reuse fixed (both job pointers honored —
+no duplicate jobs per hash). Agent bumped to 1.6. THE THREE BLOCKED FILES
+(BUTTAWAY_bently_ROLAND.pdf -> Roland/CMYK, GSO PIPELINE TEST_3X SPOT
+GLOSS_Roland.pdf -> Roland/GLOSS-3X, GSO PIPELINE TEST 2_1X SPOT
+GLOSS_Roland.pdf -> Roland/GLOSS-1X — classifications pinned by test):
+after deploy + agent restart they self-surface in the queue on the next
+agent pass; owner clicks Release/Retry; the agent re-plans and current
+auto-create logic tickets and routes them. No routing/pricing/RIP/ticket
+changes; no schema change; no real files routed during tests. Tests 985
+-> 996; tsc stays 304. Phase 16 roadmap unchanged. Next: 15H.4
+Order/Manual Convergence (paid-order _GSO Canonical consumption, orderGid
+linkage, manual job UI, merge/link action).

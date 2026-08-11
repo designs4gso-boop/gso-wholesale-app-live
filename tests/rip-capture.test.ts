@@ -204,7 +204,7 @@ describe("import + review integration (15F.0J.4)", () => {
     // the eligible-files scan never recurses (self-test recursion for claim checks is separate)
     expect(agent).not.toContain("Get-ChildItem -Path $Config.PrintsForTodayFolder -File -Recurse");
     expect(agent).toContain("NON-RECURSIVE inbox");
-    expect(agent).toContain("gso-print-intake-agent/1.5"); // 15F.0J.5 supersedes 1.4; non-recursive scan retained below
+    expect(agent).toContain("gso-print-intake-agent/1.6"); // 15H.3 version bump // 15F.0J.5 supersedes 1.4; non-recursive scan retained below
     // unchanged behaviors: content-ledger dedupe, archive move, routing plan call
     expect(agent).toContain("ledger_skip");
     expect(agent).toContain("original_archived");

@@ -169,3 +169,47 @@ ticket), 0 ambiguous, 0 laundered — nothing to relink; the repair protects
 FUTURE imports. Watcher fixes: the sync script accepts both
 -config.json/.config.json filenames and both ClaimStaleMinutes spellings.
 NEXT: 15H.3 — Intake Review + Retry.
+
+## 15H.3 IMPLEMENTED (2026-08-11) — intake review + retry
+The PrintIntake row is now the AUTHORITATIVE disposition for every intake
+hash; the agent's JSONL ledger is a cache. Status vocabulary (existing
+column, no schema change): routed | review | failed | retry_allowed |
+assigned | rejected. Agent-facing dispositions via POST
+/api/print-intake/status (same upload token, batch<=50, minimal payload):
+keep_blocked / retry_allowed / already_routed / rejected / assigned — and a
+ledgered hash the server never saw gets a durable review row
+(legacy_ledger_blocked) automatically, which is how pre-15F.0J.5 ledger
+debt surfaces in the ERP without hand-editing JSONL. Agent 1.6: routed/
+duplicate ledger entries stay pure local skips (no per-pass server calls);
+needs_review/rejected entries reconcile against the ERP each pass and FAIL
+CLOSED offline; dry-run never reconciles (no server writes).
+
+ERP review queue (/app/erp/print-intake): filename, sha8, printer/mode,
+status, human reason, ticket/linkage, timestamps; actions RELEASE/RETRY
+(idempotent, audit-logged, no job creation, no file moves), ASSIGN (exact
+owner selection; shop-scoped; active+non-finalized jobs only; multi-item
+requires the item; completed/finalized jobs refuse with a reprint/reopen
+instruction), REJECT (confirmation-gated; agent stops retrying; the file
+is NEVER deleted — it stays in Prints For Today until the owner moves it).
+Audit entries append inside rawParsedHints JSON (cap 30) plus
+ProductionJobEvent when a job is involved. Reason codes:
+conflicting_tickets, unknown_ticket, ticket_folder_mismatch,
+ticket_on_closed_job, ambiguous_candidates, unsupported_file_type,
+printer_token_conflict, premium_mode_mimaki_contradiction,
+unknown_production_requirements, ticket_allocation_failed,
+hot_folder_unreachable, copy_verify_failed, legacy_ledger_blocked,
+manual_review, rejected_by_owner.
+
+Route-plan: rejected hashes short-circuit (never re-plan); assigned/
+released hashes with an owner-assigned job route deterministically to that
+exact job/item — machine rules stay authoritative (decideMachine on the
+assigned item; contradictions still review); every review outcome upserts
+the durable review row; auto-create failures record ticket_allocation_
+failed. Report endpoint mirrors agent outcomes into the row (routed /
+review / failed) without ever downgrading routed/rejected. REUSE FIX
+(15H.0-K): createOrReusePrintIntakeJob honors BOTH generatedProductionJobId
+AND matchedProductionJobId — a hash with any existing identity can never
+mint a second ProductionJob. Transport failures (hot folder unreachable,
+copy verify, stale claims, API timeouts) keep their existing
+retry-in-place behavior and now also carry visible review rows.
+NEXT: 15H.4 — Order/Manual Convergence.

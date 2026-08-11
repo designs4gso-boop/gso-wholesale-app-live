@@ -26,7 +26,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.5 (15F.0J.5 auto job creation)"
+$ScriptVersion = "gso-print-intake-agent/1.6 (15H.3 review reconciliation)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -55,6 +55,9 @@ function Read-IntakeConfig([string]$Path) {
   }
   $config.PlanUrl = ($config.ApiBaseUrl.TrimEnd('/')) + "/api/print-intake/route-plan"
   $config.ReportUrl = ($config.ApiBaseUrl.TrimEnd('/')) + "/api/print-intake/report"
+  # 15H.3: server-authoritative disposition endpoint - the local ledger is a
+  # cache; blocked hashes ask the ERP before being skipped.
+  $config.StatusUrl = ($config.ApiBaseUrl.TrimEnd('/')) + "/api/print-intake/status"
   # Go-live cutoff (13A.6G): parsed ONCE at config load; an invalid value must
   # fail loudly here - a silently ignored typo would process every historical
   # file in Prints For Today on first start.
@@ -173,6 +176,17 @@ function Invoke-IntakeJsonPost($Config, [string]$Url, [hashtable]$Payload, [int]
   } finally {
     $client.Dispose()
   }
+}
+
+# 15H.3: ask the ERP what the CURRENT disposition is for a ledger-blocked
+# hash. Returns the result object or $null when the server is unreachable /
+# the response is unusable (callers FAIL CLOSED and keep the file untouched).
+function Get-IntakeDisposition($Config, [string]$Hash, [string]$FileName) {
+  $result = Invoke-IntakeJsonPost $Config $Config.StatusUrl @{ token = $Config.UploadToken; hash = $Hash; fileName = $FileName } 30
+  if ($result.exception -or $result.status -ne 200 -or -not $result.json -or -not $result.json.ok) { return $null }
+  $rows = @($result.json.results)
+  if (-not $rows -or $rows.Count -lt 1) { return $null }
+  return $rows[0]
 }
 
 function Get-RoutePlan($Config, [string]$FileName, [string]$Subfolder, [string]$FileHash, [long]$FileSize) {
@@ -297,12 +311,43 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
     $sha8 = $hash.Substring(0, 8)
 
     if ($Ledger.ContainsKey($hash)) {
-      # Restart-safe dedupe: this exact content was already handled. Routed
-      # content is never copied to a hot folder twice; unresolved content is
-      # not re-reported (the plan is re-checked only after the ledger is
-      # cleared or the file content changes).
-      Write-IntakeLog $Config "ledger_skip" $File.Name "already handled as $($Ledger[$hash]) (sha8=$sha8)"
-      return
+      $ledgerDecision = [string]$Ledger[$hash]
+      if ($ledgerDecision -eq "routed" -or $ledgerDecision -eq "duplicate") {
+        # Successfully handled content stays a pure LOCAL skip - no server
+        # call per pass (performance/restart safety unchanged).
+        Write-IntakeLog $Config "ledger_skip" $File.Name "already handled as $ledgerDecision (sha8=$sha8)"
+        return
+      }
+      # 15H.3: needs_review/rejected ledger entries are a CACHE - the ERP is
+      # the truth. Ask the server for the current disposition; fail closed
+      # (skip, file untouched) when it cannot answer.
+      if ($DryRun) {
+        Write-IntakeLog $Config "dry_run" $File.Name "ledger says $ledgerDecision; disposition reconciliation skipped in dry run (sha8=$sha8)"
+        return
+      }
+      $disposition = Get-IntakeDisposition $Config $hash $File.Name
+      if (-not $disposition) {
+        Write-IntakeLog $Config "disposition_unreachable" $File.Name "server unavailable - keeping $ledgerDecision skip (sha8=$sha8)"
+        return
+      }
+      $dispo = [string]$disposition.disposition
+      if ($disposition.retryAllowed) {
+        Write-IntakeLog $Config "disposition_retry" $File.Name "server says $dispo - re-planning (sha8=$sha8)"
+        # fall through to the normal plan/route pipeline below
+      } elseif ($dispo -eq "already_routed") {
+        Write-IntakeLog $Config "disposition_synced" $File.Name "server says already_routed - updating ledger cache (sha8=$sha8)"
+        Add-IntakeLedgerEntry $Config $hash $File.Name "routed"
+        $Ledger[$hash] = "routed"
+        return
+      } elseif ($dispo -eq "rejected") {
+        Write-IntakeLog $Config "disposition_synced" $File.Name "server says rejected - updating ledger cache (sha8=$sha8)"
+        Add-IntakeLedgerEntry $Config $hash $File.Name "rejected"
+        $Ledger[$hash] = "rejected"
+        return
+      } else {
+        Write-IntakeLog $Config "ledger_skip" $File.Name "server says $dispo - still blocked (sha8=$sha8)"
+        return
+      }
     }
 
     $subfolder = ""

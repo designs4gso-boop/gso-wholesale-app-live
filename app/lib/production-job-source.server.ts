@@ -728,11 +728,19 @@ export async function createOrReusePrintIntakeJob(dbClient: any, input: PrintInt
   const shop = input.shop;
   const fileHash = String(input.fileHash || "").toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(fileHash)) throw new Error("createOrReusePrintIntakeJob requires a full SHA-256 hash.");
+  // 15H.3-K: reuse honors BOTH pointer types. A row created by the MATCHED
+  // branch stores matchedProductionJobId (no generated pointer) — if that
+  // job later deactivates and the file re-plans, the original linkage wins;
+  // a second job is NEVER created for a hash that already has an identity.
+  const reuseIdentity = (row: any) => {
+    const jobId = row?.generatedProductionJobId || row?.matchedProductionJobId;
+    if (!row || !jobId || !row.authoritativeTicket) return null;
+    return { created: false, printIntakeId: row.id, productionJobId: jobId, jobTicket: row.authoritativeTicket, ripName: row.routedFilename || row.authoritativeTicket };
+  };
   // Fast path outside the transaction (same result the lock would produce).
   const existing = await dbClient.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
-  if (existing && existing.generatedProductionJobId && existing.authoritativeTicket) {
-    return { created: false, printIntakeId: existing.id, productionJobId: existing.generatedProductionJobId, jobTicket: existing.authoritativeTicket, ripName: existing.routedFilename || existing.authoritativeTicket };
-  }
+  const existingIdentity = reuseIdentity(existing);
+  if (existingIdentity) return existingIdentity;
   const cleanedName = String(input.fileName || "").slice(0, 200);
   const warnings = input.reviewWarnings && input.reviewWarnings.length
     ? input.reviewWarnings
@@ -746,9 +754,8 @@ export async function createOrReusePrintIntakeJob(dbClient: any, input: PrintInt
       // the same hash serialize here (15D.1 advisory-lock strategy).
       await acquireSourceLock(tx, shop, "print_intake", fileHash);
       const inside = await tx.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
-      if (inside && inside.generatedProductionJobId && inside.authoritativeTicket) {
-        return { created: false, printIntakeId: inside.id, productionJobId: inside.generatedProductionJobId, jobTicket: inside.authoritativeTicket, ripName: inside.routedFilename || inside.authoritativeTicket };
-      }
+      const insideIdentity = reuseIdentity(inside);
+      if (insideIdentity) return insideIdentity;
       const jobTicket = await buildNextJobTicket(tx, shop);
       const ripName = buildIntakeRipNameLocal(jobTicket, input.machine, input.mode, cleanedName);
       // 15F.0J.5A: ProductionJob has NO `source` column — PrintIntake is the
@@ -828,9 +835,8 @@ export async function createOrReusePrintIntakeJob(dbClient: any, input: PrintInt
     // hash lookup anyway.
     if (String(error?.code) === "P2002" && !isTicketUniqueViolation(error)) {
       const winner = await dbClient.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
-      if (winner && winner.generatedProductionJobId && winner.authoritativeTicket) {
-        return { created: false, printIntakeId: winner.id, productionJobId: winner.generatedProductionJobId, jobTicket: winner.authoritativeTicket, ripName: winner.routedFilename || winner.authoritativeTicket };
-      }
+      const winnerIdentity = reuseIdentity(winner);
+      if (winnerIdentity) return winnerIdentity;
     }
     throw error;
   }

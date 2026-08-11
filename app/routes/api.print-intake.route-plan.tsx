@@ -2,12 +2,15 @@ import db from "../db.server";
 import {
   basenameOf,
   decideIntakeRoute,
+  decideMachine,
   decideMachineFromFilename,
   eligibleJobsWhere,
   parseFilenamePrintHints,
+  ripFileBaseName,
   type IntakeJob,
 } from "../lib/print-intake-routing.server";
 import { createOrReusePrintIntakeJob } from "../lib/production-job-source.server";
+import { appendIntakeAudit, canonicalReviewReason, readIntakeMeta } from "../lib/print-intake-review.server";
 
 // Print Intake plan endpoint. 13A.6G behavior preserved for MATCHED files
 // (deterministic hierarchy, machine key only, no local paths). 15F.0J.5:
@@ -38,6 +41,80 @@ export async function action({ request }: { request: Request }) {
   const fileName = basenameOf(String(body.fileName || "").trim());
   if (!fileName) return json({ ok: false, error: "Missing fileName." }, 400);
   const subfolder = basenameOf(String(body.subfolder || "").trim());
+  const fileHashEarly = String(body.fileHash || "").trim().toLowerCase();
+  const hasFullHashEarly = /^[0-9a-f]{64}$/.test(fileHashEarly);
+
+  // 15H.3: server-authoritative disposition FIRST. A rejected hash never
+  // re-plans; an owner-assigned hash routes deterministically to the exact
+  // assigned job/item (never fuzzy, machine rules still authoritative).
+  const existingIntake = hasFullHashEarly
+    ? await db.printIntake.findUnique({ where: { shop_fileHashSha256: { shop: setting.shop, fileHashSha256: fileHashEarly } } })
+    : null;
+  if (existingIntake?.status === "rejected") {
+    return json({ ok: true, fileName, plan: { decision: "review", rule: null, reasons: ["rejected_by_owner"], candidates: [], autoCreated: false, rejected: true } });
+  }
+  if (existingIntake && existingIntake.matchedProductionJobId && (existingIntake.status === "assigned" || existingIntake.status === "retry_allowed")) {
+    const assignedJob = await db.productionJob.findFirst({
+      where: { id: existingIntake.matchedProductionJobId, shop: setting.shop, active: true },
+      select: {
+        id: true, jobTicket: true, status: true,
+        items: { select: { id: true, itemTicket: true, ripJobName: true, suggestedFileName: true, productTitle: true, selectedFinish: true, materialSummary: true, machineSummary: true } },
+      },
+    });
+    const meta = readIntakeMeta(existingIntake.rawParsedHints);
+    const assignedItem = assignedJob
+      ? assignedJob.items.find((item) => item.id === meta.assignedItemId)
+        || assignedJob.items.find((item) => item.itemTicket && item.itemTicket === existingIntake.authoritativeTicket)
+        || (assignedJob.items.length === 1 ? assignedJob.items[0] : null)
+      : null;
+    if (!assignedJob || !assignedItem) {
+      await db.printIntake.update({
+        where: { id: existingIntake.id },
+        data: {
+          status: "review",
+          reviewReason: assignedJob ? "ambiguous_candidates" : "unknown_ticket",
+          rawParsedHints: appendIntakeAudit(existingIntake.rawParsedHints, { at: new Date().toISOString(), actor: "route-plan", action: "assignment_unresolvable", reason: assignedJob ? "item_unresolved" : "job_missing_or_inactive" }),
+        },
+      });
+      return json({ ok: true, fileName, plan: { decision: "review", rule: null, reasons: [assignedJob ? "assigned_item_unresolved" : "assigned_job_missing_or_inactive"], candidates: [], autoCreated: false } });
+    }
+    const machineDecision = decideMachine(assignedItem as any, fileName);
+    if (!machineDecision.machine) {
+      return json({ ok: true, fileName, plan: { decision: "review", rule: null, reasons: ["assigned_but_machine_unresolved", ...machineDecision.reasons], candidates: [], autoCreated: false } });
+    }
+    const ripName = ripFileBaseName(assignedItem as any) || String(existingIntake.authoritativeTicket || assignedJob.jobTicket || "");
+    await db.printIntake.update({
+      where: { id: existingIntake.id },
+      data: {
+        status: "routed",
+        printer: machineDecision.machine,
+        routingRule: "assigned_by_owner",
+        routedFilename: ripName,
+        authoritativeTicket: assignedItem.itemTicket || assignedJob.jobTicket,
+        rawParsedHints: appendIntakeAudit(existingIntake.rawParsedHints, { at: new Date().toISOString(), actor: "route-plan", action: "routed_via_owner_assignment" }),
+      },
+    });
+    return json({
+      ok: true,
+      fileName,
+      plan: {
+        decision: "route",
+        rule: "assigned_by_owner",
+        jobId: assignedJob.id,
+        itemId: assignedItem.id,
+        jobTicket: assignedJob.jobTicket,
+        itemTicket: assignedItem.itemTicket,
+        ripName,
+        machine: machineDecision.machine,
+        machineRule: machineDecision.machineRule,
+        reasons: ["owner_assignment", ...machineDecision.reasons],
+        candidates: [],
+        autoCreated: false,
+        matchedExisting: true,
+        printIntakeId: existingIntake.id,
+      },
+    });
+  }
 
   const jobs = await db.productionJob.findMany({
     where: eligibleJobsWhere(setting.shop),
@@ -69,9 +146,44 @@ export async function action({ request }: { request: Request }) {
   }));
 
   const plan = decideIntakeRoute({ fileName, subfolder, jobs: intakeJobs });
-  const fileHash = String(body.fileHash || "").trim().toLowerCase();
+  const fileHash = fileHashEarly;
   const fileSize = Math.max(0, Math.floor(Number(body.fileSize || 0)));
-  const hasFullHash = /^[0-9a-f]{64}$/.test(fileHash);
+  const hasFullHash = hasFullHashEarly;
+
+  // 15H.3-C: every review outcome with a full hash gets a DURABLE server-side
+  // review object (idempotent on shop+hash) so the ERP queue and the agent's
+  // disposition checks have authoritative truth. Never downgrades a routed row.
+  const reviewShop = setting.shop;
+  async function recordReviewRow(reasons: string[], extraAudit?: string) {
+    if (!hasFullHash) return;
+    const reasonCode = canonicalReviewReason(reasons);
+    try {
+      const current = await db.printIntake.findUnique({ where: { shop_fileHashSha256: { shop: reviewShop, fileHashSha256: fileHash } } });
+      if (current?.status === "routed" || current?.status === "rejected") return;
+      const audit = { at: new Date().toISOString(), actor: "route-plan", action: extraAudit || "plan_reviewed", reason: reasonCode };
+      if (current) {
+        await db.printIntake.update({
+          where: { id: current.id },
+          data: { status: "review", reviewReason: reasonCode, rawParsedHints: appendIntakeAudit(current.rawParsedHints, audit) },
+        });
+      } else {
+        await db.printIntake.create({
+          data: {
+            shop: reviewShop,
+            originalFilename: fileName,
+            originalSubfolder: subfolder || null,
+            fileHashSha256: fileHash,
+            fileSize,
+            status: "review",
+            reviewReason: reasonCode,
+            rawParsedHints: appendIntakeAudit(JSON.stringify({ planReasons: reasons.slice(0, 10) }), audit),
+          },
+        });
+      }
+    } catch {
+      // review-row recording must never break the plan response
+    }
+  }
 
   // Matched existing job: record/refresh the PrintIntake linkage (best-effort;
   // the plan itself is unchanged 13A.6G behavior).
@@ -111,7 +223,9 @@ export async function action({ request }: { request: Request }) {
   if ((isUnmatched || isAmbiguousCandidates) && hasFullHash) {
     const machineDecision = decideMachineFromFilename(fileName);
     if (!machineDecision.machine) {
-      return json({ ok: true, fileName, plan: { ...plan, reasons: [...plan.reasons, ...machineDecision.reasons], autoCreated: false } });
+      const reviewReasons = [...plan.reasons, ...machineDecision.reasons];
+      await recordReviewRow(reviewReasons);
+      return json({ ok: true, fileName, plan: { ...plan, reasons: reviewReasons, autoCreated: false } });
     }
     const hints = parseFilenamePrintHints(fileName);
     const linkageWarnings = [
@@ -167,9 +281,11 @@ export async function action({ request }: { request: Request }) {
               ? "unique_conflict_recovered"
               : "production_job_create_failed";
       const safeMessage = message.replace(/postgres(ql)?:\/\/\S+/gi, "[redacted-connection]").slice(0, 200);
+      await recordReviewRow([`${code}: ${safeMessage}`], "auto_create_failed");
       return json({ ok: true, fileName, plan: { ...plan, reasons: [...plan.reasons, `${code}: ${safeMessage}`], errorCode: code, autoCreated: false } });
     }
   }
+  if (plan.decision === "review") await recordReviewRow(plan.reasons);
   return json({ ok: true, fileName, plan: { ...plan, autoCreated: false } });
 }
 

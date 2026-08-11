@@ -5,6 +5,7 @@ import {
   encodeIntakeOutcomes,
   type IntakeOutcome,
 } from "../lib/print-intake-routing.server";
+import { appendIntakeAudit, canonicalReviewReason } from "../lib/print-intake-review.server";
 
 // Print Intake outcome recorder (13A.6G): the ONLY mutation in the intake
 // flow, and it is narrow by construction — it appends one outcome record to
@@ -96,6 +97,41 @@ export async function action({ request }: { request: Request }) {
     );
   }
   await db.$transaction(writes);
+
+  // 15H.3: keep the authoritative PrintIntake disposition in sync with what
+  // the AGENT actually did (best-effort; never blocks outcome recording).
+  const fullHash = String(outcome.fileHash || "").toLowerCase();
+  if (/^[0-9a-f]{64}$/.test(fullHash)) {
+    try {
+      const row = await db.printIntake.findUnique({ where: { shop_fileHashSha256: { shop: setting.shop, fileHashSha256: fullHash } } });
+      const audit = { at: new Date().toISOString(), actor: "print-intake-agent", action: `reported_${decision}`, reason: outcome.reason || null };
+      if (decision === "routed" && row && row.status !== "routed") {
+        await db.printIntake.update({ where: { id: row.id }, data: { status: "routed", rawParsedHints: appendIntakeAudit(row.rawParsedHints, audit) } });
+      } else if ((decision === "needs_review" || decision === "failed") && row?.status !== "routed" && row?.status !== "rejected") {
+        const reasonCode = canonicalReviewReason([outcome.reason || "", outcome.rule || ""]);
+        const nextStatus = decision === "failed" ? "failed" : "review";
+        if (row) {
+          await db.printIntake.update({ where: { id: row.id }, data: { status: nextStatus, reviewReason: reasonCode, rawParsedHints: appendIntakeAudit(row.rawParsedHints, audit) } });
+        } else {
+          await db.printIntake.create({
+            data: {
+              shop: setting.shop,
+              originalFilename: fileName,
+              fileHashSha256: fullHash,
+              status: nextStatus,
+              reviewReason: reasonCode,
+              printer: outcome.machine || null,
+              routedFilename: outcome.ripName || null,
+              authoritativeTicket: outcome.itemTicket || outcome.jobTicket || null,
+              rawParsedHints: appendIntakeAudit(null, audit),
+            },
+          });
+        }
+      }
+    } catch {
+      // disposition sync must never break outcome recording
+    }
+  }
   return json({ ok: true, recorded: true });
 }
 

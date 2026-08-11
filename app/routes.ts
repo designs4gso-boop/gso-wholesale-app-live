@@ -67,6 +67,7 @@ export default [
   route("api/rip-imports/upload", "routes/api.rip-imports.upload.tsx"),
   route("api/print-intake/route-plan", "routes/api.print-intake.route-plan.tsx"),
   route("api/print-intake/report", "routes/api.print-intake.report.tsx"),
+  route("api/print-intake/status", "routes/api.print-intake.status.tsx"),
   route("api/quote-rip-results/sync", "routes/api.quote-rip-results.sync.tsx"),
   route("api/agent/intake", "routes/api.agent.intake.tsx"),
 
