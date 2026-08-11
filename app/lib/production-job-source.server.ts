@@ -108,7 +108,14 @@ function firstImageFromQuoteItem(item: any) {
   );
 }
 
-async function buildNextJobTicket(tx: any, shop: string, now = new Date()) {
+// 15H.1: THE authoritative job-ticket allocator (exported for the backfill
+// action — no other generator may exist). Canonical format GSO-YYYYMMDD-NNNN.
+// The old exhaustion fallback minted a NON-CANONICAL 6-digit epoch tail that
+// no ticket parser matches — 15H.1 removes it: allocation now FAILS CLOSED
+// (loud error) rather than ever returning an unsafe identity. The DB unique
+// index (shop, jobTicket) is the final authority behind this probe loop —
+// see runWithTicketRetry for the P2002 path.
+export async function allocateJobTicket(tx: any, shop: string, now = new Date()) {
   const stamp = dateStamp(now);
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
@@ -120,7 +127,38 @@ async function buildNextJobTicket(tx: any, shop: string, now = new Date()) {
     const existing = await tx.productionJob.findFirst({ where: { shop, jobTicket: ticket } });
     if (!existing) return ticket;
   }
-  return `GSO-${stamp}-${String(Date.now()).slice(-6)}`;
+  const exhausted = new Error(`ticket_allocation_exhausted: no free GSO-${stamp} sequence within 5000 probes`);
+  (exhausted as any).gsoCode = "ticket_allocation_exhausted";
+  throw exhausted;
+}
+
+async function buildNextJobTicket(tx: any, shop: string, now = new Date()) {
+  return allocateJobTicket(tx, shop, now);
+}
+
+// 15H.1: Postgres aborts the WHOLE transaction on a unique violation, so a
+// ticket collision (two sources racing different advisory locks) cannot be
+// retried statement-level — the entire transaction re-runs. Each rerun
+// re-acquires the lock, re-checks source idempotency, and allocates a fresh
+// candidate (the winner's committed row is now visible to the probe).
+// Bounded; only ticket-constraint P2002s retry — everything else rethrows.
+export function isTicketUniqueViolation(error: any): boolean {
+  if (String(error?.code) !== "P2002") return false;
+  const target = JSON.stringify(error?.meta?.target ?? "");
+  return /jobTicket|itemTicket/i.test(target);
+}
+
+export async function runWithTicketRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: any;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      if (!isTicketUniqueViolation(error) || attempt === attempts) throw error;
+    }
+  }
+  throw lastError;
 }
 
 // quote-item file name. 15D.2: names pass through the shared resolver so
@@ -354,8 +392,13 @@ function suggestedFileNameForOrderItem(jobTicket: string, item: any, index: numb
 
 // Pure builder: everything the webhook used to assemble, given a jobTicket.
 export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
+  // 15H.1: no unstable fallback — a payload without a stable Shopify order
+  // identity can never become a production job (the service fails closed
+  // before calling this; the null here is belt-and-braces so the stored
+  // quoteId always equals the idempotency source key).
   const orderId = orderIdentity(order);
-  const quoteId = `shopify_order_${orderId || clean(order.id) || Date.now()}`;
+  if (!orderId) return null;
+  const quoteId = `shopify_order_${orderId}`;
   const quoteNumber = orderName(order);
   const configuredLines = (Array.isArray(order.line_items) ? order.line_items : []).filter(isConfiguratorLine);
   if (!configuredLines.length) return null;
@@ -476,13 +519,22 @@ export async function createProductionJobFromSource(
     sourceKey = clean(source.quoteId);
     if (!sourceKey) throw new Error("Quote ID is required.");
   } else if (source.type === "shopify_order") {
-    sourceKey = `shopify_order_${orderIdentity(source.order) || clean(source.order?.id) || Date.now()}`;
+    // 15H.1: FAIL CLOSED on an id-less payload. The old `|| Date.now()`
+    // fallback minted a never-matching source key, so a webhook retry for
+    // such a payload would create duplicate jobs. No stable Shopify order
+    // identity (admin_graphql_api_id or id) = no production job.
+    const stableOrderId = orderIdentity(source.order);
+    if (!stableOrderId) {
+      throw new Error("Paid-order payload has no stable order identity (admin_graphql_api_id/id) — refusing to create a production job from an unidempotent source.");
+    }
+    sourceKey = `shopify_order_${stableOrderId}`;
   } else {
     if (!clean(source.authorizedBy)) throw new Error("Manual production jobs require an authorizing user.");
     sourceKey = `manual_${slugPart(source.payload.customerName, "ADMIN")}_${Date.now()}`;
   }
 
-  return await dbClient.$transaction(async (tx: any) => {
+  // 15H.1: ticket-constraint P2002 reruns the whole transaction (see helper).
+  return await runWithTicketRetry(() => dbClient.$transaction(async (tx: any) => {
     // concurrency-safe idempotency: lock, THEN check, THEN create — all in one tx
     await acquireSourceLock(tx, shop, source.type, sourceKey);
 
@@ -641,7 +693,7 @@ export async function createProductionJobFromSource(
       include: { items: true },
     });
     return { job, created: true, reason: "Manual production job created." };
-  });
+  }));
 }
 
 // ---------- 15F.0J.5: automatic PRINT-INTAKE job creation ----------
@@ -686,7 +738,10 @@ export async function createOrReusePrintIntakeJob(dbClient: any, input: PrintInt
     ? input.reviewWarnings
     : ["Commercial linkage pending: no quote/order/customer attached (link later from the Production Board)."];
   try {
-    return await dbClient.$transaction(async (tx: any) => {
+    // 15H.1: ticket-constraint P2002 reruns the whole transaction (fresh
+    // lock + recheck + fresh ticket); the catch below keeps handling ONLY
+    // the PrintIntake (shop, hash) unique-race backstop.
+    return await runWithTicketRetry(() => dbClient.$transaction(async (tx: any) => {
       // Concurrency: one lock per file content — two simultaneous plans for
       // the same hash serialize here (15D.1 advisory-lock strategy).
       await acquireSourceLock(tx, shop, "print_intake", fileHash);
@@ -765,10 +820,13 @@ export async function createOrReusePrintIntakeJob(dbClient: any, input: PrintInt
         },
       });
       return { created: true, printIntakeId: intake.id, productionJobId: job.id, jobTicket, ripName };
-    });
+    }));
   } catch (error: any) {
-    // Unique-constraint race backstop: the other request won — return its identity.
-    if (String(error?.code) === "P2002") {
+    // Unique-constraint race backstop (PrintIntake shop+hash): the other
+    // request won — return its identity. Ticket-constraint P2002s never
+    // reach here un-retried (runWithTicketRetry) and would not match the
+    // hash lookup anyway.
+    if (String(error?.code) === "P2002" && !isTicketUniqueViolation(error)) {
       const winner = await dbClient.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
       if (winner && winner.generatedProductionJobId && winner.authoritativeTicket) {
         return { created: false, printIntakeId: winner.id, productionJobId: winner.generatedProductionJobId, jobTicket: winner.authoritativeTicket, ripName: winner.routedFilename || winner.authoritativeTicket };

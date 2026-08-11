@@ -2092,3 +2092,30 @@ every candidate). The audit script now refuses to overwrite an existing
 rollback artifact (--refresh-rollback to override). No price, variant,
 title, handle, tag, collection, metafield, jar, ERP, or configurator data
 touched. Storefront customer-facing 64 debt is now ZERO.
+
+## Phase 15H.1 — ticket identity foundation (2026-08-11)
+15H.0's approved scope, implemented exactly: (A) read-only
+tools/audit-ticket-uniqueness.mjs ran first against production — 11 jobs /
+14 items, 0 duplicate (shop,jobTicket), 0 duplicate (shop,itemTicket), 0
+duplicate (shop,quoteId), 0 malformed tickets, 0 null tickets -> PASS. (B)
+schema gains @@unique([shop,jobTicket]) + @@unique([shop,itemTicket]);
+unique(shop,quoteId) deliberately deferred. (C) migration STAGED at
+prisma/migrations-pending/20260811120000_add_ticket_uniqueness — NOT under
+prisma/migrations because Render auto-runs `prisma migrate deploy` at
+deploy and the owner directed no automatic application; the exact
+Prisma-generated SQL is two CREATE UNIQUE INDEX statements (shipped with
+IF NOT EXISTS guards + README covering activation and DROP INDEX rollback).
+(D/E) allocator exported as allocateJobTicket, exhaustion now throws
+(epoch fallback removed — it emitted non-canonical unparseable tickets);
+ticket P2002 reruns the whole creation transaction (bounded x3) in both
+createProductionJobFromSource and createOrReusePrintIntakeJob. (F/G) local
+generators deleted from app.erp.production.tsx (backfill -> central
+allocator; NOT run) and the simulator (unticketed test jobs +
+fail-closed ALLOW_PRODUCTION_SIMULATION gate). (H) paid-order source key
+fails closed without a stable order id — Date.now() fallbacks removed in
+BOTH the source key and buildShopifyOrderJobPayload. Tests 959 -> 971
+(new tests/ticket-identity.test.ts, 12 tests incl. simulated cross-source
+ticket race resolving to distinct tickets). NO production data changed; NO
+routing/RIP/intake behavior changed; migration NOT applied. Phase 16
+Shopify Store Rebuild roadmap (16A-16I) unchanged. Next: 15H.2 RIP
+Identity Repair.

@@ -883,6 +883,10 @@ model ProductionJob {
   materialUsages     ProductionMaterialUsage[]
   inventoryMovements MaterialInventoryMovement[]
 
+  // 15H.1: DB-backed ticket identity — the unique index is the FINAL
+  // authority behind the advisory-locked allocator (nullable stays allowed;
+  // Postgres treats NULLs as distinct).
+  @@unique([shop, jobTicket])
   @@index([shop])
   @@index([shop, status])
   @@index([shop, priority])
@@ -929,6 +933,9 @@ model ProductionJobItem {
 
   job ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
+  // 15H.1: item tickets are derived (jobTicket + -NN) so uniqueness follows
+  // from job-ticket uniqueness — this index makes the DB the final authority.
+  @@unique([shop, itemTicket])
   @@index([shop])
   @@index([jobId])
   @@index([quoteItemId])

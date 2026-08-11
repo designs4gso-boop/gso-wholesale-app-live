@@ -94,3 +94,38 @@ names follow the contract (<TICKET>__<PRINTER>__<MODE>__<SAFE>__A1, <=120
 chars, ticket-led so result watchers match automatically). The
 "needs_review because no quote exists" behavior is retired — commercial
 linkage is a warning on a routed job, never a routing blocker.
+
+## 15H.1 IMPLEMENTED (2026-08-11) — DB-backed ticket identity
+Ticket uniqueness is now DATABASE-AUTHORITATIVE, not merely procedural:
+schema declares @@unique([shop, jobTicket]) on ProductionJob and
+@@unique([shop, itemTicket]) on ProductionJobItem (nullable preserved;
+Postgres treats NULLs as distinct). The migration is STAGED in
+prisma/migrations-pending/20260811120000_add_ticket_uniqueness (Render runs
+`prisma migrate deploy` on every push, so the folder is deliberately outside
+prisma/migrations until the OWNER activates it — see that folder's README
+for the exact steps + rollback). Pre-verified by the read-only
+tools/audit-ticket-uniqueness.mjs: 11 jobs / 14 items, ZERO duplicate
+tickets, ZERO malformed, zero null tickets.
+
+Allocator: allocateJobTicket (exported; buildNextJobTicket delegates) keeps
+the advisory-lock + count + probe design and now FAILS CLOSED on exhaustion
+— the old non-canonical 6-digit epoch fallback (which no ticket parser
+matched) is removed. Ticket-constraint P2002s rerun the ENTIRE creation
+transaction (runWithTicketRetry, bounded x3) because Postgres aborts a
+transaction on unique violation — each rerun re-locks, re-checks source
+idempotency, and allocates a fresh candidate. The PrintIntake (shop, hash)
+P2002 backstop is untouched and now explicitly excludes ticket violations.
+
+Stray generators RETIRED: app.erp.production.tsx (backfillTickets now uses
+the central allocator inside the standard retry; local copy deleted) and
+tools/simulate-paid-configurator-order.mjs (cannot mint tickets at all —
+creates unticketed test jobs, assigned later via Backfill Tickets; refuses
+to run against any non-SQLite DATABASE_URL without
+ALLOW_PRODUCTION_SIMULATION=YES_I_UNDERSTAND_THIS_WRITES_PRODUCTION).
+
+Order-source idempotency: the `|| Date.now()` fallback is GONE in both the
+source key and buildShopifyOrderJobPayload — a paid-order payload without
+admin_graphql_api_id/id FAILS CLOSED (no unidempotent job can ever mint).
+
+NEXT: 15H.2 — RIP Identity Repair (RasterLink item-ticket stage-2 matching,
+matcher unification, loose-path quarantine, unmatched flagging).

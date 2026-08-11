@@ -13,7 +13,7 @@ import {
 } from "@shopify/polaris";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
-import { createProductionJobFromSource, familyFromQuoteItems } from "../lib/production-job-source.server";
+import { allocateJobTicket, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, runWithTicketRetry } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
@@ -237,36 +237,12 @@ function slugPart(value: any, fallback = "JOB") {
   return clean || fallback;
 }
 
-function dateStamp(value = new Date()) {
-  return value.toISOString().slice(0, 10).replace(/-/g, "");
-}
-
-async function buildNextJobTicket(shop: string, now = new Date()) {
-  const stamp = dateStamp(now);
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-
-  const countToday = await db.productionJob.count({
-    where: { shop, createdAt: { gte: start, lt: end } },
-  });
-
-  for (let sequence = countToday + 1; sequence < countToday + 5000; sequence += 1) {
-    const ticket = `GSO-${stamp}-${String(sequence).padStart(4, "0")}`;
-    const existing = await db.productionJob.findFirst({ where: { shop, jobTicket: ticket } });
-    if (!existing) return ticket;
-  }
-
-  return `GSO-${stamp}-${String(Date.now()).slice(-6)}`;
-}
+// 15H.1: the local buildNextJobTicket/itemTicketFor copies are RETIRED — the
+// central authoritative allocator in production-job-source.server.ts is the
+// only ticket generator (advisory-locked, DB-unique-backed, fail-closed).
 
 function normalizeFilePart(value: any, fallback = "ITEM") {
   return slugPart(value || fallback, fallback).slice(0, 40);
-}
-
-function itemTicketFor(jobTicket: string, index: number) {
-  return `${jobTicket}-${String(index + 1).padStart(2, "0")}`;
 }
 
 function ripNameForItem(jobTicket: string, index: number) {
@@ -625,14 +601,21 @@ export async function action({ request }: { request: Request }) {
     for (const job of jobs) {
       let jobTicket = job.jobTicket;
       if (!jobTicket) {
-        jobTicket = await buildNextJobTicket(shop, new Date(job.createdAt || Date.now()));
-        await db.productionJob.update({
-          where: { id: job.id },
-          data: {
-            jobTicket,
-            assetInboxKey: job.assetInboxKey || jobTicket,
-          },
-        });
+        // 15H.1: central allocator inside a transaction, with the standard
+        // ticket-P2002 retry — the DB unique index is the final authority.
+        jobTicket = await runWithTicketRetry(() =>
+          db.$transaction(async (tx: any) => {
+            const ticket = await allocateJobTicket(tx, shop, new Date(job.createdAt || Date.now()));
+            await tx.productionJob.update({
+              where: { id: job.id },
+              data: {
+                jobTicket: ticket,
+                assetInboxKey: job.assetInboxKey || ticket,
+              },
+            });
+            return ticket;
+          }),
+        );
         await createEvent(shop, job.id, "job_ticket_backfilled", `Job ticket assigned: ${jobTicket}.`);
         updatedJobs += 1;
       }
