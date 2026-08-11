@@ -294,3 +294,14 @@ JS size (~16.3 KB vs 10 KB theme-check threshold) is warning-only cleanup
 debt; deploy is not blocked. The storefront pricing/checkout arc
 (15G.4C -> 15G.5 -> 15G.5A -> 15G.5B -> 15G.5C) is COMPLETE; next phase by
 owner decision: Ticket-First Production Intake.
+
+## 15G.5E execution record (2026-08-11) — description data cleanup DONE
+The owner-approved bulk content update replaced "Minimum order 64 units"
+with "Minimum order 50 units" across 1,886 Stock Bag product descriptions
+(the full qualifying set; 0 failures, 0 skips, 0 non-bag products touched;
+prices/variants/titles/handles/tags/collections untouched — the mutation
+carried only id + descriptionHtml). Live + SEO meta verified on Ritz
+Vanilla Cupcake and spot-checks. Originals preserved locally in
+tools/moq-cleanup-data/rollback-15g5e.json with a gated rollback script.
+The last customer-facing 64 is retired; remaining owner items: print-intake
+token rotation (15G.1A), then Ticket-First Production Intake.

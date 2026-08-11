@@ -2061,3 +2061,34 @@ jars/unrelated. Safest bulk criteria for the owner-approved phase:
 productType == "Stock Bag" AND exact sentence match, replace 64 -> 50.
 ACTIVATION: `shopify app deploy` required (theme extension only; no app
 server code changed). Tests 958 -> 959.
+
+## Phase 15G.5E — Stock Bag MOQ description cleanup (2026-08-11)
+OWNER-APPROVED Shopify CONTENT-data update, executed and verified: the exact
+sentence "Minimum order 64 units" replaced with "Minimum order 50 units" in
+Product.descriptionHtml for every qualifying product. Pre-write audit
+(tools/audit-moq-descriptions.mjs, read-only) proved: 1,898 products
+scanned, 1,886 candidates (productType "Stock Bag" + exact sentence, all
+ACTIVE), 0 non-bag matches, 0 loose/case variants, 0 multi-occurrence, 0
+pre-existing 50-sentences, 0 manually-saved SEO descriptions, 0
+replacement-unsafe (split/join on the exact literal; 64->50 preserves
+length). Update (tools/update-moq-descriptions.mjs --execute) used
+productUpdate(product: { id, descriptionHtml }) ONLY — introspection-proven
+2025-10 shape (the legacy `input` argument no longer exists) — with dry-run
+default, per-product freshness re-read (fail-closed on drift), userErrors +
+post-mutation content verification, checkpointed idempotent reruns, and a
+5-consecutive-failure halt. RESULT: 1,886 updated, 0 skipped, 0 failures.
+Post-write verification (tools/verify-moq-descriptions.mjs, read-only):
+0 products anywhere still contain the old sentence; exactly 1,886 Stock
+Bags carry the new one; 0 non-bag products gained it. Spot-checks (Ritz
+Vanilla Cupcake + 4 more): id/title/type/tags/status/variant prices
+byte-identical pre/post; live Ritz page shows "Minimum order 50 units" x5
+(description, meta description, og:description, twitter:description,
+JSON-LD) and zero 64s — SEO meta followed the description automatically
+because no product had an independent manually-saved SEO description.
+ROLLBACK: tools/moq-cleanup-data/rollback-15g5e.json (git-ignored, local)
+holds every original descriptionHtml; restore via
+tools/rollback-moq-descriptions.mjs --execute (dry-run default; --all for
+every candidate). The audit script now refuses to overwrite an existing
+rollback artifact (--refresh-rollback to override). No price, variant,
+title, handle, tag, collection, metafield, jar, ERP, or configurator data
+touched. Storefront customer-facing 64 debt is now ZERO.
