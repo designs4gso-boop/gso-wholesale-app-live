@@ -187,7 +187,9 @@ function minQtyForProduct(productType: string, profile: any | null) {
 }
 
 function defaultQtyForProduct(productType: string, profile: any | null) {
-  if (productType === STOCK_PRODUCT_TYPE) return MIN_QTY;
+  // 15G.5C: admin previews start at the canonical storefront MOQ (50) — the
+  // legacy 64 must never present as the current default anywhere.
+  if (productType === STOCK_PRODUCT_TYPE) return STOREFRONT_BAG_MIN_QTY;
   return Number(profile?.defaultQuantity || profile?.minQuantity || 128);
 }
 
@@ -197,7 +199,10 @@ async function resetPilotData(shop: string) {
     title,
     productType: STOCK_PRODUCT_TYPE,
     defaultSides: "Double Sided",
-    minQuantity: MIN_QTY,
+    // 15G.5C: fresh compatibility rows seed at the canonical 50 (existing
+    // legacy rows keep 64 as deprecated display data; canonical paths ignore
+    // ConfiguratorProduct.minQuantity for bags either way).
+    minQuantity: STOREFRONT_BAG_MIN_QTY,
     pilot: true,
     active: true,
     notes: "5-product stock bag configurator pilot",
@@ -534,7 +539,7 @@ export default function GsoConfigurator() {
           <strong>{data.productFamilyLabel}</strong>
           <span>Product type: {data.productType}</span>
           <span>Pricing source: {result.rule.source}</span>
-          <span>Min Qty: {data.minQty}</span>
+          <span>Min Qty: {data.minQty}{!isJar ? " (canonical storefront MOQ)" : ""}</span>
         </div>
       </div>
 
@@ -758,7 +763,7 @@ export default function GsoConfigurator() {
             <p><b>Production Finish:</b> {result.rule.productionFinish}</p>
             {isJar ? <p><b>Label Set:</b> {data.labelSet}</p> : <p><b>Bag Color:</b> {data.bagColor}</p>}
             <p><b>Sides / Mode:</b> {result.rule.sides}</p>
-            <p><b>Minimum Quantity:</b> {data.minQty}</p>
+            <p><b>Minimum Quantity:</b> {data.minQty}{!isJar ? " (canonical storefront MOQ)" : ""}</p>
             <p><b>Pricing Source:</b> {result.rule.source}</p>
           </div>
         </div>
@@ -780,7 +785,14 @@ export default function GsoConfigurator() {
                 <div key={product.id} className="pilot-item">
                   <strong>{product.title}</strong>
                   <span>Needs Shopify tag: configurator-pilot</span>
-                  <span>Min Qty: {product.minQuantity}</span>
+                  {/* 15G.5C: the row's stored minQuantity (64) is deprecated
+                      compatibility data — canonical storefront MOQ is 50. */}
+                  <span>
+                    Min Qty: {STOREFRONT_BAG_MIN_QTY} (canonical)
+                    {Number(product.minQuantity) !== STOREFRONT_BAG_MIN_QTY
+                      ? ` — legacy row value ${product.minQuantity} (deprecated)`
+                      : ""}
+                  </span>
                   <span>Sides: {product.defaultSides}</span>
                 </div>
               ))}

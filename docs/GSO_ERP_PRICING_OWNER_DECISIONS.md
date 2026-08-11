@@ -272,3 +272,25 @@ Ultra Raised+ 7X / Extreme Raised 8X / Deep Build 9X+ Request Custom Quote)
 — no production ConfiguratorOption writes performed or needed; Deep Build
 stays non-checkout. Small-run safety intact: 50/100 clear cost + the $75
 min-profit floor (pinned). Jars, cart transform, Shopify prices untouched.
+
+## 15G.5C closure (2026-08-11) — storefront MOQ finalized, arc complete
+Customer-facing 4x5 stock-bag minimum is FINAL at 50, with the canonical
+server response as the single runtime authority. Legacy 64 is fully retired
+from customer-facing authority: the theme block's saved 64 setting is no
+longer rendered anywhere (canonical 50 fallbacks; setting marked
+DEPRECATED), the theme JS lets the SERVER seed a fresh page's quantity
+(first fetch sends no quantity; initial input = 50 priced at the 50 band),
+the change clamp floors at the server minimum, and the admin Configurator
+shows "50 (canonical storefront MOQ)" while labeling stored 64 rows
+"legacy row value (deprecated)". No pricing values changed anywhere:
+50=$2.70 / 100=$1.80 (ratified) / 250=$1.63 / 500=$1.50 / 1000=$1.45 /
+2500=$1.32 double-sided 0X, specialty curve intact (500 dbl 3X = $1.92).
+OPEN OWNER CLEANUP (product DATA, not code): 1,886 of 1,898 product
+descriptions still contain the sentence "Minimum order 64 units"
+(Product.descriptionHtml, from the original bulk-creation template; also
+feeds SEO meta). Recommended: a dedicated approved bulk phase updating that
+sentence to 50 (or removing it) — no bulk edit performed in 15G.5C. Theme
+JS size (~16.3 KB vs 10 KB theme-check threshold) is warning-only cleanup
+debt; deploy is not blocked. The storefront pricing/checkout arc
+(15G.4C -> 15G.5 -> 15G.5A -> 15G.5B -> 15G.5C) is COMPLETE; next phase by
+owner decision: Ticket-First Production Intake.

@@ -9,6 +9,7 @@ import { canonicalStockBagJob, type CanonicalBagInputs } from "../app/lib/canoni
 import {
   CANONICAL_FINISH_OPTIONS,
   DEEP_BUILD_STOREFRONT_MESSAGE,
+  STOREFRONT_BAG_MIN_QTY,
   STOREFRONT_PRICE_BREAK_QUANTITIES,
   parseStorefrontFinish,
   priceStorefrontConfiguration,
@@ -246,5 +247,72 @@ describe("15G.5B checkout handoff hardening (root cause + proxy-safe + frontend 
     expect(liquid).toContain("data-gso-min-display");
     const admin = readFileSync("app/routes/app.erp.configurator.tsx", "utf8");
     expect(admin).toContain("return STOREFRONT_BAG_MIN_QTY;");
+  });
+});
+
+describe("15G.5C final storefront MOQ cleanup (single customer-facing authority = 50)", () => {
+  const js = readFileSync("extensions/wholesale-theme/assets/gso-product-configurator.js", "utf8");
+  const liquid = readFileSync("extensions/wholesale-theme/blocks/gso-product-configurator.liquid", "utf8");
+  const admin = readFileSync("app/routes/app.erp.configurator.tsx", "utf8");
+  const checkout = readFileSync("app/routes/apps.wholesale-lite.configurator-checkout.ts", "utf8");
+  const proxy = readFileSync("app/routes/apps.wholesale-lite.configurator.ts", "utf8");
+
+  it("canonical bag MOQ is 50 and both public routes clamp raise-only through it", () => {
+    expect(STOREFRONT_BAG_MIN_QTY).toBe(50);
+    expect(proxy).toContain("isJar ? Number(effectiveProduct.minQuantity || MIN_QTY) : STOREFRONT_BAG_MIN_QTY");
+    expect(checkout).toContain("isJar ? Number(effectiveProduct.minQuantity || MIN_QTY) : STOREFRONT_BAG_MIN_QTY");
+    expect(proxy).toContain("Math.max(numberValue(url.searchParams.get(\"quantity\"), minQuantity), minQuantity)");
+    expect(checkout).toContain("Math.max(numberValue(rawItem.quantity, minQuantity), minQuantity)");
+  });
+
+  it("fresh storefront page defers to the server: first fetch omits quantity, fallbacks are 50, no 64 remains", () => {
+    // fresh load sends NO quantity param — the server's canonical floor answers
+    expect(js).toContain('g&&e.set("quantity",String(u.quantity||c))');
+    // block-fallback literals are 50; the stale saved setting can no longer win
+    expect(js).toContain('t.dataset.minimumQuantity||"50",10)||50,1)');
+    expect(js.includes('"64"')).toBe(false);
+    expect(js.includes("||64,")).toBe(false);
+  });
+
+  it("field-change clamp floors at the SERVER minimum once known (not the stale block value)", () => {
+    expect(js).toContain("F=g&&g.product&&Number(g.product.minQuantity)||c");
+    expect(js).toContain("u.quantity=Math.max(e||F,F)");
+    expect(js.includes("u.quantity=Math.max(e||c,c)")).toBe(false);
+  });
+
+  it("liquid never renders the saved block setting into customer-facing MOQ output", () => {
+    const body = liquid.slice(liquid.indexOf("{% endschema %}"));
+    expect(body.includes("block.settings.minimum_quantity")).toBe(false);
+    expect(body).toContain('data-minimum-quantity="50"');
+    expect(body).toContain('min="50" step="1" value="50"');
+    expect(body).toContain("<span data-gso-min-display>50</span>");
+    expect(liquid).toContain("DEPRECATED");
+  });
+
+  it("admin Configurator presents 50 as canonical and demotes the legacy 64 row value", () => {
+    expect(admin).toContain("(canonical storefront MOQ)");
+    expect(admin).toContain("legacy row value");
+    // both minQtyForProduct AND defaultQtyForProduct resolve bags to canonical 50
+    expect(admin.match(/if \(productType === STOCK_PRODUCT_TYPE\) return STOREFRONT_BAG_MIN_QTY;/g)?.length).toBe(2);
+    expect(admin.includes("if (productType === STOCK_PRODUCT_TYPE) return MIN_QTY;")).toBe(false);
+    // fresh compatibility seeds no longer write 64
+    expect(admin).toContain("minQuantity: STOREFRONT_BAG_MIN_QTY,");
+  });
+
+  it("checkout prices are untouched: 100 double 0X = $1.80 and 500 double 3X = $1.92 through the same engine", () => {
+    expect(storefront({ quantity: 100, faces: 2 })).toMatchObject({ ok: true, unitPrice: 1.8, totalPrice: 180 });
+    expect(storefront({ quantity: 500, faces: 2, finish: "Raised Gloss+ — 3X" })).toMatchObject({ ok: true, unitPrice: 1.92, totalPrice: 960 });
+  });
+
+  it("Deep Build still can never checkout and no surface writes Shopify prices; jars keep their own MOQ path", () => {
+    expect(storefront({ quantity: 500, faces: 2, finish: "Deep Build 9X+ — Request Custom Quote" })).toMatchObject({ ok: false, requestQuote: true });
+    for (const src of [checkout, proxy, js]) {
+      expect(src.includes("productVariantsBulkUpdate")).toBe(false);
+      expect(src.includes("productVariantUpdate")).toBe(false);
+      expect(src.includes("productUpdate")).toBe(false);
+    }
+    // the only Admin API mutation in the public surface remains draftOrderCreate
+    expect(checkout.match(/mutation /g)?.length).toBe(1);
+    expect(checkout).toContain("draftOrderCreate");
   });
 });

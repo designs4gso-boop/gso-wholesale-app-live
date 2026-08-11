@@ -1995,3 +1995,39 @@ which any request surviving to the mutation would then have hit). Fix:
 `rule?.productionFinish || finish` — for canonical bags the finish label IS
 the production finish; the guaranteed-rule jar path is unchanged. Regression
 pin added (tests 950 -> 951).
+
+## Phase 15G.5C — final storefront MOQ cleanup (2026-08-11)
+The storefront pricing/checkout arc is COMPLETE: one customer-facing MOQ
+authority for 4x5 stock bags = 50, served by the canonical server response.
+Root causes of the residual 64s (all traced on the live page): (1) the theme
+block INSTANCE saved `minimum_quantity: 64` — schema-default changes never
+retro-update saved block settings, so the liquid kept rendering 64 into
+`data-minimum-quantity`, the quantity input, and the pre-JS notice; (2) the
+theme JS initialized from that dataset (with hardcoded "64" fallbacks) and
+sent `quantity=64` on the FIRST pricing fetch — the server's raise-only
+clamp (max(64,50)) legitimately echoed 64 back, which became the visible
+input value; (3) the field-change clamp floored at the BLOCK value (64), so
+even a corrected 50 would snap back to 64 on the next material/finish
+change; (4) `ConfiguratorProduct.minQuantity` rows store legacy 64
+(deprecated display data — canonical paths ignore it for bags); (5) nearly
+the whole catalog (1,886 of 1,898 products) carries "Minimum order 64
+units" INSIDE the Shopify product description (body_html) from the original
+bulk-creation template — this also feeds the SEO/og/twitter meta
+description. FIXES (code): liquid no longer renders the saved block setting
+into any customer-facing output (canonical 50 literals; setting label marked
+DEPRECATED); JS fallbacks 64->50; the FIRST pricing fetch now omits the
+quantity param entirely so the server's canonical floor decides (fresh page
+=> 50 priced at the 50 band); the change clamp floors at the server minimum
+once known; admin Configurator presents "50 (canonical storefront MOQ)"
+everywhere, demotes stored 64 as "legacy row value (deprecated)", previews
+default to 50, and fresh compatibility seeds write 50. NOT fixed by code
+(product DATA, owner decision required): the description sentence — exact
+field `Product.descriptionHtml`, safest path is a dedicated owner-approved
+bulk phase replacing "Minimum order 64 units" -> "Minimum order 50 units"
+(or removing it); until then the app block beside it displays the canonical
+copy. Jars keep their own MOQ path untouched. CLEANUP DEBT (documented, not
+addressed): gso-product-configurator.js is ~16.3 KB vs the 10 KB theme-check
+threshold — WARNING-ONLY, does not block `shopify app deploy`; splitting is
+deferred to avoid destabilizing a proven checkout. ACTIVATION: web (Render)
+auto-deploys; the theme-extension liquid/JS changes require one more
+`shopify app deploy`. Tests 951 -> 958.

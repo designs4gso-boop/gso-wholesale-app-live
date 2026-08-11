@@ -8,7 +8,7 @@
     { "type": "text", "id": "eyebrow", "label": "Eyebrow", "default": "GSO Custom Stock Bag" },
     { "type": "text", "id": "heading", "label": "Heading", "default": "Build Your Bag" },
     { "type": "textarea", "id": "subheading", "label": "Subheading", "default": "Choose your material, finish, bag color, and quantity." },
-    { "type": "number", "id": "minimum_quantity", "label": "Minimum quantity (server canonical minimum overrides at runtime)", "default": 50 },
+    { "type": "number", "id": "minimum_quantity", "label": "Minimum quantity (DEPRECATED — the server canonical minimum is authoritative; this setting is no longer rendered)", "default": 50 },
     {
       "type": "select",
       "id": "layout",
@@ -51,7 +51,13 @@
   data-product-handle="{{ product.handle | escape }}"
   data-product-gid="gid://shopify/Product/{{ product.id }}"
   data-base-variant-gid="gid://shopify/ProductVariant/{{ selected_variant.id }}"
-  data-minimum-quantity="{{ block.settings.minimum_quantity }}"
+  {%- comment -%}
+    15G.5C: the saved block-instance setting (64 on the live theme) can never
+    retro-update from a schema default change, so customer-facing MOQ no longer
+    renders from block settings at all. 50 is the canonical fallback; the
+    server's minQuantity overrides everything at runtime.
+  {%- endcomment -%}
+  data-minimum-quantity="50"
   data-show-price-each="{{ block.settings.show_price_each }}"
   data-show-order-total="{{ block.settings.show_order_total }}"
   data-show-matched-tier="{{ block.settings.show_matched_tier }}"
@@ -105,7 +111,7 @@
 
         <label class="gso-configurator__field">
           <span>Quantity</span>
-          <input data-gso-field="quantity" type="number" min="{{ block.settings.minimum_quantity }}" step="1" value="{{ block.settings.minimum_quantity }}">
+          <input data-gso-field="quantity" type="number" min="50" step="1" value="50">
         </label>
       </div>
 
@@ -127,7 +133,7 @@
       </div>
 
       <div class="gso-configurator__notice" data-gso-result="notice">
-        Sides are set to Double Sided. Minimum order is <span data-gso-min-display>{{ block.settings.minimum_quantity }}</span> units.
+        Sides are set to Double Sided. Minimum order is <span data-gso-min-display>50</span> units.
       </div>
 
       <button type="button" class="gso-configurator__add" data-gso-add-to-cart>
