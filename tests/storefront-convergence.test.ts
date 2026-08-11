@@ -199,3 +199,43 @@ describe("rollout delta awareness (S)", () => {
     expect(storefront({ quantity: 2500, faces: 2 })).toMatchObject({ unitPrice: 1.32 }); // vs 1.35 → −2.2%
   });
 });
+
+describe("15G.5B checkout handoff hardening (root cause + proxy-safe + frontend resilience)", () => {
+  it("draft orders use originalUnitPriceWithCurrency — the dead 2025-10 originalUnitPrice field is gone", () => {
+    const checkout = readFileSync("app/routes/apps.wholesale-lite.configurator-checkout.ts", "utf8");
+    expect(checkout).toContain("originalUnitPriceWithCurrency");
+    expect(checkout).toContain('currencyCode: "USD"');
+    expect(/originalUnitPrice: String/.test(checkout)).toBe(false);
+  });
+
+  it("checkout never emits 5xx through the app proxy (Shopify replaces upstream 5xx with theme HTML)", () => {
+    const checkout = readFileSync("app/routes/apps.wholesale-lite.configurator-checkout.ts", "utf8");
+    expect(checkout.includes("{ status: 500 }")).toBe(false);
+    expect(checkout).toContain("NEVER emit 5xx through the app proxy");
+  });
+
+  it("theme JS parses responses safely, retries once, and shows the friendly unavailable message", () => {
+    const js = readFileSync("extensions/wholesale-theme/assets/gso-product-configurator.js", "utf8");
+    expect(js).toContain("Checkout is temporarily unavailable. Please try again in a moment.");
+    expect(js).toContain("Retrying...");
+    expect(js).toContain("GSO_UNAVAILABLE");
+    expect(js).toContain("Pricing is temporarily unavailable.");
+    expect(js.includes(".then(function(t){return t.json()})")).toBe(false); // no blind parser remains
+  });
+
+  it("Deep Build / request-quote configurations can never enter a cart path client-side", () => {
+    const js = readFileSync("extensions/wholesale-theme/assets/gso-product-configurator.js", "utf8");
+    expect(js).toContain("requestQuote)return void alert");
+    expect(js).toContain('b.textContent="Request Custom Quote"');
+  });
+
+  it("MOQ display follows the canonical server minimum (50) — legacy 64 demoted", () => {
+    const js = readFileSync("extensions/wholesale-theme/assets/gso-product-configurator.js", "utf8");
+    expect(js).toContain("data-gso-min-display");
+    const liquid = readFileSync("extensions/wholesale-theme/blocks/gso-product-configurator.liquid", "utf8");
+    expect(liquid).toContain('"default": 50');
+    expect(liquid).toContain("data-gso-min-display");
+    const admin = readFileSync("app/routes/app.erp.configurator.tsx", "utf8");
+    expect(admin).toContain("return STOREFRONT_BAG_MIN_QTY;");
+  });
+});

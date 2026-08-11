@@ -8,7 +8,7 @@
     { "type": "text", "id": "eyebrow", "label": "Eyebrow", "default": "GSO Custom Stock Bag" },
     { "type": "text", "id": "heading", "label": "Heading", "default": "Build Your Bag" },
     { "type": "textarea", "id": "subheading", "label": "Subheading", "default": "Choose your material, finish, bag color, and quantity." },
-    { "type": "number", "id": "minimum_quantity", "label": "Minimum quantity", "default": 64 },
+    { "type": "number", "id": "minimum_quantity", "label": "Minimum quantity (server canonical minimum overrides at runtime)", "default": 50 },
     {
       "type": "select",
       "id": "layout",
@@ -127,7 +127,7 @@
       </div>
 
       <div class="gso-configurator__notice" data-gso-result="notice">
-        Sides are set to Double Sided. Minimum order is {{ block.settings.minimum_quantity }} units.
+        Sides are set to Double Sided. Minimum order is <span data-gso-min-display>{{ block.settings.minimum_quantity }}</span> units.
       </div>
 
       <button type="button" class="gso-configurator__add" data-gso-add-to-cart>

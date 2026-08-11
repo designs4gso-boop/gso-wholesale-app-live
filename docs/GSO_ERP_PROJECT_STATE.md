@@ -1949,3 +1949,32 @@ canonical 0X-8X finish options served from code (no DB writes), Deep Build
 Deliberate pin updates: storefront-convergence qty-100 (1.93→1.80),
 margin-curve-equivalence side-parity (100-127 double now 61%). Tests 944 ->
 945. NOT customer-live until Render deploys this commit.
+
+## Phase 15G.5B — storefront checkout handoff hardening (2026-08-11)
+LIVE FAILURE ROOT CAUSE (forensically proven with signed direct-to-Render
+probes + Admin API schema introspection): DraftOrderLineItemInput.
+originalUnitPrice DOES NOT EXIST on the pinned 2025-10 Admin API — every
+fully-valid checkout failed GraphQL schema validation (no draft orders were
+ever created), our route returned its sanitized 500 JSON, and SHOPIFY'S APP
+PROXY REPLACES UPSTREAM 5XX WITH THE STOREFRONT THEME ERROR PAGE — the
+browser saw <!doctype html> and threw "Unexpected token '<'". All earlier
+probes passed because pre-mutation rejections are 4xx, which the proxy
+passes through as JSON. FIXES: (1) line items now use
+originalUnitPriceWithCurrency {amount, currencyCode USD} — the exact shape
+Quotes/CRM already used; (2) checkout NEVER emits 5xx through the proxy
+(failure statuses 500→400 so JSON always reaches the browser); (3) theme JS
+hardened — content-type-checked safe parsing for checkout POST and pricing
+GET, one automatic 3s retry, friendly "Checkout is temporarily unavailable"
+message, button re-enable, no raw HTML/token errors ever surface; (4) Deep
+Build 9X+ can no longer enter any cart path client-side (Add button becomes
+disabled "Request Custom Quote"; hard gate in the legacy cart path; server
+rejection remains defense-in-depth); (5) stale "Minimum order: 64" display:
+source = theme block setting minimum_quantity (default was 64) — JS now
+syncs the visible minimum + input floor from the server's canonical
+product.minQuantity (50), schema default corrected to 50 (no product/theme
+data writes needed), and the Admin Configurator now uses the canonical 50
+for stock bags (legacy 64 stays deprecated display only). Deployed-build
+fingerprinting confirmed Render auto-deploys pushes to main (15G.5A was
+already live). ACTIVATION: web deploy (auto on push) fixes checkout;
+`shopify app deploy` is additionally required for the THEME extension
+changes (JS resilience + MOQ display + liquid default). Tests 945 -> 950.

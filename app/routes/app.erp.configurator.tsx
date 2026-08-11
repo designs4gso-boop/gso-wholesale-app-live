@@ -15,6 +15,7 @@ import {
 } from "../lib/configurator-pricing";
 import { RESET_PILOT_DATA_PHRASE, phraseGateOk } from "../lib/security-guards-shared";
 import { canonicalStockBagJob, resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
+import { STOREFRONT_BAG_MIN_QTY } from "../lib/storefront-canonical-pricing.server";
 
 const STOCK_PRODUCT_TYPE = PRODUCT_TYPE;
 
@@ -179,7 +180,9 @@ function productTypeForFamily(productFamily: string, requestedProductType: strin
 }
 
 function minQtyForProduct(productType: string, profile: any | null) {
-  if (productType === STOCK_PRODUCT_TYPE) return MIN_QTY;
+  // 15G.5B: stock bags use the CANONICAL storefront minimum (50) — the
+  // legacy 64 (MIN_QTY) is deprecated display data only; jars keep profiles.
+  if (productType === STOCK_PRODUCT_TYPE) return STOREFRONT_BAG_MIN_QTY;
   return Number(profile?.minQuantity || 128);
 }
 

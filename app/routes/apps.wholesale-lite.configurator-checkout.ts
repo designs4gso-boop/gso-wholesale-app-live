@@ -388,7 +388,15 @@ export async function action({ request }: ActionFunctionArgs) {
         title: lineTitle,
         sku: effectiveProduct.sku || "",
         quantity,
-        originalUnitPrice: String(priceEach.toFixed(2)),
+        // 15G.5B ROOT-CAUSE FIX: `originalUnitPrice` no longer exists on the
+        // pinned 2025-10 Admin API (schema-verified 2026-08-11) — the dead
+        // field made draftOrderCreate fail schema validation on every live
+        // checkout. `originalUnitPriceWithCurrency` is the current field
+        // (same shape Quotes/CRM has used successfully all along).
+        originalUnitPriceWithCurrency: {
+          amount: priceEach.toFixed(2),
+          currencyCode: "USD",
+        },
         customAttributes,
       });
 
@@ -464,7 +472,10 @@ export async function action({ request }: ActionFunctionArgs) {
         status: draftRes.status,
         errors: draftRes.errors,
       });
-      return jsonResponse(publicCheckoutFailure(), { status: 500 });
+      // 15G.5B: NEVER emit 5xx through the app proxy — Shopify replaces
+      // upstream 5xx responses with its storefront theme error page (the
+      // browser then sees HTML instead of our JSON). 4xx passes through.
+      return jsonResponse(publicCheckoutFailure(), { status: 400 });
     }
 
     const data = draftRes.raw;
@@ -496,8 +507,10 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (error: any) {
     // 15G.1: never serialize stack traces, tokens, or exception internals to
     // the public caller — log server-side, return the fixed generic message.
+    // 15G.5B: status 400, not 500 — the app proxy swallows upstream 5xx and
+    // serves the storefront theme page instead of our JSON.
     console.error("[configurator-checkout] unhandled checkout error", error);
-    return jsonResponse(publicCheckoutFailure(), { status: 500 });
+    return jsonResponse(publicCheckoutFailure(), { status: 400 });
   }
 }
 
