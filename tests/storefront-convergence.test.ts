@@ -286,7 +286,8 @@ describe("15G.5C final storefront MOQ cleanup (single customer-facing authority 
     expect(body).toContain('data-minimum-quantity="50"');
     expect(body).toContain('min="50" step="1" value="50"');
     expect(body).toContain("<span data-gso-min-display>50</span>");
-    expect(liquid).toContain("DEPRECATED");
+    // 15G.5C.1: label shortened to satisfy Shopify's 70-char schema limit
+    expect(liquid).toContain('"Legacy minimum quantity (deprecated)"');
   });
 
   it("admin Configurator presents 50 as canonical and demotes the legacy 64 row value", () => {
