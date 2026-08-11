@@ -4,6 +4,26 @@
   font-family: inherit;
 }
 
+/* 15G.5D: single purchase path for configurator-controlled stock bags.
+   Native Add to cart, Buy with Shop / accelerated checkout, and More payment
+   options are hidden ONLY when the block carries the lockout marker (product
+   type "Stock Bag" / tag "configurator-pilot") — jars and unrelated products
+   are untouched. Two rule blocks on purpose: browsers without :has() would
+   drop a combined selector list, so the JS-set body class must stand alone.
+   The cart drawer's wallet element (shopify-accelerated-checkout-cart) is
+   deliberately NOT matched. */
+body.gso-native-purchase-lockout .product-form__buttons,
+body.gso-native-purchase-lockout .shopify-payment-button,
+body.gso-native-purchase-lockout shopify-accelerated-checkout {
+  display: none !important;
+}
+
+body:has([data-gso-lockout="1"]) .product-form__buttons,
+body:has([data-gso-lockout="1"]) .shopify-payment-button,
+body:has([data-gso-lockout="1"]) shopify-accelerated-checkout {
+  display: none !important;
+}
+
 .gso-configurator[hidden],
 .gso-configurator [hidden] {
   display: none !important;

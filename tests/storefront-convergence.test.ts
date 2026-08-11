@@ -305,6 +305,33 @@ describe("15G.5C final storefront MOQ cleanup (single customer-facing authority 
     expect(storefront({ quantity: 500, faces: 2, finish: "Raised Gloss+ — 3X" })).toMatchObject({ ok: true, unitPrice: 1.92, totalPrice: 960 });
   });
 
+  it("15G.5D: native purchase controls are locked out ONLY for configurator stock bags", () => {
+    const css = readFileSync("extensions/wholesale-theme/assets/gso-product-configurator.css", "utf8");
+    // liquid marker comes from existing deterministic product signals
+    expect(liquid).toContain("product.type == 'Stock Bag' or product.tags contains 'configurator-pilot'");
+    expect(liquid).toContain('data-gso-lockout="1"');
+    // CSS: JS-class rule and :has() rule are SEPARATE blocks (parser resilience)
+    expect(css).toContain("body.gso-native-purchase-lockout .product-form__buttons");
+    expect(css).toContain('body:has([data-gso-lockout="1"]) .product-form__buttons');
+    expect(css).toContain("body.gso-native-purchase-lockout .shopify-payment-button");
+    expect(css).toContain("body.gso-native-purchase-lockout shopify-accelerated-checkout {");
+    // cart-drawer wallet element is deliberately untouched
+    expect(css.includes("shopify-accelerated-checkout-cart {")).toBe(false);
+    // the old unscoped body class stays dead — no CSS may ever hook it (jars)
+    expect(css.includes("gso-configurator-hide-dynamic-checkout")).toBe(false);
+    // JS: instant activation from the liquid marker + response-confirmed
+    // activation guarded so jar pages (i === true) never lock out
+    expect(js).toContain('"1"===t.dataset.gsoLockout&&document.body.classList.add("gso-native-purchase-lockout")');
+    expect(js).toContain('i||(document.body.classList.add("gso-native-purchase-lockout")');
+    // non-CSS backstop: native add-to-cart submits are disabled under lockout
+    expect(js).toContain('[name="add"]');
+    expect(js).toContain("lb[li].disabled=!0");
+    // the GSO configurator's own controls carry no name="add" and stay usable
+    expect(js).toContain("data-gso-add-to-cart");
+    expect(liquid).toContain("data-gso-add-to-cart");
+    expect(/data-gso-add-to-cart[^>]*name=/.test(liquid)).toBe(false);
+  });
+
   it("Deep Build still can never checkout and no surface writes Shopify prices; jars keep their own MOQ path", () => {
     expect(storefront({ quantity: 500, faces: 2, finish: "Deep Build 9X+ — Request Custom Quote" })).toMatchObject({ ok: false, requestQuote: true });
     for (const src of [checkout, proxy, js]) {

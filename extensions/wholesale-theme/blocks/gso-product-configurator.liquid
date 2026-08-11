@@ -41,9 +41,22 @@
 
 {% assign selected_variant = product.selected_or_first_available_variant %}
 
+{%- comment -%}
+  15G.5D: configurator-controlled stock bags get exactly ONE purchase path —
+  the GSO configurator. The lockout marker (deterministic, from existing
+  product signals: type "Stock Bag" or tag "configurator-pilot") hides the
+  theme's native Add to cart / Buy with Shop / More payment options via the
+  extension CSS + JS. Jars and unrelated products never carry the marker.
+{%- endcomment -%}
+{%- assign gso_lockout = false -%}
+{%- if product.type == 'Stock Bag' or product.tags contains 'configurator-pilot' -%}
+  {%- assign gso_lockout = true -%}
+{%- endif -%}
+
 <div
   class="gso-configurator gso-configurator--{{ block.settings.layout }}"
   {{ block.shopify_attributes }}
+  {% if gso_lockout %}data-gso-lockout="1"{% endif %}
   data-configurator-proxy="/apps/wholesale-lite/configurator"
   data-checkout-proxy="/apps/wholesale-lite/configurator-checkout"
   data-customer-email="{% if customer %}{{ customer.email | escape }}{% endif %}"

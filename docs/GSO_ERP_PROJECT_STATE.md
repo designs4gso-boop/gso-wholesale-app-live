@@ -2031,3 +2031,33 @@ threshold — WARNING-ONLY, does not block `shopify app deploy`; splitting is
 deferred to avoid destabilizing a proven checkout. ACTIVATION: web (Render)
 auto-deploys; the theme-extension liquid/JS changes require one more
 `shopify app deploy`. Tests 951 -> 958.
+
+## Phase 15G.5D — single purchase path for configurator stock bags (2026-08-11)
+On configurator-controlled stock-bag product pages the theme's NATIVE
+purchase controls (Add to cart, Buy with Shop / accelerated checkout, More
+payment options — Refresh 12.0.0 renders them as .product-form__buttons
+wrapping the name="add" submit and .shopify-payment-button >
+shopify-accelerated-checkout) created a second path that could bypass
+canonical pricing. Lockout shipped in the theme extension only: the block
+liquid emits data-gso-lockout="1" from existing deterministic signals
+(product.type "Stock Bag" OR tag "configurator-pilot" — jars have neither),
+CSS hides the native controls under BOTH body.gso-native-purchase-lockout
+(JS-set, universal) and body:has([data-gso-lockout]) (instant, split into a
+separate rule so non-:has browsers keep the class rule), and JS activates
+the class at init from the marker plus response-confirmed for any active
+non-jar configurator page, also hard-disabling name="add" submits as a
+non-CSS backstop. The cart-drawer wallet element
+(shopify-accelerated-checkout-cart) is deliberately untouched; the legacy
+unscoped gso-configurator-hide-dynamic-checkout body class stays dead (no
+CSS may hook it — it fires on jar pages too). Fail-closed by design: a
+"Stock Bag"-typed product NOT connected to the configurator shows the
+configurator error and no native buttons. Residual vector noted: theme
+quick-add cards (9 occurrences on live product pages) can still add
+recommended products natively — owner can disable quick-add in theme
+settings; our CSS also hides form buttons inside quick-add modals opened
+from locked pages. Description audit (read-only): 1,886/1,898 products
+contain "Minimum order 64 units"; ALL are productType "Stock Bag" — zero
+jars/unrelated. Safest bulk criteria for the owner-approved phase:
+productType == "Stock Bag" AND exact sentence match, replace 64 -> 50.
+ACTIVATION: `shopify app deploy` required (theme extension only; no app
+server code changed). Tests 958 -> 959.
