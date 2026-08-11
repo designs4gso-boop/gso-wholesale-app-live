@@ -245,9 +245,10 @@ function normalizeFilePart(value: any, fallback = "ITEM") {
   return slugPart(value || fallback, fallback).slice(0, 40);
 }
 
-function ripNameForItem(jobTicket: string, index: number) {
-  return itemTicketFor(jobTicket, index);
-}
+// 15H.1B: the dead ripNameForItem helper was deleted — with zero callers it
+// survived React Router's dead-code elimination (which only removes bindings
+// the stripped server exports referenced) and dragged the .server import
+// into the client bundle, breaking the build.
 
 function suggestedFileNameForItem(jobTicket: string, item: any, index: number) {
   const ticket = itemTicketFor(jobTicket, index);

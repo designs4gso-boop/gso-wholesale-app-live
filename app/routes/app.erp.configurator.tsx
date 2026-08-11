@@ -490,6 +490,9 @@ export async function loader({ request }: { request: Request }) {
     labelSet,
     qty,
     minQty,
+    // 15H.1B: the component must never import the .server pricing module —
+    // the canonical stock-bag MOQ crosses as loader data instead.
+    canonicalStockBagMinQty: STOREFRONT_BAG_MIN_QTY,
     notice,
     result,
     canonical,
@@ -788,8 +791,8 @@ export default function GsoConfigurator() {
                   {/* 15G.5C: the row's stored minQuantity (64) is deprecated
                       compatibility data — canonical storefront MOQ is 50. */}
                   <span>
-                    Min Qty: {STOREFRONT_BAG_MIN_QTY} (canonical)
-                    {Number(product.minQuantity) !== STOREFRONT_BAG_MIN_QTY
+                    Min Qty: {data.canonicalStockBagMinQty} (canonical)
+                    {Number(product.minQuantity) !== data.canonicalStockBagMinQty
                       ? ` — legacy row value ${product.minQuantity} (deprecated)`
                       : ""}
                   </span>

@@ -197,6 +197,18 @@ describe("15H.1 ticket identity foundation", () => {
     expect(board.includes("async function buildNextJobTicket")).toBe(false);
   });
 
+  it("15H.1B: route components never reference .server pricing/ticket modules directly", () => {
+    // React Router's DCE only removes bindings the stripped server exports
+    // referenced — dead helpers or component JSX touching a .server import
+    // break the client build. Canonical values cross as loader data instead.
+    const configurator = readFileSync("app/routes/app.erp.configurator.tsx", "utf8");
+    expect(configurator).toContain("canonicalStockBagMinQty: STOREFRONT_BAG_MIN_QTY");
+    expect(configurator).toContain("data.canonicalStockBagMinQty} (canonical)");
+    expect(configurator.includes("{STOREFRONT_BAG_MIN_QTY} (canonical)")).toBe(false);
+    const board = readFileSync("app/routes/app.erp.production.tsx", "utf8");
+    expect(board.includes("function ripNameForItem")).toBe(false);
+  });
+
   it("14. no duplicate ticket-generation algorithm remains outside the authoritative service", () => {
     const central = readFileSync("app/lib/production-job-source.server.ts", "utf8");
     expect(central).toContain('String(sequence).padStart(4, "0")');
