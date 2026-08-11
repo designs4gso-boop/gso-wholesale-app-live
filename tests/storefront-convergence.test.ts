@@ -229,6 +229,15 @@ describe("15G.5B checkout handoff hardening (root cause + proxy-safe + frontend 
     expect(js).toContain('b.textContent="Request Custom Quote"');
   });
 
+  it("canonical bag checkout survives a null legacy rule (Production Finish is null-safe)", () => {
+    // Root cause #2: legacy ConfiguratorPricingRule rows never match the
+    // canonical finish labels, so `rule` is null for every canonical bag line —
+    // the unguarded `rule.productionFinish` threw before draftOrderCreate ran.
+    const checkout = readFileSync("app/routes/apps.wholesale-lite.configurator-checkout.ts", "utf8");
+    expect(checkout).toContain("rule?.productionFinish");
+    expect(checkout.includes("String(rule.productionFinish")).toBe(false);
+  });
+
   it("MOQ display follows the canonical server minimum (50) — legacy 64 demoted", () => {
     const js = readFileSync("extensions/wholesale-theme/assets/gso-product-configurator.js", "utf8");
     expect(js).toContain("data-gso-min-display");

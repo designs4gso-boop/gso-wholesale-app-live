@@ -368,7 +368,10 @@ export async function action({ request }: ActionFunctionArgs) {
         { key: "Product Type", value: productType },
         { key: "Material", value: material },
         { key: "Finish", value: finish },
-        { key: "Production Finish", value: String(rule.productionFinish || finish) },
+        // 15G.5B: `rule` is legitimately null on the canonical bag path (legacy
+        // ConfiguratorPricingRule rows never match the canonical finish labels)
+        // — the canonical finish label IS the production finish for bags.
+        { key: "Production Finish", value: String(rule?.productionFinish || finish) },
         ...(isJar
           ? [
               ...(usesJarColor ? [{ key: "Jar Color", value: selectedJarColor }] : []),
