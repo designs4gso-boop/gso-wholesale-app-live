@@ -1978,3 +1978,20 @@ fingerprinting confirmed Render auto-deploys pushes to main (15G.5A was
 already live). ACTIVATION: web deploy (auto on push) fixes checkout;
 `shopify app deploy` is additionally required for the THEME extension
 changes (JS resilience + MOQ display + liquid default). Tests 945 -> 950.
+
+ROOT CAUSE #2 (found post-deploy, fixed in the follow-up commit): the first
+fix alone did not restore checkout — live probes still returned the generic
+failure. Replicating the exact mutation directly against 2025-10 proved the
+mutation itself was now schema-clean, which localized the remaining failure
+to the route: the legacy ConfiguratorPricingRule lookup (kept for jars and
+for the "Production Finish" attribute) returns NULL for every canonical bag
+line, because all 50 active stock_bag_4x5 rules carry only the old finish
+labels ("1X-4X Spot Gloss"/"No Spot Gloss") and can never match the
+canonical labels ("No Specialty — 0X" ... "Extreme Raised — 8X"). The
+unguarded `rule.productionFinish` threw a TypeError BEFORE draftOrderCreate
+ever ran — this was the crash the owner reproduced (old build: caught ->
+500 -> proxy swallowed it into theme HTML; it also masked root cause #1,
+which any request surviving to the mutation would then have hit). Fix:
+`rule?.productionFinish || finish` — for canonical bags the finish label IS
+the production finish; the guaranteed-rule jar path is unchanged. Regression
+pin added (tests 950 -> 951).
