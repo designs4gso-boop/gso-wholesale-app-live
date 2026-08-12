@@ -2,13 +2,14 @@
 
 Updated: 2026-08-12 (Phase 16D, Miron jar revenue activation)
 
-## JAR STATUS AFTER 16D
-Owner-approved applied-label jar pricing is LIVE in code (canonical jar
-engine; 100ml/150ml tables; holo +20% of base; specialty ladder 0X-8X;
-MOQ 50; 5,000+/9X+ quote). Three launch products canonicalized and HELD
-AT DRAFT pending: (1) owner `shopify app deploy` (ships the jar lockout),
-(2) `node tools/rebuild-jars-16d.mjs --activate`. See
-docs/GSO_JAR_16D_LAUNCH_RUNBOOK.md. GSO sells NO blank Miron jars.
+## JAR STATUS AFTER 16D.1 — FAMILY LIVE
+Five applied-label jar products are ACTIVE and selling through the
+canonical jar engine (owner tables; holo +20% of base; specialty 0X-8X;
+MOQ 50; 5,000+/9X+ quote): 50ml, 100ml tall, 100ml wide, 150ml, 3oz
+(Clear/Black/White). Two are technically ready but MEDIA-BLOCKED at
+DRAFT: 250ml-miron-jars and 4oz-jar (0 images — add imagery, then
+`node tools/rebuild-jars-16d.mjs --activate`). 50mml handle typo fixed
+with 301 redirect. GSO sells NO blank jars — application included.
 
 ## STOREFRONT STATUS AFTER 16C
 1,886 canonical Stock Bags ACTIVE with 1,886 ERP rows; the 31 legacy bags
