@@ -2,6 +2,15 @@
 
 Updated: 2026-08-12 (Phase 16D, Miron jar revenue activation)
 
+## DTP STATUS AFTER 16E — FAMILY LIVE (1/4 products)
+4x5-custom-pouch (dtp_4x5x2) is ACTIVE, priced by the 15C.2 owner
+selling-price ladders through canonical-dtp-pricing.server.ts (MOQ 1,000;
+>10,000 quote; CR zipper/soft-touch included — no add-ons exist). 5x4x2 /
+6x5x2 / 8x5x2 products are created, verified, and MEDIA-BLOCKED at DRAFT
+(add imagery -> `node tools/rebuild-dtp-16e.mjs --activate`). Paid all-DTP
+orders take the dtp-bags outsourced purchase checklist. GSO prices sit
+above Beast Coast at most tiers (flagged for owner review, unchanged).
+
 ## JAR STATUS AFTER 16D.1 — FAMILY LIVE
 Five applied-label jar products are ACTIVE and selling through the
 canonical jar engine (owner tables; holo +20% of base; specialty 0X-8X;
