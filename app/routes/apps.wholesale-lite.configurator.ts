@@ -289,7 +289,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ? (optionFinishes.length ? optionFinishes : ruleFinishes)
       : CANONICAL_FINISH_OPTIONS;
   const bagColors = optionBagColors.length ? optionBagColors : defaultBagColors;
-  const jarColors = jarLaunchSize ? [] : hasJarColorVariants ? ["Clear", "Black", "White"] : [];
+  // 16D.1: color-variant launch jars (3oz/4oz) keep the jar color selector —
+  // color is a production attribute (never a price axis in the engine).
+  const jarColors = hasJarColorVariants ? ["Clear", "Black", "White"] : [];
   const labelSets = jarLaunchSize ? [...JAR_LABEL_MATERIALS] : optionLabelSets;
 
   const selectedMaterial = material || materials[0] || "Matte";

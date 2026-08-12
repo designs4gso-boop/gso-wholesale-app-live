@@ -73,10 +73,14 @@ describe("owner-approved base pricing (authority — never derived)", () => {
   });
 
   it("non-launch jar types are refused (no invented pricing)", () => {
-    const result = price("jar_3oz_clear", 100);
+    // jar_5oz_clear is the cost-only placeholder — it must never price online.
+    const result = price("jar_5oz_clear", 100);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.requestQuote).toBe(false);
-    expect(jarLaunchSizeForType("jar_250ml")).toBeNull();
+    expect(jarLaunchSizeForType("jar_5oz_clear")).toBeNull();
+    // 16D.1: the full family is now launch-priced.
+    expect(jarLaunchSizeForType("jar_250ml")).toBe("250ml");
+    expect(jarLaunchSizeForType("jar_50ml")).toBe("50ml");
   });
 });
 
@@ -234,6 +238,117 @@ describe("machine routing from jar summaries (canonical authority reuse)", () =>
     expect(summary).toContain("White Layers: 1");
     const decision = decideMachine({ selectedFinish: finishLabel, materialSummary: summary, machineSummary: null } as any);
     expect(decision).toMatchObject({ machine: "roland", machineRule: "white_or_gloss" });
+  });
+});
+
+describe("16D.1 — remaining jar family owner launch pricing (authority)", () => {
+  it("prices every 50ml launch tier exactly", () => {
+    expectUnit(price("jar_50ml", 50), 4.25);
+    expectUnit(price("jar_50ml", 100), 4.0);
+    expectUnit(price("jar_50ml", 250), 3.75);
+    expectUnit(price("jar_50ml", 500), 3.5);
+    expectUnit(price("jar_50ml", 1000), 3.25);
+    expectUnit(price("jar_50ml", 2500), 3.0);
+  });
+
+  it("prices every 250ml launch tier exactly", () => {
+    expectUnit(price("jar_250ml", 50), 7.5);
+    expectUnit(price("jar_250ml", 100), 7.0);
+    expectUnit(price("jar_250ml", 250), 6.5);
+    expectUnit(price("jar_250ml", 500), 6.25);
+    expectUnit(price("jar_250ml", 1000), 5.95);
+    expectUnit(price("jar_250ml", 2500), 5.75);
+  });
+
+  it("prices every 3oz launch tier exactly (both color types share the table)", () => {
+    for (const type of ["jar_3oz_clear", "jar_3oz_black_white"]) {
+      expectUnit(price(type, 50), 2.25);
+      expectUnit(price(type, 100), 2.0);
+      expectUnit(price(type, 250), 1.75);
+      expectUnit(price(type, 500), 1.6);
+      expectUnit(price(type, 1000), 1.45);
+      expectUnit(price(type, 2500), 1.35);
+    }
+  });
+
+  it("prices every 4oz launch tier exactly (both color types share the table)", () => {
+    for (const type of ["jar_4oz_clear", "jar_4oz_black_white"]) {
+      expectUnit(price(type, 50), 2.5);
+      expectUnit(price(type, 100), 2.25);
+      expectUnit(price(type, 250), 2.0);
+      expectUnit(price(type, 500), 1.8);
+      expectUnit(price(type, 1000), 1.65);
+      expectUnit(price(type, 2500), 1.5);
+    }
+  });
+
+  it("applies holographic + specialty identically on new sizes (3oz @500 holo 2X)", () => {
+    // 1.60 + 0.32 (20% of base) + 0.50 = 2.42
+    const result = expectUnit(price("jar_3oz_clear", 500, { labelMaterial: "Holographic", specialty: "Raised Emboss — 2X" }), 2.42);
+    if (result.ok) expect(result.holoAdd).toBe(0.32);
+    // 250ml @100 holo 8X: 7.00 + 1.40 + 1.75 = 10.15
+    expectUnit(price("jar_250ml", 100, { labelMaterial: "Holographic", specialty: "Ultra Layered — 8X" }), 10.15);
+  });
+
+  it("keeps 9X+/5,000+ quote-only and MOQ 50 on new sizes", () => {
+    const nine = price("jar_50ml", 500, { specialty: JAR_DEEP_BUILD_LABEL });
+    expect(nine.ok).toBe(false);
+    if (!nine.ok) expect(nine.requestQuote).toBe(true);
+    const five = price("jar_4oz_clear", 5000);
+    expect(five.ok).toBe(false);
+    if (!five.ok) expect(five.requestQuote).toBe(true);
+    expect(price("jar_250ml", 49).ok).toBe(false);
+  });
+
+  it("carries jarColor through the snapshot as a production attribute only", () => {
+    const priced = price("jar_3oz_black_white", 500, { specialty: "Standard — 0X" });
+    if (!priced.ok) throw new Error("expected priced");
+    const meta = buildCanonicalJarLineMetadata({ productType: "jar_3oz_black_white", priced, jarColor: "White" });
+    const jar = parseCanonicalJarOrderLine(meta)!;
+    expect(jar.jarColor).toBe("White");
+    expect(jar.unitPrice).toBe(1.6);
+    // ROUTING TOKEN SAFETY: "White"/"Clear" never enter the routing-read
+    // summary — a plain-CMYK white 3oz jar still defaults to the Mimaki.
+    const summary = canonicalJarMaterialSummary(jar);
+    expect(summary.toLowerCase().includes("white layers: 1")).toBe(false);
+    expect(summary.toLowerCase().includes("clear")).toBe(false);
+    expect(/jar color/i.test(summary)).toBe(false);
+    const decision = decideMachine({ selectedFinish: jar.finishLabel, materialSummary: summary, machineSummary: null } as any);
+    expect(decision).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
+    // invalid colors fail closed
+    expect(parseCanonicalJarOrderLine(meta.replace('"White"', '"Chartreuse"'))).toBeNull();
+  });
+
+  it("maps a paid 3oz color-jar order with jarColor in add-ons and notes (not the summary)", () => {
+    const priced = price("jar_3oz_clear", 250);
+    if (!priced.ok) throw new Error("expected priced");
+    const meta = buildCanonicalJarLineMetadata({ productType: "jar_3oz_clear", priced, jarColor: "Clear" });
+    const order = {
+      admin_graphql_api_id: "gid://shopify/Order/9160006",
+      name: "#16D1-3OZ",
+      line_items: [{
+        id: 5, title: "3oz Jar - Clear / Matte / Standard — 0X / Standard", quantity: 250, price: "1.75",
+        properties: [
+          { name: "Product Family", value: "Jars" },
+          { name: "Product Type", value: "jar_3oz_clear" },
+          { name: "Material", value: "Matte" },
+          { name: "Finish", value: "Standard — 0X" },
+          { name: "Label Material", value: "Standard" },
+          { name: "Label Set", value: "Standard" },
+          { name: "Jar Color", value: "Clear" },
+          { name: "_GSO Canonical", value: meta },
+        ],
+      }],
+    };
+    const payload = buildShopifyOrderJobPayload(order, "GSO-20260812-9006")!;
+    expect(payload.checklistFamily).toBe("premium-jars");
+    const item = payload.items[0];
+    expect(item.unitPrice).toBe(1.75);
+    expect(JSON.parse(item.selectedAddOns)).toMatchObject({ family: "jars", size: "3oz", jarColor: "Clear" });
+    expect(item.productionNotes).toContain("Jar Color (customer): Clear");
+    expect(/clear/i.test(item.materialSummary)).toBe(false);
+    const decision = decideMachine({ selectedFinish: item.selectedFinish, materialSummary: item.materialSummary, machineSummary: null } as any);
+    expect(decision).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
   });
 });
 

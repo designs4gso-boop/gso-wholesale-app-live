@@ -1,24 +1,24 @@
-// Phase 16D — canonicalize the Miron applied-label launch jars (100ml tall,
-// 100ml wide, 150ml) to the single-purchase-path architecture:
-//   - collapse the native 30-variant Material/Label/Spot-Gloss matrix to ONE
-//     "Default Title" variant @ 1.00 / CONTINUE (placeholder — checkout is
-//     draft-order based and server-repriced; the variant price is never
-//     charged once the lockout is live)
-//   - add the configurator-pilot tag (lockout marker via the deployed liquid)
-//   - set productType "Jars" (drives the 16D jar field labels in the block)
-//   - keep templateSuffix "jar" (the jar template's block instance renders
-//     the payload-driven jar configurator)
-//   - update the ERP ConfiguratorProduct row: shopifyVariantGid backfill,
-//     minQuantity 50 (owner 16D launch MOQ), active, provenance note
-// ACTIVATION IS A SEPARATE GATE: --activate only after the owner runs
-// `shopify app deploy` (the deploy ships the jar lockout + native-submit
-// block in the theme JS — activating before it would leave the legacy
-// native purchase path open at the 1.00 placeholder).
+// Phase 16D/16D.1 — canonicalize the Miron/oz applied-label jar family to the
+// single-purchase-path architecture:
+//   - collapse native variant matrices to ONE "Default Title" variant @ 1.00 /
+//     CONTINUE (placeholder — checkout is draft-order based, server-repriced)
+//   - configurator-pilot tag (lockout marker), productType "Jars", template
+//     "jar" kept
+//   - ERP ConfiguratorProduct rows: shopifyVariantGid backfill, minQuantity 50
+//     (owner launch MOQ), active, provenance notes (3oz/4oz have TWO rows per
+//     handle — clear + black_white color types — both are updated)
+//   - 16D.1: fixes the "50mml-miron-jars" handle typo -> "50ml-miron-jars"
+//     WITH a Shopify URL redirect (this also aligns Shopify with the ERP row,
+//     which always held the typo-free handle), and corrects the stale jar
+//     recipe application labor (10s -> 36s/jar = the owner $20/hr @ 100
+//     jars/hr standard; cost-side operational data only, no migration).
+// ACTIVATION GATES: --activate refuses any product that fails canonical
+// verification or has ZERO media (MEDIA ONLY BLOCKER — no imageless launch).
 //
 //   node tools/rebuild-jars-16d.mjs               read-only audit + dry run
 //   node tools/rebuild-jars-16d.mjs --execute     canonicalize (stays DRAFT)
-//   node tools/rebuild-jars-16d.mjs --activate    post-deploy: set ACTIVE + verify
-//   node tools/rebuild-jars-16d.mjs --rollback    restore snapshots (stays DRAFT)
+//   node tools/rebuild-jars-16d.mjs --activate    activate every verified product with media
+//   node tools/rebuild-jars-16d.mjs --rollback    restore snapshots
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -32,13 +32,23 @@ const DATA_DIR = path.join("tools", "rebuild-16c-data");
 const ROLLBACK_FILE = path.join(DATA_DIR, "rollback-16d-jars.json");
 const MARKER = "16D jar canonical launch";
 
-// handle -> expected ERP productType (verified live before any write)
+// handle -> ERP productTypes rooted at that handle (color-variant sizes have
+// two). The 100ml/150ml entries stay so this remains the ONE family tool
+// (idempotent converge — already-canonical products verify and skip).
 const LAUNCH_TARGETS = {
-  "100ml-tall-miron-jars": "jar_100ml_tall",
-  "100ml-wide-miron-jars": "jar_100ml_wide",
-  "150ml-miron-jars": "jar_150ml",
+  "50ml-miron-jars": ["jar_50ml"],
+  "100ml-tall-miron-jars": ["jar_100ml_tall"],
+  "100ml-wide-miron-jars": ["jar_100ml_wide"],
+  "150ml-miron-jars": ["jar_150ml"],
+  "250ml-miron-jars": ["jar_250ml"],
+  "3oz-jar": ["jar_3oz_clear", "jar_3oz_black_white"],
+  "4oz-jar": ["jar_4oz_clear", "jar_4oz_black_white"],
 };
+const TYPO_HANDLE = "50mml-miron-jars";
+const FIXED_HANDLE = "50ml-miron-jars";
 const JAR_MIN_QTY = 50;
+// Owner application standard: $20/hour at minimum 100 jars/hour = 36 s/jar.
+const APPLICATION_SECONDS_PER_JAR = 36;
 
 const db = new PrismaClient();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -67,13 +77,13 @@ function requireClean(step, payload) {
   if (errors.length) throw new Error(`${step}: ${JSON.stringify(errors).slice(0, 400)}`);
 }
 
-async function detailFor(token, handle) {
+async function detailFor(token, handle, optional = false) {
   const data = await gql(token, DETAIL, { h: handle });
-  if (!data.productByIdentifier) throw new Error(`${handle}: product not found`);
+  if (!data.productByIdentifier && !optional) throw new Error(`${handle}: product not found`);
   return data.productByIdentifier;
 }
 
-function snapshotOf(detail, erpRow) {
+function snapshotOf(detail, erpRows) {
   return {
     id: detail.id,
     handle: detail.handle,
@@ -82,9 +92,14 @@ function snapshotOf(detail, erpRow) {
     previousProductType: detail.productType ?? "",
     previousTemplateSuffix: detail.templateSuffix ?? null,
     previousTags: [...(detail.tags || [])],
-    erpRow: erpRow
-      ? { id: erpRow.id, previousMinQuantity: erpRow.minQuantity, previousVariantGid: erpRow.shopifyVariantGid ?? null, previousActive: erpRow.active, previousNotes: erpRow.notes ?? null }
-      : null,
+    erpRows: (erpRows || []).map((row) => ({
+      id: row.id,
+      previousMinQuantity: row.minQuantity,
+      previousVariantGid: row.shopifyVariantGid ?? null,
+      previousActive: row.active,
+      previousNotes: row.notes ?? null,
+      previousHandle: row.shopifyHandle ?? null,
+    })),
     options: (detail.options || []).map((option) => ({ id: option.id, name: option.name, position: option.position, values: [...option.values] })),
     variants: detail.variants.nodes.map((variant) => ({
       id: variant.id, title: variant.title, position: variant.position, price: variant.price,
@@ -105,7 +120,7 @@ function appendRollback(entry) {
   }
 }
 
-async function verifyCanonical(token, handle, expectType) {
+async function verifyCanonical(token, handle, expectTypes) {
   const detail = await detailFor(token, handle);
   const problems = [];
   const variants = detail.variants.nodes;
@@ -116,14 +131,53 @@ async function verifyCanonical(token, handle, expectType) {
   if (!detail.tags.includes("configurator-pilot")) problems.push("missing configurator-pilot tag");
   if (detail.productType !== "Jars") problems.push(`productType "${detail.productType}"`);
   if (detail.templateSuffix !== "jar") problems.push(`templateSuffix ${detail.templateSuffix}`);
-  const row = await db.configuratorProduct.findFirst({ where: { shop: SHOP, shopifyHandle: handle, productType: expectType } });
-  if (!row) problems.push("ERP row missing");
-  else {
-    if (row.shopifyVariantGid !== variants[0]?.id) problems.push("ERP variant GID mismatch");
-    if (row.minQuantity !== JAR_MIN_QTY) problems.push(`ERP minQuantity ${row.minQuantity}`);
-    if (!row.active) problems.push("ERP row inactive");
+  for (const expectType of expectTypes) {
+    const row = await db.configuratorProduct.findFirst({ where: { shop: SHOP, shopifyHandle: handle, productType: expectType } });
+    if (!row) { problems.push(`ERP row missing (${expectType})`); continue; }
+    if (row.shopifyVariantGid !== variants[0]?.id) problems.push(`ERP variant GID mismatch (${expectType})`);
+    if (row.minQuantity !== JAR_MIN_QTY) problems.push(`ERP minQuantity ${row.minQuantity} (${expectType})`);
+    if (!row.active) problems.push(`ERP row inactive (${expectType})`);
   }
   return { detail, ok: problems.length === 0, problems };
+}
+
+// 16D.1: fix the 50mml handle typo with a storefront redirect, aligning
+// Shopify with the ERP row (which always held the typo-free handle).
+async function fixTypoHandle(token, dryRun) {
+  const atFixed = await detailFor(token, FIXED_HANDLE, true);
+  if (atFixed) return false; // already fixed
+  const atTypo = await detailFor(token, TYPO_HANDLE, true);
+  if (!atTypo) throw new Error(`Neither ${FIXED_HANDLE} nor ${TYPO_HANDLE} exists — STOP.`);
+  if (dryRun) {
+    console.log(`[dry] would rename handle ${TYPO_HANDLE} -> ${FIXED_HANDLE} (redirectNewHandle: true)`);
+    return false;
+  }
+  const intro = await gql(token, `{ t: __type(name: "ProductUpdateInput") { inputFields { name } } }`);
+  const hasRedirect = intro.t.inputFields.some((field) => field.name === "redirectNewHandle");
+  if (!hasRedirect) throw new Error("ProductUpdateInput has no redirectNewHandle on this API version — STOP (no silent URL break).");
+  const result = await gql(
+    token,
+    `mutation($p: ProductUpdateInput!) { productUpdate(product: $p) { product { id handle } userErrors { field message } } }`,
+    { p: { id: atTypo.id, handle: FIXED_HANDLE, redirectNewHandle: true } },
+  );
+  requireClean("handle fix", result.productUpdate);
+  if (result.productUpdate.product.handle !== FIXED_HANDLE) throw new Error("handle fix did not stick — STOP");
+  console.log(`handle fixed: ${TYPO_HANDLE} -> ${FIXED_HANDLE} (redirect created)`);
+  await sleep(300);
+  return true;
+}
+
+// Owner application standard correction — cost-side operational data only.
+async function fixApplicationLabor(dryRun) {
+  const stale = await db.productRecipe.findMany({
+    where: { shop: SHOP, active: true, productTypeProfile: { key: { startsWith: "jar_" } }, NOT: { applicationLaborSecondsPerUnit: APPLICATION_SECONDS_PER_JAR } },
+    select: { id: true, name: true, applicationLaborSecondsPerUnit: true },
+  });
+  if (!stale.length) { console.log("application labor: all jar recipes already at 36 s/jar"); return; }
+  for (const recipe of stale) {
+    console.log(`${dryRun ? "[dry] would update" : "updated"} recipe "${recipe.name}": applicationLaborSecondsPerUnit ${recipe.applicationLaborSecondsPerUnit} -> ${APPLICATION_SECONDS_PER_JAR}`);
+    if (!dryRun) await db.productRecipe.update({ where: { id: recipe.id }, data: { applicationLaborSecondsPerUnit: APPLICATION_SECONDS_PER_JAR } });
+  }
 }
 
 async function main() {
@@ -141,6 +195,7 @@ async function main() {
         productType: entry.previousProductType,
         templateSuffix: entry.previousTemplateSuffix,
         tags: entry.previousTags,
+        ...(entry.handle ? { handle: entry.handle } : {}),
         productOptions: entry.options
           .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
           .map((option) => ({ name: option.name, position: option.position, values: option.values.map((value) => ({ name: value })) })),
@@ -154,14 +209,14 @@ async function main() {
         product { id status variantsCount { count } } userErrors { field message } } }`, { input });
       const errors = result.productSet?.userErrors || [];
       if (errors.length) { console.log(`FAIL ${entry.handle}: ${JSON.stringify(errors).slice(0, 250)}`); continue; }
-      if (entry.erpRow) {
+      for (const row of entry.erpRows || (entry.erpRow ? [entry.erpRow] : [])) {
         await db.configuratorProduct.update({
-          where: { id: entry.erpRow.id },
+          where: { id: row.id },
           data: {
-            minQuantity: entry.erpRow.previousMinQuantity,
-            shopifyVariantGid: entry.erpRow.previousVariantGid,
-            active: entry.erpRow.previousActive,
-            notes: entry.erpRow.previousNotes,
+            minQuantity: row.previousMinQuantity,
+            shopifyVariantGid: row.previousVariantGid,
+            active: row.previousActive,
+            notes: row.previousNotes,
           },
         });
       }
@@ -173,35 +228,54 @@ async function main() {
 
   if (ACTIVATE) {
     let activated = 0;
-    for (const [handle, expectType] of Object.entries(LAUNCH_TARGETS)) {
-      const verdict = await verifyCanonical(token, handle, expectType);
+    let blocked = 0;
+    for (const [handle, expectTypes] of Object.entries(LAUNCH_TARGETS)) {
+      const verdict = await verifyCanonical(token, handle, expectTypes);
       if (!verdict.ok) { console.log(`REFUSED ${handle}: ${verdict.problems.join("; ")}`); process.exitCode = 1; continue; }
+      if ((verdict.detail.mediaCount?.count ?? 0) === 0) {
+        console.log(`MEDIA ONLY BLOCKER ${handle}: technically ready, 0 media — stays ${verdict.detail.status}. Add product imagery, then re-run --activate.`);
+        blocked += 1;
+        continue;
+      }
       if (verdict.detail.status === "ACTIVE") { console.log(`already ACTIVE ${handle}`); activated += 1; continue; }
       const result = await gql(token, `mutation($p: ProductUpdateInput!) { productUpdate(product: $p) { product { id status } userErrors { field message } } }`, { p: { id: verdict.detail.id, status: "ACTIVE" } });
       requireClean(`${handle} activate`, result.productUpdate);
       if (result.productUpdate.product.status === "ACTIVE") { console.log(`ACTIVATED ${handle}`); activated += 1; }
       await sleep(250);
     }
-    console.log(`\nACTIVE: ${activated}/${Object.keys(LAUNCH_TARGETS).length}`);
+    console.log(`\nACTIVE: ${activated}/${Object.keys(LAUNCH_TARGETS).length}${blocked ? ` | media-blocked: ${blocked}` : ""}`);
     return;
   }
 
-  for (const [handle, expectType] of Object.entries(LAUNCH_TARGETS)) {
-    const detail = await detailFor(token, handle);
-    const erpRow = await db.configuratorProduct.findFirst({ where: { shop: SHOP, shopifyHandle: handle, productType: expectType } });
+  await fixTypoHandle(token, !EXECUTE);
+  await fixApplicationLabor(!EXECUTE);
+
+  for (const [handle, expectTypes] of Object.entries(LAUNCH_TARGETS)) {
+    const detail = await detailFor(token, handle, true);
+    if (!detail) {
+      console.log(`${EXECUTE ? "SKIP" : "[dry]"} ${handle}: not found yet (typo fix pending?)`);
+      continue;
+    }
+    const erpRows = [];
+    for (const expectType of expectTypes) {
+      const row = await db.configuratorProduct.findFirst({ where: { shop: SHOP, productType: expectType, OR: [{ shopifyHandle: handle }, { shopifyProductGid: detail.id }] } });
+      if (row) erpRows.push(row);
+    }
     const already = detail.tags.includes("configurator-pilot") && detail.variants.nodes.length === 1;
     const guards = [];
-    if (!erpRow) guards.push(`no ERP row (${expectType})`);
+    if (erpRows.length !== expectTypes.length) guards.push(`ERP rows ${erpRows.length}/${expectTypes.length} (${expectTypes.join(",")})`);
     if (!already) {
       if (detail.status !== "DRAFT") guards.push(`status ${detail.status} (expected DRAFT pre-canonicalization)`);
       if (detail.variants.nodes.length < 2) guards.push(`${detail.variants.nodes.length} variants`);
     }
     if (guards.length) throw new Error(`${handle}: ${guards.join("; ")} — STOP.`);
-    const plan = already ? "converge (already collapsed)" : `keep pos-1 variant, delete ${detail.variants.nodes.length - 1} variants + ${detail.options.length} options`;
-    console.log(`${EXECUTE ? "REBUILD" : "[dry]"} ${handle} (${detail.status}, ${detail.variants.nodes.length} variants, tmpl=${detail.templateSuffix}): ${plan}; +tag +type Jars +ERP vgid/minQ ${JAR_MIN_QTY}`);
+    const plan = already
+      ? "converge (already canonical)"
+      : `keep pos-1 variant, delete ${detail.variants.nodes.length - 1} variants + ${detail.options.length} options`;
+    console.log(`${EXECUTE ? "REBUILD" : "[dry]"} ${handle} (${detail.status}, ${detail.variants.nodes.length} variants, media ${detail.mediaCount?.count ?? 0}): ${plan}; +tag +type Jars +${erpRows.length} ERP row(s) vgid/minQ ${JAR_MIN_QTY}`);
 
     if (!EXECUTE) continue;
-    appendRollback(snapshotOf(detail, erpRow));
+    appendRollback(snapshotOf(detail, erpRows));
 
     let current = detail;
     if (current.variants.nodes.length > 1) {
@@ -236,19 +310,24 @@ async function main() {
       await sleep(300);
     }
     const fresh = await detailFor(token, handle);
-    await db.configuratorProduct.update({
-      where: { id: erpRow.id },
-      data: {
-        shopifyProductGid: fresh.id,
-        shopifyVariantGid: fresh.variants.nodes[0].id,
-        minQuantity: JAR_MIN_QTY,
-        active: true,
-        pilot: true,
-        notes: `${erpRow.notes ? `${erpRow.notes}\n` : ""}${MARKER}: variant matrix collapsed, variant GID backfilled, MOQ ${JAR_MIN_QTY}, owner-approved 16D pricing via canonical jar engine.`,
-      },
-    });
-    const verdict = await verifyCanonical(token, handle, expectType);
-    console.log(`  ${handle}: ${verdict.ok ? "VERIFIED (stays DRAFT until --activate after shopify app deploy)" : "VERIFY FAILED: " + verdict.problems.join("; ")}`);
+    for (const row of erpRows) {
+      await db.configuratorProduct.update({
+        where: { id: row.id },
+        data: {
+          shopifyProductGid: fresh.id,
+          shopifyVariantGid: fresh.variants.nodes[0].id,
+          shopifyHandle: handle,
+          minQuantity: JAR_MIN_QTY,
+          active: true,
+          pilot: true,
+          notes: (row.notes || "").includes(MARKER)
+            ? row.notes
+            : `${row.notes ? `${row.notes}\n` : ""}${MARKER}: variant matrix collapsed, variant GID backfilled, MOQ ${JAR_MIN_QTY}, owner-approved pricing via canonical jar engine.`,
+        },
+      });
+    }
+    const verdict = await verifyCanonical(token, handle, expectTypes);
+    console.log(`  ${handle}: ${verdict.ok ? `VERIFIED (media ${verdict.detail.mediaCount?.count ?? 0}; activation via --activate)` : "VERIFY FAILED: " + verdict.problems.join("; ")}`);
     if (!verdict.ok) process.exitCode = 1;
     await sleep(300);
   }

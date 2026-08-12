@@ -381,3 +381,30 @@ label+application included; Matte/Gloss base included):
   stay DRAFT.
 - Tests 1076 (28 new jar pins incl. the owner $7.50 stack example);
   TS 304; build green; prisma valid.
+
+## Phase 16D.1 (2026-08-12) — complete jar family revenue activation
+Post-activation sweep of the three live jars: 26/26 (pages 200, lockout
+markers + jar labels rendered live, pricing + checkout verified).
+- canonical-jar-pricing.ts extended with the owner 16D.1 launch ladders:
+  50ml (4.25/4.00/3.75/3.50/3.25/3.00), 250ml (7.50/7.00/6.50/6.25/
+  5.95/5.75), 3oz (2.25/2.00/1.75/1.60/1.45/1.35), 4oz (2.50/2.25/2.00/
+  1.80/1.65/1.50); both color types per oz size share one table (color =
+  production attribute, never a price axis). jar_5oz_clear stays refused.
+- jarColor plumbed through the canonical snapshot/add-ons/notes for the
+  color-variant 3oz/4oz jars. ROUTING TOKEN FIX (test-caught): profile
+  IDs jar_*_clear/jar_*_black_white contain router tokens — summaries
+  render token-safe spellings (_clr/_blkwht) and jar color NEVER enters
+  routing-read fields, so a plain-CMYK Clear/White jar still routes
+  Mimaki; exact values ride in notes/add-ons/snapshot.
+- tools/rebuild-jars-16d.mjs is now the ONE family tool (7 handles):
+  fixed the 50mml->50ml handle typo WITH redirect (also healed the
+  Shopify-vs-ERP handle mismatch), corrected 11 jar recipes'
+  applicationLaborSecondsPerUnit 10->36 (owner $20/hr @ 100 jars/hr),
+  canonicalized 50ml (3->1 variants), 250ml (30->1), 3oz (45->1, 2 ERP
+  rows), 4oz (45->1, 2 ERP rows). --activate refuses 0-media products
+  (MEDIA ONLY BLOCKER: 250ml-miron-jars, 4oz-jar).
+- Margin audit (jar+lid+$0.20 application; label media/ink still absent
+  from ERP): all 24 new tiers >= 30% — 50ml 33-37%, 250ml 41-46%,
+  3oz 39-64%, 4oz 43-66%. No STOP tiers.
+- Tests 1084 (8 new incl. per-tier pins + token-safety); TS 304; build
+  green; prisma valid.

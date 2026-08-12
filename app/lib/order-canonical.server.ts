@@ -118,6 +118,10 @@ export type CanonicalJarOrderLine = {
   specialtyX: number;
   finishLabel: string;
   unitPrice: number;
+  // 16D.1: color-variant jars (3oz/4oz). Production attribute only — the
+  // words "Clear"/"White" are machine-router tokens, so this value may
+  // appear ONLY in notes/add-ons, never in routing-read summaries.
+  jarColor: "" | "Clear" | "Black" | "White";
   engine: string;
 };
 
@@ -134,6 +138,7 @@ export function parseCanonicalJarOrderLine(raw: string | null | undefined): Cano
   const qty = Number(parsed.qty);
   const specialtyX = Number(parsed.specialtyX);
   const unitPrice = Number(parsed.unitPrice);
+  const jarColor = parsed.jarColor === undefined ? "" : parsed.jarColor;
   const ok =
     typeof parsed.v === "string" && parsed.v.length > 0 &&
     typeof parsed.profile === "string" && parsed.profile.startsWith("jar_") &&
@@ -144,6 +149,7 @@ export function parseCanonicalJarOrderLine(raw: string | null | undefined): Cano
     Number.isFinite(specialtyX) && specialtyX >= 0 && specialtyX <= 8 &&
     typeof parsed.finishLabel === "string" && parsed.finishLabel.length > 0 &&
     Number.isFinite(unitPrice) && unitPrice > 0 &&
+    (jarColor === "" || jarColor === "Clear" || jarColor === "Black" || jarColor === "White") &&
     typeof parsed.engine === "string" && parsed.engine.length > 0;
   if (!ok) return null;
   return {
@@ -159,6 +165,7 @@ export function parseCanonicalJarOrderLine(raw: string | null | undefined): Cano
     specialtyX: Math.floor(specialtyX),
     finishLabel: parsed.finishLabel,
     unitPrice,
+    jarColor,
     engine: parsed.engine,
   };
 }
@@ -172,8 +179,12 @@ export function parseCanonicalJarOrderLine(raw: string | null | undefined): Cano
 // rendered "High-Shine" here (and stated verbatim in production notes,
 // which the router never reads).
 export function canonicalJarMaterialSummary(jar: CanonicalJarOrderLine): string {
+  // 16D.1: the 3oz/4oz profile IDs contain the literal words "clear"/"white"
+  // (jar_3oz_clear, jar_4oz_black_white) — router tokens. The summary renders
+  // a token-safe spelling; the exact profile rides in add-ons/notes/snapshot.
+  const safeProfile = jar.profile.replace(/_clear\b/g, "_clr").replace(/_black_white\b/g, "_blkwht");
   const parts = [
-    `Profile: ${jar.profile}`,
+    `Profile: ${safeProfile}`,
     `Family: Jars`,
     `Size: ${jar.size}`,
     `Base: ${jar.baseFinish === "Gloss" ? "High-Shine" : "Matte"}`,
@@ -194,6 +205,7 @@ export function canonicalJarSelectedAddOns(jar: CanonicalJarOrderLine): Record<s
     canonicalVersion: jar.v,
     profile: jar.profile,
     size: jar.size,
+    ...(jar.jarColor ? { jarColor: jar.jarColor } : {}),
     baseFinish: jar.baseFinish,
     labelMaterial: jar.labelMaterial,
     holographic: jar.holo,

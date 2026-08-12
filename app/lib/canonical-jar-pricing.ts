@@ -25,14 +25,22 @@ export const JAR_STOREFRONT_MIN_QTY = 50;
 export const JAR_VOLUME_QUOTE_FROM = 5000;
 export const JAR_QUANTITY_OPTIONS = [50, 100, 250, 500, 1000, 2500];
 
-export type JarLaunchSize = "100ml" | "150ml";
+export type JarLaunchSize = "50ml" | "100ml" | "150ml" | "250ml" | "3oz" | "4oz";
 
 // ERP ConfiguratorProduct productTypes that price through this engine. Both
-// 100ml body styles (tall/wide) share the owner's single 100ml price table.
+// 100ml body styles (tall/wide) share the owner's single 100ml price table;
+// both 3oz and both 4oz color types (clear / black-white) share their size's
+// single owner table — jar color is a production attribute, not a price axis.
 export const JAR_LAUNCH_TYPE_SIZES: Record<string, JarLaunchSize> = {
+  jar_50ml: "50ml",
   jar_100ml_tall: "100ml",
   jar_100ml_wide: "100ml",
   jar_150ml: "150ml",
+  jar_250ml: "250ml",
+  jar_3oz_clear: "3oz",
+  jar_3oz_black_white: "3oz",
+  jar_4oz_clear: "4oz",
+  jar_4oz_black_white: "4oz",
 };
 
 export function jarLaunchSizeForType(productType: string): JarLaunchSize | null {
@@ -40,6 +48,15 @@ export function jarLaunchSizeForType(productType: string): JarLaunchSize | null 
 }
 
 export const JAR_BASE_PRICES: Record<JarLaunchSize, Array<{ minQty: number; priceEach: number }>> = {
+  // 16D.1 owner launch ladder
+  "50ml": [
+    { minQty: 50, priceEach: 4.25 },
+    { minQty: 100, priceEach: 4.0 },
+    { minQty: 250, priceEach: 3.75 },
+    { minQty: 500, priceEach: 3.5 },
+    { minQty: 1000, priceEach: 3.25 },
+    { minQty: 2500, priceEach: 3.0 },
+  ],
   "100ml": [
     { minQty: 50, priceEach: 4.95 },
     { minQty: 100, priceEach: 4.5 },
@@ -55,6 +72,33 @@ export const JAR_BASE_PRICES: Record<JarLaunchSize, Array<{ minQty: number; pric
     { minQty: 500, priceEach: 5.5 },
     { minQty: 1000, priceEach: 5.25 },
     { minQty: 2500, priceEach: 4.95 },
+  ],
+  // 16D.1 owner launch ladder
+  "250ml": [
+    { minQty: 50, priceEach: 7.5 },
+    { minQty: 100, priceEach: 7.0 },
+    { minQty: 250, priceEach: 6.5 },
+    { minQty: 500, priceEach: 6.25 },
+    { minQty: 1000, priceEach: 5.95 },
+    { minQty: 2500, priceEach: 5.75 },
+  ],
+  // 16D.1 owner launch ladder (applied-label 3oz — clear or black/white)
+  "3oz": [
+    { minQty: 50, priceEach: 2.25 },
+    { minQty: 100, priceEach: 2.0 },
+    { minQty: 250, priceEach: 1.75 },
+    { minQty: 500, priceEach: 1.6 },
+    { minQty: 1000, priceEach: 1.45 },
+    { minQty: 2500, priceEach: 1.35 },
+  ],
+  // 16D.1 owner launch ladder (applied-label 4oz — clear or black/white)
+  "4oz": [
+    { minQty: 50, priceEach: 2.5 },
+    { minQty: 100, priceEach: 2.25 },
+    { minQty: 250, priceEach: 2.0 },
+    { minQty: 500, priceEach: 1.8 },
+    { minQty: 1000, priceEach: 1.65 },
+    { minQty: 2500, priceEach: 1.5 },
   ],
 };
 
@@ -225,9 +269,13 @@ export function jarPriceBreaks(selection: Omit<JarSelection, "quantity">): Array
 
 // Hidden `_GSO Canonical` line snapshot for jar lines — family-aware sibling
 // of the stock-bag snapshot (order-canonical.server.ts parses both).
+// jarColor (16D.1, color-variant 3oz/4oz jars) is a production attribute
+// only — it never affects price and never enters routing-read summaries
+// (the words "Clear"/"White" are machine-router tokens).
 export function buildCanonicalJarLineMetadata(input: {
   productType: string;
   priced: Extract<JarPriceResult, { ok: true }>;
+  jarColor?: string;
 }): string {
   return JSON.stringify({
     v: JAR_PRICING_VERSION,
@@ -242,6 +290,7 @@ export function buildCanonicalJarLineMetadata(input: {
     specialtyX: input.priced.specialtyX,
     finishLabel: input.priced.specialtyLabel,
     unitPrice: input.priced.unitPrice,
+    ...(input.jarColor ? { jarColor: input.jarColor } : {}),
     engine: JAR_PRICING_ENGINE,
   });
 }

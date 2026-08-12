@@ -326,7 +326,7 @@ export async function action({ request }: ActionFunctionArgs) {
         }
         priceEach = priced.unitPrice;
         matchedRange = `${priced.tierMinQty}+`;
-        canonicalMeta = buildCanonicalJarLineMetadata({ productType, priced });
+        canonicalMeta = buildCanonicalJarLineMetadata({ productType, priced, jarColor: selectedJarColor || undefined });
       } else if (!isJar) {
         const faces = /single|front\s*only/i.test(String(defaultSides || "")) ? 1 : 2;
         const priced = priceStorefrontConfiguration(canonicalInputs, { quantity, faces, material, finish });

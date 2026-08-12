@@ -551,7 +551,7 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
         : (getLineProperty(line, "Production Finish") || finish);
     const bagColor = canonical ? canonical.bagColor : getLineProperty(line, "Bag Color");
     const labelSet = jarCanonical ? jarCanonical.labelMaterial : getLineProperty(line, "Label Set");
-    const jarColor = getLineProperty(line, "Jar Color");
+    const jarColor = jarCanonical?.jarColor || getLineProperty(line, "Jar Color");
     const sides = canonical ? (canonical.faces === 1 ? "Single Sided" : "Double Sided") : (getLineProperty(line, "Sides") || "Double Sided");
     const isJar = isJarFamily(productFamily) || productType.startsWith("jar_");
     const quantity = Number(line.quantity || 1);
@@ -598,6 +598,7 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
           ...(jarCanonical
             ? [
                 `Jar Size: ${jarCanonical.size}`,
+                ...(jarCanonical.jarColor ? [`Jar Color (customer): ${jarCanonical.jarColor}`] : []),
                 `Base Finish (customer): ${jarCanonical.baseFinish} — included, no charge`,
                 `Label Material: ${jarCanonical.labelMaterial}`,
                 `Holographic: ${jarCanonical.holo ? "yes (+20% of base)" : "no"}`,
