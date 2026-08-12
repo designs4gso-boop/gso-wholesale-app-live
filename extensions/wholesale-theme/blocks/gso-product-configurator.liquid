@@ -105,12 +105,12 @@
           "finish" carries the universal GSO specialty ladder.
         {%- endcomment -%}
         <label class="gso-configurator__field">
-          <span>{% if product.type == 'Jars' %}Base Finish (Included){% else %}Material{% endif %}</span>
+          <span>{% if product.type == 'Jars' %}Base Finish (Included){% elsif product.type == 'DTP Pouches' %}Lamination{% else %}Material{% endif %}</span>
           <select data-gso-field="material"></select>
         </label>
 
         <label class="gso-configurator__field">
-          <span>{% if product.type == 'Jars' %}Specialty{% else %}Finish{% endif %}</span>
+          <span>{% if product.type == 'Jars' %}Specialty{% elsif product.type == 'DTP Pouches' %}Included Spec{% else %}Finish{% endif %}</span>
           <select data-gso-field="finish"></select>
         </label>
 

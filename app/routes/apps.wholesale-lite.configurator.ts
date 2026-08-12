@@ -23,6 +23,16 @@ import {
   jarPriceBreaks,
   priceJarConfiguration,
 } from "../lib/canonical-jar-pricing";
+import {
+  DTP_FINISH_OPTIONS,
+  DTP_MATERIAL_OPTIONS,
+  DTP_QUANTITY_OPTIONS,
+  DTP_STOREFRONT_MAX_QTY,
+  DTP_STOREFRONT_MIN_QTY,
+  dtpLaunchInfoForType,
+  dtpPriceBreaks,
+  priceDtpConfiguration,
+} from "../lib/canonical-dtp-pricing.server";
 
 // 15G.1: served only through the signed Shopify app proxy (same-origin from
 // the storefront) — no cross-origin callers exist, so no CORS headers.
@@ -78,8 +88,10 @@ function resolveJarVariantProductType(productType: string, jarColor: "Clear" | "
   return productType;
 }
 
-function productFamilyForType(productType: string): "Jars" | "Stock Bags" {
-  return isJarProductType(productType) ? "Jars" : "Stock Bags";
+function productFamilyForType(productType: string): "Jars" | "Stock Bags" | "DTP Pouches" {
+  if (isJarProductType(productType)) return "Jars";
+  if (productType.startsWith("dtp_")) return "DTP Pouches";
+  return "Stock Bags";
 }
 
 function money(value: any) {
@@ -214,12 +226,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // 15G.5A: the 4x5 configurator flow starts at the approved ladder minimum
   // of 50 (server-enforced); non-launch jars keep their own product MOQ.
   // 16D: owner-approved launch jars (100ml/150ml Miron) start at 50.
+  // 16E: outsourced DTP pouches floor at the Spektra vendor MOQ (1,000).
   const jarLaunchSize = isJar ? jarLaunchSizeForType(productType) : null;
-  const minQuantity = isJar
-    ? jarLaunchSize
-      ? JAR_STOREFRONT_MIN_QTY
-      : Number(effectiveProduct.minQuantity || MIN_QTY)
-    : STOREFRONT_BAG_MIN_QTY;
+  const dtpLaunch = dtpLaunchInfoForType(productType);
+  const minQuantity = dtpLaunch
+    ? DTP_STOREFRONT_MIN_QTY
+    : isJar
+      ? jarLaunchSize
+        ? JAR_STOREFRONT_MIN_QTY
+        : Number(effectiveProduct.minQuantity || MIN_QTY)
+      : STOREFRONT_BAG_MIN_QTY;
   const quantity = Math.max(numberValue(url.searchParams.get("quantity"), minQuantity), minQuantity);
 
   const [options, rules] = await Promise.all([
@@ -282,13 +298,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // finish, the "labelSet" control carries the label material, and the
   // "finish" control carries the universal GSO specialty ladder. Non-launch
   // jars keep their DB options; bags keep the canonical 0X-8X ladder.
-  const materials = jarLaunchSize ? [...JAR_BASE_FINISHES] : optionMaterials.length ? optionMaterials : ruleMaterials;
-  const finishes = jarLaunchSize
-    ? [...JAR_SPECIALTY_OPTIONS]
-    : isJar
-      ? (optionFinishes.length ? optionFinishes : ruleFinishes)
-      : CANONICAL_FINISH_OPTIONS;
-  const bagColors = optionBagColors.length ? optionBagColors : defaultBagColors;
+  // 16E: DTP pouches are vendor-finished — everything is included, so the
+  // "option" lists are single informational entries and there is no color/
+  // label control at all (size = the product, quantity = the only price axis).
+  const materials = dtpLaunch
+    ? [...DTP_MATERIAL_OPTIONS]
+    : jarLaunchSize
+      ? [...JAR_BASE_FINISHES]
+      : optionMaterials.length
+        ? optionMaterials
+        : ruleMaterials;
+  const finishes = dtpLaunch
+    ? [...DTP_FINISH_OPTIONS]
+    : jarLaunchSize
+      ? [...JAR_SPECIALTY_OPTIONS]
+      : isJar
+        ? (optionFinishes.length ? optionFinishes : ruleFinishes)
+        : CANONICAL_FINISH_OPTIONS;
+  const bagColors = dtpLaunch ? [] : optionBagColors.length ? optionBagColors : defaultBagColors;
   // 16D.1: color-variant launch jars (3oz/4oz) keep the jar color selector —
   // color is a production attribute (never a price axis in the engine).
   const jarColors = hasJarColorVariants ? ["Clear", "Black", "White"] : [];
@@ -296,7 +323,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const selectedMaterial = material || materials[0] || "Matte";
   const selectedFinish = finish || finishes[0] || "No Spot Gloss";
-  const selectedBagColor = isJar ? "" : bagColor || bagColors[0] || "White";
+  const selectedBagColor = isJar || dtpLaunch ? "" : bagColor || bagColors[0] || "White";
   const selectedJarColor = hasJarColorVariants ? jarColor : "";
   const requestedLabelSet = optionValue(labelSets, labelSet) || (!labelSets.length ? labelSet : "");
   const selectedLabelSet = isJar ? requestedLabelSet || labelSets[0] || "Side + Lid" : "";
@@ -316,7 +343,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let priceEach = 0;
   let priceBreaks: Array<{ range: string; minQty: number; maxQty: number | null; priceEach: number }> = [];
 
-  if (jarLaunchSize) {
+  if (dtpLaunch) {
+    // 16E: owner DTP selling-price ladders (15C.2) are the single authority —
+    // size + quantity only; everything else is included in the vendor spec.
+    pricingSource = "canonical_erp";
+    const priced = priceDtpConfiguration({ productType, quantity });
+    priceBreaks = dtpPriceBreaks(productType);
+    if (priced.ok) {
+      matched = true;
+      priceEach = priced.unitPrice;
+    } else {
+      matched = false;
+      requestQuote = priced.requestQuote;
+      pricingMessage = priced.reason;
+    }
+  } else if (jarLaunchSize) {
     // 16D: owner-approved launch pricing — base(size, qty) + holographic 20%
     // of BASE + fixed specialty premium; 5,000+ and 9X+ are quote-only. The
     // engine is the single authority; legacy jar rules never price these.
@@ -403,8 +444,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // 15G.5A: approved storefront quantity ladder + volume-quote threshold
     // (5,000+ is never priced online). Themes may render these as choices;
     // arbitrary quantities >= minQuantity still price via the band step fn.
-    quantityOptions: jarLaunchSize ? JAR_QUANTITY_OPTIONS : isJar ? [] : STOREFRONT_PRICE_BREAK_QUANTITIES,
-    volumeQuoteFrom: jarLaunchSize ? JAR_VOLUME_QUOTE_FROM : isJar ? null : VOLUME_QUOTE_FROM,
+    quantityOptions: dtpLaunch ? DTP_QUANTITY_OPTIONS : jarLaunchSize ? JAR_QUANTITY_OPTIONS : isJar ? [] : STOREFRONT_PRICE_BREAK_QUANTITIES,
+    volumeQuoteFrom: dtpLaunch ? DTP_STOREFRONT_MAX_QTY : jarLaunchSize ? JAR_VOLUME_QUOTE_FROM : isJar ? null : VOLUME_QUOTE_FROM,
     selected: {
       material: selectedMaterial,
       finish: selectedFinish,

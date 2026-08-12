@@ -408,3 +408,35 @@ markers + jar labels rendered live, pricing + checkout verified).
   3oz 39-64%, 4oz 43-66%. No STOP tiers.
 - Tests 1084 (8 new incl. per-tier pins + token-safety); TS 304; build
   green; prisma valid.
+
+## Phase 16E (2026-08-12) — DTP pouch revenue activation
+Forensic audit found the COMPLETE existing authority: 15C.2 owner
+selling-price ladders (dtp-owner-pricing.server.ts, per-Spektra-SKU:
+4x5x2 1.67/0.88/0.74/0.61/0.60; 5x4x2 1.76/0.97/0.86/0.72/0.71; 6x5x2
+1.84/1.04/0.96/0.81/0.81; 8x5x2 2.05/1.23/1.23/1.05/1.05 at
+1000/2500/5000/7500/10000) + owner-verified Spektra vendor tiers +
+"included, never a customer add-on" rule for CR zipper/soft-touch/
+Silver PET/tear notches/gusset. The legacy 45% profile margin is a
+superseded template default.
+- canonical-dtp-pricing.server.ts: storefront ADAPTER over
+  ownerPriceForQuantity — holds NO price numbers. MOQ 1000 (vendor),
+  >10,000 -> quote. No holo/CR/finish surcharges exist (all included);
+  size + quantity are the only price axes.
+- Proxy/checkout dtp_ branches (family "DTP Pouches"): informational
+  included-spec option lists, no option validation, server recompute,
+  family-aware `_GSO Canonical` (supplier: spektra_outsourced).
+- Paid all-DTP orders take the dtp-bags OUTSOURCED purchase checklist
+  (PO -> Spektra -> vendor proof -> receive -> QC -> pack); mixed orders
+  default. Summaries token-clean; no in-house print math anywhere.
+- tools/rebuild-dtp-16e.mjs: 4x5-custom-pouch canonicalized as the
+  4x5x2 product (6->1 variants, media/description preserved); 5x4x2 /
+  6x5x2 / 8x5x2 CREATED as DRAFT single-variant products (0 media ->
+  --activate media gate). ERP rows dtp_<size> MOQ 1000 created.
+- Theme (next shopify app deploy, cosmetic only): DTP liquid labels
+  (Lamination / Included Spec) + Bag Color row hidden when the payload
+  color list is empty.
+- vs Beast Coast: GSO HIGH at most tiers on GSO's actual sizes (e.g.
+  4x5x2 @1000 $1.67 vs BC 4x5 $1.00; @10000 $0.60 vs $0.30) — flagged
+  for owner review, NOT changed (CR zipper included is a GSO advantage;
+  BC charges +$0.10).
+- Tests 1101 (17 new); TS 304; build green; prisma valid.

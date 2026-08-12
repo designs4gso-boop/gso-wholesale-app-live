@@ -15,6 +15,13 @@ import {
   jarLaunchSizeForType,
   priceJarConfiguration,
 } from "../lib/canonical-jar-pricing";
+import {
+  DTP_FINISH_LABEL,
+  DTP_STOREFRONT_MIN_QTY,
+  buildCanonicalDtpLineMetadata,
+  dtpLaunchInfoForType,
+  priceDtpConfiguration,
+} from "../lib/canonical-dtp-pricing.server";
 
 const SHOPIFY_API_VERSION = "2025-10";
 
@@ -78,8 +85,10 @@ function resolveJarVariantProductType(productType: string, jarColor: "Clear" | "
   return productType;
 }
 
-function productFamilyForType(productType: string): "Jars" | "Stock Bags" {
-  return isJarProductType(productType) ? "Jars" : "Stock Bags";
+function productFamilyForType(productType: string): "Jars" | "Stock Bags" | "DTP Pouches" {
+  if (isJarProductType(productType)) return "Jars";
+  if (productType.startsWith("dtp_")) return "DTP Pouches";
+  return "Stock Bags";
 }
 
 function rangeLabel(rule: any) {
@@ -244,6 +253,9 @@ export async function action({ request }: ActionFunctionArgs) {
       // Matte/Gloss base finish, "labelSet" carries the label material, and
       // "finish" carries the universal specialty ladder selection.
       const jarLaunchSize = isJar ? jarLaunchSizeForType(productType) : null;
+      // 16E: outsourced DTP pouches — size + quantity are the only axes;
+      // posted option strings are informational and never validated/priced.
+      const dtpLaunch = dtpLaunchInfoForType(productType);
       const usesJarColor = isColorVariantJarProductType(productType);
       const productFamily = productFamilyForType(productType);
       const selectedBagColor = isJar ? "" : bagColor;
@@ -252,14 +264,18 @@ export async function action({ request }: ActionFunctionArgs) {
       // 15G.5A: bags floor at the approved ladder minimum (50); non-launch
       // jars keep their own product MOQ; launch jars floor at the approved
       // jar minimum (50). The clamp can only RAISE a posted quantity.
-      const minQuantity = isJar
-        ? jarLaunchSize
-          ? JAR_STOREFRONT_MIN_QTY
-          : Number(effectiveProduct.minQuantity || MIN_QTY)
-        : STOREFRONT_BAG_MIN_QTY;
+      const minQuantity = dtpLaunch
+        ? DTP_STOREFRONT_MIN_QTY
+        : isJar
+          ? jarLaunchSize
+            ? JAR_STOREFRONT_MIN_QTY
+            : Number(effectiveProduct.minQuantity || MIN_QTY)
+          : STOREFRONT_BAG_MIN_QTY;
       const quantity = Math.max(numberValue(rawItem.quantity, minQuantity), minQuantity);
 
-      if (isJar) {
+      if (dtpLaunch) {
+        // no option validation — everything is included in the vendor spec
+      } else if (isJar) {
         if (!material || !finish || !selectedLabelSet) {
           return jsonResponse(
             {
@@ -302,7 +318,25 @@ export async function action({ request }: ActionFunctionArgs) {
       let priceEach = 0;
       let matchedRange = "";
       let canonicalMeta: string | null = null;
-      if (jarLaunchSize) {
+      if (dtpLaunch) {
+        // 16E: server recompute from the owner DTP selling-price ladders —
+        // posted prices are never read; >10,000 and below-MOQ are rejected.
+        const priced = priceDtpConfiguration({ productType, quantity });
+        if (!priced.ok) {
+          return jsonResponse(
+            {
+              ok: false,
+              requestQuote: priced.requestQuote,
+              error: priced.reason,
+              item: { title: effectiveProduct.title, productType, handle, quantity },
+            },
+            { status: 400 },
+          );
+        }
+        priceEach = priced.unitPrice;
+        matchedRange = `${priced.tierUsed}+`;
+        canonicalMeta = buildCanonicalDtpLineMetadata({ productType, priced });
+      } else if (jarLaunchSize) {
         // 16D: owner-approved launch pricing recomputed SERVER-SIDE from the
         // configuration alone — posted prices are never read. 5,000+ and
         // Deep Build 9X+ are rejected here exactly like bag Deep Builds.
@@ -400,20 +434,30 @@ export async function action({ request }: ActionFunctionArgs) {
       cartTotal = money(cartTotal + orderTotal);
 
       const baseTitle = effectiveProduct.title || clean(rawItem.title) || "Configured Product";
-      const optionSummary = isJar
-        ? [selectedJarColor, material, finish, selectedLabelSet].filter(Boolean).join(" / ")
-        : `${material} / ${finish} / ${selectedBagColor}`;
+      const optionSummary = dtpLaunch
+        ? `${dtpLaunch.size} / Soft-Touch Full-Color / CR Zipper Included`
+        : isJar
+          ? [selectedJarColor, material, finish, selectedLabelSet].filter(Boolean).join(" / ")
+          : `${material} / ${finish} / ${selectedBagColor}`;
       const lineTitle = `${baseTitle} - ${optionSummary}`;
       const customAttributes = [
         { key: "Product Family", value: productFamily },
         { key: "Product Type", value: productType },
-        { key: "Material", value: material },
-        { key: "Finish", value: finish },
+        { key: "Material", value: dtpLaunch ? "Soft-Touch Lamination (Included)" : material },
+        { key: "Finish", value: dtpLaunch ? DTP_FINISH_LABEL : finish },
+        ...(dtpLaunch
+          ? [
+              { key: "Size", value: dtpLaunch.size },
+              { key: "CR Zipper", value: "Included" },
+            ]
+          : []),
         // 15G.5B: `rule` is legitimately null on the canonical bag path (legacy
         // ConfiguratorPricingRule rows never match the canonical finish labels)
         // — the canonical finish label IS the production finish for bags.
-        { key: "Production Finish", value: String(rule?.productionFinish || finish) },
-        ...(isJar
+        { key: "Production Finish", value: dtpLaunch ? DTP_FINISH_LABEL : String(rule?.productionFinish || finish) },
+        ...(dtpLaunch
+          ? []
+          : isJar
           ? [
               ...(usesJarColor ? [{ key: "Jar Color", value: selectedJarColor }] : []),
               // 16D launch jars: explicit customer-facing base finish + label
@@ -431,6 +475,8 @@ export async function action({ request }: ActionFunctionArgs) {
               { key: "Sides", value: String(defaultSides) },
             ]),
         { key: "_GSO Product Image", value: productImageUrl },
+        // 16E: DTP lines omit Bag Color/Sides entirely (vendor-finished
+        // pouch; both sides printed by spec).
         // 15G.5 (O): hidden canonical configuration snapshot for paid-order
         // production creation and future Ticket-First intake.
         ...(canonicalMeta ? [{ key: "_GSO Canonical", value: canonicalMeta }] : []),

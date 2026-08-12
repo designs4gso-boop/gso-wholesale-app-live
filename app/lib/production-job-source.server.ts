@@ -23,12 +23,15 @@ import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.s
 import { buildIntakeRipName, decideMachine } from "./print-intake-routing.server";
 import { appendIntakeAudit, readIntakeMeta, validateIntakeAssignment } from "./print-intake-review.server";
 import {
+  canonicalDtpMaterialSummary,
+  canonicalDtpSelectedAddOns,
   canonicalJarMaterialSummary,
   canonicalJarSelectedAddOns,
   canonicalLineWarnings,
   canonicalMaterialSummary,
   canonicalSelectedAddOns,
   orderGidColumnAvailable,
+  parseCanonicalDtpOrderLine,
   parseCanonicalJarOrderLine,
   parseCanonicalOrderLine,
 } from "./order-canonical.server";
@@ -465,13 +468,18 @@ function isJarFamily(value: any) {
   const family = clean(value).toLowerCase();
   return family === "jars" || family === "jar";
 }
+function isDtpFamily(value: any) {
+  const family = clean(value).toLowerCase();
+  return family === "dtp pouches" || family === "dtp" || family === "dtp bags";
+}
 export function isConfiguratorLine(line: any) {
   // 15H.4A: a server-created canonical snapshot is the strongest signal —
   // it alone qualifies the line even if visible properties were stripped.
-  // 16D: jar canonical snapshots qualify the same way.
+  // 16D/16E: jar and DTP canonical snapshots qualify the same way.
   const rawCanonical = getLineProperty(line, "_GSO Canonical");
   if (parseCanonicalOrderLine(rawCanonical)) return true;
   if (parseCanonicalJarOrderLine(rawCanonical)) return true;
+  if (parseCanonicalDtpOrderLine(rawCanonical)) return true;
   const material = getLineProperty(line, "Material");
   const finish = getLineProperty(line, "Finish");
   const bagColor = getLineProperty(line, "Bag Color");
@@ -479,7 +487,8 @@ export function isConfiguratorLine(line: any) {
   const labelSet = getLineProperty(line, "Label Set");
   return Boolean(
     (material && finish && bagColor) ||
-      (isJarFamily(productFamily) && material && finish && labelSet),
+      (isJarFamily(productFamily) && material && finish && labelSet) ||
+      (isDtpFamily(productFamily) && material && finish),
   );
 }
 function customerNameFromOrder(order: any) {
@@ -536,19 +545,38 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
     // (byte-identical mapping to the pre-15H.4A webhook when absent).
     const rawCanonical = getLineProperty(line, "_GSO Canonical");
     const canonical = parseCanonicalOrderLine(rawCanonical);
-    // 16D: jar canonical snapshots are AUTHORITATIVE for launch jar lines
-    // exactly like bag snapshots are for bags; visible properties remain the
-    // fail-open fallback for malformed snapshots.
+    // 16D/16E: jar and DTP canonical snapshots are AUTHORITATIVE for their
+    // lines exactly like bag snapshots are for bags; visible properties
+    // remain the fail-open fallback for malformed snapshots.
     const jarCanonical = canonical ? null : parseCanonicalJarOrderLine(rawCanonical);
-    const productFamily = getLineProperty(line, "Product Family") || (canonical ? "Stock Bags" : jarCanonical ? "Jars" : "");
-    const productType = getLineProperty(line, "Product Type") || (canonical ? canonical.profile : jarCanonical ? jarCanonical.profile : "");
-    const material = canonical ? canonical.material : jarCanonical ? jarCanonical.baseFinish : getLineProperty(line, "Material");
-    const finish = canonical ? canonical.finishLabel : jarCanonical ? jarCanonical.finishLabel : getLineProperty(line, "Finish");
+    const dtpCanonical = canonical || jarCanonical ? null : parseCanonicalDtpOrderLine(rawCanonical);
+    const productFamily =
+      getLineProperty(line, "Product Family") ||
+      (canonical ? "Stock Bags" : jarCanonical ? "Jars" : dtpCanonical ? "DTP Pouches" : "");
+    const productType =
+      getLineProperty(line, "Product Type") ||
+      (canonical ? canonical.profile : jarCanonical ? jarCanonical.profile : dtpCanonical ? dtpCanonical.profile : "");
+    const material = canonical
+      ? canonical.material
+      : jarCanonical
+        ? jarCanonical.baseFinish
+        : dtpCanonical
+          ? "Soft-Touch Lamination (Included)"
+          : getLineProperty(line, "Material");
+    const finish = canonical
+      ? canonical.finishLabel
+      : jarCanonical
+        ? jarCanonical.finishLabel
+        : dtpCanonical
+          ? dtpCanonical.finishLabel
+          : getLineProperty(line, "Finish");
     const productionFinish = canonical
       ? canonical.finishLabel
       : jarCanonical
         ? jarCanonical.finishLabel
-        : (getLineProperty(line, "Production Finish") || finish);
+        : dtpCanonical
+          ? dtpCanonical.finishLabel
+          : (getLineProperty(line, "Production Finish") || finish);
     const bagColor = canonical ? canonical.bagColor : getLineProperty(line, "Bag Color");
     const labelSet = jarCanonical ? jarCanonical.labelMaterial : getLineProperty(line, "Label Set");
     const jarColor = jarCanonical?.jarColor || getLineProperty(line, "Jar Color");
@@ -559,12 +587,11 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
     // 15H.4A-K: the canonical engine-stamped unit price is the order-time
     // commercial truth; the paid line price rides alongside and mismatches
     // surface as human-visible warnings (never a recalculation).
-    const canonicalWarnings = canonical
-      ? canonicalLineWarnings(canonical, { quantity, unitPrice: linePaidUnitPrice })
-      : jarCanonical
-        ? canonicalLineWarnings(jarCanonical, { quantity, unitPrice: linePaidUnitPrice })
-        : [];
-    const unitPrice = canonical ? money(canonical.unitPrice) : jarCanonical ? money(jarCanonical.unitPrice) : linePaidUnitPrice;
+    const activeCanonical = canonical || jarCanonical || dtpCanonical;
+    const canonicalWarnings = activeCanonical
+      ? canonicalLineWarnings(activeCanonical, { quantity, unitPrice: linePaidUnitPrice })
+      : [];
+    const unitPrice = activeCanonical ? money(activeCanonical.unitPrice) : linePaidUnitPrice;
     const productTitle = lineProductTitle(line);
     const variantTitle = isJar
       ? [jarColor, material, finish, labelSet].filter(Boolean).join(" / ")
@@ -573,14 +600,18 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       ? canonicalSelectedAddOns(canonical)
       : jarCanonical
         ? canonicalJarSelectedAddOns(jarCanonical)
-        : isJar
-          ? { productFamily, productType, material, finish, productionFinish, ...(jarColor ? { jarColor } : {}), labelSet }
-          : { productFamily, productType, material, finish, productionFinish, bagColor, sides };
+        : dtpCanonical
+          ? canonicalDtpSelectedAddOns(dtpCanonical)
+          : isJar
+            ? { productFamily, productType, material, finish, productionFinish, ...(jarColor ? { jarColor } : {}), labelSet }
+            : { productFamily, productType, material, finish, productionFinish, bagColor, sides };
     const materialSummary = canonical
       ? canonicalMaterialSummary(canonical)
       : jarCanonical
         ? canonicalJarMaterialSummary(jarCanonical)
-        : isJar
+        : dtpCanonical
+          ? canonicalDtpMaterialSummary(dtpCanonical)
+          : isJar
           ? [
               `Product Family: ${productFamily}`, `Product Type: ${productType}`, `Material: ${material}`,
               `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
@@ -610,7 +641,21 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
               ]
             : []),
         ].join("\n")
-      : [
+      : dtpCanonical
+        ? [
+            `Shopify order: ${quoteNumber}`,
+            `Product Family: DTP Pouches`,
+            `Product Type: ${productType}`,
+            `Pouch Size: ${dtpCanonical.size}`,
+            `Spec: ${dtpCanonical.finishLabel}`,
+            `CR Zipper: included (vendor spec — never a customer add-on)`,
+            `Supplier: Spektra — OUTSOURCED vendor-finished pouch (no in-house print)`,
+            `Workflow: purchase order -> vendor proof -> receive -> QC -> pack (dtp-bags checklist)`,
+            `Owner ladder: ${dtpCanonical.ladderSku}`,
+            `Canonical engine: ${dtpCanonical.engine} (${dtpCanonical.v})`,
+            ...canonicalWarnings.map((warning) => `WARNING: ${warning}`),
+          ].join("\n")
+        : [
           `Shopify order: ${quoteNumber}`, `Material: ${material}`, `Finish: ${finish}`,
           `Production Finish: ${productionFinish}`, `Bag Color: ${bagColor}`, `Sides: ${sides}`,
           ...(canonical
@@ -635,6 +680,7 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       // snapshots ride under the same key (distinguished by family:"jars").
       ...(canonical ? { canonical, linePaidUnitPrice, canonicalWarnings } : {}),
       ...(jarCanonical ? { canonical: jarCanonical, linePaidUnitPrice, canonicalWarnings } : {}),
+      ...(dtpCanonical ? { canonical: dtpCanonical, linePaidUnitPrice, canonicalWarnings } : {}),
     };
     const item = {
       productTitle,
@@ -672,16 +718,26 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
     };
   });
 
-  // 16D: an all-jar order takes the applied-label jar production checklist
-  // (inventory pull -> print -> cut -> application -> QC -> pack). Mixed or
-  // bag orders keep the pre-16D default checklist unchanged.
-  const jarLineCount = configuredLines.filter((line: any) => {
-    if (parseCanonicalJarOrderLine(getLineProperty(line, "_GSO Canonical"))) return true;
+  // 16D/16E: uniform-family orders take their family checklist — all-jar ->
+  // premium-jars (applied-label flow), all-DTP -> dtp-bags (outsourced
+  // purchase flow). Mixed or bag orders keep the pre-16D default unchanged.
+  const lineFamilyOf = (line: any): "jar" | "dtp" | "other" => {
+    const raw = getLineProperty(line, "_GSO Canonical");
+    if (parseCanonicalJarOrderLine(raw)) return "jar";
+    if (parseCanonicalDtpOrderLine(raw)) return "dtp";
     const family = getLineProperty(line, "Product Family");
     const type = getLineProperty(line, "Product Type");
-    return isJarFamily(family) || type.startsWith("jar_");
-  }).length;
-  const checklistFamily = jarLineCount === configuredLines.length ? "premium-jars" : "default";
+    if (isJarFamily(family) || type.startsWith("jar_")) return "jar";
+    if (isDtpFamily(family) || type.startsWith("dtp_")) return "dtp";
+    return "other";
+  };
+  const lineFamilies = new Set(configuredLines.map(lineFamilyOf));
+  const checklistFamily =
+    lineFamilies.size === 1 && lineFamilies.has("jar")
+      ? "premium-jars"
+      : lineFamilies.size === 1 && lineFamilies.has("dtp")
+        ? "dtp-bags"
+        : "default";
 
   const firstLine = configuredLines[0];
   const firstImage =

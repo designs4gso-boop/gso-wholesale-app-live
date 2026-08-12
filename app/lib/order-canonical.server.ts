@@ -218,6 +218,95 @@ export function canonicalJarSelectedAddOns(jar: CanonicalJarOrderLine): Record<s
   };
 }
 
+// ---------- 16E: outsourced DTP pouch canonical lines ----------
+// Produced by canonical-dtp-pricing.server.ts buildCanonicalDtpLineMetadata:
+// { v, family:"dtp", profile, size, qty, finishLabel, crZipper, unitPrice,
+//   supplier, ladderSku, ladderEngine, engine }. Same fail-closed contract.
+
+export type CanonicalDtpOrderLine = {
+  v: string;
+  family: "dtp";
+  profile: string;
+  size: string;
+  qty: number;
+  finishLabel: string;
+  crZipper: boolean;
+  unitPrice: number;
+  supplier: string;
+  ladderSku: string;
+  engine: string;
+};
+
+export function parseCanonicalDtpOrderLine(raw: string | null | undefined): CanonicalDtpOrderLine | null {
+  if (!raw) return null;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(String(raw));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  if (parsed.family !== "dtp") return null;
+  const qty = Number(parsed.qty);
+  const unitPrice = Number(parsed.unitPrice);
+  const ok =
+    typeof parsed.v === "string" && parsed.v.length > 0 &&
+    typeof parsed.profile === "string" && parsed.profile.startsWith("dtp_") &&
+    typeof parsed.size === "string" && parsed.size.length > 0 &&
+    Number.isFinite(qty) && qty > 0 &&
+    typeof parsed.finishLabel === "string" && parsed.finishLabel.length > 0 &&
+    Number.isFinite(unitPrice) && unitPrice > 0 &&
+    typeof parsed.supplier === "string" && parsed.supplier.length > 0 &&
+    typeof parsed.ladderSku === "string" && parsed.ladderSku.length > 0 &&
+    typeof parsed.engine === "string" && parsed.engine.length > 0;
+  if (!ok) return null;
+  return {
+    v: parsed.v,
+    family: "dtp",
+    profile: parsed.profile,
+    size: parsed.size,
+    qty: Math.floor(qty),
+    finishLabel: parsed.finishLabel,
+    crZipper: Boolean(parsed.crZipper),
+    unitPrice,
+    supplier: parsed.supplier,
+    ladderSku: parsed.ladderSku,
+    engine: parsed.engine,
+  };
+}
+
+// DTP production summary. Token hygiene: outsourced vendor-finished pouches
+// carry NO white/gloss/clear tokens, so if an artwork file is ever intake-
+// matched it takes the plain default path — production truth (purchase
+// workflow, no in-house print) lives in the dtp-bags checklist and notes.
+export function canonicalDtpMaterialSummary(dtp: CanonicalDtpOrderLine): string {
+  return [
+    `Profile: ${dtp.profile}`,
+    `Family: DTP Pouches`,
+    `Size: ${dtp.size}`,
+    `Spec: ${dtp.finishLabel}`,
+    `CR Zipper: ${dtp.crZipper ? "included" : "no"}`,
+    `Supplier: Spektra (outsourced, vendor-finished)`,
+  ].join(" | ");
+}
+
+export function canonicalDtpSelectedAddOns(dtp: CanonicalDtpOrderLine): Record<string, unknown> {
+  return {
+    source: "gso_canonical_checkout",
+    family: "dtp",
+    canonicalVersion: dtp.v,
+    profile: dtp.profile,
+    size: dtp.size,
+    finish: dtp.finishLabel,
+    productionFinish: dtp.finishLabel,
+    crZipper: dtp.crZipper,
+    supplier: dtp.supplier,
+    ladderSku: dtp.ladderSku,
+    outsourced: true,
+    engine: dtp.engine,
+  };
+}
+
 // Cross-checks between the canonical snapshot and the paid line. Mismatches
 // never block the job — they surface as warnings on the item so a human sees
 // them (the PAID line quantity/price stay the commercial record; the
