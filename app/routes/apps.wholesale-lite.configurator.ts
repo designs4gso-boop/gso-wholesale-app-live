@@ -33,6 +33,17 @@ import {
   dtpPriceBreaks,
   priceDtpConfiguration,
 } from "../lib/canonical-dtp-pricing.server";
+import {
+  STICKER_MATERIAL_OPTIONS,
+  STICKER_QUANTITY_OPTIONS,
+  STICKER_SPECIALTY_OPTIONS,
+  STICKER_STOREFRONT_MIN_QTY,
+  STICKER_VOLUME_QUOTE_FROM,
+  priceStickerConfiguration,
+  resolveCanonicalStickerInputs,
+  stickerLaunchInfoForType,
+  stickerPriceBreaks,
+} from "../lib/canonical-sticker-pricing.server";
 
 // 15G.1: served only through the signed Shopify app proxy (same-origin from
 // the storefront) — no cross-origin callers exist, so no CORS headers.
@@ -88,9 +99,10 @@ function resolveJarVariantProductType(productType: string, jarColor: "Clear" | "
   return productType;
 }
 
-function productFamilyForType(productType: string): "Jars" | "Stock Bags" | "DTP Pouches" {
+function productFamilyForType(productType: string): "Jars" | "Stock Bags" | "DTP Pouches" | "Stickers" {
   if (isJarProductType(productType)) return "Jars";
   if (productType.startsWith("dtp_")) return "DTP Pouches";
+  if (productType.startsWith("sticker_")) return "Stickers";
   return "Stock Bags";
 }
 
@@ -229,13 +241,19 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // 16E: outsourced DTP pouches floor at the Spektra vendor MOQ (1,000).
   const jarLaunchSize = isJar ? jarLaunchSizeForType(productType) : null;
   const dtpLaunch = dtpLaunchInfoForType(productType);
-  const minQuantity = dtpLaunch
-    ? DTP_STOREFRONT_MIN_QTY
-    : isJar
-      ? jarLaunchSize
-        ? JAR_STOREFRONT_MIN_QTY
-        : Number(effectiveProduct.minQuantity || MIN_QTY)
-      : STOREFRONT_BAG_MIN_QTY;
+  // 16F: dimension-driven stickers (regular square/rect + kiss-cut die-cut).
+  const stickerLaunch = stickerLaunchInfoForType(productType);
+  const widthIn = clean(url.searchParams.get("widthIn") || url.searchParams.get("width"));
+  const heightIn = clean(url.searchParams.get("heightIn") || url.searchParams.get("height"));
+  const minQuantity = stickerLaunch
+    ? STICKER_STOREFRONT_MIN_QTY
+    : dtpLaunch
+      ? DTP_STOREFRONT_MIN_QTY
+      : isJar
+        ? jarLaunchSize
+          ? JAR_STOREFRONT_MIN_QTY
+          : Number(effectiveProduct.minQuantity || MIN_QTY)
+        : STOREFRONT_BAG_MIN_QTY;
   const quantity = Math.max(numberValue(url.searchParams.get("quantity"), minQuantity), minQuantity);
 
   const [options, rules] = await Promise.all([
@@ -301,21 +319,25 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // 16E: DTP pouches are vendor-finished — everything is included, so the
   // "option" lists are single informational entries and there is no color/
   // label control at all (size = the product, quantity = the only price axis).
-  const materials = dtpLaunch
-    ? [...DTP_MATERIAL_OPTIONS]
-    : jarLaunchSize
-      ? [...JAR_BASE_FINISHES]
-      : optionMaterials.length
-        ? optionMaterials
-        : ruleMaterials;
-  const finishes = dtpLaunch
-    ? [...DTP_FINISH_OPTIONS]
-    : jarLaunchSize
-      ? [...JAR_SPECIALTY_OPTIONS]
-      : isJar
-        ? (optionFinishes.length ? optionFinishes : ruleFinishes)
-        : CANONICAL_FINISH_OPTIONS;
-  const bagColors = dtpLaunch ? [] : optionBagColors.length ? optionBagColors : defaultBagColors;
+  const materials = stickerLaunch
+    ? [...STICKER_MATERIAL_OPTIONS]
+    : dtpLaunch
+      ? [...DTP_MATERIAL_OPTIONS]
+      : jarLaunchSize
+        ? [...JAR_BASE_FINISHES]
+        : optionMaterials.length
+          ? optionMaterials
+          : ruleMaterials;
+  const finishes = stickerLaunch
+    ? [...STICKER_SPECIALTY_OPTIONS]
+    : dtpLaunch
+      ? [...DTP_FINISH_OPTIONS]
+      : jarLaunchSize
+        ? [...JAR_SPECIALTY_OPTIONS]
+        : isJar
+          ? (optionFinishes.length ? optionFinishes : ruleFinishes)
+          : CANONICAL_FINISH_OPTIONS;
+  const bagColors = stickerLaunch || dtpLaunch ? [] : optionBagColors.length ? optionBagColors : defaultBagColors;
   // 16D.1: color-variant launch jars (3oz/4oz) keep the jar color selector —
   // color is a production attribute (never a price axis in the engine).
   const jarColors = hasJarColorVariants ? ["Clear", "Black", "White"] : [];
@@ -323,7 +345,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const selectedMaterial = material || materials[0] || "Matte";
   const selectedFinish = finish || finishes[0] || "No Spot Gloss";
-  const selectedBagColor = isJar || dtpLaunch ? "" : bagColor || bagColors[0] || "White";
+  const selectedBagColor = isJar || dtpLaunch || stickerLaunch ? "" : bagColor || bagColors[0] || "White";
   const selectedJarColor = hasJarColorVariants ? jarColor : "";
   const requestedLabelSet = optionValue(labelSets, labelSet) || (!labelSets.length ? labelSet : "");
   const selectedLabelSet = isJar ? requestedLabelSet || labelSets[0] || "Side + Lid" : "";
@@ -343,7 +365,30 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let priceEach = 0;
   let priceBreaks: Array<{ range: string; minQty: number; maxQty: number | null; priceEach: number }> = [];
 
-  if (dtpLaunch) {
+  if (stickerLaunch) {
+    // 16F: dimension-driven canonical sticker pricing — the SAME cost engine
+    // + owner margin/floor policy every ERP quote uses. Width x height are
+    // recomputed server-side; the default preview size is 3x3.
+    pricingSource = "canonical_erp";
+    const stickerInputs = await resolveCanonicalStickerInputs(db, shop);
+    const selection = {
+      productType,
+      widthIn: widthIn || "3",
+      heightIn: heightIn || "3",
+      material: selectedMaterial,
+      specialty: selectedFinish,
+    };
+    const priced = priceStickerConfiguration(stickerInputs, { ...selection, quantity });
+    priceBreaks = stickerPriceBreaks(stickerInputs, selection);
+    if (priced.ok) {
+      matched = true;
+      priceEach = priced.unitPrice;
+    } else {
+      matched = false;
+      requestQuote = priced.requestQuote;
+      pricingMessage = priced.reason;
+    }
+  } else if (dtpLaunch) {
     // 16E: owner DTP selling-price ladders (15C.2) are the single authority —
     // size + quantity only; everything else is included in the vendor spec.
     pricingSource = "canonical_erp";
@@ -439,13 +484,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       sku: effectiveProduct.sku,
       minQuantity,
       defaultSides: effectiveProduct.defaultSides || "Double Sided",
+      // 16F: the theme shows the width/height inputs only when this is set.
+      dimensionsRequired: Boolean(stickerLaunch),
     },
     options: { materials, finishes, bagColors, jarColors, labelSets },
     // 15G.5A: approved storefront quantity ladder + volume-quote threshold
     // (5,000+ is never priced online). Themes may render these as choices;
     // arbitrary quantities >= minQuantity still price via the band step fn.
-    quantityOptions: dtpLaunch ? DTP_QUANTITY_OPTIONS : jarLaunchSize ? JAR_QUANTITY_OPTIONS : isJar ? [] : STOREFRONT_PRICE_BREAK_QUANTITIES,
-    volumeQuoteFrom: dtpLaunch ? DTP_STOREFRONT_MAX_QTY : jarLaunchSize ? JAR_VOLUME_QUOTE_FROM : isJar ? null : VOLUME_QUOTE_FROM,
+    quantityOptions: stickerLaunch ? STICKER_QUANTITY_OPTIONS : dtpLaunch ? DTP_QUANTITY_OPTIONS : jarLaunchSize ? JAR_QUANTITY_OPTIONS : isJar ? [] : STOREFRONT_PRICE_BREAK_QUANTITIES,
+    volumeQuoteFrom: stickerLaunch ? STICKER_VOLUME_QUOTE_FROM : dtpLaunch ? DTP_STOREFRONT_MAX_QTY : jarLaunchSize ? JAR_VOLUME_QUOTE_FROM : isJar ? null : VOLUME_QUOTE_FROM,
     selected: {
       material: selectedMaterial,
       finish: selectedFinish,
@@ -454,6 +501,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       labelSet: selectedLabelSet,
       quantity,
       sides: selectedSides,
+      // 16F: echoed so the theme keeps the entered dimensions on refresh.
+      widthIn: stickerLaunch ? widthIn || "3" : "",
+      heightIn: stickerLaunch ? heightIn || "3" : "",
     },
     pricing: {
       matched,

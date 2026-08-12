@@ -105,12 +105,12 @@
           "finish" carries the universal GSO specialty ladder.
         {%- endcomment -%}
         <label class="gso-configurator__field">
-          <span>{% if product.type == 'Jars' %}Base Finish (Included){% elsif product.type == 'DTP Pouches' %}Lamination{% else %}Material{% endif %}</span>
+          <span>{% if product.type == 'Jars' %}Base Finish (Included){% elsif product.type == 'DTP Pouches' %}Lamination{% elsif product.type == 'Stickers' %}Material{% else %}Material{% endif %}</span>
           <select data-gso-field="material"></select>
         </label>
 
         <label class="gso-configurator__field">
-          <span>{% if product.type == 'Jars' %}Specialty{% elsif product.type == 'DTP Pouches' %}Included Spec{% else %}Finish{% endif %}</span>
+          <span>{% if product.type == 'Jars' %}Specialty{% elsif product.type == 'DTP Pouches' %}Included Spec{% elsif product.type == 'Stickers' %}Specialty{% else %}Finish{% endif %}</span>
           <select data-gso-field="finish"></select>
         </label>
 
@@ -127,6 +127,21 @@
         <label class="gso-configurator__field" data-gso-field-row="jarColor" hidden>
           <span>Jar Color</span>
           <select data-gso-field="jarColor"></select>
+        </label>
+
+        {%- comment -%}
+          16F: dimension inputs for sticker/label products. Hidden by default;
+          the JS reveals the row when the server payload sets
+          product.dimensionsRequired (dimension-driven pricing families).
+        {%- endcomment -%}
+        <label class="gso-configurator__field" data-gso-field-row="widthIn" hidden>
+          <span>Width (inches)</span>
+          <input data-gso-field="widthIn" type="number" min="0.5" max="12" step="0.25" value="3">
+        </label>
+
+        <label class="gso-configurator__field" data-gso-field-row="heightIn" hidden>
+          <span>Height (inches)</span>
+          <input data-gso-field="heightIn" type="number" min="0.5" max="12" step="0.25" value="3">
         </label>
 
         <label class="gso-configurator__field">

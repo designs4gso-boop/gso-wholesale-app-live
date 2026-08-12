@@ -30,10 +30,13 @@ import {
   canonicalLineWarnings,
   canonicalMaterialSummary,
   canonicalSelectedAddOns,
+  canonicalStickerMaterialSummary,
+  canonicalStickerSelectedAddOns,
   orderGidColumnAvailable,
   parseCanonicalDtpOrderLine,
   parseCanonicalJarOrderLine,
   parseCanonicalOrderLine,
+  parseCanonicalStickerOrderLine,
 } from "./order-canonical.server";
 
 export type ManualJobItemInput = {
@@ -252,6 +255,8 @@ export const FAMILY_CHECKLISTS: Record<string, Array<{ section: string; label: s
     { section: "prepress", label: "Proof approved", sortOrder: 20 },
     { section: "production", label: "Printed", sortOrder: 30 },
     { section: "production", label: "Cut complete", sortOrder: 40 },
+    // 16F: explicit weeding stage (die-cut/kiss-cut sticker orders).
+    { section: "production", label: "Weeded (if required)", sortOrder: 45 },
     { section: "production", label: "Finish complete", sortOrder: 50 },
     { section: "qc", label: "QC passed", sortOrder: 60 },
     { section: "packing", label: "Packed and labeled", sortOrder: 70 },
@@ -480,6 +485,7 @@ export function isConfiguratorLine(line: any) {
   if (parseCanonicalOrderLine(rawCanonical)) return true;
   if (parseCanonicalJarOrderLine(rawCanonical)) return true;
   if (parseCanonicalDtpOrderLine(rawCanonical)) return true;
+  if (parseCanonicalStickerOrderLine(rawCanonical)) return true;
   const material = getLineProperty(line, "Material");
   const finish = getLineProperty(line, "Finish");
   const bagColor = getLineProperty(line, "Bag Color");
@@ -550,33 +556,40 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
     // remain the fail-open fallback for malformed snapshots.
     const jarCanonical = canonical ? null : parseCanonicalJarOrderLine(rawCanonical);
     const dtpCanonical = canonical || jarCanonical ? null : parseCanonicalDtpOrderLine(rawCanonical);
+    const stickerCanonical = canonical || jarCanonical || dtpCanonical ? null : parseCanonicalStickerOrderLine(rawCanonical);
     const productFamily =
       getLineProperty(line, "Product Family") ||
-      (canonical ? "Stock Bags" : jarCanonical ? "Jars" : dtpCanonical ? "DTP Pouches" : "");
+      (canonical ? "Stock Bags" : jarCanonical ? "Jars" : dtpCanonical ? "DTP Pouches" : stickerCanonical ? "Stickers" : "");
     const productType =
       getLineProperty(line, "Product Type") ||
-      (canonical ? canonical.profile : jarCanonical ? jarCanonical.profile : dtpCanonical ? dtpCanonical.profile : "");
+      (canonical ? canonical.profile : jarCanonical ? jarCanonical.profile : dtpCanonical ? dtpCanonical.profile : stickerCanonical ? stickerCanonical.profile : "");
     const material = canonical
       ? canonical.material
       : jarCanonical
         ? jarCanonical.baseFinish
         : dtpCanonical
           ? "Soft-Touch Lamination (Included)"
-          : getLineProperty(line, "Material");
+          : stickerCanonical
+            ? stickerCanonical.material
+            : getLineProperty(line, "Material");
     const finish = canonical
       ? canonical.finishLabel
       : jarCanonical
         ? jarCanonical.finishLabel
         : dtpCanonical
           ? dtpCanonical.finishLabel
-          : getLineProperty(line, "Finish");
+          : stickerCanonical
+            ? stickerCanonical.finishLabel
+            : getLineProperty(line, "Finish");
     const productionFinish = canonical
       ? canonical.finishLabel
       : jarCanonical
         ? jarCanonical.finishLabel
         : dtpCanonical
           ? dtpCanonical.finishLabel
-          : (getLineProperty(line, "Production Finish") || finish);
+          : stickerCanonical
+            ? stickerCanonical.finishLabel
+            : (getLineProperty(line, "Production Finish") || finish);
     const bagColor = canonical ? canonical.bagColor : getLineProperty(line, "Bag Color");
     const labelSet = jarCanonical ? jarCanonical.labelMaterial : getLineProperty(line, "Label Set");
     const jarColor = jarCanonical?.jarColor || getLineProperty(line, "Jar Color");
@@ -587,7 +600,7 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
     // 15H.4A-K: the canonical engine-stamped unit price is the order-time
     // commercial truth; the paid line price rides alongside and mismatches
     // surface as human-visible warnings (never a recalculation).
-    const activeCanonical = canonical || jarCanonical || dtpCanonical;
+    const activeCanonical = canonical || jarCanonical || dtpCanonical || stickerCanonical;
     const canonicalWarnings = activeCanonical
       ? canonicalLineWarnings(activeCanonical, { quantity, unitPrice: linePaidUnitPrice })
       : [];
@@ -602,16 +615,20 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
         ? canonicalJarSelectedAddOns(jarCanonical)
         : dtpCanonical
           ? canonicalDtpSelectedAddOns(dtpCanonical)
-          : isJar
-            ? { productFamily, productType, material, finish, productionFinish, ...(jarColor ? { jarColor } : {}), labelSet }
-            : { productFamily, productType, material, finish, productionFinish, bagColor, sides };
+          : stickerCanonical
+            ? canonicalStickerSelectedAddOns(stickerCanonical)
+            : isJar
+              ? { productFamily, productType, material, finish, productionFinish, ...(jarColor ? { jarColor } : {}), labelSet }
+              : { productFamily, productType, material, finish, productionFinish, bagColor, sides };
     const materialSummary = canonical
       ? canonicalMaterialSummary(canonical)
       : jarCanonical
         ? canonicalJarMaterialSummary(jarCanonical)
         : dtpCanonical
           ? canonicalDtpMaterialSummary(dtpCanonical)
-          : isJar
+          : stickerCanonical
+            ? canonicalStickerMaterialSummary(stickerCanonical)
+            : isJar
           ? [
               `Product Family: ${productFamily}`, `Product Type: ${productType}`, `Material: ${material}`,
               `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
@@ -641,6 +658,19 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
               ]
             : []),
         ].join("\n")
+      : stickerCanonical
+        ? [
+            `Shopify order: ${quoteNumber}`,
+            `Product Family: Stickers`,
+            `Product Type: ${productType}`,
+            `Sticker Size: ${stickerCanonical.widthIn}" x ${stickerCanonical.heightIn}" (${stickerCanonical.areaSqIn} sq in each)`,
+            `Material: ${stickerCanonical.material}`,
+            `Specialty: ${stickerCanonical.finishLabel} (${stickerCanonical.specialtyX}X)`,
+            `Cut: ${stickerCanonical.stickerType === "die_cut" ? "die-cut (kiss-cut contour) + weeding" : "square/rectangle"}`,
+            `Technical white underbase: ${stickerCanonical.whiteRequired ? "yes (production requirement, not a customer charge)" : "no"}`,
+            `Canonical engine: ${stickerCanonical.engine} (${stickerCanonical.v})`,
+            ...canonicalWarnings.map((warning) => `WARNING: ${warning}`),
+          ].join("\n")
       : dtpCanonical
         ? [
             `Shopify order: ${quoteNumber}`,
@@ -681,6 +711,7 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       ...(canonical ? { canonical, linePaidUnitPrice, canonicalWarnings } : {}),
       ...(jarCanonical ? { canonical: jarCanonical, linePaidUnitPrice, canonicalWarnings } : {}),
       ...(dtpCanonical ? { canonical: dtpCanonical, linePaidUnitPrice, canonicalWarnings } : {}),
+      ...(stickerCanonical ? { canonical: stickerCanonical, linePaidUnitPrice, canonicalWarnings } : {}),
     };
     const item = {
       productTitle,
@@ -721,14 +752,16 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
   // 16D/16E: uniform-family orders take their family checklist — all-jar ->
   // premium-jars (applied-label flow), all-DTP -> dtp-bags (outsourced
   // purchase flow). Mixed or bag orders keep the pre-16D default unchanged.
-  const lineFamilyOf = (line: any): "jar" | "dtp" | "other" => {
+  const lineFamilyOf = (line: any): "jar" | "dtp" | "sticker" | "other" => {
     const raw = getLineProperty(line, "_GSO Canonical");
     if (parseCanonicalJarOrderLine(raw)) return "jar";
     if (parseCanonicalDtpOrderLine(raw)) return "dtp";
+    if (parseCanonicalStickerOrderLine(raw)) return "sticker";
     const family = getLineProperty(line, "Product Family");
     const type = getLineProperty(line, "Product Type");
     if (isJarFamily(family) || type.startsWith("jar_")) return "jar";
     if (isDtpFamily(family) || type.startsWith("dtp_")) return "dtp";
+    if (clean(family).toLowerCase() === "stickers" || type.startsWith("sticker_")) return "sticker";
     return "other";
   };
   const lineFamilies = new Set(configuredLines.map(lineFamilyOf));
@@ -737,7 +770,9 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       ? "premium-jars"
       : lineFamilies.size === 1 && lineFamilies.has("dtp")
         ? "dtp-bags"
-        : "default";
+        : lineFamilies.size === 1 && lineFamilies.has("sticker")
+          ? "stickers-labels"
+          : "default";
 
   const firstLine = configuredLines[0];
   const firstImage =

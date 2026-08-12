@@ -22,6 +22,14 @@ import {
   dtpLaunchInfoForType,
   priceDtpConfiguration,
 } from "../lib/canonical-dtp-pricing.server";
+import {
+  STICKER_STOREFRONT_MIN_QTY,
+  buildCanonicalStickerLineMetadata,
+  priceStickerConfiguration,
+  resolveCanonicalStickerInputs,
+  stickerLaunchInfoForType,
+  type CanonicalStickerInputs,
+} from "../lib/canonical-sticker-pricing.server";
 
 const SHOPIFY_API_VERSION = "2025-10";
 
@@ -85,9 +93,10 @@ function resolveJarVariantProductType(productType: string, jarColor: "Clear" | "
   return productType;
 }
 
-function productFamilyForType(productType: string): "Jars" | "Stock Bags" | "DTP Pouches" {
+function productFamilyForType(productType: string): "Jars" | "Stock Bags" | "DTP Pouches" | "Stickers" {
   if (isJarProductType(productType)) return "Jars";
   if (productType.startsWith("dtp_")) return "DTP Pouches";
+  if (productType.startsWith("sticker_")) return "Stickers";
   return "Stock Bags";
 }
 
@@ -172,6 +181,8 @@ export async function action({ request }: ActionFunctionArgs) {
     // stock-bag line is repriced server-side through the canonical engine.
     // Posted/browser prices are never read (unchanged contract).
     const canonicalInputs = await resolveCanonicalBagInputs(db, shop);
+    // 16F: sticker inputs resolve lazily on the first sticker line.
+    let stickerInputs: CanonicalStickerInputs | null = null;
 
     const lineItems: any[] = [];
     const itemSummaries: any[] = [];
@@ -256,6 +267,10 @@ export async function action({ request }: ActionFunctionArgs) {
       // 16E: outsourced DTP pouches — size + quantity are the only axes;
       // posted option strings are informational and never validated/priced.
       const dtpLaunch = dtpLaunchInfoForType(productType);
+      // 16F: dimension-driven stickers — the server recomputes width x height.
+      const stickerLaunch = stickerLaunchInfoForType(productType);
+      const stickerWidthIn = clean(rawItem.widthIn || rawItem.width);
+      const stickerHeightIn = clean(rawItem.heightIn || rawItem.height);
       const usesJarColor = isColorVariantJarProductType(productType);
       const productFamily = productFamilyForType(productType);
       const selectedBagColor = isJar ? "" : bagColor;
@@ -264,16 +279,29 @@ export async function action({ request }: ActionFunctionArgs) {
       // 15G.5A: bags floor at the approved ladder minimum (50); non-launch
       // jars keep their own product MOQ; launch jars floor at the approved
       // jar minimum (50). The clamp can only RAISE a posted quantity.
-      const minQuantity = dtpLaunch
-        ? DTP_STOREFRONT_MIN_QTY
-        : isJar
-          ? jarLaunchSize
-            ? JAR_STOREFRONT_MIN_QTY
-            : Number(effectiveProduct.minQuantity || MIN_QTY)
-          : STOREFRONT_BAG_MIN_QTY;
+      const minQuantity = stickerLaunch
+        ? STICKER_STOREFRONT_MIN_QTY
+        : dtpLaunch
+          ? DTP_STOREFRONT_MIN_QTY
+          : isJar
+            ? jarLaunchSize
+              ? JAR_STOREFRONT_MIN_QTY
+              : Number(effectiveProduct.minQuantity || MIN_QTY)
+            : STOREFRONT_BAG_MIN_QTY;
       const quantity = Math.max(numberValue(rawItem.quantity, minQuantity), minQuantity);
 
-      if (dtpLaunch) {
+      if (stickerLaunch) {
+        if (!stickerWidthIn || !stickerHeightIn) {
+          return jsonResponse(
+            {
+              ok: false,
+              error: "Missing sticker dimensions (width and height in inches) on one cart item.",
+              item: { handle, productGid, widthIn: stickerWidthIn, heightIn: stickerHeightIn, quantity },
+            },
+            { status: 400 },
+          );
+        }
+      } else if (dtpLaunch) {
         // no option validation — everything is included in the vendor spec
       } else if (isJar) {
         if (!material || !finish || !selectedLabelSet) {
@@ -318,7 +346,33 @@ export async function action({ request }: ActionFunctionArgs) {
       let priceEach = 0;
       let matchedRange = "";
       let canonicalMeta: string | null = null;
-      if (dtpLaunch) {
+      if (stickerLaunch) {
+        // 16F: dimension-driven server recompute through the ONE ERP cost +
+        // commercial policy pipeline — posted prices/areas are never read.
+        stickerInputs = stickerInputs || (await resolveCanonicalStickerInputs(db, shop));
+        const priced = priceStickerConfiguration(stickerInputs, {
+          productType,
+          widthIn: stickerWidthIn,
+          heightIn: stickerHeightIn,
+          quantity,
+          material,
+          specialty: finish,
+        });
+        if (!priced.ok) {
+          return jsonResponse(
+            {
+              ok: false,
+              requestQuote: priced.requestQuote,
+              error: priced.reason,
+              item: { title: effectiveProduct.title, productType, handle, widthIn: stickerWidthIn, heightIn: stickerHeightIn, material, finish, quantity },
+            },
+            { status: 400 },
+          );
+        }
+        priceEach = priced.unitPrice;
+        matchedRange = "canonical";
+        canonicalMeta = buildCanonicalStickerLineMetadata({ productType, priced });
+      } else if (dtpLaunch) {
         // 16E: server recompute from the owner DTP selling-price ladders —
         // posted prices are never read; >10,000 and below-MOQ are rejected.
         const priced = priceDtpConfiguration({ productType, quantity });
@@ -434,11 +488,13 @@ export async function action({ request }: ActionFunctionArgs) {
       cartTotal = money(cartTotal + orderTotal);
 
       const baseTitle = effectiveProduct.title || clean(rawItem.title) || "Configured Product";
-      const optionSummary = dtpLaunch
-        ? `${dtpLaunch.size} / Soft-Touch Full-Color / CR Zipper Included`
-        : isJar
-          ? [selectedJarColor, material, finish, selectedLabelSet].filter(Boolean).join(" / ")
-          : `${material} / ${finish} / ${selectedBagColor}`;
+      const optionSummary = stickerLaunch
+        ? `${stickerWidthIn}x${stickerHeightIn}in / ${material} / ${finish}`
+        : dtpLaunch
+          ? `${dtpLaunch.size} / Soft-Touch Full-Color / CR Zipper Included`
+          : isJar
+            ? [selectedJarColor, material, finish, selectedLabelSet].filter(Boolean).join(" / ")
+            : `${material} / ${finish} / ${selectedBagColor}`;
       const lineTitle = `${baseTitle} - ${optionSummary}`;
       const customAttributes = [
         { key: "Product Family", value: productFamily },
@@ -449,6 +505,13 @@ export async function action({ request }: ActionFunctionArgs) {
           ? [
               { key: "Size", value: dtpLaunch.size },
               { key: "CR Zipper", value: "Included" },
+            ]
+          : []),
+        ...(stickerLaunch
+          ? [
+              { key: "Width (in)", value: stickerWidthIn },
+              { key: "Height (in)", value: stickerHeightIn },
+              { key: "Cut", value: stickerLaunch.stickerType === "die_cut" ? "Die-Cut (contour)" : "Square / Rectangle" },
             ]
           : []),
         // 15G.5B: `rule` is legitimately null on the canonical bag path (legacy

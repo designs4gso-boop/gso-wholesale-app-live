@@ -440,3 +440,34 @@ superseded template default.
   for owner review, NOT changed (CR zipper included is a GSO advantage;
   BC charges +$0.10).
 - Tests 1101 (17 new); TS 304; build green; prisma valid.
+
+## Phase 16F (2026-08-12) — stickers/labels revenue activation (staged)
+Forensic audit: the COMPLETE sell authority already existed — the ERP
+quote pipeline (computeProductDrivenCost area costs: Material Center
+vinyl rates, ink, Mimaki/Roland machine recovery, owner cut page
+standard $6.53/54x54 page + kiss-cut contour bands x1.15/1.35/1.6,
+weeding $1.33/page, art $8.33 + print $1.00 + gloss-mask $6.25 setups)
++ computeCommercialPrice (owner margin curves stickers-labels
+[65,58,52,46,40] / spot-gloss-labels [70,62,56,50,45], sticker AREA
+market floor, minimum-job policy). NO new pricing system was built.
+- canonical-sticker-pricing.server.ts: dimension-driven storefront
+  wrapper (width x height recomputed server-side; 0.5-12in online,
+  larger -> quote; MOQ 50; >5,000 -> quote; Matte/Holographic;
+  universal specialty ladder 0X-8X + 9X+ quote; die-cut = kiss-simple
+  contour + weeding; die-irregular stays quote-blocked).
+- Proxy/checkout sticker_ branches (family "Stickers"): widthIn/
+  heightIn params, dimensionsRequired payload flag, family-aware
+  `_GSO Canonical` (stickers snapshot with dims/area/cut), server
+  recompute; paid all-sticker orders take the stickers-labels checklist
+  (+ new "Weeded (if required)" stage). Router-token hygiene: matte 0X
+  -> Mimaki; specialty/holo -> Roland (pinned).
+- Theme extension (REQUIRES shopify app deploy before activation):
+  width/height inputs (hidden unless payload dimensionsRequired) + 8
+  anchored JS edits (field refs, state, listeners, params, payload
+  consume, drawer + checkout carry dims) + sticker liquid labels.
+- tools/rebuild-stickers-16f.mjs: created custom-stickers
+  (sticker_regular) + die-cut-stickers (sticker_die_cut) as DRAFT
+  single-variant products with ERP rows; --activate media-gated (both
+  0 media). Legacy 4x5/14x16-sticker-bag = sticker-BAG products, not
+  sticker products — untouched, stay DRAFT.
+- Tests 1119 (18 new); TS 304; build green; prisma valid.

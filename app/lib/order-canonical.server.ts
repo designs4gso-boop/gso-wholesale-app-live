@@ -307,6 +307,120 @@ export function canonicalDtpSelectedAddOns(dtp: CanonicalDtpOrderLine): Record<s
   };
 }
 
+// ---------- 16F: sticker/label canonical lines ----------
+// Produced by canonical-sticker-pricing.server.ts: { v, family:"stickers",
+// profile, stickerType, widthIn, heightIn, areaSqIn, qty, material, holo,
+// whiteRequired, specialtyX, finishLabel, cutType, unitPrice, subtotal,
+// engine }. Same fail-closed contract as bags/jars/DTP.
+
+export type CanonicalStickerOrderLine = {
+  v: string;
+  family: "stickers";
+  profile: string;
+  stickerType: "regular" | "die_cut";
+  widthIn: number;
+  heightIn: number;
+  areaSqIn: number;
+  qty: number;
+  material: "Matte" | "Holographic";
+  holo: boolean;
+  whiteRequired: boolean;
+  specialtyX: number;
+  finishLabel: string;
+  cutType: string;
+  unitPrice: number;
+  engine: string;
+};
+
+export function parseCanonicalStickerOrderLine(raw: string | null | undefined): CanonicalStickerOrderLine | null {
+  if (!raw) return null;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(String(raw));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  if (parsed.family !== "stickers") return null;
+  const widthIn = Number(parsed.widthIn);
+  const heightIn = Number(parsed.heightIn);
+  const qty = Number(parsed.qty);
+  const specialtyX = Number(parsed.specialtyX);
+  const unitPrice = Number(parsed.unitPrice);
+  const ok =
+    typeof parsed.v === "string" && parsed.v.length > 0 &&
+    typeof parsed.profile === "string" && parsed.profile.startsWith("sticker_") &&
+    (parsed.stickerType === "regular" || parsed.stickerType === "die_cut") &&
+    Number.isFinite(widthIn) && widthIn > 0 &&
+    Number.isFinite(heightIn) && heightIn > 0 &&
+    Number.isFinite(qty) && qty > 0 &&
+    (parsed.material === "Matte" || parsed.material === "Holographic") &&
+    Number.isFinite(specialtyX) && specialtyX >= 0 && specialtyX <= 8 &&
+    typeof parsed.finishLabel === "string" && parsed.finishLabel.length > 0 &&
+    typeof parsed.cutType === "string" && parsed.cutType.length > 0 &&
+    Number.isFinite(unitPrice) && unitPrice > 0 &&
+    typeof parsed.engine === "string" && parsed.engine.length > 0;
+  if (!ok) return null;
+  return {
+    v: parsed.v,
+    family: "stickers",
+    profile: parsed.profile,
+    stickerType: parsed.stickerType,
+    widthIn,
+    heightIn,
+    areaSqIn: Math.round(widthIn * heightIn * 100) / 100,
+    qty: Math.floor(qty),
+    material: parsed.material,
+    holo: Boolean(parsed.holo),
+    whiteRequired: Boolean(parsed.whiteRequired),
+    specialtyX: Math.floor(specialtyX),
+    finishLabel: parsed.finishLabel,
+    cutType: parsed.cutType,
+    unitPrice,
+    engine: parsed.engine,
+  };
+}
+
+// Sticker production summary — router-token audited like bags/jars/DTP:
+// plain matte 0X carries no white/gloss/clear token (Mimaki default);
+// specialty layers emit "Gloss Layers: NX" and holographic emits the
+// technical "White Layers: 1" so those route Roland deterministically.
+export function canonicalStickerMaterialSummary(sticker: CanonicalStickerOrderLine): string {
+  const parts = [
+    `Profile: ${sticker.profile}`,
+    `Family: Stickers`,
+    `Size: ${sticker.widthIn}x${sticker.heightIn}in (${sticker.areaSqIn} sq in each)`,
+    `Material: ${sticker.holo ? "Holographic Vinyl" : "Matte Vinyl"}`,
+    `Specialty: ${sticker.finishLabel}`,
+    `Cut: ${sticker.stickerType === "die_cut" ? "kiss-cut contour + weeding" : "square/rectangle"}`,
+  ];
+  if (sticker.specialtyX >= 1) parts.push(`Gloss Layers: ${sticker.specialtyX}X`);
+  if (sticker.holo) parts.push(`White Layers: 1`, `Holographic: yes`);
+  else parts.push(`Holographic: no`);
+  return parts.join(" | ");
+}
+
+export function canonicalStickerSelectedAddOns(sticker: CanonicalStickerOrderLine): Record<string, unknown> {
+  return {
+    source: "gso_canonical_checkout",
+    family: "stickers",
+    canonicalVersion: sticker.v,
+    profile: sticker.profile,
+    stickerType: sticker.stickerType,
+    widthIn: sticker.widthIn,
+    heightIn: sticker.heightIn,
+    areaSqIn: sticker.areaSqIn,
+    material: sticker.material,
+    holographic: sticker.holo,
+    requiredWhite: sticker.whiteRequired,
+    specialtyLayers: sticker.specialtyX,
+    finish: sticker.finishLabel,
+    productionFinish: sticker.finishLabel,
+    cutType: sticker.cutType,
+    engine: sticker.engine,
+  };
+}
+
 // Cross-checks between the canonical snapshot and the paid line. Mismatches
 // never block the job — they surface as warnings on the item so a human sees
 // them (the PAID line quantity/price stay the commercial record; the
