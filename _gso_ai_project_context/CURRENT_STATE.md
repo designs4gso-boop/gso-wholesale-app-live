@@ -2,6 +2,16 @@
 
 Updated: 2026-08-12 (Phase 16D, Miron jar revenue activation)
 
+## STICKER STATUS AFTER 16F — STAGED (deploy + media gated)
+custom-stickers (sticker_regular) + die-cut-stickers (sticker_die_cut)
+are created, ERP-linked, and live-verified server-side (dimension-driven
+pricing through the ERP cost engine + owner margin/floor policy; live 1X
+@250 = $0.44 vs the owner's historical $0.45 gloss quote). Both DRAFT:
+(1) `shopify app deploy` ships the width/height inputs (required), then
+(2) add product imagery, (3) `node tools/rebuild-stickers-16f.mjs
+--activate`. Floor-policy note for owner: at floor-controlled tiers
+holographic prices equal matte (the AREA floor sets both).
+
 ## DTP STATUS AFTER 16E — FAMILY LIVE (1/4 products)
 4x5-custom-pouch (dtp_4x5x2) is ACTIVE, priced by the 15C.2 owner
 selling-price ladders through canonical-dtp-pricing.server.ts (MOQ 1,000;
