@@ -1,5 +1,12 @@
 ﻿# Next Steps
 
+> **CURRENT (2026-08-12, post-15Z.1):** the ERP is FUNCTIONALLY COMPLETE
+> (final audit: GO WITH MINOR DEBT). The next program is
+> **PHASE 16 — SHOPIFY STORE REBUILD & OPTIMIZATION** starting with the
+> 16A read-only store/catalog forensic audit. Everything below this banner
+> is the historical pilot-era list, kept for the record.
+
+
 1. Run app locally and confirm /app/erp/configurator opens.
 2. Do not run broad ts-nocheck patch unless absolutely needed.
 3. If app does not run, fix only the blocking error.

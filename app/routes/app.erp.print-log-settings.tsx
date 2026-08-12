@@ -35,7 +35,7 @@ async function ensureSetting(shop: string) {
       rasterlinkFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\print-logs\\incoming\\rasterlink",
       processedFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\print-logs\\processed",
       errorFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\print-logs\\errors",
-      expectedTicketPattern: "GSO-{date}-{jobNumber}-{sku}-{qty}",
+      expectedTicketPattern: "GSO-YYYYMMDD-NNNN (job) / GSO-YYYYMMDD-NNNN-NN (item)",
       notes: "Auto-import endpoint created by GSO ERP setup.",
     },
   });
@@ -102,7 +102,7 @@ export async function action({ request }: { request: Request }) {
         rasterlinkFolder: String(formData.get("rasterlinkFolder") || "") || null,
         processedFolder: String(formData.get("processedFolder") || "") || null,
         errorFolder: String(formData.get("errorFolder") || "") || null,
-        expectedTicketPattern: String(formData.get("expectedTicketPattern") || "GSO-{date}-{jobNumber}-{sku}-{qty}"),
+        expectedTicketPattern: String(formData.get("expectedTicketPattern") || "GSO-YYYYMMDD-NNNN (job) / GSO-YYYYMMDD-NNNN-NN (item)"),
         notes: String(formData.get("notes") || "") || null,
       },
       create: {
@@ -114,7 +114,7 @@ export async function action({ request }: { request: Request }) {
         rasterlinkFolder: String(formData.get("rasterlinkFolder") || "") || null,
         processedFolder: String(formData.get("processedFolder") || "") || null,
         errorFolder: String(formData.get("errorFolder") || "") || null,
-        expectedTicketPattern: String(formData.get("expectedTicketPattern") || "GSO-{date}-{jobNumber}-{sku}-{qty}"),
+        expectedTicketPattern: String(formData.get("expectedTicketPattern") || "GSO-YYYYMMDD-NNNN (job) / GSO-YYYYMMDD-NNNN-NN (item)"),
         notes: String(formData.get("notes") || "") || null,
       },
     });
@@ -232,7 +232,7 @@ Get-ChildItem -Path $IncomingFolder -File -Include *.csv,*.txt,*.xml -Recurse | 
                 <TextField label="RasterLink folder" name="rasterlinkFolder" defaultValue={setting.rasterlinkFolder || ""} autoComplete="off" />
                 <TextField label="Processed folder" name="processedFolder" defaultValue={setting.processedFolder || ""} autoComplete="off" />
                 <TextField label="Error folder" name="errorFolder" defaultValue={setting.errorFolder || ""} autoComplete="off" />
-                <TextField label="Expected job ticket pattern" name="expectedTicketPattern" defaultValue={setting.expectedTicketPattern || "GSO-{date}-{jobNumber}-{sku}-{qty}"} autoComplete="off" />
+                <TextField label="Expected job ticket pattern (documentation only)" name="expectedTicketPattern" defaultValue={setting.expectedTicketPattern || "GSO-YYYYMMDD-NNNN (job) / GSO-YYYYMMDD-NNNN-NN (item)"} autoComplete="off" helpText="Canonical tickets: GSO-YYYYMMDD-NNNN (job), GSO-YYYYMMDD-NNNN-NN (item). Routed names may append run decorations __R#-P#-A#. This field is a display note - the parsers and allocator never read it." />
                 <TextField label="Notes" name="notes" defaultValue={setting.notes || ""} multiline={3} autoComplete="off" />
                 <Button submit variant="primary" loading={busy}>Save settings</Button>
               </BlockStack>

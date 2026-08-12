@@ -167,7 +167,7 @@ async function ensureSetting(shop: string) {
       rasterlinkFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\rasterlink\\incoming",
       processedFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\processed",
       errorFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\error",
-      expectedTicketPattern: "GSO-{jobNumber}_{customer}_{product}_{side}_{material}_{route}_R{revision}",
+      expectedTicketPattern: "GSO-YYYYMMDD-NNNN (job) / GSO-YYYYMMDD-NNNN-NN (item); run decorations __R#-P#-A# may follow",
     },
   });
 }

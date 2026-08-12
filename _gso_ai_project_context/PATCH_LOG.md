@@ -292,3 +292,19 @@ What changed:
 - Removed import { json } from react-router.
 - Added jsonResponse helper using native Response.
 - Replaced return json(...) with return jsonResponse(...).
+
+## Patches 15G.1 - 15Z.1 (2026-08-09 .. 2026-08-12) — consolidated record
+Full detail lives in docs/GSO_ERP_PROJECT_STATE.md and
+docs/GSO_ERP_JOB_IDENTITY_AND_ROUTING_CONTRACT.md. Sequence:
+15G.1/1A security lockdown + credential masking; 15G.2/2A single price
+truth; 15G.3 canonical calculator; 15G.4A-C UV market + specialty policy;
+15G.5/5A storefront convergence + launch calibration; 15G.5B checkout
+hardening (dead originalUnitPrice field + null-rule crash; proxy never
+5xx); 15G.5C/5C.1 MOQ 50 cleanup; 15G.5D single purchase path; 15G.5E
+1,886 description cleanup; 15H.0 ticket-first forensic audit; 15H.1/1A/1B
+DB-unique tickets (+ RR 7.13.2 server/client boundary fixes); 15H.2 strict
+RIP identity; 15H.3 review/retry (agent 1.6); 15H.4A/4A.2 order
+convergence (orderGid + canonical consumption); 15H.4B manual jobs;
+15H.4C merge/link; 15H.5 runs/reprints/QC (agent 1.7); 15Z final audit
+(GO WITH MINOR DEBT); 15Z.1 this cleanup. ERP: FUNCTIONALLY COMPLETE.
+Next: PHASE 16 — Shopify Store Rebuild & Optimization (16A-16I).

@@ -34,7 +34,9 @@ async function ensureSetting(shop: string) {
       rasterlinkFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\rasterlink\\incoming",
       processedFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\processed",
       errorFolder: "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\error",
-      expectedTicketPattern: "GSO-{jobNumber}_{customer}_{product}_{side}_{material}_{route}_R{revision}",
+      // 15Z.1: canonical ticket documentation (display only — the real
+      // parsers/allocator never read this string).
+      expectedTicketPattern: "GSO-YYYYMMDD-NNNN (job) / GSO-YYYYMMDD-NNNN-NN (item); run decorations __R#-P#-A# may follow",
     },
   });
 }
@@ -372,8 +374,9 @@ export default function PrintIntake() {
           <li>Install at startup: <code>schtasks /Create /TN &quot;GSO Print Intake Agent&quot; /SC ONSTART /TR &quot;powershell -ExecutionPolicy Bypass -File C:\path\to\tools\gso-print-intake-agent.ps1 -Loop&quot;</code></li>
         </ol>
         <p style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>
-          The old <code>gso-print-intake-watcher.ps1</code> is retired — it renamed originals destructively, routed by
-          filename guesses, and its upload call cannot work on Windows PowerShell 5.1. Do not schedule it.
+          The old <code>gso-print-intake-watcher.ps1</code> was retired and removed from the repo (15Z.1) — it renamed
+          originals destructively and routed by filename guesses. If a copy still exists on any shop PC, delete it and
+          never schedule it; <code>gso-print-intake-agent.ps1</code> is the only intake agent.
         </p>
       </section>
 
