@@ -4,7 +4,10 @@ Updated: 2026-08-12 (Phase 16D, Miron jar revenue activation)
 
 ## STICKER STATUS AFTER 16F — STAGED (deploy + media gated)
 custom-stickers (sticker_regular) + die-cut-stickers (sticker_die_cut)
-are created, ERP-linked, and live-verified server-side (dimension-driven
+are created, ERP-linked, live-verified, and carry the 16F.1 holographic
+sell floor (HOLO = MAX(canonical, matte x1.2) — live-verified all tiers).
+Theme deploy CONFIRMED live (width inputs render). ONLY BLOCKER: product
+photos, then rebuild-stickers-16f.mjs --activate. (dimension-driven
 pricing through the ERP cost engine + owner margin/floor policy; live 1X
 @250 = $0.44 vs the owner's historical $0.45 gloss quote). Both DRAFT:
 (1) `shopify app deploy` ships the width/height inputs (required), then
