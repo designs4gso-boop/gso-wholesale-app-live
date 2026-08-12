@@ -24,6 +24,23 @@ body:has([data-gso-lockout="1"]) shopify-accelerated-checkout {
   display: none !important;
 }
 
+/* 16B: recommendation-card quick-add is the last native-purchase vector on
+   configurator-locked pages — a recommended bag's quick-add would add its
+   $1.00 base placeholder variant and bypass canonical pricing. Hidden under
+   the same scoped lockout (jar/unrelated product pages unaffected). Same
+   split-rule pattern: the JS body-class rule must survive non-:has parsers. */
+body.gso-native-purchase-lockout .quick-add,
+body.gso-native-purchase-lockout .quick-add__submit,
+body.gso-native-purchase-lockout quick-add-modal {
+  display: none !important;
+}
+
+body:has([data-gso-lockout="1"]) .quick-add,
+body:has([data-gso-lockout="1"]) .quick-add__submit,
+body:has([data-gso-lockout="1"]) quick-add-modal {
+  display: none !important;
+}
+
 .gso-configurator[hidden],
 .gso-configurator [hidden] {
   display: none !important;

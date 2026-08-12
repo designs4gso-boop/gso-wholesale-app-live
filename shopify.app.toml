@@ -39,7 +39,10 @@ uri = "/webhooks/orders_paid"
 # still work under read_orders but only cover Shopify's recent (~60-day)
 # window; the Pricing Intelligence page states this and degrades gracefully
 # (no auth loop: the existing token already authorizes the orders resource).
-scopes = "read_customers,read_orders,read_all_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms"
+# 16B: + read_content (pages/blogs), read_online_store_navigation (menus/
+# redirects), read_themes (templates/settings) — READ-ONLY additions for the
+# Phase 16 store-rebuild audits/automation. No new write scopes.
+scopes = "read_customers,read_orders,read_all_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms,read_content,read_online_store_navigation,read_themes"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

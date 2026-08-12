@@ -2238,3 +2238,27 @@ jobs, and merge/link all pinned untouched. Agent 1.7. Tests 1025 ->
 15H program (identity foundation -> RIP repair -> review/retry -> order/
 manual/merge convergence -> runs/reprints/QC) is COMPLETE — next:
 FINAL ERP AUDIT before Phase 16.
+
+## Phase 16B — purchase-path safety + navigation skeleton (2026-08-12)
+P0 containment EXECUTED via gated batch (dry-run -> execute -> verify,
+rollback artifact local in tools/storefront-16b-data/): the 31 legacy
+calypso/capn/ding-dongz Stock Bags (24 old variants, no configurator/ERP
+linkage, native purchase at placeholder prices) and the 8 jar-family
+products (native $0/$1 placeholder paths) are DRAFT — 39/39, Shopify now
+1,859 ACTIVE / 39 DRAFT; flavor identities preserved for the 16C canonical
+rebuild; jars hidden until their canonical storefront phase. Target sets
+were criteria-verified live (type + missing tag + multi-variant + no ERP
+row), never bare handle lists. Quick-add vector closed in the extension
+lockout CSS (.quick-add/.quick-add__submit/quick-add-modal under both rule
+families) — live at next `shopify app deploy`. Read-only scopes added to
+shopify.app.toml (read_content, read_online_store_navigation, read_themes)
+— deploy + reauthorization required, no write scopes. Domain audit:
+gsopack.com + www attached with SSL but PRIMARY is still the myshopify
+host — owner flips primary before launch. Navigation/pages/homepage are
+owner-admin work (no write scopes by design): full click-by-click runbook
+with page skeletons, menu structure, specialty-printing page plan, quote
+shell (NO safe public quote intake exists yet — micro-phase recommended),
+and legacy-page classification in docs/GSO_STORE_16B_NAVIGATION_RUNBOOK.md.
+No pricing/ERP/identity changes. Next: owner runbook steps -> 16B nav
+verification -> 16C catalog/collections cleanup (incl. legacy-31 canonical
+rebuild + collection consolidation).

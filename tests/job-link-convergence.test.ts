@@ -187,6 +187,14 @@ describe("15H.4C link convergence", () => {
     expect((await linkIntakeJobToTarget(w2.db, { shop: "shop.test", sourceJobId: "shell1", targetJobId: "target1", targetItemId: "titem", actor: "o" })).message).toContain("proof");
   });
 
+  it("16B: recommendation quick-add is suppressed under the configurator lockout (both rule families)", () => {
+    const css = readFileSync("extensions/wholesale-theme/assets/gso-product-configurator.css", "utf8");
+    expect(css).toContain("body.gso-native-purchase-lockout .quick-add,");
+    expect(css).toContain('body:has([data-gso-lockout="1"]) .quick-add,');
+    expect(css).toContain("body.gso-native-purchase-lockout quick-add-modal");
+    expect(css).toContain('body:has([data-gso-lockout="1"]) quick-add-modal');
+  });
+
   it("23+24+D+N+O. UI pins: link action, target ordering, assign ordering, filename guidance", () => {
     const board = readFileSync("app/routes/app.erp.production.tsx", "utf8");
     expect(board).toContain('value="linkJobToTarget"');
