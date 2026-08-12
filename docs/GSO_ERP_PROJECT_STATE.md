@@ -2200,3 +2200,23 @@ existing quoteId source-key field as manual_<requestId>). Tests 1009 ->
 Mimaki, fresh GSO ticket, one -01 item, $0 prices. Phase 16 roadmap
 unchanged. Next: 15H.4C merge/link (fold unlinked intake jobs into
 order/quote jobs without duplicates), then 15H.5 reprints/runs/QC.
+
+## Phase 15H.4C — merge/link production convergence (2026-08-12)
+"Link to Existing Job" on the Production Board folds unlinked intake
+shells into the real Shopify/quote/manual job: fail-closed source
+eligibility (intake provenance required; commercial jobs never shells;
+finalized-cost and proof-active sources block), exact owner target
+selection (orders first), target-ticket authority, PrintIntake
+repointing with preserved shell provenance, file-record copies (physical
+files untouched), both-sided audit events, advisory-locked idempotent
+transaction, and an active=false tombstone that keeps the shell ticket
+historical forever. Print-log history stays on the shell — never
+double-counted. Intake Assign dropdown now prioritizes commercial jobs;
+order/quote job cards show the attach-automatically filename guidance.
+Read-only audit: the three live intake jobs are eligible shells; the
+manual smoke job is not. No schema change; RIP matcher/agent/routing/
+pricing untouched. Tests 1016 -> 1025; tsc 304 baseline. The 15H.4
+convergence arc (A order, B manual, C merge/link) is COMPLETE. Phase 16
+roadmap unchanged. Next: 15H.5 Reprints / Runs / QC (attempt/revision/
+reprint counters live, R#/P# routed names, run-aware actuals, operator
+flow).

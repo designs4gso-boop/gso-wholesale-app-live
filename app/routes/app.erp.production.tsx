@@ -13,7 +13,7 @@ import {
 } from "@shopify/polaris";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
-import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, runWithTicketRetry } from "../lib/production-job-source.server";
+import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, assessLinkSource, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, jobSourceType, linkIntakeJobToTarget, runWithTicketRetry } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
@@ -563,8 +563,34 @@ export async function loader({ request }: { request: Request }) {
           }
         : null,
       customerProofUrl: job.proofApprovalToken ? `${baseUrl}/proof/${job.proofApprovalToken}` : "",
+      sourceType: jobSourceType(job),
     };
   });
+
+  // 15H.4C: link-convergence data — which active jobs are unlinked intake
+  // shells (provenance-proven), and the ordered target options (Shopify
+  // orders first, then quotes, then manual).
+  const intakeProvenance = await db.printIntake.findMany({
+    where: { shop, generatedProductionJobId: { in: jobs.map((job: any) => job.id) } },
+    select: { generatedProductionJobId: true },
+  });
+  const provenanceIds = new Set(intakeProvenance.map((row) => row.generatedProductionJobId));
+  const SOURCE_ORDER: Record<string, number> = { shopify: 0, quote: 1, manual: 2, other: 3, intake: 4 };
+  for (const job of jobsWithActuals as any[]) {
+    job.linkEligible = assessLinkSource(
+      { id: job.id, shop, active: true, status: job.status, actualCostFinalized: Boolean(job.actualCostFinalized), orderGid: job.orderGid, quoteId: job.quoteId, jobTicket: job.jobTicket, proofApprovalToken: job.proofApprovalToken || null, proofStatus: job.proofStatus || "draft", internalNotes: null },
+      provenanceIds.has(job.id),
+    ).ok;
+  }
+  const linkTargets = (jobsWithActuals as any[])
+    .filter((job) => !job.linkEligible && !job.actualCostFinalized && !["completed", "cancelled", "canceled", "archived"].includes(String(job.status || "").toLowerCase()))
+    .sort((a, b) => (SOURCE_ORDER[a.sourceType] ?? 9) - (SOURCE_ORDER[b.sourceType] ?? 9))
+    .map((job) => ({
+      id: job.id,
+      jobTicket: job.jobTicket,
+      label: `[${job.sourceType}] ${job.jobTicket || job.id} · ${job.quoteNumber || ""} · ${job.customerName || "—"} (${job.status})`,
+      items: (job.items || []).map((item: any) => ({ id: item.id, itemTicket: item.itemTicket, productTitle: item.displayTitle || item.productTitle, quantity: item.quantity })),
+    }));
 
 
   const materials = await db.material.findMany({
@@ -583,6 +609,7 @@ export async function loader({ request }: { request: Request }) {
     manualRequestId: crypto.randomUUID(),
     manualFamilies: MANUAL_JOB_FAMILIES,
     manualFinishes: MANUAL_JOB_FINISHES,
+    linkTargets,
   });
 }
 
@@ -591,6 +618,29 @@ export async function action({ request }: { request: Request }) {
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
+
+  // 15H.4C: link an UNLINKED intake shell job onto the real commercial job.
+  // Exact owner selection + confirmation; the service validates both sides,
+  // repoints intake identity, audits both jobs, and tombstones the shell.
+  if (intent === "linkJobToTarget") {
+    if (String(formData.get("confirmLink") || "") !== "yes") {
+      return Response.json({ ok: false, message: "Check the confirmation box before linking." });
+    }
+    const [targetJobId, targetItemId] = String(formData.get("linkTarget") || "").split("|");
+    try {
+      const result = await linkIntakeJobToTarget(db, {
+        shop,
+        sourceJobId: String(formData.get("sourceJobId") || ""),
+        targetJobId: targetJobId || "",
+        targetItemId: targetItemId || null,
+        actor: resolveActorFromSession(session, shop),
+        reason: String(formData.get("linkReason") || ""),
+      });
+      return Response.json({ ok: result.ok, message: result.message });
+    } catch (error: any) {
+      return Response.json({ ok: false, message: error?.message || "Could not link the job." });
+    }
+  }
 
   // 15H.4B: manual / walk-in / internal job — a real permanent GSO ticket
   // with no Shopify order, quote, or payment. Admin session only; shop from
@@ -1220,7 +1270,9 @@ Source ref: ${sourceRef}` : ""}`,
   return Response.json({ ok: false, message: "Unknown production action." }, { status: 400 });
 }
 
-function JobCard({ job, materials }: { job: any; materials: any[] }) {
+function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; linkTargets?: any[] }) {
+  const navigation = useNavigation();
+  const busy = navigation.state !== "idle";
   const navigate = useNavigate();
   const firstImage = job.productImageUrl || job.items?.find((item: any) => item.productImageUrl)?.productImageUrl;
   const totalRevenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
@@ -1628,6 +1680,11 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
                   {item.recipeName ? <Text as="p" tone="subdued">Recipe: {item.recipeName}</Text> : null}
                   <Text as="p" tone="subdued">Item ticket: {item.itemTicket || "Not assigned yet"}</Text>
                   <Text as="p" tone="subdued">Print file name: {item.suggestedFileName || "Not assigned yet"}</Text>
+                  {(job.sourceType === "shopify" || job.sourceType === "quote") && item.suggestedFileName ? (
+                    <Text as="p" tone="subdued" fontWeight="semibold">
+                      Use this filename before placing artwork into Prints For Today so it attaches automatically.
+                    </Text>
+                  ) : null}
                   <InlineStack gap="150" wrap>
                     <Button onClick={() => copyText(item.itemTicket || "")}>Copy Item Ticket</Button>
                     <Button onClick={() => copyText(item.ripJobName || item.itemTicket || "")}>Copy RIP Job Name</Button>
@@ -1638,6 +1695,43 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
             </Card>
           ))}
         </BlockStack>
+
+        {/* 15H.4C: link an unlinked intake shell onto the real commercial
+            job — exact owner selection, confirmation, full audit, tombstone. */}
+        {job.linkEligible ? (
+          <div style={{ border: "1px dashed #a78bfa", background: "#faf5ff", borderRadius: 10, padding: 12 }}>
+            <Text as="p" fontWeight="semibold">Unlinked print-intake shell — link it to the real job:</Text>
+            <Form method="post">
+              <input type="hidden" name="intent" value="linkJobToTarget" />
+              <input type="hidden" name="sourceJobId" value={job.id} />
+              <InlineStack gap="200" blockAlign="end" wrap>
+                <div style={{ minWidth: 340, flex: 1 }}>
+                  <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Link to Existing Job (orders first, then quotes, then manual)</label>
+                  <select name="linkTarget" defaultValue="" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
+                    <option value="" disabled>Pick the exact target job/item…</option>
+                    {(linkTargets || []).map((target: any) =>
+                      target.items.length > 1
+                        ? target.items.map((titem: any) => (
+                            <option key={`${target.id}|${titem.id}`} value={`${target.id}|${titem.id}`}>
+                              {target.label} → {titem.itemTicket || titem.id} · {String(titem.productTitle || "").slice(0, 28)} x{titem.quantity}
+                            </option>
+                          ))
+                        : <option key={target.id} value={`${target.id}|${target.items[0]?.id || ""}`}>{target.label}</option>,
+                    )}
+                  </select>
+                </div>
+                <input name="linkReason" placeholder="Reason (optional)" style={{ padding: 8, borderRadius: 8, border: "1px solid #bbb" }} />
+                <label style={{ fontSize: 12 }}>
+                  <input type="checkbox" name="confirmLink" value="yes" /> confirm
+                </label>
+                <Button submit loading={busy}>Link to Existing Job</Button>
+              </InlineStack>
+              <Text as="p" tone="subdued">
+                The target job&apos;s ticket stays authoritative; this shell ({job.jobTicket}) tombstones with full history. Files and RIP records are never deleted.
+              </Text>
+            </Form>
+          </div>
+        ) : null}
 
         <InlineStack gap="300" wrap>
           <div style={{ minWidth: 260, flex: 1 }}>
@@ -1829,7 +1923,7 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
 }
 
 export default function ProductionBoard() {
-  const { jobs, quotes, materials, manualRequestId, manualFamilies, manualFinishes } = useLoaderData<any>();
+  const { jobs, quotes, materials, manualRequestId, manualFamilies, manualFinishes, linkTargets } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -1950,7 +2044,7 @@ export default function ProductionBoard() {
                 <Text as="h2" variant="headingMd">{group.label}</Text>
                 <Badge>{group.jobs.length}</Badge>
               </InlineStack>
-              {group.jobs.length ? group.jobs.map((job: any) => <JobCard key={job.id} job={job} materials={materials || []} />) : <Card><Text as="p" tone="subdued">No jobs in this stage.</Text></Card>}
+              {group.jobs.length ? group.jobs.map((job: any) => <JobCard key={job.id} job={job} materials={materials || []} linkTargets={linkTargets || []} />) : <Card><Text as="p" tone="subdued">No jobs in this stage.</Text></Card>}
             </BlockStack>
           </Layout.Section>
         ))}

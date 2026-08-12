@@ -12,6 +12,7 @@ import {
   reviewReasonLabel,
   validateIntakeAssignment,
 } from "../lib/print-intake-review.server";
+import { jobSourceType } from "../lib/production-job-source.server";
 
 // Print Intake (13A.6G): the staff workflow is now automatic — drop artwork in
 // "Prints For Today" and the local intake agent asks the ERP for a
@@ -49,12 +50,24 @@ export async function loader({ request }: { request: Request }) {
     orderBy: { updatedAt: "desc" },
     take: 50,
   });
-  const assignableJobs = await db.productionJob.findMany({
+  // 15H.4C-N: commercial jobs first — Shopify orders, then quotes, then
+  // manual, then anything else. Labels carry ticket + order/quote + name.
+  const SOURCE_ORDER: Record<string, number> = { shopify: 0, quote: 1, manual: 2, other: 3, intake: 4 };
+  const assignableJobs = (await db.productionJob.findMany({
     where: { shop: session.shop, active: true, actualCostFinalized: false, status: { notIn: ["completed", "cancelled", "canceled", "archived"] } },
     orderBy: { updatedAt: "desc" },
     take: 30,
-    select: { id: true, jobTicket: true, customerName: true, items: { select: { id: true, itemTicket: true, productTitle: true }, orderBy: { sortOrder: "asc" } } },
-  });
+    select: { id: true, jobTicket: true, quoteId: true, quoteNumber: true, orderGid: true, customerName: true, items: { select: { id: true, itemTicket: true, productTitle: true }, orderBy: { sortOrder: "asc" } } },
+  }))
+    .map((job) => ({ ...job, sourceType: jobSourceType(job) }))
+    .sort((a, b) => (SOURCE_ORDER[a.sourceType] ?? 9) - (SOURCE_ORDER[b.sourceType] ?? 9))
+    .map((job) => ({
+      id: job.id,
+      jobTicket: job.jobTicket,
+      customerName: job.customerName,
+      label: `[${job.sourceType}] ${job.jobTicket || job.id} · ${job.quoteNumber || ""} · ${job.customerName || "—"}`,
+      items: job.items,
+    }));
   // 15G.1A: the raw upload token never leaves the server — the browser gets
   // only the masked configured/not-configured status.
   return {
@@ -280,10 +293,10 @@ export default function PrintIntake() {
                             job.items.length > 1
                               ? job.items.map((item) => (
                                   <option key={item.id} value={`${job.id}|${item.id}`}>
-                                    {job.jobTicket || job.id} · {item.itemTicket || item.id} — {item.productTitle.slice(0, 30)}
+                                    {job.label} → {item.itemTicket || item.id} — {item.productTitle.slice(0, 26)}
                                   </option>
                                 ))
-                              : <option key={job.id} value={`${job.id}|${job.items[0]?.id || ""}`}>{job.jobTicket || job.id} — {(job.customerName || job.items[0]?.productTitle || "job").slice(0, 30)}</option>
+                              : <option key={job.id} value={`${job.id}|${job.items[0]?.id || ""}`}>{job.label}</option>
                           ))}
                         </select>
                         <button type="submit" style={{ padding: "4px 10px", marginLeft: 4 }}>Assign</button>

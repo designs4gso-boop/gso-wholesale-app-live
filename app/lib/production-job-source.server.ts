@@ -21,6 +21,7 @@
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
 import { decideMachine } from "./print-intake-routing.server";
+import { appendIntakeAudit, readIntakeMeta, validateIntakeAssignment } from "./print-intake-review.server";
 import {
   canonicalLineWarnings,
   canonicalMaterialSummary,
@@ -908,6 +909,180 @@ export async function createProductionJobFromSource(
     });
     return { job, created: true, reason: "Manual production job created." };
   }));
+}
+
+// ---------- 15H.4C: merge/link convergence ----------
+// An UNLINKED intake-created shell job can be linked onto the real
+// commercial job (Shopify order / quote / owner-chosen manual). The TARGET
+// ticket is authoritative forever; the shell tombstones (active=false) with
+// full audit and its ticket stays historical. No records are deleted.
+
+export function jobSourceType(job: { orderGid?: string | null; quoteId: string | null }): "shopify" | "quote" | "manual" | "intake" | "other" {
+  if (job.orderGid || String(job.quoteId || "").startsWith("shopify_order_")) return "shopify";
+  const quoteId = String(job.quoteId || "");
+  if (quoteId.startsWith("manual_")) return "manual";
+  if (quoteId.startsWith("test_")) return "other";
+  if (quoteId) return "quote";
+  return "intake";
+}
+
+export type LinkSourceJob = {
+  id: string;
+  shop: string;
+  active: boolean;
+  status: string;
+  actualCostFinalized: boolean;
+  orderGid?: string | null;
+  quoteId: string | null;
+  jobTicket: string | null;
+  proofApprovalToken: string | null;
+  proofStatus: string;
+  internalNotes: string | null;
+};
+
+// Eligibility is FAIL-CLOSED: only a provably intake-created, unlinked,
+// uncommercial, unfinalized, proof-free, active shell qualifies.
+export function assessLinkSource(job: LinkSourceJob | null, hasIntakeProvenance: boolean): { ok: true } | { ok: false; reason: string } {
+  if (!job) return { ok: false, reason: "Source job not found." };
+  if (!job.active) return { ok: false, reason: "Source job is inactive (already linked or archived)." };
+  if (jobSourceType(job) !== "intake") return { ok: false, reason: "Only unlinked print-intake shell jobs can be linked away — Shopify, quote, and manual jobs are never source shells." };
+  if (!hasIntakeProvenance) return { ok: false, reason: "Source job has no print-intake provenance record — not a shell." };
+  if (job.actualCostFinalized) return { ok: false, reason: "Source job has FINALIZED actual cost — resolve costs separately before linking." };
+  if (["completed", "cancelled", "canceled", "archived"].includes(String(job.status || "").toLowerCase())) {
+    return { ok: false, reason: "Source job is completed/closed — use the reprint/reopen workflow instead." };
+  }
+  // 15H.4C-M proof safety: any live proof state fails closed.
+  if (job.proofApprovalToken || !["draft", ""].includes(String(job.proofStatus || "draft"))) {
+    return { ok: false, reason: "Source job has proof/customer-approval activity — resolve the proof before linking." };
+  }
+  return { ok: true };
+}
+
+export async function linkIntakeJobToTarget(dbClient: any, input: {
+  shop: string;
+  sourceJobId: string;
+  targetJobId: string;
+  targetItemId?: string | null;
+  actor: string;
+  reason?: string;
+}): Promise<{ ok: boolean; linked: boolean; message: string; targetTicket?: string | null }> {
+  const { shop, sourceJobId, targetJobId } = input;
+  if (!sourceJobId || !targetJobId) return { ok: false, linked: false, message: "Source and target are required." };
+  if (sourceJobId === targetJobId) return { ok: false, linked: false, message: "Source and target are the same job." };
+
+  return await dbClient.$transaction(async (tx: any) => {
+    // one link operation per source at a time (advisory lock, 15D.1 family)
+    await acquireSourceLock(tx, shop, "job_link", sourceJobId);
+
+    const source = await tx.productionJob.findFirst({
+      where: { id: sourceJobId, shop },
+      select: {
+        id: true, shop: true, active: true, status: true, actualCostFinalized: true,
+        orderGid: true, quoteId: true, jobTicket: true, proofApprovalToken: true, proofStatus: true, internalNotes: true,
+        items: { select: { id: true, itemTicket: true } },
+      },
+    });
+    // K idempotency: an already-tombstoned shell re-linked to the SAME target
+    // is a safe no-op; a DIFFERENT target rejects (needs explicit unlink).
+    if (source && !source.active && /Linked to /.test(String(source.internalNotes || ""))) {
+      const target = await tx.productionJob.findFirst({ where: { id: targetJobId, shop }, select: { jobTicket: true } });
+      const alreadyThisTarget = target?.jobTicket && String(source.internalNotes || "").includes(`Linked to ${target.jobTicket}`);
+      return alreadyThisTarget
+        ? { ok: true, linked: false, message: `Already linked to ${target.jobTicket}.`, targetTicket: target.jobTicket }
+        : { ok: false, linked: false, message: "Source is already linked to a different job — unlink/relink is a separate owner workflow." };
+    }
+    const intakeRows = await tx.printIntake.findMany({
+      where: { shop, OR: [{ generatedProductionJobId: sourceJobId }, { matchedProductionJobId: sourceJobId }] },
+    });
+    const sourceVerdict = assessLinkSource(source, intakeRows.length > 0);
+    if (!sourceVerdict.ok) return { ok: false, linked: false, message: sourceVerdict.reason };
+
+    const target = await tx.productionJob.findFirst({
+      where: { id: targetJobId, shop },
+      select: { id: true, shop: true, active: true, status: true, actualCostFinalized: true, jobTicket: true, items: { select: { id: true, itemTicket: true } } },
+    });
+    const targetVerdict = validateIntakeAssignment({ shop, job: target as any, itemId: input.targetItemId || null });
+    if (!targetVerdict.ok) return { ok: false, linked: false, message: targetVerdict.reason };
+    const targetItem = targetVerdict.item;
+    const targetTicket = targetItem?.itemTicket || target!.jobTicket || null;
+    const now = new Date().toISOString();
+    const reason = clean(input.reason) || "owner_link";
+
+    // L: raw print-log history stays with the shell (historically tied, never
+    // double-counted — target writeback only reads target-attached rows).
+    const shellPrintLogs = await tx.printLogEntry.count({ where: { shop, productionJobId: sourceJobId } });
+
+    // F: re-point every intake row to the TARGET identity; shell provenance
+    // moves into the audit JSON so it can never be mistaken for authority.
+    for (const row of intakeRows) {
+      const meta = readIntakeMeta(row.rawParsedHints);
+      const nextMeta = {
+        ...meta,
+        assignedItemId: targetItem?.id || null,
+        linkedFrom: { shellJobId: source!.id, shellTicket: source!.jobTicket, generatedProductionJobId: row.generatedProductionJobId || null },
+      };
+      await tx.printIntake.update({
+        where: { id: row.id },
+        data: {
+          matchedProductionJobId: target!.id,
+          generatedProductionJobId: null,
+          authoritativeTicket: targetTicket,
+          status: row.status === "routed" ? "routed" : "assigned",
+          rawParsedHints: appendIntakeAudit(JSON.stringify(nextMeta), { at: now, actor: input.actor, action: "linked_to_target_job", reason: `${source!.jobTicket} -> ${targetTicket}` }),
+        },
+      });
+    }
+
+    // G: file records copy onto the target (originals stay on the shell for
+    // history; physical files are never touched).
+    const sourceFiles = await tx.productionJobFile.findMany({ where: { shop, jobId: sourceJobId } });
+    for (const file of sourceFiles) {
+      await tx.productionJobFile.create({
+        data: {
+          shop,
+          jobId: target!.id,
+          fileName: file.fileName,
+          fileType: file.fileType,
+          fileUrl: file.fileUrl,
+          assetRole: file.assetRole,
+          assetSource: file.assetSource,
+          sourceRef: source!.jobTicket || file.sourceRef,
+          matchedBy: "linked_from_intake",
+          jobTicket: target!.jobTicket,
+          originalFileName: file.originalFileName || file.fileName,
+          notes: `Linked from shell ${source!.jobTicket} on ${now} by ${input.actor}.`,
+        },
+      });
+    }
+
+    // I: explicit audit on both sides; nothing pre-existing is touched.
+    const intakeSummary = intakeRows.map((row: any) => `${row.originalFilename} (sha8 ${String(row.fileHashSha256).slice(0, 8)})`).join("; ") || "no intake files";
+    await tx.productionJobEvent.create({
+      data: {
+        shop, jobId: source!.id, eventType: "production_job_linked_away",
+        message: `Linked away to ${targetTicket} (job ${target!.id}) by ${input.actor}. Reason: ${reason}. Intake: ${intakeSummary}. ${shellPrintLogs ? `${shellPrintLogs} print-log row(s) remain historically on this shell.` : ""}`,
+        createdBy: input.actor,
+      },
+    });
+    await tx.productionJobEvent.create({
+      data: {
+        shop, jobId: target!.id, eventType: "production_job_linked_from_intake",
+        message: `Intake shell ${source!.jobTicket} linked into this job${targetItem?.itemTicket ? ` (item ${targetItem.itemTicket})` : ""} by ${input.actor}. Reason: ${reason}. Intake: ${intakeSummary}.`,
+        createdBy: input.actor,
+      },
+    });
+
+    // J: tombstone — inactive, permanent record, ticket preserved untouched.
+    await tx.productionJob.update({
+      where: { id: source!.id },
+      data: {
+        active: false,
+        internalNotes: `Linked to ${targetTicket} on ${now} by ${input.actor}. This shell is historical — production continues on ${target!.jobTicket}.\n${String(source!.internalNotes || "")}`,
+      },
+    });
+
+    return { ok: true, linked: true, message: `Linked ${source!.jobTicket} into ${targetTicket}.`, targetTicket };
+  });
 }
 
 // ---------- 15F.0J.5: automatic PRINT-INTAKE job creation ----------

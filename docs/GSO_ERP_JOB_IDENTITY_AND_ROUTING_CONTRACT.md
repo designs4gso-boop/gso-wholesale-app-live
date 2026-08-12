@@ -268,3 +268,39 @@ File Name — intake resolves the job by item ticket, job ticket,
 subfolder, and suggested filename with zero new intake logic (pinned).
 Audit: created_manual_admin event with actor, requestId, requested vs
 resolved printer. NEXT: 15H.4C merge/link convergence.
+
+## 15H.4C IMPLEMENTED (2026-08-12) — merge/link convergence
+The last identity gap closes: an UNLINKED intake-created shell job can be
+linked onto the real commercial job. SOURCE eligibility (fail-closed):
+provably intake-created (PrintIntake.generatedProductionJobId provenance),
+sourceType "intake" (no orderGid, no quoteId — Shopify/quote/manual jobs
+are NEVER source shells), active, not completed/closed, no finalized
+actual cost, no proof activity (any live proof state blocks — M). TARGET:
+exact owner selection through the same validateIntakeAssignment rules
+(shop-scoped, active, non-finalized, non-closed, explicit item on
+multi-item jobs); target ordering Shopify -> quote -> manual. THE TARGET
+TICKET IS AUTHORITATIVE FOREVER — the shell ticket is never reused,
+deleted, or mutated; it stays historical. Link operation (one advisory-
+locked transaction, no half-linked state): PrintIntake rows repoint
+(matchedProductionJobId=target, generatedProductionJobId -> null with the
+shell provenance preserved in rawParsedHints.linkedFrom, authoritative
+ticket = target item/job ticket, routed stays routed) so agent/status/
+route-plan reconciliation returns the TARGET; file records COPY onto the
+target (matchedBy linked_from_intake, sourceRef = shell ticket) with shell
+originals untouched; physical NAS/RIP files never touched; raw print-log
+history stays on the shell (historically tied, never double-counted —
+target writeback reads only target-attached rows; counts recorded in the
+audit event); events production_job_linked_away / _linked_from_intake on
+both sides; shell tombstones active=false with "Linked to <ticket> on
+<date> by <actor>" prepended to notes. IDEMPOTENT: same source+target
+again = no-op; a different target after linking REJECTS (unlink/relink is
+a future explicit workflow). Stray future RIP results carrying the shell
+ticket still match the shell exactly (15H.2 strictness untouched) and can
+be manually rematched to the target in review — the linkedFrom breadcrumb
+makes that reconciliation obvious. Assign dropdown (15H.3) now orders
+Shopify -> quote -> manual with ticket+number+name labels; Shopify/quote
+job cards carry the staff wording "Use this filename before placing
+artwork into Prints For Today so it attaches automatically." Live
+eligibility audit (read-only): GSO-20260811-0001/0002/0003 all qualify as
+source shells; manual GSO-20260812-0001 correctly does not.
+NEXT: 15H.5 — Reprints / Runs / QC.

@@ -191,7 +191,8 @@ describe("15H.1 ticket identity foundation", () => {
 
   it("13. backfill uses the central allocator inside the standard retry", () => {
     const board = readFileSync("app/routes/app.erp.production.tsx", "utf8");
-    expect(board).toContain("allocateJobTicket, createProductionJobFromSource");
+    expect(board).toContain("allocateJobTicket");
+    expect(board).toContain("createProductionJobFromSource");
     expect(board).toContain("runWithTicketRetry(() =>");
     expect(board).toContain("allocateJobTicket(tx, shop");
     expect(board.includes("async function buildNextJobTicket")).toBe(false);
