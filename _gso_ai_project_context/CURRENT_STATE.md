@@ -1,6 +1,17 @@
 # GSO ERP / Shopify Configurator — Current State
 
-Updated: 2026-08-12 (Phase 15Z.1, after the Final ERP Completion Audit)
+Updated: 2026-08-12 (Phase 16C, product revenue activation)
+
+## STOREFRONT STATUS AFTER 16C
+1,886 canonical Stock Bags ACTIVE with 1,886 ERP rows; the 31 legacy bags
+were rebuilt to canonical single-variant architecture and reactivated;
+pricing pins green end-to-end. ONE OWNER COMMAND OUTSTANDING: 1,854
+healthy bags still sit on the default theme template (native $1.00
+purchase path, no configurator) — run
+`node tools/fleet-template-16c.mjs --execute` to flip them to the proven
+configurator-pilot template (dry-run verified, rollback artifact).
+Jars/DTP/stickers/boxes/banners: see the 16C launch matrix in the phase
+report; blank-jar sell pricing is the single jar blocker.
 
 Project root:
 C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp

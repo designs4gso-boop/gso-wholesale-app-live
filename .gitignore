@@ -5,6 +5,8 @@ node_modules
 tools/moq-cleanup-data/
 # 16B storefront-safety rollback artifacts stay local.
 tools/storefront-16b-data/
+# 16C legacy-bag rebuild rollback artifacts (full variant snapshots) stay local.
+tools/rebuild-16c-data/
 # Local watcher/agent configs hold the real upload token - only *.example.json is committed.
 tools/gso-rasterlink-sync-config.json
 tools/gso-rasterlink-sync.config.json

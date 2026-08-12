@@ -308,3 +308,36 @@ convergence (orderGid + canonical consumption); 15H.4B manual jobs;
 15H.4C merge/link; 15H.5 runs/reprints/QC (agent 1.7); 15Z final audit
 (GO WITH MINOR DEBT); 15Z.1 this cleanup. ERP: FUNCTIONALLY COMPLETE.
 Next: PHASE 16 — Shopify Store Rebuild & Optimization (16A-16I).
+
+## Phase 16A-16C (2026-08-12) — store safety + product revenue activation
+16A read-only store audit (P0s: 31 legacy bags + jars natively purchasable,
+misc placeholder products, 277-collection chaos). 16B containment: 39
+products drafted (31 legacy bags + 8 jars, rollback artifact), quick-add
+suppression CSS, read-only scopes (content/navigation/themes) staged,
+owner navigation runbook (docs/GSO_STORE_16B_NAVIGATION_RUNBOOK.md).
+16C revenue activation:
+- 31 legacy Stock Bags rebuilt to canonical architecture and REACTIVATED
+  (tools/rebuild-legacy-bags-16c.mjs + legacy-bag-rebuild-lib.mjs):
+  24-variant matrix collapsed to single Default Title variant @1.00
+  CONTINUE, options deleted, configurator-pilot tag + templateSuffix,
+  ConfiguratorProduct rows (sync-route parity), per-product verification
+  before activation. Canary-first gated sequence; rollback artifact in
+  tools/rebuild-16c-data/ (gitignored). Store: 1,886 Stock Bags ACTIVE,
+  1,886 ERP rows, pricing pins green ($1.80/$180, $1.92/$960, $2.70@50,
+  MOQ clamp, 9X+/5000+ quotes) on rebuilt + healthy handles.
+- CRITICAL Part C finding: 1,854 healthy bags have templateSuffix=null ->
+  default theme template -> NATIVE $1.00 purchase path, no configurator,
+  no lockout (only ritz + the 31 rebuilt render the configurator).
+  Fix tool committed (tools/fleet-template-16c.mjs, dry-run verified
+  1854/0 excluded); execution pending owner:
+  `node tools/fleet-template-16c.mjs --execute`.
+- 4 misc placeholder products (4x5-custom-pouch, 4x5-sticker-bag 210
+  variants, 14x16-sticker-bag, 4x5-box — empty productType, no lockout)
+  DRAFTED via tools/misc-containment-16c.mjs with rollback artifact.
+- Jars: applied-label ERP layer complete (10 profiles named "with Applied
+  Label", 440 pricing rules, 9 ConfiguratorProduct rows) but ALL jar rows
+  lack shopifyVariantGid and products stay DRAFT. BLANK jar sell prices do
+  not exist anywhere (bare-jar vendor costs + tiers do) — blocked on the
+  owner pricing question only, per 16C stop rule.
+- Tests 1048 (baseline 1037 + 11 rebuild-lib pins), TS 304 baseline,
+  build green. No app-code changes; tools + tests + docs only.
