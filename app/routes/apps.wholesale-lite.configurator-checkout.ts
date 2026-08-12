@@ -9,6 +9,12 @@ import {
 } from "../lib/security-guards-shared";
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 import { STOREFRONT_BAG_MIN_QTY, buildCanonicalLineMetadata, priceStorefrontConfiguration } from "../lib/storefront-canonical-pricing.server";
+import {
+  JAR_STOREFRONT_MIN_QTY,
+  buildCanonicalJarLineMetadata,
+  jarLaunchSizeForType,
+  priceJarConfiguration,
+} from "../lib/canonical-jar-pricing";
 
 const SHOPIFY_API_VERSION = "2025-10";
 
@@ -233,14 +239,24 @@ export async function action({ request }: ActionFunctionArgs) {
             })) || product
           : product;
       const isJar = isJarProductType(productType);
+      // 16D: launch jars (100ml/150ml Miron applied-label) price through the
+      // canonical jar engine — the posted "material" carries the included
+      // Matte/Gloss base finish, "labelSet" carries the label material, and
+      // "finish" carries the universal specialty ladder selection.
+      const jarLaunchSize = isJar ? jarLaunchSizeForType(productType) : null;
       const usesJarColor = isColorVariantJarProductType(productType);
       const productFamily = productFamilyForType(productType);
       const selectedBagColor = isJar ? "" : bagColor;
-      const selectedLabelSet = isJar ? labelSet || "Side + Lid" : "";
+      const selectedLabelSet = isJar ? labelSet || (jarLaunchSize ? "Standard" : "Side + Lid") : "";
       const defaultSides = effectiveProduct.defaultSides || "Double Sided";
-      // 15G.5A: bags floor at the approved ladder minimum (50); jars keep
-      // their own product MOQ. The clamp can only RAISE a posted quantity.
-      const minQuantity = isJar ? Number(effectiveProduct.minQuantity || MIN_QTY) : STOREFRONT_BAG_MIN_QTY;
+      // 15G.5A: bags floor at the approved ladder minimum (50); non-launch
+      // jars keep their own product MOQ; launch jars floor at the approved
+      // jar minimum (50). The clamp can only RAISE a posted quantity.
+      const minQuantity = isJar
+        ? jarLaunchSize
+          ? JAR_STOREFRONT_MIN_QTY
+          : Number(effectiveProduct.minQuantity || MIN_QTY)
+        : STOREFRONT_BAG_MIN_QTY;
       const quantity = Math.max(numberValue(rawItem.quantity, minQuantity), minQuantity);
 
       if (isJar) {
@@ -286,7 +302,32 @@ export async function action({ request }: ActionFunctionArgs) {
       let priceEach = 0;
       let matchedRange = "";
       let canonicalMeta: string | null = null;
-      if (!isJar) {
+      if (jarLaunchSize) {
+        // 16D: owner-approved launch pricing recomputed SERVER-SIDE from the
+        // configuration alone — posted prices are never read. 5,000+ and
+        // Deep Build 9X+ are rejected here exactly like bag Deep Builds.
+        const priced = priceJarConfiguration({
+          productType,
+          quantity,
+          baseFinish: material,
+          labelMaterial: selectedLabelSet,
+          specialty: finish,
+        });
+        if (!priced.ok) {
+          return jsonResponse(
+            {
+              ok: false,
+              requestQuote: priced.requestQuote,
+              error: priced.reason,
+              item: { title: effectiveProduct.title, productType, handle, material, finish, labelSet: selectedLabelSet, quantity },
+            },
+            { status: 400 },
+          );
+        }
+        priceEach = priced.unitPrice;
+        matchedRange = `${priced.tierMinQty}+`;
+        canonicalMeta = buildCanonicalJarLineMetadata({ productType, priced });
+      } else if (!isJar) {
         const faces = /single|front\s*only/i.test(String(defaultSides || "")) ? 1 : 2;
         const priced = priceStorefrontConfiguration(canonicalInputs, { quantity, faces, material, finish });
         if (!priced.ok) {
@@ -375,6 +416,14 @@ export async function action({ request }: ActionFunctionArgs) {
         ...(isJar
           ? [
               ...(usesJarColor ? [{ key: "Jar Color", value: selectedJarColor }] : []),
+              // 16D launch jars: explicit customer-facing base finish + label
+              // material; "Label Set" stays for legacy line compatibility.
+              ...(jarLaunchSize
+                ? [
+                    { key: "Base Finish", value: material },
+                    { key: "Label Material", value: selectedLabelSet },
+                  ]
+                : []),
               { key: "Label Set", value: selectedLabelSet },
             ]
           : [

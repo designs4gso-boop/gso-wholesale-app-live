@@ -1,6 +1,14 @@
 # GSO ERP / Shopify Configurator — Current State
 
-Updated: 2026-08-12 (Phase 16C, product revenue activation)
+Updated: 2026-08-12 (Phase 16D, Miron jar revenue activation)
+
+## JAR STATUS AFTER 16D
+Owner-approved applied-label jar pricing is LIVE in code (canonical jar
+engine; 100ml/150ml tables; holo +20% of base; specialty ladder 0X-8X;
+MOQ 50; 5,000+/9X+ quote). Three launch products canonicalized and HELD
+AT DRAFT pending: (1) owner `shopify app deploy` (ships the jar lockout),
+(2) `node tools/rebuild-jars-16d.mjs --activate`. See
+docs/GSO_JAR_16D_LAUNCH_RUNBOOK.md. GSO sells NO blank Miron jars.
 
 ## STOREFRONT STATUS AFTER 16C
 1,886 canonical Stock Bags ACTIVE with 1,886 ERP rows; the 31 legacy bags

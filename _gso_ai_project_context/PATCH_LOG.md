@@ -341,3 +341,43 @@ owner navigation runbook (docs/GSO_STORE_16B_NAVIGATION_RUNBOOK.md).
   owner pricing question only, per 16C stop rule.
 - Tests 1048 (baseline 1037 + 11 rebuild-lib pins), TS 304 baseline,
   build green. No app-code changes; tools + tests + docs only.
+
+## Phase 16D (2026-08-12) — Miron jar revenue activation (owner pricing authority)
+Owner-approved applied-label jar launch (NO blank jars — jar+lid+printed
+label+application included; Matte/Gloss base included):
+- app/lib/canonical-jar-pricing.ts: THE jar pricing authority. 100ml
+  (4.95/4.50/4.00/3.75/3.50/3.35) + 150ml (6.50/6.00/5.75/5.50/5.25/4.95)
+  at 50/100/250/500/1000/2500; holographic +20% of BASE (never layered
+  subtotal); universal specialty ladder 0X..8X (+0.30/0.50/0.70/0.90/
+  1.10/1.30/1.50/1.75); 9X+ and 5,000+ request quote; MOQ 50. Application
+  labor $0.20/jar is COST-side only. Never derived from margins/legacy
+  rules/competitors.
+- Proxy + checkout launch-jar branches (jar_100ml_tall/wide, jar_150ml):
+  material control = base finish, labelSet control = label material,
+  finish control = specialty ladder; server recomputes at checkout and
+  attaches the family-aware `_GSO Canonical` jar snapshot
+  (order-canonical.server.ts parseCanonicalJarOrderLine — bag parser and
+  jar parser never cross-parse).
+- Paid order -> ProductionJob: jar canonical snapshot is authoritative
+  (size/qty/base/label/holo/specialtyX/price + warnings); jar
+  materialSummary is token-hygienic so 0X+Standard routes Mimaki
+  (default CMYK) while specialty layers ("Gloss Layers: NX") and holo
+  (technical "White Layers: 1") route Roland via the ONE existing
+  decider. All-jar orders take the premium-jars checklist (+ new
+  "Labels cut" stage); bag orders keep default byte-identically.
+- Theme extension (REQUIRES `shopify app deploy`): lockout body class +
+  native-form submit interception now apply to jars (the legacy jar
+  native-variant purchase path is closed); jar-aware field labels
+  (Base Finish (Included) / Specialty / Label Material); jar notice
+  states included application.
+- tools/rebuild-jars-16d.mjs: canonicalized 100ml-tall/100ml-wide/150ml
+  Miron products (30-variant matrix -> single Default Title @1.00
+  CONTINUE, configurator-pilot tag, productType "Jars", template "jar"
+  kept, ERP rows: variant GID backfilled + minQuantity 50 + active).
+  Products HELD AT DRAFT: --activate only after the owner deploy.
+  Rollback artifact tools/rebuild-16c-data/rollback-16d-jars.json.
+- Legacy jar disposition: miron-jars (combined 12-variant) = REPLACED,
+  stays DRAFT; 50mml/250ml-miron-jars + 3oz/4oz-jar = future sizes,
+  stay DRAFT.
+- Tests 1076 (28 new jar pins incl. the owner $7.50 stack example);
+  TS 304; build green; prisma valid.

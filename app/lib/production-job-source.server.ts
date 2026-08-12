@@ -23,10 +23,13 @@ import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.s
 import { buildIntakeRipName, decideMachine } from "./print-intake-routing.server";
 import { appendIntakeAudit, readIntakeMeta, validateIntakeAssignment } from "./print-intake-review.server";
 import {
+  canonicalJarMaterialSummary,
+  canonicalJarSelectedAddOns,
   canonicalLineWarnings,
   canonicalMaterialSummary,
   canonicalSelectedAddOns,
   orderGidColumnAvailable,
+  parseCanonicalJarOrderLine,
   parseCanonicalOrderLine,
 } from "./order-canonical.server";
 
@@ -235,6 +238,8 @@ export const FAMILY_CHECKLISTS: Record<string, Array<{ section: string; label: s
     { section: "prepress", label: "Proof approved", sortOrder: 20 },
     { section: "production", label: "Jar + top inventory verified (Miron top type from snapshot)", sortOrder: 30 },
     { section: "production", label: "Labels printed", sortOrder: 40 },
+    // 16D: explicit cut stage (owner-required jar production checklist).
+    { section: "production", label: "Labels cut", sortOrder: 45 },
     { section: "production", label: "Labels applied", sortOrder: 50 },
     { section: "qc", label: "QC passed", sortOrder: 60 },
     { section: "packing", label: "Packed and labeled", sortOrder: 70 },
@@ -463,7 +468,10 @@ function isJarFamily(value: any) {
 export function isConfiguratorLine(line: any) {
   // 15H.4A: a server-created canonical snapshot is the strongest signal —
   // it alone qualifies the line even if visible properties were stripped.
-  if (parseCanonicalOrderLine(getLineProperty(line, "_GSO Canonical"))) return true;
+  // 16D: jar canonical snapshots qualify the same way.
+  const rawCanonical = getLineProperty(line, "_GSO Canonical");
+  if (parseCanonicalOrderLine(rawCanonical)) return true;
+  if (parseCanonicalJarOrderLine(rawCanonical)) return true;
   const material = getLineProperty(line, "Material");
   const finish = getLineProperty(line, "Finish");
   const bagColor = getLineProperty(line, "Bag Color");
@@ -526,14 +534,23 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
     // 15H.4A-E: the server-created checkout snapshot is AUTHORITATIVE for
     // canonical stock-bag lines; visible properties are the legacy fallback
     // (byte-identical mapping to the pre-15H.4A webhook when absent).
-    const canonical = parseCanonicalOrderLine(getLineProperty(line, "_GSO Canonical"));
-    const productFamily = getLineProperty(line, "Product Family") || (canonical ? "Stock Bags" : "");
-    const productType = getLineProperty(line, "Product Type") || (canonical ? canonical.profile : "");
-    const material = canonical ? canonical.material : getLineProperty(line, "Material");
-    const finish = canonical ? canonical.finishLabel : getLineProperty(line, "Finish");
-    const productionFinish = canonical ? canonical.finishLabel : (getLineProperty(line, "Production Finish") || finish);
+    const rawCanonical = getLineProperty(line, "_GSO Canonical");
+    const canonical = parseCanonicalOrderLine(rawCanonical);
+    // 16D: jar canonical snapshots are AUTHORITATIVE for launch jar lines
+    // exactly like bag snapshots are for bags; visible properties remain the
+    // fail-open fallback for malformed snapshots.
+    const jarCanonical = canonical ? null : parseCanonicalJarOrderLine(rawCanonical);
+    const productFamily = getLineProperty(line, "Product Family") || (canonical ? "Stock Bags" : jarCanonical ? "Jars" : "");
+    const productType = getLineProperty(line, "Product Type") || (canonical ? canonical.profile : jarCanonical ? jarCanonical.profile : "");
+    const material = canonical ? canonical.material : jarCanonical ? jarCanonical.baseFinish : getLineProperty(line, "Material");
+    const finish = canonical ? canonical.finishLabel : jarCanonical ? jarCanonical.finishLabel : getLineProperty(line, "Finish");
+    const productionFinish = canonical
+      ? canonical.finishLabel
+      : jarCanonical
+        ? jarCanonical.finishLabel
+        : (getLineProperty(line, "Production Finish") || finish);
     const bagColor = canonical ? canonical.bagColor : getLineProperty(line, "Bag Color");
-    const labelSet = getLineProperty(line, "Label Set");
+    const labelSet = jarCanonical ? jarCanonical.labelMaterial : getLineProperty(line, "Label Set");
     const jarColor = getLineProperty(line, "Jar Color");
     const sides = canonical ? (canonical.faces === 1 ? "Single Sided" : "Double Sided") : (getLineProperty(line, "Sides") || "Double Sided");
     const isJar = isJarFamily(productFamily) || productType.startsWith("jar_");
@@ -542,31 +559,55 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
     // 15H.4A-K: the canonical engine-stamped unit price is the order-time
     // commercial truth; the paid line price rides alongside and mismatches
     // surface as human-visible warnings (never a recalculation).
-    const canonicalWarnings = canonical ? canonicalLineWarnings(canonical, { quantity, unitPrice: linePaidUnitPrice }) : [];
-    const unitPrice = canonical ? money(canonical.unitPrice) : linePaidUnitPrice;
+    const canonicalWarnings = canonical
+      ? canonicalLineWarnings(canonical, { quantity, unitPrice: linePaidUnitPrice })
+      : jarCanonical
+        ? canonicalLineWarnings(jarCanonical, { quantity, unitPrice: linePaidUnitPrice })
+        : [];
+    const unitPrice = canonical ? money(canonical.unitPrice) : jarCanonical ? money(jarCanonical.unitPrice) : linePaidUnitPrice;
     const productTitle = lineProductTitle(line);
     const variantTitle = isJar
       ? [jarColor, material, finish, labelSet].filter(Boolean).join(" / ")
       : `${material} / ${finish} / ${bagColor}`;
     const selectedAddOns = canonical
       ? canonicalSelectedAddOns(canonical)
-      : isJar
-        ? { productFamily, productType, material, finish, productionFinish, ...(jarColor ? { jarColor } : {}), labelSet }
-        : { productFamily, productType, material, finish, productionFinish, bagColor, sides };
+      : jarCanonical
+        ? canonicalJarSelectedAddOns(jarCanonical)
+        : isJar
+          ? { productFamily, productType, material, finish, productionFinish, ...(jarColor ? { jarColor } : {}), labelSet }
+          : { productFamily, productType, material, finish, productionFinish, bagColor, sides };
     const materialSummary = canonical
       ? canonicalMaterialSummary(canonical)
-      : isJar
-        ? [
-            `Product Family: ${productFamily}`, `Product Type: ${productType}`, `Material: ${material}`,
-            `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
-            ...(jarColor ? [`Jar Color: ${jarColor}`] : []), `Label Set: ${labelSet}`,
-          ].join(" | ")
-        : `Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Bag Color: ${bagColor} | Sides: ${sides}`;
+      : jarCanonical
+        ? canonicalJarMaterialSummary(jarCanonical)
+        : isJar
+          ? [
+              `Product Family: ${productFamily}`, `Product Type: ${productType}`, `Material: ${material}`,
+              `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
+              ...(jarColor ? [`Jar Color: ${jarColor}`] : []), `Label Set: ${labelSet}`,
+            ].join(" | ")
+          : `Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Bag Color: ${bagColor} | Sides: ${sides}`;
     const productionNotes = isJar
       ? [
           `Shopify order: ${quoteNumber}`, `Product Family: ${productFamily}`, `Product Type: ${productType}`,
           `Material: ${material}`, `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
           ...(jarColor ? [`Jar Color: ${jarColor}`] : []), `Label Set: ${labelSet}`,
+          // 16D: customer-exact terms + production requirements ride in the
+          // notes (the machine router never reads notes, so the customer word
+          // "Gloss" for the included base laminate is safe here).
+          ...(jarCanonical
+            ? [
+                `Jar Size: ${jarCanonical.size}`,
+                `Base Finish (customer): ${jarCanonical.baseFinish} — included, no charge`,
+                `Label Material: ${jarCanonical.labelMaterial}`,
+                `Holographic: ${jarCanonical.holo ? "yes (+20% of base)" : "no"}`,
+                `Technical white underbase: ${jarCanonical.whiteRequired ? "yes (production requirement, not a customer charge)" : "no"}`,
+                `Specialty Layers: ${jarCanonical.specialtyX}X`,
+                `Label application: GSO applied — included and mandatory`,
+                `Canonical engine: ${jarCanonical.engine} (${jarCanonical.v})`,
+                ...canonicalWarnings.map((warning) => `WARNING: ${warning}`),
+              ]
+            : []),
         ].join("\n")
       : [
           `Shopify order: ${quoteNumber}`, `Material: ${material}`, `Finish: ${finish}`,
@@ -589,8 +630,10 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       lineTotal: money(unitPrice * quantity),
       // 15H.4A: the verbatim server-created checkout snapshot is the
       // order-time commercial truth for canonical lines; the PAID line price
-      // rides alongside for reconciliation. Never recalculated.
+      // rides alongside for reconciliation. Never recalculated. 16D: jar
+      // snapshots ride under the same key (distinguished by family:"jars").
       ...(canonical ? { canonical, linePaidUnitPrice, canonicalWarnings } : {}),
+      ...(jarCanonical ? { canonical: jarCanonical, linePaidUnitPrice, canonicalWarnings } : {}),
     };
     const item = {
       productTitle,
@@ -628,6 +671,17 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
     };
   });
 
+  // 16D: an all-jar order takes the applied-label jar production checklist
+  // (inventory pull -> print -> cut -> application -> QC -> pack). Mixed or
+  // bag orders keep the pre-16D default checklist unchanged.
+  const jarLineCount = configuredLines.filter((line: any) => {
+    if (parseCanonicalJarOrderLine(getLineProperty(line, "_GSO Canonical"))) return true;
+    const family = getLineProperty(line, "Product Family");
+    const type = getLineProperty(line, "Product Type");
+    return isJarFamily(family) || type.startsWith("jar_");
+  }).length;
+  const checklistFamily = jarLineCount === configuredLines.length ? "premium-jars" : "default";
+
   const firstLine = configuredLines[0];
   const firstImage =
     getLineProperty(firstLine, "_GSO Product Image") || getLineProperty(firstLine, "Product Image") ||
@@ -637,6 +691,7 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
   return {
     quoteId,
     quoteNumber,
+    checklistFamily,
     // 15H.4A: first-class order linkage (written to ProductionJob.orderGid
     // once the staged column is activated; capability-guarded at create).
     orderGid: orderId,
@@ -814,7 +869,9 @@ export async function createProductionJobFromSource(
           internalNotes: payload.internalNotes,
           productImageUrl: payload.productImageUrl,
           items: { create: payload.items.map((item: any) => ({ shop, ...item })) },
-          checklistItems: { create: FAMILY_CHECKLISTS.default.map((check) => ({ shop, ...check })) },
+          // 16D: all-jar orders take the applied-label jar checklist; every
+          // other order keeps the pre-16D default checklist byte-identical.
+          checklistItems: { create: checklistForFamily(payload.checklistFamily || "default").map((check) => ({ shop, ...check })) },
           events: { create: [{ shop, eventType: payload.eventType, message: payload.eventMessage(jobTicket), createdBy: actor }] },
         },
         include: { items: true },

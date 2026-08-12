@@ -12,6 +12,17 @@ import {
   priceStorefrontConfiguration,
   storefrontPriceBreaks,
 } from "../lib/storefront-canonical-pricing.server";
+import {
+  JAR_BASE_FINISHES,
+  JAR_LABEL_MATERIALS,
+  JAR_QUANTITY_OPTIONS,
+  JAR_SPECIALTY_OPTIONS,
+  JAR_STOREFRONT_MIN_QTY,
+  JAR_VOLUME_QUOTE_FROM,
+  jarLaunchSizeForType,
+  jarPriceBreaks,
+  priceJarConfiguration,
+} from "../lib/canonical-jar-pricing";
 
 // 15G.1: served only through the signed Shopify app proxy (same-origin from
 // the storefront) — no cross-origin callers exist, so no CORS headers.
@@ -201,8 +212,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
         })) || product
       : product;
   // 15G.5A: the 4x5 configurator flow starts at the approved ladder minimum
-  // of 50 (server-enforced); jars keep their own product MOQ untouched.
-  const minQuantity = isJar ? Number(effectiveProduct.minQuantity || MIN_QTY) : STOREFRONT_BAG_MIN_QTY;
+  // of 50 (server-enforced); non-launch jars keep their own product MOQ.
+  // 16D: owner-approved launch jars (100ml/150ml Miron) start at 50.
+  const jarLaunchSize = isJar ? jarLaunchSizeForType(productType) : null;
+  const minQuantity = isJar
+    ? jarLaunchSize
+      ? JAR_STOREFRONT_MIN_QTY
+      : Number(effectiveProduct.minQuantity || MIN_QTY)
+    : STOREFRONT_BAG_MIN_QTY;
   const quantity = Math.max(numberValue(url.searchParams.get("quantity"), minQuantity), minQuantity);
 
   const [options, rules] = await Promise.all([
@@ -260,14 +277,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
     "Clear",
   ];
 
-  const materials = optionMaterials.length ? optionMaterials : ruleMaterials;
-  // 15G.5A: supported bags serve the canonical 0X-8X finish ladder from code
-  // (deterministic X mapping; Deep Build 9X+ is quote-only) — no production
-  // ConfiguratorOption rows required. Jars keep their DB options.
-  const finishes = isJar ? (optionFinishes.length ? optionFinishes : ruleFinishes) : CANONICAL_FINISH_OPTIONS;
+  // 16D: launch jars serve the owner-approved option sets from the canonical
+  // jar engine — the "material" control carries the included Matte/Gloss base
+  // finish, the "labelSet" control carries the label material, and the
+  // "finish" control carries the universal GSO specialty ladder. Non-launch
+  // jars keep their DB options; bags keep the canonical 0X-8X ladder.
+  const materials = jarLaunchSize ? [...JAR_BASE_FINISHES] : optionMaterials.length ? optionMaterials : ruleMaterials;
+  const finishes = jarLaunchSize
+    ? [...JAR_SPECIALTY_OPTIONS]
+    : isJar
+      ? (optionFinishes.length ? optionFinishes : ruleFinishes)
+      : CANONICAL_FINISH_OPTIONS;
   const bagColors = optionBagColors.length ? optionBagColors : defaultBagColors;
-  const jarColors = hasJarColorVariants ? ["Clear", "Black", "White"] : [];
-  const labelSets = optionLabelSets;
+  const jarColors = jarLaunchSize ? [] : hasJarColorVariants ? ["Clear", "Black", "White"] : [];
+  const labelSets = jarLaunchSize ? [...JAR_LABEL_MATERIALS] : optionLabelSets;
 
   const selectedMaterial = material || materials[0] || "Matte";
   const selectedFinish = finish || finishes[0] || "No Spot Gloss";
@@ -291,7 +314,33 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let priceEach = 0;
   let priceBreaks: Array<{ range: string; minQty: number; maxQty: number | null; priceEach: number }> = [];
 
-  if (!isJar) {
+  if (jarLaunchSize) {
+    // 16D: owner-approved launch pricing — base(size, qty) + holographic 20%
+    // of BASE + fixed specialty premium; 5,000+ and 9X+ are quote-only. The
+    // engine is the single authority; legacy jar rules never price these.
+    pricingSource = "canonical_erp";
+    const priced = priceJarConfiguration({
+      productType,
+      quantity,
+      baseFinish: selectedMaterial,
+      labelMaterial: selectedLabelSet,
+      specialty: selectedFinish,
+    });
+    priceBreaks = jarPriceBreaks({
+      productType,
+      baseFinish: selectedMaterial,
+      labelMaterial: selectedLabelSet,
+      specialty: selectedFinish,
+    });
+    if (priced.ok) {
+      matched = true;
+      priceEach = priced.unitPrice;
+    } else {
+      matched = false;
+      requestQuote = priced.requestQuote;
+      pricingMessage = priced.reason;
+    }
+  } else if (!isJar) {
     pricingSource = "canonical_erp";
     const canonicalInputs = await resolveCanonicalBagInputs(db, shop);
     const faces = /single|front\s*only/i.test(String(effectiveProduct.defaultSides || "")) ? 1 : 2;
@@ -352,8 +401,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // 15G.5A: approved storefront quantity ladder + volume-quote threshold
     // (5,000+ is never priced online). Themes may render these as choices;
     // arbitrary quantities >= minQuantity still price via the band step fn.
-    quantityOptions: isJar ? [] : STOREFRONT_PRICE_BREAK_QUANTITIES,
-    volumeQuoteFrom: isJar ? null : VOLUME_QUOTE_FROM,
+    quantityOptions: jarLaunchSize ? JAR_QUANTITY_OPTIONS : isJar ? [] : STOREFRONT_PRICE_BREAK_QUANTITIES,
+    volumeQuoteFrom: jarLaunchSize ? JAR_VOLUME_QUOTE_FROM : isJar ? null : VOLUME_QUOTE_FROM,
     selected: {
       material: selectedMaterial,
       finish: selectedFinish,

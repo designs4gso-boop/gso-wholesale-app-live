@@ -42,11 +42,13 @@
 {% assign selected_variant = product.selected_or_first_available_variant %}
 
 {%- comment -%}
-  15G.5D: configurator-controlled stock bags get exactly ONE purchase path —
+  15G.5D: configurator-controlled products get exactly ONE purchase path —
   the GSO configurator. The lockout marker (deterministic, from existing
   product signals: type "Stock Bag" or tag "configurator-pilot") hides the
   theme's native Add to cart / Buy with Shop / More payment options via the
-  extension CSS + JS. Jars and unrelated products never carry the marker.
+  extension CSS + JS. 16D: canonical launch jars carry the configurator-pilot
+  tag, so they lock exactly like bags; the JS also applies the lockout body
+  class and blocks native form submits for jars now.
 {%- endcomment -%}
 {%- assign gso_lockout = false -%}
 {%- if product.type == 'Stock Bag' or product.tags contains 'configurator-pilot' -%}
@@ -97,13 +99,18 @@
 
     <div class="gso-configurator__app" hidden>
       <div class="gso-configurator__fields">
+        {%- comment -%}
+          16D: jar products reuse the same controls with jar vocabulary —
+          "material" carries the included Matte/Gloss base finish and
+          "finish" carries the universal GSO specialty ladder.
+        {%- endcomment -%}
         <label class="gso-configurator__field">
-          <span>Material</span>
+          <span>{% if product.type == 'Jars' %}Base Finish (Included){% else %}Material{% endif %}</span>
           <select data-gso-field="material"></select>
         </label>
 
         <label class="gso-configurator__field">
-          <span>Finish</span>
+          <span>{% if product.type == 'Jars' %}Specialty{% else %}Finish{% endif %}</span>
           <select data-gso-field="finish"></select>
         </label>
 
@@ -113,7 +120,7 @@
         </label>
 
         <label class="gso-configurator__field" data-gso-field-row="labelSet" hidden>
-          <span>Label Set</span>
+          <span>{% if product.type == 'Jars' %}Label Material{% else %}Label Set{% endif %}</span>
           <select data-gso-field="labelSet"></select>
         </label>
 

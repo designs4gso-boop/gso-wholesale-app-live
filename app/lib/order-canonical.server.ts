@@ -98,11 +98,119 @@ export function canonicalSelectedAddOns(canonical: CanonicalOrderLine): Record<s
   };
 }
 
+// ---------- 16D: applied-label jar canonical lines ----------
+// Family-aware sibling of the stock-bag snapshot, produced by
+// canonical-jar-pricing.ts buildCanonicalJarLineMetadata: { v, family:"jars",
+// profile, size, qty, baseFinish, labelMaterial, holo, whiteRequired,
+// specialtyX, finishLabel, unitPrice, engine }. Same fail-closed contract:
+// malformed snapshots fall back to visible line properties with warnings.
+
+export type CanonicalJarOrderLine = {
+  v: string;
+  family: "jars";
+  profile: string;
+  size: string;
+  qty: number;
+  baseFinish: "Matte" | "Gloss";
+  labelMaterial: "Standard" | "Holographic";
+  holo: boolean;
+  whiteRequired: boolean;
+  specialtyX: number;
+  finishLabel: string;
+  unitPrice: number;
+  engine: string;
+};
+
+export function parseCanonicalJarOrderLine(raw: string | null | undefined): CanonicalJarOrderLine | null {
+  if (!raw) return null;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(String(raw));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  if (parsed.family !== "jars") return null;
+  const qty = Number(parsed.qty);
+  const specialtyX = Number(parsed.specialtyX);
+  const unitPrice = Number(parsed.unitPrice);
+  const ok =
+    typeof parsed.v === "string" && parsed.v.length > 0 &&
+    typeof parsed.profile === "string" && parsed.profile.startsWith("jar_") &&
+    typeof parsed.size === "string" && parsed.size.length > 0 &&
+    Number.isFinite(qty) && qty > 0 &&
+    (parsed.baseFinish === "Matte" || parsed.baseFinish === "Gloss") &&
+    (parsed.labelMaterial === "Standard" || parsed.labelMaterial === "Holographic") &&
+    Number.isFinite(specialtyX) && specialtyX >= 0 && specialtyX <= 8 &&
+    typeof parsed.finishLabel === "string" && parsed.finishLabel.length > 0 &&
+    Number.isFinite(unitPrice) && unitPrice > 0 &&
+    typeof parsed.engine === "string" && parsed.engine.length > 0;
+  if (!ok) return null;
+  return {
+    v: parsed.v,
+    family: "jars",
+    profile: parsed.profile,
+    size: parsed.size,
+    qty: Math.floor(qty),
+    baseFinish: parsed.baseFinish,
+    labelMaterial: parsed.labelMaterial,
+    holo: Boolean(parsed.holo),
+    whiteRequired: Boolean(parsed.whiteRequired),
+    specialtyX: Math.floor(specialtyX),
+    finishLabel: parsed.finishLabel,
+    unitPrice,
+    engine: parsed.engine,
+  };
+}
+
+// Jar production summary — the machine decider reads this text, so token
+// hygiene is deliberate: a plain-CMYK config (0X + Standard label) contains
+// NO white/gloss/clear token and defaults to the Mimaki; specialty layers
+// emit "Gloss Layers: NX" and holographic emits "White Layers: 1" (technical
+// underbase) so those deterministically route Roland. The customer-facing
+// word "Gloss" for the INCLUDED base laminate finish is intentionally
+// rendered "High-Shine" here (and stated verbatim in production notes,
+// which the router never reads).
+export function canonicalJarMaterialSummary(jar: CanonicalJarOrderLine): string {
+  const parts = [
+    `Profile: ${jar.profile}`,
+    `Family: Jars`,
+    `Size: ${jar.size}`,
+    `Base: ${jar.baseFinish === "Gloss" ? "High-Shine" : "Matte"}`,
+    `Label Material: ${jar.holo ? "Holographic Vinyl" : "Standard Vinyl"}`,
+    `Specialty: ${jar.finishLabel}`,
+  ];
+  if (jar.specialtyX >= 1) parts.push(`Gloss Layers: ${jar.specialtyX}X`);
+  if (jar.holo) parts.push(`White Layers: 1`, `Holographic: yes`);
+  else parts.push(`Holographic: no`);
+  parts.push(`Application: GSO label application included`);
+  return parts.join(" | ");
+}
+
+export function canonicalJarSelectedAddOns(jar: CanonicalJarOrderLine): Record<string, unknown> {
+  return {
+    source: "gso_canonical_checkout",
+    family: "jars",
+    canonicalVersion: jar.v,
+    profile: jar.profile,
+    size: jar.size,
+    baseFinish: jar.baseFinish,
+    labelMaterial: jar.labelMaterial,
+    holographic: jar.holo,
+    requiredWhite: jar.whiteRequired,
+    specialtyLayers: jar.specialtyX,
+    finish: jar.finishLabel,
+    productionFinish: jar.finishLabel,
+    application: "GSO label application included",
+    engine: jar.engine,
+  };
+}
+
 // Cross-checks between the canonical snapshot and the paid line. Mismatches
 // never block the job — they surface as warnings on the item so a human sees
 // them (the PAID line quantity/price stay the commercial record; the
 // canonical block is preserved verbatim alongside).
-export function canonicalLineWarnings(canonical: CanonicalOrderLine, line: { quantity: number; unitPrice: number }): string[] {
+export function canonicalLineWarnings(canonical: Pick<CanonicalOrderLine, "qty" | "unitPrice">, line: { quantity: number; unitPrice: number }): string[] {
   const warnings: string[] = [];
   if (Number(line.quantity) !== canonical.qty) {
     warnings.push(`Canonical qty ${canonical.qty} differs from paid line qty ${line.quantity} — verify before production.`);

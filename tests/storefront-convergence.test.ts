@@ -259,8 +259,14 @@ describe("15G.5C final storefront MOQ cleanup (single customer-facing authority 
 
   it("canonical bag MOQ is 50 and both public routes clamp raise-only through it", () => {
     expect(STOREFRONT_BAG_MIN_QTY).toBe(50);
-    expect(proxy).toContain("isJar ? Number(effectiveProduct.minQuantity || MIN_QTY) : STOREFRONT_BAG_MIN_QTY");
-    expect(checkout).toContain("isJar ? Number(effectiveProduct.minQuantity || MIN_QTY) : STOREFRONT_BAG_MIN_QTY");
+    // 16D: launch jars floor at the owner-approved jar minimum (50); other
+    // jars keep their row MOQ; bags stay on the canonical 50. Same raise-only
+    // clamp in both public routes.
+    for (const src of [proxy, checkout]) {
+      expect(src).toContain("? JAR_STOREFRONT_MIN_QTY");
+      expect(src).toContain(": Number(effectiveProduct.minQuantity || MIN_QTY)");
+      expect(src).toContain(": STOREFRONT_BAG_MIN_QTY");
+    }
     expect(proxy).toContain("Math.max(numberValue(url.searchParams.get(\"quantity\"), minQuantity), minQuantity)");
     expect(checkout).toContain("Math.max(numberValue(rawItem.quantity, minQuantity), minQuantity)");
   });
@@ -305,7 +311,7 @@ describe("15G.5C final storefront MOQ cleanup (single customer-facing authority 
     expect(storefront({ quantity: 500, faces: 2, finish: "Raised Gloss+ — 3X" })).toMatchObject({ ok: true, unitPrice: 1.92, totalPrice: 960 });
   });
 
-  it("15G.5D: native purchase controls are locked out ONLY for configurator stock bags", () => {
+  it("15G.5D/16D: native purchase controls are locked out for ALL configurator products (bags + jars)", () => {
     const css = readFileSync("extensions/wholesale-theme/assets/gso-product-configurator.css", "utf8");
     // liquid marker comes from existing deterministic product signals
     expect(liquid).toContain("product.type == 'Stock Bag' or product.tags contains 'configurator-pilot'");
@@ -320,9 +326,15 @@ describe("15G.5C final storefront MOQ cleanup (single customer-facing authority 
     // the old unscoped body class stays dead — no CSS may ever hook it (jars)
     expect(css.includes("gso-configurator-hide-dynamic-checkout")).toBe(false);
     // JS: instant activation from the liquid marker + response-confirmed
-    // activation guarded so jar pages (i === true) never lock out
+    // activation. 16D: the jar exemption is GONE — every configurator
+    // product (bags AND canonical launch jars) applies the lockout class,
+    // and native form submits are always intercepted (no `i||` gate, no
+    // jar pass-through in the submit handler).
     expect(js).toContain('"1"===t.dataset.gsoLockout&&document.body.classList.add("gso-native-purchase-lockout")');
-    expect(js).toContain('i||(document.body.classList.add("gso-native-purchase-lockout")');
+    expect(js).toContain(',(document.body.classList.add("gso-native-purchase-lockout")');
+    expect(js.includes('i||(document.body.classList.add("gso-native-purchase-lockout")')).toBe(false);
+    expect(js.includes("return!(!g||!C(g))||(t.preventDefault()")).toBe(false);
+    expect(js).toContain("return(t.preventDefault()");
     // non-CSS backstop: native add-to-cart submits are disabled under lockout
     expect(js).toContain('[name="add"]');
     expect(js).toContain("lb[li].disabled=!0");
