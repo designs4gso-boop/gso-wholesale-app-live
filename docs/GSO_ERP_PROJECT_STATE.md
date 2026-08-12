@@ -2183,3 +2183,20 @@ Webhook idempotency unchanged (stable GID source key; fail closed).
 routed live as GSO-20260811-0001/0002/0003 (Roland CMYK / GLOSS-3X /
 GLOSS-1X). Tests 996 -> 1009; tsc 304. Phase 16 roadmap unchanged.
 Next: 15H.4B manual/walk-in job UI; 15H.4C merge/link convergence.
+
+## Phase 15H.4B — manual production job creation (2026-08-12)
+"New Manual Job" on the Production Board creates permanent-ticket
+production work with no Shopify/quote/payment dependency: loader-minted
+requestId idempotency (Date.now key removed; manual exemption from the
+source idempotency check removed), fail-closed validation, canonical
+decideMachine resolution (white/gloss + Mimaki rejects; Auto routes by
+owner rules), family-checklist items with resolved machine stored, zero
+fabricated commercial data, created_manual_admin audit, and post-create
+ticket + Copy Print File Name guidance proven intake-resolvable by all
+four deterministic tiers. No schema change (requestId lives in the
+existing quoteId source-key field as manual_<requestId>). Tests 1009 ->
+1016; tsc 304. Owner smoke test: New Manual Job -> "GSO MANUAL TEST" /
+"Manual CMYK Test" / qty 10 / Custom-Other / CMYK / Auto -> expect
+Mimaki, fresh GSO ticket, one -01 item, $0 prices. Phase 16 roadmap
+unchanged. Next: 15H.4C merge/link (fold unlinked intake jobs into
+order/quote jobs without duplicates), then 15H.5 reprints/runs/QC.

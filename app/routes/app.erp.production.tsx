@@ -13,7 +13,7 @@ import {
 } from "@shopify/polaris";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
-import { allocateJobTicket, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, runWithTicketRetry } from "../lib/production-job-source.server";
+import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, runWithTicketRetry } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
@@ -264,6 +264,8 @@ function folderNameForJob(job: any) {
   const firstProduct = slugPart(job.items?.[0]?.productTitle || "JOB");
   return `${ticket} - ${customer} - ${firstProduct}`;
 }
+
+const manualInput: React.CSSProperties = { display: "block", width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb", marginTop: 4 };
 
 function copyText(value: any) {
   if (typeof navigator !== "undefined" && navigator.clipboard && value) {
@@ -570,7 +572,18 @@ export async function loader({ request }: { request: Request }) {
     orderBy: [{ materialType: "asc" }, { name: "asc" }],
   });
 
-  return Response.json({ jobs: jobsWithActuals, quotes, materials });
+  return Response.json({
+    jobs: jobsWithActuals,
+    quotes,
+    materials,
+    // 15H.4B: one requestId per rendered form — double-clicks and network
+    // retries of the same form resolve to the SAME manual job (server key:
+    // shop + requestId). A successful creation revalidates the loader and
+    // mints a fresh id for the next job.
+    manualRequestId: crypto.randomUUID(),
+    manualFamilies: MANUAL_JOB_FAMILIES,
+    manualFinishes: MANUAL_JOB_FINISHES,
+  });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -578,6 +591,57 @@ export async function action({ request }: { request: Request }) {
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
+
+  // 15H.4B: manual / walk-in / internal job — a real permanent GSO ticket
+  // with no Shopify order, quote, or payment. Admin session only; shop from
+  // the session; validation + canonical machine resolution in the service.
+  if (intent === "createManualJob") {
+    try {
+      const actor = resolveActorFromSession(session, shop);
+      const result = await createProductionJobFromSource(db, {
+        shop,
+        actor,
+        source: {
+          type: "manual_admin",
+          authorizedBy: actor,
+          requestId: String(formData.get("requestId") || ""),
+          payload: {
+            customerName: String(formData.get("customerName") || ""),
+            email: String(formData.get("email") || ""),
+            phone: String(formData.get("phone") || ""),
+            notes: String(formData.get("notes") || ""),
+            reference: String(formData.get("reference") || ""),
+            dueDate: String(formData.get("dueDate") || ""),
+            items: [{
+              productTitle: String(formData.get("itemTitle") || ""),
+              quantity: Number(formData.get("quantity") || 0),
+              family: String(formData.get("family") || "default"),
+              finish: String(formData.get("finish") || "CMYK"),
+              printer: String(formData.get("printer") || "auto") as any,
+              sku: String(formData.get("sku") || ""),
+              size: String(formData.get("size") || ""),
+              notes: String(formData.get("itemNotes") || ""),
+            }],
+          },
+        },
+      });
+      const item = result.job?.items?.[0];
+      return Response.json({
+        ok: true,
+        message: result.created
+          ? `Manual job ${result.job.jobTicket} created.`
+          : `Already created as ${result.job.jobTicket} (same request).`,
+        manualJob: {
+          jobTicket: result.job.jobTicket,
+          itemTicket: item?.itemTicket || null,
+          suggestedFileName: item?.suggestedFileName || null,
+          machine: item?.machineSummary || null,
+        },
+      });
+    } catch (error: any) {
+      return Response.json({ ok: false, message: error?.message || "Could not create the manual job." });
+    }
+  }
 
   if (intent === "createFromQuote") {
     const quoteId = String(formData.get("quoteId") || "");
@@ -1765,7 +1829,7 @@ function JobCard({ job, materials }: { job: any; materials: any[] }) {
 }
 
 export default function ProductionBoard() {
-  const { jobs, quotes, materials } = useLoaderData<any>();
+  const { jobs, quotes, materials, manualRequestId, manualFamilies, manualFinishes } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -1815,6 +1879,66 @@ export default function ProductionBoard() {
                 </InlineStack>
               </Form>
               <Text as="p" tone="subdued">Slack alerts are sent automatically if SLACK_WEBHOOK_URL or PRODUCTION_SLACK_WEBHOOK_URL is set in Render.</Text>
+
+              {actionData?.manualJob ? (
+                <div style={{ border: "1px solid #86efac", background: "#f0fdf4", borderRadius: 10, padding: 12 }}>
+                  <Text as="p" fontWeight="semibold">Manual job ready — name your artwork with the ticket and drop it into Prints For Today:</Text>
+                  <p style={{ margin: "6px 0 0", fontFamily: "monospace" }}>
+                    Job ticket: <b>{actionData.manualJob.jobTicket}</b> · Item ticket: <b>{actionData.manualJob.itemTicket}</b> · Machine: {actionData.manualJob.machine || "—"}
+                  </p>
+                  {actionData.manualJob.suggestedFileName ? (
+                    <p style={{ margin: "6px 0 0", fontFamily: "monospace" }}>
+                      {actionData.manualJob.suggestedFileName}{" "}
+                      <Button size="micro" onClick={() => copyText(actionData.manualJob.suggestedFileName)}>Copy Print File Name</Button>
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* 15H.4B: manual / walk-in / internal job — permanent GSO
+                  ticket with NO Shopify order, quote, or payment required. */}
+              <details style={{ border: "1px solid #d1d5db", borderRadius: 10, padding: 12 }}>
+                <summary style={{ cursor: "pointer", fontWeight: 600 }}>New Manual Job (walk-in / internal / test — no order or quote needed)</summary>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="createManualJob" />
+                  <input type="hidden" name="requestId" value={manualRequestId} />
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
+                    <label>Job / customer name *<input name="customerName" required style={manualInput} placeholder="Walk-in — Jane D." /></label>
+                    <label>Item / product name *<input name="itemTitle" required style={manualInput} placeholder="4x5 bag labels" /></label>
+                    <label>Quantity *<input name="quantity" type="number" min="1" step="1" required style={manualInput} /></label>
+                    <label>Production family
+                      <select name="family" defaultValue="default" style={manualInput}>
+                        {manualFamilies.map((family: any) => <option key={family.value} value={family.value}>{family.label}</option>)}
+                      </select>
+                    </label>
+                    <label>Finish / requirement
+                      <select name="finish" defaultValue="CMYK" style={manualInput}>
+                        {manualFinishes.map((finish: string) => <option key={finish} value={finish}>{finish}</option>)}
+                      </select>
+                    </label>
+                    <label>Printer
+                      <select name="printer" defaultValue="auto" style={manualInput}>
+                        <option value="auto">Auto (canonical rules)</option>
+                        <option value="mimaki">Mimaki UCJV300 (CMYK only)</option>
+                        <option value="roland">Roland LG-640</option>
+                      </select>
+                    </label>
+                    <label>SKU (optional)<input name="sku" style={manualInput} /></label>
+                    <label>Size (optional)<input name="size" style={manualInput} placeholder='4" x 5"' /></label>
+                    <label>Due date (optional)<input name="dueDate" type="date" style={manualInput} /></label>
+                    <label>Reference # (optional)<input name="reference" style={manualInput} /></label>
+                    <label>Customer email (optional)<input name="email" type="email" style={manualInput} /></label>
+                    <label>Customer phone (optional)<input name="phone" style={manualInput} /></label>
+                  </div>
+                  <label style={{ display: "block", marginTop: 10 }}>Notes (optional)
+                    <textarea name="itemNotes" rows={2} style={{ ...manualInput, width: "100%" }} placeholder="Specialty details, finishing instructions…" />
+                  </label>
+                  <div style={{ marginTop: 10 }}>
+                    <Button submit variant="primary" loading={busy}>Create Manual Job</Button>
+                  </div>
+                  <Text as="p" tone="subdued">White/gloss/specialty on the CMYK-only Mimaki is rejected; Auto follows the owner routing rules (white/gloss → Roland, CMYK → Mimaki). No price or cost is fabricated.</Text>
+                </Form>
+              </details>
             </BlockStack>
           </Card>
         </Layout.Section>

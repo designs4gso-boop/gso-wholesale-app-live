@@ -243,3 +243,28 @@ Intake reuse confirmed: item ticket, job ticket, subfolder, and
 suggestedFileName all resolve order jobs; free-named artwork still
 auto-creates an unlinked job — the merge/link action is 15H.4C.
 NEXT: 15H.4B manual/walk-in jobs; 15H.4C merge/link.
+
+## 15H.4B IMPLEMENTED (2026-08-12) — manual / walk-in / internal jobs
+The dormant manual_admin branch is live behind "New Manual Job" on the
+Production Board: a real permanent GSO ticket (same authoritative
+allocator, GSO-YYYYMMDD-NNNN / -01 item) with NO Shopify order, quote,
+payment, or CRM record required. IDEMPOTENCY FIXED: the unstable
+Date.now source key is gone — the form embeds a loader-minted
+crypto.randomUUID requestId and the server keys on shop + requestId
+(quoteId = "manual_<requestId>"); double-clicks, retries, and timeout
+replays resolve to the SAME job, and the old manual exemption from the
+idempotency check is removed (every source checks now). VALIDATION
+fails closed (name/title/qty>0/family/finish/printer/requestId; shop
+only from the session). MACHINE AUTHORITY unchanged: the requested
+printer becomes a machineSummary and the ONE canonical decideMachine
+resolves it — Auto follows white/gloss->Roland else CMYK->Mimaki;
+white/gloss on the CMYK-only Mimaki REJECTS; explicit Roland allows
+CMYK or specialty. Items store family (canonical FAMILY_CHECKLISTS
+vocabulary; family checklist applied), finish, resolved machine, and a
+manual_admin selectedAddOns block; prices/costs default 0 (never
+fabricated). Status "new". After creation the UI shows job ticket, item
+ticket, machine, and the suggested production filename with Copy Print
+File Name — intake resolves the job by item ticket, job ticket,
+subfolder, and suggested filename with zero new intake logic (pinned).
+Audit: created_manual_admin event with actor, requestId, requested vs
+resolved printer. NEXT: 15H.4C merge/link convergence.

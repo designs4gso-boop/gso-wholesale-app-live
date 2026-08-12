@@ -131,7 +131,7 @@ describe("15H.1 ticket identity foundation", () => {
     const { db, jobs } = serviceDb([], 1); // first create hits the unique index
     const result = await createProductionJobFromSource(db, {
       shop: "shop.test",
-      source: { type: "manual_admin", authorizedBy: "owner", payload: { customerName: "Test", items: [{ productTitle: "Thing", quantity: 1 }] } },
+      source: { type: "manual_admin", authorizedBy: "owner", requestId: "race-test-0001", payload: { customerName: "Test", items: [{ productTitle: "Thing", quantity: 1 }] } },
     });
     expect(result.created).toBe(true);
     const racer = jobs.find((job) => String(job.id).startsWith("racer_"));

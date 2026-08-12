@@ -20,6 +20,7 @@
 
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
+import { decideMachine } from "./print-intake-routing.server";
 import {
   canonicalLineWarnings,
   canonicalMaterialSummary,
@@ -28,10 +29,38 @@ import {
   parseCanonicalOrderLine,
 } from "./order-canonical.server";
 
+export type ManualJobItemInput = {
+  productTitle: string;
+  quantity: number;
+  family?: string; // canonical FAMILY_CHECKLISTS key (default "default")
+  finish?: string; // e.g. "CMYK", "White", "Gloss — 3X", free finish text
+  printer?: "auto" | "mimaki" | "roland";
+  sku?: string;
+  size?: string;
+  notes?: string;
+  unitPrice?: number;
+  unitCost?: number;
+};
+
 export type ProductionJobSource =
   | { type: "erp_quote"; quoteId: string }
   | { type: "shopify_order"; order: any }
-  | { type: "manual_admin"; authorizedBy: string; payload: { customerName: string; items: Array<{ productTitle: string; quantity: number; unitPrice?: number; unitCost?: number; notes?: string }>; notes?: string } };
+  | {
+      type: "manual_admin";
+      authorizedBy: string;
+      // 15H.4B: STABLE client-generated id — the manual idempotency key
+      // (shop + requestId). Same requestId retried/double-clicked -> same job.
+      requestId: string;
+      payload: {
+        customerName: string;
+        email?: string;
+        phone?: string;
+        notes?: string;
+        reference?: string;
+        dueDate?: string; // ISO date; invalid values are ignored, never guessed
+        items: ManualJobItemInput[];
+      };
+    };
 
 export type CreateJobResult = { job: any; created: boolean; reason: string };
 
@@ -274,6 +303,78 @@ export function familyFromQuoteItems(items: any[]): string {
 
 export function checklistForFamily(family: string) {
   return FAMILY_CHECKLISTS[family] || FAMILY_CHECKLISTS.default;
+}
+
+// ---------- 15H.4B: manual job validation + machine resolution ----------
+// Owner-facing manual/walk-in/internal jobs. Validation is FAIL-CLOSED and
+// machine resolution delegates to the ONE canonical decider (decideMachine)
+// — no duplicated routing logic: the requested printer is expressed as a
+// machineSummary and the same contradiction rules apply (white/gloss on the
+// CMYK-only Mimaki rejects; Auto follows white/gloss->Roland else Mimaki).
+export const MANUAL_JOB_FAMILIES: Array<{ value: string; label: string }> = [
+  { value: "sticker-bags", label: "Stock Bags" },
+  { value: "standard-jars", label: "Jars" },
+  { value: "premium-jars", label: "Premium Jars (Miron/Chiron)" },
+  { value: "stickers-labels", label: "Stickers / Labels" },
+  { value: "dtp-bags", label: "DTP Pouches (outsourced)" },
+  { value: "banners", label: "Banners" },
+  { value: "default", label: "Custom / Other / Internal / Test" },
+];
+
+export const MANUAL_JOB_FINISHES = [
+  "CMYK",
+  "White",
+  "Gloss",
+  "White + Gloss",
+  "Specialty (describe in notes)",
+] as const;
+
+export type ManualJobValidation =
+  | { ok: true; items: Array<ManualJobItemInput & { resolvedMachine: "mimaki" | "roland"; machineRule: string }> }
+  | { ok: false; reason: string };
+
+export function validateManualJobInput(input: {
+  requestId: string;
+  customerName: string;
+  items: ManualJobItemInput[];
+}): ManualJobValidation {
+  if (!clean(input.requestId) || clean(input.requestId).length < 8) return { ok: false, reason: "Manual jobs require a stable requestId (retry-safe idempotency key)." };
+  if (!clean(input.customerName)) return { ok: false, reason: "Job / customer name is required." };
+  if (!input.items?.length) return { ok: false, reason: "At least one item is required." };
+  const resolved: Array<ManualJobItemInput & { resolvedMachine: "mimaki" | "roland"; machineRule: string }> = [];
+  for (const item of input.items) {
+    if (!clean(item.productTitle)) return { ok: false, reason: "Item / product name is required." };
+    const quantity = Number(item.quantity);
+    if (!Number.isFinite(quantity) || Math.floor(quantity) <= 0) return { ok: false, reason: "Quantity must be a whole number greater than zero." };
+    const family = clean(item.family || "default");
+    if (!MANUAL_JOB_FAMILIES.some((option) => option.value === family)) return { ok: false, reason: `Unknown production family "${family}".` };
+    const finish = clean(item.finish || "CMYK");
+    const printer = clean(item.printer || "auto").toLowerCase();
+    if (!["auto", "mimaki", "roland"].includes(printer)) return { ok: false, reason: `Unknown printer selection "${printer}".` };
+    // Canonical decision: requested printer -> machineSummary; finish text
+    // carries the white/gloss requirement tokens the decider reads.
+    const decision = decideMachine(
+      {
+        id: "manual",
+        itemTicket: null,
+        ripJobName: null,
+        suggestedFileName: null,
+        productTitle: item.productTitle,
+        selectedFinish: finish,
+        materialSummary: null,
+        machineSummary: printer === "mimaki" ? "Mimaki UCJV300-130" : printer === "roland" ? "Roland LG-640" : null,
+      },
+      "",
+    );
+    if (!decision.machine) {
+      return {
+        ok: false,
+        reason: `Machine selection conflicts with the finish: ${decision.reasons.join("; ")} (the Mimaki is CMYK-only — white/gloss/specialty work runs on the Roland).`,
+      };
+    }
+    resolved.push({ ...item, quantity: Math.floor(quantity), family, finish, printer: printer as any, resolvedMachine: decision.machine, machineRule: String(decision.machineRule || "default_cmyk") });
+  }
+  return { ok: true, items: resolved };
 }
 
 // ---------- ERP quote conversion validation (15D.1-C) ----------
@@ -584,7 +685,12 @@ export async function createProductionJobFromSource(
     sourceKey = `shopify_order_${stableOrderId}`;
   } else {
     if (!clean(source.authorizedBy)) throw new Error("Manual production jobs require an authorizing user.");
-    sourceKey = `manual_${slugPart(source.payload.customerName, "ADMIN")}_${Date.now()}`;
+    // 15H.4B: STABLE idempotency — shop + client requestId (no Date.now).
+    // Same requestId retried, double-clicked, or replayed after a timeout
+    // resolves to the SAME ProductionJob.
+    const requestId = clean((source as any).requestId);
+    if (!requestId || requestId.length < 8) throw new Error("Manual production jobs require a stable requestId.");
+    sourceKey = `manual_${requestId}`;
   }
 
   // 15H.1: ticket-constraint P2002 reruns the whole transaction (see helper).
@@ -592,10 +698,10 @@ export async function createProductionJobFromSource(
     // concurrency-safe idempotency: lock, THEN check, THEN create — all in one tx
     await acquireSourceLock(tx, shop, source.type, sourceKey);
 
-    if (source.type !== "manual_admin") {
-      const existing = await tx.productionJob.findFirst({ where: { shop, quoteId: sourceKey } });
-      if (existing) return { job: existing, created: false, reason: "Production job already exists." };
-    }
+    // 15H.4B: EVERY source is idempotent now — the manual branch's stable
+    // requestId key made the old exemption obsolete.
+    const existing = await tx.productionJob.findFirst({ where: { shop, quoteId: sourceKey } });
+    if (existing) return { job: existing, created: false, reason: "Production job already exists." };
 
     if (source.type === "erp_quote") {
       const quote = await tx.quote.findFirst({ where: { shop, id: sourceKey }, include: { items: true } });
@@ -715,37 +821,87 @@ export async function createProductionJobFromSource(
       return { job, created: true, reason: "Production job created from configurator order." };
     }
 
-    // manual_admin
+    // manual_admin (15H.4B): walk-in / internal / owner-entered production
+    // work — a real permanent ticket with NO Shopify order, quote, or
+    // payment required. Nothing commercial is fabricated (prices default 0
+    // = not entered). Validation + canonical machine resolution ran here.
+    const verdict = validateManualJobInput({
+      requestId: clean((source as any).requestId),
+      customerName: source.payload.customerName,
+      items: source.payload.items,
+    });
+    if (!verdict.ok) throw new Error(verdict.reason);
+    const manualItems = verdict.items;
+    const family = manualItems[0]?.family || "default";
+    const dueDate = (() => {
+      const raw = clean(source.payload.dueDate);
+      if (!raw) return null;
+      const parsed = new Date(raw);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    })();
     const jobTicket = await buildNextJobTicket(tx, shop);
     const job = await tx.productionJob.create({
       data: {
         shop,
         quoteId: sourceKey,
-        quoteNumber: sourceKey,
+        quoteNumber: clean(source.payload.reference) || `MANUAL-${clean((source as any).requestId).slice(0, 8).toUpperCase()}`,
         jobTicket,
         assetInboxKey: jobTicket,
         customerName: source.payload.customerName || null,
+        email: clean(source.payload.email) || null,
+        phone: clean(source.payload.phone) || null,
         status: "new",
         priority: "normal",
+        dueDate,
         customerNotes: source.payload.notes || null,
-        internalNotes: `Manual production job authorized by ${source.authorizedBy}.`,
+        internalNotes: [
+          `Manual production job authorized by ${source.authorizedBy}.`,
+          `Source: manual_admin | Request: ${clean((source as any).requestId)}.`,
+          "No Shopify order / quote / payment — commercial linkage optional.",
+        ].join("\n"),
         items: {
-          create: source.payload.items.map((item, index) => ({
+          create: manualItems.map((item, index) => ({
             shop,
             itemTicket: itemTicketFor(jobTicket, index),
             ripJobName: itemTicketFor(jobTicket, index),
             suggestedFileName: suggestedFileNameForQuoteItem(jobTicket, { productTitle: item.productTitle, quantity: item.quantity }, index),
             productTitle: item.productTitle,
-            quantity: Number(item.quantity) || 1,
+            sku: clean(item.sku) || null,
+            quantity: item.quantity,
             unitPrice: Number(item.unitPrice) || 0,
             unitCost: Number(item.unitCost) || 0,
-            productionNotes: item.notes || null,
+            selectedFinish: item.finish || "CMYK",
+            machineSummary: item.resolvedMachine === "roland" ? "Roland LG-640" : "Mimaki UCJV300-130",
+            materialSummary: [
+              `Family: ${MANUAL_JOB_FAMILIES.find((option) => option.value === item.family)?.label || item.family}`,
+              `Finish: ${item.finish || "CMYK"}`,
+              `Machine: ${item.resolvedMachine} (${item.machineRule})`,
+              ...(item.size ? [`Size: ${item.size}`] : []),
+            ].join(" | "),
+            selectedAddOns: JSON.stringify({
+              source: "manual_admin",
+              family: item.family,
+              finish: item.finish,
+              requestedPrinter: item.printer || "auto",
+              resolvedMachine: item.resolvedMachine,
+              machineRule: item.machineRule,
+              ...(item.size ? { size: item.size } : {}),
+            }),
+            productionNotes: [
+              ...(item.notes ? [item.notes] : []),
+              `Machine: ${item.resolvedMachine} (requested ${item.printer || "auto"}, rule ${item.machineRule}).`,
+            ].join("\n"),
             sortOrder: index + 1,
           })),
         },
-        checklistItems: { create: FAMILY_CHECKLISTS.default.map((check) => ({ shop, ...check })) },
+        checklistItems: { create: checklistForFamily(family).map((check) => ({ shop, ...check })) },
         events: {
-          create: [{ shop, eventType: "created_manual_admin", message: `Manual production job ${jobTicket} created by ${source.authorizedBy}.`, createdBy: actor }],
+          create: [{
+            shop,
+            eventType: "created_manual_admin",
+            message: `Manual production job ${jobTicket} created by ${source.authorizedBy} (request ${clean((source as any).requestId)}). ${manualItems.map((item) => `${item.productTitle} x${item.quantity} -> ${item.resolvedMachine} (requested ${item.printer || "auto"})`).join("; ")}.`,
+            createdBy: actor,
+          }],
         },
       },
       include: { items: true },
