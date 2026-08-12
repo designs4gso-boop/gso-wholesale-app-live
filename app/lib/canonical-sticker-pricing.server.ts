@@ -27,8 +27,14 @@ import { resolvePrintMaterialCostPerSqft } from "./cost-calculator.server";
 import { OWNER_STANDARDS } from "./owner-standards";
 import { resolvePricingPolicyConfig } from "./owner-config.server";
 
-export const STICKER_PRICING_VERSION = "16F-sticker-canonical";
-export const STICKER_PRICING_ENGINE = "canonical-sticker-pricing/16F";
+export const STICKER_PRICING_VERSION = "16F.1-sticker-canonical";
+export const STICKER_PRICING_ENGINE = "canonical-sticker-pricing/16F.1";
+
+// 16F.1 OWNER RULE: holographic stickers must never sell at the matte price
+// just because both hit the same market floor. Customer SELL floor only —
+// HOLO = MAX(canonical holo price, equivalent-Matte price x 1.20); an
+// engine-derived HIGHER holo price always wins. Cost accounting untouched.
+export const STICKER_HOLO_MIN_PREMIUM_PCT = 0.2;
 
 export const STICKER_STOREFRONT_MIN_QTY = 50;
 export const STICKER_VOLUME_QUOTE_FROM = 5000; // above this -> quote
@@ -162,6 +168,9 @@ export type StickerPriceResult =
       orderTotal: number;
       marginPctApplied: number;
       controllingRule: string;
+      // 16F.1: owner holographic sell floor (MAX(canonical holo, matte x1.2)).
+      holoFloorApplied: boolean;
+      matteEquivalentUnit: number | null;
       version: string;
       engine: string;
     }
@@ -268,7 +277,28 @@ export function priceStickerConfiguration(inputs: CanonicalStickerInputs, select
     },
   });
 
-  const unitPrice = money(commercial.finalTotalPrice / quantity);
+  let unitPrice = money(commercial.finalTotalPrice / quantity);
+  let controllingRule = commercial.controllingRule;
+  let holoFloorApplied = false;
+  let matteEquivalentUnit: number | null = null;
+
+  // 16F.1: holographic customer sell floor — price the IDENTICAL
+  // configuration (same dims/qty/specialty/cut) in Matte and enforce
+  // HOLO >= MATTE x 1.20. Raise-only: an engine-derived higher holo price
+  // always wins; matte pricing itself is never touched.
+  if (holographic) {
+    const matteResult = priceStickerConfiguration(inputs, { ...selection, material: "Matte" });
+    if (matteResult.ok) {
+      matteEquivalentUnit = matteResult.unitPrice;
+      const floorUnit = money(matteResult.unitPrice * (1 + STICKER_HOLO_MIN_PREMIUM_PCT));
+      if (floorUnit > unitPrice) {
+        unitPrice = floorUnit;
+        holoFloorApplied = true;
+        controllingRule = `holographic minimum premium (matte x${1 + STICKER_HOLO_MIN_PREMIUM_PCT})`;
+      }
+    }
+  }
+
   return {
     ok: true,
     stickerType: info.stickerType,
@@ -285,7 +315,9 @@ export function priceStickerConfiguration(inputs: CanonicalStickerInputs, select
     unitPrice,
     orderTotal: money(unitPrice * quantity),
     marginPctApplied: commercial.marginPctApplied,
-    controllingRule: commercial.controllingRule,
+    controllingRule,
+    holoFloorApplied,
+    matteEquivalentUnit,
     version: STICKER_PRICING_VERSION,
     engine: STICKER_PRICING_ENGINE,
   };

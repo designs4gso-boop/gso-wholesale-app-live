@@ -125,6 +125,58 @@ describe("dimension-driven pricing through the existing ERP engines", () => {
   });
 });
 
+describe("16F.1 — owner holographic minimum premium (customer sell floor)", () => {
+  const SIZES: Array<[number, number]> = [[2, 2], [3, 3], [4, 4], [2.65, 3.2]];
+  const QTYS = [50, 100, 250, 500, 1000, 2500];
+
+  it("HOLO >= MATTE x 1.20 at every representative size/quantity (raise-only)", () => {
+    for (const [w, h] of SIZES) {
+      for (const quantity of QTYS) {
+        const matte = expectOk(price({ widthIn: w, heightIn: h, quantity }));
+        const holo = expectOk(price({ widthIn: w, heightIn: h, quantity, material: "Holographic" }));
+        const floor = Math.round(matte.unitPrice * 1.2 * 100) / 100;
+        expect(holo.unitPrice, `${w}x${h}@${quantity}`).toBeGreaterThanOrEqual(floor);
+        expect(holo.matteEquivalentUnit).toBe(matte.unitPrice);
+        if (holo.holoFloorApplied) {
+          // floor-controlled: exactly matte x1.2, never lowered
+          expect(holo.unitPrice).toBe(floor);
+          expect(holo.controllingRule).toContain("holographic minimum premium");
+        } else {
+          // engine-led: the canonical holo price already clears the floor
+          expect(holo.unitPrice).toBeGreaterThanOrEqual(floor);
+        }
+      }
+    }
+  });
+
+  it("the floor uses the SAME-specialty matte equivalent (holo 4X vs matte 4X)", () => {
+    const matte4x = expectOk(price({ quantity: 250, specialty: "Heavy Raised — 4X" }));
+    const holo4x = expectOk(price({ quantity: 250, specialty: "Heavy Raised — 4X", material: "Holographic" }));
+    expect(holo4x.matteEquivalentUnit).toBe(matte4x.unitPrice);
+    expect(holo4x.unitPrice).toBeGreaterThanOrEqual(Math.round(matte4x.unitPrice * 1.2 * 100) / 100);
+  });
+
+  it("matte pricing is completely untouched by the floor (no flag, no equivalent, sell-side only)", () => {
+    const matte = expectOk(price({ quantity: 250 }));
+    expect(matte.holoFloorApplied).toBe(false);
+    expect(matte.matteEquivalentUnit).toBeNull();
+    // deterministic: pricing the same matte config twice is identical
+    expect(expectOk(price({ quantity: 250 })).unitPrice).toBe(matte.unitPrice);
+  });
+
+  it("specialty layers stay area-driven (no jar-style fixed per-unit charges appeared)", () => {
+    // the SAME specialty on a larger sticker costs MORE per unit — a fixed
+    // per-unit adder would make these equal
+    const small1x = expectOk(price({ quantity: 250, specialty: "Spot Gloss — 1X" }));
+    const small0x = expectOk(price({ quantity: 250 }));
+    const big1x = expectOk(price({ quantity: 250, specialty: "Spot Gloss — 1X", widthIn: 6, heightIn: 6 }));
+    const big0x = expectOk(price({ quantity: 250, widthIn: 6, heightIn: 6 }));
+    const smallAdder = small1x.unitPrice - small0x.unitPrice;
+    const bigAdder = big1x.unitPrice - big0x.unitPrice;
+    expect(bigAdder).toBeGreaterThan(smallAdder);
+  });
+});
+
 describe("validation and quote boundaries", () => {
   it("rejects zero/negative/absent dimensions", () => {
     for (const bad of [0, -1, "", "abc", null]) {

@@ -471,3 +471,12 @@ market floor, minimum-job policy). NO new pricing system was built.
   0 media). Legacy 4x5/14x16-sticker-bag = sticker-BAG products, not
   sticker products — untouched, stay DRAFT.
 - Tests 1119 (18 new); TS 304; build green; prisma valid.
+
+## Phase 16F.1 (2026-08-12) — sticker holographic premium + launch gate
+Owner approved the 16F canonical sticker engine/ladder (ERP pipeline
+stays the authority — no fixed table). NEW customer sell floor:
+STICKER HOLO = MAX(canonical holo price, equivalent-Matte x 1.20) —
+raise-only, same-specialty matte equivalent, cost accounting untouched,
+specialty stays area-driven. canonical-sticker-pricing.server.ts
+version 16F.1; result carries holoFloorApplied/matteEquivalentUnit.
+4 new floor pins (suite 1123); TS 304; build green.
