@@ -294,7 +294,10 @@ describe("Shopify webhook parity (15D.1-F)", () => {
     expect(payload.company).toBe("BuyCo");
     expect(payload.email).toBe("buyer@example.com");
     expect(payload.phone).toBe("555-0100");
-    expect(payload.internalNotes).toBe("Created automatically from paid Shopify configurator order #1042.");
+    // 15H.4A: deliberate pin update — internalNotes now also carries the
+    // source marker + first-class order GID (spec L metadata).
+    expect(payload.internalNotes).toContain("Created automatically from paid Shopify configurator order #1042.");
+    expect(payload.internalNotes).toContain("Source: paid_shopify_order | Order GID: ");
     expect(payload.items).toHaveLength(1); // non-configurator line excluded
     const item = payload.items[0];
     expect(item.productTitle).toBe("Stock Bag 4x5"); // title suffix stripped

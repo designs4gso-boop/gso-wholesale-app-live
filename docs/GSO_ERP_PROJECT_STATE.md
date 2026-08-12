@@ -2163,3 +2163,23 @@ changes; no schema change; no real files routed during tests. Tests 985
 -> 996; tsc stays 304. Phase 16 roadmap unchanged. Next: 15H.4
 Order/Manual Convergence (paid-order _GSO Canonical consumption, orderGid
 linkage, manual job UI, merge/link action).
+
+## Phase 15H.4A — order convergence foundation (2026-08-12)
+Checkout's `_GSO Canonical` snapshot (previously write-only) is now the
+authoritative production configuration for paid configurator orders:
+config/specialty/price map into ProductionJobItem (explicit holo/white/
+gloss tokens make intake route holo orders to Roland), the engine-stamped
+unit price is preserved as commercial truth (mismatch = warning, never
+recalculated), and unsupported lines are omitted-and-logged, never
+fabricated. First-class ProductionJob.orderGid STAGED (additive nullable
+column + (shop, orderGid) index) using the 15H.1 pattern PLUS a scripted
+schema patch — the column cannot enter schema.prisma before the DB has it
+(Prisma selects every declared scalar), so the webhook capability-probes
+at runtime and deploying code-first is safe. Read-only live audit: 14
+jobs / 3 Shopify-paid / 0 duplicates / 0 malformed; backfill tool ships
+(3 deterministic candidates) but does NOT run until owner activation.
+Webhook idempotency unchanged (stable GID source key; fail closed).
+15H.3 smoke proof recorded: the three blocked files released from the ERP
+routed live as GSO-20260811-0001/0002/0003 (Roland CMYK / GLOSS-3X /
+GLOSS-1X). Tests 996 -> 1009; tsc 304. Phase 16 roadmap unchanged.
+Next: 15H.4B manual/walk-in job UI; 15H.4C merge/link convergence.

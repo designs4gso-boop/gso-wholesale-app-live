@@ -213,3 +213,33 @@ mint a second ProductionJob. Transport failures (hot folder unreachable,
 copy verify, stale claims, API timeouts) keep their existing
 retry-in-place behavior and now also carry visible review rows.
 NEXT: 15H.4 — Order/Manual Convergence.
+
+## 15H.4A IMPLEMENTED (2026-08-12) — order convergence foundation
+Paid Shopify orders are first-class production sources. ONE order -> ONE
+ProductionJob -> one ProductionJobItem per production line (-01/-02 item
+tickets), idempotent on the stable order GID (no unstable fallbacks; absent
+GID fails closed — 15H.1 rule unchanged). `_GSO Canonical` (the
+server-created checkout snapshot: v/profile/qty/faces/material/bagColor/
+holo/whiteRequired/glossX/finishLabel/unitPrice/engine) is now CONSUMED as
+the authoritative production configuration: material/finish/production
+finish/bag color/sides map from the snapshot; holo/required-white/glossX
+land in selectedAddOns + materialSummary (explicit White/Holo tokens so
+intake machine decisions route holo work to Roland deterministically); the
+engine-stamped unit price is the order-time commercial truth with the paid
+line price preserved alongside (mismatches = human-visible WARNINGs, never
+recalculation); the verbatim snapshot rides in priceSnapshot.canonical.
+Lines WITHOUT a snapshot keep the byte-identical legacy mapping.
+Unsupported/unrecognized lines are OMITTED from automated production and
+logged on the job (never fabricated specs). ProductionJob.orderGid ships as
+a STAGED additive migration (prisma/migrations-pending/20260812090000_add_
+order_gid + scripted schema patch — schema.prisma must not declare the
+column before the DB has it, so the webhook probes the column at runtime
+and only writes orderGid post-activation; quoteId="shopify_order_<gid>"
+remains the idempotency key either way). Live audit: 14 jobs, 3
+Shopify-paid, 0 duplicate / 0 malformed order identities -> the
+tools/backfill-order-gid.mjs plan (dry-run default, --execute gate,
+refuses pre-activation) covers exactly 3 deterministic candidates.
+Intake reuse confirmed: item ticket, job ticket, subfolder, and
+suggestedFileName all resolve order jobs; free-named artwork still
+auto-creates an unlinked job — the merge/link action is 15H.4C.
+NEXT: 15H.4B manual/walk-in jobs; 15H.4C merge/link.

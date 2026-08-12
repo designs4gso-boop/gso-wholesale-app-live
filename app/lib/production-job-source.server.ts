@@ -20,6 +20,13 @@
 
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
+import {
+  canonicalLineWarnings,
+  canonicalMaterialSummary,
+  canonicalSelectedAddOns,
+  orderGidColumnAvailable,
+  parseCanonicalOrderLine,
+} from "./order-canonical.server";
 
 export type ProductionJobSource =
   | { type: "erp_quote"; quoteId: string }
@@ -352,6 +359,9 @@ function isJarFamily(value: any) {
   return family === "jars" || family === "jar";
 }
 export function isConfiguratorLine(line: any) {
+  // 15H.4A: a server-created canonical snapshot is the strongest signal —
+  // it alone qualifies the line even if visible properties were stripped.
+  if (parseCanonicalOrderLine(getLineProperty(line, "_GSO Canonical"))) return true;
   const material = getLineProperty(line, "Material");
   const finish = getLineProperty(line, "Finish");
   const bagColor = getLineProperty(line, "Bag Color");
@@ -400,36 +410,56 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
   if (!orderId) return null;
   const quoteId = `shopify_order_${orderId}`;
   const quoteNumber = orderName(order);
-  const configuredLines = (Array.isArray(order.line_items) ? order.line_items : []).filter(isConfiguratorLine);
+  const allLines = Array.isArray(order.line_items) ? order.line_items : [];
+  const configuredLines = allLines.filter(isConfiguratorLine);
+  // 15H.4A-I: unsupported/unrecognized lines are NEVER given fabricated
+  // production specs — they are omitted from automated production and
+  // logged on the job so a human sees exactly what was skipped.
+  const skippedLines = allLines
+    .filter((line: any) => !isConfiguratorLine(line))
+    .map((line: any) => `${clean(line.title || line.name) || "untitled line"} x${Number(line.quantity || 1)}`);
   if (!configuredLines.length) return null;
 
   const mappedItems = configuredLines.map((line: any, index: number) => {
-    const productFamily = getLineProperty(line, "Product Family");
-    const productType = getLineProperty(line, "Product Type");
-    const material = getLineProperty(line, "Material");
-    const finish = getLineProperty(line, "Finish");
-    const productionFinish = getLineProperty(line, "Production Finish") || finish;
-    const bagColor = getLineProperty(line, "Bag Color");
+    // 15H.4A-E: the server-created checkout snapshot is AUTHORITATIVE for
+    // canonical stock-bag lines; visible properties are the legacy fallback
+    // (byte-identical mapping to the pre-15H.4A webhook when absent).
+    const canonical = parseCanonicalOrderLine(getLineProperty(line, "_GSO Canonical"));
+    const productFamily = getLineProperty(line, "Product Family") || (canonical ? "Stock Bags" : "");
+    const productType = getLineProperty(line, "Product Type") || (canonical ? canonical.profile : "");
+    const material = canonical ? canonical.material : getLineProperty(line, "Material");
+    const finish = canonical ? canonical.finishLabel : getLineProperty(line, "Finish");
+    const productionFinish = canonical ? canonical.finishLabel : (getLineProperty(line, "Production Finish") || finish);
+    const bagColor = canonical ? canonical.bagColor : getLineProperty(line, "Bag Color");
     const labelSet = getLineProperty(line, "Label Set");
     const jarColor = getLineProperty(line, "Jar Color");
-    const sides = getLineProperty(line, "Sides") || "Double Sided";
+    const sides = canonical ? (canonical.faces === 1 ? "Single Sided" : "Double Sided") : (getLineProperty(line, "Sides") || "Double Sided");
     const isJar = isJarFamily(productFamily) || productType.startsWith("jar_");
     const quantity = Number(line.quantity || 1);
-    const unitPrice = money(line.price || line.originalUnitPrice || line.original_unit_price || 0);
+    const linePaidUnitPrice = money(line.price || line.originalUnitPrice || line.original_unit_price || 0);
+    // 15H.4A-K: the canonical engine-stamped unit price is the order-time
+    // commercial truth; the paid line price rides alongside and mismatches
+    // surface as human-visible warnings (never a recalculation).
+    const canonicalWarnings = canonical ? canonicalLineWarnings(canonical, { quantity, unitPrice: linePaidUnitPrice }) : [];
+    const unitPrice = canonical ? money(canonical.unitPrice) : linePaidUnitPrice;
     const productTitle = lineProductTitle(line);
     const variantTitle = isJar
       ? [jarColor, material, finish, labelSet].filter(Boolean).join(" / ")
       : `${material} / ${finish} / ${bagColor}`;
-    const selectedAddOns = isJar
-      ? { productFamily, productType, material, finish, productionFinish, ...(jarColor ? { jarColor } : {}), labelSet }
-      : { productFamily, productType, material, finish, productionFinish, bagColor, sides };
-    const materialSummary = isJar
-      ? [
-          `Product Family: ${productFamily}`, `Product Type: ${productType}`, `Material: ${material}`,
-          `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
-          ...(jarColor ? [`Jar Color: ${jarColor}`] : []), `Label Set: ${labelSet}`,
-        ].join(" | ")
-      : `Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Bag Color: ${bagColor} | Sides: ${sides}`;
+    const selectedAddOns = canonical
+      ? canonicalSelectedAddOns(canonical)
+      : isJar
+        ? { productFamily, productType, material, finish, productionFinish, ...(jarColor ? { jarColor } : {}), labelSet }
+        : { productFamily, productType, material, finish, productionFinish, bagColor, sides };
+    const materialSummary = canonical
+      ? canonicalMaterialSummary(canonical)
+      : isJar
+        ? [
+            `Product Family: ${productFamily}`, `Product Type: ${productType}`, `Material: ${material}`,
+            `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
+            ...(jarColor ? [`Jar Color: ${jarColor}`] : []), `Label Set: ${labelSet}`,
+          ].join(" | ")
+        : `Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Bag Color: ${bagColor} | Sides: ${sides}`;
     const productionNotes = isJar
       ? [
           `Shopify order: ${quoteNumber}`, `Product Family: ${productFamily}`, `Product Type: ${productType}`,
@@ -439,6 +469,15 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       : [
           `Shopify order: ${quoteNumber}`, `Material: ${material}`, `Finish: ${finish}`,
           `Production Finish: ${productionFinish}`, `Bag Color: ${bagColor}`, `Sides: ${sides}`,
+          ...(canonical
+            ? [
+                `Holographic: ${canonical.holo ? "yes" : "no"}`,
+                `Required White: ${canonical.whiteRequired ? "yes" : "no"}`,
+                `Gloss Layers: ${canonical.glossX}X`,
+                `Canonical engine: ${canonical.engine} (${canonical.v})`,
+              ]
+            : []),
+          ...canonicalWarnings.map((warning) => `WARNING: ${warning}`),
         ].join("\n");
     const priceSnapshot = {
       source: "shopify_order_paid_webhook",
@@ -446,6 +485,10 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       productFamily, productType, material, finish, productionFinish, bagColor,
       ...(jarColor ? { jarColor } : {}), labelSet, sides, quantity, unitPrice,
       lineTotal: money(unitPrice * quantity),
+      // 15H.4A: the verbatim server-created checkout snapshot is the
+      // order-time commercial truth for canonical lines; the PAID line price
+      // rides alongside for reconciliation. Never recalculated.
+      ...(canonical ? { canonical, linePaidUnitPrice, canonicalWarnings } : {}),
     };
     const item = {
       productTitle,
@@ -492,16 +535,27 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
   return {
     quoteId,
     quoteNumber,
+    // 15H.4A: first-class order linkage (written to ProductionJob.orderGid
+    // once the staged column is activated; capability-guarded at create).
+    orderGid: orderId,
     customerName: customerNameFromOrder(order),
     company: companyNameFromOrder(order) || null,
     email: clean(order.email || order.customer?.email) || null,
     phone: clean(order.phone || order.billing_address?.phone || order.customer?.phone) || null,
     customerNotes: clean(order.note) || null,
-    internalNotes: `Created automatically from paid Shopify configurator order ${quoteNumber}.`,
+    internalNotes: [
+      `Created automatically from paid Shopify configurator order ${quoteNumber}.`,
+      `Source: paid_shopify_order | Order GID: ${orderId}.`,
+      ...(skippedLines.length
+        ? [`NOTE: ${skippedLines.length} non-production line(s) omitted (no fabricated specs): ${skippedLines.slice(0, 5).join("; ")}${skippedLines.length > 5 ? "…" : ""}`]
+        : []),
+    ].join("\n"),
     productImageUrl: firstImage,
     items: mappedItems,
+    skippedLines,
     eventType: "created_from_shopify_order",
-    eventMessage: (ticket: string) => `Production job ${ticket} created from paid Shopify configurator order ${quoteNumber}.`,
+    eventMessage: (ticket: string) =>
+      `Production job ${ticket} created from paid Shopify configurator order ${quoteNumber} (order ${orderId}).${skippedLines.length ? ` ${skippedLines.length} non-production line(s) omitted.` : ""}`,
   };
 }
 
@@ -632,11 +686,15 @@ export async function createProductionJobFromSource(
       const jobTicket = await buildNextJobTicket(tx, shop);
       const payload = buildShopifyOrderJobPayload(source.order, jobTicket);
       if (!payload) return { job: null, created: false, reason: "No configurator line items found." };
+      // 15H.4A: orderGid is a STAGED column — write it only when the probe
+      // says the database actually has it (safe to deploy pre-activation).
+      const canWriteOrderGid = await orderGidColumnAvailable(dbClient);
       const job = await tx.productionJob.create({
         data: {
           shop,
           quoteId: payload.quoteId,
           quoteNumber: payload.quoteNumber,
+          ...(canWriteOrderGid && payload.orderGid ? { orderGid: payload.orderGid } : {}),
           jobTicket,
           assetInboxKey: jobTicket,
           customerName: payload.customerName,
