@@ -304,3 +304,46 @@ artwork into Prints For Today so it attaches automatically." Live
 eligibility audit (read-only): GSO-20260811-0001/0002/0003 all qualify as
 source shells; manual GSO-20260812-0001 correctly does not.
 NEXT: 15H.5 — Reprints / Runs / QC.
+
+## 15H.5 IMPLEMENTED (2026-08-12) — runs / reprints / QC
+Run identity is live on the dormant PrintIntake counters. DEFINITIONS:
+ATTEMPT (A#) = operational re-delivery of the same artwork (transport/copy
+failure — bumped ONCE per failed routed delivery by the report endpoint,
+never by polling); REVISION (R#) = corrected artwork = NEW hash routed to
+an already-routed ticket (route-plan auto-detects and stamps R+1);
+REPRINT (P#) = intentional physical re-production (owner action only).
+GRAMMAR (backward compatible — every historical name is the default form):
+trailing segment __[R#-][P#-]A#: __A1 (default), __A2 (retry), __R2-A1
+(revision), __P1-A1 (reprint), __R2-P2-A3 (combined). parseRunIdentity
+defaults absent tokens to R1/P0/A1; matched-path names stay BARE for
+default runs. ONE builder (buildIntakeRipName/applyRunSuffix in
+print-intake-routing; the old local copy now delegates). 15H.2 strictness
+untouched: canonical tickets lift exactly from any decorated name (pinned).
+
+WORKFLOWS (Production Board, admin session, all audited via
+ProductionJobEvent): REPRINT (reason required) bumps P, resets A,
+rebuilds routedFilename, sets the row retry_allowed, and instructs staff
+to place the artwork back into Prints For Today; the agent (1.7) makes
+ONE bounded pending-retries call per pass (status endpoint pending mode,
+take 50, fail-closed offline) that overrides the ledger cache for exactly
+those hashes — per-file routed skips stay pure-local. NEW REVISION
+records the event + guidance; the R-number binds automatically when the
+corrected file (new hash) arrives. QC records PASS / REPRINT REQUIRED /
+HOLD as production_run_qc_* events with item ticket + run identity +
+actor + note — never erases history. REOPEN FOR REPRINT (completed/
+finalized jobs; reason + confirm) moves status to the existing
+reprint_needed; completedAt and the finalized cost snapshot are NEVER
+touched — reprint machine costs surface as run previews and additional
+cost is entered via the existing manual reprint-cost field (automatic
+integration into finalized totals deliberately NOT done — the finalize
+snapshot stays immutable). Mark Printed audited: it only stamps
+printedAt (work-order paper event) — lifecycle is Routed -> Printed ->
+QC (events) -> Completed (status). ACTUALS: runBreakdownOf groups RIP
+rows by run tokens (legacy bare names land in the base run) — grouping
+sums to the identical job totals, so double-counting is impossible;
+detectRuns remains the timestamp cross-check. Events:
+production_reprint_requested / production_revision_created /
+production_run_qc_passed|failed|hold / production_job_reopened_for_
+reprint. Live audit at implementation: 15 jobs, 4 routed rows all __A1
+defaults, 1 finalized job, 0 reprint costs — full historical
+compatibility. THE 15H PRODUCTION IDENTITY PROGRAM IS COMPLETE.

@@ -30,6 +30,20 @@ export async function action({ request }: { request: Request }) {
   const setting = await db.printLogAutoImportSetting.findUnique({ where: { uploadToken: token } });
   if (!setting || !setting.enabled) return json({ ok: false, error: "Invalid or disabled upload token." }, 403);
 
+  // 15H.5: pending-retries list — ONE bounded call per agent pass returns the
+  // hashes whose server disposition says re-process (owner reprint / release /
+  // assignment), so a ledger-"routed" hash can be re-delivered without the
+  // agent ever polling per-file. Minimal payload; no job/cost data.
+  if (body.pending === true) {
+    const rows = await db.printIntake.findMany({
+      where: { shop: setting.shop, status: { in: ["retry_allowed", "assigned"] } },
+      select: { fileHashSha256: true, originalFilename: true, status: true },
+      orderBy: { updatedAt: "desc" },
+      take: 50,
+    });
+    return json({ ok: true, pending: rows.map((row) => ({ hash: row.fileHashSha256, fileName: row.originalFilename, status: row.status })) });
+  }
+
   const rawItems = Array.isArray(body.items)
     ? (body.items as Array<Record<string, unknown>>)
     : [{ hash: body.hash, fileName: body.fileName }];

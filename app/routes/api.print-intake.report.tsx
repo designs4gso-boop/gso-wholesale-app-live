@@ -6,6 +6,7 @@ import {
   type IntakeOutcome,
 } from "../lib/print-intake-routing.server";
 import { appendIntakeAudit, canonicalReviewReason } from "../lib/print-intake-review.server";
+import { applyRunSuffix } from "../lib/print-intake-routing.server";
 
 // Print Intake outcome recorder (13A.6G): the ONLY mutation in the intake
 // flow, and it is narrow by construction — it appends one outcome record to
@@ -111,7 +112,19 @@ export async function action({ request }: { request: Request }) {
         const reasonCode = canonicalReviewReason([outcome.reason || "", outcome.rule || ""]);
         const nextStatus = decision === "failed" ? "failed" : "review";
         if (row) {
-          await db.printIntake.update({ where: { id: row.id }, data: { status: nextStatus, reviewReason: reasonCode, rawParsedHints: appendIntakeAudit(row.rawParsedHints, audit) } });
+          // 15H.5-L: a FAILED delivery advances the ATTEMPT counter exactly
+          // once (never on polling scans — only when the agent reports an
+          // actual failed routed delivery). The next delivery re-plans and
+          // routes under __A{n+1}; revision/reprint are untouched.
+          const attemptBump = decision === "failed"
+            ? {
+                attemptNumber: row.attemptNumber + 1,
+                routedFilename: row.routedFilename
+                  ? applyRunSuffix(row.routedFilename, { revision: row.revisionNumber, reprint: row.reprintNumber, attempt: row.attemptNumber + 1 })
+                  : row.routedFilename,
+              }
+            : {};
+          await db.printIntake.update({ where: { id: row.id }, data: { status: nextStatus, reviewReason: reasonCode, ...attemptBump, rawParsedHints: appendIntakeAudit(row.rawParsedHints, audit) } });
         } else {
           await db.printIntake.create({
             data: {

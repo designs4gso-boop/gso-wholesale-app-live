@@ -25,6 +25,8 @@ import {
   parseWritebackProvenance,
 } from "../lib/print-log-writeback.server";
 import { resolvePrintDuration } from "../lib/rip-duration.server";
+import { applyRunSuffix } from "../lib/print-intake-routing.server";
+import { appendIntakeAudit } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
 const productionStatuses = [
@@ -570,11 +572,23 @@ export async function loader({ request }: { request: Request }) {
   // 15H.4C: link-convergence data — which active jobs are unlinked intake
   // shells (provenance-proven), and the ordered target options (Shopify
   // orders first, then quotes, then manual).
+  const provenanceJobIds = jobs.map((job: any) => job.id);
   const intakeProvenance = await db.printIntake.findMany({
-    where: { shop, generatedProductionJobId: { in: jobs.map((job: any) => job.id) } },
-    select: { generatedProductionJobId: true },
+    where: { shop, OR: [{ generatedProductionJobId: { in: provenanceJobIds } }, { matchedProductionJobId: { in: provenanceJobIds } }] },
+    select: { generatedProductionJobId: true, matchedProductionJobId: true, authoritativeTicket: true, attemptNumber: true, revisionNumber: true, reprintNumber: true, updatedAt: true },
+    orderBy: { updatedAt: "asc" },
   });
-  const provenanceIds = new Set(intakeProvenance.map((row) => row.generatedProductionJobId));
+  const provenanceIds = new Set(intakeProvenance.map((row) => row.generatedProductionJobId).filter(Boolean));
+  // 15H.5: latest run identity per authoritative ticket (later rows win).
+  const runByTicket = new Map<string, { revision: number; reprint: number; attempt: number }>();
+  for (const row of intakeProvenance) {
+    if (row.authoritativeTicket) runByTicket.set(row.authoritativeTicket, { revision: row.revisionNumber, reprint: row.reprintNumber, attempt: row.attemptNumber });
+  }
+  for (const job of jobsWithActuals as any[]) {
+    for (const item of job.items || []) {
+      item.runIdentity = runByTicket.get(item.itemTicket) || null;
+    }
+  }
   const SOURCE_ORDER: Record<string, number> = { shopify: 0, quote: 1, manual: 2, other: 3, intake: 4 };
   for (const job of jobsWithActuals as any[]) {
     job.linkEligible = assessLinkSource(
@@ -1267,6 +1281,118 @@ Source ref: ${sourceRef}` : ""}`,
     return Response.json({ ok: true, message: "Work order print event tracked." });
   }
 
+  // ---------- 15H.5: runs / reprints / QC ----------
+  // Lifecycle: Routed -> Printed (work order) -> QC (events) -> Completed
+  // (status). Attempt = operational re-delivery; Revision = corrected
+  // artwork; Reprint = intentional physical re-production. The job and item
+  // tickets NEVER change across runs; a reprint never creates a job.
+
+  if (intent === "reprintItem") {
+    const jobId = String(formData.get("jobId") || "");
+    const itemId = String(formData.get("itemId") || "");
+    const reason = String(formData.get("reprintReason") || "");
+    if (!reason) return Response.json({ ok: false, message: "A reprint reason is required." });
+    const job = await db.productionJob.findFirst({ where: { shop, id: jobId }, include: { items: true } });
+    const item = job?.items.find((row: any) => row.id === itemId);
+    if (!job || !item) return Response.json({ ok: false, message: "Job/item not found." });
+    const actor = resolveActorFromSession(session, shop);
+    const row = item.itemTicket
+      ? await db.printIntake.findFirst({
+          where: { shop, authoritativeTicket: item.itemTicket, OR: [{ matchedProductionJobId: jobId }, { generatedProductionJobId: jobId }] },
+          orderBy: { updatedAt: "desc" },
+        })
+      : null;
+    let runLabel = "P1-A1";
+    let instruction = "";
+    if (row) {
+      const nextRun = { revision: row.revisionNumber, reprint: row.reprintNumber + 1, attempt: 1 };
+      runLabel = `${nextRun.revision > 1 ? `R${nextRun.revision}-` : ""}P${nextRun.reprint}-A1`;
+      const nextName = applyRunSuffix(row.routedFilename || item.ripJobName || item.itemTicket || "", nextRun);
+      await db.printIntake.update({
+        where: { id: row.id },
+        data: {
+          reprintNumber: nextRun.reprint,
+          attemptNumber: 1,
+          routedFilename: nextName,
+          status: "retry_allowed",
+          rawParsedHints: appendIntakeAudit(row.rawParsedHints, { at: new Date().toISOString(), actor, action: "reprint_requested", reason }),
+        },
+      });
+      instruction = `Place the artwork back into Prints For Today (original is in the routed archive) — the agent will re-route it as ${nextName}.`;
+    } else {
+      instruction = "No routed artwork on record yet — when artwork is dropped it will run normally; use this reprint note for the record.";
+    }
+    await createEvent(shop, jobId, "production_reprint_requested", `Reprint requested for ${item.itemTicket || item.productTitle} (run ${runLabel}) by ${actor}. Reason: ${reason}.${String(formData.get("reprintNote") || "") ? ` Note: ${String(formData.get("reprintNote")).slice(0, 200)}` : ""}`, { createdBy: actor });
+    return Response.json({ ok: true, message: `Reprint recorded for ${item.itemTicket || item.productTitle} (run ${runLabel}). ${instruction}` });
+  }
+
+  if (intent === "revisionItem") {
+    const jobId = String(formData.get("jobId") || "");
+    const itemId = String(formData.get("itemId") || "");
+    const job = await db.productionJob.findFirst({ where: { shop, id: jobId }, include: { items: true } });
+    const item = job?.items.find((row: any) => row.id === itemId);
+    if (!job || !item) return Response.json({ ok: false, message: "Job/item not found." });
+    const actor = resolveActorFromSession(session, shop);
+    const latest = item.itemTicket
+      ? await db.printIntake.findFirst({ where: { shop, authoritativeTicket: item.itemTicket }, orderBy: { revisionNumber: "desc" }, select: { revisionNumber: true } })
+      : null;
+    const nextRevision = (latest?.revisionNumber || 1) + (latest ? 1 : 0) || 1;
+    await createEvent(shop, jobId, "production_revision_created", `Revision R${latest ? latest.revisionNumber + 1 : 2} expected for ${item.itemTicket || item.productTitle} by ${actor}. Prior artwork/files are preserved.`, { createdBy: actor });
+    return Response.json({
+      ok: true,
+      message: latest
+        ? `Revision recorded. Drop the CORRECTED artwork (new file) into Prints For Today named with the ticket — it will route automatically as R${latest.revisionNumber + 1}. Old artwork stays in history.`
+        : `Revision recorded. Drop the corrected artwork named with the ticket ${item.itemTicket || job.jobTicket} — it routes automatically; prior files stay in history.`,
+    });
+  }
+
+  if (intent === "qcItem") {
+    const jobId = String(formData.get("jobId") || "");
+    const itemId = String(formData.get("itemId") || "");
+    const result = String(formData.get("qcResult") || "");
+    if (!["pass", "reprint_required", "hold"].includes(result)) return Response.json({ ok: false, message: "Pick a QC result." });
+    const job = await db.productionJob.findFirst({ where: { shop, id: jobId }, include: { items: true } });
+    const item = job?.items.find((row: any) => row.id === itemId);
+    if (!job || !item) return Response.json({ ok: false, message: "Job/item not found." });
+    const actor = resolveActorFromSession(session, shop);
+    const row = item.itemTicket
+      ? await db.printIntake.findFirst({ where: { shop, authoritativeTicket: item.itemTicket }, orderBy: { updatedAt: "desc" }, select: { revisionNumber: true, reprintNumber: true, attemptNumber: true } })
+      : null;
+    const runLabel = row ? `R${row.revisionNumber}-P${row.reprintNumber}-A${row.attemptNumber}` : "R1-P0-A1";
+    const eventType = result === "pass" ? "production_run_qc_passed" : result === "hold" ? "production_run_qc_hold" : "production_run_qc_failed";
+    const note = String(formData.get("qcNote") || "").slice(0, 300);
+    await createEvent(shop, jobId, eventType, `QC ${result.toUpperCase().replace("_", " ")} for ${item.itemTicket || item.productTitle} (run ${runLabel}) by ${actor}.${note ? ` Note: ${note}` : ""}`, { createdBy: actor });
+    return Response.json({
+      ok: true,
+      message: result === "reprint_required"
+        ? `QC recorded (run ${runLabel}) — use the Reprint button to start the replacement run. Prior history is preserved.`
+        : `QC ${result} recorded for ${item.itemTicket || item.productTitle} (run ${runLabel}).`,
+    });
+  }
+
+  // 15H.5-F: explicit reopen for completed/finalized jobs — history stays
+  // intact: completedAt and the finalized cost snapshot are NEVER touched;
+  // production state moves to the existing "reprint_needed" status.
+  if (intent === "reopenReprint") {
+    if (String(formData.get("confirmReopen") || "") !== "yes") return Response.json({ ok: false, message: "Check the confirmation box to reopen." });
+    const jobId = String(formData.get("jobId") || "");
+    const reason = String(formData.get("reopenReason") || "").trim();
+    if (!reason) return Response.json({ ok: false, message: "A reopen reason is required." });
+    const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
+    if (!job) return Response.json({ ok: false, message: "Job not found." });
+    if (String(job.status) !== "completed" && !job.actualCostFinalized) {
+      return Response.json({ ok: false, message: "Job is not completed/finalized — use the normal Reprint button instead." });
+    }
+    const actor = resolveActorFromSession(session, shop);
+    await db.productionJob.update({ where: { id: job.id }, data: { status: "reprint_needed" } });
+    await createEvent(
+      shop, job.id, "production_job_reopened_for_reprint",
+      `Reopened for reprint by ${actor}. Reason: ${reason}. Original state preserved: status=${job.status}, completedAt=${job.completedAt ? new Date(job.completedAt).toISOString() : "—"}, actualCostFinalized=${job.actualCostFinalized}. The finalized cost snapshot is immutable — reprint machine costs appear as run previews and additional reprint cost is entered via the manual reprint-cost field.`,
+      { oldValue: String(job.status), newValue: "reprint_needed", createdBy: actor },
+    );
+    return Response.json({ ok: true, message: `${job.jobTicket} reopened for reprint (was ${job.status}${job.actualCostFinalized ? ", cost finalized — snapshot preserved" : ""}).` });
+  }
+
   return Response.json({ ok: false, message: "Unknown production action." }, { status: 400 });
 }
 
@@ -1685,16 +1811,84 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                       Use this filename before placing artwork into Prints For Today so it attaches automatically.
                     </Text>
                   ) : null}
+                  <Text as="p" tone="subdued">
+                    Run: R{item.runIdentity?.revision ?? 1} · P{item.runIdentity?.reprint ?? 0} · A{item.runIdentity?.attempt ?? 1}
+                  </Text>
                   <InlineStack gap="150" wrap>
                     <Button onClick={() => copyText(item.itemTicket || "")}>Copy Item Ticket</Button>
                     <Button onClick={() => copyText(item.ripJobName || item.itemTicket || "")}>Copy RIP Job Name</Button>
                     <Button onClick={() => copyText(item.suggestedFileName || "")}>Copy Print File Name</Button>
                   </InlineStack>
+                  {/* 15H.5: compact run controls — QC, Reprint, New Revision */}
+                  <details style={{ marginTop: 6 }}>
+                    <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 600 }}>QC / Reprint / Revision</summary>
+                    <div style={{ display: "grid", gap: 8, padding: "8px 0" }}>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="qcItem" />
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <input type="hidden" name="itemId" value={item.id} />
+                        <InlineStack gap="150" blockAlign="center" wrap>
+                          <select name="qcResult" defaultValue="" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }}>
+                            <option value="" disabled>QC result…</option>
+                            <option value="pass">PASS</option>
+                            <option value="reprint_required">REPRINT REQUIRED</option>
+                            <option value="hold">HOLD / REVIEW</option>
+                          </select>
+                          <input name="qcNote" placeholder="QC note (optional)" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb", minWidth: 180 }} />
+                          <Button submit size="micro">Record QC</Button>
+                        </InlineStack>
+                      </Form>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="reprintItem" />
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <input type="hidden" name="itemId" value={item.id} />
+                        <InlineStack gap="150" blockAlign="center" wrap>
+                          <select name="reprintReason" defaultValue="" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }}>
+                            <option value="" disabled>Reprint reason…</option>
+                            <option value="print defect">Print defect</option>
+                            <option value="color issue">Color issue</option>
+                            <option value="cut issue">Cut issue</option>
+                            <option value="gloss/white issue">Gloss/white issue</option>
+                            <option value="damaged">Damaged</option>
+                            <option value="customer replacement">Customer replacement</option>
+                            <option value="operator rerun">Operator rerun</option>
+                            <option value="other">Other</option>
+                          </select>
+                          <input name="reprintNote" placeholder="Note (optional)" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb", minWidth: 160 }} />
+                          <Button submit size="micro">Reprint</Button>
+                        </InlineStack>
+                      </Form>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="revisionItem" />
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <input type="hidden" name="itemId" value={item.id} />
+                        <InlineStack gap="150" blockAlign="center">
+                          <Button submit size="micro">New Revision (corrected artwork)</Button>
+                          <Text as="span" tone="subdued">Same job + item; the corrected file routes as R2+ automatically.</Text>
+                        </InlineStack>
+                      </Form>
+                    </div>
+                  </details>
                 </BlockStack>
               </InlineStack>
             </Card>
           ))}
         </BlockStack>
+
+        {/* 15H.5-F: explicit reopen for completed/finalized jobs — history and
+            the finalized cost snapshot stay immutable. */}
+        {(job.status === "completed" || job.actualCostFinalized) ? (
+          <Form method="post">
+            <input type="hidden" name="intent" value="reopenReprint" />
+            <input type="hidden" name="jobId" value={job.id} />
+            <InlineStack gap="150" blockAlign="center" wrap>
+              <input name="reopenReason" placeholder="Reopen reason (required)" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb", minWidth: 220 }} />
+              <label style={{ fontSize: 12 }}><input type="checkbox" name="confirmReopen" value="yes" /> confirm</label>
+              <Button submit size="micro">Reopen for Reprint</Button>
+              <Text as="span" tone="subdued">Completed/finalized state stays on record; job moves to Reprint Needed.</Text>
+            </InlineStack>
+          </Form>
+        ) : null}
 
         {/* 15H.4C: link an unlinked intake shell onto the real commercial
             job — exact owner selection, confirmation, full audit, tombstone. */}

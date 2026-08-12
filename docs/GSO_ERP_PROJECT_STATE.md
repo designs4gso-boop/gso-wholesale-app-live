@@ -2220,3 +2220,21 @@ convergence arc (A order, B manual, C merge/link) is COMPLETE. Phase 16
 roadmap unchanged. Next: 15H.5 Reprints / Runs / QC (attempt/revision/
 reprint counters live, R#/P# routed names, run-aware actuals, operator
 flow).
+
+## Phase 15H.5 — runs, reprints, QC (2026-08-12)
+The production lifecycle is complete: A/R/P run identity lives on the
+formerly-dormant PrintIntake counters with a backward-compatible filename
+grammar (__A1 historical default; __R#-P#-A# extensions), owner Reprint
+(P+1, reason-audited, re-delivery via the agent's new once-per-pass
+pending-retries call), automatic revision detection (new hash on a routed
+ticket = R+1), QC pass/reprint-required/hold events per run, explicit
+Reopen-for-Reprint on completed/finalized jobs (history and finalized
+cost snapshots immutable; reprint costs stay preview + manual field),
+attempt bumps only on actually-failed deliveries, and run-aware actuals
+grouping that provably sums to unchanged job totals. RIP strict matching,
+intake review authority, routing, pricing, order convergence, manual
+jobs, and merge/link all pinned untouched. Agent 1.7. Tests 1025 ->
+1036; tsc 304. Phase 16 Shopify Store Rebuild roadmap unchanged. The
+15H program (identity foundation -> RIP repair -> review/retry -> order/
+manual/merge convergence -> runs/reprints/QC) is COMPLETE — next:
+FINAL ERP AUDIT before Phase 16.

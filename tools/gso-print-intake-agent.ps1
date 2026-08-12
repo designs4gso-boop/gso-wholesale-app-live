@@ -26,7 +26,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.6 (15H.3 review reconciliation)"
+$ScriptVersion = "gso-print-intake-agent/1.7 (15H.5 run identity + pending retries)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -611,6 +611,22 @@ Write-IntakeLog $config "agent_started" "-" "version=$ScriptVersion mode=$modeLa
 $lastScanSummary = ""
 while ($true) {
   $ledger = Read-IntakeLedger $config
+  # 15H.5: ONE bounded pending-retries call per pass. Hashes the server says
+  # to re-process (owner Reprint / release / assignment) override the local
+  # ledger cache so an already-routed file can be re-delivered when staff
+  # place it back into Prints For Today. Server unreachable = skip quietly
+  # (fail closed - normal processing continues, nothing re-routes).
+  if (-not $DryRun) {
+    $pendingResult = Invoke-IntakeJsonPost $config $config.StatusUrl @{ token = $config.UploadToken; pending = $true } 20
+    if (-not $pendingResult.exception -and $pendingResult.status -eq 200 -and $pendingResult.json -and $pendingResult.json.ok) {
+      foreach ($pendingRow in @($pendingResult.json.pending)) {
+        if ($pendingRow -and $pendingRow.hash -and $ledger.ContainsKey([string]$pendingRow.hash)) {
+          Write-IntakeLog $config "pending_retry" ([string]$pendingRow.fileName) "server requests re-processing (sha8=$(([string]$pendingRow.hash).Substring(0,8))) - ledger cache overridden"
+          $ledger[[string]$pendingRow.hash] = "retry_pending"
+        }
+      }
+    }
+  }
   $scan = Get-EligibleArtworkFiles $config
   $files = $scan.files
   # One concise pass-level line (never one line per historical file), and only

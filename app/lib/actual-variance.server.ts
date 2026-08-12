@@ -167,6 +167,39 @@ export function matchMethodOf(entry: Pick<VarianceEntryInput, "productionJobItem
   return "attached";
 }
 
+// ---------- 15H.5: run-aware grouping (display/reconciliation only) ----------
+// Groups RIP rows by the run tokens in their source names (R#/P#/A# — absent
+// tokens default R1/P0/A1, so every historical __A1 row lands in the base
+// run). Totals are sums of the SAME rows the job-level aggregation uses —
+// grouping can never change or double-count the job total.
+export function runBreakdownOf(entries: Array<Pick<VarianceEntryInput, "sourceJobName" | "inkMl" | "printMinutes">>): Array<{
+  runKey: string;
+  revision: number;
+  reprint: number;
+  attempt: number;
+  rowCount: number;
+  inkMl: number;
+  printMinutes: number;
+}> {
+  const RUN_RE = /__(?:R(\d+)-)?(?:P(\d+)-)?A(\d+)(?:\.[a-z0-9]{1,5})?$/i;
+  const groups = new Map<string, { revision: number; reprint: number; attempt: number; rowCount: number; inkMl: number; printMinutes: number }>();
+  for (const entry of entries) {
+    const match = String(entry.sourceJobName || "").match(RUN_RE);
+    const revision = match?.[1] ? Number(match[1]) : 1;
+    const reprint = match?.[2] ? Number(match[2]) : 0;
+    const attempt = match?.[3] ? Number(match[3]) : 1;
+    const key = `R${revision}-P${reprint}-A${attempt}`;
+    const group = groups.get(key) || { revision, reprint, attempt, rowCount: 0, inkMl: 0, printMinutes: 0 };
+    group.rowCount += 1;
+    group.inkMl = round2(group.inkMl + (Number(entry.inkMl) || 0));
+    group.printMinutes = round2(group.printMinutes + (Number(entry.printMinutes) || 0));
+    groups.set(key, group);
+  }
+  return [...groups.entries()]
+    .map(([runKey, group]) => ({ runKey, ...group }))
+    .sort((a, b) => a.revision - b.revision || a.reprint - b.reprint || a.attempt - b.attempt);
+}
+
 // Distinct print start times among deduped print rows = observable run count.
 // Reprints stay visible: 2+ runs flags reprintDetected. Rows without any
 // timestamps cannot prove runs -> null ("unknown"), never guessed as 1.

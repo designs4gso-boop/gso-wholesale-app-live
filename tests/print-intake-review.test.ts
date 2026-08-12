@@ -109,7 +109,7 @@ describe("15H.3 intake review + retry", () => {
 
   it("G. agent reconciliation pins: routed skips locally; blocked hashes ask the server; fail closed offline", () => {
     const agent = readFileSync("tools/gso-print-intake-agent.ps1", "utf8");
-    expect(agent).toContain('gso-print-intake-agent/1.6');
+    expect(agent).toContain('gso-print-intake-agent/1.7');
     expect(agent).toContain('/api/print-intake/status');
     expect(agent).toContain('$ledgerDecision -eq "routed" -or $ledgerDecision -eq "duplicate"');
     expect(agent).toContain("Get-IntakeDisposition");

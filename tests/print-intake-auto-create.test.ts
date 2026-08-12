@@ -159,9 +159,9 @@ describe("route-plan + creator source pins (15F.0J.5)", () => {
     expect(agentSrc).toContain("Move-Item -LiteralPath $File.FullName -Destination $archiveDest"); // move, never delete
   });
 
-  it("agent v1.6 sends the full hash+size on the PLAN call; ledger dedupe unchanged; test 22 root-only scan intact", () => {
+  it("agent v1.7 sends the full hash+size on the PLAN call; ledger dedupe unchanged; test 22 root-only scan intact", () => {
     // 15H.3: version pin updated deliberately (1.5 -> 1.6 review reconciliation).
-    expect(agentSrc).toContain("gso-print-intake-agent/1.6");
+    expect(agentSrc).toContain("gso-print-intake-agent/1.7");
     expect(agentSrc).toContain("fileHash = $FileHash; fileSize = $FileSize");
     expect(agentSrc).toContain("Get-RoutePlan $Config $File.Name $subfolder $hash $File.Length");
     expect(agentSrc).toContain("ledger_skip"); // content dedupe untouched

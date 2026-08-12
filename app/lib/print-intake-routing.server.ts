@@ -425,10 +425,58 @@ export function decideMachineFromFilename(fileName: string): { machine: "mimaki"
   return { machine: "mimaki", machineRule: "default_cmyk", mode: "CMYK", reasons: ["default_cmyk_to_mimaki"] };
 }
 
+// ---------- 15H.5: run identity (attempt / revision / reprint) ----------
+// ONE grammar for the trailing run segment of routed names:
+//   __A1                      first normal run (historical default — every
+//                             pre-15H.5 routed file ends exactly like this)
+//   __A2                      operational retry (transport failure re-delivery)
+//   __R2-A1                   corrected artwork, second revision, first attempt
+//   __P1-A1                   first intentional reprint
+//   __R2-P2-A3                combinations, always R then P then A
+// Absent tokens default to R1 / P0 / A1 (Q: historical names stay valid).
+// ATTEMPT = operational re-delivery; REVISION = changed artwork (new hash);
+// REPRINT = intentional physical re-production. Never mixed.
+
+export type RunIdentity = { revision: number; reprint: number; attempt: number };
+
+export const DEFAULT_RUN: RunIdentity = { revision: 1, reprint: 0, attempt: 1 };
+
+const RUN_SEGMENT_RE = /__(?:R(\d+)-)?(?:P(\d+)-)?A(\d+)$/i;
+
+export function parseRunIdentity(name: string | null | undefined): RunIdentity {
+  const base = String(name || "").replace(/\.[a-z0-9]{1,5}$/i, "");
+  const match = base.match(RUN_SEGMENT_RE);
+  if (!match) return { ...DEFAULT_RUN };
+  return {
+    revision: match[1] ? Math.max(1, Number(match[1])) : 1,
+    reprint: match[2] ? Math.max(0, Number(match[2])) : 0,
+    attempt: Math.max(1, Number(match[3])),
+  };
+}
+
+export function buildRunSuffix(run: Partial<RunIdentity> = {}): string {
+  const revision = Math.max(1, Math.floor(run.revision ?? 1));
+  const reprint = Math.max(0, Math.floor(run.reprint ?? 0));
+  const attempt = Math.max(1, Math.floor(run.attempt ?? 1));
+  const tokens = [
+    ...(revision > 1 ? [`R${revision}`] : []),
+    ...(reprint > 0 ? [`P${reprint}`] : []),
+    `A${attempt}`,
+  ];
+  return `__${tokens.join("-")}`;
+}
+
+// Replace (or append) the trailing run segment of an existing routed name.
+export function applyRunSuffix(baseName: string, run: Partial<RunIdentity>): string {
+  const stripped = String(baseName || "").replace(RUN_SEGMENT_RE, "");
+  return `${stripped}${buildRunSuffix(run)}`.slice(0, 120);
+}
+
 // Structured routed RIP name for auto-created intake jobs (contract F/E):
-// <TICKET>__<PRINTER>__<MODE>__<SAFE-ORIGINAL>__A1 — system-generated only,
-// safe charset, <=120 chars, ticket exactly parseable by the result watchers.
-export function buildIntakeRipName(ticket: string, machine: string, mode: string, originalFileName: string, attempt = 1): string {
+// <TICKET>__<PRINTER>__<MODE>__<SAFE-ORIGINAL>__<RUN> — system-generated
+// only, safe charset, <=120 chars, ticket exactly parseable by the result
+// watchers. Default run renders exactly the historical __A1.
+export function buildIntakeRipName(ticket: string, machine: string, mode: string, originalFileName: string, attempt = 1, run: Partial<RunIdentity> = {}): string {
   const base = String(originalFileName || "").replace(/\.[a-z0-9]{1,5}$/i, "");
   const safe = base
     .toUpperCase()
@@ -437,6 +485,6 @@ export function buildIntakeRipName(ticket: string, machine: string, mode: string
     .replace(/^-+|-+$/g, "")
     .slice(0, 40)
     .replace(/-+$/g, "") || "FILE";
-  const name = `${ticket}__${machine.toUpperCase()}__${mode}__${safe}__A${Math.max(1, Math.floor(attempt))}`;
+  const name = `${ticket}__${machine.toUpperCase()}__${mode}__${safe}${buildRunSuffix({ attempt, ...run })}`;
   return name.slice(0, 120);
 }

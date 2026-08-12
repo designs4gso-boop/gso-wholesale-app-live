@@ -20,7 +20,7 @@
 
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
-import { decideMachine } from "./print-intake-routing.server";
+import { buildIntakeRipName, decideMachine } from "./print-intake-routing.server";
 import { appendIntakeAudit, readIntakeMeta, validateIntakeAssignment } from "./print-intake-review.server";
 import {
   canonicalLineWarnings,
@@ -1231,10 +1231,8 @@ export async function createOrReusePrintIntakeJob(dbClient: any, input: PrintInt
   }
 }
 
-// Local copy of the routed-name contract (print-intake-routing owns the
-// canonical builder; duplicated shape kept in sync by tests).
+// 15H.5: the duplicated local copy is retired — print-intake-routing owns
+// the ONE canonical routed-name builder (now run-identity aware).
 function buildIntakeRipNameLocal(ticket: string, machine: string, mode: string, originalFileName: string, attempt = 1): string {
-  const base = String(originalFileName || "").replace(/\.[a-z0-9]{1,5}$/i, "");
-  const safe = base.toUpperCase().replace(/[^A-Z0-9.]+/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/g, "") || "FILE";
-  return `${ticket}__${machine.toUpperCase()}__${mode}__${safe}__A${Math.max(1, Math.floor(attempt))}`.slice(0, 120);
+  return buildIntakeRipName(ticket, machine, mode, originalFileName, attempt);
 }

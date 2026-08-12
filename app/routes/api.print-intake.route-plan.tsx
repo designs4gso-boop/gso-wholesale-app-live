@@ -1,5 +1,6 @@
 import db from "../db.server";
 import {
+  applyRunSuffix,
   basenameOf,
   decideIntakeRoute,
   decideMachine,
@@ -82,7 +83,10 @@ export async function action({ request }: { request: Request }) {
     if (!machineDecision.machine) {
       return json({ ok: true, fileName, plan: { decision: "review", rule: null, reasons: ["assigned_but_machine_unresolved", ...machineDecision.reasons], candidates: [], autoCreated: false } });
     }
-    const ripName = ripFileBaseName(assignedItem as any) || String(existingIntake.authoritativeTicket || assignedJob.jobTicket || "");
+    const assignedRun = { revision: existingIntake.revisionNumber, reprint: existingIntake.reprintNumber, attempt: existingIntake.attemptNumber };
+    const assignedRunDefault = assignedRun.revision === 1 && assignedRun.reprint === 0 && assignedRun.attempt === 1;
+    const baseRipName = ripFileBaseName(assignedItem as any) || String(existingIntake.authoritativeTicket || assignedJob.jobTicket || "");
+    const ripName = assignedRunDefault ? baseRipName : applyRunSuffix(baseRipName, assignedRun);
     await db.printIntake.update({
       where: { id: existingIntake.id },
       data: {
@@ -188,10 +192,29 @@ export async function action({ request }: { request: Request }) {
   // Matched existing job: record/refresh the PrintIntake linkage (best-effort;
   // the plan itself is unchanged 13A.6G behavior).
   if (plan.decision === "route" && hasFullHash) {
+    let routedRipName = plan.ripName;
     try {
+      // 15H.5: run identity. Same hash re-planning keeps its stored counters
+      // (attempt bumps happen at failed-delivery reports; reprint bumps at
+      // the owner action). A NEW hash matching a ticket that already has
+      // routed artwork is a REVISION — corrected artwork, R+1.
+      const ticket = plan.itemTicket || plan.jobTicket;
+      let run = { revision: 1, reprint: 0, attempt: 1 };
+      if (existingIntake) {
+        run = { revision: existingIntake.revisionNumber, reprint: existingIntake.reprintNumber, attempt: existingIntake.attemptNumber };
+      } else if (ticket) {
+        const prior = await db.printIntake.findFirst({
+          where: { shop: setting.shop, authoritativeTicket: ticket, status: "routed", NOT: { fileHashSha256: fileHash } },
+          orderBy: { revisionNumber: "desc" },
+          select: { revisionNumber: true },
+        });
+        if (prior) run = { revision: prior.revisionNumber + 1, reprint: 0, attempt: 1 };
+      }
+      const runIsDefault = run.revision === 1 && run.reprint === 0 && run.attempt === 1;
+      routedRipName = runIsDefault ? plan.ripName : applyRunSuffix(plan.ripName || "", run);
       await db.printIntake.upsert({
         where: { shop_fileHashSha256: { shop: setting.shop, fileHashSha256: fileHash } },
-        update: { matchedProductionJobId: plan.jobId, authoritativeTicket: plan.itemTicket || plan.jobTicket, printer: plan.machine, routingRule: plan.rule, routedFilename: plan.ripName, status: "routed" },
+        update: { matchedProductionJobId: plan.jobId, authoritativeTicket: ticket, printer: plan.machine, routingRule: plan.rule, routedFilename: routedRipName, status: "routed" },
         create: {
           shop: setting.shop,
           originalFilename: fileName,
@@ -200,18 +223,21 @@ export async function action({ request }: { request: Request }) {
           fileSize,
           status: "routed",
           matchedProductionJobId: plan.jobId,
-          authoritativeTicket: plan.itemTicket || plan.jobTicket,
+          authoritativeTicket: ticket,
           printer: plan.machine,
           printMode: null,
           routingRule: plan.rule,
-          routedFilename: plan.ripName,
-          rawParsedHints: JSON.stringify({ matched: true, rule: plan.rule }),
+          routedFilename: routedRipName,
+          revisionNumber: run.revision,
+          reprintNumber: run.reprint,
+          attemptNumber: run.attempt,
+          rawParsedHints: JSON.stringify({ matched: true, rule: plan.rule, run }),
         },
       });
     } catch {
       // linkage recording must never break routing (e.g. migration not yet applied)
     }
-    return json({ ok: true, fileName, plan: { ...plan, autoCreated: false, matchedExisting: true } });
+    return json({ ok: true, fileName, plan: { ...plan, ripName: routedRipName, autoCreated: false, matchedExisting: true } });
   }
 
   // 15F.0J.5-D: unmatched (or ambiguous-candidate) file — printer/mode from
