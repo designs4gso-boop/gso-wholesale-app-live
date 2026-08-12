@@ -820,6 +820,9 @@ model ProductionJob {
   shop            String
   quoteId         String?
   quoteNumber     String?
+  // 15H.4A: first-class Shopify order linkage (paid-order jobs); column
+  // applied to production by migration 20260812090000_add_order_gid.
+  orderGid        String?
   jobTicket       String?
   assetInboxKey   String?
   assetFolderUrl  String?
@@ -891,6 +894,7 @@ model ProductionJob {
   @@index([shop, status])
   @@index([shop, priority])
   @@index([quoteId])
+  @@index([shop, orderGid])
   @@index([jobTicket])
   @@index([proofApprovalToken])
   @@index([proofStatus])
