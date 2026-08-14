@@ -19,6 +19,7 @@ import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
 import { buildBrandRates, computeEntryCosts, machineRatePerHour, type BrandInkRates } from "../lib/rip-actual-costs.server";
 import { PRINT_LOG_USAGE_SOURCE } from "../lib/print-log-writeback-shared";
+import { assetStateLabel, isFetchableAssetUrl } from "../lib/security-guards-shared";
 import {
   WRITEBACK_PHRASE,
   computePrintLogWriteback,
@@ -298,6 +299,10 @@ function assetRoleLabel(role: string) {
 }
 
 function jobAssetUpdateForRole(role: string, fileUrl: string) {
+  // 6A: a state sentinel (gso:…) is not a real asset. Promoting one would push
+  // an unfetchable string into job.artworkUrl / printFileUrl, which the customer
+  // proof page and the RIP route-plan both read as if it were artwork.
+  if (!isFetchableAssetUrl(fileUrl)) return {};
   if (role === "productImage") return { productImageUrl: fileUrl };
   if (role === "artwork") return { artworkUrl: fileUrl };
   if (role === "proof") return { proofUrl: fileUrl };
@@ -2017,7 +2022,13 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                     <BlockStack gap="200">
                       <InlineStack align="space-between" blockAlign="start">
                         <BlockStack gap="050">
-                          <Text as="p" fontWeight="bold"><a href={file.fileUrl} target="_blank" rel="noreferrer">{file.fileName}</a></Text>
+                          {/* 6A: only a real http(s)/app URL becomes a link. A state
+                              sentinel renders as operator state, never as artwork. */}
+                          <Text as="p" fontWeight="bold">
+                            {isFetchableAssetUrl(file.fileUrl)
+                              ? <a href={file.fileUrl} target="_blank" rel="noreferrer">{file.fileName}</a>
+                              : <>{file.fileName} — <Text as="span" tone="critical">{assetStateLabel(file.fileUrl)}</Text></>}
+                          </Text>
                           <Text as="p" tone="subdued">{file.fileType} | {assetRoleLabel(file.assetRole || "reference")} | {sourceLabel(file.assetSource || "manual")} | {new Date(file.createdAt).toLocaleString()}</Text>
                           {file.sourceRef ? <Text as="p" tone="subdued">Source ref: {file.sourceRef}</Text> : null}
                         </BlockStack>

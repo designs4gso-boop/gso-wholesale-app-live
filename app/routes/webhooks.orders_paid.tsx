@@ -1,6 +1,9 @@
-import { authenticate } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import db from "../db.server";
 import { createProductionJobFromSource } from "../lib/production-job-source.server";
+import { createAdminGraphql } from "../lib/personalization-assets.server";
+import { resolveWithBoundedRetry } from "../lib/personalization-checkout.server";
+import type { PersonalizationProductionResolver } from "../lib/personalization-production.server";
 
 // 15D.1: configurator-order job creation moved VERBATIM into the central
 // service (app/lib/production-job-source.server.ts) — field-for-field parity
@@ -132,6 +135,30 @@ async function applyQuotePaymentFromOrder(shop: string, quoteId: string, order: 
   return "OK quote payment order not classified; status unchanged";
 }
 
+/**
+ * Phase 5: an admin GraphQL client for re-resolving Stock Bag personalization
+ * assets at production time.
+ *
+ * `shop` here comes from Shopify's verified webhook HMAC, not from a caller, so
+ * looking up the stored offline session for it is legitimate — the 15G.1 rule
+ * this must not break is "never a caller-chosen shop value".
+ *
+ * Returns null on any failure. A missing session or an uninstalled app must
+ * degrade personalization to "needs resolution", never block a paid order from
+ * becoming a production job.
+ */
+async function buildPersonalizationResolver(shop: string): Promise<PersonalizationProductionResolver | null> {
+  try {
+    const { session } = await unauthenticated.admin(shop);
+    if (!session?.accessToken) return null;
+    const graphql = createAdminGraphql(shop, session.accessToken);
+    return (assetId: string) => resolveWithBoundedRetry({ graphql } as any, assetId, 3);
+  } catch (error) {
+    console.error("[orders_paid] could not build a personalization resolver", { shop, error: String(error) });
+    return null;
+  }
+}
+
 export const action = async ({ request }: { request: Request }) => {
   const { payload, shop } = await authenticate.webhook(request);
 
@@ -153,6 +180,7 @@ export const action = async ({ request }: { request: Request }) => {
     shop,
     source: { type: "shopify_order", order },
     actor: "orders_paid_webhook",
+    personalizationResolver: await buildPersonalizationResolver(shop),
   });
 
   return new Response(result.reason || "OK", { status: 200 });

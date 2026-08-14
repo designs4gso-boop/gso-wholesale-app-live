@@ -8,6 +8,10 @@ import {
   stripInternalCostFields,
 } from "../lib/security-guards-shared";
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
+import { resolveZakekeDesign, zakekeLineAttributes } from "../lib/zakeke-design.server";
+import { createAdminGraphql } from "../lib/personalization-assets.server";
+import { getPersonalizationClaimSecret, personalizationLineAttributes } from "../lib/personalization-claim.server";
+import { resolvePersonalizationForLine } from "../lib/personalization-checkout.server";
 import { STOREFRONT_BAG_MIN_QTY, buildCanonicalLineMetadata, priceStorefrontConfiguration } from "../lib/storefront-canonical-pricing.server";
 import {
   JAR_STOREFRONT_MIN_QTY,
@@ -183,6 +187,9 @@ export async function action({ request }: ActionFunctionArgs) {
     const canonicalInputs = await resolveCanonicalBagInputs(db, shop);
     // 16F: sticker inputs resolve lazily on the first sticker line.
     let stickerInputs: CanonicalStickerInputs | null = null;
+    // Phase 4: personalization deps resolve lazily too — a checkout with no
+    // uploaded files never reads the claim-signing secret.
+    let personalizationDeps: { graphql: ReturnType<typeof createAdminGraphql>; secret: string } | null = null;
 
     const lineItems: any[] = [];
     const itemSummaries: any[] = [];
@@ -198,6 +205,9 @@ export async function action({ request }: ActionFunctionArgs) {
       const rawJarColor = rawItem.jarColor || rawItem.jar_color || rawItem.color;
       const labelSet = clean(rawItem.labelSet || rawItem.label_set || rawItem.labelset);
       const productImageUrl = clean(rawItem.image || rawItem.productImageUrl || rawItem.imageUrl);
+      // 17C.1: artwork identity only — never an input to pricing. The preview URL is
+      // derived from the sanitized id server-side, so a posted URL is never persisted.
+      const zakekeDesign = resolveZakekeDesign(rawItem.zakekeDesignId || rawItem.zakeke_design_id);
 
       if (!handle && !productGid) {
         return jsonResponse(
@@ -487,6 +497,47 @@ export async function action({ request }: ActionFunctionArgs) {
 
       cartTotal = money(cartTotal + orderTotal);
 
+      // Phase 4: optional Stock Bag personalization (logo / QR).
+      //
+      // Deliberately resolved AFTER the line price is final, so an uploaded file
+      // cannot influence pricing in any direction. Every posted asset must carry
+      // a valid GSO-issued claim bound to this shop and that exact asset id, and
+      // is then re-read from Shopify — the posted fileUrl/mimeType/fileName/
+      // byteSize/status are never read at all.
+      let personalizationAttributes: Array<{ key: string; value: string }> = [];
+      let personalizationCount = 0;
+      if (rawItem.personalizationAssets != null) {
+        if (!personalizationDeps) {
+          personalizationDeps = {
+            graphql: createAdminGraphql(shop, accessToken),
+            secret: getPersonalizationClaimSecret(),
+          };
+        }
+        const personalization = await resolvePersonalizationForLine(
+          { graphql: personalizationDeps.graphql, secret: personalizationDeps.secret },
+          { shop, productFamily, posted: rawItem.personalizationAssets },
+        );
+        if (!personalization.ok) {
+          console.error("[configurator-checkout] personalization refused", {
+            shop,
+            productType,
+            code: personalization.code,
+          });
+          return jsonResponse(
+            {
+              ok: false,
+              error: personalization.message,
+              code: personalization.code,
+              ...(personalization.failedFile ? { failedFile: personalization.failedFile } : {}),
+              item: { title: effectiveProduct.title, productType, handle, quantity },
+            },
+            { status: 400 },
+          );
+        }
+        personalizationAttributes = personalizationLineAttributes(personalization.assets);
+        personalizationCount = personalization.assets.length;
+      }
+
       const baseTitle = effectiveProduct.title || clean(rawItem.title) || "Configured Product";
       const optionSummary = stickerLaunch
         ? `${stickerWidthIn}x${stickerHeightIn}in / ${material} / ${finish}`
@@ -540,6 +591,13 @@ export async function action({ request }: ActionFunctionArgs) {
         { key: "_GSO Product Image", value: productImageUrl },
         // 16E: DTP lines omit Bag Color/Sides entirely (vendor-finished
         // pouch; both sides printed by spec).
+        // 17C.1: Zakeke artwork identity, so the paid order can rebuild the
+        // design reference for production.
+        ...zakekeLineAttributes(zakekeDesign),
+        // Phase 4: bounded, server-built personalization identity. Deliberately
+        // ids + status + names only — never CDN URLs, which Phase 5 resolves
+        // again from the ids when production needs the artwork.
+        ...personalizationAttributes,
         // 15G.5 (O): hidden canonical configuration snapshot for paid-order
         // production creation and future Ticket-First intake.
         ...(canonicalMeta ? [{ key: "_GSO Canonical", value: canonicalMeta }] : []),
@@ -585,6 +643,8 @@ export async function action({ request }: ActionFunctionArgs) {
           matchedRange,
           jarColor: selectedJarColor,
         },
+        // Count only — asset ids, claims and CDN URLs stay server-side.
+        personalizationCount,
       });
     }
 

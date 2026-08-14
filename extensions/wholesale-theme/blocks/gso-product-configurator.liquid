@@ -2,7 +2,6 @@
 {
   "name": "GSO Product Configurator",
   "target": "section",
-  "javascript": "gso-product-configurator.js",
   "stylesheet": "gso-product-configurator.css",
   "settings": [
     { "type": "text", "id": "eyebrow", "label": "Eyebrow", "default": "GSO Custom Stock Bag" },
@@ -34,7 +33,16 @@
     { "type": "checkbox", "id": "show_order_total", "label": "Show order total", "default": false },
     { "type": "checkbox", "id": "show_matched_tier", "label": "Show matched tier", "default": false },
     { "type": "checkbox", "id": "show_price_breaks", "label": "Show price break chart", "default": true },
-    { "type": "checkbox", "id": "show_profit_data", "label": "Show internal profit/cost data", "default": false }
+    { "type": "checkbox", "id": "show_profit_data", "label": "Show internal profit/cost data", "default": false },
+
+    { "type": "header", "content": "Stock Bag personalization" },
+    {
+      "type": "checkbox",
+      "id": "enable_personalization",
+      "label": "Enable ADD YOUR BRAND uploads",
+      "info": "Stock Bags only. Requires the personalization upload endpoint, the rate-limit migration, and read_files/write_files to be live. Leave OFF until those are deployed.",
+      "default": false
+    }
   ]
 }
 {% endschema %}
@@ -64,6 +72,12 @@
   data-customer-email="{% if customer %}{{ customer.email | escape }}{% endif %}"
   data-shop="{{ shop.permanent_domain | escape }}"
   data-product-handle="{{ product.handle | escape }}"
+  {%- comment -%}
+    6A: the canonical product type drives the Zakeke family gate in
+    gso-zakeke-bridge.js. Stock Bags never use Zakeke (premade GSO artwork), so
+    the bridge must be able to tell families apart without a network call.
+  {%- endcomment -%}
+  data-product-type="{{ product.type | escape }}"
   data-product-gid="gid://shopify/Product/{{ product.id }}"
   data-base-variant-gid="gid://shopify/ProductVariant/{{ selected_variant.id }}"
   {%- comment -%}
@@ -171,6 +185,57 @@
         Sides are set to Double Sided. Minimum order is <span data-gso-min-display>50</span> units.
       </div>
 
+      {%- comment -%}
+        17C.1: the Zakeke bridge fills this in once a design is attached, so the
+        customer can see their artwork rode along before they add to cart.
+      {%- endcomment -%}
+      <div class="gso-configurator__artwork" data-gso-artwork hidden></div>
+
+      {%- comment -%}
+        Phase 3: ADD YOUR BRAND. Two independent gates — the merchant setting
+        (default OFF) AND canonical Stock Bag identity. Nothing renders unless
+        both hold, so the markup is simply absent for every other family and
+        while the feature is off. This is not a CSS-only hide.
+      {%- endcomment -%}
+      {%- assign gso_personalization = false -%}
+      {%- if block.settings.enable_personalization and product.type == 'Stock Bag' -%}
+        {%- assign gso_personalization = true -%}
+      {%- endif -%}
+
+      {%- if gso_personalization -%}
+        <section
+          class="gso-personalization"
+          data-gso-personalization
+          data-upload-proxy="/apps/wholesale-lite/personalization-upload"
+          data-max-files="5"
+          data-max-bytes="10485760"
+          aria-labelledby="gso-brand-heading-{{ block.id }}"
+        >
+          <div class="gso-personalization__head">
+            <h4 class="gso-personalization__title" id="gso-brand-heading-{{ block.id }}">ADD YOUR BRAND</h4>
+            <span class="gso-personalization__optional">OPTIONAL</span>
+          </div>
+          <p class="gso-personalization__desc">Add your logo and/or QR code to this premade design.</p>
+
+          <label class="gso-personalization__drop" data-gso-personalization-drop for="gso-brand-input-{{ block.id }}">
+            <span class="gso-personalization__drop-main">Drop files here or <span class="gso-personalization__browse">browse</span></span>
+            <span class="gso-personalization__hint" id="gso-brand-hint-{{ block.id }}">PNG, JPG or PDF &middot; Up to 5 files &middot; 10 MB each</span>
+            <input
+              id="gso-brand-input-{{ block.id }}"
+              class="gso-personalization__input"
+              type="file"
+              multiple
+              accept="image/png,image/jpeg,application/pdf"
+              data-gso-personalization-input
+              aria-describedby="gso-brand-hint-{{ block.id }}"
+            >
+          </label>
+
+          <ul class="gso-personalization__list" data-gso-personalization-list></ul>
+          <p class="gso-personalization__status" data-gso-personalization-status role="status" aria-live="polite"></p>
+        </section>
+      {%- endif -%}
+
       <button type="button" class="gso-configurator__add" data-gso-add-to-cart>
         Add to Cart
       </button>
@@ -193,5 +258,35 @@
     </noscript>
   </div>
 </div>
+
+{%- comment -%}
+  17C.1: a block may only declare one `javascript` asset in its schema, so the
+  Zakeke bridge loads here. It replaces the theme's zakekeBeforeAddToCart (which
+  POSTs the $1 canonical variant to /cart/add) with a hand-off into this
+  configurator, and blocks native cart writes on configurator products.
+{%- endcomment -%}
+{%- comment -%}
+  6A: the configurator bundle loads from an explicit deferred script tag rather
+  than the block schema's "javascript" key.
+
+  The schema key is Shopify's auto-injection convenience and is capped at 10 KB
+  by the AssetSizeAppBlockJavaScript rule; Shopify's own guidance for a larger
+  app-block script is to load it from a separate file with a script tag, which is
+  exactly how gso-zakeke-bridge.js and gso-personalization.js already load.
+
+  Loading semantics are identical (deferred, once per page, executed before
+  DOMContentLoaded fires), so every init path below is unchanged. It is loaded
+  FIRST so the two dependent assets always find a fully-parsed configurator.
+{%- endcomment -%}
+<script src="{{ 'gso-product-configurator.js' | asset_url }}" defer></script>
+
+<script src="{{ 'gso-zakeke-bridge.js' | asset_url }}" defer></script>
+
+{%- comment -%}
+  Phase 3: ADD YOUR BRAND client. Self-gating — it exits immediately unless the
+  [data-gso-personalization] container is present, which only the merchant
+  setting + Stock Bag identity can produce. No network calls while off.
+{%- endcomment -%}
+<script src="{{ 'gso-personalization.js' | asset_url }}" defer></script>
 
 

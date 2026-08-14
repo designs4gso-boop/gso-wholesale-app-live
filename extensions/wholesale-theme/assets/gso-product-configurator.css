@@ -480,3 +480,89 @@ body:has([data-gso-lockout="1"]) quick-add-modal {
     grid-template-columns: 1fr;
   }
 }
+
+/* 17C.1 — Zakeke artwork confirmation (rendered by gso-zakeke-bridge.js) */
+.gso-configurator__artwork {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--gso-border);
+  border-radius: calc(var(--gso-radius) / 2);
+  background: var(--gso-result-bg);
+  color: var(--gso-text);
+  font-size: 0.9rem;
+}
+.gso-configurator__artwork[hidden] { display: none; }
+.gso-configurator__artwork-label { font-weight: 700; }
+.gso-configurator__artwork-label::before { content: "\2713"; margin-right: 6px; color: var(--gso-accent); }
+.gso-configurator__artwork-ref { color: var(--gso-muted); word-break: break-all; }
+.gso-configurator__artwork-link { color: var(--gso-accent); margin-left: auto; text-decoration: underline; }
+/* Phase 3 — ADD YOUR BRAND (Stock Bag personalization). Compact by design:
+   before any file is chosen this adds one short block, not a tall panel. */
+.gso-personalization {
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--gso-border);
+  border-radius: calc(var(--gso-radius) / 2);
+  background: var(--gso-result-bg);
+  color: var(--gso-text);
+}
+.gso-personalization__head { display: flex; align-items: center; gap: 8px; }
+.gso-personalization__title { margin: 0; font-size: 0.95rem; letter-spacing: 0.04em; }
+.gso-personalization__optional {
+  font-size: 0.65rem; letter-spacing: 0.1em; padding: 2px 6px; border-radius: 999px;
+  border: 1px solid var(--gso-border); color: var(--gso-muted);
+}
+.gso-personalization__desc { margin: 4px 0 10px; font-size: 0.82rem; color: var(--gso-muted); }
+.gso-personalization__drop {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 14px 12px; text-align: center; cursor: pointer;
+  border: 1px dashed var(--gso-border); border-radius: calc(var(--gso-radius) / 2);
+  background: var(--gso-field-bg); color: var(--gso-field-text);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.gso-personalization__drop.is-dragover { border-color: var(--gso-accent); background: var(--gso-card-bg); }
+.gso-personalization__drop-main { font-size: 0.85rem; }
+.gso-personalization__browse { color: var(--gso-accent); text-decoration: underline; }
+.gso-personalization__hint { font-size: 0.7rem; color: var(--gso-muted); }
+/* visually hidden but focusable, so keyboard users get a real focus ring */
+.gso-personalization__input {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.gso-personalization__input:focus-visible + * ,
+.gso-personalization__drop:focus-within {
+  outline: 2px solid var(--gso-accent); outline-offset: 2px;
+}
+.gso-personalization__list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.gso-personalization__item {
+  display: flex; align-items: center; gap: 8px; font-size: 0.8rem;
+  padding: 6px 8px; border-radius: 8px; background: var(--gso-card-bg);
+  border: 1px solid var(--gso-border);
+}
+.gso-personalization__name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gso-personalization__state { color: var(--gso-muted); white-space: nowrap; }
+.gso-personalization__item--ready .gso-personalization__state { color: var(--gso-accent); }
+.gso-personalization__item--error { border-color: var(--gso-accent); }
+.gso-personalization__item--error .gso-personalization__state { color: var(--gso-accent); }
+.gso-personalization__retry,
+.gso-personalization__remove {
+  flex: 0 0 auto; background: transparent; color: var(--gso-text);
+  border: 1px solid var(--gso-border); border-radius: 6px; cursor: pointer;
+  font-size: 0.72rem; padding: 2px 8px; line-height: 1.4;
+}
+.gso-personalization__retry:hover,
+.gso-personalization__remove:hover { border-color: var(--gso-accent); color: var(--gso-accent); }
+.gso-personalization__retry:focus-visible,
+.gso-personalization__remove:focus-visible { outline: 2px solid var(--gso-accent); outline-offset: 2px; }
+.gso-personalization__status { margin: 8px 0 0; font-size: 0.75rem; color: var(--gso-muted); min-height: 1em; }
+.gso-configurator__add[aria-disabled="true"] { opacity: 0.6; cursor: progress; }
+
+@media screen and (max-width: 749px) {
+  .gso-personalization { padding: 10px; }
+  .gso-personalization__drop { padding: 12px 8px; }
+  .gso-personalization__item { flex-wrap: wrap; }
+}

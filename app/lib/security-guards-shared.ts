@@ -41,6 +41,37 @@ export function stripInternalCostFields<T>(value: T, seen = new WeakSet<object>(
   return output as T;
 }
 
+// ---------- Phase 6A: fetchable-asset guard ----------
+// ProductionJobFile.fileUrl is a NON-NULLABLE String, so an asset that has no
+// real URL yet still has to store something. Phase 5 stores an explicit
+// non-URL state sentinel (gso:personalization-pending/… , gso:personalization-failed/…)
+// rather than inventing a CDN link.
+//
+// Any consumer that fetches, renders, links, prints or promotes a fileUrl must
+// gate on this. The rule is an allowlist, not a blocklist: only http(s) and
+// same-origin application paths are ever treated as real assets, so a future
+// sentinel scheme is refused automatically without touching every caller.
+export const ASSET_STATE_SENTINEL_PREFIX = "gso:";
+
+export function isFetchableAssetUrl(value: unknown): boolean {
+  const url = String(value ?? "").trim();
+  if (!url) return false;
+  // "//host/path" is protocol-relative and therefore off-origin — never allowed.
+  if (url.startsWith("//")) return false;
+  if (url.startsWith("/")) return true; // internal app path (proof sheet, app proxy)
+  return /^https?:\/\//i.test(url);
+}
+
+/** Operator-facing label for a non-fetchable state sentinel. Never a link. */
+export function assetStateLabel(value: unknown): string {
+  const url = String(value ?? "").trim();
+  if (isFetchableAssetUrl(url)) return "";
+  if (url.startsWith("gso:personalization-failed/")) return "Upload failed in Shopify — needs re-upload";
+  if (url.startsWith("gso:personalization-pending/")) return "Still processing in Shopify — not yet printable";
+  if (!url) return "No file linked";
+  return "Not a linkable file";
+}
+
 // Shopify draftOrderCreate userErrors -> customer-safe {field, message} rows.
 // Only plain strings survive; anything malformed becomes a generic message.
 export function sanitizeDraftOrderUserErrors(errors: unknown): Array<{ field: string | null; message: string }> {

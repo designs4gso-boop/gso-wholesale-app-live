@@ -42,7 +42,7 @@ uri = "/webhooks/orders_paid"
 # 16B: + read_content (pages/blogs), read_online_store_navigation (menus/
 # redirects), read_themes (templates/settings) — READ-ONLY additions for the
 # Phase 16 store-rebuild audits/automation. No new write scopes.
-scopes = "read_customers,read_orders,read_all_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms,read_content,read_online_store_navigation,read_themes"
+scopes = "read_customers,read_orders,read_all_orders,read_products,write_products,write_discounts,read_draft_orders,write_draft_orders,read_cart_transforms,write_cart_transforms,read_content,read_online_store_navigation,read_themes,read_files,write_files"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

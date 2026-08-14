@@ -1667,3 +1667,17 @@ model PrintIntake {
   @@index([matchedProductionJobId])
   @@index([generatedProductionJobId])
 }
+
+// Phase 2.5 — durable rate limiting for the Stock Bag personalization upload
+// endpoint. Deliberately minimal and ephemeral: one row per upload attempt,
+// pruned opportunistically. identityKey is the bounded value derived in
+// personalization-upload.server.ts (shop + Shopify-signed customer id, or a
+// shop-scoped guest bucket). No IP addresses, no filenames, no assets, no PII.
+model PersonalizationUploadRateLimit {
+  id          String   @id @default(cuid())
+  identityKey String
+  createdAt   DateTime @default(now())
+
+  @@index([identityKey, createdAt])
+  @@index([createdAt])
+}

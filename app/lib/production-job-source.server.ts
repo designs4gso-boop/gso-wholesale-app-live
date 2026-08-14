@@ -21,6 +21,16 @@
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
 import { buildIntakeRipName, decideMachine } from "./print-intake-routing.server";
+import { ZAKEKE_ASSET_SOURCE, readZakekeDesignFromLine, zakekeSnapshot } from "./zakeke-design.server";
+import {
+  buildPersonalizationJobFiles,
+  buildPersonalizationSnapshot,
+  personalizationJobNote,
+  readPersonalizationFromLine,
+  resolvePersonalizationForProduction,
+  type PersonalizationProductionResolver,
+  type ResolvedPersonalizationProductionAsset,
+} from "./personalization-production.server";
 import { appendIntakeAudit, readIntakeMeta, validateIntakeAssignment } from "./print-intake-review.server";
 import {
   canonicalDtpMaterialSummary,
@@ -525,8 +535,61 @@ function suggestedFileNameForOrderItem(jobTicket: string, item: any, index: numb
   return `${ticket}_${product}_${finish}_${color}_QTY${qty}`;
 }
 
+/**
+ * THE list of production-eligible lines. Exported so Phase 5 can decode
+ * personalization off exactly the same lines, in exactly the same order, that
+ * the payload builder will map — index N here is item N there.
+ */
+export function configuratorLinesOf(order: any): any[] {
+  const allLines = Array.isArray(order?.line_items) ? order.line_items : [];
+  return allLines.filter(isConfiguratorLine);
+}
+
+/**
+ * Phase 5: decode personalization identity off a paid order, before the
+ * transaction opens (re-resolution makes network calls, which must never run
+ * inside a Prisma transaction).
+ *
+ * Only a canonical Stock Bag line qualifies — `parseCanonicalOrderLine` is the
+ * same marker the rest of this mapper treats as authoritative, and a jar / DTP /
+ * sticker / legacy line can never carry Stock Bag personalization.
+ */
+export function decodeOrderPersonalization(order: any) {
+  return configuratorLinesOf(order).map((line: any, index: number) => {
+    const canonical = parseCanonicalOrderLine(getLineProperty(line, "_GSO Canonical"));
+    const decoded = readPersonalizationFromLine((key) => getLineProperty(line, key), {
+      isCanonicalStockBagLine: Boolean(canonical),
+    });
+    return { index, productTitle: clean(line.title || line.name), ...decoded };
+  });
+}
+
+export type PersonalizationByIndex = Map<number, { assets: ResolvedPersonalizationProductionAsset[]; warnings: string[] }>;
+
+/**
+ * Resolve every decoded asset against Shopify. Fail-soft by design: a resolver
+ * fault degrades to "needs resolution" warnings, never to a lost order or a
+ * crashed webhook.
+ */
+export async function resolveOrderPersonalization(
+  order: any,
+  resolve: PersonalizationProductionResolver | null,
+): Promise<PersonalizationByIndex> {
+  const byIndex: PersonalizationByIndex = new Map();
+  for (const line of decodeOrderPersonalization(order)) {
+    if (!line.assets.length && !line.warnings.length) continue;
+    const resolved = await resolvePersonalizationForProduction(line.assets, resolve);
+    byIndex.set(line.index, { assets: resolved.assets, warnings: [...line.warnings, ...resolved.warnings] });
+  }
+  return byIndex;
+}
+
 // Pure builder: everything the webhook used to assemble, given a jobTicket.
-export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
+export function buildShopifyOrderJobPayload(
+  order: any,
+  jobTicket: string,
+  options: { personalizationByIndex?: PersonalizationByIndex } = {},
+) {
   // 15H.1: no unstable fallback — a payload without a stable Shopify order
   // identity can never become a production job (the service fails closed
   // before calling this; the null here is belt-and-braces so the stored
@@ -557,6 +620,15 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
     const jarCanonical = canonical ? null : parseCanonicalJarOrderLine(rawCanonical);
     const dtpCanonical = canonical || jarCanonical ? null : parseCanonicalDtpOrderLine(rawCanonical);
     const stickerCanonical = canonical || jarCanonical || dtpCanonical ? null : parseCanonicalStickerOrderLine(rawCanonical);
+    // 17C.1: artwork identity travels on its own line attributes, deliberately
+    // outside the canonical snapshot (those parsers whitelist their keys).
+    const zakekeDesign = readZakekeDesignFromLine((key) => getLineProperty(line, key));
+    // Phase 5: Stock Bag personalization, already decoded + re-resolved before
+    // the transaction. Artwork identity only — it never touches quantity,
+    // unitPrice, unitCost or any pricing input below.
+    const personalization = options.personalizationByIndex?.get(index);
+    const personalizationAssets = personalization?.assets || [];
+    const personalizationWarnings = personalization?.warnings || [];
     const productFamily =
       getLineProperty(line, "Product Family") ||
       (canonical ? "Stock Bags" : jarCanonical ? "Jars" : dtpCanonical ? "DTP Pouches" : stickerCanonical ? "Stickers" : "");
@@ -635,7 +707,7 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
               ...(jarColor ? [`Jar Color: ${jarColor}`] : []), `Label Set: ${labelSet}`,
             ].join(" | ")
           : `Material: ${material} | Finish: ${finish} | Production Finish: ${productionFinish} | Bag Color: ${bagColor} | Sides: ${sides}`;
-    const productionNotes = isJar
+    const productionNotesBase = isJar
       ? [
           `Shopify order: ${quoteNumber}`, `Product Family: ${productFamily}`, `Product Type: ${productType}`,
           `Material: ${material}`, `Finish: ${finish}`, `Production Finish: ${productionFinish}`,
@@ -698,6 +770,12 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
             : []),
           ...canonicalWarnings.map((warning) => `WARNING: ${warning}`),
         ].join("\n");
+    // Phase 5: personalization problems ride in the SAME "WARNING:" channel the
+    // canonical engine already uses, so the ERP job view surfaces them with no
+    // new field and no new UI.
+    const productionNotes = personalizationWarnings.length
+      ? [productionNotesBase, ...personalizationWarnings.map((warning) => `WARNING: ${warning}`)].join("\n")
+      : productionNotesBase;
     const priceSnapshot = {
       source: "shopify_order_paid_webhook",
       orderId, orderName: quoteNumber, lineItemId: line.id || null,
@@ -712,6 +790,14 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       ...(jarCanonical ? { canonical: jarCanonical, linePaidUnitPrice, canonicalWarnings } : {}),
       ...(dtpCanonical ? { canonical: dtpCanonical, linePaidUnitPrice, canonicalWarnings } : {}),
       ...(stickerCanonical ? { canonical: stickerCanonical, linePaidUnitPrice, canonicalWarnings } : {}),
+      // 17C.1: Zakeke artwork identity, nested so it can never be mistaken for a
+      // product image by the loose snapshot readers.
+      ...zakekeSnapshot(zakekeDesign),
+      // Phase 5: customer logo/QR identity, nested for exactly the same reason —
+      // firstImageFromQuoteItem/snapshotValue only read TOP-LEVEL
+      // productImageUrl/imageUrl, so nesting keeps customer artwork out of the
+      // product-thumbnail path structurally.
+      ...buildPersonalizationSnapshot(personalizationAssets),
     };
     const item = {
       productTitle,
@@ -748,6 +834,21 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       }, index),
     };
   });
+
+  // Phase 5: one file row per personalization asset, associated to its item via
+  // the itemTicket prefix (the existing convention shared with suggestedFileName
+  // / ripJobName). The machine-readable join is
+  // priceSnapshot.personalization.assets[].assetId <-> ProductionJobFile.sourceRef.
+  const personalizationLines = mappedItems
+    .map((item: any, index: number) => ({
+      itemTicket: item.itemTicket,
+      productTitle: item.productTitle,
+      assets: options.personalizationByIndex?.get(index)?.assets || [],
+    }))
+    .filter((line: any) => line.assets.length);
+  const personalizationFiles = personalizationLines.flatMap((line: any) =>
+    buildPersonalizationJobFiles(line.assets, { itemTicket: line.itemTicket, productTitle: line.productTitle }),
+  );
 
   // 16D/16E: uniform-family orders take their family checklist — all-jar ->
   // premium-jars (applied-label flow), all-DTP -> dtp-bags (outsourced
@@ -798,9 +899,24 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
       ...(skippedLines.length
         ? [`NOTE: ${skippedLines.length} non-production line(s) omitted (no fabricated specs): ${skippedLines.slice(0, 5).join("; ")}${skippedLines.length > 5 ? "…" : ""}`]
         : []),
+      // Phase 5: job-level personalization summary, in the same NOTE channel.
+      ...(personalizationJobNote(personalizationLines) ? [personalizationJobNote(personalizationLines) as string] : []),
     ].join("\n"),
     productImageUrl: firstImage,
     items: mappedItems,
+    // 17C.1: carried beside `items` rather than on them — mapped items are spread
+    // straight into Prisma, so any non-column key there would break job creation.
+    zakekeDesigns: configuredLines
+      .map((line: any, index: number) => {
+        const design = readZakekeDesignFromLine((key) => getLineProperty(line, key));
+        return design ? { ...design, sortOrder: index + 1, productTitle: clean(line.title || line.name) } : null;
+      })
+      .filter(Boolean),
+    // Phase 5: carried beside `items` for the same reason as zakekeDesigns —
+    // mapped items are spread straight into Prisma, so a non-column key there
+    // would break job creation.
+    personalizationFiles,
+    personalizationLines,
     skippedLines,
     eventType: "created_from_shopify_order",
     eventMessage: (ticket: string) =>
@@ -811,7 +927,17 @@ export function buildShopifyOrderJobPayload(order: any, jobTicket: string) {
 // ---------- the central service ----------
 export async function createProductionJobFromSource(
   dbClient: any,
-  input: { shop: string; source: ProductionJobSource; actor?: string },
+  input: {
+    shop: string;
+    source: ProductionJobSource;
+    actor?: string;
+    /**
+     * Phase 5: optional Shopify Files resolver for Stock Bag personalization.
+     * Optional on purpose — every existing caller keeps working unchanged, and a
+     * missing resolver degrades to "needs resolution" rather than failing.
+     */
+    personalizationResolver?: PersonalizationProductionResolver | null;
+  },
 ): Promise<CreateJobResult> {
   const { shop, source } = input;
   const actor = clean(input.actor) || "system";
@@ -839,6 +965,21 @@ export async function createProductionJobFromSource(
     const requestId = clean((source as any).requestId);
     if (!requestId || requestId.length < 8) throw new Error("Manual production jobs require a stable requestId.");
     sourceKey = `manual_${requestId}`;
+  }
+
+  // Phase 5: re-resolve personalization assets BEFORE opening the transaction —
+  // these are Shopify network calls and must never run inside a Prisma
+  // transaction. Read-only, so a webhook replay simply resolves again and then
+  // exits at the idempotency gate below without writing anything.
+  let personalizationByIndex: PersonalizationByIndex | undefined;
+  if (source.type === "shopify_order") {
+    try {
+      personalizationByIndex = await resolveOrderPersonalization(source.order, input.personalizationResolver ?? null);
+    } catch (error) {
+      // Optional metadata must never cost the customer their production job.
+      console.error("[production-job-source] personalization resolution failed", { shop, error: String(error) });
+      personalizationByIndex = undefined;
+    }
   }
 
   // 15H.1: ticket-constraint P2002 reruns the whole transaction (see helper).
@@ -938,7 +1079,7 @@ export async function createProductionJobFromSource(
 
     if (source.type === "shopify_order") {
       const jobTicket = await buildNextJobTicket(tx, shop);
-      const payload = buildShopifyOrderJobPayload(source.order, jobTicket);
+      const payload = buildShopifyOrderJobPayload(source.order, jobTicket, { personalizationByIndex });
       if (!payload) return { job: null, created: false, reason: "No configurator line items found." };
       // 15H.4A: orderGid is a STAGED column — write it only when the probe
       // says the database actually has it (safe to deploy pre-activation).
@@ -968,6 +1109,52 @@ export async function createProductionJobFromSource(
         },
         include: { items: true },
       });
+      // 17C.1: give production staff a retrievable handle on the customer's
+      // artwork. The design id is the durable identity (indexed sourceRef); the
+      // preview URL is a convenience that may expire, hence the note.
+      for (const design of (payload.zakekeDesigns || []) as any[]) {
+        await tx.productionJobFile.create({
+          data: {
+            shop,
+            jobId: job.id,
+            fileName: `zakeke-design-${design.designId}`,
+            originalFileName: design.productTitle || null,
+            fileType: "image",
+            fileUrl: design.previewUrl,
+            assetRole: "artwork",
+            assetSource: ZAKEKE_ASSET_SOURCE,
+            sourceRef: design.designId,
+            matchedBy: "shopify_line_property",
+            jobTicket,
+            notes: "Zakeke customer design. The design ID is the durable reference; the preview URL may expire.",
+          },
+        });
+      }
+      // Phase 5: one ProductionJobFile per Stock Bag personalization asset.
+      //
+      // Idempotency needs no unique index and no migration: this runs inside the
+      // SAME transaction as job creation, behind the advisory lock, and a replay
+      // returns at the `existing` gate above without ever reaching this loop.
+      // That is exactly how the Zakeke rows above are already deduplicated.
+      for (const file of (payload.personalizationFiles || []) as any[]) {
+        await tx.productionJobFile.create({
+          data: { shop, jobId: job.id, jobTicket, ...file },
+        });
+      }
+      const attention = ((payload.personalizationLines || []) as any[]).flatMap((line) =>
+        line.assets.filter((asset: any) => asset.status !== "READY"),
+      );
+      if ((payload.personalizationFiles || []).length) {
+        await tx.productionJobEvent.create({
+          data: {
+            shop,
+            jobId: job.id,
+            eventType: attention.length ? "personalization_needs_attention" : "personalization_files_attached",
+            message: personalizationJobNote((payload.personalizationLines || []) as any[]) || "Customer personalization attached.",
+            createdBy: actor,
+          },
+        });
+      }
       return { job, created: true, reason: "Production job created from configurator order." };
     }
 
