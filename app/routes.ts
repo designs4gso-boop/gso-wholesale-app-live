@@ -75,6 +75,7 @@ export default [
   route("apps/wholesale-lite/pricing", "routes/apps.wholesale-lite.pricing.ts"),
   route("apps/wholesale-lite/configurator", "routes/apps.wholesale-lite.configurator.ts"),
   route("apps/wholesale-lite/configurator-checkout", "routes/apps.wholesale-lite.configurator-checkout.ts"),
+  route("apps/wholesale-lite/personalization-upload", "routes/apps.wholesale-lite.personalization-upload.ts"),
   route("apps/wholesale-lite/validate", "routes/apps.wholesale-lite.validate.ts"),
   route("quote/:id", "routes/quote.$id.tsx"),
   route("webhooks/compliance", "routes/webhooks.compliance.ts"),
