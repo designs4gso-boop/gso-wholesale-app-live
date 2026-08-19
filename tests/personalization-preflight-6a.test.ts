@@ -366,10 +366,18 @@ describe("migration preflight", () => {
     expect(sql.match(/CREATE INDEX IF NOT EXISTS/g)).toHaveLength(2);
   });
 
-  it("introduces no table-name collision and sorts last in history", async () => {
+  it("introduces no table-name collision and sorts before later migrations", async () => {
     const { readdirSync } = await import("node:fs");
     const migrations = readdirSync("prisma/migrations").filter((name) => /^\d/.test(name)).sort();
-    expect(migrations[migrations.length - 1]).toBe("20260813210000_add_personalization_upload_rate_limit");
+    // Patch 1 (17D.1) legitimately added a LATER migration, so "sorts last" is
+    // no longer the invariant. What must hold is the deployment-order rule:
+    // this migration exists and is applied BEFORE the calibration one, because
+    // `migrate deploy` applies all pending migrations in a single pass.
+    expect(migrations).toContain("20260813210000_add_personalization_upload_rate_limit");
+    expect(migrations).toContain("20260818120000_add_machine_profile_calibration");
+    expect(migrations.indexOf("20260813210000_add_personalization_upload_rate_limit")).toBeLessThan(
+      migrations.indexOf("20260818120000_add_machine_profile_calibration"),
+    );
     const schema = readFileSync("prisma/schema.prisma", "utf8");
     expect(schema.match(/model PersonalizationUploadRateLimit\b/g)).toHaveLength(1);
   });

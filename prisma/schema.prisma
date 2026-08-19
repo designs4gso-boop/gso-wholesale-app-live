@@ -1681,3 +1681,66 @@ model PersonalizationUploadRateLimit {
   @@index([identityKey, createdAt])
   @@index([createdAt])
 }
+
+// Patch 1 (17D.1) — machine/profile calibration records.
+//
+// APPEND-ONLY / HISTORY-SAFE by design. Recalibration INSERTS a new row and
+// marks the prior row status="superseded" + effectiveTo=now; no row is ever
+// updated in place or deleted, so every historical calibration stays queryable.
+//
+// There is deliberately NO @@unique on this model. A compound unique containing
+// status (or an "active" boolean) would make a second inactive historical row
+// impossible for the same identity — exactly the design this must avoid.
+// "One current approved record per identity" is enforced in the application
+// transaction (supersedeAndInsert), not by a database constraint, which also
+// keeps the schema portable (no Postgres partial unique index required).
+//
+// AREA BASIS IS EXPLICIT AND SEPARATE. The Roland jar-label test proved the
+// denominators differ materially (ripLayout 8.9175 sqft vs inkableArtwork
+// 7.2144 sqft on the same job), so ink and time each record which area they
+// were measured against. Consumers must never substitute one for the other.
+//
+// Money NEVER lives here. Calibration owns mL/sqft/pass and minutes/sqft;
+// purchasing owns $/mL. True cost later resolves as
+// inkCost = calculatedInkMl * currentCanonicalInkCostPerMl.
+model MachineProfileCalibration {
+  id   String @id @default(cuid())
+  shop String
+
+  // ---- calibration identity (all six parts must match exactly) ----
+  machineKey  String // "roland-lg-640" | "mimaki-ucjv300-130"
+  inkMode     String // "cmyk" | "cmyk_heavy" | "white" | "gloss"
+  ripProfile  String // "Generic Sign Production" | "Special Effects" | "PVC Gloss / Mimaki Vision Vinyl"
+  qualityMode String // "High Quality" | "Fast Print High"
+  resolution  String // "720x1200" | "600x1200 VD"
+  passConfig  String // "hq-default" | "white-hd-1x" | "gloss-1x" | "32-pass-bidi-op1"
+
+  // ---- measured values (never money) ----
+  mlPerSqftPerPass Float?
+  inkAreaBasis     String? // "inkable_artwork" | "rip_layout" | "material_footprint"
+  minutesPerSqft   Float?
+  timeAreaBasis    String? // "rip_layout" | "inkable_artwork" | "material_footprint"
+  fixedMinutes     Float? // reserved; unused while timeModel = "variable_only"
+  timeModel        String  @default("variable_only")
+  coverageBasisPct Float? // 100 on controlled solid plates; null on heavy production references
+
+  // ---- provenance / history ----
+  measuredAt    DateTime
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  status        String    @default("approved") // approved | superseded | draft | rejected
+  source        String
+  notes         String?
+  supersedesId  String?
+
+  supersedes   MachineProfileCalibration?  @relation("CalibrationChain", fields: [supersedesId], references: [id], onDelete: SetNull)
+  supersededBy MachineProfileCalibration[] @relation("CalibrationChain")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shop])
+  @@index([shop, machineKey, inkMode, ripProfile, qualityMode, resolution, passConfig, status, effectiveFrom])
+  @@index([shop, status])
+  @@index([supersedesId])
+}
