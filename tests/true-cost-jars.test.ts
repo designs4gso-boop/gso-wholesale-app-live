@@ -24,6 +24,8 @@ import {
   packoutFor,
   productionQtyFor,
   resolveJarBlankCost,
+  JAR_DEFAULT_MEDIA_WIDTH_IN,
+  jarNestingAreas,
   type JarLabelSelection,
   type JarSizeKey,
 } from "../app/lib/jar-cost-inputs.server";
@@ -79,6 +81,8 @@ function jarJob(opts: {
   coveragePct?: number | null;
   runLabor?: TrueCostInput["runLabor"];
   variant?: "clear" | "black_white";
+  /** Patch 2B: real nesting areas in place of the bounding-box proxy. */
+  areas?: TrueCostInput["areas"];
 }) {
   const selection = opts.selection ?? SIDE_LID;
   const production = productionQtyFor(opts.qty);
@@ -90,7 +94,7 @@ function jarJob(opts: {
     customerFinishedQty: opts.qty,
     productionQty: production,
     overagePct: JAR_PLANNED_OVERAGE_PCT,
-    areas: {
+    areas: opts.areas ?? {
       inkableArtworkSqft,
       materialFootprintSqft,
       ripLayoutSqft: materialFootprintSqft,
@@ -735,5 +739,153 @@ describe("material waste semantics", () => {
     const doc = readFileSync("docs/GSO_TRUE_COST_CONTRACT.md", "utf8");
     expect(doc).toContain("No generic material-waste factor");
     expect(doc).toContain("would double-count");
+  });
+});
+
+/* ================================================================== *
+ * 11. PATCH 2B — REAL NESTING REPLACES THE PROXY
+ *
+ * Two PHYSICAL runs per jar job (run 1 = side + optional tamper, run 2 = lid),
+ * summed. Setup grouping is untouched: side+lid remains ONE design and two
+ * physical runs do NOT create a second print-setup charge.
+ *
+ * The owner working targets are STILL not asserted. The deltas below are
+ * reported exactly as the engine derived them.
+ * ================================================================== */
+
+const MIMAKI_KEY = "mimaki-ucjv300-130";
+
+function nestedJob(size: JarSizeKey, brand: "chiron" | "miron", qty: number, selection: JarLabelSelection = SIDE_LID) {
+  const production = productionQtyFor(qty);
+  const nested = jarNestingAreas({
+    size, selection, productionQty: production,
+    machineKey: MIMAKI_KEY, loadedMediaWidthIn: JAR_DEFAULT_MEDIA_WIDTH_IN,
+  });
+  const proxy = jarJob({ size, brand, qty, selection });
+  const real = jarJob({ size, brand, qty, selection, areas: nested.areas });
+  return { nested, proxy, real, production };
+}
+
+describe("11. Patch 2B — deterministic nesting, two physical runs", () => {
+  it("side+lid produces TWO physical runs and setup stays ONE design", () => {
+    const { nested } = nestedJob("100ml_wide", "chiron", 1000);
+    expect(nested.nesting!.runs.map((r) => r.key)).toEqual(["side-body-run", "lid-run"]);
+    // setup is unchanged by the run split
+    const setup = jarSetupCost(SIDE_LID);
+    expect(setup.art).toBe(JAR_ART_SETUP_BASE); // 12.50
+    expect(setup.print).toBe(JAR_PRINT_SETUP_PER_JOB); // 2.00 — ONE print setup
+    expect(setup.designs).toBe(1);
+
+    const withTamper = jarSetupCost({ side: true, lid: true, tamper: true });
+    expect(withTamper.art).toBe(JAR_ART_SETUP_BASE + JAR_ART_SETUP_TAMPER_ADD); // 22.50
+    expect(withTamper.print).toBe(JAR_PRINT_SETUP_PER_JOB); // still 2.00
+  });
+
+  it("the real result no longer rests on a proxy, and setup cost is identical", () => {
+    const { proxy, real } = nestedJob("100ml_wide", "chiron", 1000);
+    expect(proxy.result.areas.ripLayoutBasis).toMatch(/PROXY/);
+    expect(/proxy/i.test(real.result.areas.ripLayoutBasis)).toBe(false);
+    expect(real.result.provisionalReasons.join(" ")).not.toMatch(/documented PROXY/);
+    expect(real.result.totals.setup_labor).toBeCloseTo(proxy.result.totals.setup_labor, 10);
+    expect(real.result.status).toBe("PROVISIONAL");
+    expect(real.result.blockers).toEqual([]);
+  });
+
+  it("inkable artwork is UNCHANGED — nesting never touches the ink basis", () => {
+    for (const size of ["100ml_wide", "100ml_tall"] as JarSizeKey[]) {
+      const { proxy, real } = nestedJob(size, size === "100ml_wide" ? "chiron" : "miron", 1000);
+      expect(real.result.areas.inkableArtworkSqft).toBeCloseTo(proxy.result.areas.inkableArtworkSqft, 10);
+      expect(amountOf(real.result, "ink")).toBeCloseTo(amountOf(proxy.result, "ink"), 10);
+    }
+  });
+
+  it("C. CHIRON 100ml Wide, 1000 finished — reported, not tuned", () => {
+    const { nested, proxy, real } = nestedJob("100ml_wide", "chiron", 1000);
+    const [run1, run2] = nested.nesting!.runs;
+    // eslint-disable-next-line no-console
+    console.log(
+      "[2B chiron] run1 " + run1.bands[0].columns + "x" + run1.bands[0].rows + (run1.bands[0].rotated ? " rot" : "") +
+      " feed " + run1.feedLengthIn.toFixed(2) + "in rip " + run1.ripLayoutSqft.toFixed(4) +
+      " | run2 " + run2.bands[0].columns + "x" + run2.bands[0].rows + (run2.bands[0].rotated ? " rot" : "") +
+      " feed " + run2.feedLengthIn.toFixed(2) + "in rip " + run2.ripLayoutSqft.toFixed(4) +
+      " | RIP " + nested.areas.ripLayoutSqft!.toFixed(4) + " (proxy " + proxy.result.areas.ripLayoutSqft!.toFixed(4) + ")" +
+      " | MEDIA " + nested.areas.materialFootprintSqft.toFixed(4) + " (proxy " + proxy.result.areas.materialFootprintSqft.toFixed(4) + ")" +
+      " | total " + real.result.totalCost.toFixed(4) + " was " + proxy.result.totalCost.toFixed(4) +
+      " | unit " + real.result.unitCost!.toFixed(6) + " was " + proxy.result.unitCost!.toFixed(6) +
+      " delta " + (real.result.unitCost! - proxy.result.unitCost!).toFixed(6),
+    );
+    expect(run1.bands[0].columns).toBe(8);
+    expect(run1.bands[0].rows).toBe(127);
+    expect(run1.bands[0].rotated).toBe(false);
+    expect(run1.feedLengthIn).toBeCloseTo(127 * 2.6, 8);
+    expect(run2.bands[0].columns).toBe(28);
+    expect(run2.bands[0].rows).toBe(37);
+    expect(run2.feedLengthIn).toBeCloseTo(37 * 1.9, 8);
+    expect(nested.areas.materialFootprintSqft).toBeCloseTo((54 * (127 * 2.6 + 37 * 1.9)) / 144, 8);
+    expect(real.result.unitCost!).toBeGreaterThan(proxy.result.unitCost!);
+  });
+
+  it("D. MIRON 100ml Tall, 1000 finished — rotation wins on the side run", () => {
+    const { nested, proxy, real } = nestedJob("100ml_tall", "miron", 1000);
+    const [run1, run2] = nested.nesting!.runs;
+    // eslint-disable-next-line no-console
+    console.log(
+      "[2B miron] run1 " + run1.bands[0].columns + "x" + run1.bands[0].rows + (run1.bands[0].rotated ? " rot" : "") +
+      " feed " + run1.feedLengthIn.toFixed(2) + "in rip " + run1.ripLayoutSqft.toFixed(4) +
+      " | run2 " + run2.bands[0].columns + "x" + run2.bands[0].rows + (run2.bands[0].rotated ? " rot" : "") +
+      " feed " + run2.feedLengthIn.toFixed(2) + "in rip " + run2.ripLayoutSqft.toFixed(4) +
+      " | RIP " + nested.areas.ripLayoutSqft!.toFixed(4) + " (proxy " + proxy.result.areas.ripLayoutSqft!.toFixed(4) + ")" +
+      " | MEDIA " + nested.areas.materialFootprintSqft.toFixed(4) + " (proxy " + proxy.result.areas.materialFootprintSqft.toFixed(4) + ")" +
+      " | total " + real.result.totalCost.toFixed(4) + " was " + proxy.result.totalCost.toFixed(4) +
+      " | unit " + real.result.unitCost!.toFixed(6) + " was " + proxy.result.unitCost!.toFixed(6) +
+      " delta " + (real.result.unitCost! - proxy.result.unitCost!).toFixed(6),
+    );
+    expect(run1.bands[0].rotated).toBe(true); // 17 cols x 60 rows beats 8 x 127
+    expect(run1.bands[0].columns).toBe(17);
+    expect(run1.bands[0].rows).toBe(60);
+    expect(run1.feedLengthIn).toBeCloseTo(60 * 6.3, 8);
+    expect(run2.bands[0].columns).toBe(30);
+    expect(run2.bands[0].rows).toBe(34);
+    expect(nested.areas.materialFootprintSqft).toBeCloseTo((54 * (60 * 6.3 + 34 * 1.75)) / 144, 8);
+    expect(real.result.unitCost!).toBeGreaterThan(proxy.result.unitCost!);
+  });
+
+  it("machine occupancy and operator attention BOTH move with the real layout", () => {
+    const { nested, proxy, real } = nestedJob("100ml_wide", "chiron", 1000);
+    const occOld = (proxy.result.areas.ripLayoutSqft! * 1.444) / 60;
+    const occNew = (nested.areas.ripLayoutSqft! * 1.444) / 60;
+    expect(amountOf(real.result, "machine")).toBeCloseTo(occNew * EQUIP_RATE, 6);
+    expect(amountOf(real.result, "run_labor")).toBeCloseTo(
+      occNew * (DEFAULT_OPERATOR_ATTENTION_PCT / 100) * DEFAULT_OPERATOR_LABOR_RATE_PER_HOUR, 6,
+    );
+    // the two burdens share ONE resolved occupancy — they can never disagree
+    const ratio = amountOf(real.result, "run_labor") / amountOf(real.result, "machine");
+    expect(ratio).toBeCloseTo(2.5 / 8, 10);
+    expect(occNew).toBeGreaterThan(occOld);
+  });
+
+  it("REFERENCE ONLY: residual gaps after real nesting", () => {
+    const chiron = nestedJob("100ml_wide", "chiron", 1000);
+    const miron = nestedJob("100ml_tall", "miron", 1000);
+    // eslint-disable-next-line no-console
+    console.log(
+      "[2B gaps] chiron " + chiron.real.result.unitCost!.toFixed(4) + " vs 2.53 -> " + (2.53 - chiron.real.result.unitCost!).toFixed(4) +
+      " | miron " + miron.real.result.unitCost!.toFixed(4) + " vs 2.84 -> " + (2.84 - miron.real.result.unitCost!).toFixed(4),
+    );
+    // deliberately NOT asserted against the targets — the residual stays visible
+    expect(Number.isFinite(2.53 - chiron.real.result.unitCost!)).toBe(true);
+    expect(Number.isFinite(2.84 - miron.real.result.unitCost!)).toBe(true);
+  });
+
+  it("a blocked nest yields DRAFT_ONLY with a null unit cost — never a guess", () => {
+    const blocked = jarNestingAreas({
+      size: "100ml_wide", selection: SIDE_LID, productionQty: 1010,
+      machineKey: "roland-lg-640", loadedMediaWidthIn: 42, // unlisted roll
+    });
+    expect(blocked.areas.ripLayoutSqft).toBeNull();
+    const { result } = jarJob({ size: "100ml_wide", brand: "chiron", qty: 1000, areas: blocked.areas });
+    expect(result.status).toBe("DRAFT_ONLY");
+    expect(result.unitCost).toBeNull();
+    expect(result.blockers.join(" ")).toContain("MISSING_NESTING_MODEL");
   });
 });

@@ -11,6 +11,14 @@
 // path. That divergence is recorded in the Patch 2A audit and is intentional
 // until the owner decides which store wins.
 
+import {
+  computeNesting,
+  resolveNestingPolicy,
+  type NestingItem,
+  type NestingResult,
+  type NestingRun,
+} from "./nesting-engine.server";
+
 export const JAR_COST_INPUTS_VERSION = "17D.2-jar-cost-inputs";
 
 /* ------------------------------------------------------------------ *
@@ -302,4 +310,125 @@ export function resolveJarBlankCost(input: {
   const unitCost = variants[variant];
   if (unitCost == null) return { ok: false, reason: "MISSING_COST", message: `No verified standard-jar cost for ${size} ${variant}.` };
   return { ok: true, unitCost, tierMinQty: null, source: `Standard jar verified complete-set cost (${variant}).` };
+}
+
+/* ------------------------------------------------------------------ *
+ * Physical print runs + nesting (Patch 2B)
+ *
+ * SETUP GROUPING AND PHYSICAL-RUN GROUPING ARE DIFFERENT CONCEPTS.
+ *
+ *   setup grouping   side + lid = ONE artwork/design ($12.50 art, $2.00 print).
+ *                    An optional tamper is a SECOND design (+$10 art, no extra
+ *                    print setup). Unchanged by Patch 2B — see jarSetupCost().
+ *
+ *   physical runs    RUN 1 = side (+ optional tamper). RUN 2 = lid.
+ *                    Lid labels are a SEPARATE physical print run.
+ *
+ * Two physical runs do NOT create a second print-setup charge.
+ * ------------------------------------------------------------------ */
+
+export type JarPhysicalRunKey = "side-body-run" | "lid-run";
+
+/** Poseidon matte / gloss stock roll. Overrideable per job. */
+export const JAR_DEFAULT_MEDIA_WIDTH_IN = 54;
+
+/**
+ * Builds the physical runs for one jar job. Empty runs are omitted, so a
+ * lid-only job produces exactly one run.
+ */
+export function jarPhysicalRuns(size: JarSizeKey, selection: JarLabelSelection, productionQty: number): NestingRun[] {
+  const g = JAR_LABEL_GEOMETRY[size];
+  const qty = Math.max(0, Math.floor(productionQty));
+  const runs: NestingRun[] = [];
+
+  const bodyItems: NestingItem[] = [];
+  if (selection.side) {
+    bodyItems.push({
+      key: `${size}-side`, groupKey: "side", shapeType: "rect",
+      widthIn: g.side.widthIn, heightIn: g.side.heightIn, quantity: qty, allowRotate: true,
+    });
+  }
+  if (selection.tamper) {
+    bodyItems.push({
+      key: `${size}-tamper`, groupKey: "tamper", shapeType: "rect",
+      widthIn: g.tamper.widthIn, heightIn: g.tamper.heightIn, quantity: qty, allowRotate: true,
+    });
+  }
+  if (bodyItems.length) {
+    runs.push({ key: "side-body-run" satisfies JarPhysicalRunKey, label: "Run 1 — side body (+ tamper)", items: bodyItems });
+  }
+
+  if (selection.lid) {
+    const d = g.lid.diameterIn;
+    runs.push({
+      key: "lid-run" satisfies JarPhysicalRunKey,
+      label: "Run 2 — lid",
+      items: [{
+        key: `${size}-lid`, groupKey: "lid", shapeType: "circle_bbox",
+        // PHYSICAL PLACEMENT uses the diameter bounding box...
+        widthIn: d, heightIn: d, quantity: qty, allowRotate: true,
+        // ...while the real printed shape stays the circle, for honest utilisation.
+        shapeAreaSqIn: Math.PI * Math.pow(d / 2, 2),
+      }],
+    });
+  }
+
+  return runs;
+}
+
+export type JarNestingInput = {
+  size: JarSizeKey;
+  selection: JarLabelSelection;
+  productionQty: number;
+  machineKey: string;
+  loadedMediaWidthIn?: number;
+  /** Actual captured RIP Print Area_X for a historical job. Beats the default. */
+  actualSweptWidthIn?: number | null;
+};
+
+export type JarNestingAreas = {
+  inkableArtworkSqft: number;
+  ripLayoutSqft: number | null;
+  materialFootprintSqft: number;
+  ripLayoutBasis: string;
+};
+
+/**
+ * The three areas for one jar job, with ripLayoutSqft and materialFootprintSqft
+ * SUMMED ACROSS PHYSICAL RUNS. Feeds are never combined across runs.
+ *
+ * inkableArtworkSqft stays real printed shape geometry (circular lid = pi*r^2)
+ * and is NOT taken from the nesting bounding boxes.
+ *
+ * A blocked nest returns ripLayoutSqft: null, which makes the true-cost engine
+ * raise MISSING_NESTING_MODEL and return DRAFT_ONLY with a null unit cost —
+ * never a guessed width and never a silent number.
+ */
+export function jarNestingAreas(input: JarNestingInput): { areas: JarNestingAreas; nesting: NestingResult | null; blockers: string[] } {
+  const inkableArtworkSqft = (inkableArtworkSqInPerSet(input.size, input.selection) * input.productionQty) / 144;
+  const resolved = resolveNestingPolicy({
+    machineKey: input.machineKey,
+    loadedMediaWidthIn: input.loadedMediaWidthIn ?? JAR_DEFAULT_MEDIA_WIDTH_IN,
+    actualSweptWidthIn: input.actualSweptWidthIn ?? null,
+  });
+
+  if (!resolved.ok) {
+    return {
+      areas: { inkableArtworkSqft, ripLayoutSqft: null, materialFootprintSqft: 0, ripLayoutBasis: `Nesting blocked: ${resolved.message}` },
+      nesting: null,
+      blockers: [`${resolved.blocker}: ${resolved.message}`],
+    };
+  }
+
+  const nesting = computeNesting(jarPhysicalRuns(input.size, input.selection, input.productionQty), resolved.policy);
+  return {
+    areas: {
+      inkableArtworkSqft,
+      ripLayoutSqft: nesting.ripLayoutSqft,
+      materialFootprintSqft: nesting.materialFootprintSqft,
+      ripLayoutBasis: nesting.ripLayoutBasis,
+    },
+    nesting,
+    blockers: nesting.blockers,
+  };
 }

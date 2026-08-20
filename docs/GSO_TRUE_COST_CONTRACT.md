@@ -6,6 +6,9 @@ price is a separate concern and is never computed by this engine.
 Status: **implemented, wired to nothing.** `true-cost-engine.server.ts` is
 imported only by its test. No storefront, checkout, or pricing path can move.
 
+Layout is a separate contract: `GSO_NESTING_CONTRACT.md` (Patch 2B) defines how
+`ripLayoutSqft` and `materialFootprintSqft` are produced.
+
 ---
 
 ## 1. The ten components
@@ -231,10 +234,12 @@ The engine has **no** `materialWastePct`, `nestingWastePct` or `wasteFactor`
 field, and it never will. Physical media loss is not a percentage applied on
 top of an idealised area; it is the layout itself.
 
-The future deterministic nesting/layout engine computes actual consumed media —
-gutters, margins, unused roll width, row/column spacing, orientation/rotation
+The deterministic nesting/layout engine (Patch 2B,
+`app/lib/nesting-engine.server.ts`) computes actual consumed media — gutters,
+margins, unused roll width, row/column spacing, orientation/rotation
 inefficiency and feed length — and **that result IS `materialFootprintSqft`**.
-Adding a separate waste percentage on top of it would double-count.
+Adding a separate waste percentage on top of it would double-count. That engine
+carries no waste field of any kind and a test pins the absence.
 
 ```
 nesting engine  ──►  materialFootprintSqft   (actual consumed media)
@@ -245,36 +250,53 @@ nesting engine  ──►  materialFootprintSqft   (actual consumed media)
 policy (make 1010 to ship 1000) and must never be confused with physical
 nesting loss. The two are independent and are never multiplied together.
 
-Until the nesting engine exists, adapters supply a bounding-box approximation
-and label it, which forces `PROVISIONAL`.
+Families without a nesting adapter still supply a bounding-box approximation
+and label it, which forces `PROVISIONAL`. Jars no longer do.
+
+**Planned overage and nesting are also never combined.** Overage sets the
+production quantity, the nesting engine lays that quantity out, and the engine
+never re-applies the percentage to any area.
 
 ---
 
 ## 9. Known gaps (block a `VALID` result today)
 
-1. **No nesting model → no real `ripLayoutSqft`.** Tests pass the material
-   footprint as a *labelled proxy*, which forces `PROVISIONAL`. Machine recovery
-   AND operator attention are both approximate until a nesting model exists.
-2. **Operator attention 10% is provisional**, not measured per machine/profile.
-3. **`materialFootprintSqft` is still a bounding-box approximation.** It is
-   superseded by the same nesting engine as gap 1, not by a waste percentage —
-   see the note below.
+**Gaps 1 and 3 closed for jars in Patch 2B** — `app/lib/nesting-engine.server.ts`
+now supplies real `ripLayoutSqft` and `materialFootprintSqft`. See
+`GSO_NESTING_CONTRACT.md`. `true-cost-engine.server.ts` needed **no change**:
+the adapter fills `areas` and the engine consumes summed totals unaltered.
 
-Derived reference figures (1000 finished, Matte, heavy CMYK, side+lid, using the
-proxy above):
+1. ~~No nesting model~~ → **closed for jars.** A deterministic two-physical-run
+   layout (run 1 side + optional tamper, run 2 lid) reproduces the Mimaki
+   benchmark to +0.030% and 542/555 real Roland jobs within 5%. Families
+   without an adapter still pass a labelled proxy and stay `PROVISIONAL`.
+2. **Operator attention 10% is provisional**, not measured per machine/profile.
+3. ~~Bounding-box material footprint~~ → **closed for jars.**
+   `materialFootprintSqft` is now `loadedMediaWidthIn × feedLengthIn / 144` —
+   the unused web width is real consumed scrap, not a percentage.
+4. **Placement widths are provisional** — Mimaki `OWNER_APPROVED_PROVISIONAL`
+   (`min(media, 53.6in)`), Roland `PROVISIONAL_EMPIRICAL` (54in roll → 52.4in,
+   50in roll → 49.1in). Neither is supplier- or RIP-verified.
+5. **The residual is no longer explained by nesting** — see below.
+
+Derived reference figures (1000 finished, Matte, heavy CMYK, side+lid):
 
 | | Chiron 100 ml Wide | Miron 100 ml Tall |
 |---|---|---|
-| Derived unit cost (before attention) | $2.5008 | $2.8114 |
-| **Derived unit cost (with 10% attention)** | **$2.5095** | **$2.8210** |
+| Unit cost — proxy, before attention | $2.5008 | $2.8114 |
+| Unit cost — proxy, with 10% attention | $2.5095 | $2.8210 |
+| **Unit cost — REAL NESTING (2B)** | **$2.5113** | **$2.8225** |
 | Owner working target | ≈ $2.53 | ≈ $2.84 |
-| Residual gap | $0.0205 | $0.0190 |
+| **Residual gap** | **$0.0187** | **$0.0175** |
 
-Adding operator attention closed roughly a third of each residual and the two
-remain consistent with one another, which continues to point at a single
-shared cause rather than a per-family error. The targets are recorded as
-**reference only** and are deliberately not asserted in tests; closing what
-remains requires the deterministic nesting engine, not a plug figure.
+Real nesting moved the numbers by **+$0.001768** and **+$0.001472** per unit —
+it closed roughly 9% and 8% of the residuals, not the whole of them. The
+residual had been attributed to the missing nesting model; that attribution is
+now measured and mostly wrong. The two residuals remain close to one another,
+which still points at one shared cause rather than a per-family error, and that
+cause is **not yet identified**. The targets stay **reference only**, are
+deliberately not asserted in tests, and are never to be closed with a plug
+figure.
 
 ---
 
