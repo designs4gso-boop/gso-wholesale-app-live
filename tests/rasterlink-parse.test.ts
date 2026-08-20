@@ -193,3 +193,142 @@ describe("conservative matching", () => {
     expect(extractTicket("no ticket here")).toBe("");
   });
 });
+
+/* ================================================================== *
+ * 2C-1 — RASTERLINK NATIVE TIMESTAMP FORMAT (YYYYMMDD_HHMMSS)
+ *
+ * Every fixture below is the format the shop actually exports. Before this
+ * patch `new Date("20260601_231501")` was Invalid Date, so:
+ *   - cut-format rows were DROPPED ENTIRELY (no KEY_INKUSE column and no
+ *     parsable cut/vec stamp => neither side present => zero rows), and
+ *   - print rows imported with null startedAt/completedAt and 0 minutes.
+ * The pre-existing ISO-style fixtures above still pass — that path is kept.
+ * ================================================================== */
+
+describe("2C-1 RasterLink native timestamps (YYYYMMDD_HHMMSS)", () => {
+  // The real production cut CSV, byte-shaped as the shop exports it.
+  const NATIVE_CUT = `${CUT_HEADER}\n"GSO-77_drumstick_b.pdf","OK","20260601_163444","20260601_163448","20260601_231501","20260601_235058","65",""`;
+
+  it("CUT: a native-format row now produces a cut entry instead of ZERO rows", () => {
+    const rows = parseRasterlinkRows(NATIVE_CUT, "20260601_235058_1_OK_cut.csv");
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.kind).toBe("cut");
+    expect(row.status).toBe("cut:OK");
+    expect(row.startedAt).not.toBeNull();
+    expect(row.completedAt).not.toBeNull();
+    // 23:15:01 -> 23:50:58 = 35 min 57 s
+    expect(row.raw.cutMinutes).toBeCloseTo(35 + 57 / 60, 9);
+    expect(row.raw.vecMinutes).toBeCloseTo(4 / 60, 9); // 16:34:44 -> 16:34:48
+    expect(row.raw.arrangeCnt).toBe(65);
+    expect(row.inkMl).toBe(0);
+    expect(row.printMinutes).toBe(0);
+    expect(row.raw.inkBasis).toBe(INK_BASIS_CUT);
+    expect(row.jobTicket).toBe("GSO-77");
+  });
+
+  it("CUT: the stamp resolves to the exact LOCAL wall-clock time the shop recorded", () => {
+    const row = parseRasterlinkRows(NATIVE_CUT, "c.csv")[0];
+    const start = row.startedAt!;
+    expect(start.getFullYear()).toBe(2026);
+    expect(start.getMonth()).toBe(5); // June, 0-indexed
+    expect(start.getDate()).toBe(1);
+    expect(start.getHours()).toBe(23);
+    expect(start.getMinutes()).toBe(15);
+    expect(start.getSeconds()).toBe(1);
+    // startedAt falls back to VEC start only when CUT start is absent
+    expect(row.raw.cutStart).toBe(start.toISOString());
+  });
+
+  it("PRINT: native RIP stamps parse; EMPTY print stamps stay empty — no fabricated print time", () => {
+    // Exactly what the 538 production print files look like: RIP times
+    // populated, KEY_PRINT_S_TIME / KEY_PRINT_E_TIME blank.
+    const csv = `${PRINT_HEADER}\n"job_b.pdf","OK","${INKUSE}","20260601_163310","20260601_163317","","","40",""`;
+    const rows = parseRasterlinkRows(csv, "p.csv");
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.kind).toBe("print");
+    expect(row.raw.ripMinutes).toBeCloseTo(7 / 60, 9); // 16:33:10 -> 16:33:17
+    expect(row.startedAt).toBeNull();
+    expect(row.completedAt).toBeNull();
+    expect(row.printMinutes).toBe(0); // NEVER derived from RIP time
+    expect(row.raw.timingBasis).toBe("rip_only_no_print_times");
+    expect(row.inkMl).toBeCloseTo(0.168 * 40, 6); // ink still parses normally
+  });
+
+  it("PRINT: native print stamps parse when RasterLink does populate them", () => {
+    const csv = `${PRINT_HEADER}\n"job.pdf","OK","${INKUSE}","20260601_100000","20260601_100030","20260601_101500","20260601_104500","40",""`;
+    const row = parseRasterlinkRows(csv, "p.csv")[0];
+    expect(row.printMinutes).toBeCloseTo(30, 9); // 10:15 -> 10:45
+    expect(row.raw.timingBasis).toBe("print_times");
+  });
+
+  it("accepts the boundary stamps", () => {
+    const cases: Array<[string, string, number[]]> = [
+      ["20260101_000000", "20260101_000001", [2026, 0, 1, 0, 0, 0]],
+      ["20261231_235958", "20261231_235959", [2026, 11, 31, 23, 59, 58]],
+      ["20240229_120000", "20240229_120001", [2024, 1, 29, 12, 0, 0]], // leap day
+    ];
+    for (const [start, end, [y, mo, d, h, mi, s]] of cases) {
+      const row = parseRasterlinkRows(`${CUT_HEADER}\nj.pdf,OK,,,${start},${end},1,`, "c.csv")[0];
+      expect(row, start).toBeDefined();
+      const at = row.startedAt!;
+      expect([at.getFullYear(), at.getMonth(), at.getDate(), at.getHours(), at.getMinutes(), at.getSeconds()], start)
+        .toEqual([y, mo, d, h, mi, s]);
+    }
+  });
+
+  it("REJECTS malformed and impossible stamps rather than normalising them", () => {
+    // A cut row whose ONLY stamps are malformed has no cut side at all, and a
+    // cut CSV has no KEY_INKUSE column, so the row is correctly dropped.
+    for (const bad of [
+      "20260601",         // date only, no time part
+      "20260601-231501",  // wrong separator
+      "20261301_120000",  // month 13
+      "20260230_120000",  // 30 February — must NOT roll into March
+      "20260601_246000",  // hour 24, minute 60
+      "20260601_235960",  // second 60
+      "20250229_120000",  // 29 Feb in a non-leap year
+      "202606011_231501", // too many digits
+      "",                 // empty
+    ]) {
+      const rows = parseRasterlinkRows(`${CUT_HEADER}\nj.pdf,OK,,,${bad},${bad},1,`, "c.csv");
+      expect(rows, bad).toHaveLength(0);
+    }
+  });
+
+  it("a malformed CUT stamp does not fabricate a duration from the VEC stamps", () => {
+    const csv = `${CUT_HEADER}\nj.pdf,OK,20260601_163444,20260601_163448,20260230_120000,20260230_130000,65,`;
+    const row = parseRasterlinkRows(csv, "c.csv")[0];
+    expect(row.kind).toBe("cut");
+    expect(row.raw.cutMinutes).toBe(0); // impossible cut stamps -> no cut duration
+    expect(row.raw.cutStart).toBeNull();
+    expect(row.raw.vecMinutes).toBeCloseTo(4 / 60, 9);
+    expect(row.startedAt).not.toBeNull(); // falls back to VEC start, as before
+  });
+
+  it("the pre-existing ISO-style path is untouched", () => {
+    const csv = `${CUT_HEADER}\nGSO-77_job.pdf,Complete,2026/06/04 11:00:00,2026/06/04 11:02:00,2026/06/04 11:03:00,2026/06/04 11:10:00,12,OK`;
+    const row = parseRasterlinkRows(csv, "cut.csv")[0];
+    expect(row.raw.cutMinutes).toBeCloseTo(7, 6);
+    expect(row.raw.vecMinutes).toBeCloseTo(2, 6);
+  });
+
+  it("native and ISO forms of the same instant are identical", () => {
+    const native = parseRasterlinkRows(`${CUT_HEADER}\nj.pdf,OK,,,20260601_231501,20260601_235058,1,`, "c.csv")[0];
+    const iso = parseRasterlinkRows(`${CUT_HEADER}\nj.pdf,OK,,,2026-06-01 23:15:01,2026-06-01 23:50:58,1,`, "c.csv")[0];
+    expect(native.startedAt!.getTime()).toBe(iso.startedAt!.getTime());
+    expect(native.completedAt!.getTime()).toBe(iso.completedAt!.getTime());
+    expect(native.raw.cutMinutes).toBe(iso.raw.cutMinutes);
+  });
+
+  it("does NOT invent telemetry RasterLink never supplies", () => {
+    const row = parseRasterlinkRows(NATIVE_CUT, "c.csv")[0];
+    const raw = row.raw as Record<string, unknown>;
+    // no layout width, feed length, scan width or cut mode exists in either
+    // CSV variant — the parser must not conjure them
+    for (const absent of ["widthIn", "feedLengthIn", "scanWidthIn", "layoutSqft", "cutMode", "sqft"]) {
+      expect(absent in raw, absent).toBe(false);
+    }
+  });
+});

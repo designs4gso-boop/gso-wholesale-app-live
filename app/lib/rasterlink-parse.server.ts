@@ -114,9 +114,56 @@ export function parseJobInfoInkUsed(value: unknown): InkUse {
 
 // ---------- row building ----------
 
+// 2C-1: RasterLink writes its NATIVE stamps as YYYYMMDD_HHMMSS
+// ("20260601_231501"). `new Date()` cannot read that at all — it returns
+// Invalid Date — so before this fix every real production stamp resolved to
+// null. For a cut-format CSV that also meant the ROW was dropped entirely
+// (no KEY_INKUSE column, no parsable cut stamps -> neither side present), and
+// print rows imported with null timings. Parsed explicitly here; the previous
+// `new Date()` path is kept underneath for the ISO-style values that path
+// already accepted.
+const DAYS_PER_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
+  return DAYS_PER_MONTH[month - 1];
+}
+
+/**
+ * RasterLink native stamp: exactly 8 digits, "_", exactly 6 digits.
+ * Every component is range-checked and an impossible value is REJECTED, never
+ * normalised — `new Date(2026, 1, 30)` would silently roll 30 Feb into March.
+ * Returns a LOCAL-time Date, matching the convention below (see parseStamp).
+ */
+function parseRasterlinkNativeStamp(raw: string): Date | null {
+  const match = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(raw);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (year < 1970 || year > 9999) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(year, month)) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  return new Date(year, month - 1, day, hour, minute, second, 0);
+}
+
+/**
+ * TIMEZONE CONVENTION (unchanged by 2C-1): RIP stamps carry no offset, so they
+ * are naive SHOP-LOCAL times and are materialised as local-time Dates — the
+ * same behaviour `new Date("2026-06-01T23:15:01")` has always had here and in
+ * versaworks-parse.server.ts. No timezone policy exists anywhere in the repo
+ * and this patch does not introduce one. Durations are offset-invariant
+ * because both ends parse identically.
+ */
 function parseStamp(value: unknown): Date | null {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
+  const native = parseRasterlinkNativeStamp(raw);
+  if (native) return native;
   const d = new Date(raw.replace(/\//g, "-").replace(" ", "T"));
   return Number.isNaN(d.getTime()) ? null : d;
 }
