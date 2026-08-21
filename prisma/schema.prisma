@@ -1123,6 +1123,12 @@ model PrintLogEntry {
   printMinutes        Float     @default(0)
   startedAt           DateTime?
   completedAt         DateTime?
+  // 2C-2: RIP (spool/rasterise) window, promoted out of rawRow so it can be
+  // QUERIED. These are NOT print execution timing — startedAt/completedAt/
+  // printMinutes remain print-execution-only and are never derived from these.
+  // RasterLink print rows populate them; cut rows leave them null.
+  ripStartedAt        DateTime?
+  ripCompletedAt      DateTime?
   rawRow              String?
   createdAt           DateTime  @default(now())
 
@@ -1135,6 +1141,10 @@ model PrintLogEntry {
   @@index([jobTicket])
   @@index([sourceJobName])
   @@index([createdAt])
+  // Supports the RasterLink print-row event lookup added in 2C-2. sourceJobName
+  // is already indexed alone; this composite adds the discriminator the dedupe
+  // now filters on, so ONE new index covers the new query shape.
+  @@index([shop, printerSoftware, sourceJobName, ripStartedAt])
 }
 
 model PrintLogAutoImportSetting {

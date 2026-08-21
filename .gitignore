@@ -14,6 +14,19 @@ tools/gso-print-intake-config.json
 tools/gso-print-intake-agent-config.json
 tools/gso-roland-sync-config.json
 tools/gso-roland-sync.config.json
+# 2C-2: dated/suffixed BACKUPS of those configs carry the same live token
+# (e.g. gso-rasterlink-sync.config.pre-2c1.json). The rules above match exact
+# names only, and tools/*.bak does not match a .json backup.
+tools/gso-rasterlink-sync.config.*.json
+tools/gso-rasterlink-sync-config.*.json
+tools/gso-roland-sync.config.*.json
+tools/gso-roland-sync-config.*.json
+tools/gso-print-intake-config.*.json
+tools/gso-print-intake-agent-config.*.json
+# ...but the committed templates must stay tracked.
+!tools/gso-rasterlink-sync-config.example.json
+!tools/gso-roland-sync-config.example.json
+!tools/gso-print-intake-agent-config.example.json
 tools/*.bak
 dist
 build

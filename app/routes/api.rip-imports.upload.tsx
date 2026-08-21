@@ -203,7 +203,9 @@ export async function action({ request }: { request: Request }) {
     const ripNameIndex = await loadRipNameIndex(db, setting.shop);
 
     for (const entry of entries) {
-      const existing = await db.printLogEntry.findFirst({ where: rowDedupeWhere(setting.shop, entry) as any });
+      // 2C-2: importId scopes the lookup ONLY for rows with no strong event
+      // timestamp; rows carrying a RIP (or print) window still dedupe globally.
+      const existing = await db.printLogEntry.findFirst({ where: rowDedupeWhere(setting.shop, entry, importRecord.id) as any });
       if (existing) { skippedDuplicates += 1; continue; }
 
       const identity = await resolveRipIdentity(db, setting.shop, { jobName: entry.fileName, fileName: file.name }, { ripNameIndex });
@@ -231,6 +233,10 @@ export async function action({ request }: { request: Request }) {
           printMinutes: entry.printMinutes,
           startedAt: entry.startedAt,
           completedAt: entry.completedAt,
+          // 2C-2: RIP window promoted to queryable columns. rawRow keeps its
+          // own copy untouched, so nothing that already reads it changes.
+          ripStartedAt: entry.ripStartedAt,
+          ripCompletedAt: entry.ripCompletedAt,
           rawRow: JSON.stringify({
             ...entry.raw,
             resultKey: resultKeyOf(entry),

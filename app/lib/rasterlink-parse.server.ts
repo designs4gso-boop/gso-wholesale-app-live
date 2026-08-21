@@ -196,6 +196,13 @@ export type RasterlinkEntry = {
   status: string; // "print:<result>" / "cut:<result>" (kind is part of the natural key)
   startedAt: Date | null;
   completedAt: Date | null;
+  /**
+   * 2C-2: RIP (spool/rasterise) window. Print rows only — cut rows leave these
+   * null. NEVER copied into startedAt/completedAt/printMinutes: RIP time is not
+   * print execution time, and no print duration is ever derived from it.
+   */
+  ripStartedAt: Date | null;
+  ripCompletedAt: Date | null;
   printMinutes: number; // print rows only, and ONLY from print timestamps
   inkMl: number; // multiplied ESTIMATE (cc == ml); 0 when ink missing or cut row
   cmykInkMl: number;
@@ -248,6 +255,8 @@ export function parseRasterlinkRows(text: string, uploadFileName: string): Raste
         status: `print:${result || "unknown"}`,
         startedAt: printStart, // NEVER RIP time in the print slots
         completedAt: printEnd,
+        ripStartedAt: ripStart, // 2C-2: RIP window as first-class event identity
+        ripCompletedAt: ripEnd,
         printMinutes: minutesBetween(printStart, printEnd), // print duration only; RIP duration never counts
         inkMl: estimated ? cmyk + white + gloss : 0,
         cmykInkMl: estimated ? cmyk : 0,
@@ -280,6 +289,8 @@ export function parseRasterlinkRows(text: string, uploadFileName: string): Raste
         status: `cut:${result || "unknown"}`,
         startedAt: start,
         completedAt: end,
+        ripStartedAt: null, // cut rows carry no RIP window
+        ripCompletedAt: null,
         printMinutes: 0, // cut time is NOT print time; stored in raw until schema adds cut fields
         inkMl: 0,
         cmykInkMl: 0,
@@ -325,11 +336,53 @@ export function resultKeyOf(entry: RasterlinkEntry): string {
     .slice(0, 24);
 }
 
-// Natural-key WHERE clause for row-level duplicate detection on plain,
-// reliably queryable columns (sourceJobName is indexed; the print/cut kind
-// lives inside status). When both timestamps are null, inkMl joins the key so
-// distinct blank-time rows with different ink are not conflated.
-export function rowDedupeWhere(shop: string, entry: RasterlinkEntry): Record<string, unknown> {
+/**
+ * Does this row carry a timestamp that actually identifies the physical event?
+ *
+ * Cut rows: the cut/vector window (unchanged pre-2C-2 rule).
+ * Print rows: the print-execution window when RasterLink supplies one (it
+ * currently never does), otherwise the RIP window — which must be COMPLETE.
+ *
+ * A HALF window is not identity. One endpoint alone is far weaker, and a row
+ * holding only ripStartedAt would otherwise key globally against
+ * `ripCompletedAt: null`, which is also what an un-backfilled historical row
+ * looks like. Requiring both keeps those two cases apart. Production evidence
+ * supports the strict rule at zero cost: across all 165 parsed print rows and
+ * all 92 stored ones there is not a single partial RIP window (112 complete,
+ * 53 absent, 0 partial).
+ *
+ * Artwork NAME and ink are explicitly NOT identity — 2C-2A proved both repeat
+ * across genuinely distinct production runs.
+ */
+export function hasStrongEventIdentity(entry: RasterlinkEntry): boolean {
+  if (entry.kind === "cut") return Boolean(entry.startedAt || entry.completedAt);
+  if (entry.startedAt || entry.completedAt) return true; // print-execution window
+  return Boolean(entry.ripStartedAt && entry.ripCompletedAt); // RIP window: BOTH required
+}
+
+/**
+ * Natural-key WHERE clause for row-level duplicate detection on plain,
+ * reliably queryable columns (sourceJobName is indexed; the print/cut kind
+ * lives inside status).
+ *
+ * 2C-2 — two tiers, because a global key is only safe when the row can prove
+ * WHICH event it is:
+ *
+ *   STRONG identity  -> GLOBAL lookup. A print row keys on its RIP window, so
+ *                       the same artwork printed five times in one night stays
+ *                       five rows, while a byte-identical file replayed under a
+ *                       different name still collapses to one.
+ *   WEAK identity    -> lookup SCOPED TO THE CURRENT IMPORT. Identical rows
+ *                       inside one CSV still collapse, but two imports are
+ *                       never merged on artwork name alone.
+ *
+ * Before 2C-2 the weak case used the global key, and because RasterLink print
+ * rows have no print-execution stamps that degenerated to
+ * (sourceJobName, status) — which silently destroyed 18 real Batch-2 events.
+ *
+ * CUT rows are deliberately untouched: they already carry a real cut window.
+ */
+export function rowDedupeWhere(shop: string, entry: RasterlinkEntry, importId: string): Record<string, unknown> {
   const where: Record<string, unknown> = {
     shop,
     printerSoftware: RASTERLINK_SOURCE,
@@ -338,7 +391,26 @@ export function rowDedupeWhere(shop: string, entry: RasterlinkEntry): Record<str
     startedAt: entry.startedAt,
     completedAt: entry.completedAt,
   };
-  if (!entry.startedAt && !entry.completedAt) where.inkMl = entry.inkMl;
+
+  // Cut rows: pre-2C-2 behaviour, byte for byte.
+  if (entry.kind === "cut") {
+    if (!entry.startedAt && !entry.completedAt) where.inkMl = entry.inkMl;
+    return where;
+  }
+
+  // Print rows with a real event window -> global identity. A RIP window only
+  // joins the key when COMPLETE (see hasStrongEventIdentity).
+  if (hasStrongEventIdentity(entry)) {
+    if (entry.ripStartedAt && entry.ripCompletedAt) {
+      where.ripStartedAt = entry.ripStartedAt;
+      where.ripCompletedAt = entry.ripCompletedAt;
+    }
+    return where;
+  }
+
+  // No discriminating timestamp at all -> collapse only within this import.
+  where.importId = importId;
+  where.inkMl = entry.inkMl;
   return where;
 }
 
