@@ -18,6 +18,8 @@ import {
   type NestingResult,
   type NestingRun,
 } from "./nesting-engine.server";
+import { computeFinishing, type CutGeometryMap, type CutMode } from "./finishing-cost.server";
+import { type CostBasis } from "./true-cost-engine.server";
 
 export const JAR_COST_INPUTS_VERSION = "17D.2-jar-cost-inputs";
 
@@ -117,10 +119,33 @@ export const JAR_ART_SETUP_TAMPER_ADD = 10.0;
 /** $25/hr at 12.5 jobs/hr — once per job, not per design. */
 export const JAR_PRINT_SETUP_PER_JOB = 2.0;
 
-export function jarSetupCost(selection: JarLabelSelection): { art: number; print: number; total: number; designs: number } {
+/**
+ * Jar setup is genuinely MIXED and 2D-3C stamps it that way rather than
+ * flattening it to one basis:
+ *
+ *   art   PER_DESIGN — side+lid is ONE design; tamper is a SECOND (+$10).
+ *   print PER_JOB    — $2.00 once per job. Tamper adds no second print setup
+ *                     and the two physical runs (side/body, lid) do not
+ *                     either, so the amount moves with NEITHER design count
+ *                     nor copy count.
+ *
+ * These are the previously approved jar dollar amounts, unchanged. Only the
+ * basis metadata is added, and it is added to match the real arithmetic.
+ */
+export function jarSetupCost(selection: JarLabelSelection): {
+  art: number; print: number; total: number; designs: number;
+  artBasis: CostBasis; printBasis: CostBasis;
+} {
   const art = JAR_ART_SETUP_BASE + (selection.tamper ? JAR_ART_SETUP_TAMPER_ADD : 0);
   const designs = selection.tamper ? 2 : 1;
-  return { art, print: JAR_PRINT_SETUP_PER_JOB, total: art + JAR_PRINT_SETUP_PER_JOB, designs };
+  return {
+    art,
+    print: JAR_PRINT_SETUP_PER_JOB,
+    total: art + JAR_PRINT_SETUP_PER_JOB,
+    designs,
+    artBasis: "PER_DESIGN",
+    printBasis: "PER_JOB",
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -431,4 +456,58 @@ export function jarNestingAreas(input: JarNestingInput): { areas: JarNestingArea
     nesting,
     blockers: nesting.blockers,
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Finishing - cutting + weeding (Patch 2C-3A)
+ *
+ * GSO labels are cut INDIVIDUALLY - adjacent labels do not share a physical
+ * cut line - so jar side and tamper labels use SEPARATED_RECTANGLE
+ * (qty x perimeter), never a shared grid.
+ *
+ * NO OWNER CUTLINE EXISTS FOR JARS YET. The 4x5 bag benchmark proved artboard
+ * (4.00 x 5.00) and cutline (3.79 x 4.81) differ materially, so jar bands fall
+ * back to the ARTBOARD geometry and are flagged CUT_PATH_ESTIMATE_REQUIRED.
+ * A cutline is always smaller than its artboard, so this OVERSTATES jar
+ * cutting until the owner supplies real jar cutlines.
+ *
+ * LIDS are circles -> CONTOUR at qty x pi x diameter. Exact length, but no
+ * controlled contour benchmark exists, so the rate is borrowed and the job
+ * stays PROVISIONAL.
+ * ------------------------------------------------------------------ */
+
+/** CMYK-only jar work routes to the Mimaki; White/Gloss would route to Roland. */
+export const JAR_DEFAULT_CUT_MACHINE_KEY = "mimaki-ucjv300-130";
+export const JAR_DEFAULT_CUT_MODE: CutMode = "normal";
+
+/**
+ * Cut geometry per nesting band. Side and tamper are separated rectangles with
+ * NO owner cutline yet; the lid is a contour on its real diameter.
+ */
+export function jarCutGeometry(size: JarSizeKey): CutGeometryMap {
+  const g = JAR_LABEL_GEOMETRY[size];
+  return {
+    side: { model: "separated_rectangle", note: "Individually cut. No owner cutline supplied - artboard stands in and overstates." },
+    tamper: { model: "separated_rectangle", note: "Individually cut. No owner cutline supplied - artboard stands in and overstates." },
+    lid: { model: "contour", cutDiameterIn: g.lid.diameterIn, note: "Circular lid - contour path pi x diameter." },
+  };
+}
+
+export function jarFinishingStages(input: {
+  size: JarSizeKey;
+  nesting: NestingResult;
+  machineKey?: string;
+  cutMode?: CutMode;
+  cutGeometry?: CutGeometryMap;
+  requiresWeeding?: boolean;
+  requiresCutting?: boolean;
+}) {
+  return computeFinishing({
+    nesting: input.nesting,
+    machineKey: input.machineKey ?? JAR_DEFAULT_CUT_MACHINE_KEY,
+    cutMode: input.cutMode ?? JAR_DEFAULT_CUT_MODE,
+    cutGeometry: input.cutGeometry ?? jarCutGeometry(input.size),
+    requiresWeeding: input.requiresWeeding,
+    requiresCutting: input.requiresCutting,
+  });
 }

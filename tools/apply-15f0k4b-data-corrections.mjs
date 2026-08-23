@@ -6,8 +6,9 @@
 // Corrections (owner-approved in the 15F.0K.4A conflict audit + 4B task):
 //  1. Material "100ml Tall Miron Blank Jar + Lid" 2.86 -> 2.78 (align to the
 //     owner-approved 2026-07-17 VendorProduct ladder; VendorProduct untouched).
-//  2. Material "4x5 Blank Bag" 0 -> 0.09 (restore the verified 13.2.3 cost;
-//     the row was manually zeroed 2026-05-12; VendorProduct stays authority).
+//  2. Material "4x5 Blank Bag" 0 -> 0.09  *** RETIRED 2026-08-23 (2D-3A) ***
+//     Superseded by the owner-approved $0.11. The write is neutralised so an
+//     accidental re-run can never regress the current standard.
 //  3. Machines: costPerHour 5 -> 8 (owner-approved recovery rate) on both
 //     printers; rename the Roland record to "Roland TrueVIS LG-640".
 //  4. ownerConfig.pricing.minimumOrderTotals: stickers-labels 25 -> 45 via
@@ -50,25 +51,26 @@ async function main() {
     console.log("UPDATED Miron tall material -> 2.78");
   } else console.log("Miron tall material already 2.78 — skipped");
 
-  // ---- 2. 4x5 Blank Bag Material -> 0.09 ----
+  // ---- 2. 4x5 Blank Bag Material -> 0.09 ---- RETIRED 2026-08-23 (2D-3A)
+  //
+  // NEUTRALISED, NOT DELETED. This one-shot ran on 2026-07-26 and its job is
+  // done. The owner superseded the 4x5 blank on 2026-08-22: $0.09 -> $0.11
+  // (bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST). This script has no
+  // --apply guard, so an accidental re-run would have silently written the
+  // retired $0.09 straight back over the current standard. The write is
+  // therefore removed and replaced with a refusal that names the successor.
+  //
+  // Moving the Material row to $0.11 is a SEPARATE controlled follow-up and
+  // belongs in the Approved Cost Updates tool, which already seeds $0.11 —
+  // not in a historical correction script.
   const bagBefore = await db.material.findUnique({ where: { id: BAG_4X5_MATERIAL_ID } });
   if (!bagBefore) throw new Error("4x5 bag material not found — aborting.");
   console.log("BEFORE 4x5 bag material:", bagBefore.costPerUnit, bagBefore.purchaseCost, bagBefore.calculatedUnitCost);
-  if (bagBefore.costPerUnit !== 0.09) {
-    await db.material.update({
-      where: { id: BAG_4X5_MATERIAL_ID },
-      data: {
-        costPerUnit: 0.09,
-        purchaseCost: 0.09,
-        calculatedUnitCost: 0.09,
-        notes: "Restored to the verified 13.2.3 blank-bag cost (row was manually zeroed 2026-05-12). The VendorProduct preset:blank-4x5-bag remains the calculator authority. [15F.0K.4B]",
-      },
-    });
-    await db.materialCostHistory.create({
-      data: { shop: SHOP, materialId: BAG_4X5_MATERIAL_ID, oldCost: bagBefore.costPerUnit, newCost: 0.09, reason: "Restore verified 13.2.3 cost (15F.0K.4A conflict; applied 15F.0K.4B)", changedBy: ACTOR },
-    });
-    console.log("UPDATED 4x5 bag material -> 0.09");
-  } else console.log("4x5 bag material already 0.09 — skipped");
+  console.log(
+    "SKIPPED 4x5 bag material — correction #2 is RETIRED. The $0.09 it wrote was superseded " +
+    "2026-08-22 by the owner-approved $0.11. Use the Approved Cost Updates tool (which seeds " +
+    "$0.11) for any controlled change to this row; this script will never write $0.09 again.",
+  );
 
   // ---- 3. Machines: $8/hr + LG-640 rename ----
   for (const [id, label] of [[ROLAND_MACHINE_ID, "Roland"], [MIMAKI_MACHINE_ID, "Mimaki"]]) {

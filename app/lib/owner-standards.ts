@@ -26,11 +26,25 @@ export const BAG_APPLICATION_THROUGHPUT = {
 } as const;
 
 export const OWNER_STANDARDS = {
+  /**
+   * SUPERSEDED 2026-08-22 for the 4x5 bag process (Patch 2D-2).
+   *
+   * The canonical 4x5 bag application standard is now 10 SECONDS PER APPLIED
+   * SIDE at $20/hr — $0.0555555556 per side, $0.1111111111 for front+back —
+   * and it lives in `bag-cost-inputs.server.ts` as
+   * BAG_APPLICATION_SECONDS_PER_SIDE. Canonical bag costing reads that, never
+   * this entry.
+   *
+   * The numeric value here is deliberately left UNCHANGED so the legacy
+   * calculator path (calculator-emergency / product-driven-costing) keeps
+   * behaving identically until Patch 2D-4 replaces it. It is no longer an
+   * owner-verified canonical rate — see LEGACY_CONFLICTING_RATES below.
+   */
   bagApplicationPerLabel4x5: {
-    value: 20 / 256, // $0.078125
-    unit: "$ per applied label (4x5 sticker bag)",
-    basis: "$20/hour at 256 LABELS/hour (labels, not bags — front+back = 2 labels/bag) — owner-confirmed 2026-08-09 (15G.2A) reaffirming the 2026-07-24 standard. NORMAL trained-operator throughput; this is the ONLY rate canonical quoting uses.",
-    status: "owner_verified",
+    value: 20 / 256, // $0.078125 — LEGACY PATH ONLY
+    unit: "$ per applied label (4x5 sticker bag) — SUPERSEDED, legacy calculator only",
+    basis: "$20/hour at 256 LABELS/hour — owner-confirmed 2026-08-09 (15G.2A). SUPERSEDED 2026-08-22 by 10 seconds per applied side ($0.0555555556/side). Retained unchanged ONLY so the legacy calculator path does not silently shift before Patch 2D-4; canonical bag costing does not read it.",
+    status: "provisional",
   } as OwnerStandard,
   // 15G.2A: conservative / new-operator PLANNING REFERENCE only. Canonical
   // quoting NEVER uses this rate — it exists for capacity planning and
@@ -100,6 +114,17 @@ export const OWNER_STANDARDS = {
 // the product-driven calculator may read these, and tests pin that the
 // current standards win wherever both exist.
 export const LEGACY_CONFLICTING_RATES = {
+  // 2D-2: both retired on 2026-08-22. Neither may be read by canonical costing.
+  bag4x5ApplicationPer256Hour: {
+    value: 20 / 256, // $0.078125/label, $0.15625 front+back
+    location: "OWNER_STANDARDS.bagApplicationPerLabel4x5 (legacy calculator path only)",
+    supersededBy: "bag-cost-inputs.server.ts BAG_APPLICATION_SECONDS_PER_SIDE = 10 seconds per applied side at $20/hr = $0.0555555556/side, $0.1111111111 front+back (owner 2026-08-22).",
+  },
+  bag4x5Blank009: {
+    value: 0.09,
+    location: "production VendorProduct 'preset:blank-4x5-bag' (defaultUnitCost 0.09) and tools/apply-15f0k4b-data-corrections.mjs",
+    supersededBy: "bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST = $0.11 (owner 2026-08-22). approved-cost-updates.server.ts now seeds $0.11; a controlled run of that tool is still required to move the production row.",
+  },
   bag4x5PerSideLegacy: {
     value: 20 / 180, // $0.1111 — WIRED_LABOR.bag4x5PerSide (13A.3 era)
     location: "app/lib/cost-calculator.server.ts WIRED_LABOR.bag4x5PerSide (legacy calculator only)",

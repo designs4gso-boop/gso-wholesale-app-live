@@ -200,7 +200,9 @@ describe("approved cost updates (13.2.2)", () => {
       [1000, 0.7138], [2500, 0.4744], [5000, 0.4029], [7500, 0.3458], [10000, 0.3117],
     ]);
     const bags = APPROVED_COST_TRUTH.filter((item) => item.key.startsWith("bag-"));
-    expect(bags.map((bag) => bag.flatCost)).toEqual([0.09, 0.1, 1.0]);
+    // 2D-2: the 4x5 blank was superseded 2026-08-22, $0.09 -> $0.11.
+    // 4x6 and 14x16 are unchanged and keep the 2026-07-17 marker.
+    expect(bags.map((bag) => bag.flatCost)).toEqual([0.11, 0.1, 1.0]);
     expect(APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x6x2-pouch")!.policy).toBe("do_not_update");
     expect(APPROVED_COST_TRUTH.find((item) => item.key === "miron-black-metal-lids")!.policy).toBe("do_not_update");
     expect(APPROVED_COST_TRUTH.filter((item) => item.key.startsWith("template-")).every((item) => item.policy === "manual_review")).toBe(true);

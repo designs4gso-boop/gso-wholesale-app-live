@@ -26,6 +26,7 @@ import {
   resolveJarBlankCost,
   JAR_DEFAULT_MEDIA_WIDTH_IN,
   jarNestingAreas,
+  jarFinishingStages,
   type JarLabelSelection,
   type JarSizeKey,
 } from "../app/lib/jar-cost-inputs.server";
@@ -36,6 +37,7 @@ import {
   computeTrueJobCost,
   type TrueCostInput,
 } from "../app/lib/true-cost-engine.server";
+import { weedingPagesForRun } from "../app/lib/finishing-cost.server";
 import { APPROVED_ROLL_COSTS } from "../app/lib/approved-cost-updates.server";
 import { CANONICAL_INK_RATES } from "../app/lib/ink-rates-shared";
 import type { CalibrationRecord } from "../app/lib/machine-calibration.server";
@@ -83,6 +85,8 @@ function jarJob(opts: {
   variant?: "clear" | "black_white";
   /** Patch 2B: real nesting areas in place of the bounding-box proxy. */
   areas?: TrueCostInput["areas"];
+  /** Patch 2C-3: cutting + weeding stages. */
+  finishingStages?: TrueCostInput["finishingStages"];
 }) {
   const selection = opts.selection ?? SIDE_LID;
   const production = productionQtyFor(opts.qty);
@@ -119,6 +123,7 @@ function jarJob(opts: {
     equipmentRatePerHour: EQUIP_RATE,
     packout: packoutFor(opts.size, opts.qty),
     freight: jarFreightPerUnit(opts.brand, opts.size),
+    ...(opts.finishingStages ? { finishingStages: opts.finishingStages } : {}),
   };
   return { input, result: computeTrueJobCost(input) };
 }
@@ -887,5 +892,145 @@ describe("11. Patch 2B — deterministic nesting, two physical runs", () => {
     expect(result.status).toBe("DRAFT_ONLY");
     expect(result.unitCost).toBeNull();
     expect(result.blockers.join(" ")).toContain("MISSING_NESTING_MODEL");
+  });
+});
+
+/* ================================================================== *
+ * 12. PATCH 2C-3 — CUTTING + WEEDING ON THE JAR DIAGNOSTICS
+ *
+ * Both physical runs are weeded (owner policy, not shape geometry). The lid
+ * run cuts on a CONTOUR, for which no controlled benchmark exists, so the
+ * cutting line prices numerically but stays PROVISIONAL rather than pretending
+ * the grid rate was measured for circles.
+ * ================================================================== */
+
+describe("12. Patch 2C-3 — cutting + weeding", () => {
+  function finishedJob(size: JarSizeKey, brand: "chiron" | "miron", qty: number, selection: JarLabelSelection = SIDE_LID) {
+    const production = productionQtyFor(qty);
+    const nested = jarNestingAreas({
+      size, selection, productionQty: production,
+      machineKey: MIMAKI_KEY, loadedMediaWidthIn: JAR_DEFAULT_MEDIA_WIDTH_IN,
+    });
+    const finishing = jarFinishingStages({ size, nesting: nested.nesting! });
+    const without = jarJob({ size, brand, qty, selection, areas: nested.areas });
+    const withFin = jarJob({ size, brand, qty, selection, areas: nested.areas, finishingStages: finishing.stages });
+    return { nested, finishing, without, withFin };
+  }
+
+  it("weeding: 9 pages across the two runs = $12.00 on BOTH jar families", () => {
+    for (const [size, brand] of [["100ml_wide", "chiron"], ["100ml_tall", "miron"]] as const) {
+      const { finishing } = finishedJob(size, brand, 1000);
+      expect(finishing.weedingPages, size).toBe(9);
+      expect(finishing.weedingCost, size).toBeCloseTo(12.0, 10);
+    }
+  });
+
+  it("weeding pages are rounded PER RUN and summed — 7 + 2, never ceil(combined)", () => {
+    const { nested, finishing } = finishedJob("100ml_wide", "chiron", 1000);
+    const [side, lid] = nested.nesting!.runs;
+    expect(side.feedLengthIn).toBeCloseTo(330.2, 6);
+    expect(lid.feedLengthIn).toBeCloseTo(70.3, 6);
+    expect(weedingPagesForRun(side.feedLengthIn)).toBe(7);
+    expect(weedingPagesForRun(lid.feedLengthIn)).toBe(2);
+    expect(finishing.weedingPages).toBe(9);
+    expect(Math.ceil((side.feedLengthIn + lid.feedLengthIn) / 54)).toBe(8); // the wrong answer
+  });
+
+  it("the Miron side run sits exactly on a page boundary: 378in -> 7 pages", () => {
+    const { nested } = finishedJob("100ml_tall", "miron", 1000);
+    expect(nested.nesting!.runs[0].feedLengthIn).toBeCloseTo(378, 10);
+    expect(weedingPagesForRun(378)).toBe(7);
+  });
+
+  it("cutting posts TWO separate lines in the right categories, no cut setup", () => {
+    const { withFin } = finishedJob("100ml_wide", "chiron", 1000);
+    const eq = withFin.result.lines.find((l) => l.key === "cutting_machine")!;
+    const at = withFin.result.lines.find((l) => l.key === "cutting_attention")!;
+    expect(eq.category).toBe("machine_recovery");
+    expect(at.category).toBe("run_labor");
+    // 2C-3B: jars have no owner cutline, so both lines are BLOCKED at 0
+    expect(eq.amount).toBe(0);
+    expect(at.amount).toBe(0);
+    expect(eq.blocker).toContain("CUTLINE_GEOMETRY_REQUIRED");
+    expect(at.blocker).toContain("CUTLINE_GEOMETRY_REQUIRED");
+    // setup is untouched by 2C-3
+    expect(withFin.result.totals.setup_labor).toBeCloseTo(JAR_ART_SETUP_BASE + JAR_PRINT_SETUP_PER_JOB, 10);
+    expect(withFin.result.lines.some((l) => /cut.*setup|setup.*cut/i.test(l.key))).toBe(false);
+  });
+
+  it("2C-3B: the 2.5/8 split still holds on the DIAGNOSTIC preview", () => {
+    const { finishing } = finishedJob("100ml_wide", "chiron", 1000);
+    // the preview numbers are computed but never posted
+    expect(finishing.cutPathIsDiagnosticOnly).toBe(true);
+    const eq = finishing.stages.find((s) => s.key === "cutting_machine")!;
+    expect(eq.note).toMatch(/DIAGNOSTIC ESTIMATE ONLY/);
+    expect(eq.amount).toBe(0);
+  });
+
+  it("2C-3B: no jar cutline exists, so the job is DRAFT_ONLY with CUTLINE_GEOMETRY_REQUIRED", () => {
+    const { finishing, withFin } = finishedJob("100ml_wide", "chiron", 1000);
+    expect(finishing.reasons).toContain("CUTLINE_GEOMETRY_REQUIRED");
+    // only the SIDE lacks geometry — the lid's diameter is known, it is the
+    // contour RATE that is still borrowed
+    expect(finishing.cutlineMissingBands).toEqual(["side"]);
+    expect(withFin.result.status).toBe("DRAFT_ONLY");
+    expect(withFin.result.unitCost).toBeNull(); // a blocked job never publishes a per-unit number
+    expect(withFin.result.blockers.join(" ")).toMatch(/CUTLINE_GEOMETRY_REQUIRED/);
+    // side is a separated rectangle with no cutline; lid is a contour whose
+    // DIAMETER is known but whose contour RATE is still borrowed
+    const bands = finishing.runs.flatMap((r) => r.bands);
+    expect(bands.find((b) => b.groupKey === "side")!.model).toBe("separated_rectangle");
+    expect(bands.find((b) => b.groupKey === "side")!.cutlineKnown).toBe(false);
+    expect(bands.find((b) => b.groupKey === "side")!.estimateReason).toMatch(/ARTBOARD/);
+    expect(bands.find((b) => b.groupKey === "lid")!.model).toBe("contour");
+    expect(bands.find((b) => b.groupKey === "lid")!.cutlineKnown).toBe(true); // diameter supplied
+    expect(bands.find((b) => b.groupKey === "lid")!.estimateReason).toMatch(/contour/);
+  });
+
+  it("adding finishing disturbs NOTHING else — every prior line is identical", () => {
+    for (const [size, brand] of [["100ml_wide", "chiron"], ["100ml_tall", "miron"]] as const) {
+      const { without, withFin } = finishedJob(size, brand, 1000);
+      for (const key of ["blank_sets", "print_media", "ink", "art_setup", "print_setup", "application", "packout", "inbound_freight", "machine", "run_labor"]) {
+        const a = without.result.lines.find((l) => l.key === key)?.amount ?? 0;
+        const b = withFin.result.lines.find((l) => l.key === key)?.amount ?? 0;
+        expect(b, `${size} ${key}`).toBeCloseTo(a, 10);
+      }
+      expect(withFin.result.totals.materials).toBeCloseTo(without.result.totals.materials, 10);
+      expect(withFin.result.totals.ink).toBeCloseTo(without.result.totals.ink, 10);
+      expect(withFin.result.totals.setup_labor).toBeCloseTo(without.result.totals.setup_labor, 10);
+      expect(withFin.result.totals.inbound_freight).toBeCloseTo(without.result.totals.inbound_freight, 10);
+      expect(withFin.result.totals.packout).toBeCloseTo(without.result.totals.packout, 10);
+    }
+  });
+
+  it("REFERENCE ONLY: jar unit cost with cutting + weeding", () => {
+    const chiron = finishedJob("100ml_wide", "chiron", 1000);
+    const miron = finishedJob("100ml_tall", "miron", 1000);
+    for (const [name, j] of [["chiron", chiron], ["miron", miron]] as const) {
+      const f = j.finishing;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[2C-3B ${name}] status ${j.withFin.result.status} unitCost ${j.withFin.result.unitCost}` +
+        `  | DIAGNOSTIC cutPath ${f.cutPathIn.toFixed(1)}in (artboard) ${f.cutMinutes ?? "blocked"}` +
+        `  | weeding ${f.weedingPages}pg $${f.weedingCost.toFixed(2)} (POSTED)` +
+        `  | pre-2C-3 unit ${j.without.result.unitCost!.toFixed(6)}` +
+        `  | reasons ${f.reasons.join(",")}`,
+      );
+    }
+    // 2C-3B: a jar job is NOT quote-ready until real cutlines exist
+    expect(chiron.withFin.result.status).toBe("DRAFT_ONLY");
+    expect(miron.withFin.result.status).toBe("DRAFT_ONLY");
+    expect(chiron.withFin.result.unitCost).toBeNull();
+    expect(miron.withFin.result.unitCost).toBeNull();
+  });
+
+  it("requiresWeeding=false removes weeding without touching cutting", () => {
+    const production = productionQtyFor(1000);
+    const nested = jarNestingAreas({ size: "100ml_wide", selection: SIDE_LID, productionQty: production, machineKey: MIMAKI_KEY, loadedMediaWidthIn: JAR_DEFAULT_MEDIA_WIDTH_IN });
+    const on = jarFinishingStages({ size: "100ml_wide", nesting: nested.nesting! });
+    const off = jarFinishingStages({ size: "100ml_wide", nesting: nested.nesting!, requiresWeeding: false });
+    expect(off.weedingCost).toBe(0);
+    expect(off.weedingPages).toBe(0);
+    expect(off.cutMinutes).toBeCloseTo(on.cutMinutes!, 12);
   });
 });

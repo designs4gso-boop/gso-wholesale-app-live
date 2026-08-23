@@ -66,6 +66,47 @@ export type CostCategory =
   | "inbound_freight"
   | "outside_costs";
 
+/* ------------------------------------------------------------------ *
+ * Cost basis — the 2D-3B owner rule, made explicit and testable.
+ *
+ * ANY cost classified as SETUP is an EVENT-based fixed cost. It is charged
+ * per job / per design, and it must NEVER be multiplied by copy quantity
+ * simply because more copies are produced. Production costs legitimately
+ * scale with physical output.
+ *
+ * The engine already enforced this STRUCTURALLY — `input.setup` carries flat
+ * dollar amounts that are summed exactly once, and each quantity-scaled
+ * component derives its own multiplier locally — so nothing is re-plumbed
+ * here. What was missing was a way to STATE the rule and assert it, which is
+ * what this vocabulary and the per-line `basis` stamp provide.
+ *
+ * Quantity-INDEPENDENT: PER_JOB, PER_DESIGN.
+ * Quantity-SCALED:      PER_UNIT, PER_APPLICATION, PER_AREA, PER_CUT_PATH.
+ * PER_RUN is event-based but a run count is a job-structure fact, not a copy
+ * count, so it is deliberately NOT asserted as quantity-independent.
+ * ------------------------------------------------------------------ */
+export type CostBasis =
+  | "PER_JOB"
+  | "PER_DESIGN"
+  | "PER_RUN"
+  | "PER_UNIT"
+  | "PER_APPLICATION"
+  | "PER_AREA"
+  | "PER_CUT_PATH";
+
+/** Bases that copy quantity may never multiply. This IS the setup invariant. */
+export const QUANTITY_INDEPENDENT_BASES = ["PER_JOB", "PER_DESIGN"] as const;
+
+/** Bases that legitimately scale with physical production. */
+export const QUANTITY_SCALED_BASES = ["PER_UNIT", "PER_APPLICATION", "PER_AREA", "PER_CUT_PATH"] as const;
+
+export function isQuantityIndependentBasis(basis: CostBasis | undefined): boolean {
+  return basis != null && (QUANTITY_INDEPENDENT_BASES as readonly string[]).includes(basis);
+}
+
+/** Every setup component is charged per design/setup event, never per copy. */
+export const SETUP_BASIS: CostBasis = "PER_DESIGN";
+
 /** VALID = every input verified. PROVISIONAL = numeric but a basis is provisional. DRAFT_ONLY = blocked. */
 export type TrueCostStatus = "VALID" | "PROVISIONAL" | "DRAFT_ONLY";
 
@@ -74,6 +115,12 @@ export type TrueCostLine = {
   category: CostCategory;
   label: string;
   amount: number;
+  /**
+   * What this line is charged ON. Lines stamped with a quantity-independent
+   * basis must hold the SAME amount at any copy quantity — tests pin that.
+   * Left undefined where only the adapter can classify the number it supplied.
+   */
+  basis?: CostBasis;
   formula?: string;
   note?: string;
   /** Set when this line could not be computed — always blocks a VALID result. */
@@ -152,7 +199,24 @@ export type TrueCostInput = {
    * one per SKU, or thirteen for a 13-design label job. The engine only sums
    * what it is given and never assumes one setup per job.
    */
-  setup: { art: number; print: number; specialty?: number; groups: number; note?: string };
+  setup: {
+    art: number;
+    print: number;
+    specialty?: number;
+    groups: number;
+    note?: string;
+    /**
+     * 2D-3C: each setup COMPONENT declares its own basis, because a family's
+     * setup object is genuinely mixed. Jars, for example, charge art per
+     * DESIGN (side+lid = one design, tamper = a second) but print once per
+     * JOB — two physical runs do not create a second print setup. Stamping
+     * that whole object PER_DESIGN would describe arithmetic that does not
+     * happen. Default PER_DESIGN, which is what bags, banners and labels use.
+     */
+    artBasis?: CostBasis;
+    printBasis?: CostBasis;
+    specialtyBasis?: CostBasis;
+  };
 
   /**
    * Run labor.
@@ -193,7 +257,14 @@ export type TrueCostInput = {
    * the accounting, the status handling and the reason codes. Adding a stage
    * never requires a second cost engine.
    */
-  finishingStages?: Array<{ key: string; label: string; amount: number; note?: string; provisional?: string; blocker?: string }>;
+  /**
+   * Extra stages (cutting, weeding, hemming, …). They land in
+   * `finishing_application` unless the adapter names another category — 2C-3
+   * needs cutting occupancy to post as machine_recovery and its operator
+   * attention as run_labor, so those two burdens stay separately adjustable
+   * exactly like the printing ones, instead of being buried in finishing.
+   */
+  finishingStages?: Array<{ key: string; label: string; amount: number; category?: CostCategory; basis?: CostBasis; formula?: string; note?: string; provisional?: string; blocker?: string }>;
 
   outsideCosts?: Array<{ label: string; amount: number }>;
 };
@@ -225,6 +296,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
     lines.push({
       key: "blank_sets",
       category: "materials",
+      basis: "PER_UNIT",
       label: `${input.blank.label} — ${production} set(s)`,
       amount: input.blank.unitCost * production,
       formula: `${production} x $${input.blank.unitCost.toFixed(4)}`,
@@ -245,6 +317,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
     lines.push({
       key: "print_media",
       category: "materials",
+      basis: "PER_AREA",
       label: `${input.material.name} — ${input.areas.materialFootprintSqft.toFixed(2)} sqft (material footprint)`,
       amount: input.material.costPerSqft * input.areas.materialFootprintSqft,
       formula: `${input.areas.materialFootprintSqft.toFixed(4)} sqft x $${input.material.costPerSqft.toFixed(6)}/sqft`,
@@ -294,6 +367,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
       lines.push({
         key: "ink",
         category: "ink",
+        basis: "PER_AREA",
         label: `${input.calibration.inkMode} ink — ${ml.inkMl.toFixed(2)} mL`,
         amount: ml.inkMl * input.inkCostPerMl,
         formula: `${ml.areaSqft.toFixed(4)} sqft (${ml.areaBasis}) x ${ml.coveragePct}% x ${ml.mlPerSqftPerPass} mL/sqft x ${ml.passCount} pass = ${ml.inkMl.toFixed(4)} mL x $${input.inkCostPerMl.toFixed(7)}/mL`,
@@ -306,6 +380,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   lines.push({
     key: "art_setup",
     category: "setup_labor",
+    basis: input.setup.artBasis ?? SETUP_BASIS,
     label: `Art setup — ${input.setup.groups} setup group(s)`,
     amount: input.setup.art,
     note: input.setup.note,
@@ -313,6 +388,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   lines.push({
     key: "print_setup",
     category: "setup_labor",
+    basis: input.setup.printBasis ?? SETUP_BASIS,
     label: "Print setup",
     amount: input.setup.print,
   });
@@ -320,6 +396,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
     lines.push({
       key: "specialty_setup",
       category: "setup_labor",
+      basis: input.setup.specialtyBasis ?? SETUP_BASIS,
       label: "Specialty setup (e.g. gloss/white mask preparation)",
       amount: input.setup.specialty,
     });
@@ -381,6 +458,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
       lines.push({
         key: "run_labor",
         category: "run_labor",
+        basis: "PER_AREA",
         label: `Operator attention — ${pct}% of ${occupancyHours.toFixed(3)} machine hr @ $${rate}/hr`,
         amount: attentionHours * rate,
         formula: `${occupancyHours.toFixed(4)} machine hr x ${pct}% x $${rate}/hr = ${attentionHours.toFixed(4)} labor hr`,
@@ -409,6 +487,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   lines.push({
     key: "application",
     category: "finishing_application",
+    basis: "PER_APPLICATION",
     label: `Application labor — ${finished} finished unit(s)`,
     amount: appPerUnit * finished,
     formula: appFormula,
@@ -419,9 +498,11 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   for (const stage of input.finishingStages || []) {
     lines.push({
       key: stage.key,
-      category: "finishing_application",
+      category: stage.category ?? "finishing_application",
+      basis: stage.basis,
       label: stage.label,
       amount: stage.blocker ? 0 : stage.amount,
+      formula: stage.formula,
       note: stage.note,
       provisional: stage.provisional,
       blocker: stage.blocker,
@@ -443,6 +524,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
     lines.push({
       key: "machine",
       category: "machine_recovery",
+      basis: "PER_AREA",
       label: `Machine recovery — ${occupancyMinutes.toFixed(1)} min`,
       amount: (occupancyMinutes / 60) * input.equipmentRatePerHour,
       formula: `${occupancyDetail.areaSqft.toFixed(4)} sqft (${occupancyDetail.areaBasis}) x ${occupancyDetail.minutesPerSqft} min/sqft x ${occupancyDetail.passCount} pass / 60 x $${input.equipmentRatePerHour}/hr`,
@@ -457,6 +539,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   lines.push({
     key: "planned_overage",
     category: "planned_overage",
+    basis: "PER_JOB",
     label: `Planned overage ${input.overagePct}% — ${finished} finished -> ${production} produced`,
     amount: 0,
     note: "Overage is applied by producing more units: blanks, media, ink and inbound freight already price at production quantity. It is deliberately never a separate charge, so nothing is double-counted.",
@@ -470,6 +553,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   lines.push({
     key: "packout",
     category: "packout",
+    basis: "PER_UNIT",
     label: `Packout — ${packBoxes} box(es) @ ${pk.unitsPerBox}/box`,
     amount: packCost,
     formula: `ceil(${finished} / ${pk.unitsPerBox}) x $${packPerBox.toFixed(2)}/box`,
@@ -489,6 +573,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
     lines.push({
       key: "inbound_freight",
       category: "inbound_freight",
+      basis: "PER_UNIT",
       label: `Inbound freight — ${production} production unit(s)`,
       amount: input.freight.perUnit * production,
       formula: `${production} x $${input.freight.perUnit.toFixed(6)}/unit`,
