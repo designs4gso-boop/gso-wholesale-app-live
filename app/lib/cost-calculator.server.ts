@@ -4,6 +4,7 @@ import {
   percentToDivisor,
   safeNumber,
 } from "./recipe-pricing.server";
+import { OWNER_STANDARDS } from "./owner-standards";
 
 // Pure math for the Cost Calculator (estimate-only page). Extracted in 12B.1a
 // so the numbers are unit-testable and shared with the engine's helpers.
@@ -167,19 +168,35 @@ export function blankItemCostQty(quantity: number, wastePct: number) {
 // weeding, and packout keep their legacy calculator logic (no cut-length,
 // sheet-count, or packout-unit basis exists yet — review-needed). Used by the
 // Cost Calculator route only; quotes/pricing engine do not import these.
+/**
+ * 2D-4 DUPLICATE-AUTHORITY CLEANUP.
+ *
+ * Every key whose value already equalled an OWNER_STANDARDS entry now READS
+ * that entry instead of re-typing the arithmetic, so an owner edit to the
+ * registry reaches this const instead of silently missing it. NO NUMBER
+ * CHANGES — this is a sourcing fix, not a repricing.
+ *
+ * Two keys deliberately keep a literal because the registry has no equal
+ * entry, and each says why:
+ *   bag4x5PerSide         legacy-only $0.1111 (20/180). Quarantined and
+ *                         numerically DIFFERENT from the registry's 4x5
+ *                         standard; canonical bag costing never reads it.
+ *   glossWhiteSetupPerJob $8.3333 PER JOB. The registry's nearest entry,
+ *                         glossLayerSetupPerDesign, is $6.25 PER DESIGN — a
+ *                         different amount on a different basis, so it is not
+ *                         a substitute and the conflict is left visible.
+ */
 export const WIRED_LABOR = {
-  jarPerApplication: 20 / 100, // $0.20 per jar/application
-  // LEGACY-CONFLICTING (15B): $0.1111 predates the owner-authoritative 4x5
-  // standard ($20/hr at 256 labels/hr = $0.078125 = OWNER_STANDARDS.
-  // bagApplicationPerLabel4x5). Used ONLY by the legacy calculator fallback —
-  // the product-driven engine resolves 4x5 via bagApplicationRateFor/OWNER_LABOR
-  // and must never read this value.
+  jarPerApplication: OWNER_STANDARDS.jarApplicationPerLabel.value, // $0.20
+  // LEGACY-CONFLICTING (15B): predates the owner-authoritative 4x5 standard.
+  // Used ONLY by the legacy calculator fallback — the product-driven engine
+  // resolves 4x5 via bagApplicationRateFor/OWNER_LABOR and must never read it.
   bag4x5PerSide: 20 / 180, // $0.1111 per side/application (legacy fallback only)
-  bag14x16PerSide: 20 / 20, // $1.00 per side/application
-  artSetupPerDesign: 25 / 3, // $8.3333 per design
-  printSetupPerDesign: 25 / 25, // $1.00 per design
-  designSetupPerDesign: 25 / 3 + 25 / 25, // art + print = $9.3333 per design
-  glossWhiteSetupPerJob: 25 / 3, // $8.3333 per setup (labor only)
+  bag14x16PerSide: OWNER_STANDARDS.bagApplicationPerLabel14x16.value, // $1.00
+  artSetupPerDesign: OWNER_STANDARDS.artSetupPerDesign.value, // $8.3333 per design
+  printSetupPerDesign: OWNER_STANDARDS.printSetupPerDesign.value, // $1.00 per design
+  designSetupPerDesign: OWNER_STANDARDS.artSetupPerDesign.value + OWNER_STANDARDS.printSetupPerDesign.value, // $9.3333
+  glossWhiteSetupPerJob: 25 / 3, // $8.3333 per SETUP — no registry equivalent
 } as const;
 
 // Per-application dollar rate for a wired mode/item combination, or null when

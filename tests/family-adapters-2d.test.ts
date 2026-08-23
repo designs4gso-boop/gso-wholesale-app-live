@@ -369,11 +369,16 @@ describe("2D cross-family", () => {
     }
   });
 
-  it("the cost calculator route is NOT rewired in this patch", () => {
+  it("2D-4: the calculator reaches the adapters ONLY through the canonical dispatch", () => {
     const src = readFileSync("app/routes/app.erp.cost-calculator.tsx", "utf8");
-    for (const adapter of ["bag-cost-inputs", "label-cost-inputs", "banner-cost-inputs"]) {
-      expect(src.includes(adapter), adapter).toBe(false);
+    // The route must never import an adapter directly — that would be a second
+    // assembly site and the loader/action parity guarantee would be gone.
+    for (const adapter of ["bag-cost-inputs", "label-cost-inputs", "banner-cost-inputs", "true-cost-engine", "nesting-engine", "finishing-cost"]) {
+      expect(src.includes(`lib/${adapter}`), adapter).toBe(false);
     }
+    // It reaches them through the one dispatch layer instead.
+    expect(src).toContain("canonical-calculator.server");
+    expect(src).toContain("computeCanonicalJob");
   });
 });
 

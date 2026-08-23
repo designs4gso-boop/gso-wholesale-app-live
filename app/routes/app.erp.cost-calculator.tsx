@@ -24,6 +24,9 @@ import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
 import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, ROLAND_INK_CALIBRATION, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
 import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginCurveConfigFor, marginCurveKeyFor, normalizeAdditionalLineCount, resolveMarginPctForQuantity, specialtyFinishReasons, validateStickerLine } from "../lib/commercial-pricing-policy.server";
 import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
+import { SPECIALTY_FILE_PREP_FEE, SPECIALTY_FILE_PREP_LABEL, specialtyFilePrepFee } from "../lib/calculator-fee-standards";
+import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, type CanonicalCalculatorView } from "../lib/canonical-calculator-shared";
+import { canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput } from "../lib/canonical-calculator.server";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
 // owns the value; client components cannot import .server modules).
@@ -409,6 +412,19 @@ export async function loader({ request }: { request: Request }) {
   // floor bands). Missing or invalid config resolves to the code constants,
   // so pricing is byte-identical until the owner edits Pricing Settings.
   const pricingPolicy = await resolvePricingPolicyConfig(db, shop);
+
+  /* ---- 2D-4 CANONICAL TRUE COST ------------------------------------
+   * One normaliser, one assembler, one authoritative true cost. Reads the
+   * loader's own searchParams; the action replays these exact bytes.
+   * Returns null for DTP / Boxes / jars / custom, which keep their path. */
+  let canonicalResult: Awaited<ReturnType<typeof computeCanonicalJob>> | null = null;
+  {
+    const canonicalInput = normalizeCanonicalInput(url.searchParams);
+    if (canonicalInput) {
+      canonicalResult = await computeCanonicalJob({ db, shop }, canonicalInput);
+    }
+  }
+
 
   // Read-only since 12B.1a: the RIP sync settings row is created by the RIP
   // Imports / Print Intake / Print Log Settings pages, never by this route.
@@ -1091,7 +1107,7 @@ export async function loader({ request }: { request: Request }) {
         // 15G.4C: optional customer-facing specialty file-prep fee — charged
         // ONLY when staff must build the mask (flag), $25 flat per job,
         // separate from the internal $6.25 setup cost (never double-counted).
-        const filePrepFeeP = eparams.get("pfileprep") === "1" && (Number(eparams.get("pglosslayers") || 0) > 0 || Number(eparams.get("pwhitelayers") || 0) > 0) ? 25 : 0;
+        const filePrepFeeP = specialtyFilePrepFee({ requested: eparams.get("pfileprep") === "1", glossLayers: Number(eparams.get("pglosslayers") || 0), whiteLayers: Number(eparams.get("pwhitelayers") || 0) });
         const belowFloor = commercial.marginPctApplied < floorForFamily;
         return {
           quantity: qty,
@@ -1256,6 +1272,13 @@ export async function loader({ request }: { request: Request }) {
     mode: eMode, autoCost: autoCost ? { lines: autoCost.lines, perUnitVariable: autoCost.perUnitVariable, setupTotal: autoCost.setupTotal, missing: autoCost.missing, warnings: autoCost.warnings } : null,
     productMode: {
       family: pFamily || null,
+      // 2D-4: THE canonical true cost for the four in-house manufacturing
+      // families. Built by the SAME normaliser + assembler the save action
+      // uses, from the SAME query string, so calculate / save / recalculate
+      // cannot disagree. Legacy `result` below stays for commercial pricing
+      // and for the families the canonical foundation does not yet cover.
+      canonical: canonicalResult ? canonicalViewOf(canonicalResult) : null,
+      canonicalDispatch: CANONICAL_DISPATCH,
       canonicalFamily: pFamily ? canonicalUiFamily(pFamily) : null,
       selectedClass,
       topRequired,
@@ -1463,6 +1486,15 @@ export async function action({ request }: { request: Request }) {
     if (direct != null && String(direct) !== "") return String(direct);
     return String(psearchParams.get(key) ?? "");
   };
+  /* ---- 2D-4 CANONICAL TRUE COST (save side) ------------------------
+   * Deliberately built from `psearchParams` — the loader's own query string —
+   * and NOT from the posted form fields, so the saved canonical cost is the
+   * one that was displayed. Same normaliser, same assembler, same bytes. */
+  const canonicalInputSave = normalizeCanonicalInput(psearchParams);
+  const canonicalSnapshot = canonicalInputSave
+    ? await computeCanonicalJob({ db, shop }, canonicalInputSave)
+    : null;
+
   const fReadAll = (key: string) => {
     const fromSearch = psearchParams.getAll(key);
     return fromSearch.length ? fromSearch.map(String) : form.getAll(key).map(String);
@@ -1776,7 +1808,7 @@ export async function action({ request }: { request: Request }) {
           holographic: /holo/i.test(productInputSave.material?.name || ""),
         },
       });
-      const filePrepFeeSave = fRead("pfileprep") === "1" && (Number(fRead("pglosslayers") || 0) > 0 || Number(fRead("pwhitelayers") || 0) > 0) ? 25 : 0;
+      const filePrepFeeSave = specialtyFilePrepFee({ requested: fRead("pfileprep") === "1", glossLayers: Number(fRead("pglosslayers") || 0), whiteLayers: Number(fRead("pwhitelayers") || 0) });
       const belowFloor = commercial.marginPctApplied < floorForFamilySave;
       return {
         quantity: qty, requested: qty === savedRequestedQty, filePrepFee: filePrepFeeSave, jobCost: completeCost, unitCost: qty > 0 ? completeCost / qty : completeCost, marginPct: commercial.marginPctApplied,
@@ -1935,6 +1967,25 @@ export async function action({ request }: { request: Request }) {
   const familyDefaults = ruleForSave ? curveForTierCount(ruleForSave.curve, snapshotTiers.length, ruleForSave.familyMinPct) : defaultTierMargins(snapshotTiers.length);
   const savedIsDtpSnapshot = savedEngineFamily === "dtp-bags";
   const snapshot = {
+    // 2D-4: the canonical true cost, recorded verbatim next to the legacy
+    // breakdown. It is produced by the same normaliser + assembler the loader
+    // ran, from the same query string, so what was displayed is what is saved.
+    canonical: canonicalSnapshot
+      ? {
+          version: canonicalSnapshot.version,
+          family: canonicalSnapshot.family,
+          status: canonicalSnapshot.status,
+          totalCost: canonicalSnapshot.totalCost,
+          unitCost: canonicalSnapshot.unitCost,
+          lines: canonicalSnapshot.trueCost.lines,
+          totals: canonicalSnapshot.trueCost.totals,
+          diagnostics: canonicalSnapshot.diagnostics,
+          calibration: canonicalSnapshot.calibration,
+          setupBasis: canonicalSnapshot.setupBasis,
+          reasons: canonicalSnapshot.reasons,
+          blockers: canonicalSnapshot.blockers,
+        }
+      : null,
     // 15F.0: non-DTP product saves record the production-ready engine; DTP
     // keeps its 15C.2 version. Historical snapshots are never rewritten.
     engine: productSnapshot ? (savedIsDtpSnapshot ? DTP_PRICING_ENGINE_VERSION : PRODUCTION_READY_ENGINE_VERSION) : isAuto ? "14B.1a-auto" : "14B.0A-emergency",
@@ -2104,7 +2155,7 @@ export async function action({ request }: { request: Request }) {
   const quote = await db.quote.create({
     data: {
       shop, status: "draft", customerName: String(form.get("ecustomer") || "") || fRead("pcustomer") || null,
-      notes: `${productSnapshot ? (savedIsDtpSnapshot ? "15C DTP calculator draft" : "14C.2 product calculator draft") : "14B.0 emergency calculator draft"}${fRead("pnotes") ? " — " + fRead("pnotes").slice(0, 240) : ""}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}`,
+      notes: `${productSnapshot ? (savedIsDtpSnapshot ? "15C DTP calculator draft" : "14C.2 product calculator draft") : "14B.0 emergency calculator draft"}${fRead("pnotes") ? " — " + fRead("pnotes").slice(0, 240) : ""}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}${canonicalSnapshot && canonicalSnapshot.status === "DRAFT_ONLY" ? " — CANONICAL TRUE COST DRAFT_ONLY: " + canonicalSnapshot.blockers.slice(0, 4).join("; ") : ""}`,
       items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({ unitPrice: primary.unitPrice, marginPct: primary.marginPct, tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })) }) }] },
     },
   });
@@ -2354,6 +2405,7 @@ function EmergencySection() {
         <p style={smallHelp}>Choose a product family and enter the job details to begin.</p>
         <p style={smallHelp}>Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
         <ProductDrivenForm />
+        <CanonicalTrueCost />
         <ProductBreakdown />
         <ProductTiers />
         {(emergency as any).autoCost ? (
@@ -3034,7 +3086,7 @@ function ProductDrivenForm() {
         <label style={{ fontSize: 12 }}>Specialty file prep (15G.4C)
           <select name="pfileprep" style={inputStyle}>
             <option value="">Customer supplied production-ready mask — $0</option>
-            <option value="1">GSO builds the specialty mask — $25/job customer charge</option>
+            <option value="1">{SPECIALTY_FILE_PREP_LABEL}</option>
           </select>
         </label>
         </>) : null}
@@ -3177,9 +3229,137 @@ function MultiLineStickerRows() {
   );
 }
 
+/**
+ * 2D-4 — THE canonical true-cost panel.
+ *
+ * Everything here is rendered from the server's single authoritative result.
+ * The browser performs no cost arithmetic: it formats numbers the loader
+ * already computed. A DRAFT_ONLY job shows its blockers and NO unit cost,
+ * because a blocked job has no defensible per-unit number to show.
+ */
+function CanonicalTrueCost() {
+  const { emergency } = useLoaderData<typeof loader>() as any;
+  const canonical = emergency.productMode?.canonical as CanonicalCalculatorView | null | undefined;
+  if (!canonical) return null;
+
+  const statusTone: Record<string, { bg: string; fg: string; border: string }> = {
+    VALID: { bg: "#ecfdf5", fg: "#065f46", border: "#a7f3d0" },
+    PROVISIONAL: { bg: "#fffbeb", fg: "#92400e", border: "#fde68a" },
+    DRAFT_ONLY: { bg: "#fef2f2", fg: "#991b1b", border: "#fecaca" },
+  };
+  const tone = statusTone[canonical.status] || statusTone.DRAFT_ONLY;
+  const d = canonical.diagnostics;
+  const cat = canonical.totals as Record<string, number>;
+
+  const dollars = (value: number | null | undefined) =>
+    value == null ? "—" : `${Number(value).toFixed(4)}`;
+  const numeric = (value: number | null | undefined, digits = 2) =>
+    value == null ? "—" : Number(value).toFixed(digits);
+
+  const componentRows = CANONICAL_COMPONENT_ORDER.map(({ key, label }) => [label, cat[key] ?? null] as [string, number | null]);
+
+  return (
+    <div style={{ ...cardStyle, marginTop: 12, borderColor: tone.border, background: tone.bg }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <b style={{ fontSize: 14, color: tone.fg }}>CANONICAL TRUE COST</b>
+        <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 999, border: `1px solid ${tone.border}`, color: tone.fg, background: "white", fontWeight: 700 }}>
+          {canonical.status}
+        </span>
+        <span style={{ fontSize: 12, color: "#374151" }}>
+          {canonical.family} → {CANONICAL_DISPATCH[canonical.family]?.entry}
+        </span>
+        <span style={{ fontSize: 11, color: "#6b7280" }}>{canonical.version}</span>
+      </div>
+
+      <div style={{ display: "flex", gap: 24, marginTop: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={smallHelp}>TRUE JOB COST</div>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>{dollars(canonical.totalCost)}</div>
+        </div>
+        <div>
+          <div style={smallHelp}>TRUE UNIT COST</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: canonical.unitCost == null ? "#991b1b" : undefined }}>
+            {canonical.unitCost == null ? "NOT AVAILABLE" : dollars(canonical.unitCost)}
+          </div>
+          {canonical.unitCost == null ? (
+            <div style={{ ...smallHelp, color: "#991b1b" }}>
+              Blocked — this job has no defensible unit cost. It is NOT $0.
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {canonical.blockers.length ? (
+        <div style={{ marginTop: 10, border: "1px solid #fecaca", background: "white", borderRadius: 8, padding: 10 }}>
+          <b style={{ fontSize: 12, color: "#991b1b" }}>BLOCKERS ({canonical.blockers.length})</b>
+          <ul style={{ margin: "6px 0 0 18px", fontSize: 12, color: "#7f1d1d" }}>
+            {canonical.blockers.map((blocker: string, index: number) => <li key={index}>{blocker}</li>)}
+          </ul>
+        </div>
+      ) : null}
+
+      {canonical.reasons.length ? (
+        <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
+          <b>Reasons:</b> {canonical.reasons.join(" · ")}
+        </div>
+      ) : null}
+
+      <div style={{ marginTop: 10, background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10 }}>
+        <b style={{ fontSize: 12 }}>COMPONENT BREAKDOWN</b>
+        <table style={{ width: "100%", fontSize: 12, marginTop: 6, borderCollapse: "collapse" }}>
+          <tbody>
+            {componentRows.map(([label, amount]) => (
+              <tr key={label}>
+                <td style={{ padding: "2px 0", color: "#374151" }}>{label}</td>
+                <td style={{ padding: "2px 0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop: 10, background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10 }}>
+        <b style={{ fontSize: 12 }}>PRODUCTION DIAGNOSTICS</b>
+        <div style={{ fontSize: 12, color: "#374151", marginTop: 6, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "2px 16px" }}>
+          <div>Media consumed: <b>{numeric(d.mediaConsumedSqft, 3)} sqft</b></div>
+          <div>RIP layout: <b>{numeric(d.ripLayoutSqft, 3)} sqft</b></div>
+          <div>Inkable artwork: <b>{numeric(d.inkableArtworkSqft, 3)} sqft</b></div>
+          <div>Feed length: <b>{numeric(d.feedLengthIn, 1)} in</b></div>
+          <div>Nest orientation: <b>{d.nestRotated == null ? "—" : d.nestRotated ? "ROTATED" : "normal"}</b>{d.nestColumns != null ? ` (${d.nestColumns}c x ${d.nestRows}r)` : ""}</div>
+          <div>Machine minutes: <b>{numeric(d.machineMinutes, 1)}</b></div>
+          <div>Cut path: <b>{numeric(d.cutPathIn, 1)} in</b></div>
+          <div>Cut minutes: <b>{numeric(d.cutMinutes, 2)}</b></div>
+          <div>Weeding pages: <b>{d.weedingPages ?? "—"}</b></div>
+          <div>Application events: <b>{d.applicationEvents ?? "—"}</b></div>
+          <div>Physical items: <b>{d.physicalItems ?? "—"}</b></div>
+          <div>Applications per item: <b>{d.applicationsPerItem ?? "—"}</b></div>
+          <div>Printed labels available: <b>{d.printedLabelsAvailable ?? "—"}</b></div>
+          <div>Art setup events: <b>{d.artSetupEvents ?? "—"}</b> ({canonical.setupBasis.artBasis})</div>
+          <div>Print setup events: <b>{d.printSetupEvents ?? "—"}</b> ({canonical.setupBasis.printBasis})</div>
+          {d.personalizationSetupEvents != null ? (
+            <div>Personalization setups: <b>{d.personalizationSetupEvents}</b> · customer add-on <b>${Number(d.personalizationCustomerAddOn ?? 0).toFixed(2)}</b></div>
+          ) : null}
+        </div>
+      </div>
+
+      <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}>
+        <b>Calibration:</b> {canonical.calibration.resolved ? "resolved" : "NOT RESOLVED"} —{" "}
+        {Object.values(canonical.calibration.identity).join(" | ")}. {canonical.calibration.message}{" "}
+        <b>Ink $/mL:</b> {canonical.calibration.inkCostPerMl == null ? "none" : canonical.calibration.inkCostPerMl.toFixed(7)} — {canonical.calibration.inkCostSource}
+      </div>
+      <p style={{ ...smallHelp, marginTop: 6 }}>
+        TRUE MANUFACTURING COST ONLY. Selling price, margin and any market
+        comparison are a separate concern and are never computed here.
+      </p>
+    </div>
+  );
+}
+
 function ProductBreakdown() {
   const { emergency } = useLoaderData<typeof loader>() as any;
   const result = emergency.productMode?.result;
+  // The canonical panel renders separately and above this one, so a blocked
+  // canonical job stays visible even when the legacy engine produced nothing.
   if (!result) return null;
   const derived = result.derived;
   return (

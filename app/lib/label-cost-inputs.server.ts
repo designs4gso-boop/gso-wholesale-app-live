@@ -38,6 +38,12 @@ export const LABEL_COST_INPUTS_VERSION = "17D.6-label-cost-inputs";
 export const LABEL_REASONS = {
   materialCostRequired: "LABEL_MATERIAL_COST_REQUIRED",
   printGeometryRequired: "LABEL_PRINT_GEOMETRY_REQUIRED",
+  /**
+   * 2D-4: a contour line whose real inked shape area was not supplied falls
+   * back to its artboard bounding box, which overstates ink. Disclosed, never
+   * silently accepted.
+   */
+  inkableAreaEstimated: "LABEL_INKABLE_AREA_ESTIMATED",
 } as const;
 
 /** Verified roll media only. An unlisted material is never guessed. */
@@ -67,6 +73,14 @@ export type LabelLine = {
   contourPerimeterIn?: number;
   cutType?: "rectangular" | "contour" | "none";
   materialKey: string;
+
+  /**
+   * TRUE INKED SHAPE AREA per item, in square inches, when the printed shape
+   * is smaller than its artboard (a die-cut circle in a square bounding box).
+   * Omitted, the artboard is used, which OVERSTATES ink for a contour line —
+   * so the job reports INKABLE_AREA_ESTIMATED rather than pretending it is exact.
+   */
+  shapeAreaSqIn?: number;
 
   /**
    * ARTWORK IDENTITY. Lines sharing an artworkKey are the SAME artwork and
@@ -115,9 +129,28 @@ export type LabelLineResult = {
   blockers: string[];
 };
 
+/**
+ * 2D-4 — the three canonical areas for this job, summed from the SAME per-line
+ * nests that priced the media. They are summed rather than re-nested at one
+ * roll width, because a holographic line runs on 50in media and a matte line
+ * on 54in; re-nesting the job at a single width would misreport both.
+ */
+export type LabelJobAreas = {
+  inkableArtworkSqft: number;
+  ripLayoutSqft: number | null;
+  materialFootprintSqft: number;
+  ripLayoutBasis: string;
+  /** Blended $/sqft that reproduces the per-line media total exactly. */
+  blendedMaterialCostPerSqft: number | null;
+  /** True when any line fell back to its artboard for the inked area. */
+  inkableAreaEstimated: boolean;
+};
+
 export type LabelJobResult = {
   version: string;
   lines: LabelLineResult[];
+  /** Feeds TrueCostAreas. null when no line produced a nest. */
+  areas: LabelJobAreas | null;
   /** Total labels printed across every line — the application shortfall basis. */
   printedLabels: number;
   materialCost: number;
@@ -180,6 +213,13 @@ export function computeLabelJob(input: LabelJobInput): LabelJobResult {
   let additionalArtSetupEvents = 0;
   let printSetupEvents = 0;
 
+  // 2D-4 — job areas, SUMMED from the per-line nests that priced the media.
+  let inkableArtworkSqft = 0;
+  let materialFootprintSqft = 0;
+  let ripLayoutSqft: number | null = 0;
+  let nestedLines = 0;
+  let inkableAreaEstimated = false;
+
   for (const line of input.lines) {
     const lineReasons: string[] = [];
     const lineBlockers: string[] = [];
@@ -209,6 +249,8 @@ export function computeLabelJob(input: LabelJobInput): LabelJobResult {
           items: [{
             key: line.key, groupKey: line.key, shapeType: line.cutType === "contour" ? "contour" : "rect",
             widthIn: line.printWidthIn, heightIn: line.printHeightIn, quantity: line.quantity, allowRotate: true,
+            // Exact inked area when the caller knows it; the artboard otherwise.
+            ...(line.shapeAreaSqIn != null && line.shapeAreaSqIn > 0 ? { shapeAreaSqIn: line.shapeAreaSqIn } : {}),
           }],
         };
         runs.push(run);
@@ -217,6 +259,18 @@ export function computeLabelJob(input: LabelJobInput): LabelJobResult {
         lineMaterialCost = nesting.materialFootprintSqft * material.costPerSqft;
         materialCost += lineMaterialCost;
         printedLabels += line.quantity;
+
+        // Sum this line's OWN nest — never re-nest the job at one roll width.
+        nestedLines += 1;
+        inkableArtworkSqft += nesting.usedShapeAreaSqft;
+        materialFootprintSqft += nesting.materialFootprintSqft;
+        ripLayoutSqft = ripLayoutSqft == null || nesting.ripLayoutSqft == null
+          ? null
+          : ripLayoutSqft + nesting.ripLayoutSqft;
+        if (line.cutType === "contour" && !(line.shapeAreaSqIn != null && line.shapeAreaSqIn > 0)) {
+          inkableAreaEstimated = true;
+          lineReasons.push(LABEL_REASONS.inkableAreaEstimated);
+        }
       }
     }
     // Artwork identity, NOT line identity, is what art setup counts.
@@ -248,6 +302,17 @@ export function computeLabelJob(input: LabelJobInput): LabelJobResult {
   // 2D-3C: print setup is PER DESIGN ($25/hr at 25 designs/hr), not once per
   // job. 2D-3D: art counts DISTINCT ARTWORK events, print counts PRESS setup
   // events, and the two are allowed to differ. Copy quantity enters neither.
+  const areas: LabelJobAreas | null = nestedLines > 0
+    ? {
+        inkableArtworkSqft,
+        ripLayoutSqft,
+        materialFootprintSqft,
+        ripLayoutBasis: `Deterministic nesting engine, summed across ${nestedLines} physical label run(s) on their own roll widths.`,
+        blendedMaterialCostPerSqft: materialFootprintSqft > 0 ? materialCost / materialFootprintSqft : null,
+        inkableAreaEstimated,
+      }
+    : null;
+
   const distinctArtworkCount = artworkKeys.size;
   const artSetupEvents = distinctArtworkCount + additionalArtSetupEvents;
   const art = OWNER_STANDARDS.artSetupPerDesign.value * artSetupEvents;
@@ -256,6 +321,7 @@ export function computeLabelJob(input: LabelJobInput): LabelJobResult {
   return {
     version: LABEL_COST_INPUTS_VERSION,
     lines: lineResults,
+    areas,
     printedLabels,
     materialCost,
     finishing,

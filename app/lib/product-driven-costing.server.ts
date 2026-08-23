@@ -12,6 +12,7 @@
 
 import { INK_RATES, OWNER_LABOR, resolveMarginFamily, type CostLine, type SourceLabel } from "./calculator-emergency.server";
 import { WIRED_LABOR, blankItemUnitCostAtQty } from "./cost-calculator.server";
+import { OWNER_STANDARDS } from "./owner-standards";
 import { familyByKeyOrAlias } from "./product-family-registry";
 
 export const PRODUCT_ENGINE_VERSION = "14C.1";
@@ -303,7 +304,7 @@ export function buildLabelRows(params: {
 // a MISSING blocker, never silently priced at the 4x5 rate).
 export function bagApplicationRateFor(bagName: string): { rate: number | null; source: SourceLabel; basis: string } {
   const text = String(bagName || "");
-  if (/14\s?x\s?16|pound/i.test(text)) return { rate: WIRED_LABOR.bag14x16PerSide, source: "owner_standard", basis: "14x16 bag $1.00/label (owner standard)" };
+  if (/14\s?x\s?16|pound/i.test(text)) return { rate: OWNER_STANDARDS.bagApplicationPerLabel14x16.value, source: "owner_standard", basis: "14x16 bag $1.00/label (owner standard)" };
   if (/4\s?x\s?5\b/i.test(text)) return { rate: OWNER_LABOR.bagLabelApplicationPer, source: "owner_standard", basis: "4x5 bag $0.0781/label (owner standard)" };
   return { rate: null, source: "missing", basis: "No owner application-labor standard for this bag size" };
 }

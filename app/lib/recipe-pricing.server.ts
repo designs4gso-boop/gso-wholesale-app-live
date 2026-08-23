@@ -99,17 +99,114 @@ export function materialUnitCost(material: any) {
   return materialUnitCostResolution(material).unitCost;
 }
 
+/* ------------------------------------------------------------------ *
+ * 2D-4 — SETUP-TYPE ADD-ONS MAY NEVER BE PER-UNIT
+ *
+ * A setup cost is an EVENT-based fixed cost (art setup, print setup, file
+ * prep, specialty/design setup). Charging one `per_unit` multiplies it by the
+ * order quantity, which is exactly the owner rule's forbidden shape:
+ *
+ *     quantity x setup fee
+ *
+ * MODEL LIMITATION, stated plainly: `RecipeAddOn` (prisma/schema.prisma) has
+ * NO type/category/kind column — only a free-text `name` and `pricingType`.
+ * There is therefore no structural field to key a guard off, so the guard
+ * classifies from the name. A `basis` or `category` column would be the clean
+ * fix and is recorded as a schema follow-up; this is the smallest safe change
+ * that closes the hole without a migration.
+ *
+ * The guard REFUSES rather than silently reinterpreting: a setup-type add-on
+ * configured per_unit contributes ZERO and reports a blocker, so the number
+ * can never quietly become quantity x fee on a customer quote.
+ * ------------------------------------------------------------------ */
+
+/** Words that identify an operation as setup//artwork/file-prep work. */
+export const SETUP_TYPE_ADDON_PATTERNS: RegExp[] = [
+  /\bart\s*(work)?\s*(setup|charge|fee|prep)\b/i,
+  /\bprint\s*setup\b/i,
+  /\bdesign\s*(setup|fee|charge)\b/i,
+  /\bfile\s*prep(aration)?\b/i,
+  /\bpre[-\s]?press\b/i,
+  /\bspecialt(y|ies)\s*(setup|prep)\b/i,
+  /\b(gloss|white)\s*(mask|layer)\s*(setup|prep)\b/i,
+  /\bsetup\s*(fee|charge|cost)\b/i,
+  /\bplate\s*(setup|charge|fee)\b/i,
+  /\bscreen\s*(setup|charge|fee)\b/i,
+  /\bproof(ing)?\s*(setup|fee|charge)\b/i,
+];
+
+export const ADDON_BASIS_REASONS = {
+  setupCannotBePerUnit: "ADDON_SETUP_CANNOT_BE_PER_UNIT",
+} as const;
+
+/**
+ * Is this add-on a setup-type operation? Name-based, because the model gives
+ * nothing better. Errs toward flagging: a false positive costs an operator one
+ * rename, a false negative multiplies a setup fee by the whole order.
+ */
+export function isSetupTypeAddOn(addOn: { name?: unknown; pricingType?: unknown }): boolean {
+  const name = String(addOn?.name ?? "");
+  if (!name.trim()) return false;
+  return SETUP_TYPE_ADDON_PATTERNS.some((pattern) => pattern.test(name));
+}
+
+/**
+ * The allowed pricing types for an add-on. Setup-type work may be flat or
+ * included; it may never be per_unit or percent-of-cost.
+ */
+export function allowedPricingTypesFor(addOn: { name?: unknown }): string[] {
+  return isSetupTypeAddOn(addOn) ? ["flat_fee", "included"] : ["per_unit", "flat_fee", "percent", "included"];
+}
+
+export type AddOnBasisViolation = {
+  id: string;
+  name: string;
+  pricingType: string;
+  reason: string;
+  message: string;
+  allowedPricingTypes: string[];
+};
+
+/** Validate a set of add-on rows without pricing them. Used by admin screens. */
+export function validateAddOnBasis(addOns: any[]): AddOnBasisViolation[] {
+  const violations: AddOnBasisViolation[] = [];
+  for (const addOn of addOns || []) {
+    if (addOn?.pricingType !== "per_unit" && addOn?.pricingType !== "percent") continue;
+    if (!isSetupTypeAddOn(addOn)) continue;
+    violations.push({
+      id: String(addOn.id ?? ""),
+      name: String(addOn.name ?? ""),
+      pricingType: String(addOn.pricingType ?? ""),
+      reason: ADDON_BASIS_REASONS.setupCannotBePerUnit,
+      message: `${ADDON_BASIS_REASONS.setupCannotBePerUnit}: "${String(addOn.name ?? "")}" reads as setup/artwork/file-prep work, which is an EVENT-based fixed cost and must never scale with order quantity. Configured as "${String(addOn.pricingType)}". Use flat_fee (charged once) instead.`,
+      allowedPricingTypes: allowedPricingTypesFor(addOn),
+    });
+  }
+  return violations;
+}
+
 export function calculateAddOns(addOns: any[], selectedAddOnIds: string[], quantity: number, baseCost: number) {
   let perUnitCost = 0;
   let flatCost = 0;
   let percentCost = 0;
   const selected: any[] = [];
+  const basisViolations: AddOnBasisViolation[] = [];
+  const blockers: string[] = [];
 
   for (const addOn of addOns || []) {
     if (!selectedAddOnIds.includes(addOn.id)) continue;
     selected.push(addOn);
 
     const amount = safeNumber(addOn.amount);
+
+    // GUARD: a setup-type operation may never be multiplied by copy quantity.
+    if ((addOn.pricingType === "per_unit" || addOn.pricingType === "percent") && isSetupTypeAddOn(addOn)) {
+      const violation = validateAddOnBasis([addOn])[0];
+      basisViolations.push(violation);
+      blockers.push(violation.message);
+      continue; // contributes ZERO — never quantity x fee
+    }
+
     if (addOn.pricingType === "per_unit") perUnitCost += amount * quantity;
     else if (addOn.pricingType === "flat_fee") flatCost += amount;
     else if (addOn.pricingType === "percent") percentCost += baseCost * (amount / 100);
@@ -121,6 +218,8 @@ export function calculateAddOns(addOns: any[], selectedAddOnIds: string[], quant
     perUnitCost,
     flatCost,
     percentCost,
+    basisViolations,
+    blockers,
   };
 }
 
