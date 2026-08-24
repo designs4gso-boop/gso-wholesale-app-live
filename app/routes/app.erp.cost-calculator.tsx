@@ -27,6 +27,7 @@ import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
 import { SPECIALTY_FILE_PREP_FEE, SPECIALTY_FILE_PREP_LABEL, specialtyFilePrepFee } from "../lib/calculator-fee-standards";
 import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, type CanonicalCalculatorView } from "../lib/canonical-calculator-shared";
 import { canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput } from "../lib/canonical-calculator.server";
+import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
 // owns the value; client components cannot import .server modules).
@@ -913,7 +914,11 @@ export async function loader({ request }: { request: Request }) {
     if (eparams.get("pblank") === "custom" && !blankComponent) {
       // custom without name/cost/reason stays null -> MISSING line via engine when family expects a blank
     }
-    const printer = eparams.get("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
+    const printer = resolveCanonicalMachineRouting({
+      printerSelection: eparams.get("pprinter") ?? undefined,
+      whiteLayers: Number(eparams.get("pwhitelayers") || 0),
+      glossLayers: Number(eparams.get("pglosslayers") || 0),
+    }).effectivePrinter;
     requestedQtyP = Math.floor(Number(eparams.get("pqty") || 0));
     const engineFamilyP = uiFamilyToEngine(pFamily, selectedClass, selectedIncludesTop);
     const isDtpP = engineFamilyP === "dtp-bags";
@@ -1613,7 +1618,11 @@ export async function action({ request }: { request: Request }) {
     const materialId = String(fRead("pmat") || "");
     const materialRecord = materialId ? await db.material.findFirst({ where: { shop, id: materialId } }) : null;
     const materialResolved = materialRecord ? resolvePrintMaterialCostPerSqft(materialRecord) : null;
-    const printerSave = fRead("pprinter") === "roland" ? "roland" as const : "mimaki" as const;
+    const printerSave = resolveCanonicalMachineRouting({
+      printerSelection: fRead("pprinter"),
+      whiteLayers: Number(fRead("pwhitelayers") || 0),
+      glossLayers: Number(fRead("pglosslayers") || 0),
+    }).effectivePrinter;
     // 15F.0-D: verified machine speeds re-fetched at save (posted values never trusted)
     const printerSpeedsSave = resolvePrinterSpeeds(await db.machine.findMany({ where: { shop, active: true, machineType: "printer" }, select: { name: true, sqftPerHour: true } }));
     // 14C.1B: classification + engine mapping recomputed at save from the
@@ -2535,7 +2544,7 @@ Setup/design fee included in pricing.`}
         {/* 14C.2: the full GET state (including multi-value label rows) rides in
             psearch; the single-value hidden inputs below stay for back-compat. */}
         <input type="hidden" name="psearch" value={legacySearch} />
-        {["efamily", "eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason", "pfamily", "pblank", "plid", "pmat", "pqty", "pdesigns", "pfaces", "pwidth", "pheight", "pprinter", "pwhitelayers", "pglosslayers", "pglosscoverage", "pcut", "phem", "pgrommet", "pcustomname", "pcustomcost", "pcustomnote", "pwasteoverride", "pwastereason", "pboxoverride", "pboxreason", "pmachmin"].map((key) => (
+        {["efamily", "eqty", "emargin", "evar", "esetup", "eblank", "ewaste", "efactual", "efhandling", "effees", "efallow", "efalloc", "efmanual", "eophrase", "eoreason", "pfamily", "pblank", "plid", "pmat", "pqty", "pdesigns", "pfaces", "pwidth", "pheight", "pprinter", "pwhitelayers", "pwhitecoverage", "pglosslayers", "pglosscoverage", "pcut", "phem", "pgrommet", "pcustomname", "pcustomcost", "pcustomnote", "pwasteoverride", "pwastereason", "pboxoverride", "pboxreason", "pmachmin"].map((key) => (
           <input key={key} type="hidden" name={key} value={new URLSearchParams(legacySearch).get(key) || (key === "eqty" ? emergency.quantities.join(",") : key === "emargin" ? emergency.margins.join(",") : "")} />
         ))}
         <label style={{ fontSize: 12 }}>Product name<input name="eproduct" style={inputStyle} /></label>
@@ -3078,9 +3087,26 @@ function ProductDrivenForm() {
         </label>) : null}
         {!isDtp ? (<>
         <label style={{ fontSize: 12 }}>Printer
-          <select name="pprinter" style={inputStyle}><option value="mimaki">Mimaki</option><option value="roland">Roland</option></select>
+          <select name="pprinter" style={inputStyle}>
+            <option value="auto">Auto (canonical routing)</option>
+            <option value="mimaki">Mimaki</option>
+            <option value="roland">Roland</option>
+          </select>
+          <span style={smallHelp}>
+            Auto follows the canonical rule: CMYK-only runs on the Mimaki; white
+            or gloss requires the Roland. Choosing Mimaki for a white/gloss job
+            is blocked — that press is CMYK-only.
+          </span>
         </label>
         <label style={{ fontSize: 12 }}>White layers (0–14)<input name="pwhitelayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>White coverage % (required when white is used)
+          <input name="pwhitecoverage" type="number" min={1} max={100} step="1" placeholder="no default — must be entered" style={inputStyle} />
+          <span style={smallHelp}>
+            A separate input from the layer count and never derived from it.
+            White has NO default coverage: leave it blank and the job stays
+            DRAFT ONLY.
+          </span>
+        </label>
         <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Gloss coverage % (blank = 90% pre-art estimate)<input name="pglosscoverage" type="number" min={0} max={100} step="1" placeholder="90% estimated" style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Specialty file prep (15G.4C)

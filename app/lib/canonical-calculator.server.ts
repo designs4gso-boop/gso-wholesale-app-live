@@ -61,11 +61,19 @@ import {
 } from "./label-application.server";
 import type { CutMode } from "./finishing-cost.server";
 import {
+  computeInkMl,
+  computeOccupancyMinutes,
   loadActiveCalibration,
   type CalibrationIdentity,
   type CalibrationRecord,
 } from "./machine-calibration.server";
-import { CANONICAL_INK_RATES, channelInkRatePerMl, inkBrandFromMachineName } from "./ink-rates-shared";
+import { CANONICAL_INK_RATES } from "./ink-rates-shared";
+import {
+  resolveCanonicalMachineRouting,
+  type MachineRoutingResult,
+  type PrinterSelection,
+  type RoutedChannel,
+} from "./machine-routing.server";
 import {
   CANONICAL_CALCULATOR_VERSION,
   CANONICAL_DISPATCH,
@@ -77,6 +85,9 @@ import {
 } from "./canonical-calculator-shared";
 import { OWNER_STANDARDS } from "./owner-standards";
 import {
+  DEFAULT_OPERATOR_ATTENTION_PCT,
+  DEFAULT_OPERATOR_LABOR_RATE_PER_HOUR,
+  OPERATOR_ATTENTION_CLASSIFICATION,
   computeTrueJobCost,
   type CostBasis,
   type TrueCostInput,
@@ -139,15 +150,21 @@ export type CanonicalCalculatorInput = {
   quantity: number;
   overagePct?: number;
 
-  /** The exact six-part calibration identity. No part is ever guessed. */
-  machineKey: string;
-  inkMode: string;
-  ripProfile: string;
-  qualityMode: string;
-  resolution: string;
-  passConfig: string;
-  coveragePct?: number | null;
-  passCount?: number;
+  /**
+   * 2D-4A — OPERATOR-FACING PRESS CONTROL ONLY.
+   *
+   * ripProfile / qualityMode / resolution / passConfig are NOT inputs. They
+   * are derived by the one routing authority (machine-routing.server.ts) from
+   * the printer selection and the specialty layers, so a normal operator
+   * never types a calibration internal.
+   */
+  printerSelection?: PrinterSelection | string;
+  whiteLayers?: number;
+  /** Operator-supplied. Never defaulted, never inferred from whiteLayers. */
+  whiteCoveragePct?: number | null;
+  glossLayers?: number;
+  glossCoveragePct?: number | null;
+  cmykCoveragePct?: number | null;
 
   equipmentRatePerHour?: number;
   cutMode?: CutMode;
@@ -158,22 +175,54 @@ export type CanonicalCalculatorInput = {
   banner?: CanonicalBannerInput;
 };
 
+/** Routing is derived, never typed. One authority decides the whole identity. */
+export function routingFor(input: CanonicalCalculatorInput): MachineRoutingResult {
+  return resolveCanonicalMachineRouting({
+    printerSelection: input.printerSelection,
+    whiteLayers: input.whiteLayers,
+    whiteCoveragePct: input.whiteCoveragePct,
+    glossLayers: input.glossLayers,
+    glossCoveragePct: input.glossCoveragePct,
+    cmykCoveragePct: input.cmykCoveragePct,
+  });
+}
+
+/** The BASE colour channel's identity — what the engine itself prices. */
 export function calibrationIdentityOf(input: CanonicalCalculatorInput): CalibrationIdentity {
-  return {
-    machineKey: input.machineKey,
-    inkMode: input.inkMode,
-    ripProfile: input.ripProfile,
-    qualityMode: input.qualityMode,
-    resolution: input.resolution,
-    passConfig: input.passConfig,
-  };
+  const routing = routingFor(input);
+  return routing.channels.find((channel) => channel.isBase)!.identity;
 }
 
 /* ------------------------------------------------------------------ *
  * Result
  * ------------------------------------------------------------------ */
 
-// CanonicalDiagnostics is defined once, in canonical-calculator-shared.
+/** Per-channel ink diagnostics. White and gloss are NEVER merged into CMYK. */
+export type CanonicalInkChannel = {
+  kind: string;
+  calibrationKey: string;
+  identity: CalibrationIdentity;
+  calibrationResolved: boolean;
+  calibrationMessage: string;
+  /** The calibration's OWN area basis — never substituted. */
+  areaBasis: string | null;
+  inkableSqft: number | null;
+  coveragePct: number | null;
+  coverageSource: string | null;
+  /** Layers for this channel. CMYK is one pass. */
+  passes: number;
+  mlPerSqftPerPass: number | null;
+  totalMl: number | null;
+  costPerMl: number | null;
+  inkCost: number | null;
+  /** Occupancy this channel adds, on the calibration's own time basis. */
+  occupancyAreaBasis: string | null;
+  occupancyAreaSqft: number | null;
+  occupancyMinutes: number | null;
+  equipmentRecovery: number | null;
+  operatorAttention: number | null;
+  blocker?: string;
+};
 
 export type CanonicalCalculatorResult = {
   version: string;
@@ -184,6 +233,10 @@ export type CanonicalCalculatorResult = {
   totalCost: number;
   trueCost: TrueCostResult;
   diagnostics: CanonicalDiagnostics;
+  /** How the press was chosen, and what identities the job needs. */
+  routing: MachineRoutingResult;
+  /** CMYK / WHITE / GLOSS, each with its own calibration and arithmetic. */
+  inkChannels: CanonicalInkChannel[];
   calibration: {
     resolved: boolean;
     identity: CalibrationIdentity;
@@ -198,61 +251,81 @@ export type CanonicalCalculatorResult = {
 };
 
 /* ------------------------------------------------------------------ *
- * Calibration + ink price resolution (the DB half)
+ * Calibration resolution (the DB half)
  * ------------------------------------------------------------------ */
 
+/** One channel with its approved calibration row attached (or not). */
+export type ResolvedChannel = RoutedChannel & {
+  calibration: CalibrationRecord | null;
+  calibrationMessage: string;
+};
+
 export type ResolvedMachineInputs = {
+  /** The BASE colour channel's calibration — what computeTrueJobCost prices. */
   calibration: CalibrationRecord | null;
   calibrationMessage: string;
   inkCostPerMl: number | null;
   inkCostSource: string;
+  /** Every channel this job prints, base first. */
+  channels?: ResolvedChannel[];
+  routing?: MachineRoutingResult;
 };
 
 /**
- * Resolve BOTH machine halves for a job.
+ * Load the approved calibration row for ONE identity.
  *
- * Calibration owns mL/sqft and min/sqft; purchasing owns $/mL. They are
- * deliberately separate authorities and are never stored together.
- *
- * Fails CLOSED on every axis: no approved calibration row, an unrecognised
- * machine name, or a channel with no approved rate (Mimaki gloss) all return
- * null and block the job.
+ * Fails CLOSED on every axis. The MachineProfileCalibration migration is
+ * STAGED-not-applied in some environments, so a missing TABLE must read as
+ * "no approved calibration" — never a crash, and never a silently free job.
+ */
+async function loadOne(
+  deps: { db: any; shop: string; at?: Date },
+  identity: CalibrationIdentity,
+): Promise<{ calibration: CalibrationRecord | null; message: string }> {
+  try {
+    const resolution = await loadActiveCalibration(deps.db, deps.shop, identity, deps.at ?? new Date());
+    return resolution.ok
+      ? { calibration: resolution.calibration, message: `Approved calibration ${resolution.calibration.id} (${resolution.calibration.source}).` }
+      : { calibration: null, message: resolution.message };
+  } catch (error: any) {
+    return {
+      calibration: null,
+      message: `Calibration lookup unavailable (${String(error?.message || error).slice(0, 160)}). Treated as MISSING_CALIBRATION.`,
+    };
+  }
+}
+
+/**
+ * Resolve the press, every ink channel, and each channel's approved
+ * calibration row. Calibration owns mL/sqft and min/sqft; purchasing owns
+ * $/mL — deliberately separate authorities, never stored together.
  */
 export async function resolveCanonicalMachineInputs(
   deps: { db: any; shop: string; at?: Date },
-  identity: CalibrationIdentity,
+  input: CanonicalCalculatorInput | CalibrationIdentity,
 ): Promise<ResolvedMachineInputs> {
-  let calibration: CalibrationRecord | null = null;
-  let calibrationMessage = "";
-  try {
-    const resolution = await loadActiveCalibration(deps.db, deps.shop, identity, deps.at ?? new Date());
-    if (resolution.ok) {
-      calibration = resolution.calibration;
-      calibrationMessage = `Approved calibration ${resolution.calibration.id} (${resolution.calibration.source}).`;
-    } else {
-      calibrationMessage = resolution.message;
-    }
-  } catch (error: any) {
-    // The MachineProfileCalibration migration is STAGED, not applied. A missing
-    // table must read as "no approved calibration", never as a crash and never
-    // as a silently free job.
-    calibrationMessage = `Calibration lookup unavailable (${String(error?.message || error).slice(0, 200)}). Treated as MISSING_CALIBRATION.`;
+  // Back-compatible: a bare identity resolves just that one row.
+  if ("machineKey" in input && !("family" in input)) {
+    const one = await loadOne(deps, input as CalibrationIdentity);
+    return { calibration: one.calibration, calibrationMessage: one.message, inkCostPerMl: null, inkCostSource: "" };
   }
 
-  const brand = inkBrandFromMachineName(identity.machineKey);
-  const kind =
-    identity.inkMode === "white" ? "white"
-      : identity.inkMode === "gloss" ? "gloss"
-        : identity.inkMode === "cmyk" || identity.inkMode === "cmyk_heavy" ? "cmyk"
-          : "other";
-  const inkCostPerMl = brand ? channelInkRatePerMl(brand, kind as any) : null;
-  const inkCostSource = brand
-    ? inkCostPerMl != null
-      ? `Canonical purchasing rate for ${brand} ${kind} (ink-rates-shared CANONICAL_INK_RATES).`
-      : `No approved $/mL exists for ${brand} ${kind}${brand === "mimaki" && kind === "gloss" ? " — the Mimaki is CMYK-only and gloss is never priced on it." : "."}`
-    : `Machine "${identity.machineKey}" does not map to a known ink brand, so no purchasing $/mL can be resolved.`;
-
-  return { calibration, calibrationMessage, inkCostPerMl, inkCostSource };
+  const job = input as CanonicalCalculatorInput;
+  const routing = routingFor(job);
+  const channels: ResolvedChannel[] = [];
+  for (const channel of routing.channels) {
+    const loaded = await loadOne(deps, channel.identity);
+    channels.push({ ...channel, calibration: loaded.calibration, calibrationMessage: loaded.message });
+  }
+  const base = channels.find((channel) => channel.isBase)!;
+  return {
+    calibration: base.calibration,
+    calibrationMessage: base.calibrationMessage,
+    inkCostPerMl: base.inkCostPerMl,
+    inkCostSource: base.inkCostSource,
+    channels,
+    routing,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -294,6 +367,12 @@ export function assembleCanonicalJob(
   const production = Math.max(finished, Math.ceil(finished * (1 + overagePct / 100)));
   const equipmentRatePerHour = input.equipmentRatePerHour ?? OWNER_STANDARDS.machineRecoveryPerHour.value;
 
+  // Routing first: every adapter below needs the ROUTED machine key, and the
+  // nesting/cut policies are machine-specific.
+  const routing = machine.routing ?? routingFor(input);
+  reasons.push(...routing.reasons);
+  blockers.push(...routing.blockers);
+
   if (finished <= 0) {
     reasons.push(CANONICAL_REASONS.quantityRequired);
     blockers.push(`${CANONICAL_REASONS.quantityRequired}: a canonical job needs a positive finished quantity.`);
@@ -333,7 +412,7 @@ export function assembleCanonicalJob(
     const cfg = input.labels ?? { lines: [] };
     label = computeLabelJob({
       lines: cfg.lines,
-      machineKey: input.machineKey,
+      machineKey: routing.machineKey,
       cutMode: input.cutMode,
       loadedMediaWidthIn: input.loadedMediaWidthIn,
     });
@@ -414,7 +493,7 @@ export function assembleCanonicalJob(
       designs: cfg.designs,
       personalization: cfg.personalization,
       blankUnitCost: cfg.blankUnitCost,
-      machineKey: input.machineKey,
+      machineKey: routing.machineKey,
       cutMode: input.cutMode,
       loadedMediaWidthIn: input.loadedMediaWidthIn,
     };
@@ -483,7 +562,7 @@ export function assembleCanonicalJob(
       polePockets: cfg.polePockets,
       sides: cfg.sides,
       designs: cfg.designs,
-      machineKey: input.machineKey,
+      machineKey: routing.machineKey,
       cutMode: input.cutMode,
       loadedMediaWidthIn: input.loadedMediaWidthIn,
     };
@@ -550,6 +629,118 @@ export function assembleCanonicalJob(
   if (!machine.calibration) reasons.push(CANONICAL_REASONS.calibrationRequired);
   if (machine.inkCostPerMl == null) reasons.push(CANONICAL_REASONS.inkPriceRequired);
 
+  /* ---- ink channels — CMYK, WHITE and GLOSS priced SEPARATELY ----
+   * The engine prices the BASE colour channel itself (one calibration, one
+   * $/mL). Specialty channels have their own calibration, their own passes
+   * and their own coverage, so they are computed here and added as explicit
+   * ink / machine_recovery / run_labor stages. White and gloss are never
+   * folded into the CMYK arithmetic.
+   *
+   * Every channel uses ITS calibration's own area basis — inkableArtwork for
+   * ink, ripLayout for occupancy on all four seeded rows — never a substitute. */
+  const resolvedChannels: ResolvedChannel[] = machine.channels ?? [];
+  const inkChannels: CanonicalInkChannel[] = [];
+  const areaMap = {
+    inkable_artwork: areas.inkableArtworkSqft,
+    rip_layout: areas.ripLayoutSqft ?? undefined,
+    material_footprint: areas.materialFootprintSqft,
+  };
+
+  for (const channel of resolvedChannels) {
+    const entry: CanonicalInkChannel = {
+      kind: channel.kind,
+      calibrationKey: channel.calibrationKey,
+      identity: channel.identity,
+      calibrationResolved: channel.calibration != null,
+      calibrationMessage: channel.calibrationMessage,
+      areaBasis: channel.calibration?.inkAreaBasis ?? null,
+      inkableSqft: null,
+      coveragePct: channel.coveragePct,
+      coverageSource: null,
+      passes: channel.passCount,
+      mlPerSqftPerPass: channel.calibration?.mlPerSqftPerPass ?? null,
+      totalMl: null,
+      costPerMl: channel.inkCostPerMl,
+      inkCost: null,
+      occupancyAreaBasis: channel.calibration?.timeAreaBasis ?? null,
+      occupancyAreaSqft: null,
+      occupancyMinutes: null,
+      equipmentRecovery: null,
+      operatorAttention: null,
+    };
+
+    if (!channel.calibration) {
+      entry.blocker = `${CANONICAL_REASONS.calibrationRequired}: ${channel.kind.toUpperCase()} channel — ${channel.calibrationMessage}`;
+      if (!channel.isBase) blockers.push(entry.blocker);
+      inkChannels.push(entry);
+      continue;
+    }
+
+    const ml = computeInkMl({
+      calibration: channel.calibration,
+      areas: areaMap,
+      coveragePct: channel.coveragePct,
+      passCount: channel.passCount,
+    });
+    if (ml.ok) {
+      entry.inkableSqft = ml.areaSqft;
+      entry.coveragePct = ml.coveragePct;
+      entry.coverageSource = ml.coverageSource;
+      entry.totalMl = ml.inkMl;
+      entry.inkCost = channel.inkCostPerMl != null ? ml.inkMl * channel.inkCostPerMl : null;
+    } else if (!channel.isBase) {
+      entry.blocker = `${ml.reason}: ${channel.kind.toUpperCase()} channel — ${ml.message}`;
+      blockers.push(entry.blocker);
+    }
+
+    const occ = computeOccupancyMinutes({
+      calibration: channel.calibration,
+      areas: areaMap,
+      passCount: channel.passCount,
+    });
+    if (occ.ok) {
+      entry.occupancyAreaSqft = occ.areaSqft;
+      entry.occupancyMinutes = occ.minutes;
+      entry.equipmentRecovery = (occ.minutes / 60) * equipmentRatePerHour;
+      entry.operatorAttention = (occ.minutes / 60) * (DEFAULT_OPERATOR_ATTENTION_PCT / 100) * DEFAULT_OPERATOR_LABOR_RATE_PER_HOUR;
+    }
+
+    // Specialty channels post their own explicit lines; the base channel is
+    // priced by the engine so it must NOT be double-counted here.
+    if (!channel.isBase) {
+      finishingStages.push({
+        key: `ink_${channel.kind}`,
+        label: `${channel.kind.toUpperCase()} ink — ${entry.totalMl == null ? "blocked" : `${entry.totalMl.toFixed(2)} mL`} (${channel.passCount} layer(s))`,
+        amount: entry.inkCost ?? 0,
+        category: "ink",
+        basis: "PER_AREA",
+        formula: entry.totalMl == null ? undefined
+          : `${(entry.inkableSqft ?? 0).toFixed(4)} sqft (${entry.areaBasis}) x ${entry.coveragePct}% x ${entry.mlPerSqftPerPass} mL/sqft x ${channel.passCount} pass = ${entry.totalMl.toFixed(4)} mL x ${(channel.inkCostPerMl ?? 0).toFixed(7)}/mL`,
+        note: channel.inkCostSource,
+        blocker: entry.blocker,
+      });
+      if (entry.equipmentRecovery != null) {
+        finishingStages.push({
+          key: `machine_${channel.kind}`,
+          label: `${channel.kind.toUpperCase()} press occupancy — ${entry.occupancyMinutes!.toFixed(1)} min`,
+          amount: entry.equipmentRecovery,
+          category: "machine_recovery",
+          basis: "PER_AREA",
+          formula: `${(entry.occupancyAreaSqft ?? 0).toFixed(4)} sqft (${entry.occupancyAreaBasis}) x ${channel.calibration.minutesPerSqft} min/sqft x ${channel.passCount} pass`,
+        });
+        finishingStages.push({
+          key: `attention_${channel.kind}`,
+          label: `${channel.kind.toUpperCase()} operator attention — ${DEFAULT_OPERATOR_ATTENTION_PCT}% of ${entry.occupancyMinutes!.toFixed(1)} min`,
+          amount: entry.operatorAttention!,
+          category: "run_labor",
+          basis: "PER_AREA",
+          provisional: `Operator attention ${DEFAULT_OPERATOR_ATTENTION_PCT}% is ${OPERATOR_ATTENTION_CLASSIFICATION}.`,
+        });
+      }
+    }
+    inkChannels.push(entry);
+  }
+
   const trueCostInput: TrueCostInput = {
     customerFinishedQty: finished,
     productionQty: production,
@@ -561,8 +752,9 @@ export function assembleCanonicalJob(
     calibrationMessage: machine.calibrationMessage,
     inkCostPerMl: machine.inkCostPerMl,
     inkCostSource: machine.inkCostSource,
-    coveragePct: input.coveragePct,
-    passCount: input.passCount ?? 1,
+    // The BASE colour channel only. Specialty channels are priced above.
+    coveragePct: resolvedChannels.find((channel) => channel.isBase)?.coveragePct ?? input.cmykCoveragePct ?? null,
+    passCount: 1,
     application: applicationCost,
     setup,
     runLabor: { mode: "operator_attention" },
@@ -593,6 +785,8 @@ export function assembleCanonicalJob(
     totalCost: trueCost.totalCost,
     trueCost,
     diagnostics,
+    routing,
+    inkChannels,
     calibration: {
       resolved: machine.calibration != null,
       identity: calibrationIdentityOf(input),
@@ -740,14 +934,16 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
     family,
     quantity: Math.max(0, Math.floor(num(params, "pqty", 0))),
     overagePct: num(params, "poverage", 0),
-    machineKey: str(params, "pmachinekey"),
-    inkMode: str(params, "pinkmode"),
-    ripProfile: str(params, "pripprofile"),
-    qualityMode: str(params, "pqualitymode"),
-    resolution: str(params, "presolution"),
-    passConfig: str(params, "ppassconfig"),
-    coveragePct: params.get("pcoverage") ? num(params, "pcoverage") : null,
-    passCount: Math.max(1, Math.floor(num(params, "ppasscount", 1))),
+    // 2D-4A — OPERATOR FIELDS ONLY. The calibration identity (ripProfile,
+    // qualityMode, resolution, passConfig, inkMode, machineKey) is DERIVED
+    // by machine-routing.server.ts; none of it is read from the query string,
+    // so an operator can never type a calibration internal and never has to.
+    printerSelection: str(params, "pprinter") || "auto",
+    whiteLayers: Math.max(0, Math.floor(num(params, "pwhitelayers", 0))),
+    whiteCoveragePct: String(params.get("pwhitecoverage") ?? "").trim() !== "" ? num(params, "pwhitecoverage") : null,
+    glossLayers: Math.max(0, Math.floor(num(params, "pglosslayers", 0))),
+    glossCoveragePct: String(params.get("pglosscoverage") ?? "").trim() !== "" ? num(params, "pglosscoverage") : null,
+    cmykCoveragePct: String(params.get("pcmykcoverage") ?? "").trim() !== "" ? num(params, "pcmykcoverage") : null,
     cutMode: (str(params, "pcutmode") || "normal") as CutMode,
     loadedMediaWidthIn: params.get("pmediawidth") ? num(params, "pmediawidth") : undefined,
   } satisfies Partial<CanonicalCalculatorInput> as CanonicalCalculatorInput;
