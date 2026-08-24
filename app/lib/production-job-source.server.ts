@@ -853,15 +853,26 @@ export function buildShopifyOrderJobPayload(
   // 16D/16E: uniform-family orders take their family checklist — all-jar ->
   // premium-jars (applied-label flow), all-DTP -> dtp-bags (outsourced
   // purchase flow). Mixed or bag orders keep the pre-16D default unchanged.
-  const lineFamilyOf = (line: any): "jar" | "dtp" | "sticker" | "other" => {
+  // 0D: sticker BAGS are blank bags with a printed customer label applied.
+  // They price through the canonical BAG engine and carry a BAG snapshot, so
+  // no new parser is needed — but they must be classified BEFORE the generic
+  // `sticker_` test, which would otherwise file them as flat stickers and
+  // build the stickers-labels checklist (Printed / Cut / Weeded / Finish),
+  // losing the decisive "Labels applied to bags" step.
+  const lineFamilyOf = (line: any): "jar" | "dtp" | "sticker-bag" | "sticker" | "other" => {
     const raw = getLineProperty(line, "_GSO Canonical");
     if (parseCanonicalJarOrderLine(raw)) return "jar";
     if (parseCanonicalDtpOrderLine(raw)) return "dtp";
     if (parseCanonicalStickerOrderLine(raw)) return "sticker";
+    // a BAG snapshot whose profile is a sticker bag — checked before the
+    // visible-property fallbacks so a stripped line still classifies.
+    const bagCanonical = parseCanonicalOrderLine(raw);
+    if (bagCanonical && clean(bagCanonical.profile).startsWith("sticker_bag_")) return "sticker-bag";
     const family = getLineProperty(line, "Product Family");
     const type = getLineProperty(line, "Product Type");
     if (isJarFamily(family) || type.startsWith("jar_")) return "jar";
     if (isDtpFamily(family) || type.startsWith("dtp_")) return "dtp";
+    if (clean(family).toLowerCase() === "sticker bags" || type.startsWith("sticker_bag_")) return "sticker-bag";
     if (clean(family).toLowerCase() === "stickers" || type.startsWith("sticker_")) return "sticker";
     return "other";
   };
@@ -871,9 +882,14 @@ export function buildShopifyOrderJobPayload(
       ? "premium-jars"
       : lineFamilies.size === 1 && lineFamilies.has("dtp")
         ? "dtp-bags"
-        : lineFamilies.size === 1 && lineFamilies.has("sticker")
-          ? "stickers-labels"
-          : "default";
+        : lineFamilies.size === 1 && lineFamilies.has("sticker-bag")
+          ? // FAMILY_CHECKLISTS["sticker-bags"] — the only checklist carrying
+            // "Labels applied to bags". Previously reachable ONLY from the
+            // quote path (familyFromQuoteItems), never from a paid order.
+            "sticker-bags"
+          : lineFamilies.size === 1 && lineFamilies.has("sticker")
+            ? "stickers-labels"
+            : "default";
 
   const firstLine = configuredLines[0];
   const firstImage =

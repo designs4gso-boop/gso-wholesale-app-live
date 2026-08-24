@@ -8,7 +8,8 @@ import {
   stripInternalCostFields,
 } from "../lib/security-guards-shared";
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
-import { resolveZakekeDesign, zakekeLineAttributes } from "../lib/zakeke-design.server";
+import { configuratorProductGate } from "../lib/product-family";
+import { resolveZakekeDesign, zakekeDesignGate, zakekeLineAttributes } from "../lib/zakeke-design.server";
 import { createAdminGraphql } from "../lib/personalization-assets.server";
 import { getPersonalizationClaimSecret, personalizationLineAttributes } from "../lib/personalization-claim.server";
 import { resolvePersonalizationForLine } from "../lib/personalization-checkout.server";
@@ -97,12 +98,10 @@ function resolveJarVariantProductType(productType: string, jarColor: "Clear" | "
   return productType;
 }
 
-function productFamilyForType(productType: string): "Jars" | "Stock Bags" | "DTP Pouches" | "Stickers" {
-  if (isJarProductType(productType)) return "Jars";
-  if (productType.startsWith("dtp_")) return "DTP Pouches";
-  if (productType.startsWith("sticker_")) return "Stickers";
-  return "Stock Bags";
-}
+// 0D: the family classifier now lives in app/lib/product-family.ts so this
+// checkout proxy and the configurator loader cannot drift apart. This route is
+// the load-bearing CALLER — the family it resolves becomes the `Product Family`
+// draft-order attribute, which drives both the ADD YOUR BRAND gate and ERP intake.
 
 function rangeLabel(rule: any) {
   if (!rule) return "";
@@ -248,7 +247,10 @@ export async function action({ request }: ActionFunctionArgs) {
         );
       }
 
-      const baseProductType = product.productType || "stock_bag_4x5";
+      // 0D: no hard default — see the loader for the same change. An empty
+      // productType must not inherit the Stock Bag family (and with it the
+      // Stock-Bag-only ADD YOUR BRAND channel).
+      const baseProductType = clean(product.productType);
       const baseUsesJarColor = isColorVariantJarProductType(baseProductType);
       const normalizedJarColor = normalizeJarColor(rawJarColor);
       const selectedJarColor = isJarProductType(baseProductType) && baseUsesJarColor ? normalizedJarColor || "Clear" : "";
@@ -282,7 +284,45 @@ export async function action({ request }: ActionFunctionArgs) {
       const stickerWidthIn = clean(rawItem.widthIn || rawItem.width);
       const stickerHeightIn = clean(rawItem.heightIn || rawItem.height);
       const usesJarColor = isColorVariantJarProductType(productType);
-      const productFamily = productFamilyForType(productType);
+      // 0D: fail closed on an unrecognised product type rather than guessing a
+      // family. The decision itself lives in configuratorProductGate so it is
+      // directly testable; this route only maps the result to a response.
+      const familyGate = configuratorProductGate(productType);
+      if (!familyGate.ok) {
+        return jsonResponse(
+          {
+            ok: false,
+            code: familyGate.code,
+            error: "This product is not connected to the GSO configurator.",
+            item: { handle, productGid },
+          },
+          { status: 400 },
+        );
+      }
+      const productFamily = familyGate.family;
+
+      // 0D-F: required-design gate for product types whose artwork must come
+      // from Zakeke. Scope, stated accurately:
+      //   - PRE-ARMED for sticker_bag_4x5; it becomes effective once that
+      //     ConfiguratorProduct row and the controlled GSO purchase path exist.
+      //   - It enforces the PRESENCE of a sanitized design id (the output of
+      //     resolveZakekeDesign), never a raw posted value.
+      //   - It does NOT validate that the design exists in Zakeke — that needs
+      //     a server-to-server API call this phase does not make.
+      //   - It is NOT the native Shopify cart containment mechanism; nothing
+      //     here protects the native /cart/add path.
+      const designGate = zakekeDesignGate(productType, zakekeDesign);
+      if (!designGate.ok) {
+        return jsonResponse(
+          {
+            ok: false,
+            code: designGate.code,
+            error: "This product must be customized before checkout. Please complete your design and try again.",
+            item: { handle, productGid, productType },
+          },
+          { status: 400 },
+        );
+      }
       const selectedBagColor = isJar ? "" : bagColor;
       const selectedLabelSet = isJar ? labelSet || (jarLaunchSize ? "Standard" : "Side + Lid") : "";
       const defaultSides = effectiveProduct.defaultSides || "Double Sided";

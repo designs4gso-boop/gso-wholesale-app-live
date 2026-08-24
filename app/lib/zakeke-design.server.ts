@@ -80,3 +80,51 @@ export function zakekeSnapshot(design: ZakekeDesign | null): Record<string, unkn
     },
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * Phase 0D — required-design policy
+ * ------------------------------------------------------------------ */
+
+/**
+ * Product types whose artwork MUST come from Zakeke.
+ *
+ * Added incrementally and deliberately narrow: only the 4X5 Sticker Bag today.
+ * Stock Bags are the locked owner exception (premade GSO artwork + the
+ * separate ADD YOUR BRAND channel) and must never appear here. Jars, DTP
+ * pouches and flat stickers keep Zakeke OPTIONAL until each is ruled on.
+ *
+ * SCOPE OF THE GUARANTEE THIS BUYS
+ *
+ * Enforcing this proves only that a SYNTACTICALLY valid design id was present
+ * and survived sanitizeZakekeDesignId. It does NOT prove the design exists in
+ * Zakeke, belongs to this shop, or matches this product — that needs a
+ * server-to-server Zakeke API call, which this phase deliberately does not
+ * make. Treat it as "artwork was started", not "artwork is verified".
+ */
+export const ZAKEKE_REQUIRED_PRODUCT_TYPES: readonly string[] = ["sticker_bag_4x5"];
+
+export function productTypeRequiresZakekeDesign(productType: unknown): boolean {
+  const type = String(productType ?? "").trim();
+  if (!type) return false;
+  return ZAKEKE_REQUIRED_PRODUCT_TYPES.includes(type);
+}
+
+export type ZakekeDesignGate = { ok: true } | { ok: false; code: "ZAKEKE_DESIGN_REQUIRED" };
+
+/**
+ * 0D-F — the required-design DECISION, as a pure function.
+ *
+ * Takes the ALREADY-SANITIZED design (the output of resolveZakekeDesign), never
+ * a raw posted value, so a malformed or hostile id can never satisfy it.
+ *
+ * Held here rather than inline in the checkout route for the same reason as
+ * configuratorProductGate: an inline `if` can only be tested by grepping the
+ * route source, and mutation testing proved a grep cannot distinguish a correct
+ * guard from an inverted or dead-coded one.
+ */
+export function zakekeDesignGate(productType: unknown, design: ZakekeDesign | null): ZakekeDesignGate {
+  if (productTypeRequiresZakekeDesign(productType) && !design) {
+    return { ok: false, code: "ZAKEKE_DESIGN_REQUIRED" };
+  }
+  return { ok: true };
+}

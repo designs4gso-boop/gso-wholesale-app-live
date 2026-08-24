@@ -47,6 +47,32 @@ export const CANONICAL_FINISH_OPTIONS = [
   "Deep Build 9X+ — Request Custom Quote",
 ];
 
+// 0D: customer-facing bag MATERIAL list, served from CODE for the same reason
+// the finish ladder is (no production ConfiguratorOption rows required).
+// Owner rule: Matte and Gloss are two surfaces sharing ONE base material cost
+// class; Holographic is its own class. "Gloss" here is a MATERIAL — it is not
+// the Spot Gloss FINISH, which lives in CANONICAL_FINISH_OPTIONS above.
+export const BAG_MATERIAL_OPTIONS = ["Matte", "Gloss", "Holographic"];
+
+/** The two base material cost classes a bag material can resolve to. */
+export type BagMaterialClass = "matte" | "holographic";
+
+/**
+ * Map a customer-selected bag material to its base cost class.
+ *
+ * Holographic is the only material with its own cost inputs (and the only one
+ * implying the required production white underbase). Everything else — Matte,
+ * Gloss, and any legacy value — resolves to the matte class.
+ *
+ * This was previously an inline `/holo/i` test whose "Gloss prices as Matte"
+ * behaviour was an accident of the fallthrough rather than a stated rule.
+ * Naming it makes the owner rule explicit and testable, with no behaviour
+ * change: a future allowlist can no longer silently reprice Gloss.
+ */
+export function bagMaterialClassFor(material: unknown): BagMaterialClass {
+  return /holo/i.test(String(material ?? "")) ? "holographic" : "matte";
+}
+
 export function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -94,7 +120,7 @@ export function priceStorefrontConfiguration(
   const { glossLayers, deepBuild } = parseStorefrontFinish(selection.finish);
   if (deepBuild) return { ok: false, requestQuote: true, reason: DEEP_BUILD_STOREFRONT_MESSAGE };
 
-  const holographic = /holo/i.test(String(selection.material || ""));
+  const holographic = bagMaterialClassFor(selection.material) === "holographic";
   const faces = Math.max(1, Math.floor(Number(selection.faces) || 2));
 
   const job = canonicalStockBagJob(inputs, {

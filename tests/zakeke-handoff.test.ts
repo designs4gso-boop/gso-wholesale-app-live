@@ -180,9 +180,36 @@ describe("17C.1 checkout route wiring", () => {
     expect(checkout.includes("rawItem.price")).toBe(false);
     expect(checkout).toContain("priceStorefrontConfiguration");
     expect(/price[A-Za-z]*\([^)]*zakeke/i.test(checkout)).toBe(false);
-    // the resolved design is used in exactly two places: parsing it, and emitting
-    // the line attributes — never in a quantity, price, or total expression
-    expect(checkout.match(/zakekeDesign\b/g)).toHaveLength(2);
+
+    // 0D-F: the COUNT and the SEMANTIC SCAN are kept together because neither
+    // is sufficient alone, and neither subsumes the other.
+    //
+    //   - The count catches any NEW reference appearing at all, including the
+    //     alias/indirection case (`const d = zakekeDesign; unitPrice = d ? …`)
+    //     that a per-line scan cannot see.
+    //   - The per-line scan catches an EXISTING reference being mutated into a
+    //     pricing expression, which the count cannot see because the total
+    //     stays the same.
+    //
+    // An earlier revision of this test replaced the count with the scan and
+    // claimed the scan was "strictly stronger". That was wrong: mutation
+    // testing showed a two-line surcharge escaping the scan while the count
+    // caught it. Both stay.
+    //
+    // The three legitimate sites are: resolving the posted id, the 0D-F
+    // required-design gate, and emitting the draft-order line attributes.
+    // Adding a site is fine — bump this deliberately and say why.
+    expect(checkout.match(/zakekeDesign\b/g)).toHaveLength(3);
+
+    const designLines = checkout.split("\n").filter((line) => /zakekeDesign\b/.test(line));
+    expect(designLines.length).toBeGreaterThan(0);
+    for (const line of designLines) {
+      expect(/\b(unitPrice|priceEach|orderTotal|totalPrice|cartTotal|quantity|subtotal|money)\b/.test(line)).toBe(false);
+    }
+
+    // and the design still reaches the draft order exactly once, via the
+    // server-built line attributes
+    expect(checkout.match(/zakekeLineAttributes\(zakekeDesign\)/g)).toHaveLength(1);
   });
 });
 

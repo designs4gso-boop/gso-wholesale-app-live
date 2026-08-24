@@ -4,7 +4,9 @@ import { authenticate } from "../shopify.server";
 import { MIN_QTY } from "../lib/configurator-pricing";
 import { stripInternalCostFields } from "../lib/security-guards-shared";
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
+import { configuratorProductGate } from "../lib/product-family";
 import {
+  BAG_MATERIAL_OPTIONS,
   CANONICAL_FINISH_OPTIONS,
   STOREFRONT_BAG_MIN_QTY,
   STOREFRONT_PRICE_BREAK_QUANTITIES,
@@ -99,12 +101,9 @@ function resolveJarVariantProductType(productType: string, jarColor: "Clear" | "
   return productType;
 }
 
-function productFamilyForType(productType: string): "Jars" | "Stock Bags" | "DTP Pouches" | "Stickers" {
-  if (isJarProductType(productType)) return "Jars";
-  if (productType.startsWith("dtp_")) return "DTP Pouches";
-  if (productType.startsWith("sticker_")) return "Stickers";
-  return "Stock Bags";
-}
+// 0D: the family classifier now lives in app/lib/product-family.ts so this
+// loader and the checkout proxy cannot drift apart. See that file for why
+// sticker_bag_ must beat sticker_, and why unknown fails closed.
 
 function money(value: any) {
   const num = Number(value ?? 0);
@@ -215,11 +214,25 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 
-  const baseProductType = product.productType || "stock_bag_4x5";
+  // 0D: no hard default. The pre-0D `|| "stock_bag_4x5"` coerced an empty
+  // productType into the Stock Bag family, which is the one family ADD YOUR
+  // BRAND is allowed on — an unconfigured row must never inherit that.
+  const baseProductType = clean(product.productType);
   const productType = resolveJarVariantProductType(baseProductType, jarColor);
   const isJar = isJarProductType(productType);
   const hasJarColorVariants = isColorVariantJarProductType(baseProductType);
-  const productFamily = productFamilyForType(productType);
+  // Fail closed: an unrecognised product type is "not configurable", exactly
+  // as if no ERP row existed. The decision lives in configuratorProductGate so
+  // it is directly testable; this loader only maps the result to a response.
+  const familyGate = configuratorProductGate(productType);
+  if (!familyGate.ok) {
+    return jsonResponse({
+      ok: true,
+      active: false,
+      message: "No ERP configurator product found for this Shopify product.",
+    });
+  }
+  const productFamily = familyGate.family;
   const effectiveProductIdentity = [
     product.shopifyProductGid ? { shopifyProductGid: product.shopifyProductGid } : undefined,
     product.shopifyHandle ? { shopifyHandle: product.shopifyHandle } : undefined,
@@ -327,7 +340,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
         ? [...JAR_BASE_FINISHES]
         : optionMaterials.length
           ? optionMaterials
-          : ruleMaterials;
+          : ruleMaterials.length
+            ? ruleMaterials
+            // 0D: Sticker Bags serve their materials from CODE, exactly as the
+            // finish ladder and bag colours already do. Without this the
+            // dropdown renders EMPTY for any product type with no seeded
+            // ConfiguratorOption rows. Scoped to this family so Stock Bags
+            // keep their existing DB-driven list unchanged.
+            : productFamily === "Sticker Bags"
+              ? [...BAG_MATERIAL_OPTIONS]
+              : ruleMaterials;
   const finishes = stickerLaunch
     ? [...STICKER_SPECIALTY_OPTIONS]
     : dtpLaunch
