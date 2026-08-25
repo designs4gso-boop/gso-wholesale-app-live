@@ -105,3 +105,30 @@ export function configuratorProductGate(productType: unknown): ConfiguratorProdu
   if (!family) return { ok: false, code: "PRODUCT_NOT_CONFIGURABLE" };
   return { ok: true, family };
 }
+
+/* ------------------------------------------------------------------ *
+ * 0E — Stock-Bag-only behaviour needs a Stock-Bag-only discriminator
+ * ------------------------------------------------------------------ */
+
+/**
+ * Does this canonical snapshot `profile` denote an actual Stock Bag?
+ *
+ * WHY THIS EXISTS
+ *
+ * A canonical BAG snapshot is NOT automatically a Stock Bag. Two bag-based
+ * products share that snapshot shape and the same pricing engine:
+ *
+ *   stock_bag_4x5    premade GSO artwork, ADD YOUR BRAND allowed, Zakeke N/A
+ *   sticker_bag_4x5  customer artwork, Zakeke required, ADD YOUR BRAND forbidden
+ *
+ * `parseCanonicalOrderLine` accepts ANY non-empty profile, so "the snapshot
+ * parsed" only proves the line is a canonical BAG — never which bag. Anything
+ * gated on Stock-Bag-only rules must ask this instead.
+ *
+ * Deliberately an ALLOWLIST (`stock_bag_` via the classifier) rather than a
+ * `!startsWith("sticker_bag_")` denylist, so a future bag-shaped family cannot
+ * accidentally inherit Stock Bag behaviour by simply not being a sticker bag.
+ */
+export function isStockBagProfile(profile: unknown): boolean {
+  return productFamilyForConfiguratorType(profile) === "Stock Bags";
+}

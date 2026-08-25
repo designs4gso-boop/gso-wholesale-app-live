@@ -48,6 +48,7 @@ import {
   parseCanonicalOrderLine,
   parseCanonicalStickerOrderLine,
 } from "./order-canonical.server";
+import { isStickerBagProductType, isStockBagProfile } from "./product-family";
 
 export type ManualJobItemInput = {
   productTitle: string;
@@ -550,15 +551,19 @@ export function configuratorLinesOf(order: any): any[] {
  * transaction opens (re-resolution makes network calls, which must never run
  * inside a Prisma transaction).
  *
- * Only a canonical Stock Bag line qualifies — `parseCanonicalOrderLine` is the
- * same marker the rest of this mapper treats as authoritative, and a jar / DTP /
- * sticker / legacy line can never carry Stock Bag personalization.
+ * Only a canonical STOCK BAG line qualifies — a jar / DTP / sticker / sticker
+ * bag / legacy line can never carry Stock Bag personalization.
+ *
+ * 0E: the qualifying test is the snapshot's PROFILE, not merely that the bag
+ * snapshot parsed. `parseCanonicalOrderLine` accepts any non-empty profile, so
+ * a Sticker Bag (customer artwork, ADD YOUR BRAND forbidden) parsed exactly
+ * like a Stock Bag and inherited the Stock-Bag-only upload channel.
  */
 export function decodeOrderPersonalization(order: any) {
   return configuratorLinesOf(order).map((line: any, index: number) => {
     const canonical = parseCanonicalOrderLine(getLineProperty(line, "_GSO Canonical"));
     const decoded = readPersonalizationFromLine((key) => getLineProperty(line, key), {
-      isCanonicalStockBagLine: Boolean(canonical),
+      isCanonicalStockBagLine: Boolean(canonical) && isStockBagProfile(canonical.profile),
     });
     return { index, productTitle: clean(line.title || line.name), ...decoded };
   });
@@ -629,9 +634,19 @@ export function buildShopifyOrderJobPayload(
     const personalization = options.personalizationByIndex?.get(index);
     const personalizationAssets = personalization?.assets || [];
     const personalizationWarnings = personalization?.warnings || [];
+    // 0E: a bag snapshot alone does not identify WHICH bag. Sticker Bags share
+    // the canonical bag snapshot and engine with Stock Bags, so the stripped-
+    // line fallback reads the profile rather than assuming "Stock Bags".
+    // Unknown/legacy bag profiles keep the pre-0E default so no existing line
+    // loses its family.
+    const canonicalBagFamily = canonical
+      ? isStickerBagProductType(canonical.profile)
+        ? "Sticker Bags"
+        : "Stock Bags"
+      : "";
     const productFamily =
       getLineProperty(line, "Product Family") ||
-      (canonical ? "Stock Bags" : jarCanonical ? "Jars" : dtpCanonical ? "DTP Pouches" : stickerCanonical ? "Stickers" : "");
+      (canonical ? canonicalBagFamily : jarCanonical ? "Jars" : dtpCanonical ? "DTP Pouches" : stickerCanonical ? "Stickers" : "");
     const productType =
       getLineProperty(line, "Product Type") ||
       (canonical ? canonical.profile : jarCanonical ? jarCanonical.profile : dtpCanonical ? dtpCanonical.profile : stickerCanonical ? stickerCanonical.profile : "");
