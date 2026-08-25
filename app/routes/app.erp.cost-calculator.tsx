@@ -26,8 +26,9 @@ import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, com
 import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
 import { SPECIALTY_FILE_PREP_FEE, SPECIALTY_FILE_PREP_LABEL, specialtyFilePrepFee } from "../lib/calculator-fee-standards";
 import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, type CanonicalCalculatorView } from "../lib/canonical-calculator-shared";
-import { canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput } from "../lib/canonical-calculator.server";
+import { assembleCanonicalJob, canonicalInputForQuantity, canonicalSupportsTierLadder, canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput, resolveCanonicalMachineInputs } from "../lib/canonical-calculator.server";
 import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
+import { isCostedAuthority, persistQuoteIfCanonicalAllows, resolveCostAuthority } from "../lib/canonical-quote-authority.server";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
 // owns the value; client components cannot import .server modules).
@@ -419,12 +420,23 @@ export async function loader({ request }: { request: Request }) {
    * loader's own searchParams; the action replays these exact bytes.
    * Returns null for DTP / Boxes / jars / custom, which keep their path. */
   let canonicalResult: Awaited<ReturnType<typeof computeCanonicalJob>> | null = null;
-  {
-    const canonicalInput = normalizeCanonicalInput(url.searchParams);
-    if (canonicalInput) {
-      canonicalResult = await computeCanonicalJob({ db, shop }, canonicalInput);
-    }
+  const canonicalInput = normalizeCanonicalInput(url.searchParams);
+  // 2D-4C1: the calibration lookup is resolved ONCE and reused, so a tier
+  // ladder costs one DB round trip rather than one per rung. assembleCanonicalJob
+  // is pure, so every rung is byte-identical to what the save side recomputes.
+  let canonicalMachine: Awaited<ReturnType<typeof resolveCanonicalMachineInputs>> | null = null;
+  if (canonicalInput) {
+    canonicalMachine = await resolveCanonicalMachineInputs({ db, shop }, canonicalInput);
+    canonicalResult = assembleCanonicalJob(canonicalInput, canonicalMachine);
   }
+  /** Canonical true cost for ONE tier quantity. Pure — no further DB contact. */
+  const canonicalForQty = (qty: number) => {
+    if (!canonicalInput || !canonicalMachine) return null;
+    // null = this job cannot be re-quantified (multi-line label). The caller
+    // suppresses those rungs; nothing is invented for them.
+    const scaled = canonicalInputForQuantity(canonicalInput, qty);
+    return scaled ? assembleCanonicalJob(scaled, canonicalMachine) : null;
+  };
 
 
   // Read-only since 12B.1a: the RIP sync settings row is created by the RIP
@@ -1003,7 +1015,12 @@ export async function loader({ request }: { request: Request }) {
       // (1000/2500/5000/7500/10000) and is not configurable.
       const configLadderP = pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamily)] ?? pricingPolicy.values.tierLadders.defaultLadder;
       const baseTierQuantities = !eparams.get("eqty") ? (isDtpP ? DTP_LADDER_QUANTITIES : configLadderP) : eQuantities;
-      const tierQuantities = [...new Set([...baseTierQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b);
+      // 2D-4C1A FIX 2: a multi-line label job has no approved way to split a
+      // new total across customer-entered lines, so alternate rungs are
+      // SUPPRESSED — the job as entered is the only quotable quantity.
+      const tierQuantities = canonicalSupportsTierLadder(canonicalInput)
+        ? [...new Set([...baseTierQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b)
+        : [requestedQtyP].filter((value) => value > 0);
       // 15F.0-C: margin comes from each row's QUANTITY (researched band), never
       // from row count/position — adding the requested row cannot shift the
       // standard rows (forensic P0-1 fix). Families without a researched curve
@@ -1091,7 +1108,47 @@ export async function loader({ request }: { request: Request }) {
         // controlling rule is recorded. Advanced per-tier margin edits still
         // override the band margin (validated by the existing floor gate).
         const overrideMargin = eMarginsRaw.length === tierQuantities.length ? eMarginsRaw[index] : null;
-        const completeCost = run.totalCost + tierFreight.total;
+        // 2D-4C1 COST AUTHORITY. For the four canonical families the canonical
+        // TRUE MANUFACTURING COST is the only cost basis; the legacy run cost
+        // is never promoted to fill a gap. Commercial margin policy below is
+        // unchanged and stays a separate concern.
+        const authority = resolveCostAuthority({
+          canonicalFamilyKey: pFamily ? canonicalUiFamily(pFamily) : null,
+          canonical: canonicalForQty(qty),
+          legacyJobCost: run.totalCost,
+          quantity: qty,
+          freightTotal: tierFreight.total,
+        });
+        // 2D-4C1A FIX 1: a blocked row has NO cost — not a zero one. It never
+        // reaches the commercial policy, because there is nothing to price
+        // from, and every money field it publishes is null.
+        if (!isCostedAuthority(authority)) {
+          return {
+            quantity: qty,
+            requested: qty === requestedQtyP,
+            filePrepFee: 0,
+            jobCost: null,
+            unitCost: null,
+            costAuthority: authority.authority,
+            canonicalJobCost: null,
+            canonicalUnitCost: null,
+            costBasisNote: authority.basis,
+            marginPct: null,
+            unitPrice: null,
+            totalPrice: null,
+            profit: null,
+            actualMarginPct: null,
+            belowFloor: false,
+            draftOnly: true,
+            freightTotal: tierFreight.total,
+            freightSource: tierFreight.source,
+            setupTotal: run.setupTotal,
+            blockers: [...run.missing, ...authority.blockers],
+            commercial: null,
+            status: "BLOCKED",
+          };
+        }
+        const completeCost = authority.completeCost;
         const commercial = computeCommercialPrice({
           familyKey: canonicalUiFamily(pFamily), quantity: qty, completeCost,
           marginRule: marginRuleForPricingP, premiumEligible: premiumEligibleP,
@@ -1119,20 +1176,26 @@ export async function loader({ request }: { request: Request }) {
           requested: qty === requestedQtyP,
           filePrepFee: filePrepFeeP,
           jobCost: completeCost,
-          unitCost: qty > 0 ? completeCost / qty : completeCost,
+          unitCost: authority.unitCost,
+          costAuthority: authority.authority,
+          canonicalJobCost: authority.manufacturingJobCost,
+          canonicalUnitCost: authority.manufacturingUnitCost,
+          costBasisNote: authority.basis,
           marginPct: commercial.marginPctApplied,
           unitPrice: qty > 0 ? (commercial.finalTotalPrice + filePrepFeeP) / qty : commercial.finalUnitPrice,
           totalPrice: commercial.finalTotalPrice + filePrepFeeP,
           profit: commercial.achievedProfit + filePrepFeeP,
           actualMarginPct: commercial.achievedMarginPct,
           belowFloor,
-          draftOnly: run.missing.length > 0,
+          draftOnly: run.missing.length > 0 || !authority.eligible,
           freightTotal: tierFreight.total,
           freightSource: tierFreight.source,
           setupTotal: run.setupTotal,
-          blockers: run.missing,
+          blockers: [...run.missing, ...authority.blockers],
           commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP, marketPosition: commercial.marketPosition, specialty: commercial.specialty }, // 15F.0K.3 + 15G.4C
-          status: run.missing.length ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
+          // A canonical family with no usable true cost can never read READY
+          // TO QUOTE, whatever the legacy engine and the margin gate think.
+          status: (run.missing.length || !authority.eligible) ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
         };
       });
     }
@@ -1496,9 +1559,18 @@ export async function action({ request }: { request: Request }) {
    * and NOT from the posted form fields, so the saved canonical cost is the
    * one that was displayed. Same normaliser, same assembler, same bytes. */
   const canonicalInputSave = normalizeCanonicalInput(psearchParams);
-  const canonicalSnapshot = canonicalInputSave
-    ? await computeCanonicalJob({ db, shop }, canonicalInputSave)
+  const canonicalMachineSave = canonicalInputSave
+    ? await resolveCanonicalMachineInputs({ db, shop }, canonicalInputSave)
     : null;
+  const canonicalSnapshot = canonicalInputSave && canonicalMachineSave
+    ? assembleCanonicalJob(canonicalInputSave, canonicalMachineSave)
+    : null;
+  /** Canonical true cost for ONE saved tier quantity. Pure — mirrors the loader. */
+  const canonicalForQtySave = (qty: number) => {
+    if (!canonicalInputSave || !canonicalMachineSave) return null;
+    const scaled = canonicalInputForQuantity(canonicalInputSave, qty);
+    return scaled ? assembleCanonicalJob(scaled, canonicalMachineSave) : null;
+  };
 
   const fReadAll = (key: string) => {
     const fromSearch = psearchParams.getAll(key);
@@ -1729,7 +1801,10 @@ export async function action({ request }: { request: Request }) {
     // 15F.0K.2-A: same ownerConfig ladder resolution as the loader (parity).
     const configLadderSave = pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamilySave)] ?? pricingPolicy.values.tierLadders.defaultLadder;
     const baseQuantitiesSave = !fRead("eqty") ? (savedIsDtp ? DTP_LADDER_QUANTITIES : configLadderSave) : quantities;
-    const tierQuantitiesSave = [...new Set([...baseQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b);
+    // 2D-4C1A FIX 2 — loader parity: multi-line label jobs quote only as entered.
+    const tierQuantitiesSave = canonicalSupportsTierLadder(canonicalInputSave)
+      ? [...new Set([...baseQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b)
+      : [savedRequestedQty].filter((value) => value > 0);
     const validMargins = margins.filter((value) => Number.isFinite(value) && value > 0);
     // 15F.0-C: quantity-band margins at save — identical resolver to the loader.
     const provisionalRuleSave: FamilyMarginRule = { key: "provisional-universal", label: "Provisional universal curve", curve: [...PROVISIONAL_MARGIN_CURVE], familyMinPct: MARGIN_FLOOR_PCT, aliases: [] };
@@ -1800,7 +1875,31 @@ export async function action({ request }: { request: Request }) {
       }
       // 15F.0-H: identical commercial resolution to the loader (parity).
       const overrideMarginSave = validMargins.length === tierQuantitiesSave.length ? validMargins[index] : null;
-      const completeCost = run.totalCost + tierFreight.total;
+      // 2D-4C1 COST AUTHORITY — byte-identical to the loader (parity).
+      const authority = resolveCostAuthority({
+        canonicalFamilyKey: pFamilySave ? canonicalUiFamily(pFamilySave) : null,
+        canonical: canonicalForQtySave(qty),
+        legacyJobCost: run.totalCost,
+        quantity: qty,
+        freightTotal: tierFreight.total,
+      });
+      // 2D-4C1A FIX 1 — loader parity: a blocked row is non-costed, never $0,
+      // and never priced.
+      if (!isCostedAuthority(authority)) {
+        return {
+          quantity: qty, requested: qty === savedRequestedQty, filePrepFee: 0,
+          jobCost: null, unitCost: null,
+          costAuthority: authority.authority, canonicalJobCost: null, canonicalUnitCost: null,
+          costBasisNote: authority.basis,
+          marginPct: null, unitPrice: null, totalPrice: null, profit: null, actualMarginPct: null,
+          belowFloor: false, draftOnly: true,
+          freightTotal: tierFreight.total, freightSource: tierFreight.source, setupTotal: run.setupTotal,
+          blockers: [...run.missing, ...authority.blockers],
+          commercial: null,
+          status: "BLOCKED",
+        };
+      }
+      const completeCost = authority.completeCost;
       const commercial = computeCommercialPrice({
         familyKey: canonicalUiFamily(pFamilySave), quantity: qty, completeCost,
         marginRule: marginRuleForPricingSave, premiumEligible: premiumEligibleSave,
@@ -1820,12 +1919,13 @@ export async function action({ request }: { request: Request }) {
       const filePrepFeeSave = specialtyFilePrepFee({ requested: fRead("pfileprep") === "1", glossLayers: Number(fRead("pglosslayers") || 0), whiteLayers: Number(fRead("pwhitelayers") || 0) });
       const belowFloor = commercial.marginPctApplied < floorForFamilySave;
       return {
-        quantity: qty, requested: qty === savedRequestedQty, filePrepFee: filePrepFeeSave, jobCost: completeCost, unitCost: qty > 0 ? completeCost / qty : completeCost, marginPct: commercial.marginPctApplied,
+        quantity: qty, requested: qty === savedRequestedQty, filePrepFee: filePrepFeeSave, jobCost: completeCost, unitCost: authority.unitCost, marginPct: commercial.marginPctApplied,
+        costAuthority: authority.authority, canonicalJobCost: authority.manufacturingJobCost, canonicalUnitCost: authority.manufacturingUnitCost, costBasisNote: authority.basis,
         unitPrice: qty > 0 ? (commercial.finalTotalPrice + filePrepFeeSave) / qty : commercial.finalUnitPrice, totalPrice: commercial.finalTotalPrice + filePrepFeeSave, profit: commercial.achievedProfit + filePrepFeeSave, actualMarginPct: commercial.achievedMarginPct, belowFloor,
-        draftOnly: run.missing.length > 0, freightTotal: tierFreight.total, freightSource: tierFreight.source, setupTotal: run.setupTotal,
-        blockers: run.missing,
+        draftOnly: run.missing.length > 0 || !authority.eligible, freightTotal: tierFreight.total, freightSource: tierFreight.source, setupTotal: run.setupTotal,
+        blockers: [...run.missing, ...authority.blockers],
         commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave, marketPosition: commercial.marketPosition, specialty: commercial.specialty }, // 15F.0K.3 + 15G.4C
-        status: run.missing.length ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
+        status: (run.missing.length || !authority.eligible) ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
       };
     });
     const selectedTierQty = Math.floor(Number(fRead("pseltier") || 0));
@@ -1972,7 +2072,9 @@ export async function action({ request }: { request: Request }) {
   ];
   const verdict = canFinalize(lines.filter((line) => line.key !== "freight"), gate);
   if (!verdict.ok && !gate.allowed) return Response.json({ ok: false, message: verdict.blockers.join(" | ") });
+
   const primary: any = productSnapshot && savedSelectedTier ? savedSelectedTier : tiers[tiers.length - 1];
+
   const familyDefaults = ruleForSave ? curveForTierCount(ruleForSave.curve, snapshotTiers.length, ruleForSave.familyMinPct) : defaultTierMargins(snapshotTiers.length);
   const savedIsDtpSnapshot = savedEngineFamily === "dtp-bags";
   const snapshot = {
@@ -2161,13 +2263,45 @@ export async function action({ request }: { request: Request }) {
     savedBlankNameForNaming,
     pFamilySave ? familyByKeyOrAlias(pFamilySave)?.label : null,
   ]);
-  const quote = await db.quote.create({
-    data: {
-      shop, status: "draft", customerName: String(form.get("ecustomer") || "") || fRead("pcustomer") || null,
-      notes: `${productSnapshot ? (savedIsDtpSnapshot ? "15C DTP calculator draft" : "14C.2 product calculator draft") : "14B.0 emergency calculator draft"}${fRead("pnotes") ? " — " + fRead("pnotes").slice(0, 240) : ""}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}${canonicalSnapshot && canonicalSnapshot.status === "DRAFT_ONLY" ? " — CANONICAL TRUE COST DRAFT_ONLY: " + canonicalSnapshot.blockers.slice(0, 4).join("; ") : ""}`,
-      items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({ unitPrice: primary.unitPrice, marginPct: primary.marginPct, tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })) }) }] },
+  /* ---- 2D-4C1A HARD CANONICAL WRITE GATE ----------------------------
+   * The decision AND the write live behind one injectable boundary
+   * (persistQuoteIfCanonicalAllows), so the refusal is provable by executing
+   * it with a spy rather than by reading source order. Both the BASE quantity
+   * and the SELECTED tier are gated: a base job can be costable while the
+   * chosen rung is not (a Stock Bag ladder crossing below its 50-unit MOQ is
+   * the live example), and the selected row is the one persisted.
+   *
+   * Reached ONLY after the commercial margin gate above already allowed the
+   * save, and it takes no margin input at all — that is the structural
+   * guarantee an approval cannot supply a missing true cost. */
+  const saveOutcome = await persistQuoteIfCanonicalAllows(
+    {
+      canonicalFamilyKey: pFamilySave ? canonicalUiFamily(pFamilySave) : null,
+      baseCanonical: canonicalSnapshot,
+      selectedCanonical: primary ? canonicalForQtySave(Number(primary.quantity) || 0) : null,
+      selectedQuantity: Number(primary?.quantity) || 0,
+      selectedTierDraftOnly: Boolean(primary?.draftOnly),
     },
-  });
+    async () => {
+      const quote = await db.quote.create({
+        data: {
+          shop, status: "draft", customerName: String(form.get("ecustomer") || "") || fRead("pcustomer") || null,
+          notes: `${productSnapshot ? (savedIsDtpSnapshot ? "15C DTP calculator draft" : "14C.2 product calculator draft") : "14B.0 emergency calculator draft"}${fRead("pnotes") ? " — " + fRead("pnotes").slice(0, 240) : ""}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}${canonicalSnapshot && canonicalSnapshot.status === "DRAFT_ONLY" ? " — CANONICAL TRUE COST DRAFT_ONLY: " + canonicalSnapshot.blockers.slice(0, 4).join("; ") : ""}`,
+          items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({ unitPrice: primary.unitPrice, marginPct: primary.marginPct, tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })) }) }] },
+        },
+      });
+
+      return quote;
+    },
+  );
+  if (!saveOutcome.ok) {
+    return Response.json({
+      ok: false,
+      message: [saveOutcome.message, ...saveOutcome.blockers.slice(0, 4)].join(" | "),
+      canonicalBlocked: true,
+    });
+  }
+  const quote = saveOutcome.created;
   return Response.json({ ok: true, message: `Draft quote ${quote.id.slice(0, 8)}… saved with the full tier snapshot${verdict.ok ? "" : " (DRAFT ONLY — has warnings)"}. Open Quotes to finish it.` });
 }
 

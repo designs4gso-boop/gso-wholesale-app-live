@@ -476,12 +476,23 @@ describe("2D-4 calculate / save / recalculate cannot disagree", () => {
 
   it("there is exactly ONE assembler — the route never re-implements it", () => {
     const src = routeSrc();
-    // the route calls the shared entry point, on both sides
+    // ONE normaliser, fed the same bytes on both sides.
     expect(src).toContain("normalizeCanonicalInput(url.searchParams)");
     expect(src).toContain("normalizeCanonicalInput(psearchParams)");
-    const calls = src.match(/computeCanonicalJob\(/g) || [];
-    expect(calls.length).toBe(2); // loader + action, nothing else
-    // and it does NOT import the adapters directly
+    // 2D-4C1 split the wrapper into its two halves so a tier LADDER costs one
+    // calibration lookup instead of one per rung: the DB half runs once per
+    // side, the pure assembler runs per tier. Both sides use the same pair, so
+    // the parity guarantee is unchanged — and now covers every rung.
+    expect(src.match(/resolveCanonicalMachineInputs\(\{ db, shop \}/g)).toHaveLength(2);
+    expect((src.match(/assembleCanonicalJob\(/g) || []).length).toBeGreaterThanOrEqual(4);
+    expect(src).toContain("const canonicalForQty = (qty: number) =>");
+    expect(src).toContain("const canonicalForQtySave = (qty: number) =>");
+    // the per-tier helpers vary ONLY the quantity, through the ONE family-aware
+    // setter — a label job carries its quantity inside labels.lines[], so a raw
+    // top-level spread would freeze media and ink across the whole ladder.
+    expect((src.match(/canonicalInputForQuantity\(canonicalInput(Save)?, qty\)/g) || []).length).toBe(2);
+    expect(src).not.toMatch(/assembleCanonicalJob\(\{ \.\.\.canonicalInput/);
+    // and it still does NOT import the adapters directly
     for (const adapter of ["bag-cost-inputs", "banner-cost-inputs", "label-cost-inputs", "true-cost-engine"]) {
       expect(src, adapter).not.toContain(`../lib/${adapter}`);
     }

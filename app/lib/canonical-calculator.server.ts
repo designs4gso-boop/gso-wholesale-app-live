@@ -894,7 +894,12 @@ export async function computeCanonicalJob(
   deps: { db: any; shop: string; at?: Date },
   input: CanonicalCalculatorInput,
 ): Promise<CanonicalCalculatorResult> {
-  const machine = await resolveCanonicalMachineInputs(deps, calibrationIdentityOf(input));
+  // 2D-4C1 DEFECT FIX: resolve from the FULL job input, never from a bare
+  // identity. Passing calibrationIdentityOf(input) here took the back-compat
+  // branch, which returns inkCostPerMl: null and no channels/routing — so
+  // EVERY canonical job reported MISSING_INK_PRICE and no specialty channel
+  // was ever resolved. The job input is what carries the routing.
+  const machine = await resolveCanonicalMachineInputs(deps, input);
   return assembleCanonicalJob(input, machine);
 }
 
@@ -1030,6 +1035,54 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
       designs: Math.max(0, Math.floor(num(params, "pdesigns", 1))),
     },
   };
+}
+
+/**
+ * Rebuild a canonical input at a DIFFERENT quantity — for a tier ladder.
+ *
+ * Each family carries its quantity somewhere different, and getting this wrong
+ * is silent: bags and banners read the top-level `quantity`, but a LABEL job
+ * reads `labels.lines[].quantity` and ignores the top level for material, ink
+ * and nesting. Overriding only the top level therefore produced an identical
+ * job cost at every rung of a label ladder. This function is the one place
+ * that knows the difference.
+ *
+ * RETURNS null WHEN THE JOB CANNOT BE RE-QUANTIFIED.
+ *
+ * 2D-4C1A FIX 2 — a MULTI-LINE label job is exactly that case. Splitting a new
+ * total across several customer-entered lines would require an allocation rule
+ * (which line grows? in what ratio?) that no owner has approved, and each
+ * physical line is independently costed for material, nesting, ink, machine,
+ * cutting and weeding. So the entered line quantities are never redistributed:
+ * only the job AS ENTERED is quotable, and alternate ladder rungs are
+ * suppressed by the caller rather than invented here.
+ */
+export function canonicalInputForQuantity(
+  input: CanonicalCalculatorInput,
+  quantity: number,
+): CanonicalCalculatorInput | null {
+  const target = Math.max(0, Math.floor(quantity));
+  if (input.family !== "stickers-labels") return { ...input, quantity: target };
+
+  const lines = input.labels?.lines ?? [];
+  if (!lines.length) return { ...input, quantity: target };
+
+  // A single physical line IS the job, so its quantity may simply become the
+  // tier quantity — no allocation decision is involved.
+  if (lines.length === 1) {
+    return { ...input, quantity: target, labels: { ...input.labels!, lines: [{ ...lines[0], quantity: target }] } };
+  }
+
+  // Multi-line: only the entered quantities are valid.
+  const entered = lines.reduce((sum, line) => sum + Math.max(0, line.quantity), 0);
+  return target === entered ? input : null;
+}
+
+/** Can this job produce an alternate-quantity tier ladder at all? */
+export function canonicalSupportsTierLadder(input: CanonicalCalculatorInput | null | undefined): boolean {
+  if (!input) return true; // unsupported families keep their existing ladder
+  if (input.family !== "stickers-labels") return true;
+  return (input.labels?.lines?.length ?? 0) <= 1;
 }
 
 /** Re-exported so a caller never has to reach into ink-rates-shared itself. */
