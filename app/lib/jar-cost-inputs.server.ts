@@ -6,10 +6,16 @@
 //
 // SCOPE NOTE: these presets are the Patch 2 owner authority for jar geometry,
 // box density, freight and blank cost. They deliberately do NOT overwrite the
-// existing RecipeLabelZone rows, which hold older estimated geometry and
-// application seconds and are read only by admin screens — never by a cost
-// path. That divergence is recorded in the Patch 2A audit and is intentional
-// until the owner decides which store wins.
+// existing RecipeLabelZone rows, which hold older estimated GEOMETRY read only
+// by admin screens — never by a cost path.
+//
+// 2D-4D2 RESOLVED THE OTHER HALF OF THAT DIVERGENCE. The Patch 2A note said
+// the split over APPLICATION SECONDS was "intentional until the owner decides
+// which store wins". The owner has decided: the per-size RecipeLabelZone
+// timings win, and this module now carries them (see
+// JAR_APPLICATION_SECONDS_BY_SIZE). Setup rates moved onto the owner-verified
+// global standards at the same time. GEOMETRY is unchanged and still belongs
+// to this module.
 
 import {
   computeNesting,
@@ -20,6 +26,8 @@ import {
 } from "./nesting-engine.server";
 import { computeFinishing, type CutGeometryMap, type CutMode } from "./finishing-cost.server";
 import { type CostBasis } from "./true-cost-engine.server";
+import { deriveGsoLabelCutDiameter, deriveGsoLabelCutlineFromArtboard } from "./gso-cutline";
+import { OWNER_STANDARDS } from "./owner-standards";
 
 export const JAR_COST_INPUTS_VERSION = "17D.2-jar-cost-inputs";
 
@@ -27,8 +35,39 @@ export const JAR_COST_INPUTS_VERSION = "17D.2-jar-cost-inputs";
  * Production quantity
  * ------------------------------------------------------------------ */
 
-/** Owner rule: 1% planned overage. Blanks/material/ink price at production qty. */
-export const JAR_PLANNED_OVERAGE_PCT = 1;
+/**
+ * Planned jar overage — 1%. OWNER-VERIFIED (2D-4D3, 2026-08-25).
+ *
+ * 500 finished jars are produced as 505. The percentage is deliberate and the
+ * owner has confirmed it, so it now reads from the decision authority
+ * (OWNER_STANDARDS.jarPlannedOveragePct) rather than being a number this file
+ * asserts about itself.
+ *
+ * HISTORY, because how this got verified matters: the value entered the repo
+ * in commit 5246607 (Patch 2A / 17D.2, 2026-08-19) already labelled "owner
+ * rule", with no OWNER_STANDARDS entry, no dated decision, no supplier
+ * pack-quantity basis and no waste study behind it. The 2D-4D2 audit refused
+ * to accept a self-asserted label as verification and disclosed it on every
+ * jar quote instead of quietly trusting it. The owner then confirmed the 1%.
+ * The number never changed; its PROVENANCE did.
+ *
+ * What it does: raises PRODUCTION quantity, so the inputs that genuinely scale
+ * with produced units — blank complete sets, print media, ink, and the inbound
+ * freight allocated to those sets — price at the higher number. It is applied
+ * ONCE and never compounded. The planned_overage line is $0 so nothing is
+ * double-counted, and packout still counts FINISHED jars.
+ */
+export const JAR_PLANNED_OVERAGE_PCT = OWNER_STANDARDS.jarPlannedOveragePct.value;
+
+/** Machine-readable provenance — now a verified decision, not an assumption. */
+export const JAR_PLANNED_OVERAGE_PROVENANCE = {
+  pct: OWNER_STANDARDS.jarPlannedOveragePct.value,
+  status: "OWNER_VERIFIED",
+  ownerRecord: "OWNER_STANDARDS.jarPlannedOveragePct",
+  confirmedOn: "2026-08-25 (2D-4D3)",
+  supersedes: "Self-asserted comment in 5246607 (Patch 2A / 17D.2) with no owner record — audited and disclosed by 2D-4D2 until this confirmation.",
+  note: "Applies to produced-quantity inputs only. Never compounded, never a separate charge; packout stays on finished quantity.",
+} as const;
 
 export function productionQtyFor(customerFinishedQty: number, overagePct = JAR_PLANNED_OVERAGE_PCT): number {
   const finished = Math.max(0, Math.floor(customerFinishedQty));
@@ -91,53 +130,163 @@ export function materialFootprintSqInPerSet(size: JarSizeKey, selection: JarLabe
 
 /* ------------------------------------------------------------------ *
  * Application labor (owner standard $20/hr)
+ *
+ * 2D-4D2 RECONCILIATION. This module previously carried a FLAT
+ * side 45s / lid 22s / tamper 45s. Those three numbers entered the repo in
+ * one commit (5246607, Patch 2A / 17D.2, 2026-08-19) with no rate derivation,
+ * no measurement and no owner citation — and this module's own header listed
+ * the Patch 2 owner authority as "geometry, box density, freight and blank
+ * cost", which does NOT include application seconds. The same header recorded
+ * that the divergence from the RecipeLabelZone rows was "intentional until the
+ * owner decides which store wins".
+ *
+ * The owner has now decided. The authority is the per-size timing the owner
+ * supplied and which is LIVE in production RecipeLabelZone rows, seeded by
+ * tools/seed-jar-label-zone-dimensions.mjs and noted there as "confirmed by
+ * GSO jar label size list":
+ *
+ *   size          side  lid  lid-side band
+ *   50ml           12    10   12
+ *   100ml tall     12    10   12
+ *   100ml wide     12    10   12
+ *   150ml          13    10   12
+ *   250ml          15    10   12
+ *   3oz            10     8   (no lid-side zone exists)
+ *   4oz            10     8   (no lid-side zone exists)
+ *
+ * NAMING: this module calls the third label "tamper". The owner data calls it
+ * "Lid side label". They are the SAME optional band — both are a full jar
+ * circumference wide, both 0.5-0.6in tall, both optional. The geometry table
+ * below and the live zone rows agree size for size, which is why the timings
+ * transfer.
+ *
+ * BRAND: the timings are keyed by SIZE, not brand. The live zone rows exist on
+ * the Miron and plain-oz recipes; a Chiron 150ml is the same physical jar size
+ * to apply a label to, so it takes the same 150ml timing.
+ *
+ * FAILS CLOSED: 3oz and 4oz have no owner lid-side timing, so asking for that
+ * band on one of them BLOCKS. It is not filled in from another size.
  * ------------------------------------------------------------------ */
 
 export const APPLICATION_LABOR_RATE_PER_HOUR = 20;
-export const JAR_APPLICATION_SECONDS = { side: 45, lid: 22, tamper: 45 } as const;
+
+export type JarApplicationSeconds = { side: number; lid: number; tamper: number | null };
 
 /**
- * Applies to CUSTOMER FINISHED QTY only — never to the overage quantity.
- * Side+Lid = 67 s = $0.372222/jar at $20/hr.
+ * Owner application seconds per label, by jar size.
+ *
+ * tamper: null means the owner recorded NO band for that jar — a missing
+ * standard, never a zero and never a borrowed number.
  */
-export function applicationCostPerJar(selection: JarLabelSelection): number {
+export const JAR_APPLICATION_SECONDS_BY_SIZE: Record<JarSizeKey, JarApplicationSeconds> = {
+  "50ml": { side: 12, lid: 10, tamper: 12 },
+  "100ml_tall": { side: 12, lid: 10, tamper: 12 },
+  "100ml_wide": { side: 12, lid: 10, tamper: 12 },
+  "150ml": { side: 13, lid: 10, tamper: 12 },
+  "250ml": { side: 15, lid: 10, tamper: 12 },
+  "3oz": { side: 10, lid: 8, tamper: null },
+  "4oz": { side: 10, lid: 8, tamper: null },
+};
+
+/** Where each number came from, so a quote can show it without guessing. */
+export const JAR_APPLICATION_SOURCE =
+  "Owner per-size application timings, live in RecipeLabelZone (seed-jar-label-zone-dimensions.mjs, \"confirmed by GSO jar label size list\"). Applied at $20/hr.";
+
+export type JarApplicationResolution =
+  | { ok: true; secondsPerJar: number; costPerFinishedUnit: number; detail: string }
+  | { ok: false; reason: "MISSING_APPLICATION_STANDARD"; message: string };
+
+/**
+ * Application labor for ONE finished jar.
+ *
+ * Applies to CUSTOMER FINISHED QTY only — never to the overage quantity — and
+ * charges once per label actually applied.
+ */
+export function resolveJarApplication(size: JarSizeKey, selection: JarLabelSelection): JarApplicationResolution {
+  const owner = JAR_APPLICATION_SECONDS_BY_SIZE[size];
+  if (!owner) {
+    return {
+      ok: false,
+      reason: "MISSING_APPLICATION_STANDARD",
+      message: `No owner application timing exists for a ${size} jar.`,
+    };
+  }
+
+  const parts: string[] = [];
   let seconds = 0;
-  if (selection.side) seconds += JAR_APPLICATION_SECONDS.side;
-  if (selection.lid) seconds += JAR_APPLICATION_SECONDS.lid;
-  if (selection.tamper) seconds += JAR_APPLICATION_SECONDS.tamper;
-  return (seconds / 3600) * APPLICATION_LABOR_RATE_PER_HOUR;
+  if (selection.side) { seconds += owner.side; parts.push(`side ${owner.side}s`); }
+  if (selection.lid) { seconds += owner.lid; parts.push(`lid ${owner.lid}s`); }
+  if (selection.tamper) {
+    if (owner.tamper == null) {
+      return {
+        ok: false,
+        reason: "MISSING_APPLICATION_STANDARD",
+        message: `The owner recorded no lid-side/tamper band timing for a ${size} jar, so its application labor cannot be costed. Another size's timing is not a substitute.`,
+      };
+    }
+    seconds += owner.tamper;
+    parts.push(`tamper/lid-side ${owner.tamper}s`);
+  }
+
+  return {
+    ok: true,
+    secondsPerJar: seconds,
+    costPerFinishedUnit: (seconds / 3600) * APPLICATION_LABOR_RATE_PER_HOUR,
+    detail: `${parts.join(" + ") || "no labels"} = ${seconds}s per jar at ${APPLICATION_LABOR_RATE_PER_HOUR}/hr. ${JAR_APPLICATION_SOURCE}`,
+  };
 }
 
 /* ------------------------------------------------------------------ *
  * Setup (owner standard)
  * ------------------------------------------------------------------ */
 
-/** Side + Lid together are ONE design: $25/hr at 2 designs/hr. */
-export const JAR_ART_SETUP_BASE = 12.5;
-/** Tamper is a SECOND design at +$10 art, and adds NO extra print setup. */
-export const JAR_ART_SETUP_TAMPER_ADD = 10.0;
-/** $25/hr at 12.5 jobs/hr — once per job, not per design. */
-export const JAR_PRINT_SETUP_PER_JOB = 2.0;
+/* 2D-4D2 RECONCILIATION.
+ *
+ * This module previously carried art $12.50 ("$25/hr at 2 designs/hr"),
+ * a flat +$10.00 for a tamper design (no rate at all), and print $2.00
+ * ("$25/hr at 12.5 jobs/hr"). All three arrived in the same unsourced Patch 2A
+ * commit as the application seconds above, and every other appearance of them
+ * in the repo — GSO_TRUE_COST_CONTRACT.md, GSO_NESTING_CONTRACT.md,
+ * nesting-engine.server.ts — merely restates this file. No owner-approved
+ * jar-specific setup RATE exists anywhere: the rates 2 designs/hr and
+ * 12.5 jobs/hr appear nowhere else and carry no owner record.
+ *
+ * The owner-verified global setup standards DO exist, dated and stamped:
+ *   OWNER_STANDARDS.artSetupPerDesign   = $25/hr / 3 designs/hr = $8.333333
+ *   OWNER_STANDARDS.printSetupPerDesign = $25/hr / 25 jobs/hr   = $1.000000
+ *
+ * So jars now use the OWNER RATES with the JAR BASIS. The basis is what is
+ * genuinely jar-specific and it is unchanged:
+ *   art   PER_DESIGN — side+lid is ONE design; a tamper band is a SECOND.
+ *   print PER_JOB    — charged once per job. A tamper design adds no second
+ *                      print setup, and the two physical runs (side/body and
+ *                      lid) do not either.
+ */
+
+/** One art setup event at the owner rate. Side+lid together are ONE design. */
+export const JAR_ART_SETUP_PER_DESIGN = OWNER_STANDARDS.artSetupPerDesign.value;
+/** One print setup event at the owner rate, charged once per JOB. */
+export const JAR_PRINT_SETUP_PER_JOB = OWNER_STANDARDS.printSetupPerDesign.value;
 
 /**
- * Jar setup is genuinely MIXED and 2D-3C stamps it that way rather than
- * flattening it to one basis:
- *
- *   art   PER_DESIGN — side+lid is ONE design; tamper is a SECOND (+$10).
- *   print PER_JOB    — $2.00 once per job. Tamper adds no second print setup
- *                     and the two physical runs (side/body, lid) do not
- *                     either, so the amount moves with NEITHER design count
- *                     nor copy count.
- *
- * These are the previously approved jar dollar amounts, unchanged. Only the
- * basis metadata is added, and it is added to match the real arithmetic.
+ * Superseded 2D-4D2. Kept only so the old figures stay findable and a silent
+ * revert is obvious; nothing reads them.
  */
+export const JAR_SETUP_RETIRED_ASSUMPTIONS = {
+  artBaseDollars: 12.5,
+  artTamperAddDollars: 10.0,
+  printPerJobDollars: 2.0,
+  note: "Patch 2A (17D.2) figures. No owner-approved jar-specific setup rate was ever recorded for them.",
+} as const;
+
 export function jarSetupCost(selection: JarLabelSelection): {
   art: number; print: number; total: number; designs: number;
   artBasis: CostBasis; printBasis: CostBasis;
 } {
-  const art = JAR_ART_SETUP_BASE + (selection.tamper ? JAR_ART_SETUP_TAMPER_ADD : 0);
+  // A tamper/lid-side band is a SECOND distinct artwork, so it is a second art
+  // setup EVENT at the owner rate — not a flat surcharge.
   const designs = selection.tamper ? 2 : 1;
+  const art = JAR_ART_SETUP_PER_DESIGN * designs;
   return {
     art,
     print: JAR_PRINT_SETUP_PER_JOB,
@@ -282,12 +431,36 @@ export const MIRON_SET_COST: Partial<Record<JarSizeKey, number[]>> = {
   "250ml": [3.92, 3.6, 3.32, 3.11, 2.92],
 };
 
-/** Chiron verified complete-set cost — FLAT at every quantity (owner rule). */
+/**
+ * Chiron verified complete-set cost — FLAT at every quantity (owner rule).
+ *
+ * 100ml wide ($1.80) and 150ml ($1.90) are the two sizes the 14C.2A owner
+ * record (2026-07-24) covered.
+ *
+ * 100ml tall ($1.80) is OWNER-VERIFIED 2026-08-25 (2D-4D3). It needed its own
+ * confirmation rather than inheriting from 100ml wide: the size was added to
+ * the active scope on 2026-08-24, after the 14C.2A record was written, and the
+ * 2D-4D2 audit flagged that its price had arrived in the unsourced Patch 2A
+ * commit alongside figures that turned out to be wrong. Same value, real
+ * provenance — and it is a different jar, so matching 100ml wide is now the
+ * owner's answer rather than a coincidence nobody checked.
+ *
+ * This table is the canonical blank authority for Chiron. VendorProduct rows
+ * carry their own price for the legacy panel and the Vendor Cost Book; the
+ * canonical cost path never reads them.
+ */
 export const CHIRON_SET_COST: Partial<Record<JarSizeKey, number>> = {
   "100ml_tall": 1.8,
   "100ml_wide": 1.8,
   "150ml": 1.9,
   // 50ml deliberately absent — UNVERIFIED, must resolve MISSING_COST.
+};
+
+/** Per-size provenance for the Chiron flat costs. */
+export const CHIRON_SET_COST_PROVENANCE: Partial<Record<JarSizeKey, { status: "OWNER_VERIFIED"; record: string }>> = {
+  "100ml_wide": { status: "OWNER_VERIFIED", record: "14C.2A owner record, 2026-07-24" },
+  "150ml": { status: "OWNER_VERIFIED", record: "14C.2A owner record, 2026-07-24" },
+  "100ml_tall": { status: "OWNER_VERIFIED", record: "Owner confirmation, 2026-08-25 (2D-4D3)" },
 };
 
 export type StandardJarVariant = "clear" | "black_white";
@@ -326,7 +499,13 @@ export function resolveJarBlankCost(input: {
     if (flat == null) {
       return { ok: false, reason: "MISSING_COST", message: `Chiron ${size} has no verified complete-set cost — DRAFT ONLY. A blank cost must never be inferred.` };
     }
-    return { ok: true, unitCost: flat, tierMinQty: null, source: "Chiron verified complete-set cost — flat at every quantity (owner rule)." };
+    const provenance = CHIRON_SET_COST_PROVENANCE[size];
+    return {
+      ok: true,
+      unitCost: flat,
+      tierMinQty: null,
+      source: `Chiron verified complete-set cost — flat at every quantity (owner rule)${provenance ? `; ${provenance.record}` : ""}.`,
+    };
   }
 
   const variants = STANDARD_SET_COST[size];
@@ -342,9 +521,10 @@ export function resolveJarBlankCost(input: {
  *
  * SETUP GROUPING AND PHYSICAL-RUN GROUPING ARE DIFFERENT CONCEPTS.
  *
- *   setup grouping   side + lid = ONE artwork/design ($12.50 art, $2.00 print).
- *                    An optional tamper is a SECOND design (+$10 art, no extra
- *                    print setup). Unchanged by Patch 2B — see jarSetupCost().
+ *   setup grouping   side + lid = ONE artwork/design (one art setup event,
+ *                    one print setup event). An optional tamper is a SECOND
+ *                    design (a second art event, no extra print setup).
+ *                    See jarSetupCost() for the rates.
  *
  *   physical runs    RUN 1 = side (+ optional tamper). RUN 2 = lid.
  *                    Lid labels are a SEPARATE physical print run.
@@ -466,7 +646,7 @@ export function jarNestingAreas(input: JarNestingInput): { areas: JarNestingArea
  * (qty x perimeter), never a shared grid.
  *
  * NO OWNER CUTLINE EXISTS FOR JARS YET. The 4x5 bag benchmark proved artboard
- * (4.00 x 5.00) and cutline (3.79 x 4.81) differ materially, so jar bands fall
+ * (4.00 x 5.00) and cutline (3.875 x 4.875) differ materially, so jar bands fall
  * back to the ARTBOARD geometry and are flagged CUT_PATH_ESTIMATE_REQUIRED.
  * A cutline is always smaller than its artboard, so this OVERSTATES jar
  * cutting until the owner supplies real jar cutlines.
@@ -484,12 +664,53 @@ export const JAR_DEFAULT_CUT_MODE: CutMode = "normal";
  * Cut geometry per nesting band. Side and tamper are separated rectangles with
  * NO owner cutline yet; the lid is a contour on its real diameter.
  */
+/**
+ * Cut geometry for one jar size.
+ *
+ * 2D-4D C1 — DERIVED FROM THE GSO RULE, not the artboard.
+ *
+ * Jar labels are cut like every other GSO label: the cutline is the artwork
+ * outline with a -0.0625in inward offset. Until now no jar cutline existed, so
+ * the artboard "stood in and overstated" the path and every jar blocked on
+ * CUTLINE_GEOMETRY_REQUIRED. That blocker was never about jars being special —
+ * it was about nobody having applied the rule to them.
+ *
+ * Side and tamper are rectangles; the lid is a circle, so its DIAMETER takes
+ * the same 0.125in total reduction (one offset each side).
+ *
+ * Still fails closed: a profile whose artwork is too small to offset yields no
+ * cutline for that component, and computeFinishing blocks rather than guessing.
+ */
 export function jarCutGeometry(size: JarSizeKey): CutGeometryMap {
   const g = JAR_LABEL_GEOMETRY[size];
+  const side = deriveGsoLabelCutlineFromArtboard(g.side.widthIn, g.side.heightIn);
+  const tamper = deriveGsoLabelCutlineFromArtboard(g.tamper.widthIn, g.tamper.heightIn);
+  const lidCutDiameter = deriveGsoLabelCutDiameter(g.lid.diameterIn);
+
   return {
-    side: { model: "separated_rectangle", note: "Individually cut. No owner cutline supplied - artboard stands in and overstates." },
-    tamper: { model: "separated_rectangle", note: "Individually cut. No owner cutline supplied - artboard stands in and overstates." },
-    lid: { model: "contour", cutDiameterIn: g.lid.diameterIn, note: "Circular lid - contour path pi x diameter." },
+    side: side
+      ? {
+          model: "separated_rectangle",
+          cutWidthIn: side.cutWidthIn,
+          cutHeightIn: side.cutHeightIn,
+          note: `Individually cut. Cutline ${side.cutWidthIn.toFixed(3)} x ${side.cutHeightIn.toFixed(3)}in, derived from the ${g.side.widthIn} x ${g.side.heightIn}in artboard by the GSO -0.0625in offset rule.`,
+        }
+      : { model: "separated_rectangle", note: "Side artwork is too small to offset — no cutline can be derived." },
+    tamper: tamper
+      ? {
+          model: "separated_rectangle",
+          cutWidthIn: tamper.cutWidthIn,
+          cutHeightIn: tamper.cutHeightIn,
+          note: `Individually cut. Cutline ${tamper.cutWidthIn.toFixed(3)} x ${tamper.cutHeightIn.toFixed(3)}in, derived by the GSO -0.0625in offset rule.`,
+        }
+      : { model: "separated_rectangle", note: "Tamper artwork is too small to offset — no cutline can be derived." },
+    lid: lidCutDiameter
+      ? {
+          model: "contour",
+          cutDiameterIn: lidCutDiameter,
+          note: `Circular lid — contour path pi x ${lidCutDiameter.toFixed(3)}in, derived from the ${g.lid.diameterIn}in artboard diameter by the GSO -0.0625in offset rule.`,
+        }
+      : { model: "contour", note: "Lid artwork is too small to offset — no cut diameter can be derived." },
   };
 }
 

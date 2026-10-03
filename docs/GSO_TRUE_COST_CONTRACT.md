@@ -31,6 +31,15 @@ Planned Overage is a **quantity effect, not a charge**. It raises production
 quantity so blanks, media, ink and inbound freight already price at the higher
 number. It contributes `$0` as a line so nothing is double-counted.
 
+> **Jar 1% overage — OWNER-VERIFIED (2D-4D3, 2026-08-25).** Recorded as
+> `OWNER_STANDARDS.jarPlannedOveragePct`, so the cost path reads the decision
+> authority rather than a comment. 500 finished jars are produced as 505. It is
+> applied ONCE to produced-quantity inputs — blank complete sets, print media,
+> ink and their inbound freight allocation — never compounded, never a separate
+> charge, and packout still counts finished jars. 2D-4D2 had disclosed it as an
+> unverified assumption because the figure had no owner record at all; the owner
+> has now confirmed the number, so the disclosure is gone rather than replaced.
+
 ---
 
 ## 2. The three areas — never collapse them
@@ -72,21 +81,50 @@ how much of it carries ink, so occupancy is never coverage-scaled.
 
 ```
 productionQty = ceil(customerFinishedQty × (1 + overagePct/100))
-              = ceil(1000 × 1.01) = 1010     (jars, 1% owner standard)
+              = ceil(1000 × 1.01) = 1010     (jars, 1% — see the note below)
 ```
 
 ---
 
 ## 4. Jar owner rules (Patch 2)
 
-**Application labor** — $20/hr, on finished quantity only:
-side 45 s = $0.25 · lid 22 s = $0.12222 · **side+lid 67 s = $0.372222** ·
-tamper +45 s = $0.25.
+**Application labor** — $20/hr, on finished quantity only, charged once per
+label actually applied. **Per size** (2D-4D2), from the owner timings live in
+`RecipeLabelZone`:
 
-**Setup** — side + lid together are **one design**.
-Art $12.50 ($25/hr at 2 designs/hr) + print $2.00 ($25/hr at 12.5 jobs/hr).
-Optional tamper is a **second design at +$10 art with no extra print setup**,
-so side+lid+tamper = $22.50 art + $2.00 print.
+All values below are owner-approved.
+
+| Size | Side | Lid | Tamper / lid-side band |
+|---|---|---|---|
+| 50 ml | 12 s | 10 s | 12 s |
+| 100 ml tall | 12 s | 10 s | 12 s |
+| 100 ml wide | 12 s | 10 s | 12 s |
+| 150 ml | 13 s | 10 s | 12 s |
+| 250 ml | 15 s | 10 s | 12 s |
+| 3 oz | 10 s | 8 s | **none recorded — blocks** |
+| 4 oz | 10 s | 8 s | **none recorded — blocks** |
+
+This replaces the flat side 45 s / lid 22 s / tamper 45 s that Patch 2A carried.
+Those three numbers had no rate derivation, no measurement and no owner
+citation, and Patch 2A's own header excluded application seconds from what it
+claimed authority over. "Tamper" here and "Lid side label" in the zone rows are
+the same optional band — same circumference width, same 0.5–0.6 in height, both
+optional. The plain oz jars have no such band recorded, so asking for one
+BLOCKS rather than borrowing another size's timing.
+
+**Setup** — the **basis** is jar-specific and unchanged; the **rates** are the
+owner-verified globals (2D-4D2):
+
+| | Basis | Rate |
+|---|---|---|
+| Art | `PER_DESIGN` — side + lid together are **one design** | `OWNER_STANDARDS.artSetupPerDesign` = $8.333333 |
+| Print | `PER_JOB` — once per job, whatever the design or run count | `OWNER_STANDARDS.printSetupPerDesign` = $1.000000 |
+
+An optional tamper band is a **second design**, so it is a **second art setup
+event** and still no extra print setup. This replaces art $12.50
+("$25/hr at 2 designs/hr"), a flat +$10 tamper surcharge with no rate at all,
+and print $2.00 ("$25/hr at 12.5 jobs/hr") — none of which had an owner-approved
+jar-specific rate behind them.
 
 **Packout** — $2.00 labor + $1.50 consumables = **$3.50 per finished box**.
 

@@ -62,41 +62,60 @@ export const CANONICAL_SUPPORTED_FAMILIES: CanonicalFamily[] = [
   "sticker-bags",
   "stock-bags",
   "banners",
+  // 2D-4D1 PROMOTED. Every ACTIVE jar profile is now fully costed: verified
+  // blank price, artboard geometry, a cutline derived by the GSO -0.0625in
+  // rule, media, ink, machine, cutting, weeding, application, setup and a
+  // non-null provisional freight. The combinations that were missing costs —
+  // miron 3oz/4oz, chiron 50ml/250ml, standard 100ml/150ml/250ml — are not
+  // products GSO offers, and jar-active-scope.ts keeps them out of scope
+  // rather than pretending they have prices.
+  "standard-jars",
+  "premium-jars",
 ];
 
 /**
  * Families with a canonical blocker but no completed canonical integration.
  *
- * Jars have real geometry, real blank costs and a real adapter, but their
- * ACTUAL side-label cutlines are unmeasured, so canonical costing reports
- * CUTLINE_GEOMETRY_REQUIRED. Until that is resolved a jar has no defensible
- * true cost, and substituting the artboard or the legacy engine would be
- * exactly the substitution the blocker forbids.
+ * A family belongs here when the canonical engine has a verdict about it and
+ * that verdict is "not costable yet" — an adapter exists, but something it
+ * needs is genuinely unknown. That is different from an outsourced family,
+ * which simply has no canonical verdict at all.
  *
  * THE REFUSAL IS ABSOLUTE (2D-4C1C). A fail-closed family refuses regardless
  * of what any canonical result says — VALID, PROVISIONAL, non-null unit cost,
  * zero blockers, anything. That is the entire point of the classification:
  * quote-readiness is an OWNER decision about whether a family's costing is
  * complete and verified, not something a passing arithmetic result may confer
- * on itself. Without this, a future change that happened to make jar costing
- * return a usable-looking number would silently make jars quotable with no
- * one having approved it.
+ * on itself. Without this, a future change that happened to make a family's
+ * costing return a usable-looking number would silently make it quotable with
+ * no one having approved it.
  *
  * PROMOTION IS A DELIBERATE CODE CHANGE. Moving a family from
  * CANONICAL_FAIL_CLOSED to CANONICAL_COST_AUTHORITY means removing it from
  * CANONICAL_FAIL_CLOSED_FAMILIES and adding it to CANONICAL_SUPPORTED_FAMILIES,
  * and it may only happen after ALL of:
- *   1. actual owner-measured cutline geometry exists for the family,
+ *   1. cutline geometry the owner stands behind exists for the family,
  *   2. its canonical costing passes verification against that geometry,
  *   3. the owner explicitly approves it as quote-ready.
- * Not implemented here, and not implementable by accident.
+ * Never implementable by accident.
+ *
+ * THE LIST IS CURRENTLY EMPTY (2D-4D1). Jars were its only members. They were
+ * promoted under those three conditions: their cutlines now come from the
+ * owner's own -0.0625in offset rule rather than being unmeasured (1), every
+ * jar in the active scope was run through a full canonical job with zero
+ * blockers and a real unit cost (2), and the owner approved the active jar
+ * list and the promotion (3). The mechanism is kept, not deleted — the next
+ * family whose canonical verdict is "not costable yet" belongs here.
  */
-export const CANONICAL_FAIL_CLOSED_FAMILIES = ["standard-jars", "premium-jars"] as const;
+export const CANONICAL_FAIL_CLOSED_FAMILIES = [] as const;
 
-export const FAIL_CLOSED_REASONS: Record<string, string> = {
-  "standard-jars": "CUTLINE_GEOMETRY_REQUIRED",
-  "premium-jars": "CUTLINE_GEOMETRY_REQUIRED",
-};
+/**
+ * 2D-4D1: EMPTY. Jars were the only entry and they were promoted once their
+ * cutlines became derivable and their active scope was pinned down. The
+ * mechanism stays — a future family that has a canonical verdict of "not
+ * costable yet" belongs here, and the absolute refusal still works.
+ */
+export const FAIL_CLOSED_REASONS: Record<string, string> = {};
 
 export function familyCostModel(canonicalFamilyKey: string | null | undefined): FamilyCostModel {
   if (isCanonicalFamily(canonicalFamilyKey) &&

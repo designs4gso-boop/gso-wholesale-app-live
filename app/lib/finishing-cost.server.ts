@@ -14,7 +14,7 @@
 //      exists but must be asked for explicitly and is never inferred from
 //      rows/columns.
 //   2. ARTBOARD != CUTLINE. The cutter follows the real cutline. A 4x5 bag
-//      label is a 4.00 x 5.00in ARTBOARD with a 3.79 x 4.81in CUTLINE. The
+//      label is a 4.00 x 5.00in ARTBOARD cut at a 3.875 x 4.875in CUTLINE by
 //      cutline is an owner-supplied fact and is NEVER derived from bleed or
 //      inferred from the artboard.
 //
@@ -55,7 +55,7 @@ export const FINISHING_REASONS = {
   cutGeometryUnverified: "CUT_GEOMETRY_UNVERIFIED",
   /**
    * 2C-3B: the ACTUAL cutline is unknown. The 4x5 benchmark proved an artboard
-   * is not a safe substitute (4.00x5.00 artboard vs 3.79x4.81 cutline), and the
+   * is not a safe substitute (4.00x5.00 artboard vs 3.875x4.875 cutline), and the
    * rule is NOT that a cutline is always smaller — it is simply that an unknown
    * cutline is unknown. Such a job is never quote-ready. -> DRAFT_ONLY
    */
@@ -63,20 +63,55 @@ export const FINISHING_REASONS = {
 } as const;
 
 /* ------------------------------------------------------------------ *
- * The reference benchmark geometry
+ * THE HISTORICAL CUTTER BENCHMARK — a measurement, NOT current geometry
  *
- * 130 x 4x5 bag labels. ARTBOARD 4.00 x 5.00in; the cutter follows the real
- * CUTLINE 3.79 x 4.81in. Individually cut, so the path is qty x perimeter:
+ * 2D-4C2C. These constants record ONE observed job and exist solely to derive
+ * a cutting SPEED from it. They are deliberately NOT the cutline authority:
+ * current production geometry comes from gso-cutline.ts (-0.0625in inward
+ * offset), and nothing here may be used to shape a job's cut path.
  *
- *   perimeter = 2 x (3.79 + 4.81) = 17.20 in
- *   total     = 130 x 17.20       = 2236.0 in
+ * THE OBSERVED JOB
+ *   130 x 4x5 bag labels, individually cut, NORMAL mode, 09:46 -> 09:57.
+ *   Owner-confirmed cutline 3.79 x 4.81in.
+ *     perimeter = 2 x (3.79 + 4.81) = 17.20 in
+ *     total     = 130 x 17.20       = 2236.0 in over 11.0 minutes
+ *
+ * WHY THIS IS NOT REWRITTEN TO THE CURRENT RULE. A -0.0625in offset on a
+ * 4.00 x 5.00 artboard gives 3.875 x 4.875, so the recorded 3.79 x 4.81 cannot
+ * have come from today's rule: its implied insets are 0.105in and 0.095in per
+ * edge — asymmetric, and neither is 0.0625. The measurement therefore predates
+ * or diverges from the current standard, and restating it in terms of that
+ * standard would silently invent a path length nobody timed. The 2D-4C2A
+ * attempt to do exactly that was reverted here after the 2D-4C2B audit.
+ *
+ * A measured historical fact and a current production rule are allowed to
+ * disagree; forcing them to agree destroys the measurement.
+ *
+ * CONSEQUENCE, STATED PLAINLY: today's 4x5 bag labels are cut at
+ * 3.875 x 4.875in — a slightly LONGER path than the 3.79 x 4.81 job this rate
+ * was timed on — so their cut time is priced marginally higher than the
+ * benchmark job's was. That is correct: it reflects the geometry actually cut.
+ *
+ * SUPERSESSION. A fresh owner-timed cut of a known-geometry job replaces this
+ * record outright. The Roland entries below would benefit most: their piece
+ * count was inferred from layout area and is already flagged unverified.
  * ------------------------------------------------------------------ */
 
-export const REFERENCE_CUTLINE_IN = { widthIn: 3.79, heightIn: 4.81 } as const;
-export const REFERENCE_ARTBOARD_IN = { widthIn: 4.0, heightIn: 5.0 } as const;
-export const REFERENCE_QTY = 130;
-export const REFERENCE_PERIMETER_IN = 2 * (REFERENCE_CUTLINE_IN.widthIn + REFERENCE_CUTLINE_IN.heightIn); // 17.20
-export const CUT_REFERENCE_PATH_IN = REFERENCE_QTY * REFERENCE_PERIMETER_IN; // 2236.0
+/** Artboard of the OBSERVED job. Historical context only. */
+export const BENCHMARK_ARTBOARD_IN = { widthIn: 4.0, heightIn: 5.0 } as const;
+
+/**
+ * Cutline AS MEASURED on the observed job — owner-confirmed 2C-3A.
+ *
+ * NEVER a current cutline. Deriving a live job's geometry from this would
+ * reintroduce the second authority the -0.0625 rule exists to remove; use
+ * deriveGsoLabelCutlineFromArtboard from gso-cutline.ts instead.
+ */
+export const BENCHMARK_MEASURED_CUTLINE_IN = { widthIn: 3.79, heightIn: 4.81 } as const;
+
+export const BENCHMARK_QTY = 130;
+export const BENCHMARK_PERIMETER_IN = 2 * (BENCHMARK_MEASURED_CUTLINE_IN.widthIn + BENCHMARK_MEASURED_CUTLINE_IN.heightIn); // 17.20
+export const CUT_REFERENCE_PATH_IN = BENCHMARK_QTY * BENCHMARK_PERIMETER_IN; // 2236.0
 
 /* ------------------------------------------------------------------ *
  * Cut-mode calibration
@@ -112,14 +147,14 @@ export const CUT_MODE_CALIBRATION: Record<string, Partial<Record<CutMode, CutMod
       benchmarkMinutes: 11.0,
       benchmarkPathIn: CUT_REFERENCE_PATH_IN,
       classification: "OWNER_MEASURED",
-      source: "Owner controlled benchmark: 130 x 4x5 bag labels, NORMAL cut only, 09:46 -> 09:57 = 11.0 min. Cutline 3.79 x 4.81in confirmed by the owner, individually cut = 2236.0in.",
+      source: "Owner controlled benchmark: 130 x 4x5 bag labels, NORMAL cut only, 09:46 -> 09:57 = 11.0 min. Cutline 3.79 x 4.81in confirmed by the owner, individually cut = 2236.0in. HISTORICAL MEASUREMENT — not current cutline geometry; live jobs derive theirs from the -0.0625in offset rule (gso-cutline.ts).",
     },
     normal_perf: {
       inchesPerMinute: CUT_REFERENCE_PATH_IN / 20.0, // 111.8
       benchmarkMinutes: 20.0,
       benchmarkPathIn: CUT_REFERENCE_PATH_IN,
       classification: "DERIVED_FROM_CONFIRMED_GEOMETRY",
-      source: "Owner benchmark: the SAME 130-piece 4x5 layout in the NORMAL+PERF configured mode, 20 min. Recalculated on the corrected 2236.0in cutline path.",
+      source: "Owner benchmark: the SAME 130-piece 4x5 layout in the NORMAL+PERF configured mode, 20 min. Recalculated on the measured 2236.0in cutline path.",
     },
   },
   "roland-lg-640": {
@@ -348,7 +383,7 @@ export function computeFinishing(input: FinishingInput): FinishingResult {
       blockers.push(
         `${FINISHING_REASONS.cutlineGeometryRequired}: ${cutlineMissingBands.map((b) => b.groupKey).join(", ")} ` +
         `${cutlineMissingBands.length === 1 ? "has" : "have"} no ACTUAL cutline geometry. An artboard is not a substitute in either direction ` +
-        `(the 4x5 benchmark measured a 4.00x5.00in artboard against a 3.79x4.81in cutline), so this job is not quote-ready. ` +
+        `(a 4.00x5.00in artboard is cut at 3.875x4.875in under the -0.0625in offset rule), so this job is not quote-ready. ` +
         `The ${cutPathIn.toFixed(1)}in path shown is an ARTBOARD DIAGNOSTIC ESTIMATE ONLY and is not canonical measured geometry.`,
       );
       reasons.push(FINISHING_REASONS.cutlineGeometryRequired);

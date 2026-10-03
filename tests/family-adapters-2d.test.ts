@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
-  BAG_4X5_ARTBOARD_IN, BAG_4X5_BLANK_RETIRED_COST, BAG_4X5_BLANK_UNIT_COST, BAG_4X5_CUTLINE_IN,
+  BAG_4X5_ARTBOARD_IN, BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION, BAG_4X5_BLANK_UNIT_COST, BAG_4X5_CUTLINE_IN,
   BAG_APPLICATION_LABOR_RATE_PER_HOUR, BAG_APPLICATION_RETIRED_LABELS_PER_HOUR,
   BAG_APPLICATION_SECONDS_PER_SIDE, BAG_REASONS, STOCK_BAG_MOQ,
   bagApplicationCost, bagSetupCost, computeBagPhysical,
@@ -22,7 +22,7 @@ import { APPROVED_COST_TRUTH } from "../app/lib/approved-cost-updates.server";
 
 const line = (over: Partial<Parameters<typeof computeLabelJob>[0]["lines"][0]> = {}) => ({
   key: "sticker-a", quantity: 500, printWidthIn: 3, printHeightIn: 3,
-  cutWidthIn: 2.85, cutHeightIn: 2.85, materialKey: "matte", ...over,
+  cutWidthIn: 2.875, cutHeightIn: 2.875, materialKey: "matte", ...over,
 });
 
 describe("2D-1 labels / stickers", () => {
@@ -36,8 +36,8 @@ describe("2D-1 labels / stickers", () => {
 
   it("the ACTUAL cutline drives the cutter path, not the artboard", () => {
     const r = computeLabelJob({ lines: [line()] });
-    // 500 x 2 x (2.85 + 2.85) = 5700in on the CUTLINE
-    expect(r.finishing!.cutPathIn).toBeCloseTo(500 * 2 * (2.85 + 2.85), 6);
+    // 500 x 2 x (2.875 + 2.875) = 5700in on the CUTLINE
+    expect(r.finishing!.cutPathIn).toBeCloseTo(500 * 2 * (2.875 + 2.875), 6);
     // the 3x3 ARTBOARD would have given 6000in
     expect(r.finishing!.cutPathIn).not.toBeCloseTo(500 * 2 * (3 + 3), 3);
   });
@@ -84,28 +84,41 @@ describe("2D-1 labels / stickers", () => {
  * ================================================================== */
 
 describe("2D-2 4x5 sticker bag + stock bag", () => {
-  it("blank bag is EXACTLY $0.11, and $0.09 is retired", () => {
-    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.11);
-    expect(BAG_4X5_BLANK_RETIRED_COST).toBe(0.09);
+  it("blank bag base is EXACTLY $0.09 supplier price, and the $0.11 landed assumption is retired", () => {
+    // 2D-4C2D reversal: $0.09 is the supplier base BEFORE inbound freight;
+    // $0.11 was a landed assumption that hid freight inside the item cost.
+    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.09);
+    expect(BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION).toBe(0.11);
     const r = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 });
-    expect(r.blankCost).toBeCloseTo(1000 * 0.11, 10);
-    expect(r.blankCost).not.toBeCloseTo(1000 * 0.09, 2);
+    expect(r.blankCost).toBeCloseTo(1000 * 0.09, 10);
+    // the retired landed assumption is never charged
+    expect(r.blankCost).not.toBeCloseTo(1000 * 0.11, 2);
   });
 
-  it("cutline is 3.79 x 4.81 with a 17.20in perimeter — never the 4x5 artboard", () => {
-    expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 });
+  it("cutline is 3.875 x 4.875 with a 17.20in perimeter — never the 4x5 artboard", () => {
+    expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.875, heightIn: 4.875 });
     expect(BAG_4X5_ARTBOARD_IN).toEqual({ widthIn: 4.0, heightIn: 5.0 });
-    expect(2 * (3.79 + 4.81)).toBeCloseTo(17.2, 10);
+    expect(2 * (3.875 + 4.875)).toBeCloseTo(17.5, 10);
     const r = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 130, sides: 1 });
-    expect(r.finishing.cutPathIn).toBeCloseTo(130 * 17.2, 6); // 2236in
+    expect(r.finishing.cutPathIn).toBeCloseTo(130 * 17.5, 6); // 2275in at the DERIVED 3.875x4.875 cutline
     expect(r.finishing.cutPathIn).not.toBeCloseTo(130 * 2 * (4 + 5), 3); // artboard would be 2340
   });
 
-  it("Mimaki NORMAL uses the canonical 203.2727 in/min", () => {
+  it("Mimaki NORMAL uses the HISTORICAL 203.2727 in/min, on today's DERIVED geometry", () => {
     const cal = resolveCutCalibration("mimaki-ucjv300-130", "normal")!;
     expect(cal.inchesPerMinute).toBeCloseTo(203.2727, 4);
+
+    // 2D-4C2C — the separation, made concrete. The benchmark job was MEASURED
+    // at 3.79 x 4.81 (2236in in 11.0 min). Today's 4x5 bag label is CUT at the
+    // rule's 3.875 x 4.875 (2275in), a genuinely longer path, so the same 130
+    // pieces now cost slightly MORE than the benchmark took. That is correct:
+    // the rate is historical, the geometry is current, and neither is bent to
+    // match the other.
     const r = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 130, sides: 1 });
-    expect(r.finishing.cutMinutes!).toBeCloseTo(11.0, 6);
+    expect(r.finishing.cutPathIn).toBeCloseTo(2275.0, 6);
+    expect(r.finishing.cutMinutes!).toBeCloseTo(2275.0 / 203.2727272, 4); // ~11.19 min
+    expect(r.finishing.cutMinutes!).toBeGreaterThan(11.0);
+    expect(r.finishing.cutMinutes!).toBeLessThan(11.3);
   });
 
   it("application is 10s per applied SIDE at $20/hr", () => {
@@ -128,7 +141,7 @@ describe("2D-2 4x5 sticker bag + stock bag", () => {
     expect(two.application.applicationLaborCost).toBeCloseTo(2 * one.application.applicationLaborCost, 10);
     // the bag itself is never charged twice — the blank line owns it
     expect(two.application.itemCost).toBe(0);
-    expect(two.blankCost).toBeCloseTo(1000 * 0.11, 10);
+    expect(two.blankCost).toBeCloseTo(1000 * 0.09, 10);
   });
 
   it("weeding is present and no legacy cut multiplier exists", () => {
@@ -178,19 +191,19 @@ describe("2D-2 4x5 sticker bag + stock bag", () => {
   it("STOCK BAG: no $0 template blank and no Zakeke dependency", () => {
     const stock = computeBagPhysical({ product: "stock_bag", bagQuantity: 1000, sides: 1 });
     expect(stock.blankCost).toBeGreaterThan(0);
-    expect(stock.blankCost).toBeCloseTo(1000 * 0.11, 10);
+    expect(stock.blankCost).toBeCloseTo(1000 * 0.09, 10);
     // check CODE, not prose — the header comment deliberately says "NO ZAKEKE"
     const src = readFileSync("app/lib/bag-cost-inputs.server.ts", "utf8");
     const code = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
     for (const t of ["Zakeke", "zakeke", "STOCK-BAG-4X5-TBD"]) expect(code.includes(t), t).toBe(false);
     expect(src.match(/^import /gm)!.every((i) => !/zakeke/i.test(i))).toBe(true);
-    // 0.09 appears only where it documents its own retirement — never as a cost:
-    //   the retired-value constant, and the source string recording the supersession
-    expect(code.match(/0\.09/g)).toHaveLength(2);
-    expect(code).toMatch(/BAG_4X5_BLANK_RETIRED_COST = 0\.09/);
-    expect(code).toMatch(/BAG_4X5_BLANK_SOURCE[\s\S]*Supersedes the earlier \$0\.09/);
-    // and the value actually charged is 0.11
-    expect(code).toMatch(/BAG_4X5_BLANK_UNIT_COST = 0\.11/);
+    // 2D-4C2D: 0.09 IS the charged supplier base now, and 0.11 survives only
+    // as the named retired landed assumption.
+    expect(code).toMatch(/BAG_4X5_BLANK_UNIT_COST = 0\.09/);
+    expect(code).toMatch(/BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION = 0\.11/);
+    expect(code).toMatch(/BAG_4X5_BLANK_SOURCE[\s\S]*BEFORE inbound freight/);
+    // 0.11 is never the charged value
+    expect(code).not.toMatch(/BAG_4X5_BLANK_UNIT_COST = 0\.11/);
   });
 
   it("stock bag setup never charges new-customer art, however many designs are passed", () => {
@@ -325,13 +338,11 @@ describe("2D-3A banners", () => {
  * ================================================================== */
 
 describe("2D cross-family", () => {
-  it("the $0.09 blank bag is retired from the canonical seed", () => {
-    const bag = APPROVED_COST_TRUTH.find((i) => i.key === "bag-4x5")!;
-    expect(bag.flatCost).toBe(0.11);
-    expect(bag.marker).toMatch(/2026-08-22/);
-    expect(bag.marker).toMatch(/supersedes/i);
-    expect(LEGACY_CONFLICTING_RATES.bag4x5Blank009.value).toBe(0.09);
-    expect(LEGACY_CONFLICTING_RATES.bag4x5Blank009.supersededBy).toMatch(/0\.11/);
+  it("the Approved Cost Updates seed carries NO 4x5 blank-bag correction at all", () => {
+    // 2D-4C2D1: cancelled and removed, not restated as a no-op $0.09 write.
+    expect(APPROVED_COST_TRUTH.find((i) => i.key === "bag-4x5")).toBeUndefined();
+    expect(LEGACY_CONFLICTING_RATES.bag4x5Blank011LandedAssumption.value).toBe(0.11);
+    expect(LEGACY_CONFLICTING_RATES.bag4x5Blank011LandedAssumption.supersededBy).toMatch(/0\.09/);
   });
 
   it("the 256/hr application standard is retired from canonical bag costing", () => {
@@ -405,12 +416,14 @@ describe("2D-3A/2D-3B stock bag personalization + retired data script", () => {
     }
   });
 
-  it("the obsolete one-shot can never restore $0.09", () => {
+  it("the obsolete one-shot still writes no bag cost at all", () => {
     const src = readFileSync("tools/apply-15f0k4b-data-corrections.mjs", "utf8");
+    // It stays neutralised even though $0.09 is correct again: the hazard is
+    // an unguarded blind write, not the number.
     expect(src.includes("costPerUnit: 0.09")).toBe(false);
     expect(src.includes("newCost: 0.09")).toBe(false);
     expect(src).toMatch(/RETIRED 2026-08-23/);
-    expect(src).toMatch(/never write \$0\.09 again/);
+    expect(src).toMatch(/never writes a cost/);
     // the other corrections in the script are untouched
     expect(src).toMatch(/costPerUnit: 2\.78/);
     expect(src).toMatch(/costPerHour: 8/);

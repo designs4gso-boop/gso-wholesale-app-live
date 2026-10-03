@@ -67,6 +67,26 @@ import {
   type CalibrationIdentity,
   type CalibrationRecord,
 } from "./machine-calibration.server";
+import { deriveGsoLabelCutlineFromArtboard } from "./gso-cutline";
+import {
+  JAR_LABEL_GEOMETRY,
+  JAR_PLANNED_OVERAGE_PCT,
+  resolveJarApplication,
+  jarCutGeometry,
+  jarFinishingStages,
+  jarFreightPerUnit,
+  jarNestingAreas,
+  jarPhysicalRuns,
+  jarSetupCost,
+  packoutFor,
+  productionQtyFor,
+  resolveJarBlankCost,
+  type JarBrand,
+  type JarLabelSelection,
+  type JarSizeKey,
+  type StandardJarVariant,
+} from "./jar-cost-inputs.server";
+import { activeJarProfile } from "./jar-active-scope";
 import { CANONICAL_INK_RATES } from "./ink-rates-shared";
 import {
   resolveCanonicalMachineRouting,
@@ -134,6 +154,17 @@ export type CanonicalBagInput = {
   blankUnitCost?: number | null;
 };
 
+export type CanonicalJarInput = {
+  brand: JarBrand;
+  size: JarSizeKey;
+  variant?: StandardJarVariant;
+  /** Which labels this jar actually receives. */
+  selection: JarLabelSelection;
+  /** Requested label types with no verified jar geometry — these BLOCK. */
+  unsupportedLabels?: string[];
+  designs?: number;
+};
+
 export type CanonicalBannerInput = {
   widthIn: number;
   heightIn: number;
@@ -173,6 +204,7 @@ export type CanonicalCalculatorInput = {
   labels?: CanonicalLabelInput;
   bags?: CanonicalBagInput;
   banner?: CanonicalBannerInput;
+  jar?: CanonicalJarInput;
 };
 
 /** Routing is derived, never typed. One authority decides the whole identity. */
@@ -363,7 +395,8 @@ export function assembleCanonicalJob(
   const diagnostics = EMPTY_DIAGNOSTICS();
 
   const finished = Math.max(0, Math.floor(input.quantity));
-  const overagePct = input.overagePct ?? 0;
+  const overagePct = input.overagePct ??
+    (input.family === "standard-jars" || input.family === "premium-jars" ? JAR_PLANNED_OVERAGE_PCT : 0);
   const production = Math.max(finished, Math.ceil(finished * (1 + overagePct / 100)));
   const equipmentRatePerHour = input.equipmentRatePerHour ?? OWNER_STANDARDS.machineRecoveryPerHour.value;
 
@@ -406,6 +439,9 @@ export function assembleCanonicalJob(
     note: "No application selected for this job.",
   };
   let unitsPerBox = CANONICAL_PACKOUT[input.family].unitsPerBox;
+  /** Jars bring their own verified packout and freight. */
+  let jarPackout: { boxes: number; unitsPerBox: number; cost: number } | null = null;
+  let jarFreightInput: TrueCostInput["freight"] | null = null;
 
   /* ---------------- LABELS / STICKERS ---------------- */
   if (input.family === "stickers-labels") {
@@ -517,7 +553,7 @@ export function assembleCanonicalJob(
       ok: true,
       unitCost: production > 0 ? bag.blankCost / production : 0,
       label: "4x5 blank bag",
-      source: "Owner canonical 2026-08-22: $0.11 each.",
+      source: "Owner-corrected 2026-08-24: $0.09 each, supplier base BEFORE inbound freight (pallet freight not yet modelled).",
     };
 
     setup = {
@@ -605,6 +641,168 @@ export function assembleCanonicalJob(
     diagnostics.printSetupEvents = banner.setup.designs;
   }
 
+  /* ---------------- JARS (active scope only) ----------------
+   * 2D-4D1. Jars keep their own long-standing rules — art PER_DESIGN, print
+   * PER_JOB, a complete-set blank charged ONCE per jar, and per-size packout —
+   * so this branch feeds the engine from the jar adapter rather than
+   * reinterpreting any of it. Only the cutline is new, and it comes from the
+   * shared GSO offset rule like every other label.
+   *
+   * SCOPE IS ENFORCED HERE: a brand+size GSO does not offer is refused rather
+   * than costed from whatever tables happen to contain it. */
+  if (input.family === "standard-jars" || input.family === "premium-jars") {
+    const cfg = input.jar;
+    if (!cfg) {
+      reasons.push(CANONICAL_REASONS.familyUnsupported);
+      blockers.push(`${CANONICAL_REASONS.familyUnsupported}: no jar profile was supplied for this job.`);
+    } else {
+      const active = activeJarProfile(cfg.brand, cfg.size);
+      // A size the geometry tables do not contain cannot be measured at all,
+      // so the adapter is never called with it — it would throw rather than
+      // fail closed, and a crashed loader is not a refusal.
+      const geometryKnown = Object.prototype.hasOwnProperty.call(JAR_LABEL_GEOMETRY, cfg.size);
+      if (!active) {
+        reasons.push(CANONICAL_REASONS.familyUnsupported);
+        blockers.push(
+          `${CANONICAL_REASONS.familyUnsupported}: "${cfg.brand} ${cfg.size}" is not a jar GSO currently offers, so it has no verified cost. Choose an active jar, or have the owner add this combination to the active scope with its supplier cost.`,
+        );
+      } else if (active.uiFamily !== input.family) {
+        reasons.push(CANONICAL_REASONS.familyUnsupported);
+        blockers.push(
+          `${CANONICAL_REASONS.familyUnsupported}: ${active.label} quotes under "${active.uiFamily}", not "${input.family}".`,
+        );
+      }
+
+      const selection: JarLabelSelection = {
+        side: Boolean(cfg.selection?.side),
+        lid: Boolean(cfg.selection?.lid),
+        tamper: Boolean(cfg.selection?.tamper),
+      };
+
+      /* A jar has verified geometry for ONE side, ONE lid and ONE tamper label.
+       * A requested neck/bottom/additional row — or a second label in a
+       * position that already has one — is REFUSED rather than dropped:
+       * dropping it would quietly remove a whole label per jar from the media,
+       * ink, cutting, weeding and application cost. */
+      const unsupported = cfg.unsupportedLabels ?? [];
+      if (unsupported.length) {
+        reasons.push(CANONICAL_REASONS.labelGeometryUnsupported);
+        blockers.push(
+          `${CANONICAL_REASONS.labelGeometryUnsupported}: this job asks for jar label(s) the canonical jar model has no verified geometry for — ${unsupported.join(", ")}. A jar is measured as one side, one lid and one tamper label; anything else needs owner-supplied geometry before it can be quoted.`,
+        );
+      }
+      if (!selection.side && !selection.lid && !selection.tamper) {
+        reasons.push(CANONICAL_REASONS.noPrintedComponent);
+        blockers.push(
+          `${CANONICAL_REASONS.noPrintedComponent}: no jar label was selected, so there is nothing to print. Choose at least one side, lid or tamper label.`,
+        );
+      }
+      if (!geometryKnown) {
+        reasons.push(CANONICAL_REASONS.familyUnsupported);
+        blockers.push(
+          `${CANONICAL_REASONS.familyUnsupported}: "${cfg.size || "(no jar selected)"}" is not a jar size this system has geometry for, so nothing about it can be measured.`,
+        );
+      }
+    }
+
+    if (cfg && Object.prototype.hasOwnProperty.call(JAR_LABEL_GEOMETRY, cfg.size)) {
+      const selection: JarLabelSelection = {
+        side: Boolean(cfg.selection?.side),
+        lid: Boolean(cfg.selection?.lid),
+        tamper: Boolean(cfg.selection?.tamper),
+      };
+      const active = activeJarProfile(cfg.brand, cfg.size);
+
+      // ---- blank: a COMPLETE SET, charged once per jar ----
+      const blankResolution: any = resolveJarBlankCost({
+        brand: cfg.brand, size: cfg.size, quantity: production, variant: cfg.variant,
+      });
+      blank = blankResolution.ok
+        ? { ok: true, unitCost: blankResolution.unitCost, label: `${active?.label ?? cfg.brand + " " + cfg.size} complete set`, source: blankResolution.source }
+        : { ok: false, reason: blankResolution.reason, message: blankResolution.message };
+
+      // ---- areas from the jar adapter's own physical runs ----
+      const jarAreas = jarNestingAreas({
+        size: cfg.size,
+        selection,
+        productionQty: production,
+        machineKey: routing.machineKey,
+        loadedMediaWidthIn: input.loadedMediaWidthIn,
+      });
+      areas = jarAreas.areas;
+      blockers.push(...jarAreas.blockers);
+      materialName = "Poseidon Matte (jar label media)";
+      materialCostPerSqft = LABEL_MEDIA_PER_SQFT;
+      materialSource = "Verified roll cost (APPROVED_ROLL_COSTS.poseidonMattePerSqft).";
+
+      // ---- cutting + weeding on the DERIVED cutlines ----
+      if (jarAreas.nesting) {
+        const jarFinishing = jarFinishingStages({
+          size: cfg.size,
+          nesting: jarAreas.nesting,
+          machineKey: routing.machineKey,
+          cutMode: input.cutMode,
+          cutGeometry: jarCutGeometry(cfg.size),
+          requiresWeeding: true,
+        });
+        finishingStages.push(...canonicalFinishingStages(jarFinishing, { includeWeeding: true }));
+        reasons.push(...jarFinishing.reasons);
+        blockers.push(...jarFinishing.blockers);
+        diagnostics.cutPathIn = jarFinishing.cutPathIn;
+        diagnostics.cutMinutes = jarFinishing.cutMinutes;
+        diagnostics.weedingPages = jarFinishing.weedingPages;
+      }
+
+      // ---- setup: art PER_DESIGN, print PER_JOB (jar rule, unchanged) ----
+      const jarSetup = jarSetupCost(selection);
+      setup = {
+        art: jarSetup.art,
+        print: jarSetup.print,
+        groups: jarSetup.designs,
+        artBasis: jarSetup.artBasis,
+        printBasis: jarSetup.printBasis,
+        note: "Jar setup: side+lid is ONE design, tamper is a second (+$10 art). Print setup is charged once per JOB — two physical runs do not create a second one.",
+      };
+
+      /* ---- application: per LABEL applied, on finished jars ----
+       * 2D-4D2: the per-size OWNER timings, not a flat rate. A label the
+       * owner recorded no timing for — a tamper/lid-side band on a 3oz or
+       * 4oz jar — BLOCKS rather than borrowing another size's number. */
+      const jarApplication = resolveJarApplication(cfg.size, selection);
+      if (jarApplication.ok) {
+        applicationCost = {
+          costPerFinishedUnit: jarApplication.costPerFinishedUnit,
+          note: jarApplication.detail,
+        };
+      } else {
+        applicationCost = { costPerFinishedUnit: 0, note: jarApplication.message };
+        reasons.push(CANONICAL_REASONS.applicationStandardRequired);
+        blockers.push(`${CANONICAL_REASONS.applicationStandardRequired}: ${jarApplication.message}`);
+      }
+      const labelsPerJar = (selection.side ? 1 : 0) + (selection.lid ? 1 : 0) + (selection.tamper ? 1 : 0);
+      diagnostics.applicationEvents = finished * labelsPerJar;
+      diagnostics.physicalItems = finished;
+      diagnostics.applicationsPerItem = labelsPerJar;
+      diagnostics.artSetupEvents = jarSetup.designs;
+      diagnostics.printSetupEvents = 1;
+
+      // ---- packout + freight come from the jar adapter's verified tables ----
+      jarPackout = packoutFor(cfg.size, finished);
+      /* The 1% planned overage is OWNER-VERIFIED as of 2D-4D3
+       * (OWNER_STANDARDS.jarPlannedOveragePct), so it carries no disclosure —
+       * 2D-4D2's warning existed only because the figure had no owner record,
+       * and that is no longer true. It is applied once, to produced-quantity
+       * inputs, and is never a separate charge. */
+      const jarFreight: any = jarFreightPerUnit(cfg.brand, cfg.size);
+      jarFreightInput = {
+        perUnit: jarFreight.perUnit,
+        basis: jarFreight.basis,
+        provisional: jarFreight.provisional,
+        source: jarFreight.source ?? jarFreight.basis,
+      };
+    }
+  }
+
   /* ---------------- shared diagnostics ---------------- */
   diagnostics.mediaConsumedSqft = areas.materialFootprintSqft;
   diagnostics.ripLayoutSqft = areas.ripLayoutSqft;
@@ -615,15 +813,19 @@ export function assembleCanonicalJob(
     reasons.push(CANONICAL_REASONS.materialCostRequired);
   }
 
-  if (unitsPerBox == null) {
+  // Jars supply their own verified per-size box counts and consumables rate, so
+  // the shared table's "null" for them means "the adapter owns this", not "no
+  // packout standard exists".
+  if (unitsPerBox == null && !jarPackout) {
     reasons.push(CANONICAL_REASONS.packoutNotModeled);
   }
-  const packout: TrueCostInput["packout"] =
-    unitsPerBox == null
+  const packout: TrueCostInput["packout"] = jarPackout
+    ? jarPackout
+    : unitsPerBox == null
       ? { boxes: 0, unitsPerBox: 1, cost: 0 }
       : { unitsPerBox, laborPerBox: OWNER_STANDARDS.packoutPerBox.value, consumablesPerBox: 0 };
 
-  reasons.push(CANONICAL_REASONS.freightNotModeled);
+  if (!jarFreightInput) reasons.push(CANONICAL_REASONS.freightNotModeled);
 
   /* ---------------- calibration / ink ---------------- */
   if (!machine.calibration) reasons.push(CANONICAL_REASONS.calibrationRequired);
@@ -760,7 +962,7 @@ export function assembleCanonicalJob(
     runLabor: { mode: "operator_attention" },
     equipmentRatePerHour,
     packout,
-    freight: {
+    freight: jarFreightInput ?? {
       perUnit: 0,
       basis: "NO_SEPARATE_INBOUND_FREIGHT",
       provisional: false,
@@ -921,6 +1123,8 @@ export function canonicalFamilyFromUi(uiFamily: string, stockBag: boolean): Cano
   if (uiFamily === "stickers-labels") return "stickers-labels";
   if (uiFamily === "banners") return "banners";
   if (uiFamily === "sticker-bags") return stockBag ? "stock-bags" : "sticker-bags";
+  // 2D-4D1: jars route canonically for their ACTIVE scope.
+  if (uiFamily === "standard-jars" || uiFamily === "premium-jars") return uiFamily;
   return null;
 }
 
@@ -938,7 +1142,9 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
   const base = {
     family,
     quantity: Math.max(0, Math.floor(num(params, "pqty", 0))),
-    overagePct: num(params, "poverage", 0),
+    // Absent means "use the family's own planned-overage standard" (the
+    // assembler decides), not "zero" — jars carry a verified 1% owner rule.
+    ...(params.get("poverage") ? { overagePct: num(params, "poverage", 0) } : {}),
     // 2D-4A — OPERATOR FIELDS ONLY. The calibration identity (ripProfile,
     // qualityMode, resolution, passConfig, inkMode, machineKey) is DERIVED
     // by machine-routing.server.ts; none of it is read from the query string,
@@ -959,13 +1165,19 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
     for (let i = 0; i < lineCount; i += 1) {
       const q = Math.max(0, Math.floor(num(params, `pl${i}qty`, 0)));
       if (q <= 0) continue;
-      const cutW = params.get(`pl${i}cutw`) ? num(params, `pl${i}cutw`) : undefined;
-      const cutH = params.get(`pl${i}cuth`) ? num(params, `pl${i}cuth`) : undefined;
+      // 2D-4C2A: the cutline is DERIVED from the artboard by the GSO
+      // -0.0625in offset rule, never typed by an operator. One authority, so a
+      // hand-entered value cannot disagree with what production actually cuts.
+      const printW = num(params, `pl${i}w`, 0);
+      const printH = num(params, `pl${i}h`, 0);
+      const derivedCut = deriveGsoLabelCutlineFromArtboard(printW, printH);
+      const cutW = derivedCut?.cutWidthIn;
+      const cutH = derivedCut?.cutHeightIn;
       lines.push({
         key: `line-${i}`,
         quantity: q,
-        printWidthIn: num(params, `pl${i}w`, 0),
-        printHeightIn: num(params, `pl${i}h`, 0),
+        printWidthIn: printW,
+        printHeightIn: printH,
         ...(cutW != null ? { cutWidthIn: cutW } : {}),
         ...(cutH != null ? { cutHeightIn: cutH } : {}),
         ...(params.get(`pl${i}perim`) ? { contourPerimeterIn: num(params, `pl${i}perim`) } : {}),
@@ -1019,6 +1231,39 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
             }
           : undefined,
         blankUnitCost: params.get("pblankcost") ? num(params, "pblankcost") : null,
+      },
+    };
+  }
+
+  if (family === "standard-jars" || family === "premium-jars") {
+    /* 2D-4D1. The form mirrors the operator's jar choices into these fields
+     * exactly the way the label form mirrors pl0*, so the loader and the save
+     * path normalise the same bytes.
+     *
+     * "pjar" is the ACTIVE profile key ("miron/100ml_wide"). An unknown or
+     * missing key is passed through as-is rather than defaulted, because the
+     * assembler must refuse a jar GSO does not offer — quietly substituting a
+     * neighbouring size would invent a price. */
+    const [brandPart, sizePart] = str(params, "pjar").split("/");
+    return {
+      ...base,
+      jar: {
+        brand: (brandPart || "") as JarBrand,
+        size: (sizePart || "") as JarSizeKey,
+        ...(str(params, "pjarvariant") ? { variant: str(params, "pjarvariant") as StandardJarVariant } : {}),
+        selection: {
+          side: flag(params, "pjarside"),
+          lid: flag(params, "pjarlid"),
+          tamper: flag(params, "pjartamper"),
+        },
+        // Label rows whose type has no verified jar geometry. Carried through
+        // so the job BLOCKS — a dropped row would silently under-cost a whole
+        // label per jar.
+        unsupportedLabels: (str(params, "pjarunsupported") || "")
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
+        designs: params.get("pdesigns") ? Math.max(0, Math.floor(num(params, "pdesigns", 1))) : undefined,
       },
     };
   }

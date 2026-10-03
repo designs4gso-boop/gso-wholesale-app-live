@@ -200,9 +200,11 @@ describe("approved cost updates (13.2.2)", () => {
       [1000, 0.7138], [2500, 0.4744], [5000, 0.4029], [7500, 0.3458], [10000, 0.3117],
     ]);
     const bags = APPROVED_COST_TRUTH.filter((item) => item.key.startsWith("bag-"));
-    // 2D-2: the 4x5 blank was superseded 2026-08-22, $0.09 -> $0.11.
+    // 2D-4C2D1: the 4x5 entry is REMOVED — production already holds the
+    // owner-confirmed $0.09 base, so there is no correction to offer.
     // 4x6 and 14x16 are unchanged and keep the 2026-07-17 marker.
-    expect(bags.map((bag) => bag.flatCost)).toEqual([0.11, 0.1, 1.0]);
+    expect(bags.map((bag) => bag.key)).toEqual(["bag-4x6", "bag-14x16"]);
+    expect(bags.map((bag) => bag.flatCost)).toEqual([0.1, 1.0]);
     expect(APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x6x2-pouch")!.policy).toBe("do_not_update");
     expect(APPROVED_COST_TRUTH.find((item) => item.key === "miron-black-metal-lids")!.policy).toBe("do_not_update");
     expect(APPROVED_COST_TRUTH.filter((item) => item.key.startsWith("template-")).every((item) => item.policy === "manual_review")).toBe(true);
@@ -270,10 +272,14 @@ describe("approved cost updates (13.2.2)", () => {
 describe("blank bag + DTP creation (13.2.3)", () => {
   it("pins the creation specs (names, SKUs, types, Vendor TBD)", () => {
     const specs = APPROVED_COST_TRUTH.filter((item) => item.creation).map((item) => item.creation!);
-    expect(specs.map((spec) => spec.name)).toEqual(["4x5 Blank Bag", "4x6 Blank Bag", "14x16 Blank Bag", "DTP 4x5x2 Blank Pouch"]);
+    // 2D-4C2D1: the 4x5 blank bag entry was REMOVED along with its creation
+    // spec — there is no pending correction, so nothing may be created for it.
+    expect(specs.map((spec) => spec.name)).toEqual(["4x6 Blank Bag", "14x16 Blank Bag", "DTP 4x5x2 Blank Pouch"]);
     expect(specs.every((spec) => spec.vendor === "Vendor TBD")).toBe(true);
-    expect(specs.map((spec) => spec.productType)).toEqual(["bag", "bag", "bag", "dtp_bag"]);
-    expect(specs.map((spec) => spec.vendorSku)).toEqual(["preset:blank-4x5-bag", "preset:blank-4x6-bag", "preset:pound-bag", "preset:dtp-4x5x2-pouch"]);
+    expect(specs.map((spec) => spec.productType)).toEqual(["bag", "bag", "dtp_bag"]);
+    expect(specs.map((spec) => spec.vendorSku)).toEqual(["preset:blank-4x6-bag", "preset:pound-bag", "preset:dtp-4x5x2-pouch"]);
+    // the removed 4x5 spec can no longer duplicate a VendorProduct
+    expect(specs.some((spec) => spec.vendorSku === "preset:blank-4x5-bag")).toBe(false);
     // do_not_update / manual_review items must never carry a creation spec.
     expect(APPROVED_COST_TRUTH.filter((item) => item.policy !== "update").every((item) => !item.creation)).toBe(true);
   });
@@ -302,8 +308,10 @@ describe("blank bag + DTP creation (13.2.3)", () => {
   });
 
   it("an existing clean record with a blank cost is updated, not duplicated", () => {
-    const bag = APPROVED_COST_TRUTH.find((item) => item.key === "bag-4x5")!;
-    const context = ctxWith({ vendorProducts: [{ id: "x", name: "Blank 4x5 bag", vendor: "SAFE CARE", vendorSku: null, defaultUnitCost: 0, notes: null, tiers: [] }] as any });
+    // 2D-4C2D1 repointed this from the removed bag-4x5 entry to bag-4x6; it
+    // exercises generic update-not-duplicate behaviour, not a 4x5 fact.
+    const bag = APPROVED_COST_TRUTH.find((item) => item.key === "bag-4x6")!;
+    const context = ctxWith({ vendorProducts: [{ id: "x", name: "Blank 4x6 bag", vendor: "SAFE CARE", vendorSku: null, defaultUnitCost: 0, notes: null, tiers: [] }] as any });
     const { row } = evaluateApprovedItem(bag, context);
     expect(row.status).toBe("will_update");
     expect(row.changes.some((change) => change.includes("flat cost: none ->"))).toBe(true);

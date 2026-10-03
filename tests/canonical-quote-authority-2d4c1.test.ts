@@ -103,7 +103,7 @@ const deps = () => ({ db: mockDb(), shop: SHOP });
 const MACHINE = "&pprinter=auto&pwhitelayers=0&pglosslayers=0";
 const CONTROL =
   "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3" +
-  "&pl0cutw=2.85&pl0cuth=2.85&pl0mat=matte&pl0art=A" + MACHINE;
+  "&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A" + MACHINE;
 
 const inputFor = (qs: string) => {
   const input = normalizeCanonicalInput(new URLSearchParams(qs));
@@ -174,14 +174,14 @@ describe("2D-4C1 (1) resolveCanonicalMachineInputs resolves from the full job", 
  * ================================================================== */
 
 describe("2D-4C1 (2) control fixture through the real route path", () => {
-  it("1000 labels 3x3 / 2.85x2.85 cutline / matte / AUTO returns the reference result", async () => {
+  it("1000 labels 3x3 / 2.875x2.875 cutline / matte / AUTO returns the reference result", async () => {
     const result = await computeCanonicalJob(deps(), inputFor(CONTROL));
 
     expect(result.status).toBe("PROVISIONAL");
     expect(result.blockers).toHaveLength(0);
     expect(result.unitCost).not.toBeNull();
-    expect(result.unitCost!).toBeCloseTo(0.084057, 6);
-    expect(result.totalCost).toBeCloseTo(84.057199, 5);
+    expect(result.unitCost!).toBeCloseTo(0.084143, 6);
+    expect(result.totalCost).toBeCloseTo(84.143290, 5);
 
     expect(result.diagnostics.inkableArtworkSqft).toBeCloseTo(62.5, 6);
     expect(result.diagnostics.ripLayoutSqft!).toBeCloseTo(62.6875, 6);
@@ -223,7 +223,7 @@ const withBlocker: CanonicalCostLike = {
   blockers: ["BANNER_FINISHING_RATE_REQUIRED: hemming"],
 };
 const usable: CanonicalCostLike = {
-  family: "stickers-labels", status: "PROVISIONAL", unitCost: 0.084057, totalCost: 84.057199,
+  family: "stickers-labels", status: "PROVISIONAL", unitCost: 0.084143, totalCost: 84.143290,
   blockers: [], reasons: ["FREIGHT_NOT_MODELED"],
 };
 
@@ -307,7 +307,7 @@ describe("2D-4C1 (4) canonical is the cost authority", () => {
     expect(authority.unitCost).not.toBeCloseTo(LEGACY_UNIT, 6);
   });
 
-  it("all four supported families take the canonical authority", () => {
+  it("every supported family takes the canonical authority", () => {
     for (const family of CANONICAL_SUPPORTED_FAMILIES) {
       const authority = resolveCostAuthority({
         canonicalFamilyKey: family,
@@ -317,7 +317,11 @@ describe("2D-4C1 (4) canonical is the cost authority", () => {
       expect(authority.authority, family).toBe("canonical");
       expect(authority.unitCost, family).toBeCloseTo(CANON_UNIT, 10);
     }
-    expect(CANONICAL_SUPPORTED_FAMILIES).toEqual(["stickers-labels", "sticker-bags", "stock-bags", "banners"]);
+    // 2D-4D1 added the two jar families once the owner approved their active
+    // scope and every offered jar costed with zero blockers.
+    expect(CANONICAL_SUPPORTED_FAMILIES).toEqual([
+      "stickers-labels", "sticker-bags", "stock-bags", "banners", "standard-jars", "premium-jars",
+    ]);
   });
 
   it("inbound freight stays additive and disclosed — canonical reports FREIGHT_NOT_MODELED", () => {
@@ -470,7 +474,7 @@ describe("2D-4C1 per-tier quantity actually scales the job", () => {
       expect(rungs[i].unitCost!).toBeLessThan(rungs[i - 1].unitCost!);
     }
     expect(new Set(rungs.map((r) => r.totalCost)).size).toBe(3);
-    expect(rungs[1].unitCost!).toBeCloseTo(0.084057, 6);
+    expect(rungs[1].unitCost!).toBeCloseTo(0.084143, 6);
   });
 
   it("BAG and BANNER ladders scale too", async () => {
@@ -513,7 +517,7 @@ describe("2D-4C1 per-tier quantity actually scales the job", () => {
 
 const MULTI =
   "pfamily=stickers-labels&pllines=2" +
-  "&pl0qty=750&pl0w=3&pl0h=3&pl0cutw=2.85&pl0cuth=2.85&pl0mat=matte&pl0art=A" +
+  "&pl0qty=750&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A" +
   "&pl1qty=250&pl1w=2&pl1h=2&pl1cutw=1.85&pl1cuth=1.85&pl1mat=gloss&pl1art=B" + MACHINE;
 
 describe("2D-4C1A (FIX 2) multi-line label jobs are never re-allocated", () => {
@@ -861,37 +865,63 @@ describe("2D-4C1A freight never mutates the canonical manufacturing unit cost", 
  * DTP simply has no canonical verdict yet.
  * ================================================================== */
 
-describe("2D-4C1B jars are CANONICAL_FAIL_CLOSED", () => {
+describe("2D-4C1B/2D-4D1 the fail-closed mechanism, and what replaced it for jars", () => {
+  /* 2D-4C1B put jars in CANONICAL_FAIL_CLOSED because their side-label
+   * cutlines were unmeasured. 2D-4C2A gave every GSO label a cutline rule,
+   * 2D-4D applied it to jars, and 2D-4D1 established the ten jars GSO
+   * actually offers — at which point every offered jar costed with zero
+   * blockers and the owner promoted the families.
+   *
+   * The mechanism itself was NOT removed. What this block now proves is:
+   *   - the list is empty, and the classification still distinguishes the
+   *     three cost models from one another;
+   *   - the absolute refusal is still the FIRST thing the gate evaluates, so
+   *     a future member of the list still refuses unconditionally;
+   *   - every protection jars actually needed still holds through the normal
+   *     canonical gate — no result, DRAFT_ONLY, or a null unit cost all
+   *     refuse, and the legacy engine is never a substitute. */
+
   const spyCreate = () => {
     const calls: number[] = [];
     return { fn: async () => { calls.push(1); return { id: "jar_quote_should_not_exist" }; }, calls };
   };
 
-
   const jarDraftOnly: CanonicalCostLike = {
     family: "standard-jars", status: "DRAFT_ONLY", unitCost: null, totalCost: 0,
-    blockers: ["CUTLINE_GEOMETRY_REQUIRED: jar side-label actual cutline is unknown."],
+    blockers: ["FAMILY_NOT_CANONICAL: \"miron 4oz\" is not a jar GSO currently offers."],
   };
   const jarNullUnit: CanonicalCostLike = {
     family: "premium-jars", status: "PROVISIONAL", unitCost: null, totalCost: 250, blockers: [],
   };
 
-  it("classification: jars are their OWN model, distinct from both others", () => {
+  it("the fail-closed list is empty, and the three cost models stay distinct", () => {
+    expect(CANONICAL_FAIL_CLOSED_FAMILIES).toHaveLength(0);
     for (const jar of ["standard-jars", "premium-jars"]) {
-      expect(familyCostModel(jar), jar).toBe("CANONICAL_FAIL_CLOSED");
-      expect(isCanonicalFailClosedFamily(jar)).toBe(true);
-      expect(isCanonicalSupportedFamily(jar)).toBe(false);   // not quote-ready
-      expect(CANONICAL_SUPPORTED_FAMILIES).not.toContain(jar as any);
+      expect(familyCostModel(jar), jar).toBe("CANONICAL_COST_AUTHORITY");
+      expect(isCanonicalFailClosedFamily(jar), jar).toBe(false);
+      expect(isCanonicalSupportedFamily(jar), jar).toBe(true);
     }
     for (const legacy of ["dtp-bags", "boxes", "custom-item", null]) {
       expect(isCanonicalFailClosedFamily(legacy), String(legacy)).toBe(false);
+      expect(familyCostModel(legacy), String(legacy)).toBe("LEGACY_OUTSOURCED");
     }
     for (const canonical of CANONICAL_SUPPORTED_FAMILIES) {
       expect(familyCostModel(canonical), canonical).toBe("CANONICAL_COST_AUTHORITY");
     }
   });
 
-  it("1. jar DRAFT_ONLY + CUTLINE_GEOMETRY_REQUIRED => create called ZERO times", async () => {
+  it("the absolute refusal is still the FIRST thing the gate decides", () => {
+    // No family is currently fail-closed, so there is no fixture to exercise
+    // this branch with — it is asserted structurally instead, and the moment a
+    // family is added to the list the behavioural tests above cover it.
+    const lib = readFileSync("app/lib/canonical-quote-authority.server.ts", "utf8");
+    const gate = lib.slice(lib.indexOf("export function canonicalSaveGate"), lib.indexOf("export type QuoteSaveDecisionInput"));
+    expect(gate.match(/model === "CANONICAL_FAIL_CLOSED"/g)).toHaveLength(1);
+    // ...and it is decided BEFORE the result is ever asked whether it is usable
+    expect(gate.indexOf('CANONICAL_FAIL_CLOSED')).toBeLessThan(gate.indexOf("isCanonicalCostUsable"));
+  });
+
+  it("1. a jar reported DRAFT_ONLY => create called ZERO times", async () => {
     const spy = spyCreate();
     const outcome = await persistQuoteIfCanonicalAllows(
       { canonicalFamilyKey: "standard-jars", baseCanonical: jarDraftOnly, selectedCanonical: jarDraftOnly, selectedQuantity: 1000 },
@@ -899,8 +929,10 @@ describe("2D-4C1B jars are CANONICAL_FAIL_CLOSED", () => {
     );
     expect(spy.calls.length).toBe(0);
     expect(outcome.ok).toBe(false);
-    expect(outcome.ok === false && outcome.message).toContain(AUTHORITY_REASONS.canonicalFailClosed);
-    expect(outcome.ok === false && outcome.message).toContain("CUTLINE_GEOMETRY_REQUIRED");
+    expect(outcome.ok === false && outcome.message).toContain("DRAFT_ONLY");
+    // the specific reason travels with the refusal, so the operator is told
+    // WHICH jar problem stopped the save
+    expect((outcome.ok === false ? outcome.blockers : []).join(" ")).toContain("FAMILY_NOT_CANONICAL");
   });
 
   it("2. jar NULL canonical unit cost => create called ZERO times", async () => {
@@ -914,8 +946,6 @@ describe("2D-4C1B jars are CANONICAL_FAIL_CLOSED", () => {
   });
 
   it("2b. a jar with NO canonical result at all is still refused", async () => {
-    // This is the live production shape: jars are not routed through the
-    // canonical dispatch, so canonicalSnapshot is null for every jar job.
     for (const jar of ["standard-jars", "premium-jars"]) {
       const spy = spyCreate();
       const outcome = await persistQuoteIfCanonicalAllows(
@@ -927,7 +957,7 @@ describe("2D-4C1B jars are CANONICAL_FAIL_CLOSED", () => {
     }
   });
 
-  it("3. a margin approval / override cannot bypass the jar hard gate", async () => {
+  it("3. a margin approval / override cannot bypass the jar gate", async () => {
     // The boundary is reached only AFTER the commercial margin gate allowed
     // the save, and it accepts no margin input at all.
     const spy = spyCreate();
@@ -936,7 +966,7 @@ describe("2D-4C1B jars are CANONICAL_FAIL_CLOSED", () => {
       spy.fn,
     );
     expect(spy.calls.length).toBe(0);
-    expect(outcome.ok === false && outcome.message).toMatch(/neither the legacy cost nor a margin approval can substitute/i);
+    expect(outcome.ok === false && outcome.message).toMatch(/margin approval or override cannot supply a missing cost/i);
     const lib = readFileSync("app/lib/canonical-quote-authority.server.ts", "utf8");
     const signature = lib.slice(lib.indexOf("export type QuoteSaveDecisionInput"), lib.indexOf("export type QuoteSaveOutcome"));
     expect(signature).not.toMatch(/margin|override|verdict|approval|gate/i);
@@ -953,14 +983,12 @@ describe("2D-4C1B jars are CANONICAL_FAIL_CLOSED", () => {
       expect(authority.unitCost).toBeNull();
       expect(authority.completeCost).toBeNull();
       expect(authority.manufacturingJobCost).toBeNull();
-      expect(authority.reasons).toContain(AUTHORITY_REASONS.canonicalFailClosed);
-      expect(authority.reasons).toContain("CUTLINE_GEOMETRY_REQUIRED");
-      expect(authority.blockers.join(" ")).toMatch(/legacy engine's cost is NOT a substitute/i);
+      expect(authority.blockers.join(" ")).toMatch(/legacy/i);
     }
   });
 
   it("no jar cutline is invented and no artboard is substituted", () => {
-    // BEHAVIOUR, not prose: a jar with no measured cutline yields no cost at
+    // BEHAVIOUR, not prose: a jar with no canonical result yields no cost at
     // any quantity, and never coincides with the legacy figure.
     for (const qty of [50, 500, 5000]) {
       const authority = resolveCostAuthority({
@@ -971,7 +999,7 @@ describe("2D-4C1B jars are CANONICAL_FAIL_CLOSED", () => {
       expect(authority.unitCost).toBeNull();
       expect(authority.manufacturingUnitCost).toBeNull();
     }
-    // the shared cutline blocker itself is untouched by this patch
+    // the shared cutline blocker itself is untouched by the promotion
     const finishing = readFileSync("app/lib/finishing-cost.server.ts", "utf8");
     expect(finishing).toContain("cutlineGeometryRequired");
     // and the authority module invents no geometry of its own
@@ -979,82 +1007,16 @@ describe("2D-4C1B jars are CANONICAL_FAIL_CLOSED", () => {
     expect(lib).not.toMatch(/cutWidthIn|cutHeightIn|widthIn:|heightIn:/);
   });
 
-  it("ABSOLUTE: a VALID canonical result does NOT make a jar quotable", async () => {
-    for (const jar of ["standard-jars", "premium-jars"]) {
-      const valid: CanonicalCostLike = {
-        family: jar, status: "VALID", unitCost: 1.23, totalCost: 1230, blockers: [],
-      };
-      // the gate refuses before it even asks whether the result is usable
-      expect(canonicalSaveGate({ canonicalFamilyKey: jar, canonical: valid }).allowed, jar).toBe(false);
-      expect(isCanonicalCostUsable(valid)).toBe(true); // the result itself IS usable...
-      // ...and it still cannot promote the family
-      const spy = spyCreate();
-      const outcome = await persistQuoteIfCanonicalAllows(
-        { canonicalFamilyKey: jar, baseCanonical: valid, selectedCanonical: valid, selectedQuantity: 1000 },
-        spy.fn,
-      );
-      expect(spy.calls.length, jar).toBe(0);
-      expect(outcome.ok).toBe(false);
-      expect(outcome.ok === false && outcome.message).toMatch(/not owner-approved as quote-ready/i);
-      // and no cost is published either
-      const authority = resolveCostAuthority({
-        canonicalFamilyKey: jar, canonical: valid, legacyJobCost: 500, quantity: 1000, freightTotal: 0,
-      });
-      expect(authority.costed).toBe(false);
-      expect(authority.unitCost).toBeNull();
-    }
-  });
-
-  it("ABSOLUTE: PROVISIONAL + non-null unit + zero blockers is still refused", async () => {
-    for (const jar of ["standard-jars", "premium-jars"]) {
-      const provisional: CanonicalCostLike = {
-        family: jar, status: "PROVISIONAL", unitCost: 1.23, totalCost: 1230, blockers: [],
-      };
-      // this exact shape DOES allow a save for the four approved families
-      expect(canonicalSaveGate({ canonicalFamilyKey: "stickers-labels", canonical: { ...provisional, family: "stickers-labels" } }).allowed).toBe(true);
-      // but never for a fail-closed one
-      const spy = spyCreate();
-      const outcome = await persistQuoteIfCanonicalAllows(
-        { canonicalFamilyKey: jar, baseCanonical: provisional, selectedCanonical: provisional, selectedQuantity: 1000 },
-        spy.fn,
-      );
-      expect(spy.calls.length, jar).toBe(0);
-      expect(outcome.ok).toBe(false);
-    }
-  });
-
-  it("ABSOLUTE: no canonical status whatsoever can promote a fail-closed family", async () => {
-    const statuses: Array<CanonicalCostLike["status"]> = ["VALID", "PROVISIONAL", "DRAFT_ONLY"];
-    for (const status of statuses) {
-      for (const unitCost of [1.23, null]) {
-        for (const blockers of [[], ["something"]]) {
-          const spy = spyCreate();
-          const canonical: CanonicalCostLike = { family: "standard-jars", status, unitCost, totalCost: 1230, blockers };
-          const outcome = await persistQuoteIfCanonicalAllows(
-            { canonicalFamilyKey: "standard-jars", baseCanonical: canonical, selectedCanonical: canonical, selectedQuantity: 1000 },
-            spy.fn,
-          );
-          expect(spy.calls.length, `${status}/${unitCost}/${blockers.length}`).toBe(0);
-          expect(outcome.ok).toBe(false);
-        }
-      }
-    }
-  });
-
-  it("promotion is a deliberate code change, documented and not implemented", () => {
+  it("promotion is still a deliberate code change, and the mechanism is documented", () => {
     const lib = readFileSync("app/lib/canonical-quote-authority.server.ts", "utf8");
     expect(lib).toMatch(/PROMOTION IS A DELIBERATE CODE CHANGE/);
-    expect(lib).toMatch(/owner-measured cutline geometry/i);
     expect(lib).toMatch(/passes verification/i);
     expect(lib).toMatch(/explicitly approves it as quote-ready/i);
-    // jars are in exactly one list, and it is the fail-closed one
-    expect(CANONICAL_FAIL_CLOSED_FAMILIES).toContain("standard-jars");
-    expect(CANONICAL_FAIL_CLOSED_FAMILIES).toContain("premium-jars");
-    expect(CANONICAL_SUPPORTED_FAMILIES).not.toContain("standard-jars" as any);
-    expect(CANONICAL_SUPPORTED_FAMILIES).not.toContain("premium-jars" as any);
-    // ONE decision point for the fail-closed refusal in the gate
-    const gate = lib.slice(lib.indexOf("export function canonicalSaveGate"), lib.indexOf("export type QuoteSaveDecisionInput"));
-    expect(gate.match(/model === "CANONICAL_FAIL_CLOSED"/g)).toHaveLength(1);
+    // jars are in exactly one list, and it is now the supported one
+    expect(CANONICAL_SUPPORTED_FAMILIES).toContain("standard-jars" as any);
+    expect(CANONICAL_SUPPORTED_FAMILIES).toContain("premium-jars" as any);
+    expect(CANONICAL_FAIL_CLOSED_FAMILIES as readonly string[]).not.toContain("standard-jars");
+    expect(CANONICAL_FAIL_CLOSED_FAMILIES as readonly string[]).not.toContain("premium-jars");
   });
 });
 
@@ -1068,11 +1030,18 @@ describe("2D-4C1 scope guards", () => {
     expect(src.match(/inkMlPerSqft: 0\.6/g)!.length).toBeGreaterThanOrEqual(4);
   });
 
-  it("the label form wiring is deliberately NOT done here (that is 2D-4C2)", () => {
+  it("the label form wiring landed in 2D-4C2, and C1's own scope is unchanged", () => {
     const src = routeSrc();
-    // no primary label-line params emitted yet
-    expect(src).not.toContain('name="pl0qty"');
+    // C1 deliberately did NOT wire the form; 2D-4C2 did, so these now exist.
+    // The guard is inverted rather than deleted so the boundary stays recorded.
+    expect(src).toContain('name="pl0qty"');
+    // 2D-4C2A: the cutline is DERIVED, so the form no longer asks for it
     expect(src).not.toContain('name="pl0cutw"');
+    expect(src).toContain("Canonical cutline:");
+    // What C1 owns is still C1's: the authority module drives quote eligibility
+    // and the form patch did not reach into it.
+    expect(src).toContain("resolveCostAuthority({");
+    expect(src).toContain("await persistQuoteIfCanonicalAllows(");
   });
 
   it("the cutline blocker is not weakened", () => {

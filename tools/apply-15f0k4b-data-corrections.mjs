@@ -7,8 +7,9 @@
 //  1. Material "100ml Tall Miron Blank Jar + Lid" 2.86 -> 2.78 (align to the
 //     owner-approved 2026-07-17 VendorProduct ladder; VendorProduct untouched).
 //  2. Material "4x5 Blank Bag" 0 -> 0.09  *** RETIRED 2026-08-23 (2D-3A) ***
-//     Superseded by the owner-approved $0.11. The write is neutralised so an
-//     accidental re-run can never regress the current standard.
+//     $0.09 is CORRECT again (owner-corrected 2026-08-24: supplier base before
+//     inbound freight). The write stays neutralised anyway — this script has no
+//     --apply guard, and a controlled tool should own any change to this row.
 //  3. Machines: costPerHour 5 -> 8 (owner-approved recovery rate) on both
 //     printers; rename the Roland record to "Roland TrueVIS LG-640".
 //  4. ownerConfig.pricing.minimumOrderTotals: stickers-labels 25 -> 45 via
@@ -54,22 +55,21 @@ async function main() {
   // ---- 2. 4x5 Blank Bag Material -> 0.09 ---- RETIRED 2026-08-23 (2D-3A)
   //
   // NEUTRALISED, NOT DELETED. This one-shot ran on 2026-07-26 and its job is
-  // done. The owner superseded the 4x5 blank on 2026-08-22: $0.09 -> $0.11
-  // (bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST). This script has no
-  // --apply guard, so an accidental re-run would have silently written the
-  // retired $0.09 straight back over the current standard. The write is
-  // therefore removed and replaced with a refusal that names the successor.
+  // done. 2D-4C2D restored $0.09 as the correct SUPPLIER BASE cost (the
+  // 2026-08-22 $0.11 was a landed-cost assumption and is cancelled), so this
+  // script's old value happens to match again. It stays neutralised regardless:
+  // it has no --apply guard, and an unguarded blind write is the hazard here,
+  // not the number.
   //
-  // Moving the Material row to $0.11 is a SEPARATE controlled follow-up and
-  // belongs in the Approved Cost Updates tool, which already seeds $0.11 —
-  // not in a historical correction script.
+  // Any controlled change to this row belongs in the Approved Cost Updates
+  // tool (which now seeds $0.09), not in a historical correction script.
   const bagBefore = await db.material.findUnique({ where: { id: BAG_4X5_MATERIAL_ID } });
   if (!bagBefore) throw new Error("4x5 bag material not found — aborting.");
   console.log("BEFORE 4x5 bag material:", bagBefore.costPerUnit, bagBefore.purchaseCost, bagBefore.calculatedUnitCost);
   console.log(
-    "SKIPPED 4x5 bag material — correction #2 is RETIRED. The $0.09 it wrote was superseded " +
-    "2026-08-22 by the owner-approved $0.11. Use the Approved Cost Updates tool (which seeds " +
-    "$0.11) for any controlled change to this row; this script will never write $0.09 again.",
+    "SKIPPED 4x5 bag material — correction #2 is RETIRED. Use the Approved Cost Updates tool " +
+    "(which seeds the owner-confirmed $0.09 supplier base) for any controlled change to this row. " +
+    "This unguarded script never writes a cost.",
   );
 
   // ---- 3. Machines: $8/hr + LG-640 rename ----

@@ -23,7 +23,7 @@ import {
 } from "../app/lib/bag-cost-inputs.server";
 import { computeBannerCost } from "../app/lib/banner-cost-inputs.server";
 import { computeLabelJob } from "../app/lib/label-cost-inputs.server";
-import { jarSetupCost } from "../app/lib/jar-cost-inputs.server";
+import { JAR_SETUP_RETIRED_ASSUMPTIONS, jarSetupCost } from "../app/lib/jar-cost-inputs.server";
 import { OWNER_STANDARDS } from "../app/lib/owner-standards";
 import {
   QUANTITY_INDEPENDENT_BASES,
@@ -58,7 +58,7 @@ function job(qty: number, designs = 1): TrueCostInput {
       materialFootprintSqft: qty * 0.15,
       ripLayoutBasis: "deterministic nesting engine",
     },
-    blank: { ok: true, unitCost: 0.11, label: "blank", source: "owner" },
+    blank: { ok: true, unitCost: 0.09, label: "blank", source: "owner" },
     material: { name: "media", costPerSqft: 0.3156, source: "verified roll" },
     calibration: {
       id: "cal", shop: "test", machineKey: "mimaki-ucjv300-130", inkMode: "cmyk",
@@ -284,10 +284,20 @@ describe("2D-3C jar setup basis stamps describe the real arithmetic", () => {
     expect(tamper.print).toBe(plain.print);
   });
 
-  it("previously approved jar dollar amounts are unchanged", () => {
-    expect(jarSetupCost(SIDE_LID).art).toBeCloseTo(12.5, 10);
-    expect(jarSetupCost({ side: true, lid: true, tamper: true }).art).toBeCloseTo(22.5, 10);
-    expect(jarSetupCost(SIDE_LID).print).toBeCloseTo(2.0, 10);
+  it("2D-4D2: the jar BASIS is jar-specific, but the RATES are the owner globals", () => {
+    // 2D-3C stamped the basis and deliberately left the dollar amounts alone.
+    // 2D-4D2 audited those amounts: $12.50 ("2 designs/hr"), a flat +$10 with
+    // no rate at all, and $2.00 ("12.5 jobs/hr") were self-asserted in one
+    // Patch 2A commit and no owner-approved jar-specific setup rate was ever
+    // recorded. The owner-verified global rates now apply, with the jar basis
+    // unchanged.
+    expect(jarSetupCost(SIDE_LID).art).toBeCloseTo(OWNER_STANDARDS.artSetupPerDesign.value, 10);
+    expect(jarSetupCost({ side: true, lid: true, tamper: true }).art)
+      .toBeCloseTo(OWNER_STANDARDS.artSetupPerDesign.value * 2, 10);
+    expect(jarSetupCost(SIDE_LID).print).toBeCloseTo(OWNER_STANDARDS.printSetupPerDesign.value, 10);
+    // and the retired figures are recorded, not silently erased
+    expect(JAR_SETUP_RETIRED_ASSUMPTIONS.artBaseDollars).toBe(12.5);
+    expect(JAR_SETUP_RETIRED_ASSUMPTIONS.printPerJobDollars).toBe(2.0);
   });
 
   it("a PER_JOB line moves with neither design count nor copy count", () => {
@@ -438,7 +448,7 @@ describe("2D-3C stock bag personalization — one NORMAL art setup event per per
     expect(r.personalization.internalSetupCost).toBeCloseTo(25 / 3, 10);
     expect(r.blockers).toHaveLength(0);
     // base physical production still computes exactly as before
-    expect(r.blankCost).toBeCloseTo(500 * 0.11, 10);
+    expect(r.blankCost).toBeCloseTo(500 * 0.09, 10);
     expect(r.labelQuantity).toBe(1000);
     expect(r.nesting.ok).toBe(true);
   });
@@ -534,8 +544,8 @@ describe("2D-3B preserves the approved 2D decisions", () => {
     expect(personalized.setup.print).toBe(plain.setup.print);
     expect(personalized.setup.art - plain.setup.art).toBeCloseTo(ART, 10);
     expect(personalized.setup.total - plain.setup.total).toBeCloseTo(ART, 10);
-    // 1000 bags at the owner-approved $0.11 blank
-    expect(plain.blankCost).toBeCloseTo(110, 10);
+    // 1000 bags at the owner-approved $0.09 blank
+    expect(plain.blankCost).toBeCloseTo(90, 10);
     // 2000 applied sides at 10s / $20 per hour
     expect(plain.application.applicationLaborCost).toBeCloseTo((2000 * 10 / 3600) * 20, 10);
   });

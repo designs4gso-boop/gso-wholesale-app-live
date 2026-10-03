@@ -460,7 +460,7 @@ describe("0D storefront/cost foundations are unchanged", () => {
     expect(STOREFRONT_BAG_MIN_QTY).toBe(50);
   });
 
-  it("keeps the canonical blank 4x5 bag cost at $0.11", () => {
-    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.11);
+  it("keeps the canonical blank 4x5 bag cost at the $0.09 supplier base", () => {
+    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.09);
   });
 });

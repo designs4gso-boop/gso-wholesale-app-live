@@ -29,6 +29,9 @@ import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, type CanonicalCalculator
 import { assembleCanonicalJob, canonicalInputForQuantity, canonicalSupportsTierLadder, canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput, resolveCanonicalMachineInputs } from "../lib/canonical-calculator.server";
 import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
 import { isCostedAuthority, persistQuoteIfCanonicalAllows, resolveCostAuthority } from "../lib/canonical-quote-authority.server";
+import { canonicalLabelCutType, canonicalLabelMaterialKey, canonicalCutTypeIsWireable } from "../lib/canonical-calculator-shared";
+import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
+import { canonicalJarLabelRole, resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
 // owns the value; client components cannot import .server modules).
@@ -1405,8 +1408,20 @@ export async function loader({ request }: { request: Request }) {
         // 14C.2A: unpriced sticker bags stay visible (NO PRICE label, Draft Only)
         if (pFamily === "bags-4x5" || pFamily === "sticker-bags") return entry.klass === "bag_sticker";
         if (canonicalUiFamily(pFamily) === "dtp-bags") return entry.klass === "bag_dtp"; // 15C: unpriced sizes stay visible (NO PRICE, Draft Only)
-        if (pFamily === "standard-jars") return entry.klass === "jar_standard" && priced;
-        if (pFamily === "premium-jars") return (entry.klass === "jar_chiron" || entry.klass === "jar_miron") && priced;
+        // 2D-4D1 ACTIVE SCOPE. A jar row only appears if it is one of the ten
+        // combinations GSO actually offers AND it belongs to this family.
+        // Inactive sizes still exist in the DB and in the historical tables —
+        // they are simply not offered, so staff cannot quote one by accident.
+        //
+        // The `priced` requirement is deliberately NOT applied to jars: since
+        // the promotion, a jar's blank cost comes from the verified jar tables
+        // (MIRON_SET_COST / CHIRON_SET_COST / STANDARD_SET_COST), not from the
+        // VendorProduct row's own price. Requiring a DB price here would hide
+        // jars that ARE fully costed — the Chiron rows carry no unitCost — and
+        // an unpriced row still cannot invent a cost, because the canonical
+        // adapter never reads it.
+        if (pFamily === "standard-jars") return entry.klass === "jar_standard" && resolveActiveJarProfile(entry.item.name)?.uiFamily === "standard-jars";
+        if (pFamily === "premium-jars") return (entry.klass === "jar_chiron" || entry.klass === "jar_miron") && resolveActiveJarProfile(entry.item.name)?.uiFamily === "premium-jars";
         if (pFamily === "custom" || pFamily === "custom-item") return true;
         return false;
       }).slice(0, 40).map((entry: any) => ({
@@ -1414,7 +1429,12 @@ export async function loader({ request }: { request: Request }) {
         group: entry.klass === "jar_chiron" ? "CHIRON" : entry.klass === "jar_miron" ? "MIRON" : null,
         label: formatComponentLabel(entry.item.name, entry.klass, entry.includesTop,
           Number(entry.item.unitCost) > 0 ? `$${Number(entry.item.unitCost).toFixed(2)} — Verified` : (entry.item.tiers || []).length ? "tiered — Verified" : "NO PRICE — not verified"),
-      })).concat(canonicalBagOptions.map((option) => ({ value: option.value, group: null, label: option.label }))),
+        // 2D-4D1: the canonical jar descriptor travels WITH the option, so the
+        // form mirrors the operator's pick into pjar/pjarvariant and the server
+        // never has to re-guess which jar a DB row is.
+        jarProfile: resolveActiveJarProfile(entry.item.name)?.key ?? null,
+        jarVariant: resolveActiveJarVariant(entry.item.name),
+      })).concat(canonicalBagOptions.map((option) => ({ value: option.value, group: null, label: option.label, jarProfile: null, jarVariant: null }))),
       lidOptions: classified.filter((entry: any) =>
         entry.klass === "miron_top"
         && (Number(entry.item.unitCost) > 0 || (entry.item.tiers || []).length > 0)
@@ -1426,7 +1446,15 @@ export async function loader({ request }: { request: Request }) {
       materialOptions: materials
         .filter((material) => (pFamily === "banners" ? /banner/i.test(`${material.materialType || ""} ${material.name}`) : true))
         .slice(0, 40)
-        .map((material) => ({ value: material.id, label: `${material.name} — ${material.displayCostPerSqft > 0 ? `$${material.displayCostPerSqft.toFixed(4)}/sqft — Verified` : "NO PRICE — Missing"}` })),
+        // 2D-4C2: canonicalKey lets the form emit the canonical material for a
+        // label line. It selects WHICH verified canonical material applies — it
+        // never carries a cost, and an unmapped material yields null so canonical
+        // costing blocks instead of guessing.
+        .map((material) => ({
+          value: material.id,
+          label: `${material.name} — ${material.displayCostPerSqft > 0 ? `${material.displayCostPerSqft.toFixed(4)}/sqft — Verified` : "NO PRICE — Missing"}`,
+          canonicalKey: canonicalLabelMaterialKey(material.name),
+        })),
     },
     family: eFamilyRule
       ? { key: eFamilyRule.key, label: eFamilyRule.label, curve: eFamilyRule.curve, minPct: eFamilyRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
@@ -3023,6 +3051,47 @@ function ProductDrivenForm() {
   // buildLabelRows on every request, discarding stale extras).
   const lf = pm?.labelForm || null;
   const clientDefaultType = (index: number) => (index === 0 ? "side" : index === 1 ? "lid" : "additional");
+
+  /* ---- 2D-4C2 CANONICAL LABEL LINE ---------------------------------
+   * The primary sticker line lives in the legacy fields (pqty/pwidth/pheight/
+   * pmat/pcut/pdesigns), which normalizeCanonicalInput does not read. These
+   * mirror them into the canonical pl0* shape so a real form submission
+   * reaches the canonical adapter. This is a GET form, so the mirrored params
+   * land in the URL and the save path replays those exact bytes via psearch —
+   * calculate and save therefore normalise identically by construction.
+   *
+   * The cutline inputs below are NOT mirrored: they are named pl0cutw/pl0cuth
+   * directly, so the operator's measured geometry is the canonical value with
+   * nothing in between. */
+  const canonParams = new URLSearchParams(useLocation().search);
+  const [canonLine, setCanonLine] = useState<{ qty: string; w: string; h: string; mat: string; cut: string; designs: string }>(() => ({
+    qty: canonParams.get("pqty") || "",
+    w: canonParams.get("pwidth") || "",
+    h: canonParams.get("pheight") || "",
+    mat: canonParams.get("pmat") || "",
+    cut: canonParams.get("pcut") || "square-rect",
+    designs: canonParams.get("pdesigns") || "1",
+  }));
+  const syncCanonLine = (form: HTMLFormElement | null) => {
+    if (!form) return;
+    const read = (name: string) => {
+      const field = form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null;
+      return field && "value" in field ? String(field.value) : "";
+    };
+    setCanonLine({
+      qty: read("pqty"), w: read("pwidth"), h: read("pheight"),
+      mat: read("pmat"), cut: read("pcut") || "square-rect", designs: read("pdesigns") || "1",
+    });
+  };
+  // Additional physical lines come from the SUBMITTED state, which is what the
+  // server costs — an unsubmitted row cannot desynchronise the two.
+  const additionalLineCount = Math.max(0, Math.min(8, Math.floor(Number(canonParams.get("pslcount") || 0)) || 0));
+  const canonMaterialKey =
+    (pm?.materialOptions || []).find((option: any) => String(option.value) === String(canonLine.mat))?.canonicalKey || "";
+  const canonDesigns = Math.max(1, Math.floor(Number(canonLine.designs) || 1));
+  const canonCutType = canonicalLabelCutType(canonLine.cut);
+  const canonDerivedCutline = deriveGsoLabelCutlineFromArtboard(canonLine.w, canonLine.h);
+  const canonCutWireable = canonicalCutTypeIsWireable(canonLine.cut);
   const [labelCountSel, setLabelCountSel] = useState<string>(() => (lf ? (lf.count <= 3 ? String(lf.count) : "custom") : "1"));
   const [labelCountCustom, setLabelCountCustom] = useState<number>(() => (lf && lf.count > 3 ? lf.count : 4));
   const [sameSize, setSameSize] = useState<string>(() => (lf && lf.same === false ? "no" : "yes"));
@@ -3051,10 +3120,51 @@ function ProductDrivenForm() {
     { value: "additional", label: "Additional label" },
     { value: "custom", label: "Custom" },
   ];
+  /* ---- 2D-4D1 CANONICAL JAR DESCRIPTOR ------------------------------
+   * Same discipline as the pl0* label mirror: the operator's existing jar
+   * choices are mirrored into the canonical fields the normalizer reads, on a
+   * GET form, so Calculate and Save normalise the same bytes.
+   *
+   * The jar identity comes from the SUBMITTED blank (the select re-submits on
+   * change), and the descriptor rides on the option itself — the server tagged
+   * it when it built the list, so the client never re-guesses which jar a DB
+   * row is.
+   *
+   * Label roles reproduce buildLabelRows exactly, including its "same size"
+   * defaults, so the canonical selection is the same set of labels the legacy
+   * breakdown shows. Anything the canonical jar model cannot represent — an
+   * additional/neck/bottom row, or a SECOND side label — is reported rather
+   * than dropped, because dropping it would quietly remove a whole label per
+   * jar from media, ink, cutting, weeding and application. */
+  const jarBlankOption = (pm?.blankOptions || []).find(
+    (option: any) => String(option.value) === String(canonParams.get("pblank") || ""),
+  );
+  const jarDefaultTypes = (n: number): string[] =>
+    n === 1 ? ["side"] : n === 2 ? ["side", "lid"] : ["side", "lid", ...Array.from({ length: n - 2 }, () => "additional")];
+  const jarRowTypes = (() => {
+    const defaults = jarDefaultTypes(effectiveLabels);
+    if (sameSize !== "no") return defaults;
+    return defaults.map((fallback, index) => {
+      const picked = String(labelRows[index]?.type || "");
+      return LABEL_TYPE_CHOICES.some((choice) => choice.value === picked) ? picked : fallback;
+    });
+  })();
+  const jarRoles = jarRowTypes.map((type) => canonicalJarLabelRole(type));
+  const jarSelection = {
+    side: jarRoles.includes("side"),
+    lid: jarRoles.includes("lid"),
+    tamper: jarRoles.includes("tamper"),
+  };
+  const jarUnrepresentable = jarRowTypes.filter((type, index) => {
+    const role = jarRoles[index];
+    if (!role) return true;                       // no verified jar geometry
+    return jarRoles.indexOf(role) !== index;      // a second label in the same position
+  });
+
   const chironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "CHIRON");
   const mironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "MIRON");
   return (
-    <Form method="get" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
+    <Form method="get" onChange={(event) => syncCanonLine(event.currentTarget)} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
       <label style={{ fontSize: 12, gridColumn: "1 / -1" }}><b>STEP 1 — What are you pricing?</b>
         <select
           name="pfamily"
@@ -3156,6 +3266,13 @@ function ProductDrivenForm() {
             </label>
           ) : null}
           <input type="hidden" name="plabelcount" value={effectiveLabels} />
+          {/* 2D-4D1 canonical jar mirror — see the descriptor block above. */}
+          <input type="hidden" name="pjar" value={jarBlankOption?.jarProfile || ""} />
+          <input type="hidden" name="pjarvariant" value={jarBlankOption?.jarVariant || ""} />
+          {jarSelection.side ? <input type="hidden" name="pjarside" value="1" /> : null}
+          {jarSelection.lid ? <input type="hidden" name="pjarlid" value="1" /> : null}
+          {jarSelection.tamper ? <input type="hidden" name="pjartamper" value="1" /> : null}
+          {jarUnrepresentable.length ? <input type="hidden" name="pjarunsupported" value={jarUnrepresentable.join(",")} /> : null}
           <label style={{ fontSize: 12 }}>Are all label sizes the same?
             <select name="psame" value={sameSize} onChange={(event) => setSameSize(event.currentTarget.value)} style={inputStyle}>
               <option value="yes">Yes — one size for every label</option>
@@ -3263,13 +3380,56 @@ function ProductDrivenForm() {
               <option value="kiss-moderate">Kiss cut — moderate contour (multi-curve outline)</option>
               <option value="kiss-complex">Kiss cut — complex contour (detailed outline)</option>
               <option value="die-irregular">Die cut / irregular (needs owner standard)</option>
-              <option value="none">No cutting required</option>
             </select>
           </label>
         ) : null}
         {isStickers && pm.designSplitText ? (
           <div style={{ gridColumn: "1 / -1", border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 8, padding: 8, fontSize: 12, fontWeight: 600 }}>
             {pm.designSplitText} — quantity is the TOTAL physical labels; designs share it (art + print setup charged per design; production charged on the total).
+          </div>
+        ) : null}
+        {/* ---- 2D-4C2A: CANONICAL CUTLINE IS DERIVED, NOT TYPED ----------
+          * GSO builds every label's cutline from the artwork with a -0.0625in
+          * inward offset path. That is a deterministic production setup, so
+          * staff never re-measure or re-enter it — the value below is computed
+          * from the artwork dimensions above by the one shared rule the cost
+          * adapters use. Shown only so the operator can sanity-check it. */}
+        {isStickers && canonCutWireable ? (
+          <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 8, padding: 8, fontSize: 12 }}>
+            <b>Canonical cutline:</b>{" "}
+            {canonDerivedCutline
+              ? <>{formatGsoCutline(canonDerivedCutline)} — GSO standard: -{GSO_CUTLINE_OFFSET_IN}in inward offset path from the {canonLine.w || "?"} x {canonLine.h || "?"}in artwork.</>
+              : <>enter the print width and height above and the cutline is derived automatically.</>}
+          </div>
+        ) : null}
+        {/* ---- 2D-4D: canonical physical LINE 1, mirrored from the primary
+          * fields. pllines and every additional line are emitted by
+          * MultiLineStickerRows, which owns the row state. */}
+        {isStickers && canonCutWireable ? (
+          <>
+            <input type="hidden" name="pl0qty" value={canonLine.qty} />
+            <input type="hidden" name="pl0w" value={canonLine.w} />
+            <input type="hidden" name="pl0h" value={canonLine.h} />
+            <input type="hidden" name="pl0mat" value={canonMaterialKey} />
+            <input type="hidden" name="pl0cuttype" value={canonCutType} />
+            {/* Line 1 is always its own artwork; additional lines may point at it. */}
+            <input type="hidden" name="pl0art" value="ART-1" />
+            {canonDesigns > 1 ? <input type="hidden" name="pl0extraart" value={String(canonDesigns - 1)} /> : null}
+            <input type="hidden" name="pl0printsetups" value={String(canonDesigns)} />
+          </>
+        ) : null}
+        {/* A4: contour needs a MEASURED path length — a rectangle is not a
+          * contour, so without it the job stays DRAFT ONLY. */}
+        {isStickers && canonCutType === "contour" ? (
+          <label style={{ fontSize: 12 }}>* Contour cut-path perimeter (in, per label)
+            <input name="pl0perim" type="number" step="0.01" min={0.01}
+              defaultValue={canonParams.get("pl0perim") || ""} placeholder="measured path length" style={inputStyle} />
+          </label>
+        ) : null}
+        {isStickers && canonLine.mat && !canonMaterialKey ? (
+          <div style={{ gridColumn: "1 / -1", border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 8, padding: 8, fontSize: 12 }}>
+            <b>Canonical true cost unavailable for this material.</b> "{(pm?.materialOptions || []).find((o: any) => String(o.value) === String(canonLine.mat))?.label || "selected material"}"
+            does not map to a verified canonical roll (matte, gloss or holographic), so no canonical rate can be applied and the job stays DRAFT ONLY.
           </div>
         ) : null}
         {isStickers ? <MultiLineStickerRows /> : null}
@@ -3311,7 +3471,7 @@ function MultiLineStickerRows() {
   // 15F.0J.2-D: managed rows with explicit Add/Remove (no manual count entry
   // — the hidden pslcount always posts rows.length, so "01" ambiguity cannot
   // occur from the UI; the server still validates hand-edited URLs).
-  const [rows, setRows] = useState<Array<{ name: string; qty: string; designs: string; w: string; h: string; mat: string; printer: string; white: string; gloss: string; cut: string }>>(() =>
+  const [rows, setRows] = useState<Array<{ name: string; qty: string; designs: string; w: string; h: string; mat: string; printer: string; white: string; gloss: string; cut: string; art: string; perim: string }>>(() =>
     Array.from({ length: initialCount }, (_v, index) => ({
       name: readAll("pslname")[index] || "",
       qty: readAll("pslqty")[index] || "",
@@ -3323,9 +3483,28 @@ function MultiLineStickerRows() {
       white: readAll("pslwhite")[index] || "0",
       gloss: readAll("pslgloss")[index] || "0",
       cut: readAll("pslcut")[index] || "square-rect",
+      art: readAll("pslart")[index] || "new",
+      perim: readAll("pslperim")[index] || "",
     })));
   const update = (index: number, patch: Partial<(typeof rows)[number]>) => setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   const perLineErrors: Array<{ lineNumber: number; fieldErrors: string[] }> = (pm?.multiLine?.perLine || []).filter((line: any) => line.fieldErrors?.length);
+  /**
+   * Follow each line's declared artwork pointer to a stable key.
+   *
+   * "new" -> its own artwork. A numeric value points at ANOTHER canonical line
+   * index and inherits whatever that line resolved to, so a chain of
+   * "same as..." collapses to one key. Row index is never the identity.
+   */
+  const resolveArtworkKey = (canonicalIndex: number, seen: number[] = []): string => {
+    if (canonicalIndex <= 0) return "ART-1";
+    if (seen.includes(canonicalIndex)) return `ART-${canonicalIndex + 1}`; // cycle guard
+    const row = rows[canonicalIndex - 1];
+    if (!row || row.art === "new" || row.art === "") return `ART-${canonicalIndex + 1}`;
+    const pointer = Math.floor(Number(row.art));
+    if (!Number.isFinite(pointer) || pointer < 0 || pointer >= canonicalIndex) return `ART-${canonicalIndex + 1}`;
+    return resolveArtworkKey(pointer, [...seen, canonicalIndex]);
+  };
+
   if (!pm) return null;
   return (
     <details open={rows.length >= 1} style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
@@ -3337,6 +3516,34 @@ function MultiLineStickerRows() {
         Each line calculates independently (own size, material, printer, layers, cut) and prices on its own quantity band; packing is charged once at job level. Same size + same finish with several designs? Keep ONE line and set "Number of designs". An incomplete line blocks the quote until fixed or removed.
       </p>
       <input type="hidden" name="pslcount" value={rows.length} />
+      {/* ---- 2D-4D A2: CANONICAL MIRROR FOR EVERY PHYSICAL LINE ----------
+        * pllines counts the primary line plus these. Artwork identity is the
+        * operator's DECLARATION, resolved by following each line's pointer, so
+        * two lines of one artwork share one art setup while still being two
+        * physical runs with their own material, nesting, ink, cut and weeding.
+        * Quantities are emitted exactly as entered — never redistributed. */}
+      <input type="hidden" name="pllines" value={String(1 + rows.length)} />
+      {rows.map((row, index) => {
+        const canonicalIndex = index + 1;
+        const artworkKey = resolveArtworkKey(canonicalIndex);
+        const matKey = (pm.materialOptions || []).find((o: any) => String(o.value) === String(row.mat))?.canonicalKey || "";
+        const designs = Math.max(1, Math.floor(Number(row.designs) || 1));
+        const cutType = canonicalLabelCutType(row.cut);
+        return (
+          <div key={`canon-${index}`} style={{ display: "none" }}>
+            <input type="hidden" name={`pl${canonicalIndex}qty`} value={row.qty} />
+            <input type="hidden" name={`pl${canonicalIndex}w`} value={row.w} />
+            <input type="hidden" name={`pl${canonicalIndex}h`} value={row.h} />
+            <input type="hidden" name={`pl${canonicalIndex}mat`} value={matKey} />
+            <input type="hidden" name={`pl${canonicalIndex}art`} value={artworkKey} />
+            <input type="hidden" name={`pl${canonicalIndex}cuttype`} value={cutType} />
+            <input type="hidden" name={`pl${canonicalIndex}printsetups`} value={String(designs)} />
+            {designs > 1 ? <input type="hidden" name={`pl${canonicalIndex}extraart`} value={String(designs - 1)} /> : null}
+            {cutType === "contour" && row.perim ? <input type="hidden" name={`pl${canonicalIndex}perim`} value={row.perim} /> : null}
+          </div>
+        );
+      })}
+
       {rows.map((row, index) => {
         const errors = perLineErrors.find((line) => line.lineNumber === index + 2)?.fieldErrors || [];
         return (
@@ -3352,6 +3559,18 @@ function MultiLineStickerRows() {
           ) : null}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6 }}>
           <label style={{ fontSize: 11 }}>Line name<input name="pslname" value={row.name} onChange={(event) => update(index, { name: event.currentTarget.value })} placeholder={`Line ${index + 2}`} style={inputStyle} /></label>
+          {/* 2D-4D A2: artwork identity is DECLARED, never inferred. Art setup is
+            * charged per distinct ARTWORK, so two lines of one artwork must not
+            * pay twice — and matching sizes or materials prove nothing. */}
+          <label style={{ fontSize: 11 }}>* Artwork
+            <select name="pslart" value={row.art} onChange={(event) => update(index, { art: event.currentTarget.value })} style={inputStyle}>
+              <option value="new">New artwork (own art setup)</option>
+              <option value="0">Same as Line 1</option>
+              {Array.from({ length: index }, (_v, prior) => (
+                <option key={prior} value={String(prior + 1)}>Same as Line {prior + 2}</option>
+              ))}
+            </select>
+          </label>
           <label style={{ fontSize: 11 }}>* Quantity<input name="pslqty" type="number" min={1} value={row.qty} onChange={(event) => update(index, { qty: event.currentTarget.value })} style={inputStyle} /></label>
           <label style={{ fontSize: 11 }}>* Designs<input name="psldesigns" type="number" min={1} value={row.designs} onChange={(event) => update(index, { designs: event.currentTarget.value })} style={inputStyle} /></label>
           <label style={{ fontSize: 11 }}>* Width (in)<input name="pslw" type="number" step="0.01" min={0.01} value={row.w} onChange={(event) => update(index, { w: event.currentTarget.value })} style={inputStyle} /></label>
@@ -3367,6 +3586,13 @@ function MultiLineStickerRows() {
           </label>
           <label style={{ fontSize: 11 }}>White layers<input name="pslwhite" type="number" min={0} max={14} value={row.white} onChange={(event) => update(index, { white: event.currentTarget.value })} style={inputStyle} /></label>
           <label style={{ fontSize: 11 }}>Gloss layers<input name="pslgloss" type="number" min={0} max={14} value={row.gloss} onChange={(event) => update(index, { gloss: event.currentTarget.value })} style={inputStyle} /></label>
+          {canonicalLabelCutType(row.cut) === "contour" ? (
+            <label style={{ fontSize: 11 }}>* Contour cut-path perimeter (in, per label)
+              <input name="pslperim" type="number" step="0.01" min={0.01} value={row.perim}
+                onChange={(event) => update(index, { perim: event.currentTarget.value })}
+                placeholder="measured path length" style={inputStyle} />
+            </label>
+          ) : <input type="hidden" name="pslperim" value="" />}
           <label style={{ fontSize: 11 }}>Cut type
             <select name="pslcut" value={row.cut} onChange={(event) => update(index, { cut: event.currentTarget.value })} style={inputStyle}>
               <option value="square-rect">Square / rectangle</option>
@@ -3374,14 +3600,13 @@ function MultiLineStickerRows() {
               <option value="kiss-moderate">Kiss — moderate contour</option>
               <option value="kiss-complex">Kiss — complex contour</option>
               <option value="die-irregular">Die / irregular (needs standard)</option>
-              <option value="none">No cutting</option>
             </select>
           </label>
           </div>
         </div>
         );
       })}
-      <button type="button" onClick={() => setRows((prev) => (prev.length >= MAX_ADDITIONAL_LINES_UI ? prev : [...prev, { name: "", qty: "", designs: "1", w: "", h: "", mat: "", printer: "mimaki", white: "0", gloss: "0", cut: "square-rect" }]))} style={{ marginTop: 8, fontSize: 12, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontWeight: 700 }}>
+      <button type="button" onClick={() => setRows((prev) => (prev.length >= MAX_ADDITIONAL_LINES_UI ? prev : [...prev, { name: "", qty: "", designs: "1", w: "", h: "", mat: "", printer: "mimaki", white: "0", gloss: "0", cut: "square-rect", art: "new", perim: "" }]))} style={{ marginTop: 8, fontSize: 12, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontWeight: 700 }}>
         + Add line {rows.length + 2} (max {MAX_ADDITIONAL_LINES_UI} additional)
       </button>
       <p style={{ fontSize: 11, color: "#6b7280", margin: "6px 0 0" }}>Recalculate (CALCULATE COST) after adding, editing, or removing lines to refresh totals.</p>

@@ -9,14 +9,14 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
-  JAR_ART_SETUP_BASE,
-  JAR_ART_SETUP_TAMPER_ADD,
+  JAR_APPLICATION_SECONDS_BY_SIZE,
+  JAR_ART_SETUP_PER_DESIGN,
   JAR_LABEL_GEOMETRY,
   JAR_PLANNED_OVERAGE_PCT,
   JAR_PRINT_SETUP_PER_JOB,
   JAR_UNITS_PER_BOX,
   PACKOUT_TOTAL_PER_BOX,
-  applicationCostPerJar,
+  resolveJarApplication,
   inkableArtworkSqInPerSet,
   jarFreightPerUnit,
   jarSetupCost,
@@ -38,6 +38,7 @@ import {
   type TrueCostInput,
 } from "../app/lib/true-cost-engine.server";
 import { weedingPagesForRun } from "../app/lib/finishing-cost.server";
+import { OWNER_STANDARDS } from "../app/lib/owner-standards";
 import { APPROVED_ROLL_COSTS } from "../app/lib/approved-cost-updates.server";
 import { CANONICAL_INK_RATES } from "../app/lib/ink-rates-shared";
 import type { CalibrationRecord } from "../app/lib/machine-calibration.server";
@@ -117,7 +118,13 @@ function jarJob(opts: {
     inkCostSource: "Mimaki LUS-170 $176/1000 mL.",
     coveragePct: opts.coveragePct,
     passCount: 1,
-    application: { costPerFinishedUnit: applicationCostPerJar(selection), note: "Owner standard $20/hr; side 45s + lid 22s = 67s." },
+    application: (() => {
+      // 2D-4D2: per-size owner timings. The fixture asserts the resolution
+      // succeeded rather than silently costing a jar at zero labor.
+      const a = resolveJarApplication(opts.size, selection);
+      if (!a.ok) throw new Error(a.message);
+      return { costPerFinishedUnit: a.costPerFinishedUnit, note: a.detail };
+    })(),
     setup: { art: setup.art, print: setup.print, groups: setup.designs },
     runLabor: opts.runLabor ?? { mode: "operator_attention" as const },
     equipmentRatePerHour: EQUIP_RATE,
@@ -172,17 +179,25 @@ describe("E. gold standard — 1000 Chiron 100ml Wide, Matte, heavy CMYK, side+l
     expect(amountOf(result, "ink")).not.toBeCloseTo(145.678472 * 1.89 * MIMAKI_PER_ML, 2);
   });
 
-  it("setup is one design for side+lid: $12.50 art + $2.00 print", () => {
-    expect(amountOf(result, "art_setup")).toBe(12.5);
-    expect(amountOf(result, "print_setup")).toBe(2.0);
-    expect(result.totals.setup_labor).toBe(14.5);
+  it("setup is one design for side+lid, at the OWNER setup rates", () => {
+    // 2D-4D2: the jar BASIS is unchanged (art per design, print per job); the
+    // rates are now the owner-verified globals, not the unsourced $12.50/$2.00.
+    expect(amountOf(result, "art_setup")).toBeCloseTo(OWNER_STANDARDS.artSetupPerDesign.value, 10);
+    expect(amountOf(result, "print_setup")).toBeCloseTo(OWNER_STANDARDS.printSetupPerDesign.value, 10);
+    expect(result.totals.setup_labor).toBeCloseTo(
+      OWNER_STANDARDS.artSetupPerDesign.value + OWNER_STANDARDS.printSetupPerDesign.value, 10,
+    );
   });
 
-  it("application charges FINISHED qty only, at 67 s per jar", () => {
-    expect(applicationCostPerJar(SIDE_LID)).toBeCloseTo((67 / 3600) * 20, 10); // 0.372222
-    expect(amountOf(result, "application")).toBeCloseTo(1000 * 0.3722222, 4); // 372.22
+  it("application charges FINISHED qty only, at the 100ml owner timing", () => {
+    const owner = JAR_APPLICATION_SECONDS_BY_SIZE["100ml_wide"];
+    const perJar = ((owner.side + owner.lid) / 3600) * 20;
+    const applied = resolveJarApplication("100ml_wide", SIDE_LID);
+    expect(applied.ok && applied.secondsPerJar).toBe(owner.side + owner.lid); // 22s
+    expect(applied.ok && applied.costPerFinishedUnit).toBeCloseTo(perJar, 10);
+    expect(amountOf(result, "application")).toBeCloseTo(1000 * perJar, 6);
     // explicitly NOT production qty
-    expect(amountOf(result, "application")).not.toBeCloseTo(1010 * 0.3722222, 2);
+    expect(amountOf(result, "application")).not.toBeCloseTo(1010 * perJar, 6);
   });
 
   it("packout uses the per-size box density on finished qty", () => {
@@ -381,18 +396,34 @@ describe("freight amendment — invoice-derived allowances", () => {
  * ================================================================== */
 
 describe("owner rule contract", () => {
-  it("tamper adds a second design at +$10 art and NO extra print setup", () => {
+  it("tamper is a SECOND art setup event and NO extra print setup", () => {
     const withTamper = jarSetupCost({ side: true, lid: true, tamper: true });
-    expect(withTamper.art).toBe(JAR_ART_SETUP_BASE + JAR_ART_SETUP_TAMPER_ADD); // 22.50
-    expect(withTamper.print).toBe(JAR_PRINT_SETUP_PER_JOB); // 2.00
-    expect(withTamper.total).toBe(24.5);
+    // 2D-4D2: a second distinct artwork is a second setup EVENT at the owner
+    // rate — the old flat +$10 surcharge had no rate behind it at all.
+    expect(withTamper.art).toBeCloseTo(JAR_ART_SETUP_PER_DESIGN * 2, 10);
+    expect(withTamper.print).toBeCloseTo(JAR_PRINT_SETUP_PER_JOB, 10);
     expect(withTamper.designs).toBe(2);
+    expect(withTamper.total).toBeCloseTo(JAR_ART_SETUP_PER_DESIGN * 2 + JAR_PRINT_SETUP_PER_JOB, 10);
   });
 
-  it("tamper adds 45 s of application labor", () => {
-    expect(applicationCostPerJar({ side: true, lid: true, tamper: true })).toBeCloseTo((112 / 3600) * 20, 10);
-    expect(applicationCostPerJar({ side: true, lid: false, tamper: false })).toBeCloseTo((45 / 3600) * 20, 10); // 0.25
-    expect(applicationCostPerJar({ side: false, lid: true, tamper: false })).toBeCloseTo((22 / 3600) * 20, 10); // 0.122222
+  it("application uses the OWNER per-size timings, and blocks where none exists", () => {
+    const owner = JAR_APPLICATION_SECONDS_BY_SIZE["100ml_wide"];
+    const sec = (result: any) => (result.ok ? result.secondsPerJar : null);
+    expect(sec(resolveJarApplication("100ml_wide", { side: true, lid: true, tamper: true })))
+      .toBe(owner.side + owner.lid + owner.tamper!);           // 12 + 10 + 12
+    expect(sec(resolveJarApplication("100ml_wide", { side: true, lid: false, tamper: false }))).toBe(owner.side);
+    expect(sec(resolveJarApplication("100ml_wide", { side: false, lid: true, tamper: false }))).toBe(owner.lid);
+
+    // The plain oz jars have NO owner lid-side/tamper timing. Asking for one
+    // must fail closed — another size's number is not a substitute.
+    for (const size of ["3oz", "4oz"] as const) {
+      expect(JAR_APPLICATION_SECONDS_BY_SIZE[size].tamper).toBeNull();
+      const blocked = resolveJarApplication(size, { side: true, lid: true, tamper: true });
+      expect(blocked.ok).toBe(false);
+      expect(blocked.ok === false && blocked.reason).toBe("MISSING_APPLICATION_STANDARD");
+      // side + lid on the same jar still resolves normally
+      expect(resolveJarApplication(size, { side: true, lid: true, tamper: false }).ok).toBe(true);
+    }
   });
 
   it("box density is per size, not a flat 100", () => {
@@ -777,13 +808,13 @@ describe("11. Patch 2B — deterministic nesting, two physical runs", () => {
     expect(nested.nesting!.runs.map((r) => r.key)).toEqual(["side-body-run", "lid-run"]);
     // setup is unchanged by the run split
     const setup = jarSetupCost(SIDE_LID);
-    expect(setup.art).toBe(JAR_ART_SETUP_BASE); // 12.50
-    expect(setup.print).toBe(JAR_PRINT_SETUP_PER_JOB); // 2.00 — ONE print setup
+    expect(setup.art).toBeCloseTo(JAR_ART_SETUP_PER_DESIGN, 10);
+    expect(setup.print).toBeCloseTo(JAR_PRINT_SETUP_PER_JOB, 10); // ONE print setup
     expect(setup.designs).toBe(1);
 
     const withTamper = jarSetupCost({ side: true, lid: true, tamper: true });
-    expect(withTamper.art).toBe(JAR_ART_SETUP_BASE + JAR_ART_SETUP_TAMPER_ADD); // 22.50
-    expect(withTamper.print).toBe(JAR_PRINT_SETUP_PER_JOB); // still 2.00
+    expect(withTamper.art).toBeCloseTo(JAR_ART_SETUP_PER_DESIGN * 2, 10);
+    expect(withTamper.print).toBeCloseTo(JAR_PRINT_SETUP_PER_JOB, 10); // still ONE
   });
 
   it("the real result no longer rests on a proxy, and setup cost is identical", () => {
@@ -948,43 +979,42 @@ describe("12. Patch 2C-3 — cutting + weeding", () => {
     const at = withFin.result.lines.find((l) => l.key === "cutting_attention")!;
     expect(eq.category).toBe("machine_recovery");
     expect(at.category).toBe("run_labor");
-    // 2C-3B: jars have no owner cutline, so both lines are BLOCKED at 0
-    expect(eq.amount).toBe(0);
-    expect(at.amount).toBe(0);
-    expect(eq.blocker).toContain("CUTLINE_GEOMETRY_REQUIRED");
-    expect(at.blocker).toContain("CUTLINE_GEOMETRY_REQUIRED");
-    // setup is untouched by 2C-3
-    expect(withFin.result.totals.setup_labor).toBeCloseTo(JAR_ART_SETUP_BASE + JAR_PRINT_SETUP_PER_JOB, 10);
+    // 2D-4D: jar cutlines are now DERIVED by the GSO -0.0625in offset rule, so
+    // both lines carry real amounts instead of being blocked at 0.
+    expect(eq.amount).toBeGreaterThan(0);
+    expect(at.amount).toBeGreaterThan(0);
+    expect(eq.blocker).toBeUndefined();
+    expect(at.blocker).toBeUndefined();
+    // setup is untouched by 2C-3 / 2D-4D
+    expect(withFin.result.totals.setup_labor).toBeCloseTo(JAR_ART_SETUP_PER_DESIGN + JAR_PRINT_SETUP_PER_JOB, 10);
     expect(withFin.result.lines.some((l) => /cut.*setup|setup.*cut/i.test(l.key))).toBe(false);
   });
 
-  it("2C-3B: the 2.5/8 split still holds on the DIAGNOSTIC preview", () => {
+  it("2D-4D: the jar cutline is derived from each artboard, never the artboard itself", () => {
     const { finishing } = finishedJob("100ml_wide", "chiron", 1000);
-    // the preview numbers are computed but never posted
-    expect(finishing.cutPathIsDiagnosticOnly).toBe(true);
-    const eq = finishing.stages.find((s) => s.key === "cutting_machine")!;
-    expect(eq.note).toMatch(/DIAGNOSTIC ESTIMATE ONLY/);
-    expect(eq.amount).toBe(0);
+    // nothing is missing a cutline any more
+    expect(finishing.cutlineMissingBands).toEqual([]);
+    expect(finishing.reasons).not.toContain("CUTLINE_GEOMETRY_REQUIRED");
+
+    const bands = finishing.runs.flatMap((r) => r.bands);
+    const side = bands.find((b) => b.groupKey === "side")!;
+    // 100ml_wide side artboard is 6.6 x 2.6 -> 6.475 x 2.475
+    expect(side.cutWidthIn).toBeCloseTo(6.475, 10);
+    expect(side.cutHeightIn).toBeCloseTo(2.475, 10);
+    expect(side.cutlineKnown).toBe(true);
+    // and it is NOT the artboard
+    expect(side.cutWidthIn).not.toBeCloseTo(6.6, 6);
+
+    const lid = bands.find((b) => b.groupKey === "lid")!;
+    expect(lid.model).toBe("contour");
+    expect(lid.cutlineKnown).toBe(true);
   });
 
-  it("2C-3B: no jar cutline exists, so the job is DRAFT_ONLY with CUTLINE_GEOMETRY_REQUIRED", () => {
-    const { finishing, withFin } = finishedJob("100ml_wide", "chiron", 1000);
-    expect(finishing.reasons).toContain("CUTLINE_GEOMETRY_REQUIRED");
-    // only the SIDE lacks geometry — the lid's diameter is known, it is the
-    // contour RATE that is still borrowed
-    expect(finishing.cutlineMissingBands).toEqual(["side"]);
-    expect(withFin.result.status).toBe("DRAFT_ONLY");
-    expect(withFin.result.unitCost).toBeNull(); // a blocked job never publishes a per-unit number
-    expect(withFin.result.blockers.join(" ")).toMatch(/CUTLINE_GEOMETRY_REQUIRED/);
-    // side is a separated rectangle with no cutline; lid is a contour whose
-    // DIAMETER is known but whose contour RATE is still borrowed
-    const bands = finishing.runs.flatMap((r) => r.bands);
-    expect(bands.find((b) => b.groupKey === "side")!.model).toBe("separated_rectangle");
-    expect(bands.find((b) => b.groupKey === "side")!.cutlineKnown).toBe(false);
-    expect(bands.find((b) => b.groupKey === "side")!.estimateReason).toMatch(/ARTBOARD/);
-    expect(bands.find((b) => b.groupKey === "lid")!.model).toBe("contour");
-    expect(bands.find((b) => b.groupKey === "lid")!.cutlineKnown).toBe(true); // diameter supplied
-    expect(bands.find((b) => b.groupKey === "lid")!.estimateReason).toMatch(/contour/);
+  it("2D-4D: a jar job is no longer blocked by CUTLINE_GEOMETRY_REQUIRED", () => {
+    const { withFin } = finishedJob("100ml_wide", "chiron", 1000);
+    expect(withFin.result.blockers.join(" ")).not.toMatch(/CUTLINE_GEOMETRY_REQUIRED/);
+    expect(withFin.result.status).not.toBe("DRAFT_ONLY");
+    expect(withFin.result.unitCost).not.toBeNull();
   });
 
   it("adding finishing disturbs NOTHING else — every prior line is identical", () => {
@@ -1010,18 +1040,23 @@ describe("12. Patch 2C-3 — cutting + weeding", () => {
       const f = j.finishing;
       // eslint-disable-next-line no-console
       console.log(
-        `[2C-3B ${name}] status ${j.withFin.result.status} unitCost ${j.withFin.result.unitCost}` +
-        `  | DIAGNOSTIC cutPath ${f.cutPathIn.toFixed(1)}in (artboard) ${f.cutMinutes ?? "blocked"}` +
-        `  | weeding ${f.weedingPages}pg $${f.weedingCost.toFixed(2)} (POSTED)` +
+        `[2D-4D ${name}] status ${j.withFin.result.status} unitCost ${j.withFin.result.unitCost?.toFixed(6)}` +
+        `  | DERIVED cutPath ${f.cutPathIn.toFixed(1)}in  ${f.cutMinutes?.toFixed(2) ?? "blocked"}min` +
+        `  | weeding ${f.weedingPages}pg ${f.weedingCost.toFixed(2)}` +
         `  | pre-2C-3 unit ${j.without.result.unitCost!.toFixed(6)}` +
         `  | reasons ${f.reasons.join(",")}`,
       );
     }
-    // 2C-3B: a jar job is NOT quote-ready until real cutlines exist
-    expect(chiron.withFin.result.status).toBe("DRAFT_ONLY");
-    expect(miron.withFin.result.status).toBe("DRAFT_ONLY");
-    expect(chiron.withFin.result.unitCost).toBeNull();
-    expect(miron.withFin.result.unitCost).toBeNull();
+    // 2D-4D: with cutlines derived by the GSO offset rule, the ENGINE no longer
+    // blocks a jar job. Quote eligibility is a separate decision and jars stay
+    // CANONICAL_FAIL_CLOSED until the owner promotes them — see
+    // canonical-quote-authority.server.ts.
+    expect(chiron.withFin.result.status).toBe("PROVISIONAL");
+    expect(miron.withFin.result.status).toBe("PROVISIONAL");
+    expect(chiron.withFin.result.unitCost).not.toBeNull();
+    expect(miron.withFin.result.unitCost).not.toBeNull();
+    expect(chiron.withFin.result.blockers).toHaveLength(0);
+    expect(miron.withFin.result.blockers).toHaveLength(0);
   });
 
   it("requiresWeeding=false removes weeding without touching cutting", () => {

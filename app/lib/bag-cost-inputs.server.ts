@@ -13,6 +13,7 @@
 //
 // Pure: no db, no network, no clock.
 
+import { deriveGsoLabelCutlineFromArtboard } from "./gso-cutline";
 import { computeNesting, resolveNestingPolicy, type NestingResult, type NestingRun } from "./nesting-engine.server";
 import { computeFinishing, type CutGeometryMap, type CutMode, type FinishingResult } from "./finishing-cost.server";
 import { computeLabelApplication, type LabelApplicationResult } from "./label-application.server";
@@ -22,17 +23,44 @@ import { OWNER_STANDARDS } from "./owner-standards";
 export const BAG_COST_INPUTS_VERSION = "17D.6-bag-cost-inputs";
 
 /* ------------------------------------------------------------------ *
- * OWNER DECISION 1 — blank 4x5 bag
+ * OWNER DECISION 1 — blank 4x5 bag (CORRECTED 2D-4C2D)
  *
- * $0.11 each. This SUPERSEDES the older $0.09 that still sits in the
- * production VendorProduct row and (until the approved-cost-updates tool is
- * re-run) in that seed. Canonical bag costing reads THIS constant and never
- * the older value — see tests/bag-cost.test.ts.
+ * SUPPLIER BASE COST: $0.09 each, BEFORE inbound freight.
+ *
+ * The $0.11 used since 2D-2 was effectively a LANDED-cost assumption — base
+ * plus an unstated freight allowance — and was never verified as the supplier
+ * price. Blending an unmeasured freight figure into the item cost hid it from
+ * the freight component that is supposed to carry it, so the two are now
+ * separated: this constant is the supplier price only.
+ *
+ * INBOUND FREIGHT IS NOT MODELLED HERE. Blank bags ship on the SAME pallet
+ * method from the SAME supplier as jars (never Southwest Cargo, which applies
+ * only to outsourced DTP bags and boxes). No pallet rate for them has been
+ * measured, so freight stays a disclosed FREIGHT_NOT_MODELLED reason rather
+ * than a fabricated $0.02 that would merely reproduce the old $0.11.
+ *
+ * Carton data recorded for that future allocation, unused today:
+ *   coloured     1,000/carton, 12.5 x 9.5 x 10 in, 10 lb gross
+ *   white/black  2,000/carton, 23.5 x 13 x 9 in,   29 lb gross
  * ------------------------------------------------------------------ */
-export const BAG_4X5_BLANK_UNIT_COST = 0.11;
-export const BAG_4X5_BLANK_SOURCE = "Owner canonical 2026-08-22: 4x5 blank bag $0.11 each. Supersedes the earlier $0.09 (13.2.3 / 2026-07-17 marker).";
-/** Recorded so a test can prove the retired value is never used as a cost. */
-export const BAG_4X5_BLANK_RETIRED_COST = 0.09;
+export const BAG_4X5_BLANK_UNIT_COST = 0.09;
+export const BAG_4X5_BLANK_SOURCE = "Owner-corrected 2026-08-24: 4x5 blank bag supplier base cost $0.09 each, BEFORE inbound freight. Inbound pallet freight is a separate, not-yet-modelled component — never folded into this number.";
+
+/**
+ * The retired LANDED assumption. Kept only so a test can prove it is never
+ * used as the supplier base cost again. It is not a verified figure.
+ */
+export const BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION = 0.11;
+
+/**
+ * Carton facts for the future pallet-freight allocator. Recorded, not priced —
+ * nothing here participates in any cost today.
+ */
+export const BAG_4X5_CARTON_FACTS = {
+  coloured: { bagsPerCarton: 1000, cartonIn: { l: 12.5, w: 9.5, h: 10 }, grossLb: 10 },
+  whiteBlack: { bagsPerCarton: 2000, cartonIn: { l: 23.5, w: 13, h: 9 }, grossLb: 29 },
+  inboundMethod: "Same supplier and same pallet inbound method as jars. NOT Southwest Cargo — that applies only to outsourced DTP bags and boxes.",
+} as const;
 
 /* ------------------------------------------------------------------ *
  * OWNER DECISION 2 — application
@@ -51,7 +79,15 @@ export const BAG_APPLICATION_RETIRED_LABELS_PER_HOUR = 256;
  * Geometry — ARTBOARD drives printing/nesting, CUTLINE drives the cutter.
  * ------------------------------------------------------------------ */
 export const BAG_4X5_ARTBOARD_IN = { widthIn: 4.0, heightIn: 5.0 } as const;
-export const BAG_4X5_CUTLINE_IN = { widthIn: 3.79, heightIn: 4.81 } as const;
+/**
+ * 2D-4C2A: DERIVED, not hand-recorded. The GSO standard builds every label's
+ * cutline from its artboard with a -0.0625in inward offset, so a 4.00 x 5.00in
+ * bag label cuts at 3.875 x 4.875in. The previous literal 3.79 x 4.81 predated
+ * that rule and is gone — a second cutline authority is exactly what the rule
+ * exists to prevent.
+ */
+const BAG_4X5_CUT = deriveGsoLabelCutlineFromArtboard(BAG_4X5_ARTBOARD_IN.widthIn, BAG_4X5_ARTBOARD_IN.heightIn)!;
+export const BAG_4X5_CUTLINE_IN = { widthIn: BAG_4X5_CUT.cutWidthIn, heightIn: BAG_4X5_CUT.cutHeightIn } as const;
 
 export const STOCK_BAG_MOQ = 50;
 export const BAG_DEFAULT_MEDIA_WIDTH_IN = 54;
@@ -236,7 +272,7 @@ export type BagJobInput = {
   machineKey?: string;
   cutMode?: CutMode;
   loadedMediaWidthIn?: number;
-  /** Overrides the canonical $0.11 only when a verified alternative exists. */
+  /** Overrides the canonical $0.09 supplier base only when a verified alternative exists. */
   blankUnitCost?: number | null;
   /**
    * Optional logo/QR personalization of the premade Stock Bag design.
@@ -274,7 +310,7 @@ export function bagCutGeometry(): CutGeometryMap {
       model: "separated_rectangle",
       cutWidthIn: BAG_4X5_CUTLINE_IN.widthIn,
       cutHeightIn: BAG_4X5_CUTLINE_IN.heightIn,
-      note: "Owner-confirmed actual cutline 3.79 x 4.81in. The 4.00 x 5.00in artboard drives nesting/material/ink and is NEVER used for the cutter path.",
+      note: `Cutline ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn}in, derived from the 4.00 x 5.00in artboard by the GSO -0.0625in offset rule. The artboard drives nesting/material/ink and is NEVER used for the cutter path.`,
     },
   };
 }

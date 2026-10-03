@@ -102,6 +102,27 @@ export const OWNER_STANDARDS = {
     basis: "$20/hour at 10 boxes/hour",
     status: "owner_verified",
   } as OwnerStandard,
+  /*
+   * Jars are produced with a deliberate 1% planned overage: 500 finished jars
+   * are made from 505 produced. It is a QUANTITY effect, never a second
+   * charge — the inputs that genuinely scale with produced quantity (blank
+   * complete sets, print media, ink and the inbound freight allocated to those
+   * sets) price at the production number, and the overage line itself is $0 so
+   * nothing is double-counted. Packout still counts FINISHED jars, because
+   * boxes ship what the customer receives.
+   *
+   * 2D-4D3: owner-confirmed. Until then this number lived only as a comment in
+   * jar-cost-inputs.server.ts labelled "owner rule" with nothing behind it, and
+   * the 2D-4D2 audit correctly refused to treat that as verification. It is
+   * recorded here so the cost path depends on the decision authority rather
+   * than on prose.
+   */
+  jarPlannedOveragePct: {
+    value: 1,
+    unit: "% planned production overage (jars)",
+    basis: "Owner-confirmed 2026-08-25 (2D-4D3). Applies to produced-quantity inputs only — blanks, media, ink and their freight allocation. Never compounded, never charged twice, and packout stays on finished quantity.",
+    status: "owner_verified",
+  } as OwnerStandard,
   machineRecoveryPerHour: {
     value: 8,
     unit: "$ per machine hour",
@@ -120,10 +141,16 @@ export const LEGACY_CONFLICTING_RATES = {
     location: "OWNER_STANDARDS.bagApplicationPerLabel4x5 (legacy calculator path only)",
     supersededBy: "bag-cost-inputs.server.ts BAG_APPLICATION_SECONDS_PER_SIDE = 10 seconds per applied side at $20/hr = $0.0555555556/side, $0.1111111111 front+back (owner 2026-08-22).",
   },
-  bag4x5Blank009: {
-    value: 0.09,
-    location: "production VendorProduct 'preset:blank-4x5-bag' (defaultUnitCost 0.09) and tools/apply-15f0k4b-data-corrections.mjs",
-    supersededBy: "bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST = $0.11 (owner 2026-08-22). approved-cost-updates.server.ts now seeds $0.11; a controlled run of that tool is still required to move the production row.",
+  /**
+   * 2D-4C2D REVERSAL. $0.09 is the CORRECT supplier base cost, and $0.11 is
+   * the retired landed-cost assumption. The planned production update
+   * $0.09 -> $0.11 is CANCELLED: the production VendorProduct row already
+   * holds the right number, so no DB change is outstanding.
+   */
+  bag4x5Blank011LandedAssumption: {
+    value: 0.11,
+    location: "retired: bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST (2D-2 through 2D-4C2C) and the approved-cost-updates seed",
+    supersededBy: "bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST = $0.09 supplier base (owner-corrected 2026-08-24). Inbound pallet freight is a SEPARATE component and is not yet modelled; it must never be folded back into the item cost.",
   },
   bag4x5PerSideLegacy: {
     value: 20 / 180, // $0.1111 — WIRED_LABOR.bag4x5PerSide (13A.3 era)

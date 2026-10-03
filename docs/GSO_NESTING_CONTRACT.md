@@ -181,9 +181,10 @@ Lid labels are a separate physical print run. Each run gets its own layout,
 feed, `materialFootprintSqft`, `ripLayoutSqft` and machine occupancy; job
 totals are the **sum**. Feeds are **never combined** across runs.
 
-Two physical runs do **not** create a second print-setup charge. Setup stays
-$12.50 art + $2.00 print for side+lid, $22.50 art + $2.00 print with tamper.
-The nesting engine charges no money at all.
+Two physical runs do **not** create a second print-setup charge. Side+lid is
+one art setup event plus one print setup event; a tamper band adds a second art
+event and still no second print event. The rates live in
+`jar-cost-inputs.server.ts` — the nesting engine charges no money at all.
 
 ```
 physicalRuns: [

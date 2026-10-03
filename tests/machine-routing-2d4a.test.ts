@@ -80,7 +80,7 @@ function resolvedFor(qs: string, seeded = true) {
 }
 
 const LABEL = (extra = "") =>
-  `pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.85&pl0cuth=2.85&pl0mat=matte&pl0art=A${extra}`;
+  `pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A${extra}`;
 const BAG = "pfamily=sticker-bags&pqty=1000&pbagsides=2&pdesigns=1";
 const STOCK = "pfamily=sticker-bags&pstockbag=1&pqty=1000&pbagsides=2";
 const BANNER = "pfamily=banners&pqty=1&pbannerw=36&pbannerh=60&pdesigns=1";
@@ -352,9 +352,9 @@ describe("2D-4A standard jobs route correctly by family", () => {
 
   it("bags keep every approved 2D fact under the new routing", () => {
     const r = resolvedFor(BAG);
-    expect(r.trueCost.lines.find((l: any) => l.key === "blank_sets")!.amount).toBeCloseTo(1000 * 0.11, 8);
+    expect(r.trueCost.lines.find((l: any) => l.key === "blank_sets")!.amount).toBeCloseTo(1000 * 0.09, 8);
     expect(r.trueCost.lines.find((l: any) => l.key === "application")!.amount).toBeCloseTo((1000 * 2 * 10 / 3600) * 20, 6);
-    expect(r.diagnostics.cutPathIn).toBeCloseTo(2000 * 2 * (3.79 + 4.81), 6);
+    expect(r.diagnostics.cutPathIn).toBeCloseTo(2000 * 2 * (3.875 + 4.875), 6);
     expect(r.diagnostics.weedingPages).toBeGreaterThan(0);
   });
 
@@ -410,14 +410,23 @@ describe("2D-4A fails closed and preserves the committed invariants", () => {
     expect(routing.requiredIdentities).toEqual([CANONICAL_CALIBRATION_IDENTITIES["mimaki-cmyk"]]);
   });
 
-  it("17. jars are still not routed — their cutline blocker is untouched", () => {
+  it("17. jars route since 2D-4D1, and missing ARTWORK still blocks a label", () => {
     for (const family of ["standard-jars", "premium-jars"]) {
-      expect(normalizeCanonicalInput(new URLSearchParams(`pfamily=${family}&pqty=1000&pprinter=auto`))).toBeNull();
+      // Routed — but a jar with nothing selected still has no cost.
+      const input = normalizeCanonicalInput(new URLSearchParams(`pfamily=${family}&pqty=1000&pprinter=auto`));
+      expect(input, family).not.toBeNull();
+      expect(input!.printerSelection).toBe("auto");
     }
-    // and a label with no actual cutline still blocks, calibration or not
-    const noCut = resolvedFor("pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0mat=matte&pl0art=A");
-    expect(noCut.status).toBe("DRAFT_ONLY");
-    expect(noCut.blockers.join(" ")).toMatch(/CUTLINE_GEOMETRY_REQUIRED/);
+    // 2D-4C2A: a label's cutline is DERIVED from its artboard, so supplying
+    // artwork is now enough — the blocker moved to missing/invalid artwork.
+    const derived = resolvedFor("pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0mat=matte&pl0art=A");
+    expect(derived.status).not.toBe("DRAFT_ONLY");
+    expect(derived.blockers).toHaveLength(0);
+
+    // artwork too small to offset has no cutline, and still blocks
+    const noArt = resolvedFor("pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=0.1&pl0h=0.1&pl0mat=matte&pl0art=A");
+    expect(noArt.status).toBe("DRAFT_ONLY");
+    expect(noArt.blockers.join(" ")).toMatch(/CUTLINE_GEOMETRY_REQUIRED/);
   });
 
   it("18. setup stays quantity-independent under every routing", () => {

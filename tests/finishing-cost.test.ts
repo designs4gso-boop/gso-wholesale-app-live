@@ -2,7 +2,7 @@
 //
 // GSO labels are cut INDIVIDUALLY. The reference benchmark is 130 x 4x5 bag
 // labels whose ARTBOARD is 4.00 x 5.00in but whose real CUTLINE is
-// 3.79 x 4.81in — perimeter 17.20in, total path 2236.0in, cut in 11.0 min.
+// 3.79 x 4.81in — perimeter 17.20in, total path 2236.0.0in, cut in 11.0 min.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -11,10 +11,10 @@ import {
   CUT_OPERATOR_ATTENTION_PER_HOUR,
   CUT_REFERENCE_PATH_IN,
   FINISHING_REASONS,
-  REFERENCE_ARTBOARD_IN,
-  REFERENCE_CUTLINE_IN,
-  REFERENCE_PERIMETER_IN,
-  REFERENCE_QTY,
+  BENCHMARK_ARTBOARD_IN,
+  BENCHMARK_MEASURED_CUTLINE_IN,
+  BENCHMARK_PERIMETER_IN,
+  BENCHMARK_QTY,
   WEEDING_COST_PER_REFERENCE_PAGE,
   WEEDING_REFERENCE_PAGE_IN,
   WEEDING_REQUIRED_BY_DEFAULT,
@@ -38,11 +38,11 @@ const policyFor = (machineKey: string, media: number): NestingPolicy => {
 /** The reference job: nesting uses the ARTBOARD, cutting uses the CUTLINE. */
 const referenceNesting = () =>
   computeNesting(
-    [{ key: "bench", items: [{ key: "label", widthIn: 3.989, heightIn: 5, quantity: REFERENCE_QTY, shapeType: "rect", groupKey: "label" }] }],
+    [{ key: "bench", items: [{ key: "label", widthIn: 3.989, heightIn: 5, quantity: BENCHMARK_QTY, shapeType: "rect", groupKey: "label" }] }],
     policyFor(MIMAKI, 54),
   );
 const REFERENCE_GEOMETRY: CutGeometryMap = {
-  label: { model: "separated_rectangle", cutWidthIn: REFERENCE_CUTLINE_IN.widthIn, cutHeightIn: REFERENCE_CUTLINE_IN.heightIn },
+  label: { model: "separated_rectangle", cutWidthIn: BENCHMARK_MEASURED_CUTLINE_IN.widthIn, cutHeightIn: BENCHMARK_MEASURED_CUTLINE_IN.heightIn },
 };
 
 /* ================================================================== *
@@ -51,13 +51,13 @@ const REFERENCE_GEOMETRY: CutGeometryMap = {
 
 describe("1. cutline geometry", () => {
   it("3.79 x 4.81 cutline perimeter = 17.20 in", () => {
-    expect(REFERENCE_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 });
-    expect(REFERENCE_PERIMETER_IN).toBeCloseTo(17.2, 10);
+    expect(BENCHMARK_MEASURED_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 });
+    expect(BENCHMARK_PERIMETER_IN).toBeCloseTo(17.2, 10);
     expect(2 * (3.79 + 4.81)).toBeCloseTo(17.2, 10);
   });
 
   it("130 labels = 2236.0 in of total cut path", () => {
-    expect(REFERENCE_QTY).toBe(130);
+    expect(BENCHMARK_QTY).toBe(130);
     expect(CUT_REFERENCE_PATH_IN).toBeCloseTo(2236.0, 10);
     expect(130 * 17.2).toBeCloseTo(2236.0, 10);
   });
@@ -73,7 +73,7 @@ describe("1. cutline geometry", () => {
   });
 
   it("the ARTBOARD does not determine the cut path — the CUTLINE does", () => {
-    expect(REFERENCE_ARTBOARD_IN).toEqual({ widthIn: 4.0, heightIn: 5.0 });
+    expect(BENCHMARK_ARTBOARD_IN).toEqual({ widthIn: 4.0, heightIn: 5.0 });
     const withCutline = runCutPath(referenceNesting().runs[0], REFERENCE_GEOMETRY).bands[0];
     const withoutCutline = runCutPath(referenceNesting().runs[0]).bands[0];
     // nesting placed the ARTBOARD (3.989 x 5.000); the cutter used 3.79 x 4.81
@@ -110,7 +110,7 @@ describe("1. cutline geometry", () => {
  * ================================================================== */
 
 describe("2. cut-mode benchmarks on the corrected 2236in geometry", () => {
-  it("Mimaki NORMAL: 2236 / 203.2727 ~= 11 min — OWNER_MEASURED", () => {
+  it("Mimaki NORMAL: 2236.0 / 203.2727 ~= 11 min — OWNER_MEASURED", () => {
     const cal = resolveCutCalibration(MIMAKI, "normal")!;
     expect(cal.inchesPerMinute).toBeCloseTo(203.2727, 4);
     expect(cal.benchmarkPathIn).toBeCloseTo(2236.0, 6);
@@ -120,7 +120,7 @@ describe("2. cut-mode benchmarks on the corrected 2236in geometry", () => {
     expect(cal.provisional).toBeUndefined();
   });
 
-  it("Mimaki NORMAL+PERF: 2236 / 20 = 111.8 in/min — DERIVED_FROM_CONFIRMED_GEOMETRY", () => {
+  it("Mimaki NORMAL+PERF: 2236.0 / 20 = 111.8 in/min — DERIVED_FROM_CONFIRMED_GEOMETRY", () => {
     const cal = resolveCutCalibration(MIMAKI, "normal_perf")!;
     expect(cal.inchesPerMinute).toBeCloseTo(111.8, 9);
     expect(cal.classification).toBe("DERIVED_FROM_CONFIRMED_GEOMETRY");
@@ -130,8 +130,8 @@ describe("2. cut-mode benchmarks on the corrected 2236in geometry", () => {
   it("both Roland rates are UNVERIFIED_GEOMETRY and force PROVISIONAL", () => {
     const normal = resolveCutCalibration(ROLAND, "normal")!;
     const perf = resolveCutCalibration(ROLAND, "normal_perf")!;
-    expect(normal.inchesPerMinute).toBeCloseTo(2236 / 9, 9); // 248.444…
-    expect(perf.inchesPerMinute).toBeCloseTo(2236 / 16, 9); // 139.75
+    expect(normal.inchesPerMinute).toBeCloseTo(2236.0 / 9, 9); // 248.444…
+    expect(perf.inchesPerMinute).toBeCloseTo(2236.0 / 16, 9); // 139.75
     for (const cal of [normal, perf]) {
       expect(cal.classification).toBe("UNVERIFIED_GEOMETRY");
       expect(cal.provisional).toContain(FINISHING_REASONS.cutGeometryUnverified);
@@ -344,7 +344,7 @@ describe("5. never invents geometry or a rate", () => {
     const r = computeFinishing({ nesting: bags, machineKey: ROLAND, cutMode: "normal", cutGeometry: REFERENCE_GEOMETRY });
     expect(r.reasons).toContain(FINISHING_REASONS.cutGeometryUnverified);
     expect(r.stages.find((s) => s.key === "cutting_machine")!.provisional).toContain(FINISHING_REASONS.cutGeometryUnverified);
-    expect(r.cutMinutes!).toBeCloseTo(2236 / (2236 / 9), 9); // 9.0 min
+    expect(r.cutMinutes!).toBeCloseTo(2236.0 / (2236.0 / 9), 9); // 9.0 min
   });
 
   it("requiresCutting=false zeroes cutting without blocking", () => {
@@ -375,9 +375,9 @@ describe("6. product-agnostic", () => {
     );
     const r = computeFinishing({
       nesting: bags, machineKey: MIMAKI, cutMode: "normal",
-      cutGeometry: { bag: { model: "separated_rectangle", cutWidthIn: 3.79, cutHeightIn: 4.81 } },
+      cutGeometry: { bag: { model: "separated_rectangle", cutWidthIn: 3.875, cutHeightIn: 4.875 } },
     });
-    expect(r.cutPathIn).toBeCloseTo(1000 * 17.2, 6);
+    expect(r.cutPathIn).toBeCloseTo(1000 * 17.5, 6);
     expect(r.weedingPages).toBe(Math.ceil(bags.runs[0].feedLengthIn / 54));
     expect(r.reasons).toHaveLength(0);
   });

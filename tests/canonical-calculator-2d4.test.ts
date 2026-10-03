@@ -68,16 +68,22 @@ const STOCK_QS = `pfamily=sticker-bags&pstockbag=1&pqty=1000&pbagsides=2&${MACHI
 const BANNER_QS = `pfamily=banners&pqty=1&pbannerw=36&pbannerh=60&pdesigns=1&${MACHINE_QS}`;
 const LABEL_QS =
   `pfamily=stickers-labels&pllines=2` +
-  `&pl0qty=500&pl0w=3&pl0h=3&pl0cutw=2.85&pl0cuth=2.85&pl0mat=matte&pl0art=A` +
-  `&pl1qty=500&pl1w=3&pl1h=3&pl1cutw=2.85&pl1cuth=2.85&pl1mat=holographic&pl1art=A&${MACHINE_QS}`;
+  `&pl0qty=500&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A` +
+  `&pl1qty=500&pl1w=3&pl1h=3&pl1cutw=2.875&pl1cuth=2.875&pl1mat=holographic&pl1art=A&${MACHINE_QS}`;
 
 /* ================================================================== *
  * DISPATCH
  * ================================================================== */
 
 describe("2D-4 canonical dispatch", () => {
-  it("routes exactly the four in-house manufacturing families", () => {
-    expect([...CANONICAL_FAMILIES]).toEqual(["stickers-labels", "sticker-bags", "stock-bags", "banners"]);
+  it("routes every in-house manufacturing family", () => {
+    // 2D-4D1: the two jar families joined the original four once their active
+    // scope was pinned down and every offered jar came out fully costed.
+    expect([...CANONICAL_FAMILIES]).toEqual([
+      "stickers-labels", "sticker-bags", "stock-bags", "banners", "standard-jars", "premium-jars",
+    ]);
+    expect(CANONICAL_DISPATCH["standard-jars"].adapter).toBe("jar-cost-inputs.server.ts");
+    expect(CANONICAL_DISPATCH["premium-jars"].adapter).toBe("jar-cost-inputs.server.ts");
     expect(CANONICAL_DISPATCH["stickers-labels"].adapter).toBe("label-cost-inputs.server.ts");
     expect(CANONICAL_DISPATCH["sticker-bags"].adapter).toBe("bag-cost-inputs.server.ts");
     expect(CANONICAL_DISPATCH["stock-bags"].adapter).toBe("bag-cost-inputs.server.ts");
@@ -94,9 +100,19 @@ describe("2D-4 canonical dispatch", () => {
     }
   });
 
-  it("jars and custom-item also stay on their existing path", () => {
-    for (const family of ["standard-jars", "premium-jars", "custom-item"]) {
-      expect(normalizeCanonicalInput(new URLSearchParams(`pfamily=${family}&pqty=1000`))).toBeNull();
+  it("custom-item stays on its existing path", () => {
+    expect(normalizeCanonicalInput(new URLSearchParams("pfamily=custom-item&pqty=1000"))).toBeNull();
+  });
+
+  it("2D-4D1: jars now normalise, and an unselected jar blocks rather than costing", () => {
+    for (const family of ["standard-jars", "premium-jars"]) {
+      const input = normalizeCanonicalInput(new URLSearchParams(`pfamily=${family}&pqty=1000`));
+      expect(input, `${family} must reach the canonical adapter`).not.toBeNull();
+      // No jar was picked, so there is nothing to cost — the job must refuse,
+      // never fall back to a stand-in jar.
+      const result = assembleCanonicalJob(input!, CAL);
+      expect(result.status).toBe("DRAFT_ONLY");
+      expect(result.unitCost).toBeNull();
     }
   });
 
@@ -156,12 +172,18 @@ describe("2D-4 label / sticker integration", () => {
     expect(r.blockers.join(" ")).toMatch(/MISSING_CALIBRATION/);
   });
 
-  it("a missing ACTUAL cutline blocks — the artboard is never substituted", () => {
-    const noCut = LABEL_QS.replace("&pl0cutw=2.85&pl0cuth=2.85", "").replace("&pl1cutw=2.85&pl1cuth=2.85", "");
-    const r = run(noCut);
-    expect(r.status).toBe("DRAFT_ONLY");
-    expect(r.unitCost).toBeNull();
-    expect(r.blockers.join(" ")).toMatch(/CUTLINE_GEOMETRY_REQUIRED/);
+  it("the cutline is DERIVED from the artboard by the GSO offset rule", () => {
+    // 2D-4C2A: a cutline is no longer supplied per line — it is computed as
+    // artboard minus a 0.0625in inward offset on every edge.
+    const input = normalizeCanonicalInput(new URLSearchParams(
+      "pfamily=stickers-labels&pllines=1&pl0qty=100&pl0w=3&pl0h=3&pl0mat=matte&pl0art=A" + MACHINE_QS))!;
+    const line = input.labels!.lines[0];
+    expect(line.cutWidthIn).toBeCloseTo(2.875, 10);
+    expect(line.cutHeightIn).toBeCloseTo(2.875, 10);
+    // MISSING artwork still fails closed — there is nothing to offset from
+    const noArt = normalizeCanonicalInput(new URLSearchParams(
+      "pfamily=stickers-labels&pllines=1&pl0qty=100&pl0w=0&pl0h=0&pl0mat=matte&pl0art=A" + MACHINE_QS))!;
+    expect(noArt.labels!.lines[0]?.cutWidthIn).toBeUndefined();
   });
 
   it("artwork identity and print-setup events survive the round trip", () => {
@@ -285,17 +307,17 @@ describe("2D-4 bag integration", () => {
   it("the canonical adapter is authoritative and carries the owner facts", () => {
     const r = run(BAG_QS);
     expect(r.adapter.bag).not.toBeNull();
-    // $0.11 blank at production quantity
+    // $0.09 blank at production quantity
     const blankLine = r.trueCost.lines.find((l) => l.key === "blank_sets")!;
     expect(blankLine.amount).toBeCloseTo(1000 * BAG_4X5_BLANK_UNIT_COST, 8);
-    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.11);
+    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.09);
     // 10s per applied side at $20/hr, 2 sides
     expect(BAG_APPLICATION_SECONDS_PER_SIDE).toBe(10);
     expect(r.trueCost.lines.find((l) => l.key === "application")!.amount)
       .toBeCloseTo((1000 * 2 * 10 / 3600) * 20, 6);
     // the ACTUAL 4x5 cutline drove the cutter
-    expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 });
-    expect(r.diagnostics.cutPathIn).toBeCloseTo(2000 * 2 * (3.79 + 4.81), 6);
+    expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.875, heightIn: 4.875 });
+    expect(r.diagnostics.cutPathIn).toBeCloseTo(2000 * 2 * (3.875 + 4.875), 6);
     // weeding is required
     expect(r.diagnostics.weedingPages).toBeGreaterThan(0);
   });
@@ -655,8 +677,13 @@ describe("2D-4 legacy path cutover", () => {
     expect(normalizeCanonicalInput(new URLSearchParams("pfamily=dtp-bags&pqty=5000"))).toBeNull();
   });
 
-  it("jars keep their blocker — no artboard fallback to force a number", () => {
-    expect(normalizeCanonicalInput(new URLSearchParams("pfamily=standard-jars&pqty=1000"))).toBeNull();
-    expect(normalizeCanonicalInput(new URLSearchParams("pfamily=premium-jars&pqty=1000"))).toBeNull();
+  it("jars still refuse to force a number — 2D-4D1 promoted the SCOPE, not a fallback", () => {
+    // Promotion did not add an artboard fallback or any other stand-in. A jar
+    // the owner does not offer still has no cost and still cannot be quoted.
+    const params = new URLSearchParams(`pfamily=premium-jars&pqty=1000&pjar=miron/4oz&pjarside=1&${MACHINE_QS}`);
+    const result = assembleCanonicalJob(normalizeCanonicalInput(params)!, CAL);
+    expect(result.status).toBe("DRAFT_ONLY");
+    expect(result.unitCost).toBeNull();
+    expect(result.blockers.join(" ")).toContain(CANONICAL_REASONS.familyUnsupported);
   });
 });

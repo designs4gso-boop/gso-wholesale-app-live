@@ -20,10 +20,29 @@ import {
 const MIRON_MARKER = "[VERIFIED 2026-07-17 owner-approved Miron jar + normal SAN lid sheet]";
 const SAFECARE_MARKER = "[VERIFIED 2026-07-17 owner-approved SAFECARE jar cost]";
 const BAG_MARKER = "[VERIFIED 2026-07-17 owner-approved blank bag cost]";
-// 2D-2: the 4x5 blank was superseded on 2026-08-22 ($0.09 -> $0.11). Its own
-// marker keeps the two dates distinguishable in the audit trail, and the
-// canonical bag adapter reads BAG_4X5_BLANK_UNIT_COST rather than this seed.
-const BAG_MARKER_4X5 = "[VERIFIED 2026-08-22 owner-approved 4x5 blank bag cost $0.11 - supersedes the 2026-07-17 $0.09]";
+/* ------------------------------------------------------------------ *
+ * 2D-4C2D1 — THE 4x5 BLANK BAG CORRECTION IS CANCELLED AND REMOVED.
+ *
+ * There is deliberately NO "bag-4x5" entry below, and no BAG_MARKER_4X5.
+ *
+ * The owner-confirmed supplier base cost is $0.09 each before inbound freight,
+ * which is what production already holds — so there is nothing to correct. The
+ * 2D-2 $0.11 was a landed-cost assumption and its planned $0.09 -> $0.11 push
+ * is cancelled.
+ *
+ * A no-op $0.09 write target was NOT left in its place, for two reasons:
+ *   1. an entry that always evaluates "already correct" is noise in the admin
+ *      preview and invites a future edit to "fix" a value that is already right;
+ *   2. matchApprovedRecord filters candidates through looksLikeTemplateRecord
+ *      BEFORE the vendorSku lookup, so a production row whose NAME contains
+ *      "stock bag"/"outsourced"/"template" would skip the exact match, flip to
+ *      will_create, and DUPLICATE the VendorProduct. Keeping a pointless entry
+ *      keeps that risk live for no benefit.
+ *
+ * The canonical cost authority is bag-cost-inputs.server.ts
+ * BAG_4X5_BLANK_UNIT_COST; this seed never fed it. Restore an entry here only
+ * if a supplier invoice actually changes the base cost.
+ * ------------------------------------------------------------------ */
 const POUCH_MARKER = "[VERIFIED 2026-07-17 owner-approved DTP 4x5x2 blank pouch table]";
 const ROLL_INK_MARKER = "[VERIFIED 2026-07-17 owner-approved roll/ink cost]";
 
@@ -89,7 +108,6 @@ export const APPROVED_COST_TRUTH: ApprovedItem[] = [
   { key: "safecare-5oz-clear", label: "5oz clear jar (cost-only placeholder)", target: "vendor_product", kind: "flat", policy: "update", matchVendorSkus: ["preset:5oz-jar-clear"], matchName: /^5\s?oz.*clear/i, flatCost: 0.6, marker: SAFECARE_MARKER, note: "Cost item only — stays out of storefront/quote flow per project rules; this updates its cost record, nothing else." },
 
   // 3. Blank bags — flat cost each, created flat (no fake tiers) when missing.
-  { key: "bag-4x5", label: "4x5 blank bag", target: "vendor_product", kind: "flat", policy: "update", matchVendorSkus: ["preset:blank-4x5-bag"], matchName: /^(blank\s*)?4\s?x\s?5\b.*bag/i, flatCost: 0.11, marker: BAG_MARKER_4X5, creation: { name: "4x5 Blank Bag", productType: "bag", vendor: "Vendor TBD", vendorSku: "preset:blank-4x5-bag" } },
   { key: "bag-4x6", label: "4x6 blank bag", target: "vendor_product", kind: "flat", policy: "update", matchVendorSkus: ["preset:blank-4x6-bag"], matchName: /^(blank\s*)?4\s?x\s?6\b.*bag/i, flatCost: 0.1, marker: BAG_MARKER, creation: { name: "4x6 Blank Bag", productType: "bag", vendor: "Vendor TBD", vendorSku: "preset:blank-4x6-bag" } },
   { key: "bag-14x16", label: "14x16 / larger blank bag", target: "vendor_product", kind: "flat", policy: "update", matchVendorSkus: ["preset:pound-bag"], matchName: /(14\s?x\s?16|pound)\s*(blank\s*)?bag/i, flatCost: 1.0, marker: BAG_MARKER, creation: { name: "14x16 Blank Bag", productType: "bag", vendor: "Vendor TBD", vendorSku: "preset:pound-bag" } },
 

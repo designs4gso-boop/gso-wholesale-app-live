@@ -69,8 +69,9 @@ export type NestingItem = {
  *
  * SETUP GROUPING AND PHYSICAL-RUN GROUPING ARE DIFFERENT CONCEPTS.
  *
- * A jar side+lid job is ONE artwork/design for setup ($12.50 art + $2.00
- * print) but TWO physical print runs — the lid labels run separately. Each run
+ * A jar side+lid job is ONE artwork/design for setup (one art event, one
+ * print event) but TWO physical print runs — the lid labels run separately.
+ * Each run
  * gets its own layout, feed, media and occupancy; the job total is the SUM.
  * Feeds are NEVER combined across runs.
  *
