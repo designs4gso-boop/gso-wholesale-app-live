@@ -31,6 +31,7 @@ import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "
 import { QUOTE_OUTCOME_STATUSES, resolveQuoteOutcomeChange } from "../lib/pricing-intelligence.server";
 import { CUSTOMER_TIERS, customerTierDisplayLabel, isCustomerTier, tierRule } from "../lib/customer-tiers";
 import { enforceQuoteItemUnitCost, quoteItemCostIsProtected } from "../lib/quote-item-cost-authority";
+import { agentConversionCanonicalGate } from "../lib/agent-quote-canonical-gate.server";
 
 type QuoteItemInput = {
   id?: string;
@@ -501,6 +502,18 @@ async function priceRecipeLine(shop: string, payload: any, admin?: any) {
 
   if (!recipe) {
     return { ok: false, error: "Recipe not found." };
+  }
+
+  /* 2D-4E6 CANONICAL GATE. "Calculate from ERP" prices a recipe through the
+   * recipe TIER engine. For a canonical-authority family (labels, sticker /
+   * stock bags, jars, banners) that figure is not the canonical true
+   * manufacturing cost, and a line priced this way would carry no canonical
+   * block — so the save-boundary protection could not hold it. Refuse here,
+   * exactly as the Agent Review Queue does; staff build those quotes in the
+   * Cost Calculator. DTP, boxes and custom items are unchanged. */
+  const canonicalGate = agentConversionCanonicalGate(recipe);
+  if (!canonicalGate.allowed) {
+    return { ok: false, error: canonicalGate.reason, canonicalAuthorityRequired: true };
   }
 
   const recipeShopifyProductGid = recipe.productGid || recipe.shopifyProductId || null;
