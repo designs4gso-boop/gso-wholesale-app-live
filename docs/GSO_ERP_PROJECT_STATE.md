@@ -2,10 +2,15 @@
 
 ## Current Repo And Branch
 
-- Repo path: `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
-- Branch: `main`
-- Latest stable commit: `42d9bc3 Separate setup wizard blockers and warnings`
-- Working tree at closeout: Patch 11C (ERP Walkthrough / staff SOP page) pending commit
+- Repo path: `C:\Users\Desig\GSO-ERP-WORKSPACE\wholesale-lite-mvp` (migrated 2026-10; the older `C:\Users\golde\...` path is historical)
+- GitHub `origin/main`: `fd55e51` — everything after it is LOCAL ONLY and NOT deployed
+- `main` (local): `22d91f2`, 3 commits ahead of GitHub (zakeke identity/intake + canonical quote authority) — untouched, awaiting owner merge/push approval
+- CORE release branch: `costing-october-core-release-2026-10-03` = main + `cf04eaf` (2D-4 calculator RC) + `1b13758` (2D-4E authority lockdown) + October docs/fix commits. Runbook: `docs/GSO_OCTOBER_CORE_RELEASE_RUNBOOK.md`
+- FULL review branch: `costing-october-full-review-2026-10-03` = CORE + `14a125d` (storefront canonical cost basis, HELD for owner decisions) + decision packet `docs/GSO_STOREFRONT_PRICING_DECISION_PACKET.md`
+- Immutable snapshot: `costing-october-finishline-2026-10-03` @ `a9ea8b3` (its production-state docs are stale about calibrations; superseded by the two branches above)
+- Production (read-only verified 2026-10-03): all four approved machine calibrations EXIST and match — do NOT apply the calibration seed; Chiron 100ml tall VendorProduct row MISSING — seed is post-deploy, owner-approved only
+- Intentionally untracked, never stage: `shopify-theme/`, `theme-patches/`, `tools/attach-media-16g3.mjs`
+- Historical: latest stable commit at the Patch 11C closeout was `42d9bc3 Separate setup wizard blockers and warnings`
 
 ## Golden Rule For All Agents
 

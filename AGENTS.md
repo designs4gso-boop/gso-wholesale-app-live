@@ -4,7 +4,8 @@
 This is the GSO wholesale / ERP Shopify app.
 
 Repo:
-C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp
+C:\Users\Desig\GSO-ERP-WORKSPACE\wholesale-lite-mvp
+(migrated 2026-10; the older C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp path is historical)
 
 GitHub:
 designs4gso-boop/gso-wholesale-app-live

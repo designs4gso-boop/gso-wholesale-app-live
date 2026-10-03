@@ -480,3 +480,50 @@ raise-only, same-specialty matte equivalent, cost accounting untouched,
 specialty stays area-driven. canonical-sticker-pricing.server.ts
 version 16F.1; result carries holoFloorApplied/matteEquivalentUnit.
 4 new floor pins (suite 1123); TS 304; build green.
+
+## Patches 2D-4C2 → 2D-4D3 (2026-08-22 → 2026-08-25) — canonical calculator release candidate
+Recovered intact after the PC migration and checkpointed locally on
+2026-10-03 as `cf04eaf feat(costing): complete canonical calculator 2d4
+release candidate`.
+- 2D-4C2A: GSO label cutline authority (gso-cutline.ts) — -0.0625in inward
+  offset; 4.000x5.000 bag label cuts at 3.875x4.875; the 2236.0in / 11.0 min
+  benchmark sets cutter SPEED only.
+- 2D-4C2D: 4x5 blank bag $0.09 supplier base BEFORE inbound freight (owner
+  2026-08-24); $0.11 retired; approved-cost-updates 4x5 entry removed.
+- 2D-4D1: active jar scope (jar-active-scope.ts, ten owner combinations);
+  jars promoted to CANONICAL_COST_AUTHORITY; fail-closed list emptied.
+- 2D-4D2: per-size jar application seconds; jar setup on owner global rates
+  (art $8.333333 PER_DESIGN, print $1.00 PER_JOB); multi-line label artwork
+  identity declared per line.
+- 2D-4D3: jar 1% planned overage OWNER VERIFIED (OWNER_STANDARDS.
+  jarPlannedOveragePct); Chiron 100ml tall $1.80 OWNER VERIFIED;
+  tools/seed-chiron-100ml-tall-2d4d2.mjs (dry-run default, NOT applied).
+- Tests 2092 / 83 files; TS 305 baseline; build green.
+
+## Patch 2D-4E (2026-10-03) — P0 canonical authority lockdown
+Local commit `1b13758 fix(costing): enforce canonical authority across
+quote paths`.
+- E1 multi-line labels quote from canonical cost (multi-line-label-
+  authority.server.ts); finished qty = sum of entered lines.
+- E2 custom 4x5 Sticker Bag MOQ 50 in the canonical adapter.
+- E3 Quotes editor holds canonical unit cost (quote-item-cost-authority.ts);
+  blocked / re-quantified canonical items refuse to save.
+- E4 Agent Review Queue refuses canonical families on recipe tier cost.
+- E5 emergency / legacy-auto saves of a known canonical family reach the
+  canonical gate (canonicalFamilyFromMarginFamilyKey).
+- Tests 2141 / 88 files; TS 305; 0 in patch files.
+
+## Patch 2D-4E6 / 2D-4H (2026-10-03) — CORE release branch
+Branch `costing-october-core-release-2026-10-03` (from 1b13758).
+- E6: the Quotes editor's "price from recipe" action refuses canonical-
+  authority families (same gate as the Agent Review Queue) — the recipe
+  tier engine is not the canonical manufacturing cost.
+- PRODUCTION STATE CORRECTION (read-only dry runs 2026-10-03): all four
+  approved machine calibrations ALREADY EXIST in production and match the
+  approved values — the calibration seed is NOT needed and must not be
+  applied. Chiron 100ml tall VendorProduct row is MISSING (seed would
+  CREATE; owner-approved, post-deploy only).
+- 14a125d (storefront canonical cost basis) deliberately NOT in CORE.
+- Docs: CURRENT_STATE October section, GSO_TRUE_COST_CONTRACT §11,
+  GSO_ERP_PROJECT_STATE, GSO_OCTOBER_CORE_RELEASE_RUNBOOK.md.
+- NOT deployed. NOT pushed. Production DB untouched.

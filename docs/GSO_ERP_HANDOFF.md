@@ -5,7 +5,7 @@ Last updated: 2026-06-17
 ## Project
 
 Project folder:
-C:\Users\golde\shopify-apps\wholesale-lite-mvp
+C:\Users\Desig\GSO-ERP-WORKSPACE\wholesale-lite-mvp (migrated 2026-10; historical: C:\Users\golde\shopify-apps\wholesale-lite-mvp)
 
 Repo:
 designs4gso-boop/gso-wholesale-app-live

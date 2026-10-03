@@ -1,6 +1,56 @@
 # GSO ERP / Shopify Configurator — Current State
 
-Updated: 2026-08-12 (Phase 16D, Miron jar revenue activation)
+Updated: 2026-10-03 (October CORE release candidate — local only, NOT deployed)
+
+## OCTOBER 2026 — COST CALCULATOR CORE RELEASE (LOCAL ONLY, NOT DEPLOYED)
+Repo moved to `C:\Users\Desig\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
+(`C:\Users\golde\...` paths elsewhere in this file are historical).
+Release branch: `costing-october-core-release-2026-10-03`. GitHub
+`origin/main` is STILL `fd55e51`; nothing after it is on GitHub or Render.
+Full record: `docs/GSO_OCTOBER_CORE_RELEASE_RUNBOOK.md`,
+`docs/GSO_TRUE_COST_CONTRACT.md` §11, `PATCH_LOG.md` (2D-4C2 → 2D-4E).
+
+PRODUCTION STATE (read-only verified 2026-10-03, dry runs only):
+- ALL FOUR approved canonical machine calibrations ALREADY EXIST in
+  production (Mimaki cmyk_heavy 32-pass-bidi-op1 1.89 mL/sqft 1.444 min/sqft;
+  Roland cmyk hq-default 1.4133 / 0.91; Roland white white-hd-1x 6.0 / 1.71;
+  Roland gloss gloss-1x 4.18 / 0.91). Values match the approved definitions
+  exactly. DO NOT run `seed-machine-profile-calibrations.mjs --apply`; the
+  calibration seed is NOT a deployment blocker and is not needed.
+- Chiron 100ml tall VendorProduct row (`chiron-100ml-tall`) is MISSING. The
+  seed `tools/seed-chiron-100ml-tall-2d4d2.mjs` is production-only, dry-run
+  by default, would CREATE one row at $1.80, and awaits owner approval AFTER
+  the application deploy and smoke test. Not applied.
+
+CORE RELEASE CONTENT: the three historical local commits (d2ec32f, 252d99b,
+22d91f2) + `cf04eaf` (2D-4C2→2D-4D3 calculator release candidate) +
+`1b13758` (2D-4E P0 canonical authority lockdown) + the October docs/fix
+commits on the CORE branch. Canonical-authority families: stickers-labels,
+sticker-bags, stock-bags, banners, standard-jars, premium-jars. Canonical
+true manufacturing cost is the ONLY cost that reaches a Quote for them.
+Blocked canonical result = unitCost null, never $0. DTP / Boxes remain
+outsourced (LEGACY_OUTSOURCED) and incomplete.
+
+INTENTIONALLY HELD — NOT IN CORE: commit `14a125d` (storefront canonical
+manufacturing-cost basis). It changes customer-facing behaviour (5X/7X
+specialty prices move; holographic and die-cut become quote-only online)
+and needs owner decisions. See `docs/GSO_STOREFRONT_PRICING_DECISION_PACKET.md`
+on branch `costing-october-full-review-2026-10-03`. In CORE the storefront
+and admin previews still price on the legacy engine, unchanged from today.
+
+Owner-verified locks in code: label cutline -0.0625in offset; 4x5 blank
+$0.09 before inbound freight ($0.11 retired; freight not yet modelled);
+active jar scope (10 combinations; 100ml→100ml_wide, 100ml tall→100ml_tall);
+per-size jar application seconds; art $8.333333 PER_DESIGN / print $1.00
+PER_JOB; jar overage 1%; Chiron 100ml tall $1.80; sticker-bag + stock-bag
+MOQ 50; routing CMYK→Mimaki, white/gloss→Roland, explicit Mimaki+specialty
+BLOCK. Unsupported banner finishing stays fail-closed.
+
+Deployment requirement for CORE (from the origin/main diff): application
+code, tests, docs and tools only. No Prisma schema or migration changes, no
+extension/function/theme source, no shopify.app.toml, no dependency changes.
+Render auto-deploys a push to `main`; `shopify app deploy` and "Save
+settings & sync functions" are NOT required for CORE.
 
 ## STICKER STATUS AFTER 16F — STAGED (deploy + media gated)
 custom-stickers (sticker_regular) + die-cut-stickers (sticker_die_cut)
@@ -45,7 +95,7 @@ Jars/DTP/stickers/boxes/banners: see the 16C launch matrix in the phase
 report; blank-jar sell pricing is the single jar blocker.
 
 Project root:
-C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp
+C:\Users\Desig\GSO-ERP-WORKSPACE\wholesale-lite-mvp (since 2026-10; previously C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp)
 
 Branch: main (Render auto-deploys pushes; `shopify app deploy` separately
 ships theme-extension changes). HEAD before 15Z.1: 710d663.

@@ -352,3 +352,69 @@ $0.20/label · packout $2.00/box · flat 100 units/box · 10% waste · Mimaki
 0.6 mL/sqft · art setup $8.3333/design · print setup $1.00/design.
 
 Parity fixtures must be captured **before** Patch 2B touches any live path.
+
+---
+
+## 11. October 2026 state — CORE release (2D-4C2 → 2D-4E6)
+
+Recorded 2026-10-03 on local branch `costing-october-core-release-2026-10-03`.
+**Nothing in this section is deployed**; GitHub `origin/main` still ends at
+`fd55e51`.
+
+### Production state (read-only verified 2026-10-03)
+
+* **All four approved canonical machine calibrations already exist in
+  production** and match the approved definitions exactly (Mimaki
+  `cmyk_heavy` 1.89 mL/sqft/pass, 1.444 min/sqft; Roland `cmyk` 1.4133 / 0.91;
+  Roland `white` 6.0 / 1.71; Roland `gloss` 4.18 / 0.91). The calibration
+  seed is **not** a deployment blocker. **Do not apply it.**
+* **Chiron 100ml tall VendorProduct row is missing.** The seed
+  (`tools/seed-chiron-100ml-tall-2d4d2.mjs`) is production-only, dry-run by
+  default, would CREATE exactly one row at $1.80, and awaits owner approval
+  AFTER the application deploy and smoke test.
+
+### Completed phases in CORE (all local)
+
+| Phase | What it locked | Where |
+|---|---|---|
+| 2D-4C2A | GSO label cutline authority: -0.0625 in inward offset path; rectangle W-0.125 × H-0.125; circle Ø-0.125. 4.000×5.000 bag label cuts at 3.875×4.875. Historical 3.79×4.81 / 130 pcs / 2236.0 in / 11.0 min sets cutter **speed only**. | `app/lib/gso-cutline.ts`, `finishing-cost.server.ts` |
+| 2D-4C2D | 4x5 blank bag supplier base cost **$0.09 before inbound freight** (owner-corrected 2026-08-24). $0.11 is a retired landed-cost assumption and is never charged. No Approved Cost Update entry exists for the 4x5 blank. | `bag-cost-inputs.server.ts`, `approved-cost-updates.server.ts` |
+| 2D-4D1 | Active jar scope (ten owner combinations; 100ml → `100ml_wide`, 100ml tall → `100ml_tall`); jars promoted to `CANONICAL_COST_AUTHORITY`; fail-closed list emptied, mechanism kept. | `jar-active-scope.ts`, `canonical-quote-authority.server.ts` |
+| 2D-4D2 | Per-size jar application seconds (owner table); jar setup on owner global rates — art $8.333333 `PER_DESIGN` (side+lid one design, tamper a second), print $1.00 `PER_JOB`; multi-line label artwork identity declared per line. | `jar-cost-inputs.server.ts`, calculator route |
+| 2D-4D3 | **Jar planned overage 1% — OWNER VERIFIED** (`OWNER_STANDARDS.jarPlannedOveragePct`, applied once, $0 line, packout on finished qty). **Chiron 100ml tall $1.80 — OWNER VERIFIED** (`CHIRON_SET_COST`, provenance dated 2026-08-25). | `owner-standards.ts`, `jar-cost-inputs.server.ts` |
+| 2D-4E1 | Multi-line label jobs quote from canonical cost (job cost, unit cost, status, blockers, save eligibility); commercial per-line bands fed the canonical cost; finished quantity = sum of entered lines. | `multi-line-label-authority.server.ts` |
+| 2D-4E2 | Custom 4x5 Sticker Bag MOQ 50 enforced in the canonical adapter (`STICKER_BAG_BELOW_MOQ`, eligibility only). | `bag-cost-inputs.server.ts` |
+| 2D-4E3 | Quotes editor cannot retype a canonical manufacturing unit cost; blocked or re-quantified canonical items refuse to save. | `quote-item-cost-authority.ts`, `app.quotes.tsx` |
+| 2D-4E4 | Agent Review Queue refuses to convert canonical-authority families on recipe tier cost (`canonical_authority_required`). | `agent-quote-canonical-gate.server.ts` |
+| 2D-4E5 | Emergency / legacy-auto saves of a known canonical family reach the canonical gate via the researched margin family. | `canonical-calculator-shared.ts`, calculator route |
+| 2D-4E6 | Quotes editor "price from recipe" refuses canonical-authority families (same gate as E4). | `app.quotes.tsx` |
+
+### Canonical-authority families (October 2026)
+
+`stickers-labels`, `sticker-bags`, `stock-bags`, `banners`, `standard-jars`,
+`premium-jars`. `dtp-bags` and `boxes` are `LEGACY_OUTSOURCED` and are never
+routed through Mimaki/Roland, ink, cutting or weeding math.
+
+### Deliberately NOT in CORE
+
+Commit `14a125d` (storefront and admin-preview pricing on the canonical
+manufacturing cost basis) is **held** on branch
+`costing-october-full-review-2026-10-03` with the owner decision packet
+`docs/GSO_STOREFRONT_PRICING_DECISION_PACKET.md`. In CORE the public
+configurator, checkout, Pricing Rules preview and Configurator admin still
+price 4x5 bags and stickers on the legacy `computeProductDrivenCost` engine —
+exactly as production does today. The holographic, die-cut and 5X/7X
+commercial questions are therefore NOT part of the CORE release.
+
+### Still open (owner data / production actions)
+
+* Production-only: Chiron 100ml tall seed `--apply` (dry-run first), after
+  deploy + smoke test, with owner approval.
+* 4x5 blank inbound pallet freight: recorded carton facts, no rate — not
+  invented, disclosed as `FREIGHT_NOT_MODELED`, never blocking.
+* Banner hemming / grommets / pole pockets / double-sided / tube packout:
+  fail-closed until owner rates exist.
+* DTP future model: vendor tier cost + Southwest inbound freight + GSO
+  handling/setup + legitimate outside charges. Boxes: vendor box cost +
+  tooling/die/setup + Southwest inbound freight + GSO handling. Owner/vendor
+  data incomplete.
