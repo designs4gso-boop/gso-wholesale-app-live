@@ -20,6 +20,7 @@ import {
   blockingConversionIssues,
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
+import { AGENT_GATE_CONVERSION_ERROR_CODE, agentConversionCanonicalGate } from "../lib/agent-quote-canonical-gate.server";
 
 type QueueItem = {
   id: string;
@@ -364,6 +365,16 @@ async function resolveQuoteReadyRecipe(shop: string, item: any) {
 }
 
 function quoteLineFromQueueItem(item: any, recipe: any, quantity: number) {
+  // 2D-4E4 CANONICAL GATE FIRST. A canonical-authority family (labels, bags,
+  // jars, banners) may not be converted on the recipe tier engine's cost —
+  // that figure is not the canonical true manufacturing cost, and the
+  // canonical engine cannot be run from a recipe row without inventing job
+  // inputs. Refuse before any pricing happens; the staff build the quote in
+  // the Cost Calculator. Non-canonical families (DTP, boxes) are unchanged.
+  const canonicalGate = agentConversionCanonicalGate(recipe);
+  if (!canonicalGate.allowed) {
+    return { ok: false as const, blockingIssues: [canonicalGate.reason], canonicalAuthorityRequired: true as const };
+  }
   const productRequest = jsonObject(item.productRequest);
   const finishText = textValue(productRequest.finish) || textValue(item.finish);
   const priced = priceRecipeAtQuantity(recipe, quantity, {
@@ -372,7 +383,7 @@ function quoteLineFromQueueItem(item: any, recipe: any, quantity: number) {
   const blockingIssues = blockingConversionIssues(recipe, priced);
 
   if (blockingIssues.length) {
-    return { ok: false as const, blockingIssues };
+    return { ok: false as const, blockingIssues, canonicalAuthorityRequired: false as const };
   }
 
   const productName =
@@ -547,14 +558,17 @@ export async function action({ request }: { request: Request }) {
 
     const quoteLineResult = quoteLineFromQueueItem(item, recipe, quantity);
     if (!quoteLineResult.ok) {
-      const reason = `the matched recipe is not quote-ready: ${quoteLineResult.blockingIssues.join("; ")}`;
+      const reason = quoteLineResult.canonicalAuthorityRequired
+        ? `canonical authority required: ${quoteLineResult.blockingIssues.join("; ")}`
+        : `the matched recipe is not quote-ready: ${quoteLineResult.blockingIssues.join("; ")}`;
       await writeConversionFailedEvent(item, session.shop, actorId, actorName, actorEmail, reason, {
         blockingIssues: quoteLineResult.blockingIssues,
         recipeId: recipe.id,
         recipeName: recipe.name,
         selectionSource,
+        canonicalAuthorityRequired: quoteLineResult.canonicalAuthorityRequired,
       });
-      return redirect("/app/erp/agent-review-queue?conversionError=no_pricing");
+      return redirect(`/app/erp/agent-review-queue?conversionError=${quoteLineResult.canonicalAuthorityRequired ? AGENT_GATE_CONVERSION_ERROR_CODE : "no_pricing"}`);
     }
     const quoteLine = quoteLineResult.line;
 
@@ -711,6 +725,8 @@ const CONVERSION_ERROR_MESSAGES: Record<string, string> = {
   no_recipe_selected: "Choose a quote-ready recipe first.",
   no_recipe: "Draft quote was not created: the selected recipe was not found or is no longer quote-ready. Open Details on the row for the exact reasons.",
   no_pricing: "Draft quote was not created: the selected recipe is not quote-ready. Open Details on the row for the exact reasons.",
+  // 2D-4E4: canonical-authority families never convert on recipe tier cost.
+  [AGENT_GATE_CONVERSION_ERROR_CODE]: "Draft quote was not created: this recipe belongs to a canonical-authority manufacturing family (labels, sticker/stock bags, jars, banners). Its true cost must come from the canonical engine, so build the quote in the Cost Calculator instead. Open Details on the row for the recorded reason.",
 };
 
 export async function loader({ request }: { request: Request }) {

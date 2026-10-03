@@ -242,3 +242,23 @@ export function canonicalLabelCutType(legacyCut: string | null | undefined): "re
 export function canonicalCutTypeIsWireable(legacyCut: string | null | undefined): boolean {
   return canonicalLabelCutType(legacyCut) === "rectangular";
 }
+
+/* ------------------------------------------------------------------ *
+ * 2D-4E5 — A KNOWN FAMILY MUST REACH THE CANONICAL GATE.
+ *
+ * The emergency / legacy-auto calculator panels post no `pfamily`, only the
+ * researched MARGIN family (`efamily`: bags-4x5, chiron-jars, miron-jars,
+ * stickers-labels, spot-gloss-labels, banners, ...). When that margin family
+ * unambiguously names a canonical-authority manufacturing family, the save
+ * must be judged by the canonical gate — a route omitting a field is not a
+ * licence to quote on legacy math. Anything ambiguous or unknown returns
+ * null and keeps its existing legacy behaviour; nothing is guessed.
+ * ------------------------------------------------------------------ */
+export function canonicalFamilyFromMarginFamilyKey(marginFamilyKey: string | null | undefined): CanonicalFamily | null {
+  const key = String(marginFamilyKey || "").trim().toLowerCase();
+  if (key === "bags-4x5") return "sticker-bags";
+  if (key === "stickers-labels" || key === "spot-gloss-labels") return "stickers-labels";
+  if (key === "banners") return "banners";
+  if (key === "chiron-jars" || key === "miron-jars") return "premium-jars";
+  return null;
+}

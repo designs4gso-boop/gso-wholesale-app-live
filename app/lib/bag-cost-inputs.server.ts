@@ -90,12 +90,22 @@ const BAG_4X5_CUT = deriveGsoLabelCutlineFromArtboard(BAG_4X5_ARTBOARD_IN.widthI
 export const BAG_4X5_CUTLINE_IN = { widthIn: BAG_4X5_CUT.cutWidthIn, heightIn: BAG_4X5_CUT.cutHeightIn } as const;
 
 export const STOCK_BAG_MOQ = 50;
+/**
+ * 2D-4E2 — OWNER VERIFIED: custom 4x5 Sticker Bags carry the same 50-unit
+ * minimum as Stock Bags. Until October 2026 this lived only in the storefront
+ * commercial layer; the canonical manufacturing engine now enforces it as an
+ * ELIGIBILITY blocker. It is deliberately NOT part of material consumption —
+ * 49 bags still nest, cut and apply as 49; the job is simply not quotable.
+ */
+export const STICKER_BAG_MOQ = 50;
 export const BAG_DEFAULT_MEDIA_WIDTH_IN = 54;
 export const BAG_DEFAULT_MACHINE_KEY = "mimaki-ucjv300-130";
 export const BAG_DEFAULT_CUT_MODE: CutMode = "normal";
 
 export const BAG_REASONS = {
   stockBagBelowMoq: "STOCK_BAG_BELOW_MOQ",
+  /** 2D-4E2: custom 4x5 sticker bags below the owner-verified 50-unit MOQ. */
+  stickerBagBelowMoq: "STICKER_BAG_BELOW_MOQ",
   bagBlankCostRequired: "BAG_BLANK_COST_REQUIRED",
   /**
    * personalizedDesignCount must be a positive integer when supplied.
@@ -424,6 +434,13 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
   if (input.product === "stock_bag" && bagQuantity > 0 && bagQuantity < STOCK_BAG_MOQ) {
     reasons.push(BAG_REASONS.stockBagBelowMoq);
     blockers.push(`${BAG_REASONS.stockBagBelowMoq}: Stock Bags have a ${STOCK_BAG_MOQ}-unit minimum; ${bagQuantity} requested.`);
+  }
+  // 2D-4E2: the owner-verified 50-unit minimum applies to custom 4x5 sticker
+  // bags too. Eligibility only — the material/cut/application math below is
+  // untouched by it.
+  if (input.product === "sticker_bag_4x5" && bagQuantity > 0 && bagQuantity < STICKER_BAG_MOQ) {
+    reasons.push(BAG_REASONS.stickerBagBelowMoq);
+    blockers.push(`${BAG_REASONS.stickerBagBelowMoq}: 4x5 Sticker Bags have a ${STICKER_BAG_MOQ}-unit minimum (owner-verified); ${bagQuantity} requested.`);
   }
 
   const blankUnit = input.blankUnitCost == null ? BAG_4X5_BLANK_UNIT_COST : Number(input.blankUnitCost);

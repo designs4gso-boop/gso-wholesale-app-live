@@ -89,7 +89,9 @@ import {
 import { activeJarProfile } from "./jar-active-scope";
 import { CANONICAL_INK_RATES } from "./ink-rates-shared";
 import {
+  CANONICAL_CALIBRATION_IDENTITIES,
   resolveCanonicalMachineRouting,
+  type CanonicalCalibrationKey,
   type MachineRoutingResult,
   type PrinterSelection,
   type RoutedChannel,
@@ -349,6 +351,57 @@ export async function resolveCanonicalMachineInputs(
     const loaded = await loadOne(deps, channel.identity);
     channels.push({ ...channel, calibration: loaded.calibration, calibrationMessage: loaded.message });
   }
+  const base = channels.find((channel) => channel.isBase)!;
+  return {
+    calibration: base.calibration,
+    calibrationMessage: base.calibrationMessage,
+    inkCostPerMl: base.inkCostPerMl,
+    inkCostSource: base.inkCostSource,
+    channels,
+    routing,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * 2D-4F — Calibration cache for SYNCHRONOUS pricing surfaces.
+ *
+ * The storefront/preview pricing modules are pure, synchronous functions
+ * tested with literal fixtures. They cannot await a database per price. The
+ * canonical engine needs exactly FOUR calibration identities (see
+ * CANONICAL_CALIBRATION_IDENTITIES in machine-routing.server.ts), so a caller
+ * preloads those once per request and the engine is then resolved purely.
+ *
+ * FAILS CLOSED: an identity absent from the cache is MISSING_CALIBRATION, the
+ * same as an absent DB row. Nothing is widened or substituted.
+ * ------------------------------------------------------------------ */
+
+export type CalibrationCache = Partial<Record<CanonicalCalibrationKey, { calibration: CalibrationRecord | null; message: string }>>;
+
+/** Load every canonical calibration identity once. */
+export async function preloadCanonicalCalibrations(deps: { db: any; shop: string; at?: Date }): Promise<CalibrationCache> {
+  const cache: CalibrationCache = {};
+  for (const key of Object.keys(CANONICAL_CALIBRATION_IDENTITIES) as CanonicalCalibrationKey[]) {
+    cache[key] = await loadOne(deps, CANONICAL_CALIBRATION_IDENTITIES[key]);
+  }
+  return cache;
+}
+
+/** Pure twin of resolveCanonicalMachineInputs, reading the preloaded cache. */
+export function resolveCanonicalMachineInputsFromCache(
+  input: CanonicalCalculatorInput,
+  cache: CalibrationCache | null | undefined,
+): ResolvedMachineInputs {
+  const routing = routingFor(input);
+  const channels: ResolvedChannel[] = routing.channels.map((channel) => {
+    const hit = cache?.[channel.calibrationKey];
+    return {
+      ...channel,
+      calibration: hit?.calibration ?? null,
+      calibrationMessage: hit
+        ? hit.message
+        : `No preloaded calibration for ${channel.calibrationKey}. Treated as MISSING_CALIBRATION.`,
+    };
+  });
   const base = channels.find((channel) => channel.isBase)!;
   return {
     calibration: base.calibration,
@@ -1204,9 +1257,15 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
           } as LabelApplicationInput
         : undefined;
 
+    // 2D-4E1: the job's FINISHED quantity is the sum of the ENTERED physical
+    // lines whenever more than one line exists. `pqty` mirrors Line 1 only, so
+    // dividing a multi-line job total by it misstated the canonical unit cost
+    // (and the per-finished-unit application basis). Line quantities are read
+    // exactly as typed — nothing is redistributed.
+    const enteredTotal = lines.reduce((s, l) => s + l.quantity, 0);
     return {
       ...base,
-      quantity: base.quantity > 0 ? base.quantity : lines.reduce((s, l) => s + l.quantity, 0),
+      quantity: lines.length > 1 ? enteredTotal : base.quantity > 0 ? base.quantity : enteredTotal,
       labels: {
         lines,
         application,

@@ -22,10 +22,11 @@ import {
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
 import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, ROLAND_INK_CALIBRATION, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
-import { COMMERCIAL_PRICING_VERSION, buildStickerLines, combineStickerLines, computeCommercialPrice, designSplit, marginCurveConfigFor, marginCurveKeyFor, normalizeAdditionalLineCount, resolveMarginPctForQuantity, specialtyFinishReasons, validateStickerLine } from "../lib/commercial-pricing-policy.server";
+import { COMMERCIAL_PRICING_VERSION, buildStickerLines, computeCommercialPrice, designSplit, marginCurveConfigFor, marginCurveKeyFor, normalizeAdditionalLineCount, resolveMarginPctForQuantity, specialtyFinishReasons, validateStickerLine } from "../lib/commercial-pricing-policy.server";
 import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
 import { SPECIALTY_FILE_PREP_FEE, SPECIALTY_FILE_PREP_LABEL, specialtyFilePrepFee } from "../lib/calculator-fee-standards";
-import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, type CanonicalCalculatorView } from "../lib/canonical-calculator-shared";
+import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, canonicalFamilyFromMarginFamilyKey, type CanonicalCalculatorView } from "../lib/canonical-calculator-shared";
+import { resolveMultiLineLabelQuote, type MultiLineCanonicalQuote } from "../lib/multi-line-label-authority.server";
 import { assembleCanonicalJob, canonicalInputForQuantity, canonicalSupportsTierLadder, canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput, resolveCanonicalMachineInputs } from "../lib/canonical-calculator.server";
 import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
 import { isCostedAuthority, persistQuoteIfCanonicalAllows, resolveCostAuthority } from "../lib/canonical-quote-authority.server";
@@ -1290,9 +1291,14 @@ export async function loader({ request }: { request: Request }) {
       const allLines = [primaryLine, ...activeAdditional];
       const totalUnitsK = allLines.reduce((sum, line) => sum + Math.max(0, line.quantity), 0);
       const jobPackingK = OWNER_STANDARDS.packoutPerBox.value * Math.max(1, Math.ceil(totalUnitsK / 5000));
-      const combined = combineStickerLines({
+      // 2D-4E1 CANONICAL AUTHORITY FOR MULTI-LINE JOBS. The combined job's
+      // manufacturing cost, unit cost, status and blockers come from the
+      // canonical result for the job AS ENTERED (canonicalResult covers every
+      // pl* line). The per-line legacy runs above stay as diagnostics; the
+      // commercial band policy is fed the canonical cost, never the legacy one.
+      const combined = resolveMultiLineLabelQuote({
         lines: allLines,
-        jobPackingCost: jobPackingK, // 15F.0-FINAL-H: once on combined units
+        canonical: canonicalResult,
         marginRule: resolveMarginFamily("stickers-labels"),
         policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
       });
@@ -1313,7 +1319,13 @@ export async function loader({ request }: { request: Request }) {
           totalLineCost: allLines.reduce((sum, line) => sum + line.lineCost, 0),
           jobPackingCost: jobPackingK,
         },
-        packingNote: "Packing charged once at job level (5,000/box provisional density, $2 owner standard).",
+        packingNote: "Packing charged once at job level (5,000/box provisional density, $2 owner standard). Per-line machine/ink/cutting figures above are legacy diagnostics; the job cost is the canonical true manufacturing cost.",
+        // 2D-4E1: what the job is costed FROM, for the panel and the save parity check.
+        costAuthority: combined.costAuthority,
+        canonicalUnitCost: combined.unitCost,
+        canonicalJobCost: combined.totalCost,
+        costBasisNote: combined.authority.basis,
+        allocationNote: combined.allocation?.note ?? null,
       };
     }
   }
@@ -1650,7 +1662,7 @@ export async function action({ request }: { request: Request }) {
   let savedEngineFamily: ProductFamilyKey | null = null;
   let savedTiers: any[] | null = null;
   let savedSelectedTier: any | null = null;
-  let savedMultiLine: ReturnType<typeof combineStickerLines> | null = null; // 15F.0-K
+  let savedMultiLine: MultiLineCanonicalQuote | null = null; // 15F.0-K, canonical-authoritative since 2D-4E1
   let savedMarginRule: FamilyMarginRule | null = null;
   let savedMarginKey: string | null = null;
   let savedLabelRows: LabelRow[] | null = null;
@@ -2036,32 +2048,52 @@ export async function action({ request }: { request: Request }) {
         finishedSqft: productSnapshot.derived.baseSqft, setupTotal: productSnapshot.setupTotal,
       };
       const allLinesSave = [primaryLineSave, ...activeAdditionalSave];
-      const totalUnitsSave = allLinesSave.reduce((sum, line) => sum + Math.max(0, line.quantity), 0);
-      savedMultiLine = combineStickerLines({
+      // 2D-4E1 CANONICAL AUTHORITY FOR MULTI-LINE SAVES. The persisted jobCost
+      // and unitCost are the canonical manufacturing figures for the job AS
+      // ENTERED (canonicalSnapshot covers every pl* line); the legacy per-line
+      // runs above never reach the Quote. An unusable canonical result leaves
+      // every money field null and the save is refused below — never $0 and
+      // never the legacy number.
+      savedMultiLine = resolveMultiLineLabelQuote({
         lines: allLinesSave,
-        jobPackingCost: OWNER_STANDARDS.packoutPerBox.value * Math.max(1, Math.ceil(totalUnitsSave / 5000)),
+        canonical: canonicalSnapshot,
         marginRule: resolveMarginFamily("stickers-labels"),
         policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
       });
       const combinedQty = Math.max(1, savedMultiLine.totalQuantity);
+      const multiLineCosted = savedMultiLine.costAuthority === "canonical" && savedMultiLine.blockers.length === 0;
+      if (!multiLineCosted) {
+        return Response.json({
+          ok: false,
+          message: [
+            `Multi-line sticker job cannot save: canonical true manufacturing cost is not usable, and the legacy engine's cost is never a substitute.`,
+            ...savedMultiLine.blockers.slice(0, 4),
+          ].join(" | "),
+          canonicalAuthorityBlocked: true,
+        });
+      }
       savedSelectedTier = {
         quantity: combinedQty,
         requested: true,
         jobCost: savedMultiLine.totalCost,
-        unitCost: savedMultiLine.totalCost / combinedQty,
-        marginPct: Math.round(savedMultiLine.achievedMarginPct * 10) / 10,
-        unitPrice: savedMultiLine.finalTotalPrice / combinedQty,
+        unitCost: savedMultiLine.unitCost,
+        costAuthority: savedMultiLine.authority.authority,
+        canonicalJobCost: savedMultiLine.totalCost,
+        canonicalUnitCost: savedMultiLine.unitCost,
+        costBasisNote: savedMultiLine.authority.basis,
+        marginPct: Math.round((savedMultiLine.achievedMarginPct ?? 0) * 10) / 10,
+        unitPrice: (savedMultiLine.finalTotalPrice ?? 0) / combinedQty,
         totalPrice: savedMultiLine.finalTotalPrice,
         profit: savedMultiLine.achievedProfit,
         actualMarginPct: savedMultiLine.achievedMarginPct,
-        belowFloor: savedMultiLine.achievedMarginPct < Math.max(savedMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT),
-        draftOnly: savedMultiLine.blockers.length > 0,
+        belowFloor: (savedMultiLine.achievedMarginPct ?? 0) < Math.max(savedMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT),
+        draftOnly: false,
         freightTotal: 0,
         freightSource: "estimated",
         setupTotal: 0,
         blockers: savedMultiLine.blockers,
-        commercial: { version: COMMERCIAL_PRICING_VERSION, candidates: null, controllingRule: `Multi-line sticker job — ${savedMultiLine.controllingRule}`, marginSource: "per-line researched quantity bands + area floors", premiumApplied: allLinesSave.some((line) => line.glossOrWhite) },
-        status: savedMultiLine.blockers.length ? "BLOCKED" : "READY TO QUOTE",
+        commercial: { version: COMMERCIAL_PRICING_VERSION, candidates: null, controllingRule: `Multi-line sticker job — ${savedMultiLine.controllingRule}`, marginSource: "per-line researched quantity bands + area floors on the canonical cost basis", premiumApplied: allLinesSave.some((line) => line.glossOrWhite) },
+        status: "READY TO QUOTE",
         multiLine: savedMultiLine,
       };
       savedTiers = [savedSelectedTier];
@@ -2116,6 +2148,9 @@ export async function action({ request }: { request: Request }) {
           status: canonicalSnapshot.status,
           totalCost: canonicalSnapshot.totalCost,
           unitCost: canonicalSnapshot.unitCost,
+          // 2D-4E3: the finished quantity this cost was computed for, so the
+          // Quotes editor can refuse a quantity edit it cannot re-cost.
+          quantity: canonicalSnapshot.trueCost.customerFinishedQty,
           lines: canonicalSnapshot.trueCost.lines,
           totals: canonicalSnapshot.trueCost.totals,
           diagnostics: canonicalSnapshot.diagnostics,
@@ -2149,7 +2184,7 @@ export async function action({ request }: { request: Request }) {
         achievedMarginPct: savedSelectedTier.actualMarginPct,
         shippingOwnership: "Outbound customer delivery/shipping excluded from the product price (quoted separately); inbound vendor freight remains a production cost.",
       } : null,
-      multiLine: savedMultiLine ? { lines: savedMultiLine.lines, totalQuantity: savedMultiLine.totalQuantity, totalCost: savedMultiLine.totalCost, finalTotalPrice: savedMultiLine.finalTotalPrice, achievedMarginPct: savedMultiLine.achievedMarginPct, blockers: savedMultiLine.blockers } : null,
+      multiLine: savedMultiLine ? { version: savedMultiLine.version, costAuthority: savedMultiLine.costAuthority, lines: savedMultiLine.lines, totalQuantity: savedMultiLine.totalQuantity, totalCost: savedMultiLine.totalCost, unitCost: savedMultiLine.unitCost, finalTotalPrice: savedMultiLine.finalTotalPrice, achievedMarginPct: savedMultiLine.achievedMarginPct, allocation: savedMultiLine.allocation, blockers: savedMultiLine.blockers } : null,
       designSplit: !savedIsDtpSnapshot && savedEngineFamily === "stickers-labels" && Number(fRead("pdesigns") || 0) > 1
         ? designSplit(savedRequestedQty, Number(fRead("pdesigns"))).text
         : null,
@@ -2302,9 +2337,18 @@ export async function action({ request }: { request: Request }) {
    * Reached ONLY after the commercial margin gate above already allowed the
    * save, and it takes no margin input at all — that is the structural
    * guarantee an approval cannot supply a missing true cost. */
+  /* 2D-4E5: a KNOWN canonical family reaches the gate even when the
+   * emergency / legacy-auto panel posted no `pfamily`. The researched margin
+   * family (`efamily`) names the manufacturing family unambiguously for the
+   * canonical ones; with no canonical input on those panels the gate refuses,
+   * which is the point — a route omitting a field is not a licence to quote
+   * on legacy math. Unknown/ambiguous families stay legacy, unchanged. */
+  const canonicalGateFamilyKey = pFamilySave
+    ? canonicalUiFamily(pFamilySave)
+    : canonicalFamilyFromMarginFamilyKey(familyRule?.key ?? null);
   const saveOutcome = await persistQuoteIfCanonicalAllows(
     {
-      canonicalFamilyKey: pFamilySave ? canonicalUiFamily(pFamilySave) : null,
+      canonicalFamilyKey: canonicalGateFamilyKey,
       baseCanonical: canonicalSnapshot,
       selectedCanonical: primary ? canonicalForQtySave(Number(primary.quantity) || 0) : null,
       selectedQuantity: Number(primary?.quantity) || 0,
@@ -2325,7 +2369,13 @@ export async function action({ request }: { request: Request }) {
   if (!saveOutcome.ok) {
     return Response.json({
       ok: false,
-      message: [saveOutcome.message, ...saveOutcome.blockers.slice(0, 4)].join(" | "),
+      message: [
+        saveOutcome.message,
+        ...saveOutcome.blockers.slice(0, 4),
+        ...(!pFamilySave && canonicalGateFamilyKey
+          ? [`The emergency/legacy panel cannot quote "${canonicalGateFamilyKey}" — it is a canonical-authority family. Use the product calculator so the canonical true cost is computed.`]
+          : []),
+      ].join(" | "),
       canonicalBlocked: true,
     });
   }
@@ -3882,12 +3932,18 @@ function ProductTiers() {
             <span>Machine: {money2(totals.totalMachineCost)}</span>
             <span>Ink: {money2(totals.totalInkCost)}</span>
             <span>Cutting: {money2(totals.totalCuttingCost)}</span>
-            <span>Line costs: {money2(totals.totalLineCost)}</span>
+            <span>Line costs (legacy diagnostic): {money2(totals.totalLineCost)}</span>
             <span>Job packing (once): {money2(totals.jobPackingCost)}</span>
-            <span>Job cost: {money2(combined.totalCost)}</span>
-            <span style={{ color: "#166534" }}>Selling price: {money2(combined.finalTotalPrice)}</span>
+            <span>Canonical job cost: {combined.totalCost == null ? "— (blocked)" : money2(combined.totalCost)}</span>
+            <span>Canonical unit cost: {combined.unitCost == null ? "— (blocked)" : `$${Number(combined.unitCost).toFixed(4)}`}</span>
+            <span style={{ color: "#166534" }}>Selling price: {combined.finalTotalPrice == null ? "—" : money2(combined.finalTotalPrice)}</span>
           </div>
         ) : null}
+        {/* 2D-4E1: the job is costed from canonical true manufacturing cost. */}
+        <p style={{ ...smallHelp, margin: "4px 0 0" }}>
+          Cost authority: <b>{multiLine.costAuthority === "canonical" ? "canonical true manufacturing cost" : "BLOCKED — no canonical true cost"}</b>. {multiLine.costBasisNote}
+          {multiLine.allocationNote ? <> {multiLine.allocationNote}</> : null}
+        </p>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 6 }}>
             <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 5 }}>Line</th><th>Qty</th><th>Size</th><th>Designs</th><th>Finish</th><th>Printer</th><th>Sqft</th><th>Adj sqft</th><th>Machine</th><th>Ink</th><th>Cutting</th><th>Subtotal</th></tr></thead>

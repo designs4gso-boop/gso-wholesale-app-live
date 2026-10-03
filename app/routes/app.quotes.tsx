@@ -30,6 +30,7 @@ import {
 import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "../lib/quote-margin.server";
 import { QUOTE_OUTCOME_STATUSES, resolveQuoteOutcomeChange } from "../lib/pricing-intelligence.server";
 import { CUSTOMER_TIERS, customerTierDisplayLabel, isCustomerTier, tierRule } from "../lib/customer-tiers";
+import { enforceQuoteItemUnitCost, quoteItemCostIsProtected } from "../lib/quote-item-cost-authority";
 
 type QuoteItemInput = {
   id?: string;
@@ -1368,6 +1369,25 @@ export async function action({ request }: { request: Request }) {
     const customerTierLabel =
       customerTier === "custom" ? String(quote.customerTierLabel || "").trim().slice(0, 80) || null : null;
 
+    /* 2D-4E3 CANONICAL COST PROTECTION AT THE SAVE BOUNDARY. An item whose
+     * cost snapshot carries a canonical true-cost block is a canonical-
+     * authority manufacturing job: its unit cost is held at the canonical
+     * figure whatever the editor posted, a BLOCKED canonical job cannot be
+     * saved with a typed cost, and a quantity change cannot be re-costed here
+     * (the engine input is not in the snapshot) so it is refused. Selling
+     * price stays editable under the existing low-margin policy. Items with
+     * no canonical block keep their existing behaviour. */
+    const costDecisions = quote.items.map((item) => enforceQuoteItemUnitCost(item));
+    const refused = costDecisions.find((decision) => decision.protected && !decision.ok);
+    if (refused && refused.protected && !refused.ok) {
+      const quotes = await getQuotes(shop);
+      return Response.json({ ok: false, error: refused.reason, canonicalBlocked: true, quotes });
+    }
+    const protectedItems: QuoteItemInput[] = quote.items.map((item, index) => {
+      const decision = costDecisions[index];
+      return decision.protected && decision.ok ? { ...item, unitCost: String(decision.unitCost) } : item;
+    });
+
     if (quote.id) {
       const existingQuote = await db.quote.findFirst({ where: { id: quote.id, shop } });
       if (existingQuote?.status === "paid") {
@@ -1391,7 +1411,7 @@ export async function action({ request }: { request: Request }) {
         }),
         db.quoteItem.deleteMany({ where: { quoteId: quote.id } }),
         db.quoteItem.createMany({
-          data: quote.items.map((item) => quoteItemData(item, quote.id as string)),
+          data: protectedItems.map((item) => quoteItemData(item, quote.id as string)),
         }),
       ]);
     } else {
@@ -1407,7 +1427,7 @@ export async function action({ request }: { request: Request }) {
           status: quote.status,
           notes: quote.notes,
           items: {
-            create: quote.items.map((item) => quoteItemData(item)),
+            create: protectedItems.map((item) => quoteItemData(item)),
           },
         },
       });
@@ -2112,7 +2132,9 @@ export default function QuotesPage() {
                                   autoComplete="off"
                                 />
                                 <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
-                                <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off" />
+                                <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off"
+                                  disabled={quoteItemCostIsProtected(item.costSnapshot)}
+                                  helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Re-quote in the Cost Calculator to change it." : undefined} />
                               </InlineStack>
                             </BlockStack>
                           )}
@@ -2137,7 +2159,9 @@ export default function QuotesPage() {
                             </InlineStack>
                           ) : null}
                           <InlineStack gap="300">
-                            <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off" />
+                            <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off"
+                              disabled={quoteItemCostIsProtected(item.costSnapshot)}
+                              helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Re-quote in the Cost Calculator to change it." : undefined} />
                             <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
                             <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" />
                           </InlineStack>

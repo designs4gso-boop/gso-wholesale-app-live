@@ -477,7 +477,9 @@ describe("multi-line sticker safety (15F.0J.2)", () => {
     expect(src).toContain("Multi-line sticker job cannot save until every active line is complete or removed");
     expect(src).toContain("const primaryLineSave = {");
     expect(src).toContain("const allLinesSave = [primaryLineSave, ...activeAdditionalSave]");
-    expect(src).toContain("multiLine: savedMultiLine ? { lines: savedMultiLine.lines, totalQuantity: savedMultiLine.totalQuantity"); // snapshot carries combined totals
+    // 2D-4E1: the snapshot still carries the combined totals, now from the
+    // canonical multi-line authority (costAuthority + canonical unitCost too).
+    expect(src).toContain("multiLine: savedMultiLine ? { version: savedMultiLine.version, costAuthority: savedMultiLine.costAuthority, lines: savedMultiLine.lines, totalQuantity: savedMultiLine.totalQuantity"); // snapshot carries combined totals
     expect(src).toContain('name="psearch"'); // save/reopen replay preserved
   });
 
@@ -712,6 +714,9 @@ describe("route parity + presentation pins (15F.0-L/M/P)", () => {
   it("multi-line save recomputes lines from posted state (fReadAll) with re-fetched materials", () => {
     expect(src).toContain('fReadAll("pslqty")');
     expect(src).toContain("lineMaterialByIdSave");
-    expect(src).toContain("combineStickerLines({");
+    // 2D-4E1: the combined job is decided by the canonical multi-line
+    // authority (fed the canonical result), not by the legacy combiner.
+    expect(src).toContain("resolveMultiLineLabelQuote({");
+    expect(src).not.toContain("combineStickerLines({");
   });
 });
