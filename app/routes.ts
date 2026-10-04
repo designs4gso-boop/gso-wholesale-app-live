@@ -70,6 +70,7 @@ export default [
   route("api/print-intake/status", "routes/api.print-intake.status.tsx"),
   route("api/quote-rip-results/sync", "routes/api.quote-rip-results.sync.tsx"),
   route("api/agent/intake", "routes/api.agent.intake.tsx"),
+  route("api/slack/interactions", "routes/api.slack.interactions.tsx"),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
   route("apps/wholesale-lite/pricing", "routes/apps.wholesale-lite.pricing.ts"),
