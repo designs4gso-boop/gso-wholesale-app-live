@@ -550,3 +550,31 @@ CORE release). LOCAL ONLY. Not pushed, not deployed, no schema change.
   green; git diff --check clean; no secrets in repo.
 - OPEN OWNER ITEM: product-family-sales-rules sticker-bags officialMoq 100
   vs canonical adapter MOQ 50.
+
+## Patch OPS-2 (2026-10-04) — operations platform productionization + AI runtime foundation
+Branch `agents-operations-productionize-2026-10-04` (from 20ea4ae). LOCAL ONLY.
+Not pushed, not deployed, migration PREPARED — NOT APPLIED, no production write.
+- OWNER DECISION: 4x5 Sticker Bag MOQ = 50. product-family-sales-rules fixed
+  (100 -> 50); parity test sticker-bag-moq-parity-ops2 (49 blocks / 50 passes /
+  100 passes; canonical == sales == intake == quote prep == drafts).
+- Repository boundary (ActionIntent / ExternalEvent / Outbox / AgentRun /
+  SlackStaffIdentity) with Memory + Prisma implementations; async intent engine
+  with append-only AuditEvent rows and execution kill switch; outbox worker;
+  production transition executor (one write path; not wired to routes).
+- Prisma: six additive Ops* models; migration
+  20261004120000_add_ops_agent_platform generated schema-to-schema.
+- Reasoning layer: provider boundary; Disabled/Fake/OpenAI providers; OpenAI
+  Agents SDK 0.18 + zod 4 installed (server-only dynamic import); tool gateway
+  (10 read + 6 proposal tools); structured output schemas; 4 specialists with
+  typed handoffs; supervisor with deterministic fallback; HITL mapped to
+  ActionIntent; tracing disabled by default. NO live model call; no key.
+- Kill switches GSO_AGENT_EXECUTION_ENABLED / GSO_AGENT_REASONING_ENABLED
+  (default false, independent). move_production_job ceiling DISABLED ->
+  APPROVAL_REQUIRED (owner first-release level); runtime still blocked by the
+  execution switch.
+- Slack: read methods form-encoded (private channel discovery root cause),
+  listChannels/findChannel, repository-backed approvals with event receipts.
+- Hub: provider/kill-switch status, grouped durable intents, outbox, runs.
+- Docs: 8 updated + GSO_OPERATIONS_PRODUCTION_READINESS,
+  GSO_REASONING_PROVIDER_ARCHITECTURE, GSO_OPENAI_AGENTS_RUNTIME.
+- Tests 2220 / 100 files (+2 opt-in skipped); TS 305; build green.

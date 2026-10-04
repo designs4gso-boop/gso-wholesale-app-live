@@ -50,3 +50,13 @@ Every card that needs a decision shows: agent, action, autonomy level, intent id
 1. Nothing an agent does moves a job, sends a message, or touches money in this release. If you see otherwise, stop and tell the owner.
 2. The hub shows the simulation result; if it reports failures the platform must not be trusted for approvals.
 3. Secrets live outside the repo; never paste tokens into Slack, docs or tickets.
+
+## OPS-2 update (2026-10-04)
+
+- **Two switches you can see on the hub**: "Reasoning enabled" (may a model reason) and "Execution enabled" (may approved actions actually execute). Both are OFF in the first release. With Execution OFF, approving a card records your decision and nothing moves; the hub lists it under "Approved but blocked by the execution kill switch".
+- **Model proposals** look like any other card but say "proposed by ... (model)". The model never approves anything and never sees prices, costs or secrets; it can only ask GSO tools and propose.
+- **Sticker bag MOQ is 50** everywhere (owner decision). If you see 100 anywhere, report it.
+- **Duplicate clicks / Slack retries** are recorded as replays and do nothing.
+- **Outbox dead letters** (hub: "dead (manual review)") need a human: read the error, fix the cause, re-enqueue or close.
+- **Paused reasoning runs** wait for the intent decision; approving or rejecting the card is all that is needed.
+- If the model is unavailable, everything deterministic keeps working: intake, quote readiness, canonical costing, production status, art state, reports and approvals.

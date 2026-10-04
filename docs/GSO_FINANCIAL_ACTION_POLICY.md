@@ -35,3 +35,7 @@ Sales reports state "quoted value, not cash collected". No agent claims revenue,
 ## Never
 
 Discounts, credits, price matching, payment terms, deposits, taxes, freight, vendor costs, margins — none may be invented, promised, or changed by an agent. Customer requests for any of these are escalated (`discount_requested`, `final_price_requested`) to staff/owner.
+
+## OPS-2 update (2026-10-04)
+
+QuickBooks remains **DEFERRED — NOT CONNECTED**. Money actions (`refund_or_void`, `change_cost_or_price`) stay OWNER_REQUIRED and are additionally blocked by the execution kill switch; `send_invoice` and `send_purchase_order` stay DISABLED. The reasoning layer has no financial tool: `getCanonicalCostStatus` returns costability and blockers, never a price; `proposePurchaseRequest` can only create a draft intent from known vendor data and is denied to the sales and marketing specialists by the permission matrix. Models cannot approve money actions (actor type `model` is refused by `decideIntent`).

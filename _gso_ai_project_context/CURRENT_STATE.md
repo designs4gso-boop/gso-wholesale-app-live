@@ -13,7 +13,7 @@ path touched. QuickBooks DEFERRED — NOT CONNECTED. Docs: GSO_AGENT_SYSTEM_
 CONTRACT, GSO_OPERATIONS_AGENT_ARCHITECTURE, GSO_AGENT_OPERATIONS_RUNBOOK,
 GSO_AGENT_DEPLOYMENT_PLAN, GSO_SLACK_INTEGRATION_CONTRACT, GSO_SLACK_SETUP,
 GSO_ART_APPROVAL_CONTRACT, GSO_PRODUCTION_AUTOMATION_CONTRACT,
-GSO_FINANCIAL_ACTION_POLICY. Owner review pending (PATCH_LOG OPS-1).
+GSO_FINANCIAL_ACTION_POLICY. OPS-1 architecture approved 2026-10-04; OPS-2 productionization + AI runtime foundation on branch `agents-operations-productionize-2026-10-04` (durable repositories, outbox/worker, transition executor, kill switches, OpenAI Agents SDK runtime prepared and disabled, sticker bag MOQ 50). Migration PREPARED — NOT APPLIED. See PATCH_LOG OPS-2 and docs/GSO_OPERATIONS_PRODUCTION_READINESS.md.
 
 ## OCTOBER 2026 — COST CALCULATOR CORE RELEASE (LIVE on Render as dba23c6 since 2026-10-03)
 Repo moved to `C:\Users\Desig\GSO-ERP-WORKSPACE\wholesale-lite-mvp`

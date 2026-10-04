@@ -39,3 +39,7 @@ An agent may never set CUSTOMER_APPROVED or FINAL_ART_APPROVED. Recording the sa
 ## ERP bridge
 
 `approvalFromProofPortal(job, version)` maps the existing proof portal fields to a CUSTOMER_APPROVED record. No ERP write is performed by the agent; persisting approval records is part of deployment Phase 2.
+
+## OPS-2 update (2026-10-04)
+
+Unchanged contract. With the reasoning layer, a model may summarise preflight findings, explain corrections, draft designer notes and classify issue descriptions through `getArtStatus` / `proposeArtReview`. A model can NEVER set CUSTOMER_APPROVED, FINAL_ART_APPROVED or a QC pass: those states are written only by `recordApproval` with a human/portal approver, and `record_final_art_approval` intents need a mapped human approver plus the execution kill switch. A revised file version still invalidates all prior approvals.

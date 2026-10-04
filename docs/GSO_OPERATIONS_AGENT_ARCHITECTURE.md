@@ -76,3 +76,28 @@ lead / job / quote facts ──► deterministic agent module ──► proposal
 ## Background automation design (Phase 32)
 
 Today the ERP has no cron, worker or outbox. Proposed (not built): an `OpsOutbox` table written in the same transaction as the ERP change (status_change event, queue item created, purchase request created); a single worker (Render background worker, owner approval required) drains it, runs the deterministic agents, creates intents, posts Slack cards (sandbox first). Idempotency = outbox row id. Failure = row stays, exception `SLACK_FAILURE` raised once per row.
+
+## OPS-2 update (2026-10-04)
+
+New modules:
+
+```
+app/lib/ops/
+  repositories.ts                  ActionIntentRepository / ExternalEventRepository / OutboxRepository / AgentRunRepository / SlackStaffIdentityRepository
+  memory-repositories.ts           tests / simulation / default local runtime
+  prisma-repositories.server.ts    durable runtime (OPS-2 tables; GSO_OPS_REPOSITORY=prisma)
+  runtime-config.ts                kill switches, provider selection, limits (safe defaults)
+  outbox-worker.ts                 claim -> validate intent -> kill switch -> execute via intent engine -> retry/dead
+  production-transition-executor.ts (.server.ts)  the ONE agent write path into ProductionJob (not wired to any route)
+app/lib/reasoning/
+  provider.ts  disabled-provider.ts  fake-provider.ts  openai-provider.server.ts
+  schemas.ts  tool-gateway.ts  gateway-services.server.ts  specialists.ts  operations-supervisor.ts
+app/lib/slack/slack-dedupe.ts      shared dedupe keys (client-safe)
+prisma/migrations/20261004120000_add_ops_agent_platform/  PREPARED — NOT APPLIED
+```
+
+Changed: `action-intents.ts` is async and repository-backed, records a full `AuditEvent` per transition and gates consequential execution on the kill switch; `slack-interactions.ts` is async, claims an external-event receipt per click and resolves identity from the repository first; `slack-client.server.ts` sends list/info methods form-encoded and adds `listChannels`/`findChannel`; the hub shows runtime status and grouped durable intents; the simulator runs the reasoning flow with the fake provider.
+
+Reasoning flow: `runOperationsSupervisor` -> provider.runAgent (specialist tools via the gateway) -> structured output validated -> typed handoff (max 2) -> `paused_for_approval` maps to the gateway-created ActionIntent plus a persisted `AgentRun` -> human decision on the intent -> `resumeAfterDecision`. Any failure -> deterministic fallback.
+
+Background automation (Phase 25/26) is implemented locally: `OpsOutboxMessage` + `processOutboxBatch`. Scheduling remains owner-gated (see the production readiness doc).

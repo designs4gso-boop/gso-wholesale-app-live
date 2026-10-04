@@ -37,3 +37,9 @@ Bot: `chat:write`, `channels:read`, `groups:read`, `app_mentions:read`, `channel
 ## Slack can never
 
 post to a non-sandbox channel while sandbox-only is on · DM staff automatically · create/delete channels · invite/remove users · change workspace config · message customers · approve real art, move jobs, create invoices/POs or change financial data · execute text.
+
+## OPS-2 update (2026-10-04)
+
+- **Private channel discovery — root cause found and fixed.** Slack list/read methods (`conversations.list`, `users.conversations`, `conversations.info`, `conversations.history`) ignore arguments sent as a JSON body; the `types` filter was silently dropped, so only public channels came back and `#gso-agent-sandbox` (private) looked unlisted. Form-encoded and GET requests return it with `is_member=true`, matching the owner PowerShell result. `SlackClient.api` now sends those methods form-encoded (`FORM_ENCODED_METHODS`); `listChannels` paginates with cursors; `findChannel` resolves `#name` or an id. Scopes were sufficient (`channels:read`, `groups:read`); none were added.
+- **Durable approvals.** `handleSlackInteraction(repos, interaction, { envStaffMap })` claims an `OpsExternalEventReceipt` per click (replay -> no-op), resolves identity from `OpsSlackStaffIdentity` first and the env JSON map second, then applies the decision through the intent engine. Events are receipted too. Works across processes once the Prisma repositories are configured.
+- Live verification (run key `ops2-2026-10-04`, sandbox only): discovery lists the private sandbox channel as member, 8 cards posted once, replay duplicate=true, thread reply, Socket Mode hello.

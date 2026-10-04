@@ -37,3 +37,7 @@ Ready when status completed, QC pass recorded, packing complete, ship-to known; 
 ## Status answers
 
 `describeJobStatus` never guesses: unknown machine/vendor/proof/purchasing facts are listed under `dataGaps`.
+
+## OPS-2 update (2026-10-04) — transition executor
+
+`requestProductionTransition({ jobId, targetStatus, actionIntentId, actor })` (`app/lib/ops/production-transition-executor.ts`) is now the ONE server-side path for agent-originated status changes. Checks, in order: intent exists, is `move_production_job` for this job and target, and is APPROVED (a COMPLETED intent returns duplicate and never mutates) -> `GSO_AGENT_EXECUTION_ENABLED` -> job exists, current and target statuses known -> deterministic guard with real facts (art approval on the current version, QC recorded, shipping record, hold release, material, routing) -> canonical machine routing (`decideMachine`) has no BLOCK for print stages -> single execution through the intent engine with audit -> the injected `applyTransition` writes status plus a `status_change` event naming the intent and actor. Prisma dependencies live in `production-transition-executor.server.ts` and are NOT wired to any route or worker handler in this release. The ceiling for `move_production_job` is APPROVAL_REQUIRED (owner decision); no AUTO production writes exist. The legacy `changeStatus` form handler is unchanged and remains the staff path.

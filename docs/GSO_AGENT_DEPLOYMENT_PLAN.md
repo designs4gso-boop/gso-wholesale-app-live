@@ -36,3 +36,11 @@ Revert the merge commit(s); no data to migrate back until Phase 2. After Phase 2
 ## Verification gates before every phase
 
 `npx vitest run` green · `npm run build` green · `npm run typecheck` at baseline · `git diff --check` clean · simulation (`tests/ops-company-flow.test.ts`) all assertions passing.
+
+## OPS-2 update (2026-10-04) — supersedes the Phase 2/5/7 details above
+
+Durable store, outbox, worker, executor and the reasoning runtime are implemented on branch `agents-operations-productionize-2026-10-04`. The authoritative sequence is in `docs/GSO_OPERATIONS_PRODUCTION_READINESS.md`; OpenAI enablement is in `docs/GSO_OPENAI_AGENTS_RUNTIME.md`.
+
+Additional environment variables (names only): `GSO_OPS_REPOSITORY` (memory|prisma), `GSO_AGENT_EXECUTION_ENABLED` (default false), `GSO_AGENT_REASONING_ENABLED` (default false), `GSO_REASONING_PROVIDER` (none|openai), `OPENAI_API_KEY` (secret), `GSO_OPENAI_MODEL`, `GSO_OPENAI_TRACING_ENABLED` (default false), `GSO_OPENAI_TRACE_SENSITIVE` (default false), `GSO_AGENT_MAX_TURNS`, `GSO_AGENT_TIMEOUT_MS`, `GSO_AGENT_MAX_TOOL_CALLS`, `GSO_AGENT_MAX_RETRIES`, `GSO_AGENT_MAX_CONCURRENCY`.
+
+Merge impact as-is: new dependency `@openai/agents` (plus `zod` 4) installed server-side only and never imported unless the provider is enabled; six new Prisma models (migration prepared; the owner must apply it before setting `GSO_OPS_REPOSITORY=prisma`); no existing route or test changed behaviour; typecheck at baseline.
