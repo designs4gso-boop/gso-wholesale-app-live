@@ -12,6 +12,7 @@ import {
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { groupPurchaseRequests, isPastDate } from "../lib/purchase-request-groups";
 
 const statusOptions = [
   { label: "Draft", value: "draft" },
@@ -60,15 +61,6 @@ function safeDate(value: any) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Not set";
   return date.toLocaleDateString();
-}
-
-function isPastDate(value: any) {
-  if (!value) return false;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return date < today;
 }
 
 function materialStatus(material: any) {
@@ -274,14 +266,9 @@ export async function loader({ request }: { request: Request }) {
   ]);
 
   const lowStockMaterials = materials.filter((material: any) => ["out_of_stock", "low_stock"].includes(materialStatus(material)));
-  const openRequests = purchaseRequests.filter((req: any) => !["received", "cancelled"].includes(req.status));
-  const orderedRequests = purchaseRequests.filter((req: any) => ["ordered", "partially_received"].includes(req.status));
-  const receivedRequests = purchaseRequests.filter((req: any) => req.status === "received");
-  const sentRequests = purchaseRequests.filter((req: any) => Boolean(req.sentAt));
-  const followUpRequests = purchaseRequests.filter((req: any) => Boolean(req.followUpNeeded) || (req.followUpDate && isPastDate(req.followUpDate)));
-  const lateRequests = purchaseRequests.filter((req: any) => !["received", "cancelled"].includes(req.status) && req.expectedArrivalDate && isPastDate(req.expectedArrivalDate));
-
-  return Response.json({ purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests, sentRequests, followUpRequests, lateRequests });
+  // Hotfix 2026-10-04: one shared grouping (lib/purchase-request-groups) so the
+  // loader and the component cannot disagree on which groups exist.
+  return Response.json({ purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, ...groupPurchaseRequests(purchaseRequests) });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -768,7 +755,9 @@ function LowStockMaterialCard({ material, costBookItems }: { material: any; cost
 }
 
 export default function PurchaseRequestsPage() {
-  const { purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests } = useLoaderData<any>();
+  // Every group the loader returns must be destructured here — the summary
+  // badges read them as bare identifiers (2026-10-04 production ReferenceError).
+  const { purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests, sentRequests, followUpRequests, lateRequests } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const navigate = useNavigate();
   const busy = useNavigation().state !== "idle";
