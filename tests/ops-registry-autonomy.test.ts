@@ -33,10 +33,19 @@ describe("agent registry", () => {
 
 describe("autonomy ceilings and permission matrix", () => {
   it("the platform ceiling denies the dangerous actions for everyone tonight", () => {
-    for (const action of ["send_purchase_order", "send_invoice", "move_production_job", "dispatch_to_machine", "send_customer_notification", "override_canonical_blocker", "post_slack_external"] as const) {
+    for (const action of ["send_purchase_order", "send_invoice", "dispatch_to_machine", "send_customer_notification", "override_canonical_blocker", "post_slack_external"] as const) {
       expect(ACTION_AUTONOMY_CEILING[action]).toBe("DISABLED");
       for (const id of AGENT_IDS) expect(permissionFor(id, action)).toBe("DENIED");
     }
+  });
+
+  it("production job mutation is APPROVAL_REQUIRED at most, never AUTO (OPS-2 owner decision)", () => {
+    expect(ACTION_AUTONOMY_CEILING.move_production_job).toBe("APPROVAL_REQUIRED");
+    for (const id of AGENT_IDS) expect(["APPROVAL", "DENIED"]).toContain(permissionFor(id, "move_production_job"));
+    expect(permissionFor("operations_supervisor", "move_production_job")).toBe("APPROVAL");
+    expect(permissionFor("production_planner", "move_production_job")).toBe("APPROVAL");
+    expect(permissionFor("cannabis_packaging_sales", "move_production_job")).toBe("DENIED");
+    expect(permissionFor("production_dispatcher", "dispatch_to_machine")).toBe("DENIED");
   });
 
   it("money actions are owner-only at most", () => {
@@ -48,7 +57,8 @@ describe("autonomy ceilings and permission matrix", () => {
   });
 
   it("an agent can never be more permissive than the ceiling", () => {
-    expect(effectiveAutonomy("AUTO_INTERNAL", "move_production_job")).toBe("DISABLED");
+    expect(effectiveAutonomy("AUTO_INTERNAL", "move_production_job")).toBe("APPROVAL_REQUIRED"); // agent AUTO is capped to approval
+    expect(effectiveAutonomy("AUTO_INTERNAL", "dispatch_to_machine")).toBe("DISABLED");
     expect(effectiveAutonomy("AUTO_INTERNAL", "record_final_art_approval")).toBe("APPROVAL_REQUIRED");
     expect(effectiveAutonomy(undefined, "read_report")).toBe("DISABLED");
     expect(mostRestrictive("AUTO_READ", "OWNER_REQUIRED")).toBe("OWNER_REQUIRED");

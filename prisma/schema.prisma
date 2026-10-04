@@ -346,24 +346,24 @@ model MaterialVariant {
 }
 
 model ProductTypeProfile {
-  id               String   @id @default(cuid())
-  shop             String
-  key              String
-  name             String
-  productionMode   String   @default("in_house") // in_house, outsourced, hybrid
-  minQuantity      Int      @default(1)
-  defaultQuantity  Int      @default(1)
-  tierBreakpoints  String   @default("1") // comma-separated tier start quantities
-  tierTemplate     String? // JSON range rows with margin/fixed price defaults
-  defaultMarginPct Float    @default(40)
-  pricingMethod    String   @default("auto_margin") // auto_margin, fixed_price, discount_from_first, markup_over_cost
-  defaultTags      String? // comma-separated Shopify tags to apply later
-  calculatorKind   String?  // label, box, dtp, jar, sticker_bag, sourced, general
+  id                   String   @id @default(cuid())
+  shop                 String
+  key                  String
+  name                 String
+  productionMode       String   @default("in_house") // in_house, outsourced, hybrid
+  minQuantity          Int      @default(1)
+  defaultQuantity      Int      @default(1)
+  tierBreakpoints      String   @default("1") // comma-separated tier start quantities
+  tierTemplate         String? // JSON range rows with margin/fixed price defaults
+  defaultMarginPct     Float    @default(40)
+  pricingMethod        String   @default("auto_margin") // auto_margin, fixed_price, discount_from_first, markup_over_cost
+  defaultTags          String? // comma-separated Shopify tags to apply later
+  calculatorKind       String? // label, box, dtp, jar, sticker_bag, sourced, general
   calculatorRoutesJson String? // JSON route config used by the custom product cost calculator
-  notes            String?
-  active           Boolean  @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  notes                String?
+  active               Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   recipes ProductRecipe[]
 
@@ -374,31 +374,31 @@ model ProductTypeProfile {
 }
 
 model ProductRecipe {
-  id                             String  @id @default(cuid())
+  id                             String    @id @default(cuid())
   shop                           String
   categoryId                     String?
   productTypeProfileId           String?
   name                           String
   sku                            String?
-  productType                    String  @default("label") // label, dtp_bag, box, sourced_product, die_cut_bag, general
-  productFamily                  String  @default("Labels") // Labels, Sticker Bags, DTP Bags, Boxes, DTF / Apparel, custom
-  pricingTemplateMode            String   @default("template") // template, custom
-  costReviewNeeded               Boolean  @default(false)
+  productType                    String    @default("label") // label, dtp_bag, box, sourced_product, die_cut_bag, general
+  productFamily                  String    @default("Labels") // Labels, Sticker Bags, DTP Bags, Boxes, DTF / Apparel, custom
+  pricingTemplateMode            String    @default("template") // template, custom
+  costReviewNeeded               Boolean   @default(false)
   costReviewReasons              String?
   costReviewSyncedAt             DateTime?
   costReviewSource               String?
-  useInQuotes                    Boolean  @default(true)
-  applicationLaborSecondsPerUnit Float   @default(0)
-  packingLaborSecondsPerUnit     Float   @default(0)
-  prepressMinutes                Float   @default(0)
+  useInQuotes                    Boolean   @default(true)
+  applicationLaborSecondsPerUnit Float     @default(0)
+  packingLaborSecondsPerUnit     Float     @default(0)
+  prepressMinutes                Float     @default(0)
   productGid                     String?
   variantGid                     String?
   shopifyProductId               String?
   shopifyVariantId               String?
-  shopifyTargetMode              String  @default("product_all_variants")
+  shopifyTargetMode              String    @default("product_all_variants")
   shopifyVariantIds              String?
-  costMethod                     String  @default("recipe") // recipe, sourced_flat, sourced_tier
-  productionMode                 String  @default("in_house") // in_house, outsourced, hybrid
+  costMethod                     String    @default("recipe") // recipe, sourced_flat, sourced_tier
+  productionMode                 String    @default("in_house") // in_house, outsourced, hybrid
   vendorProductId                String?
 
   widthIn         Float?
@@ -1358,32 +1358,32 @@ model ErpAdminSetting {
 }
 
 model PriceApprovalRecord {
-  id                String    @id @default(cuid())
-  shop              String
-  source            String    @default("margin_review")
-  variantRuleId     String
-  recipeId          String?
-  recipeName        String?
-  shopifyProductGid String?
-  shopifyVariantGid String?
-  productTitle      String?
-  variantTitle      String?
-  currentPrice      Float?
-  suggestedPrice    Float
-  estimatedCost     Float
-  targetMarginPct   Float?
-  currentMarginPct  Float?
-  delta             Float?
-  action            String    @default("Review price")
-  status            String    @default("needs_review") // needs_review, cost_review_hold, approved, rejected, skipped, updated_in_shopify
-  reason            String?
-  costReviewNeeded  Boolean   @default(false)
-  tierIssues        Int       @default(0)
-  approvedAt        DateTime?
-  rejectedAt        DateTime?
+  id                 String    @id @default(cuid())
+  shop               String
+  source             String    @default("margin_review")
+  variantRuleId      String
+  recipeId           String?
+  recipeName         String?
+  shopifyProductGid  String?
+  shopifyVariantGid  String?
+  productTitle       String?
+  variantTitle       String?
+  currentPrice       Float?
+  suggestedPrice     Float
+  estimatedCost      Float
+  targetMarginPct    Float?
+  currentMarginPct   Float?
+  delta              Float?
+  action             String    @default("Review price")
+  status             String    @default("needs_review") // needs_review, cost_review_hold, approved, rejected, skipped, updated_in_shopify
+  reason             String?
+  costReviewNeeded   Boolean   @default(false)
+  tierIssues         Int       @default(0)
+  approvedAt         DateTime?
+  rejectedAt         DateTime?
   updatedInShopifyAt DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@unique([shop, variantRuleId])
   @@index([shop])
@@ -1406,14 +1406,14 @@ model AgentReviewQueueItem {
   phone                  String?
   preferredContactMethod String?
 
-  productFamily      String?
-  productType        String?
-  quantity           String?
-  dimensionsOrSize   String?
+  productFamily       String?
+  productType         String?
+  quantity            String?
+  dimensionsOrSize    String?
   materialOrSubstrate String?
-  finish             String?
-  deadline           String?
-  shippingCityState  String?
+  finish              String?
+  deadline            String?
+  shippingCityState   String?
 
   contact           Json?
   productRequest    Json?
@@ -1443,7 +1443,7 @@ model AgentReviewQueueItem {
   convertedAt      DateTime?
   convertedQuoteId String?
 
-  requiresStaffApproval          Boolean @default(true)
+  requiresStaffApproval           Boolean @default(true)
   canBecomeRealQuoteAutomatically Boolean @default(false)
 
   createdAt DateTime @default(now())
@@ -1494,8 +1494,8 @@ model AgentApiCredential {
   id   String @id @default(cuid())
   shop String
 
-  agentId   String
-  agentName String
+  agentId    String
+  agentName  String
   agentEmail String?
 
   sourceType    String
@@ -1508,20 +1508,20 @@ model AgentApiCredential {
   scopes                 Json?
   allowedProductFamilies Json?
 
-  isActive      Boolean   @default(true)
-  revokedAt     DateTime?
-  revokedReason String?
-  lastUsedAt    DateTime?
+  isActive       Boolean   @default(true)
+  revokedAt      DateTime?
+  revokedReason  String?
+  lastUsedAt     DateTime?
   lastUsedIpHash String?
 
   createdBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([shop, tokenId])
   @@index([shop])
   @@index([shop, isActive])
   @@index([shop, agentId])
-  @@unique([shop, tokenId])
 }
 
 model AgentSubmissionLog {
@@ -1532,7 +1532,7 @@ model AgentSubmissionLog {
   agentId      String?
   agentName    String?
 
-  sourceChannel String?
+  sourceChannel  String?
   externalLeadId String?
   idempotencyKey String?
   requestId      String?
@@ -1666,7 +1666,7 @@ model PrintIntake {
   revisionNumber           Int      @default(1)
   reprintNumber            Int      @default(0)
   reviewReason             String?
-  rawParsedHints           String?  // JSON: FilenamePrintHints + linkage warnings
+  rawParsedHints           String? // JSON: FilenamePrintHints + linkage warnings
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
@@ -1753,4 +1753,159 @@ model MachineProfileCalibration {
   @@index([shop, machineKey, inkMode, ripProfile, qualityMode, resolution, passConfig, status, effectiveFrom])
   @@index([shop, status])
   @@index([supersedesId])
+}
+
+// ---------------------------------------------------------------------------
+// OPS-2 (2026-10-04) — GSO Operations Agent Platform durable storage.
+// ADDITIVE ONLY: six new tables, no change to any existing model. Prepared on
+// a local branch; the migration is NOT applied until the owner runs it.
+// ---------------------------------------------------------------------------
+
+/// Business authorization record for every consequential agent action.
+model OpsActionIntent {
+  id                String    @id
+  shop              String?
+  actionType        String
+  agentId           String
+  agentVersion      String
+  provider          String?
+  model             String?
+  entityType        String
+  entityId          String
+  payload           Json?
+  reason            String
+  autonomyLevel     String
+  approvalPolicy    String
+  idempotencyKey    String    @unique
+  status            String
+  createdByType     String
+  createdById       String
+  createdBySource   String?
+  approvedByType    String?
+  approvedById      String?
+  approvedByName    String?
+  approvedBySource  String?
+  approvedAt        DateTime?
+  executedAt        DateTime?
+  externalReference String?
+  error             String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  auditEvents OpsActionAuditEvent[]
+
+  @@index([status, createdAt])
+  @@index([entityType, entityId])
+  @@index([agentId, createdAt])
+  @@index([shop, status])
+}
+
+/// Append-only audit trail. Rows are never updated or deleted by the application.
+model OpsActionAuditEvent {
+  id                String   @id
+  intentId          String
+  idempotencyKey    String
+  agentId           String
+  agentVersion      String
+  provider          String?
+  model             String?
+  entityType        String
+  entityId          String
+  actionType        String
+  autonomyLevel     String
+  event             String
+  previousStatus    String?
+  newStatus         String?
+  actorType         String
+  actorId           String
+  actorSource       String?
+  approverType      String?
+  approverId        String?
+  executionResult   String?
+  externalReference String?
+  error             String?
+  detail            String?
+  payloadKeys       Json?
+  at                DateTime
+
+  intent OpsActionIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+
+  @@index([intentId, at])
+  @@index([at])
+  @@index([actionType, at])
+}
+
+/// Receipt per external event id (Slack event/interaction, webhook, worker retry, provider callback).
+model OpsExternalEventReceipt {
+  id         String   @id @default(cuid())
+  source     String
+  externalId String
+  kind       String
+  status     String   @default("RECEIVED")
+  result     String?
+  error      String?
+  receivedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([source, externalId])
+  @@index([receivedAt])
+  @@index([status, receivedAt])
+}
+
+/// Transactional outbox for deterministic side effects processed by the worker.
+model OpsOutboxMessage {
+  id                String    @id @default(cuid())
+  idempotencyKey    String    @unique
+  type              String
+  payload           Json
+  intentId          String?
+  status            String    @default("PENDING")
+  attempts          Int       @default(0)
+  maxAttempts       Int       @default(5)
+  nextAttemptAt     DateTime  @default(now())
+  claimedBy         String?
+  claimedAt         DateTime?
+  lastError         String?
+  externalReference String?
+  createdAt         DateTime  @default(now())
+  completedAt       DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([intentId])
+  @@index([type, status])
+}
+
+/// Slack user -> ERP staff identity (approval authority). Replaces the env JSON map when populated.
+model OpsSlackStaffIdentity {
+  id          String   @id @default(cuid())
+  slackUserId String   @unique
+  staffId     String
+  name        String
+  role        String   @default("staff")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([staffId])
+}
+
+/// Reasoning workflow state (provider run), separate from business authorization.
+model OpsAgentRun {
+  id          String    @id @default(cuid())
+  agentId     String
+  provider    String
+  model       String?
+  status      String
+  intentId    String?
+  state       Json?
+  turns       Int       @default(0)
+  startedAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+  error       String?
+
+  @@index([status, updatedAt])
+  @@index([intentId])
+  @@index([agentId, startedAt])
 }

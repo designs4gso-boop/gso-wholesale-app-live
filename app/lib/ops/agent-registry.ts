@@ -22,7 +22,7 @@
 
 import { ACTION_TYPES, type ActionType, type AutonomyLevel, type Permission, AUTONOMY_TO_PERMISSION, effectiveAutonomy } from "./autonomy";
 
-export const AGENT_REGISTRY_VERSION = "agent-registry/1.0.0-2026-10-03";
+export const AGENT_REGISTRY_VERSION = "agent-registry/2.0.0-2026-10-04";
 
 export type AgentStatus = "ACTIVE" | "DRAFT" | "BLOCKED" | "MANUAL_ONLY";
 
@@ -85,8 +85,8 @@ export const AGENT_REGISTRY: AgentDefinition[] = [
     outputs: ["validated intents", "approval requests", "exception routing", "audit records"],
     tools: ["ops/action-intents", "ops/autonomy", "slack/slack-interactions", "ops/exceptions"],
     forbidden: ["executing DISABLED actions", "approving on a human's behalf", "overriding canonical blockers"],
-    autonomy: { post_slack_internal: "AUTO_INTERNAL", read_report: "AUTO_READ" },
-    approvalPolicy: "Never approves. Collects approvals from mapped staff/owner only.",
+    autonomy: { post_slack_internal: "AUTO_INTERNAL", read_report: "AUTO_READ", read_production_status: "AUTO_READ", request_art_approval: "AUTO_INTERNAL", move_production_job: "APPROVAL_REQUIRED" },
+    approvalPolicy: "Never approves. Proposes only; collects approvals from mapped staff/owner. Job moves require human approval, the execution kill switch and the transition executor.",
     handoffTargets: ["exception_manager"],
     promptVersion: "n/a",
     modelVersion: NO_MODEL,
@@ -265,8 +265,8 @@ export const AGENT_REGISTRY: AgentDefinition[] = [
     outputs: ["ordered queue", "blockers", "next action per job"],
     tools: ["ops/production-planner", "ops/production-transitions"],
     forbidden: ["moving jobs", "writing jobs"],
-    autonomy: { read_production_status: "AUTO_READ", move_production_job: "DISABLED" },
-    approvalPolicy: "n/a tonight",
+    autonomy: { read_production_status: "AUTO_READ", move_production_job: "APPROVAL_REQUIRED" },
+    approvalPolicy: "Job moves are proposals: mapped staff/owner approve, kill switch must be on, transition executor validates.",
     handoffTargets: ["production_dispatcher", "exception_manager"],
     promptVersion: "n/a",
     modelVersion: NO_MODEL,

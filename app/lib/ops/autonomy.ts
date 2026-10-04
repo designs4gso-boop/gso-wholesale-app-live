@@ -8,7 +8,7 @@
 //   * Refund / void and anything financial are OWNER_REQUIRED.
 //   * QuickBooks is DEFERRED — not connected, no credential required.
 
-export const OPS_PLATFORM_VERSION = "ops-platform/1.0.0-2026-10-03";
+export const OPS_PLATFORM_VERSION = "ops-platform/2.0.0-2026-10-04";
 
 export type AutonomyLevel =
   | "AUTO_READ"          // may read and report; never writes
@@ -80,7 +80,10 @@ export const ACTION_AUTONOMY_CEILING: Record<ActionType, AutonomyLevel> = {
   send_purchase_order: "DISABLED",                // tonight: no external PO
   prepare_invoice: "AUTO_INTERNAL",
   send_invoice: "DISABLED",                       // tonight: QuickBooks deferred, no external invoice
-  move_production_job: "DISABLED",                // tonight: support built, execution off
+  // OPS-2 (owner, 2026-10-04): production mutation = APPROVAL_REQUIRED (never
+  // AUTO). Runtime execution additionally requires GSO_AGENT_EXECUTION_ENABLED
+  // (default false) and the production transition executor.
+  move_production_job: "APPROVAL_REQUIRED",
   dispatch_to_machine: "DISABLED",                // tonight: plan only
   record_qc_result: "APPROVAL_REQUIRED",          // a person/device records inspection
   mark_shipped: "APPROVAL_REQUIRED",
