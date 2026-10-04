@@ -53,7 +53,7 @@ The SDK enables tracing by default in Node. GSO disables it by default and never
 
 ## Enablement sequence (owner)
 
-1. Apply OPS-2 migration; set `GSO_OPS_REPOSITORY=prisma` (durable intents/runs).
+1. Activate the OPS-2 migration (move it from `prisma/migrations-pending/` to `prisma/migrations/`, deploy, Render Pre-Deploy applies it); then set `GSO_OPS_REPOSITORY=prisma` (durable intents/runs).
 2. Add `OPENAI_API_KEY` (secret) and `GSO_OPENAI_MODEL` on Render.
 3. Set `GSO_REASONING_PROVIDER=openai`, keep `GSO_AGENT_REASONING_ENABLED=false`; verify hub shows Configured YES / Reasoning NO.
 4. Run the opt-in live test from a trusted machine once; review output.

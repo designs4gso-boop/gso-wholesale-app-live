@@ -578,3 +578,13 @@ Not pushed, not deployed, migration PREPARED — NOT APPLIED, no production writ
 - Docs: 8 updated + GSO_OPERATIONS_PRODUCTION_READINESS,
   GSO_REASONING_PROVIDER_ARCHITECTURE, GSO_OPENAI_AGENTS_RUNTIME.
 - Tests 2220 / 100 files (+2 opt-in skipped); TS 305; build green.
+
+## OPS-2 release gate (2026-10-04) — audit + two release-blocker fixes
+- Render Pre-Deploy auto-runs `prisma migrate deploy`; OPS-2 migration moved
+  to prisma/migrations-pending/ (15H.4A convention) with activation README so
+  the first deploy ships inert code only. MIGRATION STILL NOT APPLIED.
+- getOpsRepositories: CommonJS require replaced by a static import (ESM
+  bundle could not resolve it; prisma mode would have thrown). Default
+  memory mode unchanged; no Ops table queried at boot.
+- Gates: 2220 tests / 100 files, build green, TS 305, diff clean; SDK absent
+  from client bundle. Not pushed, not deployed.

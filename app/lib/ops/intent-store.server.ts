@@ -5,19 +5,24 @@
 // Business code never imports Prisma directly; it receives OpsRepositories.
 
 import { createMemoryRepositories } from "./memory-repositories";
+import { createPrismaRepositories } from "./prisma-repositories.server";
 import { readOpsRuntimeConfig } from "./runtime-config";
 import type { OpsRepositories } from "./repositories";
 
 const globalRef = globalThis as unknown as { __gsoOpsRepositories?: OpsRepositories };
 
+/**
+ * Importing prisma-repositories.server has NO database side effect: it only
+ * references the shared Prisma client; the Ops* tables are queried solely
+ * inside repository methods, which run only when GSO_OPS_REPOSITORY=prisma.
+ * (Release gate 2026-10-04: a CommonJS `require` here was unresolvable in the
+ * ESM server bundle and would have thrown the moment prisma mode was enabled.)
+ */
 export function getOpsRepositories(): OpsRepositories {
   if (globalRef.__gsoOpsRepositories) return globalRef.__gsoOpsRepositories;
   const config = readOpsRuntimeConfig();
   if (config.repository === "prisma") {
-    // Lazy require keeps the Prisma client out of memory-mode processes and
-    // out of every test. Resolved at runtime only when explicitly configured.
-    const mod = require("./prisma-repositories.server") as typeof import("./prisma-repositories.server");
-    globalRef.__gsoOpsRepositories = mod.createPrismaRepositories();
+    globalRef.__gsoOpsRepositories = createPrismaRepositories();
   } else {
     globalRef.__gsoOpsRepositories = createMemoryRepositories();
   }
