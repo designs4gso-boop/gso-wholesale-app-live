@@ -48,6 +48,11 @@ export async function loader({ request }: { request: Request }) {
   };
 }
 
+/** Same shape other ERP routes use for the acting staff member (session fields are optional on the Shopify Session type). */
+function actorFromSession(session: any): { id: string; name?: string } {
+  return { id: String(session?.email || session?.shop || "staff"), name: [session?.firstName, session?.lastName].filter(Boolean).join(" ").trim() || undefined };
+}
+
 export async function action({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -60,7 +65,7 @@ export async function action({ request }: { request: Request }) {
     slackEnv,
     slack: new SlackClient(slackEnv),
     runKey: String(formData.get("runKey") || ""),
-    requestedBy: { id: String(session.email || session.shop), name: [session.firstName, session.lastName].filter(Boolean).join(" ") || undefined },
+    requestedBy: actorFromSession(session),
     erpBase: new URL(request.url).origin,
   });
   if (!result.ok) return Response.json({ ok: false, stage: result.stage, reasons: result.reasons, intentId: result.intentId ?? null });
