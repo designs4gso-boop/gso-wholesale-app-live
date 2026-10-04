@@ -20,11 +20,19 @@ export function prismaTransitionDeps(db: DbLike, shop: string): TransitionDeps {
       return { ...job, previousStatus: lastHold?.oldValue ?? null } as JobSnapshot;
     },
     async loadFacts(job, target) {
-      const row = await db.productionJob.findFirst({ where: { id: job.id }, select: { proofStatus: true, proofApprovedAt: true, checklistItems: { select: { section: true, completed: true } }, events: { where: { eventType: { in: ["qc_result", "shipped", "tracking_added"] } }, select: { eventType: true, newValue: true } } } });
+      const row = await db.productionJob.findFirst({ where: { id: job.id }, select: { proofStatus: true, proofApprovedAt: true, checklistItems: { select: { section: true, completed: true } }, events: { where: { eventType: { in: ["qc_result", "shipped", "tracking_added", "proof_approved"] } }, select: { eventType: true, newValue: true } } } });
       const qcPass = Boolean(row?.events?.some((e: any) => e.eventType === "qc_result" && String(e.newValue).toLowerCase() === "pass"));
       const shipping = Boolean(row?.events?.some((e: any) => e.eventType === "shipped" || e.eventType === "tracking_added"));
+      // Art approval evidence the ERP actually records (Stage 4, 2026-10-04):
+      //   (a) customer proof portal: proofStatus=approved + proofApprovedAt, or
+      //   (b) staff "Approve proof" action: a `proof_approved` event (the only
+      //       emitter is app.erp.production.$id.proof.tsx approveProof).
+      // A bare status string set through the legacy changeStatus handler emits
+      // only `status_change` and therefore does NOT count as art approval.
+      const portalApproved = row?.proofStatus === "approved" && Boolean(row?.proofApprovedAt);
+      const staffApproved = Boolean(row?.events?.some((e: any) => e.eventType === "proof_approved"));
       return {
-        artApproved: row?.proofStatus === "approved" && Boolean(row?.proofApprovedAt),
+        artApproved: portalApproved || staffApproved,
         qcPassRecorded: qcPass,
         shippingRecorded: shipping,
         materialReady: undefined,

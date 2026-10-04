@@ -125,20 +125,22 @@ export async function createSandboxApprovalTest(input: SandboxTestInput): Promis
   const posted = await input.slack.postBlocks({ destination: "production", text: `SANDBOX Stage 3 durable approval test ${intent.id}`, blocks, idempotencyKey: `sandbox-approval-test:${intent.id}` });
   if (!posted.ok) return { ok: false, stage: "slack", reasons: [posted.error], intentId: intent.id };
 
-  if (!posted.duplicate) {
-    // Append-only trace of the card post on the intent's audit trail (no payload, no secrets).
-    const rec = { at: now.toISOString(), actor: { type: "system" as const, id: "ops-hub" }, event: "slack_card_posted", from: intent.status, to: intent.status, detail: `${posted.channel} ${posted.ts}` };
-    intent.audit.push(rec);
-    await input.repos.intents.save(intent);
-    const audit: AuditEvent = {
-      id: `${intent.id}:slack:${posted.ts}`, intentId: intent.id, idempotencyKey: intent.idempotencyKey, agentId: intent.agentId, agentVersion: intent.agentVersion,
-      provider: intent.provider, model: intent.model, entityType: intent.entityType, entityId: intent.entityId, actionType: intent.actionType, reason: intent.reason,
-      payloadKeys: Object.keys(intent.payload), autonomyLevel: intent.autonomyLevel, previousStatus: intent.status, newStatus: intent.status, event: "slack_card_posted",
-      actor: rec.actor, approver: intent.approvedBy, at: rec.at, executionResult: null, externalReference: `slack:${posted.channel}:${posted.ts}`, error: null, detail: rec.detail,
-    };
-    await input.repos.intents.appendAudit(audit);
-  }
+  if (!posted.duplicate) await recordSlackCardPosted(input.repos, intent, posted, now);
   return { ok: true, intent, duplicateIntent: proposed.duplicate, slack: { channel: posted.channel, ts: posted.ts, duplicate: posted.duplicate, sandboxRedirected: posted.sandboxRedirected } };
+}
+
+/** Append-only trace of a Slack card post on the intent's audit trail (no payload, no secrets). Shared by Stage 3 and Stage 4. */
+export async function recordSlackCardPosted(repos: OpsRepositories, intent: ActionIntent, posted: { channel: string; ts: string }, now: Date) {
+  const rec = { at: now.toISOString(), actor: { type: "system" as const, id: "ops-hub" }, event: "slack_card_posted", from: intent.status, to: intent.status, detail: `${posted.channel} ${posted.ts}` };
+  intent.audit.push(rec);
+  await repos.intents.save(intent);
+  const audit: AuditEvent = {
+    id: `${intent.id}:slack:${posted.ts}`, intentId: intent.id, idempotencyKey: intent.idempotencyKey, agentId: intent.agentId, agentVersion: intent.agentVersion,
+    provider: intent.provider, model: intent.model, entityType: intent.entityType, entityId: intent.entityId, actionType: intent.actionType, reason: intent.reason,
+    payloadKeys: Object.keys(intent.payload), autonomyLevel: intent.autonomyLevel, previousStatus: intent.status, newStatus: intent.status, event: "slack_card_posted",
+    actor: rec.actor, approver: intent.approvedBy, at: rec.at, executionResult: null, externalReference: `slack:${posted.channel}:${posted.ts}`, error: null, detail: rec.detail,
+  };
+  await repos.intents.appendAudit(audit);
 }
 
 /** Hub grouping (shared with the loader so the test can pin it). */
