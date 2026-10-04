@@ -28,6 +28,11 @@ export function loadSlackEnv(path = process.env.GSO_SLACK_ENV_FILE || DEFAULT_SL
   return env;
 }
 
+/** Methods whose arguments must be form-encoded (Slack ignores JSON bodies for them). */
+export const FORM_ENCODED_METHODS = new Set(["conversations.list", "users.conversations", "conversations.info", "conversations.history", "conversations.members", "users.info", "auth.test"]);
+
+export type SlackChannelSummary = { id: string; name: string; isPrivate: boolean; isMember: boolean };
+
 export type SlackApiResult<T = any> = { ok: true; data: T } | { ok: false; error: string; needed?: string; data?: any };
 
 export class SlackClient {
@@ -40,11 +45,19 @@ export class SlackClient {
     return value;
   }
 
+  /**
+   * Slack Web API call. Write methods (chat.*) accept JSON. Read/list methods
+   * (conversations.list, users.conversations, conversations.info/history)
+   * IGNORE arguments sent as a JSON body — the `types` filter is silently
+   * dropped and private channels vanish from the result. Those methods are
+   * therefore sent form-encoded. (OPS-2 Phase 32 root cause.)
+   */
   async api<T = any>(method: string, body: Record<string, unknown> = {}, tokenKind: "bot" | "app" = "bot"): Promise<SlackApiResult<T>> {
+    const form = FORM_ENCODED_METHODS.has(method);
     const res = await this.fetchImpl(`https://slack.com/api/${method}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json; charset=utf-8", Authorization: `Bearer ${this.token(tokenKind)}` },
-      body: JSON.stringify(body),
+      headers: { "Content-Type": form ? "application/x-www-form-urlencoded" : "application/json; charset=utf-8", Authorization: `Bearer ${this.token(tokenKind)}` },
+      body: form ? new URLSearchParams(Object.entries(body).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) : JSON.stringify(body),
     });
     const data: any = await res.json();
     if (!data?.ok) return { ok: false, error: String(data?.error || `http_${res.status}`), needed: data?.needed, data };
@@ -57,6 +70,32 @@ export class SlackClient {
   connectionsOpen() { return this.api<{ url: string }>("apps.connections.open", {}, "app"); }
 
   conversationsInfo(channel: string) { return this.api("conversations.info", { channel }); }
+
+  /** Lists public AND private channels the bot can see, following cursors. */
+  async listChannels(options: { types?: string; limit?: number; maxPages?: number } = {}): Promise<SlackApiResult<SlackChannelSummary[]>> {
+    const out: SlackChannelSummary[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < (options.maxPages ?? 10); page += 1) {
+      const r = await this.api<{ channels: any[]; response_metadata?: { next_cursor?: string } }>("conversations.list", { types: options.types ?? "public_channel,private_channel", limit: options.limit ?? 200, exclude_archived: true, ...(cursor ? { cursor } : {}) });
+      if (!r.ok) return r;
+      for (const c of r.data.channels ?? []) out.push({ id: c.id, name: c.name, isPrivate: Boolean(c.is_private), isMember: Boolean(c.is_member) });
+      cursor = r.data.response_metadata?.next_cursor || undefined;
+      if (!cursor) break;
+    }
+    return { ok: true, data: out };
+  }
+
+  /** Resolves "#name" / "name" / "C…" to a channel the bot is a member of; null when not found. */
+  async findChannel(nameOrId: string): Promise<SlackChannelSummary | null> {
+    const wanted = String(nameOrId).replace(/^#/, "").toLowerCase();
+    if (/^[CG][A-Z0-9]{8,}$/.test(nameOrId)) {
+      const info = await this.conversationsInfo(nameOrId);
+      return info.ok ? { id: info.data.channel.id, name: info.data.channel.name, isPrivate: Boolean(info.data.channel.is_private), isMember: Boolean(info.data.channel.is_member) } : null;
+    }
+    const list = await this.listChannels();
+    if (!list.ok) return null;
+    return list.data.find((c) => c.name.toLowerCase() === wanted) ?? null;
+  }
 
   history(channel: string, limit = 10) { return this.api<{ messages: any[] }>("conversations.history", { channel, limit }); }
 

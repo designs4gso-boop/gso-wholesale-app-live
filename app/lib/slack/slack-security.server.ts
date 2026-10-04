@@ -60,18 +60,7 @@ export class SlackEventDeduper {
   }
 }
 
-/** Stable key for an Events API delivery. */
-export function eventDedupKey(body: any): string | null {
-  const id = body?.event_id || body?.envelope_id;
-  return id ? `event:${id}` : null;
-}
-
-/** Stable key for a block-action click: same user, same message, same action, same intent. */
-export function interactionDedupKey(payload: any): string | null {
-  const action = payload?.actions?.[0];
-  if (!action) return null;
-  return `interaction:${payload?.user?.id ?? "?"}:${payload?.container?.message_ts ?? payload?.message?.ts ?? "?"}:${action.action_id}:${action.value ?? ""}`;
-}
+export { eventDedupKey, interactionDedupKey } from "./slack-dedupe";
 
 export function isSlackRetry(headers: Headers): { retry: boolean; num: number; reason: string | null } {
   const num = Number(headers.get("x-slack-retry-num") || 0);
