@@ -106,7 +106,7 @@ export async function stage4Preflight(deps: Stage4Deps): Promise<Stage4Preflight
   const guard = from ? evaluateTransition(from, STAGE4.target, facts) : { allowed: false, reasons: [`unknown status "${job.status}"`], requiredFacts: [] };
   if (!guard.allowed) blockers.push(...guard.reasons.map((r) => `guard: ${r}`));
   if (routing.blocked) blockers.push(...routing.reasons.map((r) => `routing: ${r}`));
-  if (!facts.artApproved) blockers.push("fact artApproved is false (no portal approval and no staff proof_approved event)");
+  if (!facts.artApproved) blockers.push("fact artApproved is false (no portal/staff approval, or the approval predates the latest proof/artwork revision, or changes were requested)");
   return { ...base, job, currentStatus: job.status, facts, routing, guard: { allowed: guard.allowed, reasons: guard.reasons, requiredFacts: guard.requiredFacts }, blockers: Array.from(new Set(blockers)), ok: blockers.length === 0 };
 }
 

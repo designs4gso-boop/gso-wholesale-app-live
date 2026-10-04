@@ -20,19 +20,41 @@ export function prismaTransitionDeps(db: DbLike, shop: string): TransitionDeps {
       return { ...job, previousStatus: lastHold?.oldValue ?? null } as JobSnapshot;
     },
     async loadFacts(job, target) {
-      const row = await db.productionJob.findFirst({ where: { id: job.id }, select: { proofStatus: true, proofApprovedAt: true, checklistItems: { select: { section: true, completed: true } }, events: { where: { eventType: { in: ["qc_result", "shipped", "tracking_added", "proof_approved"] } }, select: { eventType: true, newValue: true } } } });
+      const row = await db.productionJob.findFirst({
+        where: { id: job.id },
+        select: {
+          proofStatus: true,
+          proofApprovedAt: true,
+          checklistItems: { select: { section: true, completed: true } },
+          // Revision markers: every proof/artwork asset row. (Print files, RIP
+          // outputs and reference images are not art revisions.)
+          files: { where: { OR: [{ assetRole: { in: ["artwork", "proof"] } }, { fileType: { in: ["artwork", "proof", "customer_pdf", "dieline"] } }] }, select: { createdAt: true } },
+          events: { where: { eventType: { in: ["qc_result", "shipped", "tracking_added", "proof_approved", "proof_saved"] } }, select: { eventType: true, newValue: true, createdAt: true } },
+        },
+      });
       const qcPass = Boolean(row?.events?.some((e: any) => e.eventType === "qc_result" && String(e.newValue).toLowerCase() === "pass"));
       const shipping = Boolean(row?.events?.some((e: any) => e.eventType === "shipped" || e.eventType === "tracking_added"));
-      // Art approval evidence the ERP actually records (Stage 4, 2026-10-04):
-      //   (a) customer proof portal: proofStatus=approved + proofApprovedAt, or
-      //   (b) staff "Approve proof" action: a `proof_approved` event (the only
-      //       emitter is app.erp.production.$id.proof.tsx approveProof).
-      // A bare status string set through the legacy changeStatus handler emits
-      // only `status_change` and therefore does NOT count as art approval.
-      const portalApproved = row?.proofStatus === "approved" && Boolean(row?.proofApprovedAt);
-      const staffApproved = Boolean(row?.events?.some((e: any) => e.eventType === "proof_approved"));
+      // Art approval evidence the ERP actually records (Stage 4 audit, 2026-10-04):
+      //   (a) customer proof portal: proofStatus=approved + proofApprovedAt;
+      //   (b) staff "Approve proof" action: a `proof_approved` event (sole
+      //       emitter: app.erp.production.$id.proof.tsx approveProof).
+      // Neither signal is bound to a proof/art version in the schema, so an
+      // approval counts ONLY if it is at least as recent as the latest
+      // proof/artwork revision marker (proof/artwork file rows, proof_saved
+      // events) and the customer has not since requested changes. The legacy
+      // changeStatus handler emits only `status_change` and never counts.
+      const ms = (d: any) => (d ? new Date(d).getTime() : null);
+      const latestRevisionAt = Math.max(
+        -Infinity,
+        ...((row?.files ?? []).map((f: any) => ms(f.createdAt) ?? -Infinity) as number[]),
+        ...((row?.events ?? []).filter((e: any) => e.eventType === "proof_saved").map((e: any) => ms(e.createdAt) ?? -Infinity) as number[]),
+      );
+      const staffApprovalAt = Math.max(-Infinity, ...((row?.events ?? []).filter((e: any) => e.eventType === "proof_approved").map((e: any) => ms(e.createdAt) ?? -Infinity) as number[]));
+      const portalApprovalAt = row?.proofStatus === "approved" && row?.proofApprovedAt ? (ms(row.proofApprovedAt) as number) : -Infinity;
+      const approvalAt = Math.max(staffApprovalAt, portalApprovalAt);
+      const artApproved = Number.isFinite(approvalAt) && row?.proofStatus !== "changes_requested" && (!Number.isFinite(latestRevisionAt) || approvalAt >= latestRevisionAt);
       return {
-        artApproved: portalApproved || staffApproved,
+        artApproved,
         qcPassRecorded: qcPass,
         shippingRecorded: shipping,
         materialReady: undefined,

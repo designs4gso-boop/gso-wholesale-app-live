@@ -241,11 +241,14 @@ describe("Stage 4 execution", () => {
   });
 
   it("the Prisma fact loader counts the staff proof_approved event or portal approval as art approval, never a bare status string", async () => {
-    const mk = (row: any) => prismaTransitionDeps({ productionJob: { findFirst: async () => row } }, "shop");
+    const mk = (row: any) => prismaTransitionDeps({ productionJob: { findFirst: async () => ({ files: [], ...row }) } }, "shop");
     const job = { id: "j", shop: "shop", jobTicket: STAGE4.ticket, status: "proof_approved" };
-    expect((await mk({ proofStatus: "draft", proofApprovedAt: null, checklistItems: [], events: [{ eventType: "proof_approved", newValue: null }] }).loadFacts(job, "printing")).artApproved).toBe(true);
-    expect((await mk({ proofStatus: "approved", proofApprovedAt: new Date(), checklistItems: [], events: [] }).loadFacts(job, "printing")).artApproved).toBe(true);
-    expect((await mk({ proofStatus: "draft", proofApprovedAt: null, checklistItems: [], events: [{ eventType: "status_change", newValue: "proof_approved" }] }).loadFacts(job, "printing")).artApproved).toBe(false);
+    const at = new Date("2026-05-11T01:04:05.659Z");
+    expect((await mk({ proofStatus: "draft", proofApprovedAt: null, checklistItems: [], events: [{ eventType: "proof_approved", newValue: null, createdAt: at }] }).loadFacts(job, "printing")).artApproved).toBe(true);
+    expect((await mk({ proofStatus: "approved", proofApprovedAt: at, checklistItems: [], events: [] }).loadFacts(job, "printing")).artApproved).toBe(true);
+    expect((await mk({ proofStatus: "draft", proofApprovedAt: null, checklistItems: [], events: [{ eventType: "status_change", newValue: "proof_approved", createdAt: at }] }).loadFacts(job, "printing")).artApproved).toBe(false);
     expect((await mk({ proofStatus: "approved", proofApprovedAt: null, checklistItems: [], events: [] }).loadFacts(job, "printing")).artApproved).toBe(false);
+    // stale: approval predates a newer proof revision
+    expect((await mk({ proofStatus: "draft", proofApprovedAt: null, checklistItems: [], files: [{ createdAt: new Date("2026-05-12T00:00:00Z") }], events: [{ eventType: "proof_approved", newValue: null, createdAt: at }] }).loadFacts(job, "printing")).artApproved).toBe(false);
   });
 });
