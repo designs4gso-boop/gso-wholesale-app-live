@@ -1,13 +1,14 @@
-// Staff Operations Hub (OPS-2) — read-only view of the agent platform: provider
-// and kill-switch status (safe values only), registry, permission matrix,
-// durable intents grouped by state (pending approvals, failed, blocked by the
-// execution kill switch, completed), outbox and paused reasoning runs, and the
-// offline simulation result. No secrets, no raw prompts, no chain-of-thought,
-// no customer PII beyond entity ids. Approvals stay in Slack / the Agent
-// Review Queue; this page does not duplicate them.
+// Staff Operations Hub (OPS-2 / Stage 3) — read-only view of the agent
+// platform plus ONE owner-authenticated control: "Create Slack sandbox
+// approval test", which creates a SYNTHETIC durable ActionIntent and posts its
+// approval card to the sandbox channel. It never touches a ProductionJob,
+// never executes, and refuses unless every runtime gate holds. No secrets, no
+// raw prompts, no chain-of-thought, no customer PII beyond entity ids.
 
-import { Badge, BlockStack, Card, InlineStack, Page, Text } from "@shopify/polaris";
-import { Link, useLoaderData } from "react-router";
+import crypto from "node:crypto";
+
+import { Badge, BlockStack, Button, Card, InlineStack, Page, Text } from "@shopify/polaris";
+import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { auditSummary, isConsequential } from "../lib/ops/action-intents";
@@ -15,38 +16,55 @@ import { AGENT_REGISTRY, AGENT_REGISTRY_VERSION, permissionMatrix } from "../lib
 import { ACTION_TYPES, OPS_PLATFORM_VERSION } from "../lib/ops/autonomy";
 import { describeRepositoryDurability, getOpsRepositories } from "../lib/ops/intent-store.server";
 import { describeOpsRuntime, readOpsRuntimeConfig } from "../lib/ops/runtime-config";
+import { createSandboxApprovalTest, groupIntentsForHub, sandboxApprovalTestGate } from "../lib/ops/sandbox-approval-test";
 import { runCompanyFlowSimulation } from "../lib/ops/simulator.server";
 import { SPECIALISTS } from "../lib/reasoning/specialists";
-import { describeSlackEnv, loadSlackEnv } from "../lib/slack/slack-client.server";
+import { SlackClient, describeSlackEnv, loadSlackEnv } from "../lib/slack/slack-client.server";
 
 export async function loader({ request }: { request: Request }) {
   await authenticate.admin(request);
   const config = readOpsRuntimeConfig();
+  const slackEnv = loadSlackEnv();
   const repos = getOpsRepositories();
   const intents = (await repos.intents.list({ limit: 200 })).map(auditSummary);
   const outbox = await repos.outbox.list();
   const pausedRuns = await repos.runs.listByStatus("PAUSED_FOR_APPROVAL");
   const sim = await runCompanyFlowSimulation();
-  const grouped = {
-    pending: intents.filter((i) => i.status === "AWAITING_APPROVAL"),
-    blocked: intents.filter((i) => i.status === "APPROVED" && isConsequential(i.actionType) && !config.executionEnabled),
-    failed: intents.filter((i) => i.status === "FAILED"),
-    completed: intents.filter((i) => i.status === "COMPLETED"),
-  };
+  const gate = sandboxApprovalTestGate(config, slackEnv);
   return {
     platformVersion: OPS_PLATFORM_VERSION,
     registryVersion: AGENT_REGISTRY_VERSION,
     runtime: describeOpsRuntime(config),
     durability: describeRepositoryDurability(),
-    slack: describeSlackEnv(loadSlackEnv()),
+    slack: describeSlackEnv(slackEnv),
     agents: AGENT_REGISTRY.map((a) => ({ id: a.id, name: a.name, status: a.status, purpose: a.purpose, reasoning: Object.values(SPECIALISTS).some((s) => s.agentId === a.id) ? "model-capable (provider-gated)" : "deterministic" })),
     matrix: permissionMatrix(),
     actions: ACTION_TYPES,
-    grouped,
+    grouped: groupIntentsForHub(intents, config, isConsequential),
     outbox: { pending: outbox.filter((m) => m.status === "PENDING").length, processing: outbox.filter((m) => m.status === "PROCESSING").length, failed: outbox.filter((m) => m.status === "FAILED").length, dead: outbox.filter((m) => m.status === "DEAD").map((m) => ({ id: m.id, type: m.type, lastError: m.lastError })), completed: outbox.filter((m) => m.status === "COMPLETED").length },
     pausedRuns: pausedRuns.map((r) => ({ id: r.id, agentId: r.agentId, provider: r.provider, intentId: r.intentId, updatedAt: r.updatedAt })),
     simulation: { passed: sim.assertions.filter((a) => a.ok).length, total: sim.assertions.length, failures: sim.assertions.filter((a) => !a.ok).map((f) => f.name) },
+    sandboxTest: { gate, runKey: crypto.randomUUID() },
   };
+}
+
+export async function action({ request }: { request: Request }) {
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  if (String(formData.get("intent")) !== "createSandboxApprovalTest") return Response.json({ ok: false, reasons: ["unknown action"] }, { status: 400 });
+  const config = readOpsRuntimeConfig();
+  const slackEnv = loadSlackEnv();
+  const result = await createSandboxApprovalTest({
+    repos: getOpsRepositories(),
+    config,
+    slackEnv,
+    slack: new SlackClient(slackEnv),
+    runKey: String(formData.get("runKey") || ""),
+    requestedBy: { id: String(session.email || session.shop), name: [session.firstName, session.lastName].filter(Boolean).join(" ") || undefined },
+    erpBase: new URL(request.url).origin,
+  });
+  if (!result.ok) return Response.json({ ok: false, stage: result.stage, reasons: result.reasons, intentId: result.intentId ?? null });
+  return Response.json({ ok: true, intentId: result.intent.id, status: result.intent.status, autonomyLevel: result.intent.autonomyLevel, duplicateIntent: result.duplicateIntent, slack: result.slack });
 }
 
 const cell = { border: "1px solid #e1e3e5", padding: "4px 6px", fontSize: 12, whiteSpace: "nowrap" as const };
@@ -74,7 +92,10 @@ function IntentList({ title, rows, empty }: { title: string; rows: Row[]; empty:
 
 export default function OpsHub() {
   const data = useLoaderData<typeof loader>();
+  const actionData = useActionData<any>();
+  const busy = useNavigation().state !== "idle";
   const r = data.runtime;
+  const gate = data.sandboxTest.gate;
   return (
     <Page title="Operations hub" subtitle={`${data.platformVersion} · ${data.registryVersion}`}>
       <BlockStack gap="400">
@@ -97,6 +118,30 @@ export default function OpsHub() {
               <Link to="/app/erp/production">Production</Link>
               <Link to="/app/erp/purchase-requests">Purchase requests</Link>
             </InlineStack>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="200">
+            <Text as="h2" variant="headingMd">Stage 3 — Slack sandbox approval test</Text>
+            <Text as="p" tone="subdued">Creates ONE synthetic, durable ActionIntent (move_production_job on OPS-SANDBOX-TEST-NO-ERP-WRITE, APPROVAL_REQUIRED) and posts its SANDBOX approval card to #{data.slack.testChannel}. Approving it in Slack records a durable APPROVED state and an audit row. Execution is OFF: no job, PO, invoice, message or money action can result.</Text>
+            <InlineStack gap="200" wrap>
+              {Object.entries(gate.checks).map(([k, ok]) => <Badge key={k} tone={ok ? "success" : "critical"}>{`${k}: ${ok ? "OK" : "FAIL"}`}</Badge>)}
+            </InlineStack>
+            {gate.ok ? (
+              <Form method="post">
+                <input type="hidden" name="intent" value="createSandboxApprovalTest" />
+                <input type="hidden" name="runKey" value={data.sandboxTest.runKey} />
+                <Button submit variant="primary" disabled={busy}>CREATE SLACK SANDBOX APPROVAL TEST</Button>
+              </Form>
+            ) : (
+              <Text as="p" tone="critical">Refused (fail closed): {gate.reasons.join("; ")}</Text>
+            )}
+            {actionData ? (
+              actionData.ok
+                ? <Text as="p" tone="success">Intent <code>{actionData.intentId}</code> {actionData.status} ({actionData.autonomyLevel}){actionData.duplicateIntent ? " — existing intent reused (same run key)" : ""} · Slack {actionData.slack.duplicate ? "card already posted" : "card posted"} to {actionData.slack.channel} ts {actionData.slack.ts}. Approve it in Slack, then reload this page.</Text>
+                : <Text as="p" tone="critical">Refused at {actionData.stage}: {(actionData.reasons || []).join("; ")}{actionData.intentId ? ` (intent ${actionData.intentId})` : ""}</Text>
+            ) : null}
           </BlockStack>
         </Card>
 
