@@ -527,3 +527,26 @@ Branch `costing-october-core-release-2026-10-03` (from 1b13758).
 - Docs: CURRENT_STATE October section, GSO_TRUE_COST_CONTRACT §11,
   GSO_ERP_PROJECT_STATE, GSO_OCTOBER_CORE_RELEASE_RUNBOOK.md.
 - NOT deployed. NOT pushed. Production DB untouched.
+
+## Patch OPS-1 (2026-10-03) — Slack + autonomous operations agent platform
+Branch `agents-operations-finishline-2026-10-03` (from dba23c6, the LIVE
+CORE release). LOCAL ONLY. Not pushed, not deployed, no schema change.
+- app/lib/ops/: autonomy levels + platform ceilings, 21-agent registry,
+  ActionIntent engine (idempotent, human-approved, audited), untrusted-text
+  guard, deterministic agents (sales intake, quote prep, art preflight,
+  art approval, production transition guard over ACTUAL statuses, planner,
+  dispatch via decideMachine, QC, shipping, purchasing, invoice readiness,
+  reporting, status, exceptions, reorder/marketing, follow-up), simulator.
+- app/lib/slack/: fetch Web API client, v0 signature verify, dedupe,
+  Block Kit, interaction allow-list, Socket Mode (verification only);
+  sandbox-only destination resolution (default on).
+- Routes: api/slack/interactions (503 until configured), app/erp/ops-hub.
+- No LLM provider wired; model-dependent agents are DRAFT. QuickBooks
+  DEFERRED — NOT CONNECTED. Every money/customer/PO/invoice/job-move
+  action DENIED or approval-gated; override_canonical_blocker DENIED.
+- Live Slack verified in #gso-agent-sandbox only (9 scenario cards,
+  idempotent replay, thread reply, Socket Mode hello).
+- Tests 2197 / 97 files (+1 live test skipped by default); TS 305; build
+  green; git diff --check clean; no secrets in repo.
+- OPEN OWNER ITEM: product-family-sales-rules sticker-bags officialMoq 100
+  vs canonical adapter MOQ 50.

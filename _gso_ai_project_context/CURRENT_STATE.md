@@ -1,8 +1,21 @@
 # GSO ERP / Shopify Configurator — Current State
 
-Updated: 2026-10-03 (October CORE release candidate — local only, NOT deployed)
+Updated: 2026-10-03 (CORE release LIVE as dba23c6; operations agent platform on local branch, NOT deployed)
 
-## OCTOBER 2026 — COST CALCULATOR CORE RELEASE (LOCAL ONLY, NOT DEPLOYED)
+## OCTOBER 2026 — OPERATIONS AGENT PLATFORM (LOCAL BRANCH, NOT DEPLOYED)
+Branch `agents-operations-finishline-2026-10-03` on top of the LIVE CORE
+release (`dba23c6` = origin/main on Render). Adds `app/lib/ops/` (21-role
+registry, autonomy ceilings, ActionIntent engine, deterministic agents,
+simulator) and `app/lib/slack/` (sandbox-only Slack adapter), routes
+`api/slack/interactions` (inert until configured) and `app/erp/ops-hub`.
+No LLM, no durable store, no worker, no schema change, no production write
+path touched. QuickBooks DEFERRED — NOT CONNECTED. Docs: GSO_AGENT_SYSTEM_
+CONTRACT, GSO_OPERATIONS_AGENT_ARCHITECTURE, GSO_AGENT_OPERATIONS_RUNBOOK,
+GSO_AGENT_DEPLOYMENT_PLAN, GSO_SLACK_INTEGRATION_CONTRACT, GSO_SLACK_SETUP,
+GSO_ART_APPROVAL_CONTRACT, GSO_PRODUCTION_AUTOMATION_CONTRACT,
+GSO_FINANCIAL_ACTION_POLICY. Owner review pending (PATCH_LOG OPS-1).
+
+## OCTOBER 2026 — COST CALCULATOR CORE RELEASE (LIVE on Render as dba23c6 since 2026-10-03)
 Repo moved to `C:\Users\Desig\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
 (`C:\Users\golde\...` paths elsewhere in this file are historical).
 Release branch: `costing-october-core-release-2026-10-03`. GitHub
