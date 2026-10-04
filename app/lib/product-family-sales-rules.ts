@@ -36,18 +36,18 @@ export const PRODUCT_FAMILY_SALES_RULES: ProductFamilySalesRule[] = [
     key: "sticker-bags",
     label: "Sticker Bags",
     aliases: ["Sticker Bags", "Sticker Bag", "Label Applied Bags"],
-    officialMoq: 100,
+    officialMoq: 50,
     quotePrepAllowed: true,
     manualReviewRequired: true,
     agentFirmPricingAllowed: false,
     agentSafeStage: "intake_quote_prep",
     salesRules: [
-      "Official MOQ: 100",
+      "Official MOQ: 50 (owner-approved 2026-10-04; matches the canonical adapter STICKER_BAG_MOQ)",
       "Quote prep allowed",
       "Staff review required before firm quote/order",
     ],
     customerSafeSummary:
-      "Sticker bag orders usually start at 100 units. Final pricing depends on bag size, label size, material, finish, sides, and application.",
+      "Sticker bag orders usually start at 50 units. Final pricing depends on bag size, label size, material, finish, sides, and application.",
     staffNotes:
       "Allow intake and quote prep only until recipe, margin, and quote-readiness are reviewed.",
   },
