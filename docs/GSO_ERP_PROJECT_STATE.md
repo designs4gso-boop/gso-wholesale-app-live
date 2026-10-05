@@ -2267,3 +2267,14 @@ and legacy-page classification in docs/GSO_STORE_16B_NAVIGATION_RUNBOOK.md.
 No pricing/ERP/identity changes. Next: owner runbook steps -> 16B nav
 verification -> 16C catalog/collections cleanup (incl. legacy-31 canonical
 rebuild + collection consolidation).
+
+
+## 2026-10-04/05 — Operations agent platform: Stages 3-4 live, overnight Stage 5 foundation (local)
+
+Production main before the overnight branch: `cd94033dbca6d74efaa50b38ce1843727869ea22`.
+- OPS-2 migration APPLIED; `GSO_OPS_REPOSITORY=prisma`; reasoning OFF; execution OFF; Slack HTTPS Interactivity at /api/slack/interactions, `SLACK_SANDBOX_ONLY=true`, owner mapped.
+- Stage 3 PASSED live (synthetic durable intent -> sandbox card -> owner approval -> durable APPROVED -> replay no-op).
+- Stage 4 PASSED live: TEST job GSO-20260510-0004 moved proof_approved -> printing through durable intent -> Slack owner approval -> execution switch -> requestProductionTransition() -> guard -> single write -> audit -> completed intent. Execution switch reset to false afterwards. Art-approval fact loader is revision-safe (approval must be newer than the latest proof/artwork revision).
+- Overnight branch `ops5-overnight-autonomy-2026-10-04` (LOCAL, not pushed): authenticated worker trigger (api/ops/worker/run, GSO_OPS_WORKER_TOKEN unset, not scheduled), worker consequential-action ceiling (dead-letters job moves etc.), legacy changeStatus hardened to the staff vocabulary, Ops Hub safety dashboard + nav link + collapsed release-test tools, reasoning release readiness, offline e2e + adversarial tests, canonical-vs-legacy calculator display fix, runbooks (GSO_OPS_RUNTIME_EXECUTION_AUDIT, GSO_OPS_RELEASE_RUNBOOK, GSO_REASONING_RELEASE_RUNBOOK).
+- Remaining blockers / owner decisions: worker scheduler choice (Render Cron Job) and token; OpenAI key + model (Stage 6, reasoning stays OFF until observed); staff-only production stages (prepress, proof_needed, ready_to_print, laminating, packing, ready_for_pickup) are unknown to the agent guard (fail closed) pending an owner rule; material/routing readiness facts unmodelled; QuickBooks DEFERRED.
+- Recommended next release order: merge overnight branch -> deploy (inert) -> set worker token -> diagnostics GET -> one manual POST -> optional cron -> Stage 6 configure-off -> opt-in live test -> reasoning on, execution off -> owner review.

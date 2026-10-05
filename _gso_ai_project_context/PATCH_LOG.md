@@ -588,3 +588,24 @@ Not pushed, not deployed, migration PREPARED — NOT APPLIED, no production writ
   memory mode unchanged; no Ops table queried at boot.
 - Gates: 2220 tests / 100 files, build green, TS 305, diff clean; SDK absent
   from client bundle. Not pushed, not deployed.
+
+## Patch OPS-5 (2026-10-04/05, unattended) — Stage 5 worker foundation + hardening
+Branch `ops5-overnight-autonomy-2026-10-04` from cd94033. LOCAL ONLY. No push,
+no deploy, no Render change, no production write, no migration, no schema change.
+- Worker: WORKER_FORBIDDEN_ACTIONS ceiling (consequential intents dead-letter for
+  manual review regardless of GSO_AGENT_EXECUTION_ENABLED); worker-runtime
+  (mutex, v1 handlers ops.noop + sandbox slack.post, sanitized diagnostics);
+  authenticated trigger api/ops/worker/run (bearer GSO_OPS_WORKER_TOKEN >= 32
+  chars, 503 unset / 401 bad, body ignored, 409 busy). Not scheduled; token unset.
+- Legacy production changeStatus validates against the staff vocabulary
+  (lib/production-status-vocabulary); arbitrary strings -> 400.
+- Ops Hub: safety header (reasoning/execution/repository/sandbox/worker),
+  explain-why per intent, worker/outbox diagnostics, collapsed SANDBOX /
+  RELEASE TEST TOOLS (Stage 3/4), nav link added.
+- Reasoning: CustomerReplyDraft text scan rejects price/discount/guarantee
+  language; runbooks for Stage 6 (no live calls made).
+- Calculator: ProductBreakdown labels legacy 14C.2 lines as diagnostics and
+  shows the canonical 17D.7 total as the job cost (display only, no math).
+- Tests +36 (worker, hardening, e2e flows, adversarial, calculator authority).
+  Full suite 108 files / 2284 tests + 2 opt-in skipped before final commit
+  verification; TS 300; build green.
