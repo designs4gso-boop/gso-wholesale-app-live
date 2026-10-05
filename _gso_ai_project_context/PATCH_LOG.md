@@ -609,3 +609,25 @@ no deploy, no Render change, no production write, no migration, no schema change
 - Tests +36 (worker, hardening, e2e flows, adversarial, calculator authority).
   Full suite 108 files / 2284 tests + 2 opt-in skipped before final commit
   verification; TS 300; build green.
+
+## Patch COSTING-SPECS-2026-10-05 - Fixed product production specs + weeding calibration architecture (LOCAL branch)
+
+Branch: costing-product-specs-automation-2026-10-05 (from 1ed4353). Not pushed.
+
+Files added:
+- app/lib/jar-label-geometry.ts, app/lib/bag-artboard-geometry.ts (verbatim extractions, client-safe)
+- app/lib/product-production-spec.ts (one spec resolver; no new numbers)
+- app/lib/weeding-standard.ts (ONE weeding standard object, current values), app/lib/weeding-benchmark.ts (analysis only)
+- tests: product-production-spec, jar-custom-size-override, fixed-product-regression, fixed-product-adversarial, weeding-standard
+- docs: GSO_FIXED_PRODUCT_SPEC_AUDIT.md, GSO_WEEDING_COST_AUDIT.md, GSO_PRODUCT_SPEC_OWNER_DECISIONS.md, GSO_COST_CALCULATOR_STAFF_WORKFLOW.md
+
+Files changed:
+- app/lib/jar-cost-inputs.server.ts (re-export geometry; optional validated geometry param on area/run/cut builders)
+- app/lib/bag-cost-inputs.server.ts, app/lib/finishing-cost.server.ts, app/lib/owner-standards.ts (re-export from the single sources; values unchanged)
+- app/lib/canonical-calculator-shared.ts (diagnostics productSpec + finishingBreakdown; 3 reason codes)
+- app/lib/canonical-calculator.server.ts (jar override validation fail-closed; spec recorded; finishing decomposition; normalizer fields)
+- app/routes/app.erp.cost-calculator.tsx (jar label-set flow, read-only spec, Advanced/Custom Size Override, spec + finishing panels)
+- app/routes/app.erp.product-setup.tsx (read-only cost-engine spec for jar recipes)
+- app/routes/app.erp.cost-verification.tsx (read-only production standards card)
+
+Not done / owner: weeding rate unchanged pending owner timing; geometry confirmations; see docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md.
