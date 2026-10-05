@@ -11,6 +11,9 @@ import {
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
 import { materialKind, materialKindLabel } from "../lib/material-classify";
+// 2026-10-05 read-only fixed-product spec summary (ONE authority; no editable duplicate here)
+import { resolveActiveJarProfile } from "../lib/jar-active-scope";
+import { describeStandardSpec, getProductProductionSpec } from "../lib/product-production-spec";
 
 // 15B: recipe-family vocabulary is REGISTRY-first (shared product-family
 // registry supplies the canonical families' recipe labels); the extra strings
@@ -292,6 +295,20 @@ async function createDefaultTemplates(shop: string) {
 function unitCost(material: any) {
   return Number(material?.calculatedUnitCost || material?.costPerUnit || material?.purchaseCost || 0);
 }
+
+/**
+ * 2026-10-05: the production spec the COST ENGINE uses for a jar recipe,
+ * resolved from the recipe name through the active jar scope. Read-only: the
+ * RecipeLabelZone rows below are older admin estimates and never price a job.
+ */
+function productionSpecSummary(recipeName: string | null | undefined): { title: string; dims: string; note: string; status: string } | null {
+  const profile = resolveActiveJarProfile(recipeName || "");
+  if (!profile) return null;
+  const spec = getProductProductionSpec(profile.uiFamily, profile.key);
+  if (!spec) return null;
+  return { title: spec.displayName, dims: describeStandardSpec(spec), note: spec.statusNote, status: spec.status };
+}
+
 
 function zoneSqft(zone: any) {
   const width = Number(zone.widthIn || 0);
@@ -1963,7 +1980,7 @@ export default function ProductSetupRecipeBuilder() {
               const reasons = costReviewReasonList(recipe);
               return <tr key={recipe.id}>
                 <td><strong>{recipe.name}</strong><br/><span className="muted">{recipe.sku || "No SKU"}</span></td>
-                <td>{recipe.productFamily || recipe.productType}</td>
+                <td>{recipe.productFamily || recipe.productType}{(() => { const spec = productionSpecSummary(recipe.name); return spec ? <div className="muted" title={spec.note}>Cost-engine spec: {spec.dims}</div> : null; })()}</td>
                 <td>{recipe.productTypeProfile?.name || "No template"}</td>
                 <td>{pct(recipe.targetMarginPct)}</td>
                 <td>
@@ -1981,6 +1998,16 @@ export default function ProductSetupRecipeBuilder() {
       {selectedRecipe ? <div className="card" id="production-recipe">
         <span id="features" /><span id="shopify" />
         <h2>{selectedRecipe.name}</h2>
+        {(() => {
+          const spec = productionSpecSummary(selectedRecipe.name);
+          if (!spec) return null;
+          return <div className="card" style={{ borderColor: spec.status === "COST_AUTHORITY" ? "#bbf7d0" : "#fecaca" }}>
+            <h3>Production spec used by the cost engine (read-only)</h3>
+            <p><strong>{spec.title}</strong>: {spec.dims}</p>
+            <p className="muted">{spec.note}</p>
+            <p className="muted">Label zones below are older admin estimates kept for reference; they never price a job. Change the standard only through the owner-decision process (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md).</p>
+          </div>;
+        })()}
         <p className="muted">Sections 4 (Features: recipe add-ons + vendor product add-ons above), 5 (Shopify: GID link fields below), and 6 (Production Recipe) all edit THIS selected recipe — the existing forms are reused, not duplicated.</p>
         <p className="muted">Full recipe details are loaded only for this one selected recipe to protect server memory.</p>
         {selectedRecipeQuoteReady ? <span className="badge green">Quote-ready</span> : <span className="badge yellow">Not quote-ready</span>}

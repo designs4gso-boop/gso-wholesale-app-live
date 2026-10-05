@@ -6,6 +6,10 @@ import { materialKind } from "../lib/material-classify";
 import { resolveMaterialUnitCost, resolvePrintMaterialCostPerSqft } from "../lib/cost-calculator.server";
 import { buildCsv } from "../lib/shopify-cost-audit-shared";
 import { applyApprovedCostUpdates, previewApprovedCostUpdates } from "../lib/approved-cost-updates.server";
+// 2026-10-05 read-only production standards (weeding + fixed-product specs + jar application timings)
+import { WEEDING_STANDARD } from "../lib/weeding-standard";
+import { describeStandardSpec, listProductSpecs } from "../lib/product-production-spec";
+import { APPLICATION_LABOR_RATE_PER_HOUR, JAR_APPLICATION_SECONDS_BY_SIZE } from "../lib/jar-cost-inputs.server";
 import {
   APPLY_CONFIRM_PHRASE,
   APPROVED_UPDATE_STATUS_LABELS,
@@ -595,6 +599,21 @@ export async function loader({ request }: { request: Request }) {
     replayTests,
     ownerChecklist,
     approvedUpdates: await previewApprovedCostUpdates(db, shop),
+    // 2026-10-05: read-only standards visibility (no editing surface)
+    productionStandards: {
+      weeding: WEEDING_STANDARD,
+      jarApplication: Object.entries(JAR_APPLICATION_SECONDS_BY_SIZE).map(([size, seconds]) => ({
+        size,
+        sideSeconds: seconds.side,
+        lidSeconds: seconds.lid,
+        tamperSeconds: seconds.tamper,
+        sideCost: (seconds.side / 3600) * APPLICATION_LABOR_RATE_PER_HOUR,
+        lidCost: (seconds.lid / 3600) * APPLICATION_LABOR_RATE_PER_HOUR,
+        tamperCost: seconds.tamper == null ? null : (seconds.tamper / 3600) * APPLICATION_LABOR_RATE_PER_HOUR,
+      })),
+      applicationRatePerHour: APPLICATION_LABOR_RATE_PER_HOUR,
+      specs: listProductSpecs().map((spec) => ({ family: spec.family, productKey: spec.productKey, displayName: spec.displayName, status: spec.status, dims: describeStandardSpec(spec), source: spec.source.module })),
+    },
   };
 }
 
@@ -707,6 +726,55 @@ export default function CostVerificationRoute() {
               <li>Print speed / setup minutes (finish speed curve; cut time from cutter speed later — 12.5 cm/s effective estimate)</li>
               <li>Known-job replay: 0 of 7 recorded (section below)</li>
             </ul>
+          </div>
+        </div>
+      </section>
+
+      <section style={{ ...cardStyle, marginTop: 16 }}>
+        <h2 style={{ marginTop: 0 }}>Production standards in force (read-only)</h2>
+        <p style={smallHelp}>
+          What the canonical cost engine prices with today. Nothing here is editable: weeding changes go through weeding-standard.ts after
+          owner timing data; product dimensions go through docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, fontSize: 13 }}>
+          <div>
+            <b>Weeding</b> <span style={smallHelp}>{data.productionStandards.weeding.version} · {data.productionStandards.weeding.status}</span>
+            <ul style={{ margin: "6px 0 0 18px", lineHeight: 1.7 }}>
+              <li>${data.productionStandards.weeding.laborRatePerHour}/hr at {data.productionStandards.weeding.pagesPerHour} pages/hr = ${data.productionStandards.weeding.costPerPage.toFixed(4)} per {data.productionStandards.weeding.pageWidthIn}x{data.productionStandards.weeding.pageLengthIn} in page</li>
+              <li>Pages = ceil(feed length / {data.productionStandards.weeding.pageLengthIn} in) per physical run, then summed</li>
+              <li>PENDING: owner timing measurements (rate unchanged until the owner approves a new standard)</li>
+            </ul>
+          </div>
+          <div>
+            <b>Jar application</b> <span style={smallHelp}>${data.productionStandards.applicationRatePerHour}/hr, owner per-size seconds per label</span>
+            <table style={{ width: "100%", marginTop: 6, borderCollapse: "collapse" }}>
+              <thead><tr><th style={thStyle}>Size</th><th style={thStyle}>Side</th><th style={thStyle}>Lid</th><th style={thStyle}>Tamper</th></tr></thead>
+              <tbody>
+                {data.productionStandards.jarApplication.map((row) => (
+                  <tr key={row.size}>
+                    <td style={tdStyle}>{row.size}</td>
+                    <td style={tdStyle}>{row.sideSeconds}s (${row.sideCost.toFixed(4)})</td>
+                    <td style={tdStyle}>{row.lidSeconds}s (${row.lidCost.toFixed(4)})</td>
+                    <td style={tdStyle}>{row.tamperSeconds == null ? "no timing (blocks)" : `${row.tamperSeconds}s ($${(row.tamperCost ?? 0).toFixed(4)})`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <b>Fixed-product production specs</b> <span style={smallHelp}>product-production-spec.ts</span>
+            <table style={{ width: "100%", marginTop: 6, borderCollapse: "collapse" }}>
+              <thead><tr><th style={thStyle}>Product</th><th style={thStyle}>Standard dimensions</th><th style={thStyle}>Status</th></tr></thead>
+              <tbody>
+                {data.productionStandards.specs.map((spec) => (
+                  <tr key={spec.productKey}>
+                    <td style={tdStyle}>{spec.displayName}<div style={smallHelp}>{spec.family} · {spec.productKey}</div></td>
+                    <td style={tdStyle}>{spec.dims}</td>
+                    <td style={tdStyle}>{spec.status === "COST_AUTHORITY" ? "cost authority" : "OWNER CONFIRMATION REQUIRED"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </section>
