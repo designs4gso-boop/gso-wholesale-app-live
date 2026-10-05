@@ -9,11 +9,32 @@
 // actions respect the execution kill switch, and a completed message is never
 // re-executed. The worker is NOT scheduled or deployed in this release.
 
-import { executeIntent, type ActionIntent } from "./action-intents";
+import { executeIntent, isConsequential, type ActionIntent } from "./action-intents";
+import type { ActionType } from "./autonomy";
 import type { OpsRepositories, OutboxMessage } from "./repositories";
 import type { OpsRuntimeConfig } from "./runtime-config";
 
-export const OUTBOX_WORKER_VERSION = "outbox-worker/1.0.0-2026-10-04";
+export const OUTBOX_WORKER_VERSION = "outbox-worker/1.1.0-2026-10-04";
+
+/**
+ * WORKER SAFETY CEILING (Stage 5, 2026-10-04). The background worker may
+ * never execute a consequential action, whatever the execution switch says
+ * and however the intent was approved. Production job movement, customer
+ * messages, POs, invoices, refunds, cost/price changes, dispatch, QC and
+ * shipping records require a HUMAN execution path (today: the owner's
+ * explicit hub action through requestProductionTransition for job moves).
+ * Inventory, material, Shopify-order and financial mutations have no
+ * ActionType at all and therefore no worker path.
+ */
+export const WORKER_FORBIDDEN_ACTIONS: ReadonlySet<ActionType> = new Set<ActionType>([
+  "move_production_job", "dispatch_to_machine", "record_qc_result", "mark_shipped", "record_final_art_approval",
+  "send_customer_notification", "send_purchase_order", "send_invoice", "refund_or_void", "change_cost_or_price",
+  "override_canonical_blocker", "post_slack_external",
+]);
+
+export function workerMayExecute(actionType: ActionType): boolean {
+  return !WORKER_FORBIDDEN_ACTIONS.has(actionType) && !isConsequential(actionType);
+}
 
 export type HandlerContext = { repos: OpsRepositories; config: OpsRuntimeConfig; now: Date; workerId: string; message: OutboxMessage };
 
@@ -58,6 +79,12 @@ export async function processOutboxBatch(repos: OpsRepositories, config: OpsRunt
         if (!intent) throw new Error(`intent ${message.intentId} not found`);
         if (intent.status === "COMPLETED") { await repos.outbox.markCompleted(message.id, intent.externalReference, now); report.skipped.push({ id: message.id, reason: "intent already completed" }); continue; }
         if (intent.status === "CANCELLED" || intent.status === "FAILED") { await repos.outbox.markFailed(message.id, `intent is ${intent.status}`, null, now); report.dead.push(message.id); continue; }
+        if (!workerMayExecute(intent.actionType)) {
+          // Never retried: a human execution path is required. Kept for manual review.
+          await repos.outbox.markFailed(message.id, `worker may not execute consequential action ${intent.actionType}; requires explicit human execution`, null, now);
+          report.dead.push(message.id);
+          continue;
+        }
         if (intent.status !== "APPROVED") { await repos.outbox.markFailed(message.id, `intent is ${intent.status}; waiting for approval`, new Date(now.getTime() + backoffMs(message.attempts, options.backoffBaseMs, options.backoffMaxMs)), now); report.retried.push(message.id); continue; }
         // Execute THROUGH the intent engine so the kill switch, single-execution and audit all apply.
         const ctx: HandlerContext = { repos, config, now, workerId, message };

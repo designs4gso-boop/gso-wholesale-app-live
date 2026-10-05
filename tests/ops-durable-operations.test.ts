@@ -105,28 +105,30 @@ describe("outbox and worker", () => {
     expect(r4.completed.length).toBe(1);
   });
 
-  it("intent-bound messages execute through the intent engine: waiting for approval retries, kill switch blocks, approved runs once", async () => {
+  it("intent-bound messages: consequential actions are dead-lettered for a human path even when approved and execution is on; internal work executes once", async () => {
     const repos = createMemoryRepositories();
-    const off = readOpsRuntimeConfig({});
     const on = readOpsRuntimeConfig({ GSO_AGENT_EXECUTION_ENABLED: "true" });
     const p = await proposeIntent(repos.intents, { actionType: "mark_shipped", agentId: "shipping_agent", entityType: "job", entityId: "J1", reason: "t", idempotencyKey: "ship", now });
     if (!p.ok) throw new Error();
     await validateIntent(repos.intents, p.intent.id, undefined, now);
+    await decideIntent(repos.intents, p.intent.id, "APPROVE", { type: "staff", id: "s", role: "staff" }, undefined, now);
     let executions = 0;
-    const handlers = { "ship": async () => { executions += 1; return { externalReference: "1Z" }; } };
+    const handlers = { "ship": async () => { executions += 1; return { externalReference: "1Z" }; }, "queue": async () => { executions += 1; return { externalReference: "q" }; } };
     await repos.outbox.enqueue({ idempotencyKey: "ship-msg", type: "ship", payload: {}, intentId: p.intent.id, now });
     const r1 = await processOutboxBatch(repos, on, handlers, { workerId: "w", now, backoffBaseMs: 1000 });
-    expect(r1.retried.length).toBe(1); // awaiting approval
-    await decideIntent(repos.intents, p.intent.id, "APPROVE", { type: "staff", id: "s", role: "staff" }, undefined, now);
-    const r2 = await processOutboxBatch(repos, off, handlers, { workerId: "w", now: later(2000), backoffBaseMs: 1000 });
-    expect(r2.retried.length).toBe(1); // kill switch
+    expect(r1.dead.length).toBe(1); // Stage 5 ceiling: the worker never executes consequential actions
     expect(executions).toBe(0);
-    const r3 = await processOutboxBatch(repos, on, handlers, { workerId: "w", now: later(5000), backoffBaseMs: 1000 });
+    expect((await repos.intents.getById(p.intent.id))?.status).toBe("APPROVED");
+    // Internal (non-consequential) work executes through the intent engine exactly once.
+    const q = await proposeIntent(repos.intents, { actionType: "create_review_queue_item", agentId: "lead_manager", entityType: "lead", entityId: "L1", reason: "t", idempotencyKey: "q", now });
+    if (!q.ok) throw new Error();
+    await validateIntent(repos.intents, q.intent.id, undefined, now);
+    await repos.outbox.enqueue({ idempotencyKey: "q-msg", type: "queue", payload: {}, intentId: q.intent.id, now });
+    const r3 = await processOutboxBatch(repos, readOpsRuntimeConfig({}), handlers, { workerId: "w", now: later(5000), backoffBaseMs: 1000 });
     expect(r3.completed.length).toBe(1);
     expect(executions).toBe(1);
-    // A second message for the same (already completed) intent is skipped, not re-executed.
-    await repos.outbox.enqueue({ idempotencyKey: "ship-msg-2", type: "ship", payload: {}, intentId: p.intent.id, now });
-    const r4 = await processOutboxBatch(repos, on, handlers, { workerId: "w", now: later(6000) });
+    await repos.outbox.enqueue({ idempotencyKey: "q-msg-2", type: "queue", payload: {}, intentId: q.intent.id, now });
+    const r4 = await processOutboxBatch(repos, readOpsRuntimeConfig({}), handlers, { workerId: "w", now: later(6000) });
     expect(r4.skipped.length).toBe(1);
     expect(executions).toBe(1);
   });
