@@ -40,10 +40,19 @@ export const CUT_OPERATOR_ATTENTION_PER_HOUR = 2.5;
 /** Display convenience only; the engine never sees this merged number. */
 export const CUT_COMBINED_BURDEN_PER_HOUR = CUT_EQUIPMENT_RATE_PER_HOUR + CUT_OPERATOR_ATTENTION_PER_HOUR;
 
-export const WEEDING_LABOR_RATE_PER_HOUR = 20;
-export const WEEDING_PAGES_PER_HOUR = 15;
-export const WEEDING_COST_PER_REFERENCE_PAGE = WEEDING_LABOR_RATE_PER_HOUR / WEEDING_PAGES_PER_HOUR;
-export const WEEDING_REFERENCE_PAGE_IN = 54;
+/* 2026-10-05: the weeding numbers now come from ONE object —
+ * weeding-standard.ts WEEDING_STANDARD — initialised to exactly these values
+ * ($20/hr, 15 pages/hr, 54in reference page). Re-exported under the names the
+ * rest of the engine and the tests already use, so nothing about the cost
+ * changes; a future owner-measured calibration edits that one object. */
+import {
+  WEEDING_COST_PER_REFERENCE_PAGE,
+  WEEDING_LABOR_RATE_PER_HOUR,
+  WEEDING_PAGES_PER_HOUR,
+  WEEDING_REFERENCE_PAGE_IN,
+  WEEDING_STANDARD,
+} from "./weeding-standard";
+export { WEEDING_COST_PER_REFERENCE_PAGE, WEEDING_LABOR_RATE_PER_HOUR, WEEDING_PAGES_PER_HOUR, WEEDING_REFERENCE_PAGE_IN, WEEDING_STANDARD };
 export const WEEDING_REQUIRED_BY_DEFAULT = true;
 
 export const FINISHING_REASONS = {

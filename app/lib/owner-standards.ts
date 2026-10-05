@@ -8,6 +8,8 @@
 // code paths; they are quarantined and MUST NOT override calculator truth
 // (tests enforce this).
 
+import { WEEDING_STANDARD } from "./weeding-standard";
+
 export type OwnerStandard = {
   value: number;
   unit: string;
@@ -91,9 +93,11 @@ export const OWNER_STANDARDS = {
     status: "owner_verified",
   } as OwnerStandard,
   weedingPerPage54x54: {
-    value: 20 / 15, // $1.3333
-    unit: "$ per 54x54in weeding page",
-    basis: "$20/hour at 15 pages/hour",
+    // 2026-10-05: read from the single weeding standard object
+    // (weeding-standard.ts) — still $20/hour at 15 pages/hour = $1.3333.
+    value: WEEDING_STANDARD.costPerPage,
+    unit: `$ per ${WEEDING_STANDARD.pageWidthIn}x${WEEDING_STANDARD.pageLengthIn}in weeding page`,
+    basis: `$${WEEDING_STANDARD.laborRatePerHour}/hour at ${WEEDING_STANDARD.pagesPerHour} pages/hour`,
     status: "owner_verified",
   } as OwnerStandard,
   packoutPerBox: {
