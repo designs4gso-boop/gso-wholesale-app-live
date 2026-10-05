@@ -66,6 +66,11 @@ export const CustomerReplyDraftSchema = def<CustomerReplyDraft>("CustomerReplyDr
   if (!oneOf(v.tone, ["friendly", "formal"] as const)) e.push("tone invalid");
   if (v.containsPricing !== false) e.push("containsPricing must be false — the model may not price");
   if (v.containsPromises !== false) e.push("containsPromises must be false — the model may not promise turnaround");
+  // Belt and braces (Phase 10): the flags are self-reported by the model, so the
+  // text itself is also scanned. Any price-like or guarantee-like content fails.
+  const draft = String(v.draft ?? "");
+  if (/\$\s?\d|\d[\d,]*(\.\d+)?\s?(usd|dollars?)\b|\bper (unit|bag|label|jar|piece)\b.*\d|\bunit price\b|\bdiscount\b|\d{1,2}\s?% ?off/i.test(draft)) e.push("draft contains price/discount language — GSO prices only through the Cost Calculator");
+  if (/\bguarantee[ds]?\b|\brush\b.*\bfree\b|\bships? in \d+ (business )?days?\b|\bturnaround (is|of) \d/i.test(draft)) e.push("draft contains a turnaround promise");
   if (!str(v.reason, 500)) e.push("reason invalid");
 });
 
