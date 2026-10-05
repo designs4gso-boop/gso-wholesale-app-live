@@ -3797,9 +3797,21 @@ function ProductBreakdown() {
   // canonical job stays visible even when the legacy engine produced nothing.
   if (!result) return null;
   const derived = result.derived;
+  // ONE AUTHORITATIVE CALCULATION (2026-10-04): for canonical families the job
+  // cost shown here is the canonical 17D.7 true cost; the legacy 14C.2 lines
+  // below are per-line DIAGNOSTICS only and may legitimately disagree with it
+  // (e.g. the 1000 x 3x3 matte control case: canonical ~84.14 vs legacy ~79.08).
+  // No formula changed — this component only stops presenting the legacy
+  // total as if it were the job cost.
+  const canonical = emergency.productMode?.canonical as { totalCost: number | null; unitCost: number | null; status: string; version: string } | null | undefined;
+  const canonicalAuthoritative = Boolean(canonical) && !emergency.productMode?.isDtp;
   return (
     <div style={{ marginTop: 10 }}>
-      <b style={{ fontSize: 13 }}>Cost breakdown (engine {emergency.productMode?.isDtp ? "15C-spektra-dtp" : "14C.2"} — all values derived by the server)</b>
+      <b style={{ fontSize: 13 }}>
+        {canonicalAuthoritative
+          ? "Legacy per-line diagnostics (engine 14C.2) — NOT the job cost; the CANONICAL TRUE COST above is authoritative"
+          : `Cost breakdown (engine ${emergency.productMode?.isDtp ? "15C-spektra-dtp" : "14C.2"} — all values derived by the server)`}
+      </b>
       {emergency.productMode?.isDtp ? (
         <p style={smallHelp}>Vendor-finished Spektra pouches — no in-house sqft/material/machine derivation. Vendor tier cost + GSO design charge + flat per-PO freight only.</p>
       ) : (
@@ -3837,7 +3849,20 @@ function ProductBreakdown() {
           COST NOT VERIFIED — DRAFT ONLY: {result.missing.join("; ")}
         </div>
       ) : <div style={{ color: "#166534", fontSize: 13, fontWeight: 700, marginTop: 6 }}>Finalizable: Yes</div>}
-      <p style={smallHelp}>Total cost ${result.totalCost.toFixed(2)} · Unit cost ${result.unitCost.toFixed(4)} — the automatic pricing tiers below are generated from these values.</p>
+      {canonicalAuthoritative ? (
+        canonical && canonical.totalCost != null && canonical.unitCost != null ? (
+          <p style={{ ...smallHelp, fontWeight: 700, color: "#065f46" }}>
+            Authoritative job cost (canonical {canonical.version}, {canonical.status}): total ${Number(canonical.totalCost).toFixed(4)} · unit ${Number(canonical.unitCost).toFixed(4)} — the pricing tiers below are generated from the canonical cost.
+            <span style={{ fontWeight: 400, color: "#6b7280" }}> Legacy 14C.2 diagnostic total ${result.totalCost.toFixed(2)} is shown for comparison only and is never used for quoting.</span>
+          </p>
+        ) : (
+          <p style={{ ...smallHelp, fontWeight: 700, color: "#991b1b" }}>
+            Canonical true cost is BLOCKED for this job — there is no authoritative job cost and nothing may be quoted from the legacy diagnostic total (${result.totalCost.toFixed(2)}).
+          </p>
+        )
+      ) : (
+        <p style={smallHelp}>Total cost ${result.totalCost.toFixed(2)} · Unit cost ${result.unitCost.toFixed(4)} — the automatic pricing tiers below are generated from these values.</p>
+      )}
 
       {/* 15G.3-I: specialty finish explanation — display only, math unchanged. */}
       {(() => {
@@ -3859,7 +3884,7 @@ function ProductBreakdown() {
 
       {/* 15G.3-M: compact trust/source card — why this number is trusted. */}
       <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 4 }}>
-        <div><b>Pricing engine:</b> Canonical Product Engine ({emergency.productMode?.isDtp ? "15C Spektra DTP ladder" : "15F.0 production-ready + owner policy"})</div>
+        <div><b>Pricing engine:</b> {canonicalAuthoritative ? `Canonical true cost ${canonical?.version ?? "17D.7"} (authoritative) · legacy 14C.2 lines are diagnostics` : `Canonical Product Engine (${emergency.productMode?.isDtp ? "15C Spektra DTP ladder" : "15F.0 production-ready + owner policy"})`}</div>
         <div><b>Machine rate:</b> Owner standard — $8/hr</div>
         <div><b>4x5 application:</b> 256 labels/hr @ $20/hr ($0.078125/label)</div>
         <div><b>Cost sources:</b> {result.missing.length ? `${result.missing.length} UNVERIFIED — draft only` : "Verified / owner standards"}</div>
