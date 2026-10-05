@@ -32,7 +32,11 @@ import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
 import { isCostedAuthority, persistQuoteIfCanonicalAllows, resolveCostAuthority } from "../lib/canonical-quote-authority.server";
 import { canonicalLabelCutType, canonicalLabelMaterialKey, canonicalCutTypeIsWireable } from "../lib/canonical-calculator-shared";
 import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
-import { canonicalJarLabelRole, resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
+import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
+// 2026-10-05 fixed-product spec layer (client-safe): standard jar dimensions are RESOLVED, never typed.
+import { JAR_LABEL_GEOMETRY, formatJarGeometry, type JarSizeKey } from "../lib/jar-label-geometry";
+import { LABEL_SETS, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
+import { WEEDING_STANDARD } from "../lib/weeding-standard";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
 // owns the value; client components cannot import .server modules).
@@ -3096,11 +3100,8 @@ function ProductDrivenForm() {
   const jars = isStandardJars || isPremium;
   const isDtp = canonicalFamily === "dtp-bags"; // 15C: vendor-finished pouches
   const topRequired = Boolean(pm?.topRequired);
-  // ---- 14C.2 jar label builder (client state seeds from the server echo and
-  // survives calculation/validation/save; the SERVER rebuilds rows via
-  // buildLabelRows on every request, discarding stale extras).
-  const lf = pm?.labelForm || null;
-  const clientDefaultType = (index: number) => (index === 0 ? "side" : index === 1 ? "lid" : "additional");
+  // 2026-10-05: the 14C.2 typed-dimension jar label builder was replaced by the
+  // fixed-product flow below (label set + resolved standard dimensions).
 
   /* ---- 2D-4C2 CANONICAL LABEL LINE ---------------------------------
    * The primary sticker line lives in the legacy fields (pqty/pwidth/pheight/
@@ -3142,74 +3143,54 @@ function ProductDrivenForm() {
   const canonCutType = canonicalLabelCutType(canonLine.cut);
   const canonDerivedCutline = deriveGsoLabelCutlineFromArtboard(canonLine.w, canonLine.h);
   const canonCutWireable = canonicalCutTypeIsWireable(canonLine.cut);
-  const [labelCountSel, setLabelCountSel] = useState<string>(() => (lf ? (lf.count <= 3 ? String(lf.count) : "custom") : "1"));
-  const [labelCountCustom, setLabelCountCustom] = useState<number>(() => (lf && lf.count > 3 ? lf.count : 4));
-  const [sameSize, setSameSize] = useState<string>(() => (lf && lf.same === false ? "no" : "yes"));
-  const [labelRows, setLabelRows] = useState<Array<{ type: string; widthIn: string; heightIn: string }>>(() =>
-    lf && !lf.same && Array.isArray(lf.rows)
-      ? lf.rows.map((row: any) => ({ type: row.type, widthIn: row.widthIn > 0 ? String(row.widthIn) : "", heightIn: row.heightIn > 0 ? String(row.heightIn) : "" }))
-      : Array.from({ length: lf ? lf.count : 1 }, (_v, index) => ({ type: clientDefaultType(index), widthIn: "", heightIn: "" })),
-  );
-  const effectiveLabels = Math.min(Math.max(1, Math.floor(labelCountSel === "custom" ? labelCountCustom || 1 : Number(labelCountSel))), 6);
-  const resizeRows = (count: number) =>
-    setLabelRows((previous) => Array.from({ length: count }, (_v, index) => previous[index] || { type: clientDefaultType(index), widthIn: "", heightIn: "" }));
-  const updateRow = (index: number, patch: Partial<{ type: string; widthIn: string; heightIn: string }>) =>
-    setLabelRows((previous) => {
-      const next = [...previous];
-      while (next.length <= index) next.push({ type: clientDefaultType(next.length), widthIn: "", heightIn: "" });
-      next[index] = { ...next[index], ...patch };
-      return next;
-    });
-  // UI copy of LABEL_TYPES (the .server module cannot be imported client-side)
-  const LABEL_TYPE_CHOICES = [
-    { value: "side", label: "Side label" },
-    { value: "lid", label: "Lid label" },
-    { value: "bottom", label: "Bottom label" },
-    { value: "neck", label: "Neck label" },
-    { value: "tamper", label: "Tamper label" },
-    { value: "additional", label: "Additional label" },
-    { value: "custom", label: "Custom" },
-  ];
-  /* ---- 2D-4D1 CANONICAL JAR DESCRIPTOR ------------------------------
-   * Same discipline as the pl0* label mirror: the operator's existing jar
-   * choices are mirrored into the canonical fields the normalizer reads, on a
-   * GET form, so Calculate and Save normalise the same bytes.
+  /* ---- 2026-10-05 FIXED-PRODUCT JAR FLOW -------------------------------
+   * family -> exact product (pblank) -> label set -> quantity -> material.
+   * Standard label dimensions are RESOLVED from the one product-spec authority
+   * (product-production-spec.ts -> jar-label-geometry.ts), shown read-only and
+   * never typed. A CUSTOM SIZE OVERRIDE is explicit, collapsed under Advanced,
+   * and reaches the canonical engine only with its flag (pjarcustom=1); the
+   * engine fails closed on a partial or conflicting override.
    *
-   * The jar identity comes from the SUBMITTED blank (the select re-submits on
-   * change), and the descriptor rides on the option itself — the server tagged
-   * it when it built the list, so the client never re-guesses which jar a DB
-   * row is.
-   *
-   * Label roles reproduce buildLabelRows exactly, including its "same size"
-   * defaults, so the canonical selection is the same set of labels the legacy
-   * breakdown shows. Anything the canonical jar model cannot represent — an
-   * additional/neck/bottom row, or a SECOND side label — is reported rather
-   * than dropped, because dropping it would quietly remove a whole label per
-   * jar from media, ink, cutting, weeding and application. */
+   * The hidden plabelcount/psame/plabeltype/plabelw/plabelh mirrors feed the
+   * legacy 14C.2 diagnostics path the SAME dimensions; it never decides cost. */
   const jarBlankOption = (pm?.blankOptions || []).find(
     (option: any) => String(option.value) === String(canonParams.get("pblank") || ""),
   );
-  const jarDefaultTypes = (n: number): string[] =>
-    n === 1 ? ["side"] : n === 2 ? ["side", "lid"] : ["side", "lid", ...Array.from({ length: n - 2 }, () => "additional")];
-  const jarRowTypes = (() => {
-    const defaults = jarDefaultTypes(effectiveLabels);
-    if (sameSize !== "no") return defaults;
-    return defaults.map((fallback, index) => {
-      const picked = String(labelRows[index]?.type || "");
-      return LABEL_TYPE_CHOICES.some((choice) => choice.value === picked) ? picked : fallback;
-    });
-  })();
-  const jarRoles = jarRowTypes.map((type) => canonicalJarLabelRole(type));
-  const jarSelection = {
-    side: jarRoles.includes("side"),
-    lid: jarRoles.includes("lid"),
-    tamper: jarRoles.includes("tamper"),
+  const jarSpec = jars && jarBlankOption?.jarProfile ? getProductProductionSpec(canonicalFamily, jarBlankOption.jarProfile) : null;
+  const jarSizeKey = jarSpec && jarSpec.status === "COST_AUTHORITY" ? (String(jarSpec.physical.size) as JarSizeKey) : null;
+  const jarStandard = jarSizeKey ? JAR_LABEL_GEOMETRY[jarSizeKey] ?? null : null;
+  const [jarSetSel, setJarSetSel] = useState<string>(() => canonParams.get("pjarset") || "side_lid");
+  const [jarTamperOpt, setJarTamperOpt] = useState<boolean>(() => canonParams.get("pjartamperopt") === "1");
+  const [jarCustom, setJarCustom] = useState<boolean>(() => canonParams.get("pjarcustom") === "1");
+  const [jarOverride, setJarOverride] = useState<Record<string, string>>(() => ({
+    sidew: canonParams.get("pjarsidew") || "", sideh: canonParams.get("pjarsideh") || "",
+    lidd: canonParams.get("pjarlidd") || "",
+    tamperw: canonParams.get("pjartamperw") || "", tamperh: canonParams.get("pjartamperh") || "",
+  }));
+  const jarTamperAllowed = jarSpec?.optionalTamperBand === true;
+  const jarSelection = labelSetSelection(jarSetSel, jarTamperAllowed && jarTamperOpt) ?? { side: false, lid: false, tamper: false };
+  const ov = (key: string): number | null => {
+    const n = Number(jarOverride[key]);
+    return jarOverride[key] !== "" && Number.isFinite(n) && n > 0 ? n : null;
   };
-  const jarUnrepresentable = jarRowTypes.filter((type, index) => {
-    const role = jarRoles[index];
-    if (!role) return true;                       // no verified jar geometry
-    return jarRoles.indexOf(role) !== index;      // a second label in the same position
-  });
+  // Dimensions the legacy diagnostics rows carry: standard unless the override is ON and that piece is complete.
+  const jarPieceRows: Array<{ type: string; w: number; h: number }> = [];
+  if (jarStandard) {
+    if (jarSelection.side) {
+      const custom = jarCustom && ov("sidew") != null && ov("sideh") != null;
+      jarPieceRows.push({ type: "side", w: custom ? ov("sidew")! : jarStandard.side.widthIn, h: custom ? ov("sideh")! : jarStandard.side.heightIn });
+    }
+    if (jarSelection.lid) {
+      const d = jarCustom && ov("lidd") != null ? ov("lidd")! : jarStandard.lid.diameterIn;
+      jarPieceRows.push({ type: "lid", w: d, h: d });
+    }
+    if (jarSelection.tamper) {
+      const custom = jarCustom && ov("tamperw") != null && ov("tamperh") != null;
+      jarPieceRows.push({ type: "tamper", w: custom ? ov("tamperw")! : jarStandard.tamper.widthIn, h: custom ? ov("tamperh")! : jarStandard.tamper.heightIn });
+    }
+  }
+  const jarOverrideActive = jarCustom && ["sidew", "sideh", "lidd", "tamperw", "tamperh"].some((key) => ov(key) != null);
+  const overrideBadge = <span style={{ marginLeft: 8, background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11 }}>CUSTOM SIZE OVERRIDE</span>;
 
   const chironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "CHIRON");
   const mironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "MIRON");
@@ -3286,49 +3267,85 @@ function ProductDrivenForm() {
           </label>
         ) : null}
         {jars ? (<>
-          <label style={{ fontSize: 12 }}>How many labels per jar?
-            <select
-              value={labelCountSel}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                setLabelCountSel(value);
-                resizeRows(Math.min(Math.max(1, Math.floor(value === "custom" ? labelCountCustom || 1 : Number(value))), 6));
-              }}
-              style={inputStyle}
-            >
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="3">3</option>
-              <option value="custom">Custom (up to 6)</option>
+          <label style={{ fontSize: 12 }}>* Label set
+            <select name="pjarset" value={jarSetSel} onChange={(event) => setJarSetSel(event.currentTarget.value)} style={inputStyle}>
+              {LABEL_SETS.map((set) => <option key={set.key} value={set.key}>{set.label}</option>)}
             </select>
+            <div style={smallHelp}>One label per piece per jar: Side + Lid on 128 jars is 128 side labels and 128 lid labels.</div>
           </label>
-          {labelCountSel === "custom" ? (
-            <label style={{ fontSize: 12 }}>Labels per jar (1–6)
-              <input
-                type="number" min={1} max={6} value={labelCountCustom}
-                onChange={(event) => {
-                  const value = Number(event.currentTarget.value) || 1;
-                  setLabelCountCustom(value);
-                  resizeRows(Math.min(Math.max(1, Math.floor(value)), 6));
-                }}
-                style={inputStyle}
-              />
+          {jarTamperAllowed ? (
+            <label style={{ fontSize: 12 }}>
+              <input type="checkbox" name="pjartamperopt" value="1" checked={jarTamperOpt} onChange={(event) => setJarTamperOpt(event.currentTarget.checked)} />{" "}
+              Add tamper / lid-side band (optional, +1 label per jar)
             </label>
+          ) : jarSpec ? (
+            <p style={{ ...smallHelp, margin: 0 }}>Tamper band: not available for {jarSpec.displayName} (no owner application timing recorded).</p>
           ) : null}
-          <input type="hidden" name="plabelcount" value={effectiveLabels} />
-          {/* 2D-4D1 canonical jar mirror — see the descriptor block above. */}
+          {/* 2D-4D1 canonical jar mirror: the server reads these fields, never the UI copy. */}
           <input type="hidden" name="pjar" value={jarBlankOption?.jarProfile || ""} />
           <input type="hidden" name="pjarvariant" value={jarBlankOption?.jarVariant || ""} />
           {jarSelection.side ? <input type="hidden" name="pjarside" value="1" /> : null}
           {jarSelection.lid ? <input type="hidden" name="pjarlid" value="1" /> : null}
           {jarSelection.tamper ? <input type="hidden" name="pjartamper" value="1" /> : null}
-          {jarUnrepresentable.length ? <input type="hidden" name="pjarunsupported" value={jarUnrepresentable.join(",")} /> : null}
-          <label style={{ fontSize: 12 }}>Are all label sizes the same?
-            <select name="psame" value={sameSize} onChange={(event) => setSameSize(event.currentTarget.value)} style={inputStyle}>
-              <option value="yes">Yes — one size for every label</option>
-              <option value="no">No — set each label separately</option>
-            </select>
-          </label>
+          {/* legacy 14C.2 diagnostics rows carry the SAME resolved dimensions; they are never the cost authority */}
+          <input type="hidden" name="plabelcount" value={Math.max(1, jarPieceRows.length)} />
+          <input type="hidden" name="psame" value="no" />
+          {jarPieceRows.map((row) => (
+            <span key={row.type}>
+              <input type="hidden" name="plabeltype" value={row.type} />
+              <input type="hidden" name="plabelw" value={row.w} />
+              <input type="hidden" name="plabelh" value={row.h} />
+            </span>
+          ))}
+          <div style={{ gridColumn: "1 / -1", border: `1px solid ${jarStandard ? "#bbf7d0" : "#fecaca"}`, background: jarStandard ? "#f0fdf4" : "#fef2f2", borderRadius: 8, padding: 8, fontSize: 12 }}>
+            {jarSpec && jarStandard ? (<>
+              <b>STANDARD PRODUCTION SPEC: {jarSpec.displayName}</b>{jarOverrideActive ? overrideBadge : null}
+              <div style={{ marginTop: 4 }}>
+                {formatJarGeometry(jarStandard, jarSelection)}{" "}
+                <span style={{ color: "#6b7280" }}>(read-only, resolved from {jarSpec.source.module}, {jarSpec.source.version})</span>
+              </div>
+              <div style={{ color: "#166534" }}>{jarPieceRows.length} printed label piece(s) per jar · {jarSpec.routing}</div>
+            </>) : (<>
+              <b style={{ color: "#991b1b" }}>STANDARD PRODUCTION DIMENSIONS NOT CONFIRMED</b>
+              <div style={{ color: "#7f1d1d" }}>
+                {jarBlankOption
+                  ? "This product has no authoritative label geometry, so it cannot be costed. Owner confirmation is required (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md)."
+                  : "Select an exact jar product above to load its standard label dimensions."}
+              </div>
+            </>)}
+          </div>
+          <details open={jarCustom} style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, background: "#f9fafb" }}>
+            <summary style={{ fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              Advanced / Custom Size Override {jarOverrideActive ? "(ACTIVE)" : "(normally not needed)"}
+            </summary>
+            <label style={{ fontSize: 12, display: "block", marginTop: 6 }}>
+              <input type="checkbox" name="pjarcustom" value="1" checked={jarCustom} onChange={(event) => setJarCustom(event.currentTarget.checked)} />{" "}
+              <b>CUSTOM SIZE OVERRIDE</b>: replace the standard dimensions for this job only (recorded in the quote snapshot)
+            </label>
+            {jarCustom ? (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, marginTop: 6 }}>
+                {jarSelection.side ? (<>
+                  <label style={{ fontSize: 12 }}>Side width (in)<input name="pjarsidew" type="number" step="0.001" min={0.126} max={54} value={jarOverride.sidew} onChange={(event) => setJarOverride({ ...jarOverride, sidew: event.currentTarget.value })} style={inputStyle} placeholder={jarStandard ? String(jarStandard.side.widthIn) : ""} /></label>
+                  <label style={{ fontSize: 12 }}>Side height (in)<input name="pjarsideh" type="number" step="0.001" min={0.126} max={54} value={jarOverride.sideh} onChange={(event) => setJarOverride({ ...jarOverride, sideh: event.currentTarget.value })} style={inputStyle} placeholder={jarStandard ? String(jarStandard.side.heightIn) : ""} /></label>
+                </>) : null}
+                {jarSelection.lid ? (
+                  <label style={{ fontSize: 12 }}>Lid diameter (in)<input name="pjarlidd" type="number" step="0.001" min={0.126} max={54} value={jarOverride.lidd} onChange={(event) => setJarOverride({ ...jarOverride, lidd: event.currentTarget.value })} style={inputStyle} placeholder={jarStandard ? String(jarStandard.lid.diameterIn) : ""} /></label>
+                ) : null}
+                {jarSelection.tamper ? (<>
+                  <label style={{ fontSize: 12 }}>Tamper width (in)<input name="pjartamperw" type="number" step="0.001" min={0.126} max={54} value={jarOverride.tamperw} onChange={(event) => setJarOverride({ ...jarOverride, tamperw: event.currentTarget.value })} style={inputStyle} placeholder={jarStandard ? String(jarStandard.tamper.widthIn) : ""} /></label>
+                  <label style={{ fontSize: 12 }}>Tamper height (in)<input name="pjartamperh" type="number" step="0.001" min={0.126} max={54} value={jarOverride.tamperh} onChange={(event) => setJarOverride({ ...jarOverride, tamperh: event.currentTarget.value })} style={inputStyle} placeholder={jarStandard ? String(jarStandard.tamper.heightIn) : ""} /></label>
+                </>) : null}
+                <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>Override reason (saved with the quote)
+                  <input name="pjaroverridereason" maxLength={240} defaultValue={canonParams.get("pjaroverridereason") || ""} style={inputStyle} placeholder="e.g. customer-supplied die line" />
+                </label>
+                <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+                  A piece left blank keeps its standard size. A half-entered piece, a value outside 0.126 to 54 in, or a size for a label
+                  that is not in the set BLOCKS the quote instead of guessing. Application labor stays at the owner per-size timing; the
+                  override changes media, ink, cutting and weeding only.
+                </p>
+              </div>
+            ) : null}
+          </details>
         </>) : null}
         {isBanners ? (
           <label style={{ fontSize: 12 }}>Print
@@ -3357,29 +3374,10 @@ function ProductDrivenForm() {
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtpfreightpass" value="1" /> Pass freight through to customer (backs the $85 out of the ladder subtotal — never recovered twice)</label>
           <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>One production-ready design included; extra designs bill $25 (1,000–2,499) / $20 (2,500–4,999) / $15 (5,000+) each. Below-floor or below-$500-profit prices need the owner phrase + reason in Advanced Pricing Controls.</p>
         </>) : null}
-        {!isDtp && (!jars || sameSize === "yes") ? (<>
+        {!isDtp && !jars ? (<>
           <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={inputStyle} /></label>
           <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" style={inputStyle} /></label>
         </>) : null}
-        {jars && sameSize === "no" ? (
-          <div style={{ gridColumn: "1 / -1", display: "grid", gap: 6 }}>
-            {Array.from({ length: effectiveLabels }, (_v, index) => {
-              const row = labelRows[index] || { type: clientDefaultType(index), widthIn: "", heightIn: "" };
-              return (
-                <div key={index} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: 8, border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, background: "#f9fafb" }}>
-                  <label style={{ fontSize: 12 }}>Label {index + 1} type
-                    <select name="plabeltype" value={row.type} onChange={(event) => updateRow(index, { type: event.currentTarget.value })} style={inputStyle}>
-                      {LABEL_TYPE_CHOICES.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
-                    </select>
-                  </label>
-                  <label style={{ fontSize: 12 }}>* Width (in)<input name="plabelw" type="number" step="0.01" min={0.01} value={row.widthIn} onChange={(event) => updateRow(index, { widthIn: event.currentTarget.value })} style={inputStyle} /></label>
-                  <label style={{ fontSize: 12 }}>* Height (in)<input name="plabelh" type="number" step="0.01" min={0.01} value={row.heightIn} onChange={(event) => updateRow(index, { heightIn: event.currentTarget.value })} style={inputStyle} /></label>
-                </div>
-              );
-            })}
-            <p style={{ ...smallHelp, margin: 0 }}>Every label row needs its own positive width and height. The server rebuilds these rows on Calculate and Save — stale hidden rows never affect cost.</p>
-          </div>
-        ) : null}
         {!isDtp ? (<label style={{ fontSize: 12 }}>* Material
           <select name="pmat" style={inputStyle}>
             <option value="">— select material —</option>
@@ -3672,6 +3670,17 @@ function MultiLineStickerRows() {
  * already computed. A DRAFT_ONLY job shows its blockers and NO unit cost,
  * because a blocked job has no defensible per-unit number to show.
  */
+/** 2026-10-05: renders a diagnostics geometry map ({ side: { widthIn, heightIn }, lid: { diameterIn } }) as text. */
+function describeGeometryMap(map: Record<string, Record<string, number>> | null | undefined): string {
+  if (!map) return "—";
+  const parts = Object.entries(map).map(([piece, dims]) => {
+    if (dims.diameterIn != null) return `${piece} Ø ${dims.diameterIn} in`;
+    return `${piece} ${dims.widthIn} x ${dims.heightIn} in`;
+  });
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+
 function CanonicalTrueCost() {
   const { emergency } = useLoaderData<typeof loader>() as any;
   const canonical = emergency.productMode?.canonical as CanonicalCalculatorView | null | undefined;
@@ -3776,6 +3785,36 @@ function CanonicalTrueCost() {
           ) : null}
         </div>
       </div>
+
+      {d.productSpec ? (
+        <div style={{ marginTop: 10, background: "white", border: `1px solid ${d.productSpec.customSize ? "#fde68a" : "#e5e7eb"}`, borderRadius: 8, padding: 10, fontSize: 12 }}>
+          <b>PRODUCT SPEC USED</b>
+          {d.productSpec.customSize ? <span style={{ marginLeft: 8, background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11 }}>CUSTOM SIZE OVERRIDE</span> : null}
+          <div style={{ marginTop: 4 }}>
+            {d.productSpec.displayName}{d.productSpec.labelSet ? ` · label set ${d.productSpec.labelSet}` : ""} · standard: {describeGeometryMap(d.productSpec.standard)}
+          </div>
+          {d.productSpec.customSize ? (
+            <div style={{ color: "#92400e" }}>
+              Override used for {d.productSpec.overriddenPieces.join(", ")}: {describeGeometryMap(d.productSpec.override)}
+              {d.productSpec.overrideReason ? ` · reason: ${d.productSpec.overrideReason}` : ""}
+            </div>
+          ) : null}
+          <div style={{ color: "#6b7280" }}>{d.productSpec.source} ({d.productSpec.specVersion})</div>
+        </div>
+      ) : null}
+      {d.finishingBreakdown ? (
+        <div style={{ marginTop: 10, background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, fontSize: 12 }}>
+          <b>FINISHING DECOMPOSITION</b> <span style={{ color: "#6b7280" }}>(sums of the engine lines above; nothing re-estimated)</span>
+          <div style={{ marginTop: 4, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "2px 16px" }}>
+            <div>Cutting (machine): <b>{dollars(d.finishingBreakdown.cuttingMachine)}</b></div>
+            <div>Cutting (attention): <b>{dollars(d.finishingBreakdown.cuttingAttention)}</b></div>
+            <div>Weeding: <b>{dollars(d.finishingBreakdown.weeding)}</b> ({d.weedingPages ?? "—"} page(s) at ${WEEDING_STANDARD.costPerPage.toFixed(4)}; {WEEDING_STANDARD.version})</div>
+            <div>Application: <b>{dollars(d.finishingBreakdown.application)}</b></div>
+            <div>Specialty setup: <b>{dollars(d.finishingBreakdown.specialtySetup)}</b></div>
+            <div>Finishing total: <b>{dollars(d.finishingBreakdown.total)}</b></div>
+          </div>
+        </div>
+      ) : null}
 
       <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}>
         <b>Calibration:</b> {canonical.calibration.resolved ? "resolved" : "NOT RESOLVED"} —{" "}

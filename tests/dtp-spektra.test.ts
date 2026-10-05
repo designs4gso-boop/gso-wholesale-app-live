@@ -183,7 +183,8 @@ describe("DTP route pins (15C)", () => {
     expect(pdf).toContain('name="pnotes"');
     expect(pdf).toContain("Included product specification");
     expect(pdf).toContain("MOQ ");
-    expect(pdf).toContain('{!isDtp && (!jars || sameSize === "yes") ?'); // dimensions hidden
+    // 2026-10-05: jars no longer type dimensions at all (resolved from the product spec)
+    expect(pdf).toContain("{!isDtp && !jars ? (<>"); // dimensions hidden
     expect(pdf).toContain('{!isDtp ? (<label style={{ fontSize: 12 }}>* Material'); // material hidden
   });
 

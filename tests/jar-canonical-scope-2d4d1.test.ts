@@ -447,7 +447,14 @@ describe("2D-4D1 — a blocked jar can never be saved", () => {
 describe("2D-4D1 — the calculator form emits the canonical jar descriptor", () => {
   it("mirrors the operator's jar pick into the fields the normaliser reads", () => {
     const src = routeSrc();
-    for (const field of ["pjar", "pjarvariant", "pjarside", "pjarlid", "pjartamper", "pjarunsupported"]) {
+    for (const field of ["pjar", "pjarvariant", "pjarside", "pjarlid", "pjartamper"]) {
+      expect(src, `form must emit ${field}`).toContain(`name="${field}"`);
+    }
+    // 2026-10-05: the label-set flow cannot produce an unrepresentable row, so
+    // the form no longer emits pjarunsupported; the normaliser still honours it
+    // (tests/fixed-product-adversarial.test.ts) for any replayed legacy search.
+    expect(src).not.toContain('name="pjarunsupported"');
+    for (const field of ["pjarset", "pjartamperopt", "pjarcustom", "pjarsidew", "pjarsideh", "pjarlidd", "pjartamperw", "pjartamperh", "pjaroverridereason"]) {
       expect(src, `form must emit ${field}`).toContain(`name="${field}"`);
     }
     // The descriptor rides on the server-tagged option — the client never
@@ -462,9 +469,18 @@ describe("2D-4D1 — the calculator form emits the canonical jar descriptor", ()
     expect(src).toMatch(/pFamily === "premium-jars"\) return [^\n]*resolveActiveJarProfile\(entry\.item\.name\)\?\.uiFamily === "premium-jars"/);
   });
 
-  it("reproduces the legacy label-row defaults so both engines see the same labels", () => {
-    // buildLabelRows: 1 -> side, 2 -> side+lid, 3+ -> side+lid+additional...
-    expect(routeSrc()).toContain('n === 1 ? ["side"] : n === 2 ? ["side", "lid"]');
+  it("feeds the legacy label rows the SAME resolved dimensions so both engines see the same labels", () => {
+    // 2026-10-05: the typed-dimension builder is gone; the form mirrors the
+    // spec-resolved pieces into the legacy row fields (psame=no + one hidden
+    // plabeltype/plabelw/plabelh per piece) so the 14C.2 diagnostics path
+    // sees exactly what the canonical engine prices.
+    const src = routeSrc();
+    expect(src).toContain('<input type="hidden" name="psame" value="no" />');
+    expect(src).toContain('<input type="hidden" name="plabeltype" value={row.type} />');
+    expect(src).toContain('<input type="hidden" name="plabelw" value={row.w} />');
+    expect(src).toContain('<input type="hidden" name="plabelh" value={row.h} />');
+    expect(src).toContain("STANDARD PRODUCTION DIMENSIONS NOT CONFIRMED");
+    expect(src).toContain("getProductProductionSpec(canonicalFamily, jarBlankOption.jarProfile)");
   });
 });
 
