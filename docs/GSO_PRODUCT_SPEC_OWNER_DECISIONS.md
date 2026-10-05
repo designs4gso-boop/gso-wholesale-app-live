@@ -2,6 +2,8 @@
 
 Only unresolved items. Each row shows what the system does TODAY while the item is open. Nothing here was changed on the owner's behalf.
 
+**Authority rule in force (release gate 2026-10-05):** every jar label dimension is CANONICAL_COSTING_PENDING_CONFIRMATION — the cost engine keeps pricing with it (no change), staff see it as "CURRENT CANONICAL COSTING GEOMETRY / PHYSICAL DIMENSIONS NEED OWNER CONFIRMATION" (amber), and every quote snapshot records that status. When the owner confirms a size, the change is: record the confirmation (owner record + date) and flip that size to OWNER_CONFIRMED in a reviewed commit; adjust numbers only if the physical check disagrees, with the regression fixtures re-pinned.
+
 | # | Product / area | Missing value | Current fallback | Risk | Owner needs to provide |
 |---|---|---|---|---|---|
 | 1 | Weeding standard (all weeded families) | Measured pages/hour and difficulty effect | $20/hr at 15 pages/hr, 54 in page, ceil per run (unchanged) | Under/over-recovery of weeding labor on every job; no complexity sensitivity | WAITING FOR OWNER TIMING DATA: per session — product/geometry, feed inches (pages), pieces, elapsed minutes, difficulty, operator, date (see `GSO_WEEDING_COST_AUDIT.md` section 6) |

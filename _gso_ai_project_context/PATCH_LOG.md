@@ -631,3 +631,9 @@ Files changed:
 - app/routes/app.erp.cost-verification.tsx (read-only production standards card)
 
 Not done / owner: weeding rate unchanged pending owner timing; geometry confirmations; see docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md.
+
+## Patch COSTING-SPECS-GATE-2026-10-05 - distinguish costing geometry from confirmed product specs (LOCAL)
+
+Added: app/lib/jar-reference-geometry.ts (seed mirror, NOT cost authority), tests/fixed-product-authority-gate.test.ts, tests/fixtures/jar-fixtures-2026-10-05.json (engine capture at 292d766).
+Changed: jar-label-geometry.ts (JAR_LABEL_GEOMETRY_AUTHORITY, SpecAuthorityStatus), product-production-spec.ts (authority fields, AUTHORITY_LABEL, conflicts, Chiron note), canonical-calculator-shared.ts + canonical-calculator.server.ts (snapshot authority metadata), calculator/product-setup/cost-verification routes (amber pending state, no "owner-confirmed" wording for jars), docs.
+Not changed: any cost, weeding or application number; RecipeLabelZone values; Patch 2A values; schema.

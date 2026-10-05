@@ -301,12 +301,12 @@ function unitCost(material: any) {
  * resolved from the recipe name through the active jar scope. Read-only: the
  * RecipeLabelZone rows below are older admin estimates and never price a job.
  */
-function productionSpecSummary(recipeName: string | null | undefined): { title: string; dims: string; note: string; status: string } | null {
+function productionSpecSummary(recipeName: string | null | undefined): { title: string; dims: string; note: string; status: string; authorityStatus: string; authorityNote: string; conflictSummary: string | null; sharedSizeKeyNote: string | null } | null {
   const profile = resolveActiveJarProfile(recipeName || "");
   if (!profile) return null;
   const spec = getProductProductionSpec(profile.uiFamily, profile.key);
   if (!spec) return null;
-  return { title: spec.displayName, dims: describeStandardSpec(spec), note: spec.statusNote, status: spec.status };
+  return { title: spec.displayName, dims: describeStandardSpec(spec), note: spec.statusNote, status: spec.status, authorityStatus: spec.authorityStatus, authorityNote: spec.authorityNote, conflictSummary: spec.conflictSummary, sharedSizeKeyNote: spec.sharedSizeKeyNote };
 }
 
 
@@ -1980,7 +1980,7 @@ export default function ProductSetupRecipeBuilder() {
               const reasons = costReviewReasonList(recipe);
               return <tr key={recipe.id}>
                 <td><strong>{recipe.name}</strong><br/><span className="muted">{recipe.sku || "No SKU"}</span></td>
-                <td>{recipe.productFamily || recipe.productType}{(() => { const spec = productionSpecSummary(recipe.name); return spec ? <div className="muted" title={spec.note}>Cost-engine spec: {spec.dims}</div> : null; })()}</td>
+                <td>{recipe.productFamily || recipe.productType}{(() => { const spec = productionSpecSummary(recipe.name); return spec ? <div className="muted" title={spec.note}>Cost-engine geometry{spec.authorityStatus === "OWNER_CONFIRMED" ? "" : " (owner confirmation pending)"}: {spec.dims}</div> : null; })()}</td>
                 <td>{recipe.productTypeProfile?.name || "No template"}</td>
                 <td>{pct(recipe.targetMarginPct)}</td>
                 <td>
@@ -2001,9 +2001,14 @@ export default function ProductSetupRecipeBuilder() {
         {(() => {
           const spec = productionSpecSummary(selectedRecipe.name);
           if (!spec) return null;
-          return <div className="card" style={{ borderColor: spec.status === "COST_AUTHORITY" ? "#bbf7d0" : "#fecaca" }}>
-            <h3>Production spec used by the cost engine (read-only)</h3>
+          const confirmed = spec.authorityStatus === "OWNER_CONFIRMED";
+          return <div className="card" style={{ borderColor: spec.status !== "COST_AUTHORITY" ? "#fecaca" : confirmed ? "#bbf7d0" : "#fde68a" }}>
+            <h3>{confirmed ? "Standard production spec (read-only)" : "Current canonical costing geometry (read-only)"}</h3>
+            {!confirmed ? <p><span className="badge yellow">PHYSICAL DIMENSIONS NEED OWNER CONFIRMATION</span></p> : null}
             <p><strong>{spec.title}</strong>: {spec.dims}</p>
+            <p className="muted">{spec.authorityNote}</p>
+            {spec.conflictSummary ? <p className="muted">{spec.conflictSummary}</p> : null}
+            {spec.sharedSizeKeyNote ? <p className="muted">{spec.sharedSizeKeyNote}</p> : null}
             <p className="muted">{spec.note}</p>
             <p className="muted">Label zones below are older admin estimates kept for reference; they never price a job. Change the standard only through the owner-decision process (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md).</p>
           </div>;

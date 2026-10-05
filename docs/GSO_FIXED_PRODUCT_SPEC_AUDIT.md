@@ -1,5 +1,7 @@
 # GSO Fixed-Product Production Spec Audit (2026-10-05)
 
+> **Release-gate note (2026-10-05, later the same day).** "Canonical costing geometry" does NOT mean "physically owner-confirmed production dimension". The Patch 2A jar table entered the repo in commit 5246607 self-labelled "owner presets" with no OWNER_STANDARDS entry, no dated decision and no measurement record. Every jar dimension is therefore classified **CANONICAL_COSTING_PENDING_CONFIRMATION**: it is what the cost engine prices with today (unchanged), it is NOT labelled owner-confirmed anywhere in the UI, and the authority status rides into every snapshot. Only the 4x5 bag artboard has explicit evidence (2D-4C2A benchmark on the actual artboard; live production) and is classified **OWNER_CONFIRMED**. Unknown products are **UNSUPPORTED** and fail closed.
+
 Read-only audit of where the repo defines "what GSO normally prints" for each fixed product, which definition the canonical cost engine actually uses, and where definitions duplicate or conflict. Nothing in this document is inferred: every value is quoted from a repo file. Anything not found is marked MISSING or OWNER CONFIRMATION REQUIRED.
 
 ## 1. Authorities found
@@ -19,6 +21,21 @@ Read-only audit of where the repo defines "what GSO normally prints" for each fi
 ## 2. Jar-by-jar table
 
 Status legend: KNOWN = cost authority holds a value; DUPLICATED = a second source restates it; CONFLICT = the second source disagrees; MISSING = no authority; OCR = OWNER CONFIRMATION REQUIRED.
+
+### 2a. Authority classification per source (release gate)
+
+| Source | Classification | Evidence |
+|---|---|---|
+| Patch 2A table (`jar-label-geometry.ts`), all 7 size keys | CANONICAL_COSTING_PENDING_CONFIRMATION | commit 5246607 self-labelled; no OWNER_STANDARDS record; `JAR_LABEL_GEOMETRY_AUTHORITY.ownerRecord = null` |
+| RecipeLabelZone seed (`tools/seed-jar-label-zone-dimensions.mjs`), now mirrored read-only in `jar-reference-geometry.ts` | CONFLICTING_REFERENCE (NOT a cost authority; no cost module imports it, test-pinned) | seed rows self-described "Estimated ... Verify with physical jar" |
+| Chiron 100ml Tall / 100ml Wide / 150ml | CANONICAL_COSTING_PENDING_CONFIRMATION + shared size key | no Chiron-specific geometry exists; costed on the Miron size key; `sharedSizeKeyNote` set |
+| 3oz / 4oz tamper band | UNSUPPORTED for costing (no owner timing) | `JAR_APPLICATION_SECONDS_BY_SIZE` tamper = null -> blocks |
+| 5oz (`jar_5oz_clear` or any 5oz key) | UNSUPPORTED | not in active scope; spec resolves null; engine refuses |
+| 4x5 bag artboard | OWNER_CONFIRMED | 2D-4C2A benchmark on the actual 4x5 artboard vs cutline; live sticker-bag production |
+
+Products marked OWNER_CONFIRMED: `bag-4x5/sticker`, `bag-4x5/stock`. Products marked PENDING: all 10 jar profiles. Blocked: 5oz, any non-active brand/size, 3oz/4oz tamper band.
+
+Exact reference conflicts per selected piece (canonical -> reference): 50ml side 5.6x1.5 -> 5.75x1.625, lid 1.6 -> 1.75, tamper width 5.6 -> 5.75; 100ml Tall side 6.3x3.15 -> 6.125x3.125, tamper width 6.3 -> 6.125; 100ml Wide side width 6.6 -> 6.43, lid 1.9 -> 1.875, tamper width 6.6 -> 6.43; 150ml tamper height 0.6 -> 0.5; 250ml side 9.4x2.9 -> 9.375x2.875, lid 2.1 -> 2.0, tamper 9.4x0.6 -> 9.375x0.5; 3oz side 6.9x1.4 -> 7.1x1.7, lid 2.1 -> 2.0; 4oz side height 1.4 -> 2.125.
 
 | Product (profile key) | Side (cost authority) | Lid Ø (cost authority) | Tamper (cost authority) | RecipeLabelZone seed (admin, estimated) | Status |
 |---|---|---|---|---|---|
@@ -73,3 +90,7 @@ Pinned in `tests/fixed-product-regression.test.ts`:
 Closed: one resolver for standard dims; read-only display in the calculator, Product Setup and Cost Verification; explicit custom-size override with fail-closed validation; the spec used (and any override) recorded in every canonical quote snapshot via `diagnostics.productSpec`.
 
 Not closed (owner): confirmation of the Patch 2A table against physical jars; Chiron-specific geometry if it differs from Miron; 3oz/4oz tamper timing; any 5oz product.
+
+## 7. Downstream physical-production impact (release gate)
+
+Consumers of `JAR_LABEL_GEOMETRY` / `jarCutGeometry` / `jarPhysicalRuns` / `diagnostics.productSpec` in `app/`: `canonical-calculator.server.ts`, `canonical-calculator-shared.ts`, `jar-cost-inputs.server.ts`, `jar-label-geometry.ts`, `product-production-spec.ts`, `jar-active-scope.ts`, and the three admin routes (cost calculator, product setup, cost verification). No production-artwork, cut-file, proof-geometry, RIP, art-preflight or production-transition module imports any of them (`productSpec` matches elsewhere are the unrelated `productSpecToken` in product-family-registry). The geometry drove COSTING only before this branch and drives COSTING only after it. Newly introduced physical artifact dependency: NO.

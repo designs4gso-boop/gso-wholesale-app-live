@@ -612,7 +612,7 @@ export async function loader({ request }: { request: Request }) {
         tamperCost: seconds.tamper == null ? null : (seconds.tamper / 3600) * APPLICATION_LABOR_RATE_PER_HOUR,
       })),
       applicationRatePerHour: APPLICATION_LABOR_RATE_PER_HOUR,
-      specs: listProductSpecs().map((spec) => ({ family: spec.family, productKey: spec.productKey, displayName: spec.displayName, status: spec.status, dims: describeStandardSpec(spec), source: spec.source.module })),
+      specs: listProductSpecs().map((spec) => ({ family: spec.family, productKey: spec.productKey, displayName: spec.displayName, status: spec.status, authorityStatus: spec.authorityStatus, conflictCount: spec.referenceConflicts.length, sharedSizeKey: Boolean(spec.sharedSizeKeyNote), dims: describeStandardSpec(spec), source: spec.source.module })),
     },
   };
 }
@@ -764,13 +764,17 @@ export default function CostVerificationRoute() {
           <div>
             <b>Fixed-product production specs</b> <span style={smallHelp}>product-production-spec.ts</span>
             <table style={{ width: "100%", marginTop: 6, borderCollapse: "collapse" }}>
-              <thead><tr><th style={thStyle}>Product</th><th style={thStyle}>Standard dimensions</th><th style={thStyle}>Status</th></tr></thead>
+              <thead><tr><th style={thStyle}>Product</th><th style={thStyle}>Costing dimensions</th><th style={thStyle}>Authority</th></tr></thead>
               <tbody>
                 {data.productionStandards.specs.map((spec) => (
                   <tr key={spec.productKey}>
                     <td style={tdStyle}>{spec.displayName}<div style={smallHelp}>{spec.family} · {spec.productKey}</div></td>
                     <td style={tdStyle}>{spec.dims}</td>
-                    <td style={tdStyle}>{spec.status === "COST_AUTHORITY" ? "cost authority" : "OWNER CONFIRMATION REQUIRED"}</td>
+                    <td style={tdStyle}>
+                      {spec.authorityStatus === "OWNER_CONFIRMED" ? "owner-confirmed" : spec.authorityStatus === "UNSUPPORTED" ? "UNSUPPORTED (blocks)" : "costing geometry — owner confirmation pending"}
+                      {spec.conflictCount ? <div style={smallHelp}>{spec.conflictCount} reference conflict(s)</div> : null}
+                      {spec.sharedSizeKey ? <div style={smallHelp}>shared Miron size key</div> : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>

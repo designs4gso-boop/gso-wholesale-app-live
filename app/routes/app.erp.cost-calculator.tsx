@@ -35,7 +35,7 @@ import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutl
 import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
 // 2026-10-05 fixed-product spec layer (client-safe): standard jar dimensions are RESOLVED, never typed.
 import { JAR_LABEL_GEOMETRY, formatJarGeometry, type JarSizeKey } from "../lib/jar-label-geometry";
-import { LABEL_SETS, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
+import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
@@ -3297,30 +3297,53 @@ function ProductDrivenForm() {
               <input type="hidden" name="plabelh" value={row.h} />
             </span>
           ))}
-          <div style={{ gridColumn: "1 / -1", border: `1px solid ${jarStandard ? "#bbf7d0" : "#fecaca"}`, background: jarStandard ? "#f0fdf4" : "#fef2f2", borderRadius: 8, padding: 8, fontSize: 12 }}>
+          {/* 2026-10-05 release gate: GREEN only for OWNER_CONFIRMED dimensions.
+              Pending costing geometry still auto-resolves (no pricing change) but is
+              shown AMBER with the owner-confirmation warning and any reference
+              conflict for the selected pieces. Unknown = RED, fail closed. */}
+          {(() => {
+            const confirmed = jarSpec?.authorityStatus === "OWNER_CONFIRMED";
+            const tone = !(jarSpec && jarStandard)
+              ? { border: "#fecaca", bg: "#fef2f2" }
+              : confirmed ? { border: "#bbf7d0", bg: "#f0fdf4" } : { border: "#fde68a", bg: "#fffbeb" };
+            const selectedConflicts = (jarSpec?.referenceConflicts || []).filter((c) => (jarSelection as any)[c.piece]);
+            return (
+          <div style={{ gridColumn: "1 / -1", border: `1px solid ${tone.border}`, background: tone.bg, borderRadius: 8, padding: 8, fontSize: 12 }}>
             {jarSpec && jarStandard ? (<>
-              <b>STANDARD PRODUCTION SPEC: {jarSpec.displayName}</b>{jarOverrideActive ? overrideBadge : null}
+              <b style={{ color: confirmed ? undefined : "#92400e" }}>{AUTHORITY_LABEL[jarSpec.authorityStatus]}: {jarSpec.displayName}</b>{jarOverrideActive ? overrideBadge : null}
+              {!confirmed ? <div style={{ color: "#92400e", fontWeight: 700 }}>{PENDING_CONFIRMATION_WARNING}</div> : null}
               <div style={{ marginTop: 4 }}>
                 {formatJarGeometry(jarStandard, jarSelection)}{" "}
                 <span style={{ color: "#6b7280" }}>(read-only, resolved from {jarSpec.source.module}, {jarSpec.source.version})</span>
               </div>
-              <div style={{ color: "#166534" }}>{jarPieceRows.length} printed label piece(s) per jar · {jarSpec.routing}</div>
+              {!confirmed ? (
+                <div style={{ color: "#78350f" }}>
+                  These are the dimensions the cost engine prices with today; they are not owner-confirmed physical dimensions. Pricing is unchanged. Use Advanced / Custom Size Override if the job needs a different size.
+                </div>
+              ) : null}
+              {selectedConflicts.length ? (
+                <div style={{ color: "#78350f" }}>Reference setup contains a different {selectedConflicts.map((c) => c.text).join("; ")}. Current quote uses the existing canonical cost-engine geometry.</div>
+              ) : null}
+              {jarSpec.sharedSizeKeyNote ? <div style={{ color: "#78350f" }}>{jarSpec.sharedSizeKeyNote}</div> : null}
+              <div style={{ color: confirmed ? "#166534" : "#92400e" }}>{jarPieceRows.length} printed label piece(s) per jar · {jarSpec.routing}</div>
             </>) : (<>
               <b style={{ color: "#991b1b" }}>STANDARD PRODUCTION DIMENSIONS NOT CONFIRMED</b>
               <div style={{ color: "#7f1d1d" }}>
                 {jarBlankOption
-                  ? "This product has no authoritative label geometry, so it cannot be costed. Owner confirmation is required (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md)."
+                  ? "This product has no costing geometry, so it cannot be quoted. Owner must supply confirmed dimensions (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md)."
                   : "Select an exact jar product above to load its standard label dimensions."}
               </div>
             </>)}
           </div>
+            );
+          })()}
           <details open={jarCustom} style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, background: "#f9fafb" }}>
             <summary style={{ fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
               Advanced / Custom Size Override {jarOverrideActive ? "(ACTIVE)" : "(normally not needed)"}
             </summary>
             <label style={{ fontSize: 12, display: "block", marginTop: 6 }}>
               <input type="checkbox" name="pjarcustom" value="1" checked={jarCustom} onChange={(event) => setJarCustom(event.currentTarget.checked)} />{" "}
-              <b>CUSTOM SIZE OVERRIDE</b>: replace the standard dimensions for this job only (recorded in the quote snapshot)
+              <b>CUSTOM SIZE OVERRIDE</b>: replace the resolved dimensions for this job only (recorded in the quote snapshot)
             </label>
             {jarCustom ? (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, marginTop: 6 }}>
@@ -3790,6 +3813,11 @@ function CanonicalTrueCost() {
         <div style={{ marginTop: 10, background: "white", border: `1px solid ${d.productSpec.customSize ? "#fde68a" : "#e5e7eb"}`, borderRadius: 8, padding: 10, fontSize: 12 }}>
           <b>PRODUCT SPEC USED</b>
           {d.productSpec.customSize ? <span style={{ marginLeft: 8, background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11 }}>CUSTOM SIZE OVERRIDE</span> : null}
+          <span style={{ marginLeft: 8, borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11, ...(d.productSpec.authorityStatus === "OWNER_CONFIRMED" ? { background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" } : { background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" }) }}>
+            {d.productSpec.authorityStatus === "OWNER_CONFIRMED" ? "OWNER-CONFIRMED DIMENSIONS" : d.productSpec.authorityStatus == null ? "DIMENSION AUTHORITY NOT RECORDED (older snapshot)" : "COSTING GEOMETRY — OWNER CONFIRMATION PENDING"}
+          </span>
+          {d.productSpec.referenceConflict ? <div style={{ color: "#78350f", marginTop: 4 }}>Reference setup differs: {(d.productSpec.referenceConflicts || []).join("; ")}.</div> : null}
+          {d.productSpec.sharedSizeKeyNote ? <div style={{ color: "#78350f", marginTop: 4 }}>{d.productSpec.sharedSizeKeyNote}</div> : null}
           <div style={{ marginTop: 4 }}>
             {d.productSpec.displayName}{d.productSpec.labelSet ? ` · label set ${d.productSpec.labelSet}` : ""} · standard: {describeGeometryMap(d.productSpec.standard)}
           </div>

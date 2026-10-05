@@ -6,14 +6,21 @@
 2. Select the exact product / blank item (e.g. Miron 100ml Wide). Miron jars also need the physical top type.
 3. Choose the **Label set**: Side Only, Lid Only, or Side + Lid. On sizes with an owner timing you may tick "Add tamper / lid-side band" (3oz/4oz show "not available").
 4. Enter the quantity (finished jars) and number of designs.
-5. Read the green **STANDARD PRODUCTION SPEC** box. It shows the dimensions the cost engine will use (e.g. "Side 6.6 x 2.6 in · Lid Ø 1.9 in"). You cannot edit it here.
+5. Read the spec box. It shows the dimensions the cost engine will use (e.g. "Side 6.6 x 2.6 in · Lid Ø 1.9 in"). You cannot edit it here. Its colour tells you how strong the dimension evidence is:
+   - **Green, "STANDARD PRODUCTION SPEC"**: owner-confirmed physical dimensions (today only the 4x5 bags qualify; no jar does).
+   - **Amber, "CURRENT CANONICAL COSTING GEOMETRY" + "PHYSICAL DIMENSIONS NEED OWNER CONFIRMATION"**: the dimensions the cost engine has always priced with, not yet physically confirmed by the owner. Normal jar quotes use these automatically; pricing is unchanged. If the box also says "Reference setup contains a different ...", the admin reference rows disagree; the quote still uses the costing geometry. Chiron jars additionally say they are costed on the shared Miron size key.
+   - **Red, "STANDARD PRODUCTION DIMENSIONS NOT CONFIRMED"**: no costing geometry; the quote blocks.
 6. Choose material and finish, leave printer on Auto, and Calculate.
 
 What you get: one label of each selected kind per jar (Side + Lid on 128 jars = 128 side + 128 lid labels), two physical print runs, application charged per label, art setup once for side+lid, print setup once per job, packout and freight per jar.
 
 ## When the spec box is RED: "STANDARD PRODUCTION DIMENSIONS NOT CONFIRMED"
 
-The product has no authoritative dimensions (or no product is selected). The quote will block. Do not guess sizes. Either select an exact product, or escalate to the owner via `docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md`.
+The product has no costing geometry (or no product is selected). The quote will block. Do not guess sizes. Either select an exact product, or escalate to the owner via `docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md`.
+
+## When the spec box is AMBER
+
+Quote normally. Do not re-enter dimensions. Do not tell the customer the dimensions are confirmed. If the customer supplies a die line that differs, use the Custom Size Override for that job and give the reason. The canonical cost panel shows "COSTING GEOMETRY — OWNER CONFIRMATION PENDING" on the quote; older quotes show "DIMENSION AUTHORITY NOT RECORDED (older snapshot)".
 
 ## Custom size for one job (rare)
 

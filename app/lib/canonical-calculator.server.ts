@@ -90,7 +90,7 @@ import {
 import { activeJarProfile } from "./jar-active-scope";
 import { JAR_LABEL_GEOMETRY_SOURCE, validateJarGeometryOverride } from "./jar-label-geometry";
 import { BAG_4X5_ARTBOARD_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
-import { PRODUCT_SPEC_VERSION } from "./product-production-spec";
+import { PRODUCT_SPEC_VERSION, getProductProductionSpec } from "./product-production-spec";
 import { CANONICAL_INK_RATES } from "./ink-rates-shared";
 import {
   CANONICAL_CALIBRATION_IDENTITIES,
@@ -818,6 +818,11 @@ export function assembleCanonicalJob(
         if (selection.tamper && (!only || only.includes("tamper"))) out.tamper = { ...g.tamper };
         return out;
       };
+      /* 2026-10-05 release gate: the authority status rides with the spec so
+       * no snapshot can later be read as "owner-confirmed" when it was priced
+       * on pending costing geometry. */
+      const productSpec = active ? getProductProductionSpec(active.uiFamily, active.key) : null;
+      const selectedConflicts = (productSpec?.referenceConflicts ?? []).filter((c) => selection[c.piece]);
       diagnostics.productSpec = {
         specVersion: PRODUCT_SPEC_VERSION,
         family: input.family,
@@ -830,6 +835,11 @@ export function assembleCanonicalJob(
         override: overriddenPieces.length ? pick(geometryForCost, overriddenPieces) : {},
         overriddenPieces,
         overrideReason: cfg.overrideReason ? String(cfg.overrideReason).slice(0, 240) : null,
+        authorityStatus: productSpec?.authorityStatus ?? "CANONICAL_COSTING_PENDING_CONFIRMATION",
+        ownerConfirmationRequired: productSpec?.ownerConfirmationRequired ?? true,
+        referenceConflict: selectedConflicts.length > 0,
+        referenceConflicts: selectedConflicts.map((c) => c.text),
+        sharedSizeKeyNote: productSpec?.sharedSizeKeyNote ?? null,
       };
 
       // ---- blank: a COMPLETE SET, charged once per jar ----
@@ -1107,6 +1117,11 @@ export function assembleCanonicalJob(
       override: {},
       overriddenPieces: [],
       overrideReason: null,
+      authorityStatus: getProductProductionSpec(input.family, input.family === "sticker-bags" ? "bag-4x5/sticker" : "bag-4x5/stock")?.authorityStatus ?? "CANONICAL_COSTING_PENDING_CONFIRMATION",
+      ownerConfirmationRequired: getProductProductionSpec(input.family, input.family === "sticker-bags" ? "bag-4x5/sticker" : "bag-4x5/stock")?.ownerConfirmationRequired ?? true,
+      referenceConflict: false,
+      referenceConflicts: [],
+      sharedSizeKeyNote: null,
     };
   }
 

@@ -176,6 +176,18 @@ export type CanonicalProductSpecDiagnostics = {
   override: Record<string, Record<string, number>>;
   overriddenPieces: string[];
   overrideReason: string | null;
+  /**
+   * 2026-10-05 release gate — authority of the STANDARD dimensions.
+   * Optional in the type because snapshots written before this field existed
+   * must keep rendering; readers treat absence as "unknown authority".
+   */
+  authorityStatus?: "OWNER_CONFIRMED" | "CANONICAL_COSTING_PENDING_CONFIRMATION" | "UNSUPPORTED";
+  ownerConfirmationRequired?: boolean;
+  /** true when the admin reference rows disagree with the costing geometry. */
+  referenceConflict?: boolean;
+  /** Staff wording of each conflict; [] when none. */
+  referenceConflicts?: string[];
+  sharedSizeKeyNote?: string | null;
 };
 
 export type CanonicalFinishingBreakdown = {

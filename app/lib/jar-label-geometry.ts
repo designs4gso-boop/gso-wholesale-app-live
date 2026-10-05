@@ -35,7 +35,39 @@ export const JAR_LABEL_GEOMETRY: Record<JarSizeKey, JarLabelGeometry> = {
   "4oz": { side: { widthIn: 7.125, heightIn: 1.4 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 7.125, heightIn: 0.5 } },
 };
 
-export const JAR_LABEL_GEOMETRY_SOURCE = "jar-cost-inputs.server.ts JAR_LABEL_GEOMETRY — Patch 2A (17D.2) owner presets; the only geometry any cost path reads";
+export const JAR_LABEL_GEOMETRY_SOURCE = "jar-cost-inputs.server.ts JAR_LABEL_GEOMETRY — Patch 2A (17D.2) presets; the only geometry any cost path reads";
+
+/**
+ * AUTHORITY STATUS of a fixed-product dimension source (2026-10-05 release gate).
+ *
+ *  OWNER_CONFIRMED                          — repo holds an explicit owner
+ *                                              confirmation record for the
+ *                                              physical dimension.
+ *  CANONICAL_COSTING_PENDING_CONFIRMATION   — the dimension is what the
+ *                                              canonical cost engine prices
+ *                                              with TODAY, but no owner record
+ *                                              physically confirms it.
+ *  UNSUPPORTED                              — no costing geometry; fail closed.
+ */
+export type SpecAuthorityStatus = "OWNER_CONFIRMED" | "CANONICAL_COSTING_PENDING_CONFIRMATION" | "UNSUPPORTED";
+
+/**
+ * Provenance of the table above. The numbers entered the repo in commit
+ * 5246607 (Patch 2A / 17D.2, 2026-08-19) self-labelled "owner presets" with
+ * NO OWNER_STANDARDS entry, no dated decision and no measurement record —
+ * the same pattern 2D-4D2 audited for the 1% overage before the owner
+ * confirmed it. Until a physical confirmation is recorded, the table is the
+ * current canonical COSTING geometry, not a confirmed PRODUCTION dimension.
+ */
+export const JAR_LABEL_GEOMETRY_AUTHORITY = {
+  authorityStatus: "CANONICAL_COSTING_PENDING_CONFIRMATION" as SpecAuthorityStatus,
+  ownerConfirmationRequired: true,
+  source: JAR_LABEL_GEOMETRY_SOURCE,
+  version: JAR_LABEL_GEOMETRY_VERSION,
+  introducedIn: "5246607 (Patch 2A / 17D.2, 2026-08-19)",
+  ownerRecord: null as string | null,
+  note: "Current canonical costing geometry. Physical dimensions need owner confirmation (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md). No cost changes until the owner confirms.",
+} as const;
 
 export type JarLabelSelection = { side: boolean; lid: boolean; tamper: boolean };
 
