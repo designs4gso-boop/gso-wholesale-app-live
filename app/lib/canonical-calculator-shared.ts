@@ -87,6 +87,12 @@ export const CANONICAL_REASONS = {
   noPrintedComponent: "NO_PRINTED_COMPONENT",
   /** A requested label has no owner application-labor timing. */
   applicationStandardRequired: "MISSING_APPLICATION_STANDARD",
+  /** 2026-10-05: CUSTOM SIZE OVERRIDE on, but a selected piece has no complete, in-range custom size. */
+  customSizeIncomplete: "CUSTOM_SIZE_INCOMPLETE",
+  /** 2026-10-05: custom dimensions supplied WITHOUT the override flag — never applied, never ignored. */
+  customSizeConflict: "CUSTOM_SIZE_CONFLICT",
+  /** 2026-10-05: no authoritative standard dimensions exist for the selected fixed product. */
+  standardDimensionsNotConfirmed: "STANDARD_PRODUCTION_DIMENSIONS_NOT_CONFIRMED",
 } as const;
 
 /* ------------------------------------------------------------------ *
@@ -139,6 +145,49 @@ export type CanonicalDiagnostics = {
   personalizationSetupEvents: number | null;
   /** Owner decision: personalization is free to the customer. */
   personalizationCustomerAddOn: number | null;
+  /**
+   * 2026-10-05 — which fixed-product production spec priced this job and
+   * whether staff overrode the standard dimensions. Lives in diagnostics so it
+   * rides into every quote snapshot (snapshot.canonical.diagnostics) with no
+   * schema change. null for families without a fixed spec (custom labels,
+   * banners).
+   */
+  productSpec: CanonicalProductSpecDiagnostics | null;
+  /**
+   * 2026-10-05 — finishing cost split by stage from the engine's own lines.
+   * Nothing is re-estimated: each figure is the sum of existing line keys.
+   */
+  finishingBreakdown: CanonicalFinishingBreakdown | null;
+};
+
+export type CanonicalProductSpecDiagnostics = {
+  specVersion: string;
+  family: string;
+  productKey: string;
+  displayName: string;
+  /** Where the standard dimensions came from. */
+  source: string;
+  labelSet: string | null;
+  /** The standard (authority) geometry for the selected pieces. */
+  standard: Record<string, Record<string, number>>;
+  /** true when ANY piece used a staff CUSTOM SIZE OVERRIDE. */
+  customSize: boolean;
+  /** The override geometry actually used, per overridden piece; {} when none. */
+  override: Record<string, Record<string, number>>;
+  overriddenPieces: string[];
+  overrideReason: string | null;
+};
+
+export type CanonicalFinishingBreakdown = {
+  cuttingMachine: number;
+  cuttingAttention: number;
+  weeding: number;
+  application: number;
+  specialtySetup: number;
+  /** Sum of the five above. */
+  total: number;
+  /** Which engine line keys fed each bucket — the split is bookkeeping, not a new estimate. */
+  basis: Record<string, string[]>;
 };
 
 /**

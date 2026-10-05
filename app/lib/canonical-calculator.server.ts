@@ -82,11 +82,15 @@ import {
   productionQtyFor,
   resolveJarBlankCost,
   type JarBrand,
+  type JarGeometryOverride,
   type JarLabelSelection,
   type JarSizeKey,
   type StandardJarVariant,
 } from "./jar-cost-inputs.server";
 import { activeJarProfile } from "./jar-active-scope";
+import { JAR_LABEL_GEOMETRY_SOURCE, validateJarGeometryOverride } from "./jar-label-geometry";
+import { BAG_4X5_ARTBOARD_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
+import { PRODUCT_SPEC_VERSION } from "./product-production-spec";
 import { CANONICAL_INK_RATES } from "./ink-rates-shared";
 import {
   CANONICAL_CALIBRATION_IDENTITIES,
@@ -104,6 +108,7 @@ import {
   type CanonicalCalculatorView,
   type CanonicalDiagnostics,
   type CanonicalFamily,
+  type CanonicalFinishingBreakdown,
 } from "./canonical-calculator-shared";
 import { OWNER_STANDARDS } from "./owner-standards";
 import {
@@ -165,6 +170,18 @@ export type CanonicalJarInput = {
   /** Requested label types with no verified jar geometry — these BLOCK. */
   unsupportedLabels?: string[];
   designs?: number;
+  /**
+   * 2026-10-05 CUSTOM SIZE OVERRIDE. Only honoured when customSize is true;
+   * values without the flag BLOCK (CUSTOM_SIZE_CONFLICT) rather than being
+   * silently applied or silently ignored. A flag with an incomplete override
+   * for a selected piece BLOCKS (CUSTOM_SIZE_INCOMPLETE). Application seconds
+   * are NOT affected by an override — they stay the owner's per-size timings.
+   */
+  customSize?: boolean;
+  geometryOverride?: JarGeometryOverride | null;
+  overrideReason?: string | null;
+  /** Staff-chosen label set key (side_only / lid_only / side_lid) — recorded, not costed. */
+  labelSet?: string | null;
 };
 
 export type CanonicalBannerInput = {
@@ -437,6 +454,8 @@ const EMPTY_DIAGNOSTICS = (): CanonicalDiagnostics => ({
   printSetupEvents: null,
   personalizationSetupEvents: null,
   personalizationCustomerAddOn: null,
+  productSpec: null,
+  finishingBreakdown: null,
 });
 
 export function assembleCanonicalJob(
@@ -766,6 +785,53 @@ export function assembleCanonicalJob(
       };
       const active = activeJarProfile(cfg.brand, cfg.size);
 
+      /* ---- 2026-10-05 CUSTOM SIZE OVERRIDE (fail closed) ----
+       * Standard dimensions come from the one geometry authority. Staff may
+       * override a SELECTED piece only with the explicit flag AND a complete,
+       * in-range value; anything else blocks. */
+      const overrideSupplied = Boolean(cfg.geometryOverride && Object.keys(cfg.geometryOverride).length);
+      let jarGeometry: ReturnType<typeof validateJarGeometryOverride> = validateJarGeometryOverride(cfg.size, selection, null);
+      if (overrideSupplied && !cfg.customSize) {
+        reasons.push(CANONICAL_REASONS.customSizeConflict);
+        blockers.push(
+          `${CANONICAL_REASONS.customSizeConflict}: custom label dimensions were supplied without the CUSTOM SIZE OVERRIDE flag. Either turn the override on (Advanced / Custom Size Override) or clear the custom dimensions — the standard ${active?.label ?? cfg.size} dimensions were NOT silently used.`,
+        );
+      } else if (cfg.customSize) {
+        jarGeometry = validateJarGeometryOverride(cfg.size, selection, cfg.geometryOverride ?? null);
+        if (!jarGeometry.ok) {
+          reasons.push(CANONICAL_REASONS.customSizeIncomplete);
+          blockers.push(`${CANONICAL_REASONS.customSizeIncomplete}: ${jarGeometry.errors.join("; ")}.`);
+        } else if (!jarGeometry.overridden.length) {
+          reasons.push(CANONICAL_REASONS.customSizeIncomplete);
+          blockers.push(
+            `${CANONICAL_REASONS.customSizeIncomplete}: CUSTOM SIZE OVERRIDE is on but no custom dimension was entered for any selected label. Enter the custom size or turn the override off to use the standard ${active?.label ?? cfg.size} dimensions.`,
+          );
+        }
+      }
+      const geometryForCost = jarGeometry.ok ? jarGeometry.geometry : JAR_LABEL_GEOMETRY[cfg.size];
+      const standardGeometry = JAR_LABEL_GEOMETRY[cfg.size];
+      const overriddenPieces = jarGeometry.ok ? jarGeometry.overridden.map(String) : [];
+      const pick = (g: typeof standardGeometry, only?: string[]) => {
+        const out: Record<string, Record<string, number>> = {};
+        if (selection.side && (!only || only.includes("side"))) out.side = { ...g.side };
+        if (selection.lid && (!only || only.includes("lid"))) out.lid = { ...g.lid };
+        if (selection.tamper && (!only || only.includes("tamper"))) out.tamper = { ...g.tamper };
+        return out;
+      };
+      diagnostics.productSpec = {
+        specVersion: PRODUCT_SPEC_VERSION,
+        family: input.family,
+        productKey: active?.key ?? `${cfg.brand}/${cfg.size}`,
+        displayName: active?.label ?? `${cfg.brand} ${cfg.size}`,
+        source: JAR_LABEL_GEOMETRY_SOURCE,
+        labelSet: cfg.labelSet ?? null,
+        standard: pick(standardGeometry),
+        customSize: Boolean(cfg.customSize) && overriddenPieces.length > 0,
+        override: overriddenPieces.length ? pick(geometryForCost, overriddenPieces) : {},
+        overriddenPieces,
+        overrideReason: cfg.overrideReason ? String(cfg.overrideReason).slice(0, 240) : null,
+      };
+
       // ---- blank: a COMPLETE SET, charged once per jar ----
       const blankResolution: any = resolveJarBlankCost({
         brand: cfg.brand, size: cfg.size, quantity: production, variant: cfg.variant,
@@ -781,6 +847,7 @@ export function assembleCanonicalJob(
         productionQty: production,
         machineKey: routing.machineKey,
         loadedMediaWidthIn: input.loadedMediaWidthIn,
+        geometry: geometryForCost,
       });
       areas = jarAreas.areas;
       blockers.push(...jarAreas.blockers);
@@ -795,7 +862,7 @@ export function assembleCanonicalJob(
           nesting: jarAreas.nesting,
           machineKey: routing.machineKey,
           cutMode: input.cutMode,
-          cutGeometry: jarCutGeometry(cfg.size),
+          cutGeometry: jarCutGeometry(cfg.size, geometryForCost),
           requiresWeeding: true,
         });
         finishingStages.push(...canonicalFinishingStages(jarFinishing, { includeWeeding: true }));
@@ -1026,6 +1093,22 @@ export function assembleCanonicalJob(
 
   const trueCost = computeTrueJobCost(trueCostInput);
   diagnostics.machineMinutes = machineMinutesFrom(trueCost);
+  diagnostics.finishingBreakdown = finishingBreakdownFrom(trueCost);
+  if (input.family === "sticker-bags" || input.family === "stock-bags") {
+    diagnostics.productSpec = {
+      specVersion: PRODUCT_SPEC_VERSION,
+      family: input.family,
+      productKey: input.family === "sticker-bags" ? "bag-4x5/sticker" : "bag-4x5/stock",
+      displayName: input.family === "sticker-bags" ? "4x5 Sticker Bag" : "4x5 Stock Bag",
+      source: BAG_ARTBOARD_SOURCE,
+      labelSet: null,
+      standard: { label: { widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn } },
+      customSize: false,
+      override: {},
+      overriddenPieces: [],
+      overrideReason: null,
+    };
+  }
 
   const allBlockers = Array.from(new Set([...blockers, ...trueCost.blockers]));
   const status: TrueCostStatus = allBlockers.length
@@ -1188,6 +1271,49 @@ export function canonicalFamilyFromUi(uiFamily: string, stockBag: boolean): Cano
  * action passes the replayed `psearch` it received. Identical bytes in,
  * identical input out — there is no second construction to drift from.
  */
+/**
+ * 2026-10-05 — reads the CUSTOM SIZE OVERRIDE fields exactly as typed. A piece
+ * is present only when at least one of its fields was supplied, so a half-typed
+ * piece arrives as a partial object and the assembler can refuse it by name.
+ * Non-numeric text becomes NaN on purpose (validateJarGeometryOverride rejects it).
+ */
+function jarOverrideFromParams(params: URLSearchParams): JarGeometryOverride | null {
+  const raw = (name: string): number | undefined => {
+    const v = params.get(name);
+    if (v == null || String(v).trim() === "") return undefined;
+    return Number(v);
+  };
+  const out: JarGeometryOverride = {};
+  const sideW = raw("pjarsidew"), sideH = raw("pjarsideh");
+  if (sideW !== undefined || sideH !== undefined) out.side = { widthIn: sideW as number, heightIn: sideH as number };
+  const lidD = raw("pjarlidd");
+  if (lidD !== undefined) out.lid = { diameterIn: lidD };
+  const tamperW = raw("pjartamperw"), tamperH = raw("pjartamperh");
+  if (tamperW !== undefined || tamperH !== undefined) out.tamper = { widthIn: tamperW as number, heightIn: tamperH as number };
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 2026-10-05 — finishing decomposition from the engine's OWN lines. Each
+ * bucket is a sum of existing line keys; no split is estimated.
+ */
+function finishingBreakdownFrom(trueCost: TrueCostResult): CanonicalFinishingBreakdown {
+  const sum = (keys: string[]) => trueCost.lines.filter((l) => keys.includes(l.key)).reduce((t, l) => t + (Number(l.amount) || 0), 0);
+  const basis = {
+    cuttingMachine: ["cutting_machine"],
+    cuttingAttention: ["cutting_attention"],
+    weeding: ["weeding"],
+    application: ["application"],
+    specialtySetup: ["specialty_setup"],
+  };
+  const cuttingMachine = sum(basis.cuttingMachine);
+  const cuttingAttention = sum(basis.cuttingAttention);
+  const weeding = sum(basis.weeding);
+  const application = sum(basis.application);
+  const specialtySetup = sum(basis.specialtySetup);
+  return { cuttingMachine, cuttingAttention, weeding, application, specialtySetup, total: cuttingMachine + cuttingAttention + weeding + application + specialtySetup, basis };
+}
+
 export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalculatorInput | null {
   const family = canonicalFamilyFromUi(str(params, "pfamily"), flag(params, "pstockbag"));
   if (!family) return null;
@@ -1323,6 +1449,12 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
           .map((t) => t.trim())
           .filter(Boolean),
         designs: params.get("pdesigns") ? Math.max(0, Math.floor(num(params, "pdesigns", 1))) : undefined,
+        // 2026-10-05 CUSTOM SIZE OVERRIDE — raw values pass through untouched;
+        // the assembler validates and fails closed. Nothing is defaulted here.
+        labelSet: str(params, "pjarset") || null,
+        customSize: flag(params, "pjarcustom"),
+        geometryOverride: jarOverrideFromParams(params),
+        overrideReason: str(params, "pjaroverridereason") || null,
       },
     };
   }
