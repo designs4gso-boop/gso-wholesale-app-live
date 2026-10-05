@@ -30,25 +30,11 @@ import { applyRunSuffix } from "../lib/print-intake-routing.server";
 import { appendIntakeAudit } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
-const productionStatuses = [
-  { label: "New", value: "new" },
-  { label: "Prepress", value: "prepress" },
-  { label: "Proof Needed", value: "proof_needed" },
-  { label: "Proof Sent", value: "proof_sent" },
-  { label: "Proof Approved", value: "proof_approved" },
-  { label: "Ready to Print", value: "ready_to_print" },
-  { label: "Printing", value: "printing" },
-  { label: "Cutting", value: "cutting" },
-  { label: "Laminating", value: "laminating" },
-  { label: "QC", value: "qc" },
-  { label: "Packing", value: "packing" },
-  { label: "Ready for Pickup", value: "ready_for_pickup" },
-  { label: "Shipped", value: "shipped" },
-  { label: "Completed", value: "completed" },
-  { label: "On Hold", value: "on_hold" },
-  { label: "Reprint Needed", value: "reprint_needed" },
-  { label: "Cancelled", value: "cancelled" },
-];
+import { PRODUCTION_STATUS_OPTIONS, isStaffProductionStatus } from "../lib/production-status-vocabulary";
+
+// Hardening (2026-10-04): the staff vocabulary lives in a client-safe module so
+// the change-status action can validate against the SAME list the UI offers.
+const productionStatuses = [...PRODUCTION_STATUS_OPTIONS];
 
 const priorityOptions = [
   { label: "Low", value: "low" },
@@ -776,7 +762,13 @@ export async function action({ request }: { request: Request }) {
 
   if (intent === "changeStatus") {
     const jobId = String(formData.get("jobId") || "");
-    const status = String(formData.get("status") || "new");
+    const status = String(formData.get("status") || "");
+    // Hardening (2026-10-04): only the canonical staff vocabulary is accepted.
+    // Arbitrary strings are rejected. This manual move records a status_change
+    // event ONLY — it never manufactures art-approval, QC or shipping evidence
+    // (the agent fact loader reads proof_approved/qc_result/shipped events and
+    // proof fields, never a bare status), and no agent/runtime code calls it.
+    if (!isStaffProductionStatus(status)) return Response.json({ ok: false, message: `Invalid production status "${status}".` }, { status: 400 });
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
     if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
 
