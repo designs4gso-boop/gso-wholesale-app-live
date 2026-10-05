@@ -78,35 +78,36 @@ export function productionQtyFor(customerFinishedQty: number, overagePct = JAR_P
  * Label geometry (owner presets, Patch 2)
  * ------------------------------------------------------------------ */
 
-export type JarSizeKey = "50ml" | "100ml_tall" | "100ml_wide" | "150ml" | "250ml" | "3oz" | "4oz";
+/* 2026-10-05: the geometry table now lives in the client-safe module
+ * jar-label-geometry.ts (byte-identical values) so the Cost Calculator form and
+ * the product-spec layer can show the standard dimensions without importing
+ * this server module. Re-exported here so every existing import keeps
+ * resolving to the same single authority. */
+import {
+  JAR_LABEL_GEOMETRY,
+  type JarGeometryOverride,
+  type JarLabelGeometry,
+  type JarLabelSelection,
+  type JarSizeKey,
+} from "./jar-label-geometry";
+export { JAR_LABEL_GEOMETRY, type JarGeometryOverride, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey };
 
-export type JarLabelGeometry = {
-  /** Side wrap, rectangular. */
-  side: { widthIn: number; heightIn: number };
-  /** Lid, CIRCULAR — diameter. Ink uses circle area; nesting uses the bounding box. */
-  lid: { diameterIn: number };
-  /** Optional tamper band, rectangular. */
-  tamper: { widthIn: number; heightIn: number };
-};
-
-export const JAR_LABEL_GEOMETRY: Record<JarSizeKey, JarLabelGeometry> = {
-  "50ml": { side: { widthIn: 5.6, heightIn: 1.5 }, lid: { diameterIn: 1.6 }, tamper: { widthIn: 5.6, heightIn: 0.5 } },
-  "100ml_tall": { side: { widthIn: 6.3, heightIn: 3.15 }, lid: { diameterIn: 1.75 }, tamper: { widthIn: 6.3, heightIn: 0.5 } },
-  "100ml_wide": { side: { widthIn: 6.6, heightIn: 2.6 }, lid: { diameterIn: 1.9 }, tamper: { widthIn: 6.6, heightIn: 0.5 } },
-  "150ml": { side: { widthIn: 7.125, heightIn: 3.125 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.125, heightIn: 0.6 } },
-  "250ml": { side: { widthIn: 9.4, heightIn: 2.9 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 9.4, heightIn: 0.6 } },
-  "3oz": { side: { widthIn: 6.9, heightIn: 1.4 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 6.9, heightIn: 0.5 } },
-  "4oz": { side: { widthIn: 7.125, heightIn: 1.4 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 7.125, heightIn: 0.5 } },
-};
-
-export type JarLabelSelection = { side: boolean; lid: boolean; tamper: boolean };
+/**
+ * The geometry a cost path measures: the standard table entry unless a
+ * VALIDATED custom-size override (jar-label-geometry.ts
+ * validateJarGeometryOverride) was passed through from the canonical input.
+ * Callers that pass nothing get exactly the pre-2026-10-05 behaviour.
+ */
+export function effectiveJarGeometry(size: JarSizeKey, geometry?: JarLabelGeometry | null): JarLabelGeometry {
+  return geometry ?? JAR_LABEL_GEOMETRY[size];
+}
 
 /**
  * INKABLE ARTWORK area per set — the circular lid uses its ACTUAL circle area.
  * This is the denominator every ink calibration is measured against.
  */
-export function inkableArtworkSqInPerSet(size: JarSizeKey, selection: JarLabelSelection): number {
-  const g = JAR_LABEL_GEOMETRY[size];
+export function inkableArtworkSqInPerSet(size: JarSizeKey, selection: JarLabelSelection, geometry?: JarLabelGeometry | null): number {
+  const g = effectiveJarGeometry(size, geometry);
   let sqin = 0;
   if (selection.side) sqin += g.side.widthIn * g.side.heightIn;
   if (selection.lid) sqin += Math.PI * Math.pow(g.lid.diameterIn / 2, 2);
@@ -119,8 +120,8 @@ export function inkableArtworkSqInPerSet(size: JarSizeKey, selection: JarLabelSe
  * lid is cut from a square of media. This is deliberately LARGER than the
  * inkable area and must never be substituted for it.
  */
-export function materialFootprintSqInPerSet(size: JarSizeKey, selection: JarLabelSelection): number {
-  const g = JAR_LABEL_GEOMETRY[size];
+export function materialFootprintSqInPerSet(size: JarSizeKey, selection: JarLabelSelection, geometry?: JarLabelGeometry | null): number {
+  const g = effectiveJarGeometry(size, geometry);
   let sqin = 0;
   if (selection.side) sqin += g.side.widthIn * g.side.heightIn;
   if (selection.lid) sqin += g.lid.diameterIn * g.lid.diameterIn;
@@ -541,8 +542,8 @@ export const JAR_DEFAULT_MEDIA_WIDTH_IN = 54;
  * Builds the physical runs for one jar job. Empty runs are omitted, so a
  * lid-only job produces exactly one run.
  */
-export function jarPhysicalRuns(size: JarSizeKey, selection: JarLabelSelection, productionQty: number): NestingRun[] {
-  const g = JAR_LABEL_GEOMETRY[size];
+export function jarPhysicalRuns(size: JarSizeKey, selection: JarLabelSelection, productionQty: number, geometry?: JarLabelGeometry | null): NestingRun[] {
+  const g = effectiveJarGeometry(size, geometry);
   const qty = Math.max(0, Math.floor(productionQty));
   const runs: NestingRun[] = [];
 
@@ -589,6 +590,8 @@ export type JarNestingInput = {
   loadedMediaWidthIn?: number;
   /** Actual captured RIP Print Area_X for a historical job. Beats the default. */
   actualSweptWidthIn?: number | null;
+  /** Validated CUSTOM SIZE OVERRIDE geometry (2026-10-05). Omit = standard table. */
+  geometry?: JarLabelGeometry | null;
 };
 
 export type JarNestingAreas = {
@@ -610,7 +613,7 @@ export type JarNestingAreas = {
  * never a guessed width and never a silent number.
  */
 export function jarNestingAreas(input: JarNestingInput): { areas: JarNestingAreas; nesting: NestingResult | null; blockers: string[] } {
-  const inkableArtworkSqft = (inkableArtworkSqInPerSet(input.size, input.selection) * input.productionQty) / 144;
+  const inkableArtworkSqft = (inkableArtworkSqInPerSet(input.size, input.selection, input.geometry) * input.productionQty) / 144;
   const resolved = resolveNestingPolicy({
     machineKey: input.machineKey,
     loadedMediaWidthIn: input.loadedMediaWidthIn ?? JAR_DEFAULT_MEDIA_WIDTH_IN,
@@ -625,7 +628,7 @@ export function jarNestingAreas(input: JarNestingInput): { areas: JarNestingArea
     };
   }
 
-  const nesting = computeNesting(jarPhysicalRuns(input.size, input.selection, input.productionQty), resolved.policy);
+  const nesting = computeNesting(jarPhysicalRuns(input.size, input.selection, input.productionQty, input.geometry), resolved.policy);
   return {
     areas: {
       inkableArtworkSqft,
@@ -681,8 +684,8 @@ export const JAR_DEFAULT_CUT_MODE: CutMode = "normal";
  * Still fails closed: a profile whose artwork is too small to offset yields no
  * cutline for that component, and computeFinishing blocks rather than guessing.
  */
-export function jarCutGeometry(size: JarSizeKey): CutGeometryMap {
-  const g = JAR_LABEL_GEOMETRY[size];
+export function jarCutGeometry(size: JarSizeKey, geometry?: JarLabelGeometry | null): CutGeometryMap {
+  const g = effectiveJarGeometry(size, geometry);
   const side = deriveGsoLabelCutlineFromArtboard(g.side.widthIn, g.side.heightIn);
   const tamper = deriveGsoLabelCutlineFromArtboard(g.tamper.widthIn, g.tamper.heightIn);
   const lidCutDiameter = deriveGsoLabelCutDiameter(g.lid.diameterIn);

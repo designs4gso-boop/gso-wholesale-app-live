@@ -160,9 +160,14 @@ describe("2D-4D B bags", () => {
     const ruled = deriveGsoLabelCutlineFromArtboard(4, 5)!;
     expect(BAG_4X5_CUTLINE_IN.widthIn).toBe(ruled.cutWidthIn);
     expect(BAG_4X5_CUTLINE_IN.heightIn).toBe(ruled.cutHeightIn);
-    // there is exactly ONE bag artboard constant — no other size has one
+    // there is exactly ONE bag artboard constant — no other size has one.
+    // 2026-10-05: it lives in the client-safe bag-artboard-geometry.ts and the
+    // server module re-exports it rather than defining its own.
+    const geometrySrc = readFileSync("app/lib/bag-artboard-geometry.ts", "utf8");
+    expect(geometrySrc.match(/_ARTBOARD_IN = /g)).toHaveLength(1);
     const src = readFileSync("app/lib/bag-cost-inputs.server.ts", "utf8");
-    expect(src.match(/_ARTBOARD_IN = /g)).toHaveLength(1);
+    expect(src.match(/_ARTBOARD_IN = /g)).toBeNull();
+    expect(src).toContain('import { BAG_4X5_ARTBOARD_IN } from "./bag-artboard-geometry"');
   });
 
   it("MOQ, application and setup are unchanged", () => {

@@ -78,7 +78,10 @@ export const BAG_APPLICATION_RETIRED_LABELS_PER_HOUR = 256;
 /* ------------------------------------------------------------------ *
  * Geometry — ARTBOARD drives printing/nesting, CUTLINE drives the cutter.
  * ------------------------------------------------------------------ */
-export const BAG_4X5_ARTBOARD_IN = { widthIn: 4.0, heightIn: 5.0 } as const;
+// 2026-10-05: value moved verbatim to the client-safe bag-artboard-geometry.ts
+// so the product-spec layer can read it; re-exported here unchanged.
+import { BAG_4X5_ARTBOARD_IN } from "./bag-artboard-geometry";
+export { BAG_4X5_ARTBOARD_IN };
 /**
  * 2D-4C2A: DERIVED, not hand-recorded. The GSO standard builds every label's
  * cutline from its artboard with a -0.0625in inward offset, so a 4.00 x 5.00in
