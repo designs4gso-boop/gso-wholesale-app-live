@@ -500,6 +500,18 @@ export type CommercialPriceResult = {
   // 15F.0K.3: market context for badges/snapshots — INFORMATION ONLY, never
   // feeds back into the price (warnings never alter price; test-pinned).
   marketPosition: MarketPosition | null;
+  // 2026-10-05: owner price ladder context (jars) — null when no ladder applies.
+  ownerLadder?: {
+    unitPrice: number;
+    totalPrice: number;
+    source: string;
+    label: string;
+    controls: boolean;
+    raisedByFloor: boolean;
+    floorPct: number;
+    finalVsLadderPct: number | null;
+    ladderMarginPct: number | null;
+  } | null;
   // 15G.4C: specialty commercial context (bags): tier %, holo %, small-run
   // minimum, floor, deep-build flag — null on standard jobs.
   specialty?: {
@@ -558,6 +570,15 @@ export function computeCommercialPrice(input: {
     requiredWhite: boolean;
     holographic: boolean;
   } | null;
+  /**
+   * 2026-10-05 — OWNER PRICE LADDER (jars). When present, the owner-approved
+   * ladder unit price REPLACES the quantity-band margin curve as the
+   * commercial candidate; the family minimum margin (never below the 40 %
+   * global floor) and the owner minimum-profit / minimum-order policies stay
+   * as raising-only protection. The margin curve is NOT consulted. See
+   * jar-commercial-pricing.ts for the evidence behind this.
+   */
+  ownerLadder?: { unitPrice: number; source: string; label: string } | null;
 }): CommercialPriceResult {
   const quantity = Math.max(1, Math.floor(input.quantity));
   const completeCost = Math.max(0, input.completeCost);
@@ -573,20 +594,27 @@ export function computeCommercialPrice(input: {
   const curveKey = input.marginCurveKey ?? rule?.key ?? null;
   const curveConfig = marginCurveConfigFor(values, curveKey);
 
-  const baseMarginPct = input.marginPctOverride != null && Number.isFinite(input.marginPctOverride) && input.marginPctOverride > 0
-    ? input.marginPctOverride
-    : resolveMarginPctForQuantity(values, curveKey, rule, quantity);
-  const marginSource = input.marginPctOverride != null && Number.isFinite(input.marginPctOverride) && input.marginPctOverride > 0
-    ? "owner per-tier margin edit (Advanced Pricing Controls)"
-    : rule
-      ? `${rule.label} researched curve at quantity band (${COMMERCIAL_PRICING_SOURCE})`
-      : `provisional universal curve — FAMILY MARGIN RULE NOT CONFIGURED (${MARGIN_FLOOR_PCT}% floor)`;
-
-  const costBasedPrice = marginMath(completeCost, baseMarginPct).price;
   // Family minimum: config entry wins when present (Stage-A defaults carry
   // the identical familyMinPct values), else the rule constant.
   const floorPct = Math.max(curveConfig?.familyMinPct ?? rule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
   const marginFloorPrice = marginMath(completeCost, floorPct).price;
+  const ownerLadder = input.ownerLadder && Number.isFinite(input.ownerLadder.unitPrice) && input.ownerLadder.unitPrice > 0 ? input.ownerLadder : null;
+  const staffOverride = input.marginPctOverride != null && Number.isFinite(input.marginPctOverride) && input.marginPctOverride > 0;
+  const baseMarginPct = staffOverride
+    ? input.marginPctOverride!
+    : ownerLadder
+      ? floorPct // ladder mode: the margin curve is not consulted; the floor is the only margin figure in play
+      : resolveMarginPctForQuantity(values, curveKey, rule, quantity);
+  const marginSource = staffOverride
+    ? "owner per-tier margin edit (Advanced Pricing Controls)"
+    : ownerLadder
+      ? `${ownerLadder.source} + ${floorPct}% minimum margin protection`
+      : rule
+        ? `${rule.label} researched curve at quantity band (${COMMERCIAL_PRICING_SOURCE})`
+        : `provisional universal curve — FAMILY MARGIN RULE NOT CONFIGURED (${MARGIN_FLOOR_PCT}% floor)`;
+
+  const costBasedPrice = marginMath(completeCost, baseMarginPct).price;
+  const ownerLadderPrice = ownerLadder ? ownerLadder.unitPrice * quantity : null;
   const premiumConfig = premiumRule ? marginCurveConfigFor(values, PREMIUM_FINISH_MARGIN_KEY) : null;
   const premiumFinishFloorPrice = premiumRule
     ? marginMath(completeCost, Math.max(
@@ -658,7 +686,14 @@ export function computeCommercialPrice(input: {
     };
   }
 
-  const contenders: Array<{ rule: string; price: number | null }> = specialtyActive
+  const contenders: Array<{ rule: string; price: number | null }> = ownerLadder && !staffOverride
+    ? [
+        { rule: ownerLadder.label, price: ownerLadderPrice },
+        { rule: `Minimum margin protection — ${floorPct}% family minimum (cost / (1 - ${floorPct}%))`, price: marginFloorPrice },
+        { rule: "Minimum gross-profit floor (owner, provisional)", price: minimumGrossProfitPrice },
+        { rule: "Minimum order total (owner, provisional)", price: minimumOrderTotalPrice },
+      ]
+    : specialtyActive
     ? [
         // owner rule: the old full-margin cost-plus path is NOT the primary
         // specialty candidate — market tier + 40% floor + job minimums only.
@@ -677,7 +712,7 @@ export function computeCommercialPrice(input: {
         { rule: "Verified market target (owner config)", price: verifiedMarketTargetPrice },
       ];
   let finalTotalPrice = 0;
-  let controllingRule = specialtyActive ? SPECIALTY_FLOOR_RULE : contenders[0].rule;
+  let controllingRule = ownerLadder && !staffOverride ? contenders[0].rule : specialtyActive ? SPECIALTY_FLOOR_RULE : contenders[0].rule;
   for (const contender of contenders) {
     if (contender.price != null && contender.price > finalTotalPrice) {
       finalTotalPrice = contender.price;
@@ -711,6 +746,21 @@ export function computeCommercialPrice(input: {
     achievedProfit,
     achievedMarginPct,
     specialty: specialtyInfo,
+    // 2026-10-05: owner ladder context for jars — what the owner's own price
+    // is, whether it controlled, and by how much the floor raised it.
+    ownerLadder: ownerLadder
+      ? {
+          unitPrice: ownerLadder.unitPrice,
+          totalPrice: ownerLadderPrice!,
+          source: ownerLadder.source,
+          label: ownerLadder.label,
+          controls: controllingRule === ownerLadder.label,
+          raisedByFloor: !staffOverride && finalTotalPrice > ownerLadderPrice! + 1e-9,
+          floorPct,
+          finalVsLadderPct: ownerLadderPrice! > 0 ? ((finalTotalPrice / ownerLadderPrice!) - 1) * 100 : null,
+          ladderMarginPct: ownerLadderPrice! > 0 ? ((ownerLadderPrice! - completeCost) / ownerLadderPrice!) * 100 : null,
+        }
+      : null,
     // 15F.0K.3: computed AFTER price selection — display/snapshot info only.
     marketPosition: marketBand
       ? (() => {

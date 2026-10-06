@@ -42,6 +42,8 @@ import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // owns the value; client components cannot import .server modules).
 const MAX_ADDITIONAL_LINES_UI = 8;
 import { calculatorFamilies, calculatorFamilyValues, familyByKeyOrAlias } from "../lib/product-family-registry";
+// 2026-10-05: owner jar price ladder + quantity-break envelope (see jar-commercial-pricing.ts)
+import { JAR_PRICE_BREAK_SUPPORT_QUANTITIES, applyQuantityBreakEnvelope, dropSupportRows, jarSpecialtyXFromLayers, resolveJarOwnerLadder } from "../lib/jar-commercial-pricing";
 import { resolveProductDisplayName } from "../lib/commercial-name-resolver.server";
 import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { buildCanonicalPricingSnapshot } from "../lib/pricing-snapshot";
@@ -1026,9 +1028,24 @@ export async function loader({ request }: { request: Request }) {
       // 2D-4C1A FIX 2: a multi-line label job has no approved way to split a
       // new total across customer-entered lines, so alternate rungs are
       // SUPPRESSED — the job as entered is the only quotable quantity.
+      // 2026-10-05: jar families price hidden SUPPORT rows at every known price
+      // break so the quantity-break envelope can cap any requested quantity.
+      const jarPricingFamilyP = canonicalUiFamily(pFamily) === "premium-jars" || canonicalUiFamily(pFamily) === "standard-jars";
+      const supportQuantitiesP = jarPricingFamilyP ? JAR_PRICE_BREAK_SUPPORT_QUANTITIES : [];
+      const displayQuantitySetP = new Set([...baseTierQuantities, requestedQtyP]);
       const tierQuantities = canonicalSupportsTierLadder(canonicalInput)
-        ? [...new Set([...baseTierQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b)
+        ? [...new Set([...baseTierQuantities, ...supportQuantitiesP, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b)
         : [requestedQtyP].filter((value) => value > 0);
+      const jarProfileP = jarPricingFamilyP ? resolveActiveJarProfile(pickedBlank?.name || "") : null;
+      const jarHoloP = /holo/i.test(productInput.material?.name || "");
+      const jarLadderFor = (qty: number) => {
+        if (!jarProfileP) return null;
+        const resolved = resolveJarOwnerLadder({
+          brand: jarProfileP.brand, sizeKey: jarProfileP.size, quantity: qty, holographic: jarHoloP,
+          specialtyX: jarSpecialtyXFromLayers({ glossLayers: Number(eparams.get("pglosslayers") || 0), whiteLayers: Number(eparams.get("pwhitelayers") || 0), holographic: jarHoloP }),
+        });
+        return resolved.ok ? { unitPrice: resolved.quote.unitPrice, source: resolved.quote.source, label: resolved.quote.label } : null;
+      };
       // 15F.0-C: margin comes from each row's QUANTITY (researched band), never
       // from row count/position — adding the requested row cannot shift the
       // standard rows (forensic P0-1 fix). Families without a researched curve
@@ -1154,11 +1171,13 @@ export async function loader({ request }: { request: Request }) {
             blockers: [...run.missing, ...authority.blockers],
             commercial: null,
             status: "BLOCKED",
+            supportRow: !displayQuantitySetP.has(qty), floorPct: floorForFamily,
           };
         }
         const completeCost = authority.completeCost;
         const commercial = computeCommercialPrice({
           familyKey: canonicalUiFamily(pFamily), quantity: qty, completeCost,
+          ownerLadder: jarLadderFor(qty), // 2026-10-05 owner jar ladder (null for non-jar / Chiron)
           marginRule: marginRuleForPricingP, premiumEligible: premiumEligibleP,
           marginPctOverride: overrideMargin,
           finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
@@ -1200,12 +1219,15 @@ export async function loader({ request }: { request: Request }) {
           freightSource: tierFreight.source,
           setupTotal: run.setupTotal,
           blockers: [...run.missing, ...authority.blockers],
-          commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP, marketPosition: commercial.marketPosition, specialty: commercial.specialty }, // 15F.0K.3 + 15G.4C
+          commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP, marketPosition: commercial.marketPosition, specialty: commercial.specialty, ownerLadder: commercial.ownerLadder ?? null }, // 15F.0K.3 + 15G.4C + 2026-10-05 owner ladder
+          supportRow: !displayQuantitySetP.has(qty), floorPct: floorForFamily,
           // A canonical family with no usable true cost can never read READY
           // TO QUOTE, whatever the legacy engine and the margin gate think.
           status: (run.missing.length || !authority.eligible) ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
         };
       });
+      // 2026-10-05: quantity-break envelope for jars, then hide the support rows.
+      productTiers = dropSupportRows(jarPricingFamilyP ? applyQuantityBreakEnvelope(productTiers) : productTiers);
     }
     // 15F.0J.2: multi-line sticker jobs. The PRIMARY sticker form is ALWAYS
     // Line 1; pslcount counts ADDITIONAL lines (>=1 activates multi-line —
@@ -1384,6 +1406,12 @@ export async function loader({ request }: { request: Request }) {
             return ladder.unitPrice != null ? { qty: requestedQtyP, unitPrice: ladder.unitPrice, total: ladder.unitPrice * requestedQtyP, tierUsed: ladder.tierUsed } : null;
           })()
         : null,
+      // 2026-10-05: one staff sentence describing the commercial basis for jars.
+      pricingBasis: productTiers && productTiers.some((tier: any) => tier.commercial?.ownerLadder)
+        ? { kind: "owner_ladder", text: "Owner jar price ladder (16D, approved 2026-08-12) with minimum margin protection — the margin curve is not used for this product." }
+        : productTiers && (canonicalUiFamily(pFamily) === "premium-jars" || canonicalUiFamily(pFamily) === "standard-jars")
+          ? { kind: "curve_with_envelope", text: "No owner price ladder for this jar (Chiron / out of ladder range): quantity-band margin curve with the quantity-break envelope (totals never fall when quantity rises)." }
+          : null,
       marginFamily: productMarginRule
         ? { key: productMarginRule.key, label: productMarginRule.label, curve: productMarginRule.curve, minPct: productMarginRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
         : { key: productMarginKey || "", label: "FAMILY MARGIN RULE NOT CONFIGURED", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
@@ -1846,9 +1874,23 @@ export async function action({ request }: { request: Request }) {
     const configLadderSave = pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamilySave)] ?? pricingPolicy.values.tierLadders.defaultLadder;
     const baseQuantitiesSave = !fRead("eqty") ? (savedIsDtp ? DTP_LADDER_QUANTITIES : configLadderSave) : quantities;
     // 2D-4C1A FIX 2 — loader parity: multi-line label jobs quote only as entered.
+    // 2026-10-05 loader parity: jar support rows for the quantity-break envelope.
+    const jarPricingFamilySave = canonicalUiFamily(pFamilySave) === "premium-jars" || canonicalUiFamily(pFamilySave) === "standard-jars";
+    const supportQuantitiesSave = jarPricingFamilySave ? JAR_PRICE_BREAK_SUPPORT_QUANTITIES : [];
+    const displayQuantitySetSave = new Set([...baseQuantitiesSave, savedRequestedQty]);
     const tierQuantitiesSave = canonicalSupportsTierLadder(canonicalInputSave)
-      ? [...new Set([...baseQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b)
+      ? [...new Set([...baseQuantitiesSave, ...supportQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b)
       : [savedRequestedQty].filter((value) => value > 0);
+    const jarProfileSave = jarPricingFamilySave ? resolveActiveJarProfile(savedBlank?.name || "") : null;
+    const jarHoloSave = /holo/i.test(productInputSave.material?.name || "");
+    const jarLadderForSave = (qty: number) => {
+      if (!jarProfileSave) return null;
+      const resolved = resolveJarOwnerLadder({
+        brand: jarProfileSave.brand, sizeKey: jarProfileSave.size, quantity: qty, holographic: jarHoloSave,
+        specialtyX: jarSpecialtyXFromLayers({ glossLayers: Number(fRead("pglosslayers") || 0), whiteLayers: Number(fRead("pwhitelayers") || 0), holographic: jarHoloSave }),
+      });
+      return resolved.ok ? { unitPrice: resolved.quote.unitPrice, source: resolved.quote.source, label: resolved.quote.label } : null;
+    };
     const validMargins = margins.filter((value) => Number.isFinite(value) && value > 0);
     // 15F.0-C: quantity-band margins at save — identical resolver to the loader.
     const provisionalRuleSave: FamilyMarginRule = { key: "provisional-universal", label: "Provisional universal curve", curve: [...PROVISIONAL_MARGIN_CURVE], familyMinPct: MARGIN_FLOOR_PCT, aliases: [] };
@@ -1941,11 +1983,13 @@ export async function action({ request }: { request: Request }) {
           blockers: [...run.missing, ...authority.blockers],
           commercial: null,
           status: "BLOCKED",
+          supportRow: !displayQuantitySetSave.has(qty), floorPct: floorForFamilySave,
         };
       }
       const completeCost = authority.completeCost;
       const commercial = computeCommercialPrice({
         familyKey: canonicalUiFamily(pFamilySave), quantity: qty, completeCost,
+        ownerLadder: jarLadderForSave(qty), // 2026-10-05 owner jar ladder (loader parity)
         marginRule: marginRuleForPricingSave, premiumEligible: premiumEligibleSave,
         marginPctOverride: overrideMarginSave,
         finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
@@ -1968,10 +2012,13 @@ export async function action({ request }: { request: Request }) {
         unitPrice: qty > 0 ? (commercial.finalTotalPrice + filePrepFeeSave) / qty : commercial.finalUnitPrice, totalPrice: commercial.finalTotalPrice + filePrepFeeSave, profit: commercial.achievedProfit + filePrepFeeSave, actualMarginPct: commercial.achievedMarginPct, belowFloor,
         draftOnly: run.missing.length > 0 || !authority.eligible, freightTotal: tierFreight.total, freightSource: tierFreight.source, setupTotal: run.setupTotal,
         blockers: [...run.missing, ...authority.blockers],
-        commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave, marketPosition: commercial.marketPosition, specialty: commercial.specialty }, // 15F.0K.3 + 15G.4C
+        commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave, marketPosition: commercial.marketPosition, specialty: commercial.specialty, ownerLadder: commercial.ownerLadder ?? null }, // 15F.0K.3 + 15G.4C + 2026-10-05 owner ladder
+        supportRow: !displayQuantitySetSave.has(qty), floorPct: floorForFamilySave,
         status: (run.missing.length || !authority.eligible) ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
       };
     });
+    // 2026-10-05: quantity-break envelope (jars) then drop hidden support rows — loader parity.
+    savedTiers = dropSupportRows(jarPricingFamilySave ? applyQuantityBreakEnvelope(savedTiers) : savedTiers);
     const selectedTierQty = Math.floor(Number(fRead("pseltier") || 0));
     savedSelectedTier = savedTiers.find((tier) => tier.quantity === selectedTierQty)
       || savedTiers.find((tier) => tier.requested)
@@ -2627,12 +2674,17 @@ function EmergencySection() {
       {/* 14B.1a: Automatic Costing form (Recommended) — server computes everything */}
       <div style={{ borderTop: "2px solid #b45309", marginTop: 14, paddingTop: 12 }}>
         <h3 style={{ margin: "0 0 4px" }}>Cost Calculator</h3>
-        <p style={smallHelp}>Choose a product family and enter the job details to begin.</p>
-        <p style={smallHelp}>Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
+        <p style={smallHelp}>Choose a product, enter the job, press CALCULATE COST. You get the true manufacturing cost first, then the recommended customer price. Legacy diagnostics are collapsed at the bottom. Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
         <ProductDrivenForm />
         <CanonicalTrueCost />
-        <ProductBreakdown />
         <ProductTiers />
+        {/* 2026-10-05: legacy per-line diagnostics are secondary — collapsed under the canonical result and the customer price. */}
+        {emergency.productMode?.result ? (
+          <details style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 10, padding: "6px 10px", background: "#fafafa" }}>
+            <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#6b7280" }}>Advanced diagnostics — legacy 14C.2 per-line breakdown (not the job cost)</summary>
+            <ProductBreakdown />
+          </details>
+        ) : null}
         {(emergency as any).autoCost ? (
           <div style={{ marginTop: 10 }}>
             <b style={{ fontSize: 13 }}>Automatic cost breakdown</b>
@@ -3190,6 +3242,23 @@ function ProductDrivenForm() {
     }
   }
   const jarOverrideActive = jarCustom && ["sidew", "sideh", "lidd", "tamperw", "tamperh"].some((key) => ov(key) != null);
+  /* 2026-10-05 overnight: label-count helper derives from the CURRENT quantity
+   * field (canonLine.qty tracks pqty on every form change). Never a stale or
+   * hard-coded number; neutral wording when the quantity is missing/invalid. */
+  const jarQtyForCopy = (() => {
+    const n = Number(canonLine.qty);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+  })();
+  const jarLabelCountCopy = (() => {
+    const pieces: string[] = [];
+    if (jarSelection.side) pieces.push("side label");
+    if (jarSelection.lid) pieces.push("lid label");
+    if (jarSelection.tamper) pieces.push("tamper band");
+    if (!pieces.length) return "Choose a label set: one label of each selected kind is printed and applied per jar.";
+    if (jarQtyForCopy == null) return `One ${pieces.join(", one ")} per jar. Enter the quantity to see the label counts.`;
+    const fmt = (n: number) => n.toLocaleString();
+    return `${fmt(jarQtyForCopy)} jar${jarQtyForCopy === 1 ? "" : "s"}: ${pieces.map((p) => `${fmt(jarQtyForCopy)} ${p}${jarQtyForCopy === 1 ? "" : "s"}`).join(" + ")}.`;
+  })();
   const overrideBadge = <span style={{ marginLeft: 8, background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11 }}>CUSTOM SIZE OVERRIDE</span>;
 
   const chironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "CHIRON");
@@ -3271,7 +3340,7 @@ function ProductDrivenForm() {
             <select name="pjarset" value={jarSetSel} onChange={(event) => setJarSetSel(event.currentTarget.value)} style={inputStyle}>
               {LABEL_SETS.map((set) => <option key={set.key} value={set.key}>{set.label}</option>)}
             </select>
-            <div style={smallHelp}>One label per piece per jar: Side + Lid on 128 jars is 128 side labels and 128 lid labels.</div>
+            <div style={smallHelp}>{jarLabelCountCopy}</div>
           </label>
           {jarTamperAllowed ? (
             <label style={{ fontSize: 12 }}>
@@ -4173,12 +4242,28 @@ function ProductTiers() {
   const productLabel = pm.productLabel || familyEntryForLabel?.label || "";
   return (
     <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
-      <b style={{ fontSize: 13 }}>Automatic pricing tiers — generated from the calculated job (no re-entry)</b>
+      <b style={{ fontSize: 15 }}>RECOMMENDED CUSTOMER PRICE</b>
+      <div style={{ ...smallHelp, marginTop: 2 }}>Automatic pricing tiers generated from the calculated job (no re-entry). Customer price is commercial policy; it never changes the true manufacturing cost above.</div>
       <p style={{ ...smallHelp, marginTop: 4 }}>
-        {mf.configured
+        {pm.pricingBasis
+          ? <><b>Pricing basis:</b> {pm.pricingBasis.text} Family minimum {mf.configured ? mf.minPct : emergency.floor}% · global floor {emergency.floor}%.</>
+          : mf.configured
           ? <>Margin family: <b>{mf.label}</b> · researched curve {mf.curve.join(" / ")}% · family minimum {mf.minPct}% · global floor {emergency.floor}% · source: {mf.source}</>
           : <><b style={{ color: "#92400e" }}>FAMILY MARGIN RULE NOT CONFIGURED</b> — provisional universal curve with the {emergency.floor}% global floor. Margins are editable in Advanced Pricing Controls.</>}
       </p>
+      {(() => {
+        // 2026-10-05: owner-ladder vs floor conflict, stated once for the requested row.
+        const ol = requested?.commercial?.ownerLadder;
+        if (!ol) return null;
+        return (
+          <div style={{ border: `1px solid ${ol.raisedByFloor ? "#fde68a" : "#bbf7d0"}`, background: ol.raisedByFloor ? "#fffbeb" : "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
+            <b>Owner storefront price for this jar at {requested.quantity.toLocaleString()}:</b> {money2(ol.unitPrice)}/jar ({money2(ol.totalPrice)} total; {ol.ladderMarginPct != null ? `${ol.ladderMarginPct.toFixed(1)}% margin on true cost` : ""}).
+            {ol.raisedByFloor
+              ? <> <b style={{ color: "#92400e" }}>OWNER CONFIRMATION PENDING:</b> that price is below the {ol.floorPct}% minimum margin, so the quote is held at the margin floor ({money2(requested.unitPrice)}/jar, {ol.finalVsLadderPct != null ? `+${ol.finalVsLadderPct.toFixed(0)}%` : ""} above the ladder). The owner can lower the jar margin floor or revise the ladder in docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md.</>
+              : <> The owner ladder controls this price (above the margin floor).</>}
+          </div>
+        );
+      })()}
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           {pm.isDtp ? (
