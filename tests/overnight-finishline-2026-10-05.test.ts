@@ -89,3 +89,21 @@ describe("PHASE 15/23 — Cost Verification exposes pricing authorities read-onl
     expect(tokens).toMatch(/BLOCKED: \{ label: "BLOCKED", bg: "#fef2f2"/);
   });
 });
+
+describe("PHASE 29/31 — stale constants fixed without behaviour change", () => {
+  it("configurator audit expects the canonical bag MOQ (50), not the retired pilot 64", async () => {
+    const src = readFileSync("app/routes/app.erp.configurator-audit.tsx", "utf8");
+    expect(src).toContain("const STOCK_BAG_MIN_QTY = 50;");
+    expect(src).not.toContain("const STOCK_BAG_MIN_QTY = 64;");
+    const bags = await import("../app/lib/bag-cost-inputs.server");
+    expect(bags.STOCK_BAG_MOQ).toBe(50);
+    expect(bags.STICKER_BAG_MOQ).toBe(50);
+  });
+  it("the canonical engine reads the approved Poseidon roll cost instead of re-typed arithmetic (identical value)", async () => {
+    const src = readFileSync("app/lib/canonical-calculator.server.ts", "utf8");
+    expect(src).toContain("const LABEL_MEDIA_PER_SQFT = APPROVED_ROLL_COSTS.poseidonMattePerSqft;");
+    expect(src).not.toContain("const LABEL_MEDIA_PER_SQFT = 213 / ((54 / 12) * 150);");
+    const approved = await import("../app/lib/approved-cost-updates.server");
+    expect(approved.APPROVED_ROLL_COSTS.poseidonMattePerSqft).toBeCloseTo(213 / ((54 / 12) * 150), 12);
+  });
+});

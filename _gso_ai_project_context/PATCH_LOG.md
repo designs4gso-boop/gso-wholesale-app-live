@@ -643,3 +643,10 @@ Not changed: any cost, weeding or application number; RecipeLabelZone values; Pa
 Added: tests/jar-live-smoke-followup.test.ts, tests/fixtures/jar-live-smoke-100ml-tall-2026-10-05.json.
 Changed: canonical-calculator-shared.ts (diagnostics applicationBreakdown + cutPathBasis), canonical-calculator.server.ts (populate both from existing engine data), jar-cost-inputs.server.ts (stale cut comment), cost-calculator route (context-aware application standard card, APPLICATION BREAKDOWN table, WHY CUTTING IS PROVISIONAL card, legacy application row marker), docs.
 Not changed: any cost line, pricing, weeding or application number; CUT_PATH_ESTIMATE_REQUIRED semantics.
+
+## Patch OVERNIGHT-FINISHLINE-2026-10-05 - UX + pricing + cleanup + release readiness (LOCAL branch gso-erp-overnight-finishline-2026-10-05)
+
+Pricing: app/lib/jar-commercial-pricing.ts (owner 16D ladder resolution, quantity-break envelope, support quantities), commercial-pricing-policy.server.ts (ownerLadder input/result), cost-calculator route (jar ladder wiring in loader + save, envelope, support rows, pricing basis, owner-ladder note, snapshot context, override copy, legacy diagnostics collapsed, quantity-derived jar helper). Tests: pricing-policy-sanity-2026-10-05 (every qty 50..1000), overnight-finishline-2026-10-05. Generated audit tables in docs/generated/.
+UI: app.tsx nav (24 grouped links), app._index.tsx dashboard (needs-attention counts, advanced tools), walkthrough wording, pricing-settings dead-control marking, print-intake/rip-imports/rip-import-review/print-logs flow strip + copy, cost-verification pricing authorities, erp-ui-tokens.ts, product-setup spec card lines, quotes/production/agent-review-queue/ops-hub copy pass, materials/machines/vendors/vendor-cost-book/reports copy pass.
+Not changed: any true cost, weeding/application/geometry number, schema, migrations, ops safety defaults, Slack/worker behaviour, printer routing.
+Owner: docs/GSO_ERP_FINAL_OWNER_CHECKLIST.md.

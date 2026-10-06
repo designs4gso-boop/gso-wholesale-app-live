@@ -4,7 +4,9 @@ import { db } from "../db.server";
 
 const STOCK_BAG_PRODUCT_TYPE = "stock_bag_4x5";
 const STOCK_BAG_PRODUCT_TYPE_LABEL = "4x5 Stock Bag";
-const STOCK_BAG_MIN_QTY = 64;
+// 2026-10-05: the canonical storefront bag MOQ is 50 (owner-approved 2026-10-04; STICKER_BAG_MOQ / STOCK_BAG_MOQ /
+// STOREFRONT_BAG_MIN_QTY all = 50). The retired pilot value 64 must not be asserted as the expected row value.
+const STOCK_BAG_MIN_QTY = 50;
 const STOCK_BAG_DEFAULT_SIDES = "Double Sided";
 
 function norm(value: unknown) {

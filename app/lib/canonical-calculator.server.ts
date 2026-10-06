@@ -115,6 +115,7 @@ import {
   type CanonicalFinishingBreakdown,
 } from "./canonical-calculator-shared";
 import { OWNER_STANDARDS } from "./owner-standards";
+import { APPROVED_ROLL_COSTS } from "./approved-cost-updates.server";
 import {
   DEFAULT_OPERATOR_ATTENTION_PCT,
   DEFAULT_OPERATOR_LABOR_RATE_PER_HOUR,
@@ -1204,7 +1205,8 @@ export function assembleCanonicalJob(
 }
 
 /** Verified roll cost for bag-label media. */
-const LABEL_MEDIA_PER_SQFT = 213 / ((54 / 12) * 150);
+// 2026-10-05: read the approved roll cost instead of re-typing its arithmetic (value identical: 0.3155555556).
+const LABEL_MEDIA_PER_SQFT = APPROVED_ROLL_COSTS.poseidonMattePerSqft;
 
 /**
  * Map a FinishingResult onto engine stages, preserving category AND basis.
