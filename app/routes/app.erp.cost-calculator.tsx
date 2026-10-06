@@ -2685,7 +2685,7 @@ function EmergencySection() {
       {/* 14B.1a: Automatic Costing form (Recommended) — server computes everything */}
       <div style={{ borderTop: "2px solid #b45309", marginTop: 14, paddingTop: 12 }}>
         <h3 style={{ margin: "0 0 4px" }}>Cost Calculator</h3>
-        <p style={smallHelp}>Choose a product, enter the job, press CALCULATE COST. You get the true manufacturing cost first, then the recommended customer price. Legacy diagnostics are collapsed at the bottom. Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
+        <p style={smallHelp}>Choose a product family and enter the job details to begin. Press CALCULATE COST: you get the true manufacturing cost first, then the recommended customer price. Legacy diagnostics are collapsed at the bottom. Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
         <ProductDrivenForm />
         <CanonicalTrueCost />
         <ProductTiers />
@@ -4257,7 +4257,7 @@ function ProductTiers() {
   return (
     <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
       <b style={{ fontSize: 15 }}>RECOMMENDED CUSTOMER PRICE</b>
-      <div style={{ ...smallHelp, marginTop: 2 }}>Automatic pricing tiers generated from the calculated job (no re-entry). Customer price is commercial policy; it never changes the true manufacturing cost above.</div>
+      <div style={{ ...smallHelp, marginTop: 2 }}>Automatic pricing tiers — generated from the calculated job (no re-entry). Customer price is commercial policy; it never changes the true manufacturing cost above.</div>
       <p style={{ ...smallHelp, marginTop: 4 }}>
         {pm.pricingBasis
           ? <><b>Pricing basis:</b> {pm.pricingBasis.text} Family minimum {mf.configured ? mf.minPct : emergency.floor}% · global floor {emergency.floor}%.</>

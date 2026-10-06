@@ -602,7 +602,7 @@ describe("automatic tier flow pins (14C.2)", () => {
     expect(src3).toContain("Automatic pricing tiers — generated from the calculated job (no re-entry)");
     expect(src3).toContain("computeProductDrivenCost({ ...productInput, quantity: qty })"); // loader rerun per tier
     expect(src3).toContain("computeProductDrivenCost({ ...productInputSave, quantity: qty })"); // save rerun per tier
-    expect(src3).toContain("[...new Set([...baseTierQuantities, requestedQtyP])]"); // requested quantity always a row (15C: DTP uses vendor tier defaults)
+    expect(src3).toContain("[...new Set([...baseTierQuantities, ...supportQuantitiesP, requestedQtyP])]"); // requested quantity always a row (15C: DTP uses vendor tier defaults)
     expect(src3).toContain("← requested"); // highlighted
     expect(src3).toContain("if (requestedQtyP > 0) {"); // no tier table before a real calculation
   });

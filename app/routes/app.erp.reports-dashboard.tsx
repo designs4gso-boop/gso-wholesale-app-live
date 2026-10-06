@@ -506,7 +506,7 @@ export default function ReportsDashboard() {
         <section style={{ border: "2px solid #b45309", borderRadius: 14, padding: 16, background: "white", marginTop: 16 }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>Actual profitability (finalized jobs only)</h2>
           <p style={{ fontSize: 12, color: "#666", margin: "4px 0 10px" }}>
-            Only jobs whose final costs have been locked are counted. {report.exec.openJobs} open job(s) are excluded because their costs are not final yet.
+            Only jobs whose final costs have been locked are counted. {report.exec.openJobs} open/unfinalized job(s) are EXCLUDED because their costs are not final yet.
             {report.exec.legacyJobs ? ` ${report.exec.legacyJobs} older job(s) were finalized before snapshots existed and use stored totals only.` : ""} Nothing here changes pricing automatically.
           </p>
           {!hasFinalized ? (

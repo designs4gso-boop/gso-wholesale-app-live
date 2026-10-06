@@ -424,7 +424,7 @@ export default function PricingSettings() {
       ) : null}
 
       <section style={{ ...card, borderColor: evidenceLiveFrom ? "#bbf7d0" : "#fecaca", background: evidenceLiveFrom ? "#f0fdf4" : "#fef2f2" }}>
-        <b>Pricing evidence start date (read-only here)<ClassTag kind="display" note="evidence cutoff, not a price input" /></b>
+        <b>Pricing evidence start date (READ-ONLY here)<ClassTag kind="display" note="evidence cutoff, not a price input" /></b>
         <span style={{ fontSize: 11, color: "#6b7280", marginLeft: 8 }}>(15F.0K.4H)</span>
         <p style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.7 }}>
           {evidenceLiveFrom ? (
