@@ -18,49 +18,40 @@ export default function App() {
 
   return (
     <AppProvider embedded apiKey={apiKey}>
-      {/* Patch 13.0 nav groups. The embedded admin nav renders a flat link
+      {/* Nav groups (2026-10-05). The embedded admin nav renders a flat link
           list (no section headers), so grouping is expressed by ordering and
-          label prefixes: unprefixed = Daily Operations; "Setup ·" = Setup &
-          Cost Data; "Audit ·" = Cost Audit / Health; "Owner ·" = owner-only
-          tools that can change live pricing, mappings, or Shopify behavior. */}
+          label prefixes: Dashboard, then "Sales ·", "Production ·",
+          "Purchasing ·", "Operations ·", "Reporting ·", "Pricing ·",
+          "Audit ·", "Setup ·", "Admin ·", "Help ·". Everything that used to be
+          an "Owner ·" or secondary "Audit ·" link (configurator tools, cost
+          audits, admin settings, agent security, pricing rules, production
+          extras, Add Product) now lives ONLY under Dashboard -> "Advanced &
+          owner tools" (/app#advanced) so the daily nav stays short. */}
       <s-app-nav>
         <s-link href="/app">Dashboard</s-link>
-        <s-link href="/app/erp/setup-wizard">Setup Wizard</s-link>
-        <s-link href="/app/erp/walkthrough">ERP Walkthrough</s-link>
-        <s-link href="/app/quotes">Quotes / CRM</s-link>
-        <s-link href="/app/erp/agent-review-queue">Agent Review Queue</s-link>
-        <s-link href="/app/erp/ops-hub">Operations Hub</s-link>
-        <s-link href="/app/erp/production">Production</s-link>
-        <s-link href="/app/erp/reports-dashboard">Reports Dashboard</s-link>
-        <s-link href="/app/erp/print-logs">Print Logs</s-link>
-        <s-link href="/app/erp/rip-imports">RIP Imports</s-link>
-        <s-link href="/app/erp/rip-import-review">RIP Import Review</s-link>
-        <s-link href="/app/erp/print-intake">Print Intake</s-link>
-        <s-link href="/app/erp/cost-calculator">Cost Calculator</s-link>
-        <s-link href="/app/erp/pricing-settings">Pricing Settings</s-link>
-        <s-link href="/app/erp/pricing-intelligence">Pricing Intelligence</s-link>
+        <s-link href="/app/quotes">Sales · Quotes / CRM</s-link>
+        <s-link href="/app/erp/cost-calculator">Sales · Cost Calculator</s-link>
+        <s-link href="/app/erp/production">Production · Production Board</s-link>
+        <s-link href="/app/erp/print-intake">Production · Print Intake</s-link>
+        <s-link href="/app/erp/rip-imports">Production · RIP Imports & Review</s-link>
+        <s-link href="/app/erp/print-logs">Production · Print Logs</s-link>
+        <s-link href="/app/erp/purchase-requests">Purchasing · Purchase Requests</s-link>
+        <s-link href="/app/erp/reorder-report">Purchasing · Reorder Report</s-link>
+        <s-link href="/app/erp/agent-review-queue">Operations · Agent Review Queue</s-link>
+        <s-link href="/app/erp/ops-hub">Operations · Operations Hub</s-link>
+        <s-link href="/app/erp/reports-dashboard">Reporting · Reports Dashboard</s-link>
+        <s-link href="/app/erp/pricing-settings">Pricing · Pricing Settings</s-link>
+        <s-link href="/app/erp/pricing-intelligence">Pricing · Pricing Intelligence</s-link>
+        <s-link href="/app/erp/margin-review">Pricing · Margin Review</s-link>
+        <s-link href="/app/erp/cost-verification">Audit · Cost Verification</s-link>
         <s-link href="/app/erp/product-setup">Setup · Product Setup</s-link>
-        <s-link href="/app/erp/products/new">Setup · Add Product</s-link>
         <s-link href="/app/erp/materials">Setup · Materials</s-link>
         <s-link href="/app/erp/machines">Setup · Machines</s-link>
         <s-link href="/app/erp/vendors">Setup · Vendors</s-link>
         <s-link href="/app/erp/vendor-cost-book">Setup · Vendor Cost Book</s-link>
-        <s-link href="/app/erp/cost-verification">Audit · Cost Verification</s-link>
-        <s-link href="/app/erp/cost-health">Audit · Cost Health</s-link>
-        <s-link href="/app/erp/shopify-cost-audit">Audit · Shopify Cost Audit</s-link>
-        <s-link href="/app/erp/actual-costs">Audit · Actual Costs</s-link>
-        <s-link href="/app/erp/calibration">Audit · Calibration</s-link>
-        <s-link href="/app/erp/pricing-health">Audit · Pricing Health</s-link>
-        <s-link href="/app/erp/configurator-audit">Audit · Configurator Audit</s-link>
-        <s-link href="/app/erp/admin-settings">Owner · Admin Settings</s-link>
-        <s-link href="/app/erp/agent-security">Owner · Agent Security</s-link>
-        <s-link href="/app/erp/pricing-rules">Owner · Pricing Rules</s-link>
-        <s-link href="/app/erp/configurator">Owner · Configurator</s-link>
-        <s-link href="/app/erp/configurator-sync">Owner · Configurator Sync</s-link>
-        <s-link href="/app/erp/configurator-mapping">Owner · Manual Mapping</s-link>
-        <s-link href="/app/erp/configurator-jar-mapping">Owner · Jar Mapping</s-link>
-        <s-link href="/app/erp/shopify-links">Owner · Shopify Links</s-link>
-        <s-link href="/app/erp/margin-review">Owner · Margin Review</s-link>
+        <s-link href="/app#advanced">Admin · Advanced Tools</s-link>
+        <s-link href="/app/erp/setup-wizard">Help · Setup Wizard</s-link>
+        <s-link href="/app/erp/walkthrough">Help · ERP Walkthrough</s-link>
       </s-app-nav>
 
       <Outlet />

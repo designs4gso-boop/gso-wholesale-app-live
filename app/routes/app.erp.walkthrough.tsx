@@ -46,14 +46,14 @@ const SECTIONS: SopSection[] = [
     title: "2. Setup Wizard: blockers vs warnings",
     what: "A read-only readiness dashboard. Launch blockers stop any launch; warnings are fine for internal beta but should be reviewed before full customer launch.",
     why: "It separates 'cannot launch' from 'do not forget'. The Quote Pipeline card also deep-checks a sample of 10 quote-ready recipes with the same engine the queue uses.",
-    path: "Sidebar -> Setup Wizard. Fix anything in the Launch blockers list first; each blocker has a direct action button.",
+    path: "Sidebar -> Help · Setup Wizard. Fix anything in the Launch blockers list first; each blocker has a direct action button.",
     links: [{ label: "Setup Wizard", url: "/app/erp/setup-wizard" }],
   },
   {
     title: "3. Product Setup / recipe readiness",
     what: "Recipes are the cost and pricing source of truth. The Recipe readiness box shows exact blockers; the Fix readiness blockers card repairs them (width/height, minimum quantity, preferred machine, materials, tiers).",
     why: "A recipe that is not conversion-ready cannot become a draft quote from the Agent Review Queue. Every conversion failure reason points back to something fixable here.",
-    path: "Sidebar -> Product Setup -> open a recipe -> read the readiness box -> use the fix card -> Test price at a quantity -> enable Use in Quotes / CRM once green.",
+    path: "Sidebar -> Setup · Product Setup -> open a recipe -> read the readiness box -> use the fix card -> Test price at a quantity -> enable Use in Quotes / CRM once green.",
     links: [
       { label: "Product Setup", url: "/app/erp/product-setup" },
       { label: "Materials", url: "/app/erp/materials" },
@@ -68,7 +68,7 @@ const SECTIONS: SopSection[] = [
     title: "4. Creating a quote",
     what: "The Quotes / CRM builder prices lines from quote-ready recipes (or manual entry), tracks customer tier, and moves quotes through draft -> sent -> approved -> paid stages on the board.",
     why: "The quote is the contract-in-progress. Everything customer-facing (payment requests, invoices, the portal link) hangs off it.",
-    path: "Sidebar -> Quotes / CRM -> build items (pick a recipe and Price from recipe, or type manually) -> Save.",
+    path: "Sidebar -> Sales · Quotes / CRM -> build items (pick a recipe and Price from recipe, or type manually) -> Save.",
     links: [{ label: "Quotes / CRM", url: "/app/quotes" }],
     callouts: [
       "Save Quote never sends anything to the customer.",
@@ -102,7 +102,7 @@ const SECTIONS: SopSection[] = [
     title: "7. Paid quote to production",
     what: "Production jobs can only be created from quotes with status paid (or already in production). The button does not appear before that, and the server enforces it even if it did.",
     why: "Owner rule: production starts after full payment. Deposit paid is not enough.",
-    path: "Quote reaches paid -> Create Production Job on the card (or from the Production page) -> job gets a ticket, checklist, and proof sheet.",
+    path: "Quote reaches paid -> Create Production Job on the card (or from the Production · Production Board page) -> job gets a ticket, checklist, and proof sheet.",
     links: [{ label: "Production", url: "/app/erp/production" }],
     callouts: [
       "Move-to-Paid on the board is ONLY for real offline payments (check/wire already received). It is the sanctioned override - treat it like recording money.",
@@ -112,7 +112,7 @@ const SECTIONS: SopSection[] = [
     title: "8. Agent Security / credential creation",
     what: "Create, revoke, and monitor external agent credentials. New credentials carry the intake:create scope and optional product-family restrictions.",
     why: "External agents can ONLY submit leads. They cannot create quotes, orders, invoices, messages, or production jobs - the credential system is how that stays true.",
-    path: "Sidebar -> Agent Security -> Create agent credential -> copy the one-time token -> test with tools/test-agent-intake.ps1 -> expect 201 accepted then 200 duplicate.",
+    path: "Dashboard -> Advanced & owner tools -> Agent Security -> Create agent credential -> copy the one-time token -> test with tools/test-agent-intake.ps1 -> expect 201 accepted then 200 duplicate.",
     links: [{ label: "Agent Security", url: "/app/erp/agent-security" }],
     callouts: [
       "The one-time token is shown exactly once and stored only as a hash. If it is lost, revoke and create a new credential.",
@@ -124,7 +124,7 @@ const SECTIONS: SopSection[] = [
     title: "9. Agent Review Queue to draft quote",
     what: "Every agent lead (and staff-entered lead) lands here for review. Details expands the full request inline. Converting requires explicitly choosing a quote-ready recipe.",
     why: "This is the only bridge from external leads to real quotes, and it is staff-gated on purpose. The draft it creates is internal - nothing is sent to the customer.",
-    path: "Sidebar -> Agent Review Queue -> Details on a row -> mark Ready to quote -> pick a recipe in the dropdown -> Create draft quote -> continue in Quotes / CRM.",
+    path: "Sidebar -> Operations · Agent Review Queue -> Details on a row -> mark Ready to quote -> pick a recipe in the dropdown -> Create draft quote -> continue in Quotes / CRM.",
     links: [
       { label: "Agent Review Queue", url: "/app/erp/agent-review-queue" },
       { label: "Product Setup", url: "/app/erp/product-setup" },
@@ -147,7 +147,7 @@ const SECTIONS: SopSection[] = [
     title: "11. Reporting / margin review",
     what: "Reports mature as production jobs log actual costs and print logs import. Margin review compares expected vs actual.",
     why: "This is where quoted margins meet reality. It is a warning on the wizard until real jobs flow through - that is normal.",
-    path: "Sidebar -> Reports Dashboard / Print Logs / Margin Review after jobs complete.",
+    path: "Sidebar -> Reporting · Reports Dashboard / Production · Print Logs / Pricing · Margin Review after jobs complete.",
     links: [
       { label: "Reports Dashboard", url: "/app/erp/reports-dashboard" },
       { label: "Print Logs", url: "/app/erp/print-logs" },
