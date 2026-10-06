@@ -22,6 +22,7 @@ import {
   filterVarianceRows,
   type VarianceReportRow,
 } from "../lib/actual-variance.server";
+import { ERP_CARD_STYLE, ERP_SMALL_HELP, ERP_TD_STYLE, ERP_TH_STYLE } from "../lib/erp-ui-tokens";
 
 // Actual Cost Dashboard (13A.5): READ-ONLY. Turns imported RIP/print-log rows
 // into actual dollars using the verified DB channel costs. No action export,
@@ -189,10 +190,11 @@ export async function loader({ request }: { request: Request }) {
   return { summary, rows: rows.slice(0, 200), rowTotal: rows.length, rollups, gsoqRows, varianceRows, varianceSummary, varianceFilters, varianceError };
 }
 
-const cardStyle: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 12, padding: 14, background: "white" };
-const thStyle: React.CSSProperties = { background: "#f3f4f6", textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb", fontSize: 12 };
-const tdStyle: React.CSSProperties = { padding: 8, borderBottom: "1px solid #e5e7eb", fontSize: 12, verticalAlign: "top" };
-const smallHelp: React.CSSProperties = { color: "#6b7280", fontSize: 12, marginTop: 4 };
+// 2026-10-05: shared ERP UI tokens.
+const cardStyle = ERP_CARD_STYLE;
+const thStyle = ERP_TH_STYLE;
+const tdStyle = ERP_TD_STYLE;
+const smallHelp = ERP_SMALL_HELP;
 const warnStyle: React.CSSProperties = { color: "#92400e", fontSize: 11 };
 
 const statusBadge: Record<MatchStatus, React.CSSProperties> = {

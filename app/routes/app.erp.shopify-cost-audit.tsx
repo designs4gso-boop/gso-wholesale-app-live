@@ -25,6 +25,7 @@ import {
   type RowClassification,
 } from "../lib/shopify-cost-audit-shared";
 import { buildErpIndex, computeRecipeCosts, pullShopifyCatalog } from "../lib/shopify-cost-audit.server";
+import { ERP_CARD_STYLE, ERP_SMALL_HELP } from "../lib/erp-ui-tokens";
 
 // Read-only Shopify cost audit (12B.2b). No action export, no database writes,
 // no Shopify writes: the loader reads ERP tables and runs one paginated
@@ -258,8 +259,9 @@ export async function loader({ request }: { request: Request }) {
   }
 }
 
-const cardStyle: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "white" };
-const smallHelp: React.CSSProperties = { color: "#6b7280", fontSize: 12, marginTop: 4 };
+// 2026-10-05: shared ERP UI tokens.
+const cardStyle = ERP_CARD_STYLE;
+const smallHelp = ERP_SMALL_HELP;
 const badgeStyle: Record<string, React.CSSProperties> = {
   bad: { background: "#fee2e2", color: "#991b1b", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
   warn: { background: "#fef3c7", color: "#92400e", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
