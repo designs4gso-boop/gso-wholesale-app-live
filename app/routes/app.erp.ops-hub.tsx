@@ -141,6 +141,27 @@ function explain(i: Row, executionEnabled: boolean): string {
   return i.status;
 }
 
+// Staff-facing copy (2026-10-05): plain words in the normal view, raw ids in
+// a collapsed block. Display only — the intent data and every action are
+// untouched.
+function humanWords(value: string) {
+  return String(value || "").replace(/_/g, " ");
+}
+
+function entityLabel(entity: string) {
+  const [type, ...rest] = String(entity || "").split(":");
+  const id = rest.join(":");
+  return `${humanWords(type) || "object"}${id ? ` ${id.length > 14 ? `…${id.slice(-8)}` : id}` : ""}`;
+}
+
+const AUTONOMY_WORDS: Record<string, string> = {
+  OWNER_REQUIRED: "owner decision required",
+  APPROVAL_REQUIRED: "staff decision required",
+  AUTO: "internal / automatic",
+  READ_ONLY: "read only",
+  DISABLED: "disabled",
+};
+
 function IntentList({ title, rows, empty, tone, executionEnabled }: { title: string; rows: Row[]; empty: string; tone?: "success" | "info" | "attention" | "warning" | "critical"; executionEnabled: boolean }) {
   return (
     <Card>
@@ -153,12 +174,19 @@ function IntentList({ title, rows, empty, tone, executionEnabled }: { title: str
         {rows.map((i) => (
           <BlockStack key={i.id} gap="050">
             <Text as="p">
-              <strong>{i.actionType}</strong> on {i.entity} · agent {i.agentId}{i.provider ? ` via ${i.provider}` : ""} · <code>{i.id}</code>
+              <strong>{humanWords(i.actionType)}</strong> · {entityLabel(i.entity)} · proposed by {humanWords(i.agentId)}{i.provider ? ` (via ${i.provider})` : ""}
             </Text>
             <Text as="p" tone="subdued">
-              created {i.createdAt} · level {i.autonomyLevel}{i.approvedBy ? ` · approved by ${i.approvedBy}` : ""}{i.executedAt ? ` · executed ${i.executedAt}` : ""}{i.externalReference ? ` · ref ${i.externalReference}` : ""}
+              created {i.createdAt} · {AUTONOMY_WORDS[i.autonomyLevel] || humanWords(i.autonomyLevel)}{i.approvedBy ? ` · approved by ${i.approvedBy}` : ""}{i.executedAt ? ` · executed ${i.executedAt}` : ""}{i.externalReference ? ` · ref ${i.externalReference}` : ""}
             </Text>
             <Text as="p" tone={i.status === "FAILED" ? "critical" : "subdued"}>{explain(i, executionEnabled)}</Text>
+            <details>
+              <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Technical details (ids, audit trail)</summary>
+              <Text as="p" tone="subdued">
+                intent <code>{i.id}</code> · {i.entity} · agent {i.agentId} {i.agentVersion}{i.model ? ` · model ${i.model}` : ""} · status {i.status} · level {i.autonomyLevel}
+              </Text>
+              {(i.events || []).map((e) => <Text key={e} as="p" tone="subdued"><code>{e}</code></Text>)}
+            </details>
           </BlockStack>
         ))}
       </BlockStack>
@@ -182,39 +210,54 @@ export default function OpsHub() {
   return (
     <Page title="Operations hub" subtitle={`${data.platformVersion} · ${data.registryVersion}`}>
       <BlockStack gap="400">
-        {/* ---------------- Global safety header ---------------- */}
+        {/* ---------------- Global safety header (concise primary view) ---------------- */}
         <Card>
           <BlockStack gap="200">
             <InlineStack gap="200" blockAlign="center">
-              <Text as="h2" variant="headingMd">Safety status</Text>
+              <Text as="h2" variant="headingMd">Today at a glance</Text>
               <Badge tone={data.dangerous.length ? "critical" : "success"}>{data.dangerous.length ? "ATTENTION" : "ALL CONSEQUENTIAL PATHS CLOSED"}</Badge>
             </InlineStack>
             <InlineStack gap="200" wrap>
               <Badge tone={r.reasoningEnabled === "YES" ? "critical" : "success"}>{`Reasoning ${r.reasoningEnabled === "YES" ? "ON" : "OFF"}`}</Badge>
               <Badge tone={executionOn ? "critical" : "success"}>{`Execution ${executionOn ? "ON" : "OFF"}`}</Badge>
-              <Badge tone={w.repository === "prisma" ? "success" : "critical"}>{`Repository: ${w.repository}`}</Badge>
-              <Badge tone={data.slack.sandboxOnly === "true" ? "success" : "critical"}>{`Slack sandbox mode: ${data.slack.sandboxOnly === "true" ? "ON" : "OFF"}`}</Badge>
-              <Badge tone="success">{`Worker scheduled: ${w.scheduled ? "YES" : "NO"}`}</Badge>
-              <Badge tone={w.authConfigured ? "attention" : "info"}>{`Worker trigger configured: ${w.authConfigured ? "YES" : "NO"}`}</Badge>
-              <Badge tone={r.provider === "NONE" ? "success" : "attention"}>{`Provider: ${r.provider}${r.provider !== "NONE" ? ` (configured ${r.providerConfigured})` : ""}`}</Badge>
-              <Badge tone={r.tracingEnabled === "YES" || r.sensitiveTracing === "YES" ? "critical" : "success"}>{`Tracing ${r.tracingEnabled} · sensitive ${r.sensitiveTracing}`}</Badge>
+              <Badge tone={w.repository === "prisma" ? "success" : "critical"}>{`Repository: ${w.repository === "prisma" ? "database (durable)" : w.repository}`}</Badge>
+              <Badge tone={data.slack.sandboxOnly === "true" ? "success" : "critical"}>{`Slack mode: ${data.slack.sandboxOnly === "true" ? "SANDBOX ONLY" : "LIVE CHANNELS"}`}</Badge>
+              <Badge>{`Worker trigger: ${w.authConfigured ? "configured" : "not configured"}`}</Badge>
+              <Badge>{`Worker schedule: ${w.scheduled ? "scheduled" : "manual only (no cron)"}`}</Badge>
+            </InlineStack>
+            <InlineStack gap="200" wrap>
+              <Badge tone={data.grouped.pending.length ? "attention" : undefined}>{`NEEDS DECISION: ${data.grouped.pending.length}`}</Badge>
+              <Badge tone={data.grouped.blocked.length ? "critical" : undefined}>{`EXECUTION BLOCKED: ${data.grouped.blocked.length}`}</Badge>
+              <Badge tone={data.grouped.failed.length ? "critical" : undefined}>{`FAILED: ${data.grouped.failed.length}`}</Badge>
+              <Badge tone={data.grouped.completed.length ? "success" : undefined}>{`COMPLETED: ${data.grouped.completed.length}`}</Badge>
             </InlineStack>
             {data.dangerous.map((d) => <Text key={d} as="p" tone="critical">⚠ {d}</Text>)}
-            <Text as="p" tone="subdued">Production job movement is never executed from Slack and never by the worker; it requires an explicit owner action through the centralized transition executor. Money, customer messages, POs, invoices and dispatch stay DISABLED or OWNER_REQUIRED. QuickBooks: DEFERRED — NOT CONNECTED. Slack: bot token {data.slack.botToken}, signing secret {data.slack.signingSecret}, test channel {data.slack.testChannel}.</Text>
-            <Text as="p" tone="subdued">Repository: {data.durability}. Reasoning blockers: {r.blockers.join("; ") || "none"}. Offline simulation: {data.simulation.passed}/{data.simulation.total} checks{data.simulation.failures.length ? ` — FAILURES: ${data.simulation.failures.join("; ")}` : ""}.</Text>
+            {data.simulation.failures.length ? <Text as="p" tone="critical">Offline simulation FAILURES: {data.simulation.failures.join("; ")}</Text> : null}
+            <Text as="p" tone="subdued">Approving a card in Slack or here records a decision only. Nothing executes from Slack and nothing executes from the worker; a production job moves only through an explicit owner action via the centralized transition executor. Money, customer messages, POs, invoices and dispatch stay DISABLED or OWNER_REQUIRED. QuickBooks: DEFERRED — NOT CONNECTED.</Text>
             <InlineStack gap="200">
               <Link to="/app/erp/agent-review-queue">Agent Review Queue</Link>
               <Link to="/app/erp/production">Production</Link>
               <Link to="/app/erp/purchase-requests">Purchase requests</Link>
             </InlineStack>
+            <details>
+              <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Diagnostics (provider, tracing, Slack environment, repository, simulation)</summary>
+              <BlockStack gap="100">
+                <InlineStack gap="200" wrap>
+                  <Badge tone={r.provider === "NONE" ? "success" : "attention"}>{`Provider: ${r.provider}${r.provider !== "NONE" ? ` (configured ${r.providerConfigured})` : ""}`}</Badge>
+                  <Badge tone={r.tracingEnabled === "YES" || r.sensitiveTracing === "YES" ? "critical" : "success"}>{`Tracing ${r.tracingEnabled} · sensitive ${r.sensitiveTracing}`}</Badge>
+                </InlineStack>
+                <Text as="p" tone="subdued">Slack: bot token {data.slack.botToken}, signing secret {data.slack.signingSecret}, test channel {data.slack.testChannel}.</Text>
+                <Text as="p" tone="subdued">Repository: {data.durability}. Reasoning blockers: {r.blockers.join("; ") || "none"}. Offline simulation: {data.simulation.passed}/{data.simulation.total} checks{data.simulation.failures.length ? ` — FAILURES: ${data.simulation.failures.join("; ")}` : ""}.</Text>
+              </BlockStack>
+            </details>
           </BlockStack>
         </Card>
 
         {/* ---------------- Daily operations ---------------- */}
-        <IntentList title="Needs a decision" rows={data.grouped.pending} empty="No intents awaiting a human decision." tone="attention" executionEnabled={executionOn} />
-        <IntentList title="Approved but blocked by the execution kill switch" rows={data.grouped.blocked} empty="None." tone="warning" executionEnabled={executionOn} />
-        <IntentList title="Failed / disabled actions" rows={data.grouped.failed} empty="None." tone="critical" executionEnabled={executionOn} />
-        <IntentList title="Completed actions" rows={data.grouped.completed} empty="None." tone="success" executionEnabled={executionOn} />
+        <IntentList title="NEEDS DECISION" rows={data.grouped.pending} empty="No intents awaiting a human decision." tone="attention" executionEnabled={executionOn} />
+        <IntentList title="EXECUTION BLOCKED — approved, held by the execution kill switch" rows={data.grouped.blocked} empty="None." tone="critical" executionEnabled={executionOn} />
+        <IntentList title="FAILED / disabled actions" rows={data.grouped.failed} empty="None." tone="critical" executionEnabled={executionOn} />
+        <IntentList title="COMPLETED" rows={data.grouped.completed} empty="None." tone="success" executionEnabled={executionOn} />
 
         <Card>
           <BlockStack gap="200">

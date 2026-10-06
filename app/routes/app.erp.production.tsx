@@ -82,6 +82,86 @@ function labelForStatus(value: string) {
   return productionStatuses.find((status) => status.value === value)?.label || value;
 }
 
+// ---------------------------------------------------------------------------
+// Staff at-a-glance helpers (2026-10-05). DISPLAY ONLY: every value below is
+// derived from fields the loader already returns (job, items, files,
+// checklistItems, materialUsages, proofStatus, writebackPreview). Nothing here
+// feeds any action, status validation, or transition.
+// Tone rule: green = verified/ready/completed, amber = provisional/pending/
+// needs a decision, red = blocked/failed, grey = informational.
+// ---------------------------------------------------------------------------
+type GlanceTone = "success" | "attention" | "warning" | "critical" | undefined;
+
+function statusToneFor(status: string): GlanceTone {
+  if (status === "completed" || status === "shipped") return "success";
+  if (status === "on_hold" || status === "reprint_needed" || status === "cancelled") return "critical";
+  if (status === "new" || status === "proof_needed" || status === "proof_sent" || status === "qc") return "attention";
+  return undefined;
+}
+
+function glanceProduct(job: any) {
+  const items = job.items || [];
+  if (!items.length) return "No items";
+  const first = items[0].displayTitle || items[0].productTitle || "Item";
+  return items.length > 1 ? `${first} (+${items.length - 1} more)` : first;
+}
+
+function glanceQuantity(job: any) {
+  const total = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
+  return total > 0 ? String(total) : "Not set";
+}
+
+function glanceDue(job: any): { text: string; tone: GlanceTone } {
+  if (!job.dueDate) return { text: "Not set", tone: undefined };
+  const due = new Date(job.dueDate);
+  if (Number.isNaN(due.getTime())) return { text: "Not set", tone: undefined };
+  const closed = ["completed", "shipped", "cancelled"].includes(String(job.status || ""));
+  const overdue = !closed && due.getTime() < Date.now() - 24 * 60 * 60 * 1000;
+  return { text: due.toLocaleDateString(), tone: overdue ? "critical" : undefined };
+}
+
+function glanceMachine(job: any) {
+  const fromItems = Array.from(new Set((job.items || []).map((item: any) => String(item.machineSummary || "").trim()).filter(Boolean))) as string[];
+  if (fromItems.length) return fromItems.join(", ");
+  const printers = (job.writebackPreview?.printers || []) as string[];
+  if (printers.length) return `${printers.join(", ")} (from print logs)`;
+  return "Not assigned";
+}
+
+function glanceArt(job: any): { text: string; tone: GlanceTone } {
+  const hasArtwork = Boolean(job.artworkUrl) || (job.files || []).some((file: any) => file.assetRole === "artwork" || file.fileType === "artwork");
+  if (job.proofStatus === "approved" || job.proofApprovedAt) return { text: "Proof approved", tone: "success" };
+  if (job.proofStatus === "changes_requested") return { text: "Customer requested changes", tone: "critical" };
+  if (job.proofStatus === "sent" || job.proofStatus === "viewed") return { text: "Proof sent — waiting on customer", tone: "attention" };
+  if (hasArtwork) return { text: "Artwork linked — proof not sent", tone: "attention" };
+  return { text: "No artwork linked", tone: "attention" };
+}
+
+function glanceMaterial(job: any): { text: string; tone: GlanceTone } {
+  const rows = (job.materialUsages || []).filter((usage: any) => String(usage.source || "") !== PRINT_LOG_USAGE_SOURCE);
+  if (!rows.length) return { text: "Not logged", tone: "attention" };
+  const deducted = rows.reduce((sum: number, usage: any) => sum + Number(usage.stockDeductedQty || 0), 0);
+  return { text: deducted > 0 ? `${rows.length} row(s) logged, stock deducted` : `${rows.length} row(s) logged`, tone: undefined };
+}
+
+function glanceNextAction(job: any) {
+  if (String(job.status) === "completed") return "Done — close out final cost if still open";
+  if (String(job.status) === "cancelled") return "None (cancelled)";
+  const next = (job.checklistItems || []).find((check: any) => !check.completed);
+  if (next) return next.label;
+  return "Checklist complete — update status";
+}
+
+function Glance({ label, value, tone }: { label: string; value: string; tone?: GlanceTone }) {
+  const color = tone === "success" ? "#065f46" : tone === "critical" ? "#991b1b" : tone === "attention" || tone === "warning" ? "#92400e" : "#202223";
+  return (
+    <div style={{ minWidth: 140 }}>
+      <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color }}>{value}</div>
+    </div>
+  );
+}
+
 function money(value: any) {
   return (Number(value) || 0).toFixed(2);
 }
@@ -1416,19 +1496,36 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
             )}
             <BlockStack gap="100">
               <Text as="h3" variant="headingMd">{job.company || job.customerName || "Production Job"}</Text>
-              <Text as="p" tone="subdued">Ticket {job.jobTicket || job.id} | Quote {job.quoteId || "N/A"}</Text>
-              <Text as="p" tone="subdued">Recommended folder: {folderNameForJob(job)}</Text>
-              <InlineStack gap="200">
-                <Badge tone="success">{labelForStatus(job.status)}</Badge>
-                <Badge>{job.jobTicket || "No ticket"}</Badge>
-                <Badge>{job.priority}</Badge>
-                {job.dueDate ? <Badge>Due {new Date(job.dueDate).toLocaleDateString()}</Badge> : null}
+              {/* At-a-glance row (2026-10-05): every value comes from fields the loader already returns. */}
+              <InlineStack gap="200" wrap>
+                <Badge tone={statusToneFor(job.status)}>{labelForStatus(job.status)}</Badge>
+                <Badge>{job.jobTicket ? `Job ${job.jobTicket}` : "No ticket yet"}</Badge>
+                <Badge tone={job.priority === "rush" || job.priority === "critical" ? "attention" : undefined}>{`Priority: ${job.priority}`}</Badge>
               </InlineStack>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 18px", padding: "8px 10px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#fafafa" }}>
+                <Glance label="Customer" value={job.company || job.customerName || "Unknown"} />
+                <Glance label="Product" value={glanceProduct(job)} />
+                <Glance label="Quantity" value={glanceQuantity(job)} />
+                <Glance label="Due date" value={glanceDue(job).text} tone={glanceDue(job).tone} />
+                <Glance label="Machine" value={glanceMachine(job)} />
+                <Glance label="Art / proof" value={glanceArt(job).text} tone={glanceArt(job).tone} />
+                <Glance label="Material" value={glanceMaterial(job).text} tone={glanceMaterial(job).tone} />
+                <Glance label="Next action" value={glanceNextAction(job)} tone="attention" />
+              </div>
               <InlineStack gap="150" wrap>
                 <Button onClick={() => copyText(job.jobTicket || job.id)}>Copy Job Ticket</Button>
-                <Button onClick={() => copyText(folderNameForJob(job))}>Copy Folder Name</Button>
-                <Button onClick={() => copyText(job.items?.[0]?.ripJobName || job.jobTicket || job.id)}>Copy RIP Name</Button>
               </InlineStack>
+              <details>
+                <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Technical identifiers (folder name, RIP name, quote/job ids)</summary>
+                <BlockStack gap="100">
+                  <Text as="p" tone="subdued">Ticket {job.jobTicket || job.id} | Quote {job.quoteId || "N/A"} | Job id <code>{job.id}</code></Text>
+                  <Text as="p" tone="subdued">Recommended folder: {folderNameForJob(job)}</Text>
+                  <InlineStack gap="150" wrap>
+                    <Button onClick={() => copyText(folderNameForJob(job))}>Copy Folder Name</Button>
+                    <Button onClick={() => copyText(job.items?.[0]?.ripJobName || job.jobTicket || job.id)}>Copy RIP Name</Button>
+                  </InlineStack>
+                </BlockStack>
+              </details>
               <Card>
                 <BlockStack gap="150">
                   <InlineStack align="space-between" blockAlign="center">
@@ -1485,7 +1582,7 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
           <BlockStack gap="200">
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h4" variant="headingSm">Actual Cost Summary</Text>
-              {Number(job.actuals?.entryCount || 0) > 0 ? <Badge tone="success">{job.actuals.entryCount} print log(s)</Badge> : <Badge tone="warning">No print logs matched</Badge>}
+              {Number(job.actuals?.entryCount || 0) > 0 ? <Badge>{`${job.actuals.entryCount} print log(s) matched`}</Badge> : <Badge tone="warning">No print logs matched</Badge>}
             </InlineStack>
             {Number(job.actuals?.entryCount || 0) > 0 ? (
               <BlockStack gap="150">
@@ -1529,14 +1626,17 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                           Proposed writeback: <b>${money(job.writebackPreview.totalCost)}</b> = ink {job.writebackPreview.inkCost == null ? "n/a" : `$${money(job.writebackPreview.inkCost)} (${job.writebackPreview.inkMl.toFixed(2)} ml)`}
                           {" + "}machine {job.writebackPreview.machineCost == null ? "n/a" : `$${money(job.writebackPreview.machineCost)} (${job.writebackPreview.printMinutes.toFixed(1)} min @ $${job.writebackPreview.machineRatePerHour}/hr)`}
                         </Text>
-                        <Text as="p" tone="subdued">
-                          {job.writebackPreview.printRowCount} print row(s){job.writebackPreview.cutRowsExcluded ? `, ${job.writebackPreview.cutRowsExcluded} cut excluded` : ""}
-                          {job.writebackPreview.duplicatesIgnored ? `, ${job.writebackPreview.duplicatesIgnored} duplicate(s) ignored` : ""}
-                          {" · runs: "}{job.writebackPreview.runCount == null ? "unknown" : job.writebackPreview.runCount}{job.writebackPreview.reprintDetected ? " (reprints included)" : ""}
-                          {" · match: "}{job.writebackPreview.matchMethods.join(", ")} · {job.writebackPreview.printers.join(", ")}
-                          {job.writebackPreview.itemTicketAttribution ? ` · item ${job.writebackPreview.itemTicketAttribution}` : ""}
-                          {" · material preview-only (not written)"}
-                        </Text>
+                        <details>
+                          <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>How this preview was matched (rows, runs, printers)</summary>
+                          <Text as="p" tone="subdued">
+                            {job.writebackPreview.printRowCount} print row(s){job.writebackPreview.cutRowsExcluded ? `, ${job.writebackPreview.cutRowsExcluded} cut excluded` : ""}
+                            {job.writebackPreview.duplicatesIgnored ? `, ${job.writebackPreview.duplicatesIgnored} duplicate(s) ignored` : ""}
+                            {" · runs: "}{job.writebackPreview.runCount == null ? "unknown" : job.writebackPreview.runCount}{job.writebackPreview.reprintDetected ? " (reprints included)" : ""}
+                            {" · match: "}{job.writebackPreview.matchMethods.join(", ")} · {job.writebackPreview.printers.join(", ")}
+                            {job.writebackPreview.itemTicketAttribution ? ` · item ${job.writebackPreview.itemTicketAttribution}` : ""}
+                            {" · material preview-only (not written)"}
+                          </Text>
+                        </details>
                         {(job.writebackPreview.warnings || []).slice(0, 6).map((warning: string) => (
                           <Text as="p" tone="subdued" key={warning}>⚠ {warning}</Text>
                         ))}
@@ -1571,7 +1671,7 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
           <BlockStack gap="250">
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h4" variant="headingSm">Final Actual Cost</Text>
-              {job.actualCostFinalized ? <Badge tone="success">Finalized</Badge> : <Badge tone="warning">Open</Badge>}
+              {job.actualCostFinalized ? <Badge tone="success">VERIFIED — finalized</Badge> : <Badge tone="warning">PROVISIONAL — open</Badge>}
             </InlineStack>
             <InlineStack gap="300" wrap>
               <Text as="p">Revenue: ${money(summarizeFinalActualCosts(job, job.actuals, materialSummary).revenue)}</Text>
@@ -1639,7 +1739,7 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
           <BlockStack gap="250">
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h4" variant="headingSm">Material Usage + Waste</Text>
-              {(job.materialUsages || []).length ? <Badge tone="success">{job.materialUsages.length} material row(s)</Badge> : <Badge tone="warning">No material logged</Badge>}
+              {(job.materialUsages || []).length ? <Badge>{`${job.materialUsages.length} material row(s)`}</Badge> : <Badge tone="warning">No material logged</Badge>}
             </InlineStack>
             <InlineStack gap="300" wrap>
               <Text as="p">Material cost: ${money(materialSummary.materialCost)}</Text>
@@ -1801,21 +1901,29 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                     );
                   })()}
                   {item.recipeName ? <Text as="p" tone="subdued">Recipe: {item.recipeName}</Text> : null}
-                  <Text as="p" tone="subdued">Item ticket: {item.itemTicket || "Not assigned yet"}</Text>
                   <Text as="p" tone="subdued">Print file name: {item.suggestedFileName || "Not assigned yet"}</Text>
                   {(job.sourceType === "shopify" || job.sourceType === "quote") && item.suggestedFileName ? (
                     <Text as="p" tone="subdued" fontWeight="semibold">
                       Use this filename before placing artwork into Prints For Today so it attaches automatically.
                     </Text>
                   ) : null}
-                  <Text as="p" tone="subdued">
-                    Run: R{item.runIdentity?.revision ?? 1} · P{item.runIdentity?.reprint ?? 0} · A{item.runIdentity?.attempt ?? 1}
-                  </Text>
                   <InlineStack gap="150" wrap>
-                    <Button onClick={() => copyText(item.itemTicket || "")}>Copy Item Ticket</Button>
-                    <Button onClick={() => copyText(item.ripJobName || item.itemTicket || "")}>Copy RIP Job Name</Button>
                     <Button onClick={() => copyText(item.suggestedFileName || "")}>Copy Print File Name</Button>
                   </InlineStack>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Item ticket, RIP name and run identity</summary>
+                    <BlockStack gap="050">
+                      <Text as="p" tone="subdued">Item ticket: {item.itemTicket || "Not assigned yet"}</Text>
+                      <Text as="p" tone="subdued">RIP job name: {item.ripJobName || item.itemTicket || "Not assigned yet"}</Text>
+                      <Text as="p" tone="subdued">
+                        Run: R{item.runIdentity?.revision ?? 1} · P{item.runIdentity?.reprint ?? 0} · A{item.runIdentity?.attempt ?? 1} (revision · reprint · attempt)
+                      </Text>
+                      <InlineStack gap="150" wrap>
+                        <Button onClick={() => copyText(item.itemTicket || "")}>Copy Item Ticket</Button>
+                        <Button onClick={() => copyText(item.ripJobName || item.itemTicket || "")}>Copy RIP Job Name</Button>
+                      </InlineStack>
+                    </BlockStack>
+                  </details>
                   {/* 15H.5: compact run controls — QC, Reprint, New Revision */}
                   <details style={{ marginTop: 6 }}>
                     <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 600 }}>QC / Reprint / Revision</summary>
@@ -2107,9 +2215,17 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                   <TextField label="Add production note" name="note" autoComplete="off" />
                   <Button submit>Add note</Button>
                 </Form>
-                {(job.events || []).map((event: any) => (
+                {(job.events || []).slice(0, 3).map((event: any) => (
                   <Text as="p" key={event.id} tone="subdued">{new Date(event.createdAt).toLocaleString()}: {event.message}</Text>
                 ))}
+                {(job.events || []).length > 3 ? (
+                  <details>
+                    <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>{`Older events (${(job.events || []).length - 3} more of the last ${(job.events || []).length})`}</summary>
+                    {(job.events || []).slice(3).map((event: any) => (
+                      <Text as="p" key={event.id} tone="subdued">{new Date(event.createdAt).toLocaleString()}: {event.message}</Text>
+                    ))}
+                  </details>
+                ) : null}
               </BlockStack>
             </Card>
           </div>
@@ -2149,7 +2265,7 @@ export default function ProductionBoard() {
                   <Text as="p" tone="subdued">Production jobs snapshot quote items, variants, quantities, images, recipes, file links, and pricing/cost data.</Text>
                 </BlockStack>
                 <InlineStack gap="200">
-                  <Badge tone="success">{jobs.length} active job(s)</Badge>
+                  <Badge>{`${jobs.length} active job(s)`}</Badge>
                   <Form method="post">
                     <input type="hidden" name="intent" value="backfillTickets" />
                     <Button submit>Backfill tickets</Button>
