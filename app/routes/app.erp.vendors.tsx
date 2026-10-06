@@ -300,6 +300,25 @@ function usageForVendor(usage: any[], name: string) {
   return usage.find((row) => row.name.toLowerCase() === String(name || "").toLowerCase());
 }
 
+// Display-only helpers: readable labels for stored keys + data-quality flags.
+function optionLabel(options: string[][], value: string | null | undefined) {
+  return options.find(([key]) => key === value)?.[1] || String(value || "").replace(/_/g, " ") || "Not set";
+}
+
+function humanize(value: any) {
+  return String(value || "").replace(/_/g, " ") || "not set";
+}
+
+const SEEDED_VENDOR_NOTE_PREFIX = "Created from existing material/vendor product/purchase request vendor text.";
+
+function vendorMissingFields(vendor: any) {
+  const missing: string[] = [];
+  if (!vendor.contactName && !vendor.email && !vendor.phone && !(vendor.contacts || []).length) missing.push("contact");
+  if (!vendor.leadTimeDays) missing.push("lead time");
+  if (!vendor.paymentTerms) missing.push("payment terms");
+  return missing;
+}
+
 export default function VendorCenter() {
   const { vendors, usage, openPurchaseRequests } = useLoaderData<any>();
   const actionData = useActionData<any>();
@@ -312,7 +331,7 @@ export default function VendorCenter() {
   return (
     <Page
       title="Vendor Center"
-      subtitle="Centralize supplier contacts, terms, lead times, vendor SKUs, notes, and purchase activity."
+      subtitle="Who you buy from: contacts, payment terms, lead times, and what each vendor supplies."
       secondaryActions={[
         { content: "PO Requests", url: "/app/erp/purchase-requests" },
         { content: "Reorder Report", url: "/app/erp/reorder-report" },
@@ -324,13 +343,13 @@ export default function VendorCenter() {
             <BlockStack gap="300">
               <InlineStack align="space-between" blockAlign="center">
                 <BlockStack gap="100">
-                  <Text as="h2" variant="headingMd">Vendor command center</Text>
-                  <Text as="p" tone="subdued">Create clean vendor records and seed them from existing material, vendor product, and PO request vendor names.</Text>
+                  <Text as="h2" variant="headingMd">Vendors overview</Text>
+                  <Text as="p" tone="subdued">One record per vendor. Materials, vendor products and PO requests link to vendors by name, so keep names consistent.</Text>
                 </BlockStack>
-                <InlineStack gap="200">
-                  <Badge tone="success">{vendors.filter((vendor: any) => vendor.active).length} active</Badge>
+                <InlineStack gap="200" wrap>
+                  <Badge>{vendors.filter((vendor: any) => vendor.active).length} active vendor(s)</Badge>
                   <Badge>{openPurchaseRequests} open PO(s)</Badge>
-                  {uncreatedUsage.length ? <Badge tone="warning">{uncreatedUsage.length} vendor name(s) need records</Badge> : null}
+                  {uncreatedUsage.length ? <Badge tone="critical">{uncreatedUsage.length} vendor name(s) without a record</Badge> : null}
                 </InlineStack>
               </InlineStack>
 
@@ -339,10 +358,13 @@ export default function VendorCenter() {
               <InlineStack gap="200">
                 <Form method="post">
                   <input type="hidden" name="intent" value="seedFromExisting" />
-                  <Button submit loading={busy}>Create vendors from existing names</Button>
+                  <Button submit loading={busy} disabled={!uncreatedUsage.length}>Create vendor records from existing names</Button>
                 </Form>
-                <Button url="/app/erp/purchase-requests">Open PO Requests</Button>
+                <Button url="/app/erp/purchase-requests">Open PO requests</Button>
               </InlineStack>
+              <Text as="p" tone="subdued">
+                Vendors created from existing names are marked "Seeded" until you review their contact, terms and lead time.
+              </Text>
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -360,16 +382,17 @@ export default function VendorCenter() {
                     <div style={{ minWidth: 180, flex: 1 }}><SelectField label="Status" name="status" options={statusOptions} /></div>
                   </InlineStack>
                   <InlineStack gap="250" wrap>
-                    <div style={{ minWidth: 200, flex: 1 }}><Field label="Main contact" name="contactName" /></div>
-                    <div style={{ minWidth: 200, flex: 1 }}><Field label="Email" name="email" type="email" /></div>
-                    <div style={{ minWidth: 180, flex: 1 }}><Field label="Phone" name="phone" /></div>
-                    <div style={{ minWidth: 180, flex: 1 }}><Field label="Lead time days" name="leadTimeDays" type="number" /></div>
+                    <div style={{ minWidth: 200, flex: 1 }}><Field label="Main contact name" name="contactName" /></div>
+                    <div style={{ minWidth: 200, flex: 1 }}><Field label="Main contact email" name="email" type="email" /></div>
+                    <div style={{ minWidth: 180, flex: 1 }}><Field label="Main contact phone" name="phone" /></div>
+                    <div style={{ minWidth: 180, flex: 1 }}><Field label="Lead time (days)" name="leadTimeDays" type="number" /></div>
                   </InlineStack>
                   <InlineStack gap="250" wrap>
                     <div style={{ minWidth: 240, flex: 1 }}><Field label="Website" name="website" /></div>
                     <div style={{ minWidth: 240, flex: 1 }}><Field label="Payment terms" name="paymentTerms" placeholder="Net 30, due on receipt, COD" /></div>
                   </InlineStack>
                   <TextArea label="Notes" name="notes" placeholder="What does this vendor supply? Terms, quality notes, ordering process." />
+                  <Text as="p" tone="subdued">Address, MOQ, shipping and quality notes can be added on the vendor card after saving. Saving a name that already exists updates that vendor.</Text>
                   <Button submit variant="primary" loading={busy}>Save vendor</Button>
                 </BlockStack>
               </Form>
@@ -381,11 +404,12 @@ export default function VendorCenter() {
           <Layout.Section>
             <Card>
               <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">Vendor names found but not created yet</Text>
+                <Text as="h2" variant="headingMd">Vendor names in use without a vendor record</Text>
+                <Text as="p" tone="subdued">These names appear on materials, vendor products or PO requests but have no vendor record. Use "Create vendor records from existing names" above, or add them manually.</Text>
                 {uncreatedUsage.map((row: any) => (
                   <InlineStack key={row.name} align="space-between" blockAlign="center">
                     <Text as="p"><strong>{row.name}</strong> | Materials: {row.materialCount} | Vendor products: {row.vendorProductCount} | PO requests: {row.purchaseRequestCount}</Text>
-                    <Badge tone="warning">Needs vendor record</Badge>
+                    <Badge tone="critical">Vendor record missing</Badge>
                   </InlineStack>
                 ))}
               </BlockStack>
@@ -407,18 +431,23 @@ export default function VendorCenter() {
                 purchaseExamples: [],
               };
 
+              const seeded = String(vendor.notes || "").startsWith(SEEDED_VENDOR_NOTE_PREFIX);
+              const missing = vendorMissingFields(vendor);
+
               return (
                 <Card key={vendor.id}>
                   <BlockStack gap="300">
                     <InlineStack align="space-between" blockAlign="start">
                       <BlockStack gap="100">
-                        <InlineStack gap="200" blockAlign="center">
+                        <InlineStack gap="200" blockAlign="center" wrap>
                           <Text as="h2" variant="headingMd">{vendor.name}</Text>
-                          <Badge tone={vendor.active ? "success" : "critical"}>{vendor.active ? vendor.status : "inactive"}</Badge>
-                          <Badge>{vendor.vendorType}</Badge>
+                          <Badge>{vendor.active ? optionLabel(statusOptions, vendor.status) : "Archived"}</Badge>
+                          <Badge>{optionLabel(vendorTypeOptions, vendor.vendorType)}</Badge>
+                          {seeded ? <Badge tone="warning">Seeded — review details</Badge> : null}
+                          {missing.length ? <Badge tone="critical">{`Missing: ${missing.join(", ")}`}</Badge> : null}
                         </InlineStack>
                         <Text as="p" tone="subdued">{vendor.contactName || "No main contact"} {vendor.email ? `| ${vendor.email}` : ""} {vendor.phone ? `| ${vendor.phone}` : ""}</Text>
-                        <Text as="p" tone="subdued">Lead time: {vendor.leadTimeDays || "TBD"} day(s) | Terms: {vendor.paymentTerms || "TBD"}</Text>
+                        <Text as="p" tone="subdued">Lead time: {vendor.leadTimeDays ? `${vendor.leadTimeDays} day(s)` : "not set"} | Payment terms: {vendor.paymentTerms || "not set"}</Text>
                       </BlockStack>
                       <InlineStack gap="200">
                         {vendor.website ? <Button url={vendor.website} target="_blank">Website</Button> : null}
@@ -426,7 +455,7 @@ export default function VendorCenter() {
                           <input type="hidden" name="intent" value="toggleVendorActive" />
                           <input type="hidden" name="id" value={vendor.id} />
                           <input type="hidden" name="active" value={vendor.active ? "false" : "true"} />
-                          <Button submit tone={vendor.active ? "critical" : undefined}>{vendor.active ? "Archive" : "Restore"}</Button>
+                          <Button submit tone={vendor.active ? "critical" : undefined}>{vendor.active ? "Archive vendor (hide, keeps history)" : "Restore vendor"}</Button>
                         </Form>
                       </InlineStack>
                     </InlineStack>
@@ -434,8 +463,8 @@ export default function VendorCenter() {
                     <InlineStack gap="250" wrap>
                       <Badge>Materials: {vendorUsage.materialCount}</Badge>
                       <Badge>Vendor products: {vendorUsage.vendorProductCount}</Badge>
-                      <Badge>POs: {vendorUsage.purchaseRequestCount}</Badge>
-                      <Badge tone={vendorUsage.openPurchaseRequestCount ? "warning" : undefined}>Open POs: {vendorUsage.openPurchaseRequestCount}</Badge>
+                      <Badge>PO requests: {vendorUsage.purchaseRequestCount}</Badge>
+                      <Badge tone={vendorUsage.openPurchaseRequestCount ? "attention" : undefined}>Open POs: {vendorUsage.openPurchaseRequestCount}</Badge>
                       <Badge>Est. PO spend: ${money(vendorUsage.estimatedSpend)}</Badge>
                     </InlineStack>
 
@@ -450,12 +479,12 @@ export default function VendorCenter() {
                             <InlineStack gap="200" wrap>
                               <div style={{ minWidth: 160, flex: 1 }}><SelectField label="Vendor type" name="vendorType" defaultValue={vendor.vendorType} options={vendorTypeOptions} /></div>
                               <div style={{ minWidth: 160, flex: 1 }}><SelectField label="Status" name="status" defaultValue={vendor.status} options={statusOptions} /></div>
-                              <div style={{ minWidth: 160, flex: 1 }}><Field label="Lead time days" name="leadTimeDays" type="number" defaultValue={vendor.leadTimeDays} /></div>
+                              <div style={{ minWidth: 160, flex: 1 }}><Field label="Lead time (days)" name="leadTimeDays" type="number" defaultValue={vendor.leadTimeDays} /></div>
                             </InlineStack>
                             <InlineStack gap="200" wrap>
-                              <div style={{ minWidth: 180, flex: 1 }}><Field label="Main contact" name="contactName" defaultValue={vendor.contactName} /></div>
-                              <div style={{ minWidth: 180, flex: 1 }}><Field label="Email" name="email" defaultValue={vendor.email} /></div>
-                              <div style={{ minWidth: 180, flex: 1 }}><Field label="Phone" name="phone" defaultValue={vendor.phone} /></div>
+                              <div style={{ minWidth: 180, flex: 1 }}><Field label="Main contact name" name="contactName" defaultValue={vendor.contactName} /></div>
+                              <div style={{ minWidth: 180, flex: 1 }}><Field label="Main contact email" name="email" defaultValue={vendor.email} /></div>
+                              <div style={{ minWidth: 180, flex: 1 }}><Field label="Main contact phone" name="phone" defaultValue={vendor.phone} /></div>
                             </InlineStack>
                             <InlineStack gap="200" wrap>
                               <div style={{ minWidth: 220, flex: 1 }}><Field label="Website" name="website" defaultValue={vendor.website} /></div>
@@ -467,7 +496,7 @@ export default function VendorCenter() {
                               <div style={{ minWidth: 90, flex: 1 }}><Field label="State" name="state" defaultValue={vendor.state} /></div>
                               <div style={{ minWidth: 110, flex: 1 }}><Field label="Zip" name="zip" defaultValue={vendor.zip} /></div>
                             </InlineStack>
-                            <TextArea label="MOQ notes" name="moqNotes" defaultValue={vendor.moqNotes} />
+                            <TextArea label="Minimum order (MOQ) notes" name="moqNotes" defaultValue={vendor.moqNotes} />
                             <TextArea label="Shipping notes" name="shippingNotes" defaultValue={vendor.shippingNotes} />
                             <TextArea label="Quality notes" name="qualityNotes" defaultValue={vendor.qualityNotes} />
                             <TextArea label="General notes" name="notes" defaultValue={vendor.notes} />
@@ -479,13 +508,14 @@ export default function VendorCenter() {
                       <div style={{ minWidth: 280, flex: 1 }}>
                         <Card>
                           <BlockStack gap="200">
-                            <Text as="h3" variant="headingSm">Contacts</Text>
+                            <Text as="h3" variant="headingSm">Additional contacts</Text>
+                            <Text as="p" tone="subdued">Other people at this vendor (sales rep, accounting). The main contact is on the vendor details form.</Text>
                             {vendor.contacts?.length ? vendor.contacts.map((contact: any) => (
                               <Text as="p" key={contact.id}>
                                 <strong>{contact.primary ? "★ " : ""}{contact.name}</strong>{contact.role ? `, ${contact.role}` : ""}<br />
                                 {contact.email || "No email"} {contact.phone ? `| ${contact.phone}` : ""}
                               </Text>
-                            )) : <Text as="p" tone="subdued">No extra contacts yet.</Text>}
+                            )) : <Text as="p" tone="subdued">No additional contacts yet.</Text>}
 
                             <Form method="post">
                               <input type="hidden" name="intent" value="addContact" />
@@ -506,28 +536,39 @@ export default function VendorCenter() {
 
                     <InlineStack gap="300" wrap align="start">
                       <div style={{ minWidth: 260, flex: 1 }}>
-                        <Text as="h3" variant="headingSm">Materials using this vendor</Text>
+                        <Text as="h3" variant="headingSm">Materials from this vendor</Text>
                         {vendorUsage.materialExamples.length ? vendorUsage.materialExamples.map((material: any) => (
-                          <Text as="p" key={material.id}>{material.name} | SKU: {material.sku || "none"} | Cost: ${money(material.costPerUnit)} | Stock: {material.stockOnHand ?? "n/a"}</Text>
-                        )) : <Text as="p" tone="subdued">No matching materials yet.</Text>}
+                          <Text as="p" key={material.id}>{material.name} | SKU: {material.sku || "none"} | Cost: ${money(material.costPerUnit)} per unit | Stock: {material.stockOnHand ?? "not recorded"}</Text>
+                        )) : <Text as="p" tone="subdued">No materials list this vendor yet.</Text>}
+                        {vendorUsage.materialCount > vendorUsage.materialExamples.length ? <Text as="p" tone="subdued">Showing {vendorUsage.materialExamples.length} of {vendorUsage.materialCount}.</Text> : null}
                       </div>
                       <div style={{ minWidth: 260, flex: 1 }}>
-                        <Text as="h3" variant="headingSm">Vendor products</Text>
+                        <Text as="h3" variant="headingSm">Vendor products (sourced items)</Text>
                         {vendorUsage.vendorProductExamples.length ? vendorUsage.vendorProductExamples.map((product: any) => (
-                          <Text as="p" key={product.id}>{product.name} | SKU: {product.vendorSku || "none"} | MOQ: {product.moq || "n/a"} | Cost: ${money(product.defaultUnitCost)}</Text>
-                        )) : <Text as="p" tone="subdued">No vendor product templates yet.</Text>}
+                          <Text as="p" key={product.id}>{product.name} | SKU: {product.vendorSku || "none"} | MOQ: {product.moq || "not set"} | Cost: ${money(product.defaultUnitCost)} per item</Text>
+                        )) : <Text as="p" tone="subdued">No vendor products from this vendor yet.</Text>}
+                        {vendorUsage.vendorProductCount > vendorUsage.vendorProductExamples.length ? <Text as="p" tone="subdued">Showing {vendorUsage.vendorProductExamples.length} of {vendorUsage.vendorProductCount}.</Text> : null}
                       </div>
                       <div style={{ minWidth: 260, flex: 1 }}>
                         <Text as="h3" variant="headingSm">Recent PO requests</Text>
                         {vendorUsage.purchaseExamples.length ? vendorUsage.purchaseExamples.map((po: any) => (
-                          <Text as="p" key={po.id}>{po.materialName} | {po.status} | Qty: {po.requestedQty} | Est: ${money(po.estimatedCost)}</Text>
-                        )) : <Text as="p" tone="subdued">No PO requests yet.</Text>}
+                          <Text as="p" key={po.id}>{po.materialName} | {humanize(po.status)} | Qty: {po.requestedQty} | Est: ${money(po.estimatedCost)}</Text>
+                        )) : <Text as="p" tone="subdued">No PO requests for this vendor yet.</Text>}
                       </div>
                     </InlineStack>
                   </BlockStack>
                 </Card>
               );
-            }) : <Card><Text as="p" tone="subdued">No vendor records yet. Create one or seed from existing names.</Text></Card>}
+            }) : (
+              <Card>
+                <BlockStack gap="100">
+                  <Text as="p" fontWeight="bold">No vendor records yet.</Text>
+                  <Text as="p" tone="subdued">
+                    Add a vendor with the form above{uncreatedUsage.length ? `, or create ${uncreatedUsage.length} record(s) from the vendor names already in use` : ""}.
+                  </Text>
+                </BlockStack>
+              </Card>
+            )}
           </BlockStack>
         </Layout.Section>
       </Layout>
