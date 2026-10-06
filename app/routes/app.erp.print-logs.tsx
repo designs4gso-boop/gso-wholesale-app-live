@@ -9,7 +9,7 @@ import {
   Badge,
   Divider,
 } from "@shopify/polaris";
-import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
+import { Form, Link, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import {
@@ -354,6 +354,40 @@ export async function action({ request }: { request: Request }) {
   return Response.json({ ok: false, message: "Unknown print log action." }, { status: 400 });
 }
 
+// Print flow strip (display only). The same four steps, in the same order,
+// appear on Print Intake, RIP Imports, RIP Import Review and Print Logs so
+// staff read them as one flow: artwork file -> matched job -> printer ->
+// RIP log -> actual usage -> review exceptions. Kept local to this file on
+// purpose (no shared module).
+const PRINT_FLOW_STEPS = [
+  { step: 1, label: "Print Intake", hint: "artwork → hot folder", to: "/app/erp/print-intake" },
+  { step: 2, label: "RIP Imports", hint: "printer logs in", to: "/app/erp/rip-imports" },
+  { step: 3, label: "RIP Import Review", hint: "fix unmatched", to: "/app/erp/rip-import-review" },
+  { step: 4, label: "Print Logs", hint: "actual usage", to: "/app/erp/print-logs" },
+] as const;
+
+function PrintFlowStrip({ current }: { current: string }) {
+  return (
+    <nav aria-label="Print flow" style={{ marginTop: 12, marginBottom: 16, padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#f9fafb", fontSize: 13, lineHeight: 1.8 }}>
+      <span style={{ fontWeight: 700, color: "#6b7280", marginRight: 8 }}>Print flow:</span>
+      {PRINT_FLOW_STEPS.map((item, index) => {
+        const active = item.to === current;
+        const text = `${item.step} ${item.label} (${item.hint})`;
+        return (
+          <span key={item.to}>
+            {index > 0 ? <span style={{ color: "#9ca3af", margin: "0 6px" }}>·</span> : null}
+            {active ? (
+              <b aria-current="page" style={{ color: "#111827", background: "#e0e7ff", padding: "2px 8px", borderRadius: 999 }}>{text}</b>
+            ) : (
+              <Link to={item.to} style={{ color: "#1d4ed8" }}>{text}</Link>
+            )}
+          </span>
+        );
+      })}
+    </nav>
+  );
+}
+
 function SourceSelect({ name, defaultValue }: { name: string; defaultValue?: string }) {
   return (
     <select name={name} defaultValue={defaultValue || "versaworks"} style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #aaa" }}>
@@ -371,19 +405,20 @@ export default function PrintLogImportPage() {
 
   return (
     <Page
-      title="Print Log Import"
-      subtitle="Import VersaWorks, RasterLink, or CSV job logs and match actual ink, sqft, and print time back to GSO job tickets."
+      title="Print Logs"
+      subtitle="Step 4 of the print flow: what each job actually used — ink, area and print time — matched back to GSO job tickets from the printer logs."
       primaryAction={{ content: "Production Board", onAction: () => navigate("/app/erp/production") }}
       secondaryActions={[{ content: "Auto Import Settings", onAction: () => navigate("/app/erp/print-log-settings") }]}
     >
+      <PrintFlowStrip current="/app/erp/print-logs" />
       <Layout>
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
                 <BlockStack gap="100">
-                  <Text as="h2" variant="headingMd">Import print log</Text>
-                  <Text as="p" tone="subdued">Export or copy job history from VersaWorks/RasterLink, then paste it here. The app matches rows by GSO job ticket.</Text>
+                  <Text as="h2" variant="headingMd">Import a print log by hand</Text>
+                  <Text as="p" tone="subdued">Export or copy job history from VersaWorks/RasterLink, then upload or paste it here. Rows are matched to jobs only by an exact GSO job ticket; anything else is left for RIP Import Review.</Text>
                 </BlockStack>
                 <InlineStack gap="200">
                   <Button onClick={() => navigate("/app/erp/print-log-settings")}>Auto Import Settings</Button>
@@ -391,7 +426,19 @@ export default function PrintLogImportPage() {
                 </InlineStack>
               </InlineStack>
 
-              {actionData?.message ? <Text as="p" tone={actionData.ok ? "success" : "critical"}>{actionData.message}</Text> : null}
+              {actionData?.message ? (
+                actionData.ok ? (
+                  <Text as="p" tone="success">{actionData.message}</Text>
+                ) : (
+                  <BlockStack gap="100">
+                    <Text as="p" tone="critical" fontWeight="bold">That action did not go through — nothing was changed.</Text>
+                    <details style={{ fontSize: 13 }}>
+                      <summary style={{ cursor: "pointer" }}>Technical detail</summary>
+                      <code style={{ display: "block", marginTop: 4, whiteSpace: "pre-wrap" }}>{actionData.message}</code>
+                    </details>
+                  </BlockStack>
+                )
+              ) : null}
 
               <Form method="post" encType="multipart/form-data">
                 <input type="hidden" name="intent" value="importPrintLog" />
@@ -468,7 +515,12 @@ export default function PrintLogImportPage() {
                     ))}
                   </BlockStack>
                 </Card>
-              )) : <Text as="p" tone="subdued">No print logs imported yet.</Text>}
+              )) : (
+                <Text as="p" tone="subdued">
+                  No print logs imported yet. Import one above (upload or paste), or bring a printer log in on RIP Imports (step 2);
+                  each import then appears here with its matched row count and total ink, area and print time.
+                </Text>
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -478,10 +530,11 @@ export default function PrintLogImportPage() {
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">Unmatched rows</Text>
               <Text as="p" tone="subdued">
-                Manual matching moved to RIP Import Review (Patch 13A.6E): it shows candidate suggestions, requires
-                explicit confirmation, protects against stale data, and keeps a full audit trail — the quick dropdown
-                here had none of that and could overwrite the row's parsed ticket.
+                Rows the importer could not tie to exactly one job are listed here for information only. Fixing them
+                happens on RIP Import Review (step 3): it shows candidate suggestions, requires explicit confirmation,
+                protects against stale data, and keeps a full audit trail.
               </Text>
+              <Text as="p" tone="subdued" variant="bodyXs">Manual-match retirement reference: 13A.6E.</Text>
               <InlineStack gap="200">
                 <Button variant="primary" onClick={() => navigate("/app/erp/rip-import-review")}>Open RIP Import Review</Button>
               </InlineStack>
@@ -497,7 +550,12 @@ export default function PrintLogImportPage() {
                     </InlineStack>
                   </BlockStack>
                 </Card>
-              )) : <Text as="p" tone="subdued">No unmatched rows.</Text>}
+              )) : (
+                <Text as="p" tone="subdued">
+                  No unmatched rows — every imported print-log row is attached to a job. A row appears here when an import
+                  finds no exact GSO ticket for it (or more than one job matches).
+                </Text>
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>

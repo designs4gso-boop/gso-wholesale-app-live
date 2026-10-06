@@ -172,6 +172,62 @@ export async function action({ request }: { request: Request }) {
 
 const card: React.CSSProperties = { marginTop: 16, border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "white" };
 const chip: React.CSSProperties = { display: "inline-block", padding: "2px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600 };
+const finePrint: React.CSSProperties = { fontSize: 11, color: "#9ca3af", marginTop: 6 };
+
+// Print flow strip (display only). The same four steps, in the same order,
+// appear on Print Intake, RIP Imports, RIP Import Review and Print Logs so
+// staff read them as one flow: artwork file -> matched job -> printer ->
+// RIP log -> actual usage -> review exceptions. Kept local to this file on
+// purpose (no shared module).
+const PRINT_FLOW_STEPS = [
+  { step: 1, label: "Print Intake", hint: "artwork → hot folder", to: "/app/erp/print-intake" },
+  { step: 2, label: "RIP Imports", hint: "printer logs in", to: "/app/erp/rip-imports" },
+  { step: 3, label: "RIP Import Review", hint: "fix unmatched", to: "/app/erp/rip-import-review" },
+  { step: 4, label: "Print Logs", hint: "actual usage", to: "/app/erp/print-logs" },
+] as const;
+
+function PrintFlowStrip({ current }: { current: string }) {
+  return (
+    <nav aria-label="Print flow" style={{ marginTop: 12, padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#f9fafb", fontSize: 13, lineHeight: 1.8 }}>
+      <span style={{ fontWeight: 700, color: "#6b7280", marginRight: 8 }}>Print flow:</span>
+      {PRINT_FLOW_STEPS.map((item, index) => {
+        const active = item.to === current;
+        const text = `${item.step} ${item.label} (${item.hint})`;
+        return (
+          <span key={item.to}>
+            {index > 0 ? <span style={{ color: "#9ca3af", margin: "0 6px" }}>·</span> : null}
+            {active ? (
+              <b aria-current="page" style={{ color: "#111827", background: "#e0e7ff", padding: "2px 8px", borderRadius: 999 }}>{text}</b>
+            ) : (
+              <Link to={item.to} style={{ color: "#1d4ed8" }}>{text}</Link>
+            )}
+          </span>
+        );
+      })}
+    </nav>
+  );
+}
+
+// Failure notice: plain sentence for staff, raw server text kept in a
+// collapsed "Technical detail". Every ok:false path in this action returns
+// before any write, so "nothing was changed" is accurate.
+function ActionNotice({ ok, message }: { ok: boolean; message: string }) {
+  return (
+    <section style={{ ...card, borderColor: ok ? "#86efac" : "#fca5a5", background: ok ? "#f0fdf4" : "#fef2f2" }}>
+      {ok ? (
+        message
+      ) : (
+        <>
+          <b>That action did not go through — nothing was changed.</b>
+          <details style={{ marginTop: 6, fontSize: 13 }}>
+            <summary style={{ cursor: "pointer" }}>Technical detail</summary>
+            <code style={{ display: "block", marginTop: 4, whiteSpace: "pre-wrap" }}>{message}</code>
+          </details>
+        </>
+      )}
+    </section>
+  );
+}
 
 const DECISION_STYLE: Record<IntakeOutcome["decision"], React.CSSProperties> = {
   routed: { ...chip, background: "#dcfce7", color: "#166534" },
@@ -207,14 +263,17 @@ export default function PrintIntake() {
   return (
     <main style={{ maxWidth: 1100, margin: "40px auto", padding: 16, fontFamily: "system-ui, sans-serif" }}>
       <section style={{ background: "linear-gradient(135deg,#111827,#064e3b)", color: "white", padding: 24, borderRadius: 14 }}>
-        <h1 style={{ margin: 0 }}>Print Intake Automation</h1>
+        <h1 style={{ margin: 0 }}>Print Intake</h1>
         <p style={{ margin: "8px 0 0" }}>
-          Patch 13A.6G: staff drop artwork into <b>Prints For Today</b> — nothing else. The local intake agent maps each
-          file to exactly one production job (item ticket, job ticket, stored filename, or job subfolder — never fuzzy),
-          copies it to the machine hot folder under the exact ERP RIP name, archives the original, and logs the outcome
-          below. Unresolved files stay where staff put them and appear as Needs review.
+          Step 1 of the print flow. Staff drop artwork into <b>Prints For Today</b> — nothing else. The local intake agent
+          matches each file to exactly one production job (item ticket, job ticket, stored filename, or job subfolder —
+          never a guess), copies it to the printer&apos;s hot folder under the exact ERP RIP name, archives the original,
+          and logs the outcome below. Files it cannot match stay where staff put them and show up as Needs review.
         </p>
+        <p style={{ margin: "8px 0 0", fontSize: 11, color: "#c7d2fe" }}>Engine reference: intake automation 13A.6G · review queue 15H.3.</p>
       </section>
+
+      <PrintFlowStrip current="/app/erp/print-intake" />
 
       <section style={card}>
         <b>Intake folder:</b> <code>{incomingFolder}</code>
@@ -226,33 +285,40 @@ export default function PrintIntake() {
       </section>
 
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
-        <b>Machine routing (finalized rules).</b>
+        <b>Which printer gets the file (finalized rules).</b>
         <div style={{ fontSize: 13, marginTop: 6 }}>
           <b>White and/or gloss &rarr; Roland LG-640 (the Mimaki is CMYK only).</b> CMYK-only jobs explicitly assigned to Roland in the ERP, or
           named with the standalone <code>ROLAND</code> filename tag, also route to Roland. All other CMYK-only jobs
-          default to the <b>Mimaki UCJV300</b> (<code>GSO_MIMAKI_CMYK_STANDARD</code>). Contradictory data (for example
-          a white/gloss job explicitly assigned to the CMYK-only Mimaki) goes to Needs review. Copies happen only where
-          the config enables them: <code>MimakiRoutingEnabled</code> / <code>RolandRoutingEnabled</code> ship off, and
-          Roland additionally needs its confirmed <code>VersaWorksHotFolder</code> path — until then Roland-bound plans
-          appear as Needs review with the blocking reason.
+          default to the <b>Mimaki UCJV300</b>. Contradictory data (for example a white/gloss job explicitly assigned to
+          the CMYK-only Mimaki) is blocked and goes to Needs review. A file name with no printer tag is treated as a
+          Mimaki job. Roland-bound plans stay in Needs review with the blocking reason until the Roland hot folder is
+          confirmed and enabled in the agent config.
         </div>
+        <details style={{ ...finePrint, color: "#6b7280" }}>
+          <summary style={{ cursor: "pointer" }}>Technical detail (config keys)</summary>
+          <div style={{ marginTop: 4 }}>
+            Mimaki default profile: <code>GSO_MIMAKI_CMYK_STANDARD</code>. Copies happen only where the agent config enables
+            them: <code>MimakiRoutingEnabled</code> / <code>RolandRoutingEnabled</code> ship off, and Roland additionally
+            needs its confirmed <code>VersaWorksHotFolder</code> path.
+          </div>
+        </details>
       </section>
 
-      {actionData?.message ? (
-        <section style={{ ...card, borderColor: actionData.ok ? "#86efac" : "#fca5a5", background: actionData.ok ? "#f0fdf4" : "#fef2f2" }}>
-          {actionData.message}
-        </section>
-      ) : null}
+      {actionData?.message ? <ActionNotice ok={Boolean(actionData.ok)} message={actionData.message} /> : null}
 
       <section style={card}>
-        <h2 style={{ margin: "0 0 4px" }}>Review queue (server-authoritative)</h2>
+        <h2 style={{ margin: "0 0 4px" }}>Files needing review</h2>
         <p style={{ margin: "0 0 10px", fontSize: 13, color: "#6b7280" }}>
-          15H.3: the agent&apos;s local ledger is a cache — this queue is the truth. <b>Release / Retry</b> lets the agent
-          re-plan a blocked file on its next pass; <b>Assign</b> routes it to an exact job/item you pick; <b>Reject</b>
-          stops retries (the file itself is never deleted). Every action is audited.
+          This queue is the source of truth (the agent&apos;s local ledger is only a cache). <b>Release / Retry</b> lets
+          the agent re-plan a blocked file on its next pass; <b>Assign</b> routes it to the exact job/item you pick;{" "}
+          <b>Reject</b> stops retries (the file itself is never deleted). Every action is audited.
         </p>
         {reviewRows.length === 0 ? (
-          <p style={{ color: "#6b7280" }}>Nothing needs review — unticketed files with deterministic hints auto-create and route.</p>
+          <p style={{ color: "#6b7280" }}>
+            Nothing needs review right now. A file appears here when the intake agent cannot match it to exactly one job
+            (missing ticket, duplicate, contradictory printer data, or Roland not yet enabled); you then Release, Assign
+            or Reject it from this table.
+          </p>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -290,7 +356,7 @@ export default function PrintIntake() {
                         <input type="hidden" name="intent" value="assign" />
                         <input type="hidden" name="intakeId" value={row.id} />
                         <select name="target" defaultValue="" style={{ maxWidth: 200 }}>
-                          <option value="" disabled>Assign to…</option>
+                          <option value="" disabled>{assignableJobs.length ? "Assign to…" : "No open jobs to assign to"}</option>
                           {assignableJobs.map((job) => (
                             job.items.length > 1
                               ? job.items.map((item) => (
@@ -332,7 +398,10 @@ export default function PrintIntake() {
           <span>(last {outcomes.length} outcomes; file names only — no local paths)</span>
         </p>
         {outcomes.length === 0 ? (
-          <p style={{ color: "#6b7280" }}>No intake outcomes reported yet — install and run the agent below.</p>
+          <p style={{ color: "#6b7280" }}>
+            No intake outcomes yet. Once the intake agent (setup below) processes a file from Prints For Today, each file
+            appears here with its result: Routed, Needs review, Duplicate or Failed, plus the job and printer it went to.
+          </p>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -359,13 +428,15 @@ export default function PrintIntake() {
           </div>
         )}
         <p style={{ fontSize: 13, marginTop: 10 }}>
-          Unmatched RIP <i>results</i> (after printing) are a separate workflow:{" "}
-          <Link to="/app/erp/rip-import-review">RIP Import Review</Link>.
+          Next in the flow: after the job prints, the printer&apos;s log comes in on{" "}
+          <Link to="/app/erp/rip-imports">RIP Imports</Link> (step 2); rows that could not be matched to a job are fixed on{" "}
+          <Link to="/app/erp/rip-import-review">RIP Import Review</Link> (step 3).
         </p>
       </section>
 
       <section style={card}>
-        <h2 style={{ margin: "0 0 8px" }}>Agent setup (tools/gso-print-intake-agent.ps1)</h2>
+        <h2 style={{ margin: "0 0 8px" }}>Agent setup</h2>
+        <p style={{ ...finePrint, marginTop: 0, marginBottom: 8 }}>Script: <code>tools/gso-print-intake-agent.ps1</code></p>
         <ol style={{ fontSize: 13, lineHeight: 1.9, margin: 0, paddingLeft: 20 }}>
           <li>On the shop PC: copy <code>tools\gso-print-intake-agent-config.example.json</code> to <code>gso-print-intake-agent-config.json</code> (git-ignored) and set <code>UploadToken</code> (see the credential card below — the token itself is only shown once, at rotation).</li>
           <li>Health check (writes nothing): <code>powershell -ExecutionPolicy Bypass -File tools\gso-print-intake-agent.ps1 -Health</code></li>
@@ -374,20 +445,22 @@ export default function PrintIntake() {
           <li>Install at startup: <code>schtasks /Create /TN &quot;GSO Print Intake Agent&quot; /SC ONSTART /TR &quot;powershell -ExecutionPolicy Bypass -File C:\path\to\tools\gso-print-intake-agent.ps1 -Loop&quot;</code></li>
         </ol>
         <p style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>
-          The old <code>gso-print-intake-watcher.ps1</code> was retired and removed from the repo (15Z.1) — it renamed
+          The old <code>gso-print-intake-watcher.ps1</code> was retired and removed from the repo — it renamed
           originals destructively and routed by filename guesses. If a copy still exists on any shop PC, delete it and
           never schedule it; <code>gso-print-intake-agent.ps1</code> is the only intake agent.
         </p>
+        <p style={finePrint}>Retirement reference: 15Z.1.</p>
       </section>
 
       <section style={{ ...card, borderColor: "#fcd34d", background: "#fffbeb" }}>
         <b>Print Intake Agent Credential: {credentialStatusLabel(credential)}</b>
         <p style={{ fontSize: 13, marginBottom: 6 }}>
-          The full token is never displayed here (15G.1A). In agent configs, set <code>UploadToken</code> to the value
+          The full token is never displayed here. In agent configs, set <code>UploadToken</code> to the value
           in place of <code>{CREDENTIAL_PLACEHOLDER}</code>. To obtain a value, rotate the token on{" "}
           <Link to="/app/erp/print-log-settings">Print Log Settings</Link> — the new token is shown exactly once at
           rotation and never again. Never commit the real config — it is git-ignored.
         </p>
+        <p style={finePrint}>Credential masking reference: 15G.1A.</p>
         {!credential.configured ? (
           <p style={{ fontSize: 13, color: "#991b1b" }}>
             No credential is configured yet — open Print Log Settings and rotate the token to create one.

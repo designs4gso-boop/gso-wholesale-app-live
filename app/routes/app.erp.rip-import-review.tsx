@@ -411,6 +411,62 @@ const STATUS_STYLE: Record<ReviewStatus, React.CSSProperties> = {
   ambiguous: { ...chip, background: "#fee2e2", color: "#991b1b" },
   attached: { ...chip, background: "#dcfce7", color: "#166534" },
 };
+const finePrint: React.CSSProperties = { fontSize: 11, color: "#9ca3af", marginTop: 6 };
+
+// Print flow strip (display only). The same four steps, in the same order,
+// appear on Print Intake, RIP Imports, RIP Import Review and Print Logs so
+// staff read them as one flow: artwork file -> matched job -> printer ->
+// RIP log -> actual usage -> review exceptions. Kept local to this file on
+// purpose (no shared module).
+const PRINT_FLOW_STEPS = [
+  { step: 1, label: "Print Intake", hint: "artwork → hot folder", to: "/app/erp/print-intake" },
+  { step: 2, label: "RIP Imports", hint: "printer logs in", to: "/app/erp/rip-imports" },
+  { step: 3, label: "RIP Import Review", hint: "fix unmatched", to: "/app/erp/rip-import-review" },
+  { step: 4, label: "Print Logs", hint: "actual usage", to: "/app/erp/print-logs" },
+] as const;
+
+function PrintFlowStrip({ current }: { current: string }) {
+  return (
+    <nav aria-label="Print flow" style={{ marginTop: 12, padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#f9fafb", fontSize: 13, lineHeight: 1.8 }}>
+      <span style={{ fontWeight: 700, color: "#6b7280", marginRight: 8 }}>Print flow:</span>
+      {PRINT_FLOW_STEPS.map((item, index) => {
+        const active = item.to === current;
+        const text = `${item.step} ${item.label} (${item.hint})`;
+        return (
+          <span key={item.to}>
+            {index > 0 ? <span style={{ color: "#9ca3af", margin: "0 6px" }}>·</span> : null}
+            {active ? (
+              <b aria-current="page" style={{ color: "#111827", background: "#e0e7ff", padding: "2px 8px", borderRadius: 999 }}>{text}</b>
+            ) : (
+              <Link to={item.to} style={{ color: "#1d4ed8" }}>{text}</Link>
+            )}
+          </span>
+        );
+      })}
+    </nav>
+  );
+}
+
+// Failure notice: plain sentence for staff, raw server text kept in a
+// collapsed "Technical detail". Every ok:false path in this action returns
+// before any write, so "nothing was changed" is accurate.
+function ActionNotice({ ok, message }: { ok: boolean; message: string }) {
+  return (
+    <div style={{ marginTop: 16, border: ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: ok ? "#f0fdf4" : "#fef2f2", padding: 12, borderRadius: 10 }}>
+      {ok ? (
+        <span style={{ fontWeight: 600 }}>{message}</span>
+      ) : (
+        <>
+          <b>That action did not go through — nothing was changed.</b>
+          <details style={{ marginTop: 6, fontSize: 13 }}>
+            <summary style={{ cursor: "pointer" }}>Technical detail</summary>
+            <code style={{ display: "block", marginTop: 4, whiteSpace: "pre-wrap" }}>{message}</code>
+          </details>
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function RipImportReview() {
   const data = useLoaderData<typeof loader>();
@@ -432,8 +488,9 @@ export default function RipImportReview() {
       <section style={{ background: "linear-gradient(135deg,#111827,#4c1d95)", color: "white", padding: 24, borderRadius: 14 }}>
         <h1 style={{ margin: 0 }}>RIP Import Review</h1>
         <p style={{ margin: "8px 0 0" }}>
-          Patch 13A.6C — review unmatched and ambiguous print-log rows (RasterLink + VersaWorks) and attach them to the
-          correct production job with confirmation and a full audit trail. Nothing here auto-matches.
+          Step 3 of the print flow. Printer-log rows that could not be matched to a job on RIP Imports (no ticket found,
+          or more than one job fits) land here. Pick the correct production job, confirm, and the row&apos;s real ink and
+          print time attach to that job with a full audit trail. Nothing on this page matches automatically.
         </p>
         <p style={{ margin: "8px 0 0", fontSize: 13 }}>
           <Link to="/app/erp/actual-costs" style={{ color: "#c4b5fd" }}>Actual Costs</Link>{" · "}
@@ -441,13 +498,12 @@ export default function RipImportReview() {
           <Link to="/app/erp/rip-imports" style={{ color: "#c4b5fd" }}>RIP Imports</Link>{" · "}
           <Link to="/app/erp/print-log-settings" style={{ color: "#c4b5fd" }}>Auto Import Settings</Link>
         </p>
+        <p style={{ margin: "8px 0 0", fontSize: 11, color: "#c4b5fd" }}>Engine reference: review workflow 13A.6C · backfill audit 13A.7C.</p>
       </section>
 
-      {actionData ? (
-        <div style={{ marginTop: 16, border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", padding: 12, borderRadius: 10, fontWeight: 600 }}>
-          {actionData.message}
-        </div>
-      ) : null}
+      <PrintFlowStrip current="/app/erp/rip-import-review" />
+
+      {actionData ? <ActionNotice ok={Boolean(actionData.ok)} message={String(actionData.message || "")} /> : null}
 
       <section style={card}>
         <span style={STATUS_STYLE.unmatched}>Unmatched: {data.counts.unmatched}</span>
@@ -489,10 +545,11 @@ export default function RipImportReview() {
       <section style={{ ...card, borderColor: "#bfdbfe", background: "#eff6ff" }}>
         <b>VersaWorks matching note.</b>{" "}
         <span style={{ fontSize: 13 }}>
-          VersaWorks uploads are hardened (Patch 13A.6D): exact-only two-stage matching with ambiguity flags, file and
-          row dedupe — the same standard as RasterLink. Rows imported <i>before</i> that patch may still carry silent
+          VersaWorks uploads now use the same strict matching as RasterLink: exact-only two-stage matching with
+          ambiguity flags, plus file and row dedupe. Rows imported <i>before</i> that hardening may still carry silent
           first-match attachments; spot-check older rows in the &quot;Attached&quot; view and correct them here.
         </span>
+        <div style={finePrint}>Hardening reference: 13A.6D.</div>
       </section>
 
       <section style={card}>
@@ -503,7 +560,13 @@ export default function RipImportReview() {
           {data.page < data.pageCount ? <>{" · "}<Link to={pageLink(data.page + 1)}>Next</Link></> : null}
         </p>
 
-        {data.rows.length === 0 ? <p style={{ color: "#6b7280" }}>No rows match this filter.</p> : null}
+        {data.rows.length === 0 ? (
+          <p style={{ color: "#6b7280" }}>
+            No rows match these filters. Unmatched or ambiguous printer-log rows appear here after a log is imported on{" "}
+            <Link to="/app/erp/rip-imports">RIP Imports</Link>; to see rows already attached, set Status to
+            &quot;Attached&quot; or &quot;All&quot;, or widen the Window.
+          </p>
+        ) : null}
 
         {data.rows.map((row) => (
           <div key={row.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 14, marginBottom: 12, background: row.reviewStatus === "attached" ? "#f9fafb" : "white" }}>
@@ -535,9 +598,15 @@ export default function RipImportReview() {
               </div>
             ) : null}
             {row.warnings.length ? (
-              <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 12, color: "#92400e" }}>
-                {row.warnings.map((warning) => <li key={warning}>{warning}</li>)}
-              </ul>
+              <div style={{ marginTop: 8, fontSize: 12, color: "#92400e" }}>
+                <b>Check before attaching:</b> this row has {row.warnings.length} matching warning{row.warnings.length === 1 ? "" : "s"}.
+                <details style={{ marginTop: 4 }}>
+                  <summary style={{ cursor: "pointer" }}>Technical detail</summary>
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                    {row.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                  </ul>
+                </details>
+              </div>
             ) : null}
 
             {row.reviewStatus === "attached" && row.attachedJob ? (
@@ -623,7 +692,8 @@ export default function RipImportReview() {
       </section>
 
       <section style={{ ...card, borderColor: "#7c2d12", borderWidth: 2 }}>
-        <h2 style={{ margin: "0 0 4px" }}>Roland duration &amp; item attribution audit (13A.7C)</h2>
+        <h2 style={{ margin: "0 0 4px" }}>Print time &amp; item attribution audit</h2>
+        <p style={{ ...finePrint, marginTop: 0, marginBottom: 6 }}>Backfill engine reference: 13A.7C (Roland duration + item attribution).</p>
         <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
           Read-only audit of the {data.backfillAudit.counts.attachedRows} most recent attached rows. Duration precedence:
           exact print start/end stamps from the row&apos;s own source data (derived, plausibility-checked) &gt; imported
@@ -674,6 +744,12 @@ export default function RipImportReview() {
               </tr>
             </thead>
             <tbody>
+              {data.backfillAudit.auditRows.length === 0 ? (
+                <tr><td colSpan={9} style={{ padding: 10, color: "#6b7280" }}>
+                  No attached rows to audit yet. Once printer-log rows are attached to jobs (automatically on import, or by
+                  hand above), the most recent ones are listed here with their print time and item attribution.
+                </td></tr>
+              ) : null}
               {data.backfillAudit.auditRows.map((row: any) => (
                 <tr key={row.id} style={{ borderTop: "1px solid #e5e7eb" }}>
                   <td style={{ padding: 6 }}>{row.sourceJobName || "—"}{row.isCut ? " (cut)" : ""}</td>
@@ -703,6 +779,13 @@ export default function RipImportReview() {
               </tr>
             </thead>
             <tbody>
+              {data.imports.length === 0 ? (
+                <tr><td colSpan={9} style={{ padding: 10, color: "#6b7280" }}>
+                  No printer-log imports yet. Upload a VersaWorks or RasterLink log on{" "}
+                  <Link to="/app/erp/rip-imports">RIP Imports</Link> (step 2) and it will be listed here with its matched and
+                  unmatched counts.
+                </td></tr>
+              ) : null}
               {data.imports.map((item) => (
                 <tr key={item.id} style={{ borderTop: "1px solid #e5e7eb" }}>
                   <td style={{ padding: 6 }}>{new Date(item.createdAt).toLocaleString()}</td>
