@@ -637,3 +637,9 @@ Not done / owner: weeding rate unchanged pending owner timing; geometry confirma
 Added: app/lib/jar-reference-geometry.ts (seed mirror, NOT cost authority), tests/fixed-product-authority-gate.test.ts, tests/fixtures/jar-fixtures-2026-10-05.json (engine capture at 292d766).
 Changed: jar-label-geometry.ts (JAR_LABEL_GEOMETRY_AUTHORITY, SpecAuthorityStatus), product-production-spec.ts (authority fields, AUTHORITY_LABEL, conflicts, Chiron note), canonical-calculator-shared.ts + canonical-calculator.server.ts (snapshot authority metadata), calculator/product-setup/cost-verification routes (amber pending state, no "owner-confirmed" wording for jars), docs.
 Not changed: any cost, weeding or application number; RecipeLabelZone values; Patch 2A values; schema.
+
+## Patch JAR-LIVE-SMOKE-2026-10-05 - staff display fixes after the first live jar quote (LOCAL)
+
+Added: tests/jar-live-smoke-followup.test.ts, tests/fixtures/jar-live-smoke-100ml-tall-2026-10-05.json.
+Changed: canonical-calculator-shared.ts (diagnostics applicationBreakdown + cutPathBasis), canonical-calculator.server.ts (populate both from existing engine data), jar-cost-inputs.server.ts (stale cut comment), cost-calculator route (context-aware application standard card, APPLICATION BREAKDOWN table, WHY CUTTING IS PROVISIONAL card, legacy application row marker), docs.
+Not changed: any cost line, pricing, weeding or application number; CUT_PATH_ESTIMATE_REQUIRED semantics.

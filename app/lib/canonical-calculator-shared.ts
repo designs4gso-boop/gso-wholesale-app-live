@@ -158,6 +158,48 @@ export type CanonicalDiagnostics = {
    * Nothing is re-estimated: each figure is the sum of existing line keys.
    */
   finishingBreakdown: CanonicalFinishingBreakdown | null;
+  /**
+   * 2026-10-05 live smoke follow-up — per-piece application detail straight
+   * from the engine's own per-size owner timings (jars) or per-side seconds
+   * (bags). Display only: the `application` line is still the cost; this is
+   * the same arithmetic shown per piece. null where the engine has no
+   * per-piece timing (custom labels).
+   */
+  applicationBreakdown: CanonicalApplicationBreakdown | null;
+  /**
+   * 2026-10-05 — why the cut path is or is not exact, in staff wording.
+   * null when the job is not cut.
+   */
+  cutPathBasis: CanonicalCutPathBasis | null;
+};
+
+export type CanonicalApplicationBreakdown = {
+  /** Staff label for the standard, e.g. "Jar application (owner per-size timings)". */
+  standardLabel: string;
+  laborRatePerHour: number;
+  finishedUnits: number;
+  pieces: Array<{
+    piece: string;
+    label: string;
+    secondsPerLabel: number;
+    costPerLabel: number;
+    labels: number;
+    cost: number;
+  }>;
+  totalLabels: number;
+  totalCost: number;
+  source: string;
+};
+
+export type CanonicalCutPathBasis = {
+  /** true when every band's LENGTH is exact geometry (owner cutline or derived by the GSO rule). */
+  lengthExact: boolean;
+  /** true when the cutting RATE used is an owner-measured benchmark for the same cut model. */
+  rateExact: boolean;
+  /** Per-band staff wording. */
+  bands: Array<{ group: string; model: string; lengthBasis: string; rateBasis: string }>;
+  /** One staff sentence explaining the PROVISIONAL state, or null when exact. */
+  provisionalReason: string | null;
 };
 
 export type CanonicalProductSpecDiagnostics = {

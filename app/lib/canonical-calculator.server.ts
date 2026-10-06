@@ -86,6 +86,9 @@ import {
   type JarLabelSelection,
   type JarSizeKey,
   type StandardJarVariant,
+  APPLICATION_LABOR_RATE_PER_HOUR,
+  JAR_APPLICATION_SECONDS_BY_SIZE,
+  JAR_APPLICATION_SOURCE,
 } from "./jar-cost-inputs.server";
 import { activeJarProfile } from "./jar-active-scope";
 import { JAR_LABEL_GEOMETRY_SOURCE, validateJarGeometryOverride } from "./jar-label-geometry";
@@ -108,6 +111,7 @@ import {
   type CanonicalCalculatorView,
   type CanonicalDiagnostics,
   type CanonicalFamily,
+  type CanonicalCutPathBasis,
   type CanonicalFinishingBreakdown,
 } from "./canonical-calculator-shared";
 import { OWNER_STANDARDS } from "./owner-standards";
@@ -456,6 +460,8 @@ const EMPTY_DIAGNOSTICS = (): CanonicalDiagnostics => ({
   personalizationCustomerAddOn: null,
   productSpec: null,
   finishingBreakdown: null,
+  applicationBreakdown: null,
+  cutPathBasis: null,
 });
 
 export function assembleCanonicalJob(
@@ -652,6 +658,19 @@ export function assembleCanonicalJob(
     diagnostics.physicalItems = bag.application.physicalItems;
     diagnostics.applicationsPerItem = bag.application.applicationsPerItem;
     diagnostics.printedLabelsAvailable = bag.application.printedLabels;
+    {
+      const costPerLabel = (BAG_APPLICATION_SECONDS_PER_SIDE / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
+      const labels = finished * cfg.sides;
+      diagnostics.applicationBreakdown = {
+        standardLabel: "4x5 bag application (owner decision: seconds per applied side)",
+        laborRatePerHour: BAG_APPLICATION_LABOR_RATE_PER_HOUR,
+        finishedUnits: finished,
+        pieces: [{ piece: "side", label: `Applied label (${cfg.sides} side(s) per bag)`, secondsPerLabel: BAG_APPLICATION_SECONDS_PER_SIDE, costPerLabel, labels, cost: costPerLabel * labels }],
+        totalLabels: labels,
+        totalCost: costPerLabel * labels,
+        source: "bag-cost-inputs.server.ts OWNER DECISION 2 — 10 s per applied side at $20/hr",
+      };
+    }
     diagnostics.artSetupEvents = bag.setup.artDesignEvents;
     diagnostics.printSetupEvents = bag.setup.printDesignEvents;
     diagnostics.personalizationSetupEvents = bag.personalization.setupEvents;
@@ -913,6 +932,31 @@ export function assembleCanonicalJob(
       diagnostics.applicationEvents = finished * labelsPerJar;
       diagnostics.physicalItems = finished;
       diagnostics.applicationsPerItem = labelsPerJar;
+      /* 2026-10-05 — per-piece application detail from the SAME owner
+       * timings the application line is costed from. Display only. A piece
+       * with no timing (3oz/4oz tamper) is listed with null-safe zeros and the
+       * job is already blocked above. */
+      if (jarApplication.ok) {
+        const ownerSeconds = JAR_APPLICATION_SECONDS_BY_SIZE[cfg.size];
+        const pieceRows: NonNullable<CanonicalDiagnostics["applicationBreakdown"]>["pieces"] = [];
+        const addPiece = (piece: string, label: string, seconds: number | null) => {
+          if (seconds == null) return;
+          const costPerLabel = (seconds / 3600) * APPLICATION_LABOR_RATE_PER_HOUR;
+          pieceRows.push({ piece, label, secondsPerLabel: seconds, costPerLabel, labels: finished, cost: costPerLabel * finished });
+        };
+        if (selection.side) addPiece("side", "Side label", ownerSeconds.side);
+        if (selection.lid) addPiece("lid", "Lid label", ownerSeconds.lid);
+        if (selection.tamper) addPiece("tamper", "Tamper / lid-side band", ownerSeconds.tamper);
+        diagnostics.applicationBreakdown = {
+          standardLabel: "Jar application (owner per-size timings)",
+          laborRatePerHour: APPLICATION_LABOR_RATE_PER_HOUR,
+          finishedUnits: finished,
+          pieces: pieceRows,
+          totalLabels: pieceRows.reduce((t, p) => t + p.labels, 0),
+          totalCost: pieceRows.reduce((t, p) => t + p.cost, 0),
+          source: JAR_APPLICATION_SOURCE,
+        };
+      }
       diagnostics.artSetupEvents = jarSetup.designs;
       diagnostics.printSetupEvents = 1;
 
@@ -1104,6 +1148,7 @@ export function assembleCanonicalJob(
   const trueCost = computeTrueJobCost(trueCostInput);
   diagnostics.machineMinutes = machineMinutesFrom(trueCost);
   diagnostics.finishingBreakdown = finishingBreakdownFrom(trueCost);
+  diagnostics.cutPathBasis = cutPathBasisFrom(trueCost);
   if (input.family === "sticker-bags" || input.family === "stock-bags") {
     diagnostics.productSpec = {
       specVersion: PRODUCT_SPEC_VERSION,
@@ -1306,6 +1351,36 @@ function jarOverrideFromParams(params: URLSearchParams): JarGeometryOverride | n
   const tamperW = raw("pjartamperw"), tamperH = raw("pjartamperh");
   if (tamperW !== undefined || tamperH !== undefined) out.tamper = { widthIn: tamperW as number, heightIn: tamperH as number };
   return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 2026-10-05 live smoke follow-up — staff wording for WHY the cut path is
+ * exact or provisional, read from the cutting line the engine already emitted.
+ * It changes nothing: the reason codes and amounts are the engine's. A
+ * contour band (jar lid) always carries CUT_PATH_ESTIMATE_REQUIRED today
+ * because the only owner-measured cutter benchmark is a straight-line 4x5
+ * rectangle job; the contour LENGTH is exact, the cutting RATE is borrowed.
+ */
+function cutPathBasisFrom(trueCost: TrueCostResult): CanonicalCutPathBasis | null {
+  const cutLine = trueCost.lines.find((l) => l.key === "cutting_machine") as any;
+  if (!cutLine) return null;
+  if (/not required/i.test(String(cutLine.label || ""))) return null;
+  const provisional: string = String(cutLine.provisional || "");
+  const bands: CanonicalCutPathBasis["bands"] = [];
+  const contourBands = [...provisional.matchAll(/(\w+) cuts on a contour and no controlled contour benchmark exists/g)].map((m) => m[1]);
+  const artboardBands = [...provisional.matchAll(/(\w+) has no owner-supplied cutline/g)].map((m) => m[1]);
+  const unknownContour = [...provisional.matchAll(/(\w+) cuts on a contour and NO actual contour geometry/g)].map((m) => m[1]);
+  for (const g of contourBands) bands.push({ group: g, model: "contour", lengthBasis: "exact: pi x cut diameter derived from the artboard by the GSO -0.0625 in rule", rateBasis: "borrowed: owner-measured STRAIGHT-LINE cutter benchmark (130 x 4x5 rectangles); no contour benchmark exists" });
+  for (const g of unknownContour) bands.push({ group: g, model: "contour", lengthBasis: "DIAGNOSTIC: bounding box stands in for unknown contour geometry", rateBasis: "borrowed straight-line benchmark" });
+  for (const g of artboardBands) bands.push({ group: g, model: "separated_rectangle", lengthBasis: "DIAGNOSTIC: artboard stands in for an unknown cutline", rateBasis: "owner-measured straight-line benchmark" });
+  const rateUnverified = /CUT_GEOMETRY_UNVERIFIED/.test(provisional);
+  const lengthExact = unknownContour.length === 0 && artboardBands.length === 0;
+  const rateExact = contourBands.length === 0 && unknownContour.length === 0 && !rateUnverified;
+  let provisionalReason: string | null = null;
+  if (!lengthExact) provisionalReason = "The cut LENGTH for at least one label is a diagnostic stand-in, not measured geometry.";
+  else if (contourBands.length) provisionalReason = `The cut length is exact (rectangles: 2 x (w + h) on the derived cutline; ${contourBands.join(", ")}: pi x diameter), but the cutter SPEED for a circular contour has never been benchmarked — the straight-line 4x5 rate is borrowed. Cost stays PROVISIONAL until the owner times a contour cut job.`;
+  else if (rateUnverified) provisionalReason = "The cutter rate is numeric but its benchmark piece count was never owner-confirmed.";
+  return { lengthExact, rateExact, bands, provisionalReason };
 }
 
 /**

@@ -1,0 +1,168 @@
+{
+ "capturedAt": "2026-10-05",
+ "capturedAtHead": "10036eb47e470e38e030d1053ca863406cd32a8d",
+ "liveObservation": {
+  "totalCost": 430.0861,
+  "unitCost": 3.36,
+  "reason": "CUT_PATH_ESTIMATE_REQUIRED",
+  "printedLabels": 256,
+  "physicalItems": 128,
+  "applicationEvents": 256,
+  "applicationsPerItem": 2,
+  "weedingPages": 2,
+  "pricing": "128 @ $8.00/jar = $1,024.01 (pricing comes from owner pricing config in the DB; not reproducible offline)"
+ },
+ "query": "pfamily=premium-jars&pqty=128&pjar=miron/100ml_tall&pjarside=1&pjarlid=1&pjarset=side_lid&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0",
+ "status": "PROVISIONAL",
+ "totalCost": 430.0861464893229,
+ "unitCost": 3.3600480194478353,
+ "reasons": [
+  "CUT_PATH_ESTIMATE_REQUIRED"
+ ],
+ "blockers": [],
+ "lines": [
+  {
+   "key": "blank_sets",
+   "amount": 361.4
+  },
+  {
+   "key": "print_media",
+   "amount": 6.999416666666666
+  },
+  {
+   "key": "ink",
+   "amount": 6.681759647184025
+  },
+  {
+   "key": "art_setup",
+   "amount": 8.333333333333334
+  },
+  {
+   "key": "print_setup",
+   "amount": 1
+  },
+  {
+   "key": "run_labor",
+   "amount": 1.3196116840277778
+  },
+  {
+   "key": "application",
+   "amount": 15.644444444444446
+  },
+  {
+   "key": "cutting_machine",
+   "amount": 2.004309834751299
+  },
+  {
+   "key": "cutting_attention",
+   "amount": 0.6263468233597809
+  },
+  {
+   "key": "weeding",
+   "amount": 2.6666666666666665
+  },
+  {
+   "key": "machine",
+   "amount": 4.222757388888889
+  },
+  {
+   "key": "planned_overage",
+   "amount": 0
+  },
+  {
+   "key": "packout",
+   "amount": 7
+  },
+  {
+   "key": "inbound_freight",
+   "amount": 12.1875
+  }
+ ],
+ "totals": {
+  "materials": 368.39941666666664,
+  "ink": 6.681759647184025,
+  "setup_labor": 9.333333333333334,
+  "run_labor": 1.9459585073875587,
+  "finishing_application": 18.311111111111114,
+  "machine_recovery": 6.227067223640187,
+  "planned_overage": 0,
+  "packout": 7,
+  "inbound_freight": 12.1875,
+  "outside_costs": 0
+ },
+ "diagnostics": {
+  "mediaConsumedSqft": 22.18125,
+  "ripLayoutSqft": 21.932604166666664,
+  "inkableArtworkSqft": 20.087060026407006,
+  "feedLengthIn": null,
+  "nestRotated": null,
+  "nestColumns": null,
+  "nestRows": null,
+  "machineMinutes": 31.7,
+  "cutPathIn": 3055.661448070844,
+  "cutMinutes": 15.032323760634743,
+  "weedingPages": 2,
+  "applicationEvents": 256,
+  "physicalItems": 128,
+  "applicationsPerItem": 2,
+  "printedLabelsAvailable": null,
+  "artSetupEvents": 1,
+  "printSetupEvents": 1,
+  "personalizationSetupEvents": null,
+  "personalizationCustomerAddOn": null,
+  "productSpec": {
+   "specVersion": "product-production-spec/1.1.0-2026-10-05",
+   "family": "premium-jars",
+   "productKey": "miron/100ml_tall",
+   "displayName": "Miron 100ml tall",
+   "source": "jar-cost-inputs.server.ts JAR_LABEL_GEOMETRY — Patch 2A (17D.2) presets; the only geometry any cost path reads",
+   "labelSet": "side_lid",
+   "standard": {
+    "side": {
+     "widthIn": 6.3,
+     "heightIn": 3.15
+    },
+    "lid": {
+     "diameterIn": 1.75
+    }
+   },
+   "customSize": false,
+   "override": {},
+   "overriddenPieces": [],
+   "overrideReason": null,
+   "authorityStatus": "CANONICAL_COSTING_PENDING_CONFIRMATION",
+   "ownerConfirmationRequired": true,
+   "referenceConflict": true,
+   "referenceConflicts": [
+    "side label width 6.125 in (current quote uses 6.3 in)",
+    "side label height 3.125 in (current quote uses 3.15 in)"
+   ],
+   "sharedSizeKeyNote": null
+  },
+  "finishingBreakdown": {
+   "cuttingMachine": 2.004309834751299,
+   "cuttingAttention": 0.6263468233597809,
+   "weeding": 2.6666666666666665,
+   "application": 15.644444444444446,
+   "specialtySetup": 0,
+   "total": 20.941767769222192,
+   "basis": {
+    "cuttingMachine": [
+     "cutting_machine"
+    ],
+    "cuttingAttention": [
+     "cutting_attention"
+    ],
+    "weeding": [
+     "weeding"
+    ],
+    "application": [
+     "application"
+    ],
+    "specialtySetup": [
+     "specialty_setup"
+    ]
+   }
+  }
+ }
+}

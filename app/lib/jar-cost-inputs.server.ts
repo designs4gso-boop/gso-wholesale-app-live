@@ -648,15 +648,19 @@ export function jarNestingAreas(input: JarNestingInput): { areas: JarNestingArea
  * cut line - so jar side and tamper labels use SEPARATED_RECTANGLE
  * (qty x perimeter), never a shared grid.
  *
- * NO OWNER CUTLINE EXISTS FOR JARS YET. The 4x5 bag benchmark proved artboard
- * (4.00 x 5.00) and cutline (3.875 x 4.875) differ materially, so jar bands fall
- * back to the ARTBOARD geometry and are flagged CUT_PATH_ESTIMATE_REQUIRED.
- * A cutline is always smaller than its artboard, so this OVERSTATES jar
- * cutting until the owner supplies real jar cutlines.
+ * CUTLINES (2D-4C2A, audited again 2026-10-05): jarCutGeometry DERIVES every
+ * jar cutline from its artboard by the GSO -0.0625 in rule (side/tamper
+ * rectangles: width-0.125 x height-0.125; lid circle: diameter-0.125). The
+ * rectangle bands therefore carry an exact owner-rule cutline and are NOT
+ * flagged. The earlier note that jars "fall back to the ARTBOARD" is obsolete.
  *
- * LIDS are circles -> CONTOUR at qty x pi x diameter. Exact length, but no
- * controlled contour benchmark exists, so the rate is borrowed and the job
- * stays PROVISIONAL.
+ * LIDS are circles -> CONTOUR at qty x pi x cut diameter. The LENGTH is exact
+ * geometry, but the only owner-measured cutter benchmark is a straight-line
+ * 4x5 rectangle job, so the contour RATE is borrowed and every lid job is
+ * flagged CUT_PATH_ESTIMATE_REQUIRED -> PROVISIONAL. Nesting/layout does not
+ * change the path (separated cuts: qty x perimeter per band). Whether the
+ * borrowed rate over- or under-states contour time is UNKNOWN until the
+ * owner times a contour job; it is not conservative by design.
  * ------------------------------------------------------------------ */
 
 /** CMYK-only jar work routes to the Mimaki; White/Gloss would route to Roland. */

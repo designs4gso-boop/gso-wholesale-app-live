@@ -50,3 +50,10 @@ Dimensions are fixed at the owner 4x5 artboard; no label set or override exists.
 - The legacy 14C.2 breakdown (diagnostics only) still receives the same dimensions automatically.
 - Product Setup shows the cost-engine spec for jar recipes read-only above the label zones; label zones remain reference only.
 - Cost Verification has a new read-only "Production standards in force" card (weeding, jar application, fixed-product specs).
+
+## Reading the jar result (added 2026-10-05 after the first live smoke test)
+
+- **PROVISIONAL with CUT_PATH_ESTIMATE_REQUIRED on any job with a lid label is expected.** The cut length is exact; the cutter speed for circular contours has never been timed, so the straight-line benchmark is borrowed. The "WHY CUTTING IS PROVISIONAL" card says so. A Side Only jar job has no cut-path flag but is still PROVISIONAL because operator attention (10%) and inbound freight are owner-approved provisional standards.
+- **Application cost**: read the APPLICATION BREAKDOWN table in the canonical panel (side, lid, total; owner per-size seconds at $20/hr). The "Application standard" line in the green trust card shows the same standard.
+- **Ignore the legacy 14C.2 application row** (it uses the old flat $0.20/label and is suffixed "legacy diagnostic only"). It never enters the quote.
+- The green trust card no longer shows "4x5 application" on jar quotes.

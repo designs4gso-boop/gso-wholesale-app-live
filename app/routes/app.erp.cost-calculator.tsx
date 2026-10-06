@@ -25,7 +25,7 @@ import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TI
 import { COMMERCIAL_PRICING_VERSION, buildStickerLines, computeCommercialPrice, designSplit, marginCurveConfigFor, marginCurveKeyFor, normalizeAdditionalLineCount, resolveMarginPctForQuantity, specialtyFinishReasons, validateStickerLine } from "../lib/commercial-pricing-policy.server";
 import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
 import { SPECIALTY_FILE_PREP_FEE, SPECIALTY_FILE_PREP_LABEL, specialtyFilePrepFee } from "../lib/calculator-fee-standards";
-import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, canonicalFamilyFromMarginFamilyKey, type CanonicalCalculatorView } from "../lib/canonical-calculator-shared";
+import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, canonicalFamilyFromMarginFamilyKey, type CanonicalApplicationBreakdown, type CanonicalCalculatorView } from "../lib/canonical-calculator-shared";
 import { resolveMultiLineLabelQuote, type MultiLineCanonicalQuote } from "../lib/multi-line-label-authority.server";
 import { assembleCanonicalJob, canonicalInputForQuantity, canonicalSupportsTierLadder, canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput, resolveCanonicalMachineInputs } from "../lib/canonical-calculator.server";
 import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
@@ -3843,6 +3843,40 @@ function CanonicalTrueCost() {
           </div>
         </div>
       ) : null}
+      {d.applicationBreakdown && d.applicationBreakdown.pieces.length ? (
+        <div style={{ marginTop: 10, background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, fontSize: 12 }}>
+          <b>APPLICATION BREAKDOWN</b> <span style={{ color: "#6b7280" }}>({d.applicationBreakdown.standardLabel}, ${d.applicationBreakdown.laborRatePerHour}/hr; same arithmetic as the application line)</span>
+          <table style={{ width: "100%", marginTop: 4, borderCollapse: "collapse" }}>
+            <thead><tr><th style={{ textAlign: "left", padding: "2px 0" }}>Piece</th><th style={{ textAlign: "right" }}>Seconds / label</th><th style={{ textAlign: "right" }}>$ / label</th><th style={{ textAlign: "right" }}>Labels</th><th style={{ textAlign: "right" }}>Cost</th></tr></thead>
+            <tbody>
+              {d.applicationBreakdown.pieces.map((p) => (
+                <tr key={p.piece}>
+                  <td style={{ padding: "2px 0" }}>{p.label}</td>
+                  <td style={{ textAlign: "right" }}>{p.secondsPerLabel}s</td>
+                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(p.costPerLabel)}</td>
+                  <td style={{ textAlign: "right" }}>{p.labels}</td>
+                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(p.cost)}</td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 700, borderTop: "1px solid #e5e7eb" }}>
+                <td style={{ padding: "2px 0" }}>Total application</td><td /><td />
+                <td style={{ textAlign: "right" }}>{d.applicationBreakdown.totalLabels}</td>
+                <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(d.applicationBreakdown.totalCost)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={{ color: "#6b7280", marginTop: 4 }}>{d.applicationBreakdown.source}</div>
+        </div>
+      ) : null}
+      {d.cutPathBasis && d.cutPathBasis.provisionalReason ? (
+        <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 10, fontSize: 12 }}>
+          <b style={{ color: "#92400e" }}>WHY CUTTING IS PROVISIONAL</b>
+          <div style={{ marginTop: 4, color: "#78350f" }}>{d.cutPathBasis.provisionalReason}</div>
+          <div style={{ color: "#6b7280", marginTop: 4 }}>
+            {d.cutPathBasis.bands.map((b) => `${b.group}: length ${b.lengthBasis}; rate ${b.rateBasis}`).join(" · ")}
+          </div>
+        </div>
+      ) : null}
 
       <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}>
         <b>Calibration:</b> {canonical.calibration.resolved ? "resolved" : "NOT RESOLVED"} —{" "}
@@ -3904,7 +3938,10 @@ function ProductBreakdown() {
         <tbody>
           {result.lines.filter((line: any) => line.amount !== 0 || line.source === "missing").map((line: any) => (
             <tr key={line.key} style={{ borderTop: "1px solid #e5e7eb", background: line.source === "missing" ? "#fef2f2" : undefined }}>
-              <td style={{ padding: 5 }}>{line.label}</td>
+              <td style={{ padding: 5 }}>
+                {line.label}
+                {canonicalAuthoritative && line.key === "application" ? <span style={{ color: "#92400e", fontWeight: 700 }}> — legacy diagnostic only, not used by canonical quote (canonical application is in the panel above)</span> : null}
+              </td>
               <td align="right">${line.amount.toFixed(2)}</td>
               <td style={{ paddingLeft: 8 }}><span style={{ fontWeight: 700, color: line.source === "verified" ? "#166534" : line.source === "owner_standard" ? "#1e40af" : line.source === "missing" ? "#991b1b" : line.source === "manual_override" ? "#7c2d12" : "#92400e" }}>{String(line.source).replace(/_/g, " ")}</span>{line.note ? <span style={{ color: "#6b7280" }}> — {line.note}</span> : null}</td>
             </tr>
@@ -3953,7 +3990,20 @@ function ProductBreakdown() {
       <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 4 }}>
         <div><b>Pricing engine:</b> {canonicalAuthoritative ? `Canonical true cost ${canonical?.version ?? "17D.7"} (authoritative) · legacy 14C.2 lines are diagnostics` : `Canonical Product Engine (${emergency.productMode?.isDtp ? "15C Spektra DTP ladder" : "15F.0 production-ready + owner policy"})`}</div>
         <div><b>Machine rate:</b> Owner standard — $8/hr</div>
-        <div><b>4x5 application:</b> 256 labels/hr @ $20/hr ($0.078125/label)</div>
+        {/* 2026-10-05 live smoke follow-up: the application standard shown here is
+            the one the CANONICAL engine priced with (per family), never the legacy
+            4x5 bag rate on a jar quote. The legacy figure stays visible only when
+            no canonical breakdown exists, and is labelled as legacy. */}
+        {(() => {
+          const ab = (emergency.productMode?.canonical as any)?.diagnostics?.applicationBreakdown as CanonicalApplicationBreakdown | null | undefined;
+          if (canonicalAuthoritative && ab && ab.pieces.length) {
+            return (
+              <div><b>Application standard:</b> {ab.standardLabel} @ ${ab.laborRatePerHour}/hr — {ab.pieces.map((p) => `${p.label.toLowerCase()} ${p.secondsPerLabel}s (${p.costPerLabel.toFixed(4)}/label)`).join(" · ")}</div>
+            );
+          }
+          if (canonicalAuthoritative) return <div><b>Application standard:</b> see canonical application line (no per-piece timing for this family)</div>;
+          return <div><b>Legacy 4x5 bag application (legacy 14C.2 path only):</b> 256 labels/hr @ $20/hr ($0.078125/label)</div>;
+        })()}
         <div><b>Cost sources:</b> {result.missing.length ? `${result.missing.length} UNVERIFIED — draft only` : "Verified / owner standards"}</div>
         <div><b>Mimaki:</b> CMYK only · <b>Roland LG-640:</b> white + gloss</div>
         <div><b>Pricing policy:</b> owner Pricing Settings (margin bands, floors, market targets)</div>
