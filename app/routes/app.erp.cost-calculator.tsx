@@ -2410,7 +2410,18 @@ export async function action({ request }: { request: Request }) {
         data: {
           shop, status: "draft", customerName: String(form.get("ecustomer") || "") || fRead("pcustomer") || null,
           notes: `${productSnapshot ? (savedIsDtpSnapshot ? "15C DTP calculator draft" : "14C.2 product calculator draft") : "14B.0 emergency calculator draft"}${fRead("pnotes") ? " — " + fRead("pnotes").slice(0, 240) : ""}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}${canonicalSnapshot && canonicalSnapshot.status === "DRAFT_ONLY" ? " — CANONICAL TRUE COST DRAFT_ONLY: " + canonicalSnapshot.blockers.slice(0, 4).join("; ") : ""}`,
-          items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({ unitPrice: primary.unitPrice, marginPct: primary.marginPct, tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })) }) }] },
+          items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({
+            unitPrice: primary.unitPrice, marginPct: primary.marginPct,
+            tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })),
+            // 2026-10-05: enough context to explain this price later (never rewritten; new quotes only).
+            pricingPolicyVersion: COMMERCIAL_PRICING_VERSION,
+            priceSource: (primary as any).commercial?.controllingRule ?? null,
+            pricingBasis: (primary as any).commercial?.marginSource ?? null,
+            ownerLadder: (primary as any).commercial?.ownerLadder ?? null,
+            envelopeCappedTo: (primary as any).envelopeCappedTo ?? null,
+            recommendedUnitPrice: primary.unitPrice, recommendedTotalPrice: primary.totalPrice,
+            ownerMarginOverride: gate.belowFloor ? { reason: gate.reason } : null,
+          }) }] },
         },
       });
 
@@ -2752,7 +2763,10 @@ Setup/design fee included in pricing.`}
           </select>
         </label>
         <label style={{ fontSize: 12 }}>Tier quantities (comma list)<input name="eqty" defaultValue={emergency.quantities.join(",")} style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Tier margins % (comma list, blank = curve)<input name="emargin" defaultValue={emergency.margins.join(",")} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Tier margins % (comma list, blank = recommended)
+          <input name="emargin" defaultValue={emergency.margins.join(",")} style={inputStyle} />
+          <span style={smallHelp}>A margin entered here REPLACES the recommended price for that tier (the tier table shows the resulting price and realized margin side by side). Below the family minimum or the global floor the quote cannot be saved without the owner override phrase and a reason. Overrides never change the true manufacturing cost.</span>
+        </label>
         {!emergency.productMode ? (
           <>
             {/* 15G.3: manual cost entry exists ONLY for unsupported/manual jobs.
