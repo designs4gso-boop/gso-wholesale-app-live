@@ -1,20 +1,22 @@
 #!/usr/bin/env node
 // Generates app/lib/generated/spektra-live-price-matrix-2026-10-06.ts from the
 // live Flex Packaging / Spektra research CSV. Deterministic: same CSV in, same
-// file out. REFUSES to run without the CSV — it never invents rows.
+// file out. REFUSES to run without the CSV, with a missing required column,
+// with ANY rejected row, or with conflicting duplicate prices — it never
+// invents or alters a vendor price and never edits the CSV.
 //
-// Expected CSV columns (header names are matched case-insensitively after
-// stripping spaces/underscores; extra columns are ignored):
-//   size, material, finish, spot (or spot_gloss), zipper, top_feature (or feature),
-//   clear_gusset (true/false/yes/no/1/0), quantity, sku_count (or skus; default 1),
-//   public_total (or order_total / total), public_unit (optional, displayed unit),
-//   observed_at (optional; defaults to the research date), note (optional)
+// Import contract (header names matched case-insensitively after stripping
+// spaces / underscores / dashes): see tools/lib/spektra-csv-import.mjs.
+// The research `features` column ("Sombrero + Clear Gusset") is parsed into
+// topFeature + clearGusset. Exact duplicate rows (same key, same price) are
+// collapsed and reported; a duplicate key with a different price is a
+// conflict and refuses the run.
 //
 // Usage: node tools/generate-spektra-cost-book.mjs [path/to/matrix.csv]
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { RESEARCH_DATE, importSpektraCsv } from "./lib/spektra-csv-import.mjs";
 
-const RESEARCH_DATE = "2026-10-06";
 const DEFAULT_CSV = "docs/vendor-research/SPEKTRA_FLEX_LIVE_PRICE_MATRIX_2026-10-06.csv";
 const OUT = "app/lib/generated/spektra-live-price-matrix-2026-10-06.ts";
 
@@ -23,71 +25,30 @@ if (!existsSync(csvPath)) {
   console.error(`REFUSED: research CSV not found at ${csvPath}. No rows generated; the existing artifact is left untouched.`);
   process.exit(2);
 }
-
-const norm = (s) => String(s || "").toLowerCase().replace(/[\s_\-]+/g, "");
-const ALIASES = {
-  size: ["size", "pouchsize", "bagsize"],
-  material: ["material"],
-  finish: ["finish", "laminate", "lamination"],
-  spot: ["spot", "spotgloss", "spotuv"],
-  zipper: ["zipper", "zip"],
-  topFeature: ["topfeature", "feature", "top"],
-  clearGusset: ["cleargusset", "gusset"],
-  quantity: ["quantity", "qty", "totalquantity"],
-  skuCount: ["skucount", "skus", "designs", "designcount"],
-  publicTotal: ["publictotal", "ordertotal", "total", "publicordertotal"],
-  publicUnitDisplayed: ["publicunit", "unitprice", "displayedunit", "publicunitdisplayed"],
-  observedAt: ["observedat", "date", "observed"],
-  note: ["note", "notes"],
-};
-
-function parseCsv(text) {
-  const rows = [];
-  let row = [], field = "", inQuotes = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const c = text[i];
-    if (inQuotes) {
-      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i += 1; } else inQuotes = false; }
-      else field += c;
-    } else if (c === '"') inQuotes = true;
-    else if (c === ",") { row.push(field); field = ""; }
-    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i += 1; row.push(field); rows.push(row); row = []; field = ""; }
-    else field += c;
-  }
-  if (field.length || row.length) { row.push(field); rows.push(row); }
-  return rows.filter((r) => r.some((v) => String(v).trim() !== ""));
+const result = importSpektraCsv(readFileSync(csvPath, "utf8"));
+if (result.missingColumns.length) {
+  console.error(`REFUSED: ${result.reason}`);
+  process.exit(3);
+}
+for (const r of result.rejected.slice(0, 25)) console.error(`REJECTED line ${r.lineNumber}: ${r.errors.join("; ")}`);
+for (const c of result.conflicts.slice(0, 25)) console.error(`CONFLICT line ${c.lineNumber}: same configuration priced $${c.priorTotal} and $${c.total}`);
+console.log(`CSV rows read: ${result.read}`);
+console.log(`unique rows accepted: ${result.accepted.length}`);
+console.log(`rows rejected: ${result.rejected.length}`);
+console.log(`exact duplicate rows collapsed: ${result.duplicates.length}`);
+console.log(`conflicting duplicates: ${result.conflicts.length}`);
+if (!result.ok) {
+  console.error("REFUSED: validation failed; the existing artifact is left untouched.");
+  process.exit(4);
 }
 
-const text = readFileSync(csvPath, "utf8");
-const [header, ...lines] = parseCsv(text);
-const col = {};
-for (const [key, names] of Object.entries(ALIASES)) {
-  const idx = header.findIndex((h) => names.includes(norm(h)));
-  if (idx >= 0) col[key] = idx;
-}
-for (const required of ["size", "material", "finish", "spot", "zipper", "topFeature", "quantity", "publicTotal"]) {
-  if (col[required] == null) { console.error(`REFUSED: CSV is missing a required column for "${required}" (accepted names: ${ALIASES[required].join(", ")})`); process.exit(3); }
-}
-const bool = (v) => /^(true|yes|y|1)$/i.test(String(v || "").trim());
-const money = (v) => Number(String(v || "").replace(/[$,\s]/g, ""));
-const rows = lines.map((line, i) => {
-  const get = (k) => (col[k] == null ? "" : String(line[col[k]] ?? "").trim());
-  const r = {
-    size: get("size"), material: get("material"), finish: get("finish"), spot: get("spot") || "None", zipper: get("zipper") || "None",
-    topFeature: get("topFeature") || "No Tear Notch", clearGusset: bool(get("clearGusset")),
-    quantity: Math.floor(Number(get("quantity"))), skuCount: Math.max(1, Math.floor(Number(get("skuCount") || 1))),
-    publicTotal: money(get("publicTotal")), publicUnitDisplayed: get("publicUnitDisplayed") ? money(get("publicUnitDisplayed")) : null,
-    observedAt: get("observedAt") || RESEARCH_DATE, note: get("note") || null,
-  };
-  if (!r.size || !r.material || !r.finish || !(r.quantity > 0) || !(r.publicTotal > 0)) { console.error(`REFUSED: line ${i + 2} is incomplete: ${JSON.stringify(r)}`); process.exit(4); }
-  return r;
-});
-rows.sort((a, b) => a.size.localeCompare(b.size) || a.material.localeCompare(b.material) || a.finish.localeCompare(b.finish) || a.spot.localeCompare(b.spot) || a.zipper.localeCompare(b.zipper) || a.topFeature.localeCompare(b.topFeature) || Number(a.clearGusset) - Number(b.clearGusset) || a.quantity - b.quantity || a.skuCount - b.skuCount);
-
+const rows = result.accepted;
 const out = `// GENERATED ARTIFACT — do not edit by hand.
 // Source CSV: ${DEFAULT_CSV}
-// Generator:  tools/generate-spektra-cost-book.mjs
-// Generated from ${rows.length} observed row(s). Re-run the generator after any research update.
+// Generator:  tools/generate-spektra-cost-book.mjs (import contract: tools/lib/spektra-csv-import.mjs)
+// Generated from ${result.read} CSV rows -> ${rows.length} unique directly observed rows
+// (${result.duplicates.length} exact duplicates collapsed, ${result.rejected.length} rejected). Re-run after any research update.
+// Every row is a DIRECTLY OBSERVED public-calculator price; derived/estimated prices are never stored here.
 
 export const SPEKTRA_MATRIX_GENERATED_AT = "${RESEARCH_DATE}";
 export const SPEKTRA_MATRIX_SOURCE_FILE = "${DEFAULT_CSV}";
@@ -113,7 +74,7 @@ export type SpektraObservedRow = {
   note: string | null;
 };
 
-export const SPEKTRA_OBSERVED_ROWS: SpektraObservedRow[] = ${JSON.stringify(rows, null, 1)};
+export const SPEKTRA_OBSERVED_ROWS: SpektraObservedRow[] = ${JSON.stringify(rows.map((r) => ({ ...r, note: null })), null, 0).replace(/\},\{/g, "},\n{")};
 `;
 writeFileSync(resolve(OUT), out);
-console.log(`wrote ${OUT} with ${rows.length} rows from ${csvPath}`);
+console.log(`generated artifact row count: ${rows.length} -> ${OUT}`);

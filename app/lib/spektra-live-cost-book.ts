@@ -111,9 +111,13 @@ export function validateSpektraConfiguration(c: Partial<SpektraConfiguration>): 
  * ------------------------------------------------------------------ */
 const money = (n: number) => Math.round(n * 100) / 100;
 
-/** Wholesale total from the EXACT public order total (never from the rounded displayed unit). */
+/**
+ * Wholesale total from the EXACT public order total (never from the rounded
+ * displayed unit). NO intermediate cent rounding — the research keeps
+ * fractional cents (e.g. $913.10 x 0.75 = $684.825) and so does this book.
+ */
 export function wholesaleTotalFromPublicTotal(publicTotal: number): number {
-  return money(Number(publicTotal) * SPEKTRA_ACCOUNT_DISCOUNT_FACTOR);
+  return Number(publicTotal) * SPEKTRA_ACCOUNT_DISCOUNT_FACTOR;
 }
 
 export function wholesaleUnitCost(publicTotal: number, deliveredQuantity: number): number {
@@ -125,7 +129,7 @@ export function wholesaleUnitCost(publicTotal: number, deliveredQuantity: number
 /** Validated public rule: total(n SKUs) = total(1 SKU) + 185 x (n - 1). The quantity tier is the TOTAL order quantity. */
 export function publicTotalForSkuCount(oneSkuPublicTotal: number, skuCount: number): number {
   const n = Math.max(1, Math.floor(Number(skuCount) || 1));
-  return money(Number(oneSkuPublicTotal) + SPEKTRA_PUBLIC_EXTRA_SKU_FEE * (n - 1));
+  return Number(oneSkuPublicTotal) + SPEKTRA_PUBLIC_EXTRA_SKU_FEE * (n - 1);
 }
 
 export function wholesaleExtraSkuCost(skuCount: number): number {
