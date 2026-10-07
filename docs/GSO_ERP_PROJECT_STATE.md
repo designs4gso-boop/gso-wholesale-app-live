@@ -1,16 +1,19 @@
 # GSO ERP Project State
 
-## Current Repo And Branch
+## Current Repo And Branch (UPDATED 2026-10-07 — Wednesday morning release candidate)
 
-- Repo path: `C:\Users\Desig\GSO-ERP-WORKSPACE\wholesale-lite-mvp` (migrated 2026-10; the older `C:\Users\golde\...` path is historical)
-- GitHub `origin/main`: `fd55e51` — everything after it is LOCAL ONLY and NOT deployed
-- `main` (local): `22d91f2`, 3 commits ahead of GitHub (zakeke identity/intake + canonical quote authority) — untouched, awaiting owner merge/push approval
-- CORE release branch: `costing-october-core-release-2026-10-03` = main + `cf04eaf` (2D-4 calculator RC) + `1b13758` (2D-4E authority lockdown) + October docs/fix commits. Runbook: `docs/GSO_OCTOBER_CORE_RELEASE_RUNBOOK.md`
-- FULL review branch: `costing-october-full-review-2026-10-03` = CORE + `14a125d` (storefront canonical cost basis, HELD for owner decisions) + decision packet `docs/GSO_STOREFRONT_PRICING_DECISION_PACKET.md`
-- Immutable snapshot: `costing-october-finishline-2026-10-03` @ `a9ea8b3` (its production-state docs are stale about calibrations; superseded by the two branches above)
-- Production (read-only verified 2026-10-03): all four approved machine calibrations EXIST and match — do NOT apply the calibration seed; Chiron 100ml tall VendorProduct row MISSING — seed is post-deploy, owner-approved only
-- Intentionally untracked, never stage: `shopify-theme/`, `theme-patches/`, `tools/attach-media-16g3.mjs`
-- Historical: latest stable commit at the Patch 11C closeout was `42d9bc3 Separate setup wizard blockers and warnings`
+- Repo path: `C:\Users\Desig\GSO-ERP-WORKSPACE\wholesale-lite-mvp`
+- PRODUCTION = `main` = `origin/main` = `a3c79c8` (jar live-smoke follow-up on the live CORE release). Nothing after it is deployed.
+- RELEASE-CANDIDATE branch: `gso-erp-overnight-finishline-2026-10-05` — LOCAL ONLY, never pushed. Contents on top of `a3c79c8`: overnight finish-line UX/pricing pass (2026-10-05/06), Spektra live cost book (1,084 observed rows), OWNER-APPROVED 4x5x2 DTP ladder (2026-10-06), remaining-size DTP proposals + 25k recommendation (not active), release-candidate UX/production/admin cleanup and paid-order trail (2026-10-07). Control docs: `docs/GSO_FINAL_RELEASE_READINESS_2026-10-07.md`, `docs/GSO_OWNER_DECISIONS_BEFORE_RELEASE_2026-10-07.md`, `docs/GSO_DTP_FINAL_PRICING_REVIEW_2026-10-07.md`.
+- CUSTOMER PRICING AUTHORITY: jars = owner 16D ladder + margin floor + envelope (`canonical-jar-pricing.ts`); 4x5 sticker bags = owner research curves / market targets (Pricing Settings); DTP 4x5x2 = OWNER-APPROVED 2026-10-06 ladder $1.30 / $0.71 / $0.46 / $0.37 (steps; 25,000+ review required; 1,000 tier $350 GP exception) in `dtp-owner-pricing.server.ts`; DTP 5x4x2 / 6x5x2 / 8x5x2 = July 2026 ladders flagged OWNER PRICING REVIEW REQUIRED (6x5x2 / 8x5x2 still quote; 5x4x2 = MANUAL / VENDOR REVIEW); DTP 3.5x4.5x2 / 5x5x2 = no ladder (PROPOSED only); shaped DTP = standard price x 1.10 + $700 per new die, MOQ 2,500.
+- COST AUTHORITY: canonical true manufacturing cost for the four canonical families (`canonical-quote-authority.server.ts`); DTP 4x5x2 = live Spektra cost book by exact configuration (`dtp-quote-cost-authority.server.ts`); other DTP sizes = legacy VendorProduct tiers until reviewed; freight $85/PO = UNVERIFIED ASSUMPTION; true-cost controls unchanged (3x3 sticker 84.143290; Miron 128 = 430.0861 / 3.3600; Miron 127 = 427.0185 / 3.3624).
+- MARKET BENCHMARK OF RECORD (DTP): Design & Customize 4x5 (`dtp-market-benchmark.ts`) — PRIMARY / CONTROLLING; others research only.
+- HELD WORK (not activated): storefront FULL branch (`costing-october-full-review-2026-10-03`, canonical storefront cost basis); durable Die ID registry (schema); production transition guard wiring (decision #7); owner identity gating (decision #8).
+- AGENT PLATFORM: reasoning OFF, execution OFF, worker not scheduled (manual API trigger only), Slack decision-only; `GSO_OPS_REPOSITORY` must be set to `prisma` in the Render environment before the ops platform is relied on.
+- OPEN BLOCKERS / DECISIONS: see the two 2026-10-07 control docs (A1–A5 release path items; 11 owner decisions).
+- RELEASE PLAN: Wednesday = owner review + decisions + encode approved ladders; Thursday = push, review, merge, Render deploy, `shopify app deploy`, "Save settings & sync functions", production smoke; Friday = release confirmation, staff use, rollback readiness (`a3c79c8` stays deployable).
+- Intentionally untracked, never stage: `shopify-theme/`, `theme-patches/`, `tools/attach-media-16g3.mjs`. Existing stash (configurator pilot print tools) untouched.
+- Historical pointers (pre-2026-10-05) remain in the sections below; where they disagree with this block, this block wins.
 
 ## Golden Rule For All Agents
 

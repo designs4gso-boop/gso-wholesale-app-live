@@ -1,6 +1,10 @@
 # GSO ERP / Shopify Configurator — Current State
 
-Updated: 2026-10-03 (CORE release LIVE as dba23c6; operations agent platform on local branch, NOT deployed)
+Updated: 2026-10-07 (release candidate on local branch `gso-erp-overnight-finishline-2026-10-05`; production = `a3c79c8`)
+
+## 2026-10-07 — RELEASE CANDIDATE (LOCAL BRANCH, NOT DEPLOYED)
+Production is `main` = `origin/main` = `a3c79c8`. The local branch holds: the Spektra live cost book (1,084 observed rows, fail-closed import), the OWNER-APPROVED 4x5x2 DTP ladder ($1.30 / $0.71 / $0.46 / $0.37; 25k review required; $350 GP exception at 1,000 only; Design & Customize = benchmark of record), PROPOSED ladders for 3.5x4.5x2 / 5x5x2 / 6x5x2 / 8x5x2 + a 25k recommendation (Pricing Intelligence, not active), 5x4x2 = manual/vendor review, shaped DTP policy (+10%, $700 die, MOQ 2,500), and the overnight release-candidate cleanup (sales/production/admin wording and guards, QC card, proof guards, paid-order Slack alert + review-queue trail, cart-transform key compatibility). Agent platform stays reasoning OFF / execution OFF / worker unscheduled / Slack decision-only. Owner control docs: `docs/GSO_FINAL_RELEASE_READINESS_2026-10-07.md`, `docs/GSO_OWNER_DECISIONS_BEFORE_RELEASE_2026-10-07.md`, `docs/GSO_DTP_FINAL_PRICING_REVIEW_2026-10-07.md`. Older sections below describe earlier states.
+
 
 ## OCTOBER 2026 — OPERATIONS AGENT PLATFORM (LOCAL BRANCH, NOT DEPLOYED)
 Branch `agents-operations-finishline-2026-10-03` on top of the LIVE CORE

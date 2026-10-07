@@ -3,8 +3,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildProductionAlertText, unrecognizedPaidOrderQueueItem } from "../app/lib/production-alert.server";
-// Plain ESM function (no Shopify runtime) — safe to import directly.
-import { cartTransformRun } from "../extensions/gso-configurator-cart-transform/src/cart_transform_run.js";
+// Plain ESM function (no Shopify runtime). Loaded dynamically by path so the
+// untyped Function source is not pulled into the TypeScript program.
+const cartTransformPath = "../extensions/gso-configurator-cart-transform/src/cart_transform_run.js";
+const { cartTransformRun } = (await import(/* @vite-ignore */ cartTransformPath)) as { cartTransformRun: (input: any) => any };
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
