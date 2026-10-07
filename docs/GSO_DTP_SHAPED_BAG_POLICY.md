@@ -13,6 +13,10 @@
 | SKUs / designs | normal Spektra SKU economics ($185 public / $138.75 wholesale per extra SKU; GSO design fees per the owner ladder) | never creates a die |
 | Setup / prepress / plates / run charges | already inside the public Spektra price | never added again (test-pinned: no double charge) |
 | Tooling in profit | excluded from gross profit (vendor die cost unknown) | shown as pass-through |
+| Shaped MOQ (2026-10-06) | **2,500** units | a 1,000-unit shaped request is BLOCKED; the standard DTP MOQ (1,000) is unchanged |
+| Same physical shape, several designs | one $700 fee | a different physical shape = a new $700 fee |
+
+Approved 4x5x2 example (2026-10-06): 2,500 at the standard anchor $0.71 -> shaped product $0.781 / unit before customer-facing rounding ($1,952.50); + $700 tooling separately if a new die.
 
 Examples (standard product price $1,000): custom shape $1,100 product; new die +$700 tooling = $1,800 total; 5 or 10 designs on one shape = one $700; two shapes = $1,400; three = $2,100; reorder on the same die = $1,100 (no tooling).
 
