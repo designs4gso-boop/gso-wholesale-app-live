@@ -27,7 +27,7 @@ import { decideMachine } from "../app/lib/print-intake-routing.server";
 import { buildCanonicalJarLineMetadata, priceJarConfiguration } from "../app/lib/canonical-jar-pricing";
 
 const OWNER_LADDER_PINS: Record<string, number[]> = {
-  dtp_4x5x2: [1.67, 0.88, 0.74, 0.61, 0.6],
+  dtp_4x5x2: [1.3, 0.71, 0.46, 0.46, 0.37], // OWNER-APPROVED 2026-10-06; 7,500 steps to the 5,000 price
   dtp_5x4x2: [1.76, 0.97, 0.86, 0.72, 0.71],
   dtp_6x5x2: [1.84, 1.04, 0.96, 0.81, 0.81],
   dtp_8x5x2: [2.05, 1.23, 1.23, 1.05, 1.05],
@@ -45,7 +45,7 @@ describe("owner DTP ladder consumption (authority — 15C.2, never re-derived)",
         const result = priced(type, quantity);
         if (!result.ok) throw new Error(`${type}@${quantity}: ${result.reason}`);
         expect(result.unitPrice, `${type}@${quantity}`).toBe(prices[index]);
-        expect(result.tierUsed).toBe(quantity);
+        expect(result.tierUsed).toBe(type === "dtp_4x5x2" && quantity === 7500 ? 5000 : quantity);
         // the storefront number IS the owner ladder number
         expect(result.unitPrice).toBe(ownerPriceForQuantity(dtpLaunchInfoForType(type)!.sku, quantity).unitPrice);
       });
@@ -55,11 +55,11 @@ describe("owner DTP ladder consumption (authority — 15C.2, never re-derived)",
   it("between tiers uses the highest reached owner tier — never interpolated", () => {
     const at1500 = priced("dtp_4x5x2", 1500);
     if (!at1500.ok) throw new Error("expected ok");
-    expect(at1500).toMatchObject({ tierUsed: 1000, unitPrice: 1.67 });
+    expect(at1500).toMatchObject({ tierUsed: 1000, unitPrice: 1.3 });
     const at3000 = priced("dtp_4x5x2", 3000);
     if (!at3000.ok) throw new Error("expected ok");
-    expect(at3000).toMatchObject({ tierUsed: 2500, unitPrice: 0.88 });
-    expect(at3000.orderTotal).toBe(2640);
+    expect(at3000).toMatchObject({ tierUsed: 2500, unitPrice: 0.71 });
+    expect(at3000.orderTotal).toBe(2130);
   });
 
   it("the adapter holds no price numbers of its own (ladder is the single source)", () => {
@@ -132,7 +132,7 @@ describe("canonical DTP snapshot", () => {
       size: "4x5x2",
       qty: 2500,
       crZipper: true,
-      unitPrice: 0.88,
+      unitPrice: 0.71,
       supplier: "spektra_outsourced",
       ladderSku: "spektra-dtp-4x5x2",
     });
@@ -180,7 +180,7 @@ describe("paid DTP order -> ProductionJob payload", () => {
         id: 21,
         title: "4x5 Custom Pouch - 4x5x2 / Soft-Touch Full-Color / CR Zipper Included",
         quantity: overrides.quantity ?? 2500,
-        price: overrides.price ?? "0.88",
+        price: overrides.price ?? "0.71",
         properties: [
           { name: "Product Family", value: "DTP Pouches" },
           { name: "Product Type", value: "dtp_4x5x2" },
@@ -200,7 +200,7 @@ describe("paid DTP order -> ProductionJob payload", () => {
     expect(payload.orderGid).toBe("gid://shopify/Order/9160010");
     const item = payload.items[0];
     expect(item.quantity).toBe(2500);
-    expect(item.unitPrice).toBe(0.88);
+    expect(item.unitPrice).toBe(0.71);
     expect(item.materialSummary).toContain("Family: DTP Pouches");
     expect(item.materialSummary).toContain("Size: 4x5x2");
     expect(item.productionNotes).toContain("OUTSOURCED vendor-finished pouch (no in-house print)");
@@ -208,7 +208,7 @@ describe("paid DTP order -> ProductionJob payload", () => {
     const addOns = JSON.parse(item.selectedAddOns);
     expect(addOns).toMatchObject({ family: "dtp", outsourced: true, crZipper: true, ladderSku: "spektra-dtp-4x5x2" });
     const priceSnapshot = JSON.parse(item.priceSnapshot);
-    expect(priceSnapshot.canonical).toMatchObject({ family: "dtp", unitPrice: 0.88 });
+    expect(priceSnapshot.canonical).toMatchObject({ family: "dtp", unitPrice: 0.71 });
   });
 
   it("qualifies DTP canonical lines even without visible properties", () => {
@@ -216,13 +216,13 @@ describe("paid DTP order -> ProductionJob payload", () => {
     order.line_items[0].properties = order.line_items[0].properties.filter((prop: any) => prop.name === "_GSO Canonical");
     expect(isConfiguratorLine(order.line_items[0])).toBe(true);
     const payload = buildShopifyOrderJobPayload(order, "GSO-20260812-9011")!;
-    expect(payload.items[0].unitPrice).toBe(0.88);
+    expect(payload.items[0].unitPrice).toBe(0.71);
     expect(payload.checklistFamily).toBe("dtp-bags");
   });
 
   it("surfaces canonical/paid mismatches as warnings, never recalculations", () => {
     const payload = buildShopifyOrderJobPayload(dtpOrder({ price: "0.10" }), "GSO-20260812-9012")!;
-    expect(payload.items[0].unitPrice).toBe(0.88);
+    expect(payload.items[0].unitPrice).toBe(0.71);
     expect(payload.items[0].productionNotes).toContain("WARNING:");
   });
 

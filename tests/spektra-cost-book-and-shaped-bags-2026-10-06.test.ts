@@ -212,7 +212,7 @@ describe("DTP catalog status and freight assumption", () => {
     expect(dtpCatalogEntry("3.5x4.5x2")!.ownerLadder).toBe("NONE_OWNER_DECISION_REQUIRED");
     expect(dtpCatalogEntry("5x5x2")!.ownerLadder).toBe("NONE_OWNER_DECISION_REQUIRED");
     expect(Object.keys(DTP_OWNER_PRICE_LADDERS).sort()).toEqual(["spektra-dtp-4x5x2", "spektra-dtp-5x4x2", "spektra-dtp-6x5x2", "spektra-dtp-8x5x2"]);
-    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).toEqual({ 1000: 1.67, 2500: 0.88, 5000: 0.74, 7500: 0.61, 10000: 0.6 });
+    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).toEqual({ 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37 }); // OWNER-APPROVED 2026-10-06
   });
 
   it("freight: the $85 runtime assumption is unchanged but labelled UNVERIFIED everywhere it is surfaced", () => {
@@ -234,9 +234,9 @@ describe("owner shaped-pouch policy (OWNER DECISION 2026-10-06)", () => {
     expect(DTP_NEW_DIE_TOOLING_FEE).toBe(700);
     const std = priceShapedPouch({ shape: "standard", quantity: 1000, standardProductTotal: 1000 });
     expect(std).toMatchObject({ productTotal: 1000, shapeSurcharge: 0, toolingFee: 0, total: 1000, unitPrice: 1 });
-    const custom = priceShapedPouch({ shape: "custom", quantity: 1000, standardProductTotal: 1000, die: { mode: "new" } });
+    const custom = priceShapedPouch({ shape: "custom", quantity: 2500, standardProductTotal: 1000, die: { mode: "new" } });
     expect(custom).toMatchObject({ shapeSurcharge: 100, productTotal: 1100, toolingRequired: true, toolingFee: 700, total: 1800, errors: [] });
-    expect(custom.unitPrice).toBeCloseTo(1.1, 9); // tooling is NOT inside the unit price
+    expect(custom.unitPrice).toBeCloseTo(1100 / 2500, 9); // tooling is NOT inside the unit price
     expect(custom.lines.map((l) => [l.key, l.amount])).toEqual([["product", 1000], ["shape_surcharge", 100], ["tooling", 700]]);
   });
 
@@ -249,25 +249,25 @@ describe("owner shaped-pouch policy (OWNER DECISION 2026-10-06)", () => {
   });
 
   it("reorder on the same existing die: $0 tooling, surcharge still +10%", () => {
-    const re = priceShapedPouch({ shape: "custom", quantity: 1000, standardProductTotal: 1000, die: { mode: "existing", dieId: "DIE-0007" } });
+    const re = priceShapedPouch({ shape: "custom", quantity: 2500, standardProductTotal: 1000, die: { mode: "existing", dieId: "DIE-0007" } });
     expect(re).toMatchObject({ toolingRequired: false, toolingFee: 0, shapeSurcharge: 100, productTotal: 1100, total: 1100, dieId: "DIE-0007", errors: [] });
     expect(toolingForShapes([{ shapeKey: "S1", die: { mode: "existing", dieId: "DIE-0007" } }])).toMatchObject({ toolingFee: 0, reusedShapes: 1, errors: [] });
   });
 
   it("artwork and SKU-count changes never create a die by themselves; a new physical shape does", () => {
     // the policy functions take no artwork/SKU inputs for tooling: identical results across design counts
-    const a = priceShapedPouch({ shape: "custom", quantity: 1000, standardProductTotal: 1000, die: { mode: "existing", dieId: "DIE-0007" } });
-    const b = priceShapedPouch({ shape: "custom", quantity: 1000, standardProductTotal: 1000 + 25 * 4, die: { mode: "existing", dieId: "DIE-0007" } }); // 5 SKUs: design fees change the product, not the die
+    const a = priceShapedPouch({ shape: "custom", quantity: 2500, standardProductTotal: 1000, die: { mode: "existing", dieId: "DIE-0007" } });
+    const b = priceShapedPouch({ shape: "custom", quantity: 2500, standardProductTotal: 1000 + 25 * 4, die: { mode: "existing", dieId: "DIE-0007" } }); // 5 SKUs: design fees change the product, not the die
     expect(a.toolingFee).toBe(0);
     expect(b.toolingFee).toBe(0);
     expect(toolingForShapes([{ shapeKey: "S1", die: { mode: "existing", dieId: "DIE-0007" } }, { shapeKey: "S9", die: { mode: "new" } }]).toolingFee).toBe(700);
   });
 
   it("existing-die claims without an ID or reference fail closed; dimensions never auto-match", () => {
-    const bad = priceShapedPouch({ shape: "custom", quantity: 1000, standardProductTotal: 1000, die: { mode: "existing" } });
+    const bad = priceShapedPouch({ shape: "custom", quantity: 2500, standardProductTotal: 1000, die: { mode: "existing" } });
     expect(bad.errors[0]).toMatch(/requires a Die ID \/ Shape ID or a clear staff reference/);
     expect(bad.toolingFee).toBe(0);
-    const ref = priceShapedPouch({ shape: "custom", quantity: 1000, standardProductTotal: 1000, die: { mode: "existing", reference: "Acme 4x5 wave, job 1234" } });
+    const ref = priceShapedPouch({ shape: "custom", quantity: 2500, standardProductTotal: 1000, die: { mode: "existing", reference: "Acme 4x5 wave, job 1234" } });
     expect(ref.errors).toEqual([]);
     expect(toolingForShapes([{ shapeKey: "S1", die: { mode: "existing" } }]).errors.length).toBe(1);
   });
@@ -282,17 +282,22 @@ describe("owner shaped-pouch policy (OWNER DECISION 2026-10-06)", () => {
   });
 
   it("applyShapedPolicyToDtpRow: surcharge on base + design fees, tooling excluded from profit, SKU fees not surcharged twice", () => {
-    const row = applyShapedPolicyToDtpRow({ quantity: 1000, shape: "custom", die: { mode: "new" }, ladderUnitPrice: 1.67, customerBaseSubtotal: 1670, extraDesignFees: 100, customerTotal: 1770, grossProfit: 500 });
-    expect(row.shaped.shapeSurcharge).toBe(177); // 10% of (1670 + 100)
-    expect(row.unitPrice).toBeCloseTo(1.837, 9);
-    expect(row.totalPrice).toBe(1770 + 177 + 700);
-    expect(row.profit).toBe(677); // tooling is pass-through, not profit
-    expect(row.marginPct).toBeCloseTo((677 / 1947) * 100, 6);
+    // 2026-10-06 approved 4x5x2 anchor at the shaped MOQ (2,500): $0.71 -> shaped $0.781
+    const row = applyShapedPolicyToDtpRow({ quantity: 2500, shape: "custom", die: { mode: "new" }, ladderUnitPrice: 0.71, customerBaseSubtotal: 1775, extraDesignFees: 100, customerTotal: 1875, grossProfit: 700 });
+    expect(row.shaped.shapeSurcharge).toBe(187.5); // 10% of (1775 + 100)
+    expect(row.unitPrice).toBeCloseTo(0.781, 9);
+    expect(row.totalPrice).toBe(1875 + 187.5 + 700);
+    expect(row.profit).toBe(887.5); // tooling is pass-through, not profit
+    expect(row.marginPct).toBeCloseTo((887.5 / 2062.5) * 100, 6);
     expect(row.blocked).toBe(false);
-    const standard = applyShapedPolicyToDtpRow({ quantity: 1000, shape: "standard", die: { mode: "none" }, ladderUnitPrice: 1.67, customerBaseSubtotal: 1670, extraDesignFees: 0, customerTotal: 1670, grossProfit: 400 });
-    expect(standard).toMatchObject({ unitPrice: 1.67, totalPrice: 1670, profit: 400, blocked: false });
-    const blocked = applyShapedPolicyToDtpRow({ quantity: 1000, shape: "custom", die: { mode: "existing" }, ladderUnitPrice: 1.67, customerBaseSubtotal: 1670, extraDesignFees: 0, customerTotal: 1670, grossProfit: 400 });
+    const standard = applyShapedPolicyToDtpRow({ quantity: 2500, shape: "standard", die: { mode: "none" }, ladderUnitPrice: 0.71, customerBaseSubtotal: 1775, extraDesignFees: 0, customerTotal: 1775, grossProfit: 400 });
+    expect(standard).toMatchObject({ unitPrice: 0.71, totalPrice: 1775, profit: 400, blocked: false });
+    const blocked = applyShapedPolicyToDtpRow({ quantity: 2500, shape: "custom", die: { mode: "existing" }, ladderUnitPrice: 0.71, customerBaseSubtotal: 1775, extraDesignFees: 0, customerTotal: 1775, grossProfit: 400 });
     expect(blocked.blocked).toBe(true);
+    // shaped MOQ 2,500: a 1,000-unit shaped request is blocked (standard 1,000 stays allowed)
+    const belowMoq = applyShapedPolicyToDtpRow({ quantity: 1000, shape: "custom", die: { mode: "new" }, ladderUnitPrice: 1.3, customerBaseSubtotal: 1300, extraDesignFees: 0, customerTotal: 1300, grossProfit: 439 });
+    expect(belowMoq.blocked).toBe(true);
+    expect(belowMoq.reasons.join(" ")).toContain("2,500");
   });
 
   it("customer presentation keeps tooling as a separate block", () => {

@@ -273,12 +273,15 @@ import {
   priceDtpQuote,
 } from "../app/lib/dtp-owner-pricing.server";
 
-const LANDED_4X5X2_2500 = 0.4922 * 2500 + 85 + 25 / 3; // vendor + freight + 1 design art
+// 2026-10-06: 4x5x2 quotes cost from the LIVE Spektra book by configuration
+// (White PET / Soft Touch / no spot / CR / No Tear Notch / 1 SKU at 2,500 =
+// $958.20 wholesale) + $85 freight (UNVERIFIED) + 1 design art.
+const LANDED_4X5X2_2500 = 0.38328 * 2500 + 85 + 25 / 3;
 
 describe("DTP owner price ladders (15C.2)", () => {
-  it("holds all 20 exact owner prices, keyed by stable vendorSku", () => {
-    const expected: Record<string, number[]> = {
-      "spektra-dtp-4x5x2": [1.67, 0.88, 0.74, 0.61, 0.6],
+  it("holds the exact owner prices, keyed by stable vendorSku (4x5x2 = OWNER-APPROVED 2026-10-06; no 7,500 tier)", () => {
+    const expected: Record<string, Array<number | null>> = {
+      "spektra-dtp-4x5x2": [1.3, 0.71, 0.46, null, 0.37],
       "spektra-dtp-5x4x2": [1.76, 0.97, 0.86, 0.72, 0.71],
       "spektra-dtp-6x5x2": [1.84, 1.04, 0.96, 0.81, 0.81],
       "spektra-dtp-8x5x2": [2.05, 1.23, 1.23, 1.05, 1.05],
@@ -286,33 +289,35 @@ describe("DTP owner price ladders (15C.2)", () => {
     expect(DTP_LADDER_QUANTITIES).toEqual([1000, 2500, 5000, 7500, 10000]);
     for (const [sku, prices] of Object.entries(expected)) {
       DTP_LADDER_QUANTITIES.forEach((qty, index) => {
-        expect(DTP_OWNER_PRICE_LADDERS[sku][qty], `${sku}@${qty}`).toBe(prices[index]);
+        expect(DTP_OWNER_PRICE_LADDERS[sku][qty] ?? null, `${sku}@${qty}`).toBe(prices[index]);
       });
     }
   });
 
-  it("lookup: exact tier, highest-reached between tiers, above 10,000 — never interpolated", () => {
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 2500)).toEqual({ tierUsed: 2500, unitPrice: 0.88 });
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 1500)).toEqual({ tierUsed: 1000, unitPrice: 1.67 });
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 3000)).toEqual({ tierUsed: 2500, unitPrice: 0.88 });
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 6000)).toEqual({ tierUsed: 5000, unitPrice: 0.74 });
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 8000)).toEqual({ tierUsed: 7500, unitPrice: 0.61 });
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25000)).toEqual({ tierUsed: 10000, unitPrice: 0.6 });
+  it("lookup: exact tier, highest-reached between tiers, 7,500 steps to 5,000, 25,000 = OWNER PRICING REVIEW REQUIRED — never interpolated", () => {
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 2500)).toEqual({ tierUsed: 2500, unitPrice: 0.71 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 1500)).toEqual({ tierUsed: 1000, unitPrice: 1.3 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 3000)).toEqual({ tierUsed: 2500, unitPrice: 0.71 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 6000)).toEqual({ tierUsed: 5000, unitPrice: 0.46 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 8000)).toEqual({ tierUsed: 5000, unitPrice: 0.46 }); // no 7,500 price -> steps to 5,000
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 24999)).toEqual({ tierUsed: 10000, unitPrice: 0.37 });
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25000)).toEqual({ tierUsed: null, unitPrice: null, reviewRequired: expect.stringContaining("OWNER PRICING REVIEW REQUIRED") });
+    expect(ownerPriceForQuantity("spektra-dtp-6x5x2", 25000)).toEqual({ tierUsed: 10000, unitPrice: 0.81 }); // other ladders unchanged
     expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 500).unitPrice).toBeNull(); // below MOQ
     expect(ownerPriceForQuantity("unknown-sku", 2500).unitPrice).toBeNull(); // no ladder — never guessed
   });
 
   it("PRODUCT MAPPING SAFEGUARD: 4x5x2 and 5x4x2 use their OWN ladders and never share (historical mislabel regression)", () => {
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 2500).unitPrice).toBe(0.88);
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 2500).unitPrice).toBe(0.71);
     expect(ownerPriceForQuantity("spektra-dtp-5x4x2", 2500).unitPrice).toBe(0.97);
     for (const qty of DTP_LADDER_QUANTITIES) {
       expect(ownerPriceForQuantity("spektra-dtp-4x5x2", qty).unitPrice).not.toBe(ownerPriceForQuantity("spektra-dtp-5x4x2", qty).unitPrice);
     }
   });
 
-  it("actual margin/profit from landed cost; recommended 4x5x2 ladder lands near the study targets (~35/40/43/45/45%)", () => {
+  it("actual margin/profit from LIVE landed cost; approved 4x5x2 ladder lands near ~34/41/41/40% (2026-10-06)", () => {
     const cases: Array<[number, number, number]> = [
-      [1000, 0.9897 * 1000, 35], [2500, 0.4922 * 2500, 40], [5000, 0.4033 * 5000, 43], [7500, 0.3232 * 7500, 45], [10000, 0.3232 * 10000, 45],
+      [1000, 767.3625, 33.8], [2500, 958.2, 40.8], [5000, 1273.965, 40.6], [10000, 2112.86, 40.4],
     ];
     for (const [qty, vendor, approxPct] of cases) {
       const landed = vendor + 85 + 25 / 3;
@@ -335,11 +340,11 @@ describe("DTP owner price ladders (15C.2)", () => {
     // never routine owner review for a normal owner-ladder quote)
     const ladder = priceDtpQuote({ ...base, customUnitPrice: null });
     expect(ladder.status).toBe("READY");
-    expect(ladder.statusReasons.join(" ")).toContain("Note: below the 40% margin target");
+    expect(ladder.grossMarginPct).toBeGreaterThanOrEqual(40); // approved $0.71 on live landed cost
     // healthy custom price -> READY
     expect(priceDtpQuote({ ...base, customUnitPrice: 0.95 }).status).toBe("READY");
-    // below the 35% floor but profit >= $500 -> OVERRIDE REQUIRED
-    const belowFloor = priceDtpQuote({ ...base, customUnitPrice: 0.79 });
+    // below the 35% floor -> OVERRIDE REQUIRED (2,500 tier keeps the normal protection)
+    const belowFloor = priceDtpQuote({ ...base, customUnitPrice: 0.6 });
     expect(belowFloor.status).toBe("OWNER OVERRIDE REQUIRED");
     expect(belowFloor.statusReasons.join(" ")).toContain("35%");
     // profit between $350 and $500 -> OVERRIDE REQUIRED
@@ -366,7 +371,7 @@ describe("DTP owner price ladders (15C.2)", () => {
     const threeDesigns = priceDtpQuote({ ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: 0.4922 * 2500 + 85 + 3 * (25 / 3), missingCost: false, designs: 3, customUnitPrice: null, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
     expect(threeDesigns.extraDesignCount).toBe(2);
     expect(threeDesigns.extraDesignFees).toBe(40); // 2 x $20
-    expect(threeDesigns.customerTotal).toBeCloseTo(0.88 * 2500 + 40, 6);
+    expect(threeDesigns.customerTotal).toBeCloseTo(0.71 * 2500 + 40, 6);
     const repeat = priceDtpQuote({ ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: 0.4922 * 2500 + 85 + 3 * (25 / 3), missingCost: false, designs: 3, customUnitPrice: null, repeatOrder: true, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
     expect(repeat.extraDesignFees).toBe(0);
     expect(repeat.designFeeWaived).toBe(true);
@@ -381,10 +386,10 @@ describe("DTP owner price ladders (15C.2)", () => {
     const base = { ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: LANDED_4X5X2_2500, missingCost: false, designs: 1, customUnitPrice: null as number | null, repeatOrder: false, freightAmount: 85, override: { phrase: "", reason: "" } };
     const embedded = priceDtpQuote({ ...base, passThroughFreight: false });
     expect(embedded.customerFreight).toBe(0);
-    expect(embedded.customerTotal).toBeCloseTo(0.88 * 2500, 6); // no second $85 charge
+    expect(embedded.customerTotal).toBeCloseTo(0.71 * 2500, 6); // no second $85 charge
     const passThrough = priceDtpQuote({ ...base, passThroughFreight: true });
     expect(passThrough.customerFreight).toBe(85);
-    expect(passThrough.customerBaseSubtotal).toBeCloseTo(0.88 * 2500 - 85, 6); // backed out
+    expect(passThrough.customerBaseSubtotal).toBeCloseTo(0.71 * 2500 - 85, 6); // backed out
     expect(passThrough.customerTotal).toBeCloseTo(embedded.customerTotal, 6); // NEVER recovered twice
     const passThroughCustom = priceDtpQuote({ ...base, passThroughFreight: true, customUnitPrice: 0.85 });
     expect(passThroughCustom.customerBaseSubtotal).toBeCloseTo(0.85 * 2500, 6); // custom price is product-only
@@ -406,7 +411,7 @@ describe("DTP owner price ladders (15C.2)", () => {
     expect(src4).toContain("Base pouch subtotal");
     expect(DTP_PRICING_ENGINE_VERSION).toBe("15C.2-dtp-owner-price-ladders");
     // owner ladder prices are NEVER hardcoded in the route
-    for (const price of ["1.67", "0.88", "0.74", "1.76", "0.97", "2.05"]) expect(src4).not.toContain(`= ${price}`);
+    for (const price of ["1.30", "0.71", "0.46", "0.37", "1.76", "0.97", "2.05"]) expect(src4).not.toContain(`= ${price}`);
     const setupSrc = readFileSync(new URL("../app/routes/app.erp.product-setup.tsx", import.meta.url), "utf8");
     expect(setupSrc).toContain("DTP pricing rules — owner selling-price ladders (15C.2)");
     expect(setupSrc).toContain("DTP_OWNER_PRICE_LADDERS");

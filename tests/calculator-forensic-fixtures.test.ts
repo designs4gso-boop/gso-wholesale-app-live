@@ -255,21 +255,22 @@ describe("15F.0-M remaining forensic fixtures (corrected engine)", () => {
     expect(run.totalCost).toBeCloseTo(1477.3936, 3);
   });
 
-  it("fixture 6: 2,500 Spektra DTP 4x5x2 — UNCHANGED (owner ladder preserved exactly)", () => {
-    const landed = 0.4922 * 2500 + 25 / 3 + 85;
-    expect(landed).toBeCloseTo(1323.83, 2);
+  it("fixture 6: 2,500 Spektra DTP 4x5x2 — OWNER-APPROVED 2026-10-06 ladder on the live landed cost", () => {
+    // live book: White PET / Soft Touch / no spot / CR / No Tear Notch / 1 SKU x 2,500 = $1,277.60 public x 0.75 = $958.20
+    const landed = 0.38328 * 2500 + 25 / 3 + 85;
+    expect(landed).toBeCloseTo(1051.53, 2);
     const quote = priceDtpQuote({
       ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: landed, missingCost: false,
       designs: 1, customUnitPrice: null, repeatOrder: false, passThroughFreight: false,
       freightAmount: 85, override: { phrase: "", reason: "" },
     });
-    expect(quote.unitPrice).toBe(0.88);
-    expect(quote.customerTotal).toBeCloseTo(2200, 6);
-    expect(quote.grossMarginPct).toBeCloseTo(((2200 - landed) / 2200) * 100, 4);
-    // 15F.0-FINAL: meets the 35% floor + $500 target -> READY with an
-    // informational note; floors/profit rules/overrides unchanged.
+    expect(quote.unitPrice).toBe(0.71);
+    expect(quote.customerTotal).toBeCloseTo(1775, 6);
+    expect(quote.grossMarginPct).toBeCloseTo(((1775 - landed) / 1775) * 100, 4);
+    // meets the 35% floor + $500 target (2,500 tier keeps the normal protection) -> READY
     expect(quote.status).toBe("READY");
-    expect(quote.statusReasons.join(" ")).toContain("meets the 35% DTP floor");
+    expect(quote.minJobProfit).toBe(500);
+    expect(quote.pricingSource).toBe("OWNER_APPROVED_DTP_4X5_2026_10_06");
   });
 
   it("fixture 7: one 3x6 ft banner — tube packing + deterministic hems/grommets quote automatically (15F.0-FINAL)", () => {

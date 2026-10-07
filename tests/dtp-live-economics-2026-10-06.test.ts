@@ -19,10 +19,10 @@ describe("DTP live economics (analysis only — ladders unchanged)", () => {
     expect(legacySeedUnit("4x5x2", 1500)).toBe(0.9897);
     expect(legacySeedUnit("4x5x2", 25000)).toBe(0.3232);
     expect(legacySeedUnit("5x5x2", 1000)).toBeNull();
-    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).toEqual({ 1000: 1.67, 2500: 0.88, 5000: 0.74, 7500: 0.61, 10000: 0.6 });
+    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).toEqual({ 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37 }); // OWNER-APPROVED 2026-10-06
   });
 
-  it("4x5x2 x1000 (Soft Touch): live vendor $0.767362/unit vs old $0.9897 (-22.5%); landed includes art + $85 (unverified); current $1.67 ladder GM/GP computed", () => {
+  it("4x5x2 x1000 (Soft Touch): live vendor $0.767362/unit vs old $0.9897 (-22.5%); landed includes art + $85 (unverified); APPROVED $1.30 ladder GM/GP + benchmark computed", () => {
     const c = dtpEconomicsCell("4x5x2", 1000);
     expect(c.vendorStatus).toBe("OBSERVED_VENDOR_PRICE");
     expect(c.vendorUnit!).toBeCloseTo(0.767362, 5);
@@ -32,18 +32,29 @@ describe("DTP live economics (analysis only — ladders unchanged)", () => {
     expect(c.freightStatus).toBe("UNVERIFIED");
     expect(c.artCost).toBeCloseTo(8.3333, 3);
     expect(c.landedTotal!).toBeCloseTo(767.3625 + 8.3333 + 85, 1);
-    expect(c.currentSellUnit).toBe(1.67);
-    expect(c.currentGp!).toBeCloseTo(1670 - c.landedTotal!, 1);
-    expect(c.currentGmPct!).toBeCloseTo(((1670 - c.landedTotal!) / 1670) * 100, 0);
+    expect(c.currentSellUnit).toBe(1.3);
+    expect(c.currentGp!).toBeCloseTo(1300 - c.landedTotal!, 1); // ~$439
+    expect(c.currentGmPct!).toBeCloseTo(((1300 - c.landedTotal!) / 1300) * 100, 0); // ~33.8%
     expect(c.hardFloorPct).toBe(dtpHardFloorPct(1000));
-    expect(c.proposals.map((p) => p.key)).toEqual(["hold_price", "hold_margin", "split"]);
-    const hold = c.proposals[0];
-    expect(hold.sellUnit).toBe(1.67);
-    const pass = c.proposals[1];
-    expect(pass.sellUnit).toBeLessThan(1.67); // vendor cost fell, so passing it through lowers the price
-    expect(pass.sellUnit).toBeGreaterThan(c.landedUnit!);
-    expect(c.proposals[2].sellUnit).toBeCloseTo((hold.sellUnit + pass.sellUnit) / 2, 4);
-    expect(c.marketReference).toMatch(/NOT AVAILABLE/);
+    expect(c.minJobProfit).toBe(350); // owner acquisition-tier exception
+    expect(c.meetsProtection).toBe(true);
+    expect(c.ladderStatus).toBe("OWNER_APPROVED");
+    expect(c.pricingSource).toBe("OWNER_APPROVED_DTP_4X5_2026_10_06");
+    expect(c.proposals).toEqual([]); // approved ladder is decided — no generic proposals
+    expect(c.marketReference).toMatch(/Design & Customize/);
+    expect(c.benchmark.competitorComparableUnit).toBeCloseTo(1.05, 6);
+    expect(c.benchmark.premiumPct).toBeCloseTo(23.8, 1);
+    // 2,500 keeps the normal $500 target and the approved price
+    const c2 = dtpEconomicsCell("4x5x2", 2500);
+    expect(c2.currentSellUnit).toBe(0.71);
+    expect(c2.minJobProfit).toBe(500);
+    expect(c2.meetsProtection).toBe(true);
+    // 25,000: vendor cost shown, but NO owner sell price (OWNER PRICING REVIEW REQUIRED)
+    const c25 = dtpEconomicsCell("4x5x2", 25000);
+    expect(c25.vendorStatus).toBe("OBSERVED_VENDOR_PRICE");
+    expect(c25.currentSellUnit).toBeNull();
+    expect(c25.ladderStatus).toBe("OWNER_PRICING_REVIEW_REQUIRED");
+    expect(c25.ladderNote).toContain("OWNER PRICING REVIEW REQUIRED");
   });
 
   it("new sizes (3.5x4.5x2, 5x5x2) have vendor cost but no owner ladder: floor and target anchors only", () => {
