@@ -13,6 +13,10 @@ import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "
 import type React from "react";
 import { authenticate } from "../shopify.server";
 import { findLikelyDuplicates } from "../lib/product-family-registry";
+// 2026-10-06: read-only Spektra / Flex Packaging live cost book (versioned, client-safe).
+import { SPEKTRA_COST_BOOK_META, SPEKTRA_FINISHES, SPEKTRA_MATERIALS, SPEKTRA_OBSERVED_ROWS, SPEKTRA_PUBLISHED_TIERS, SPEKTRA_SIZES, SPEKTRA_SPOT_OPTIONS, SPEKTRA_TOP_FEATURES, SPEKTRA_ZIPPER_OPTIONS, spektraMatrixSummary, wholesaleTotalFromPublicTotal } from "../lib/spektra-live-cost-book";
+import { DTP_CATALOG, SPEKTRA_FREIGHT_ASSUMPTION } from "../lib/dtp-catalog";
+import { useState } from "react";
 import db from "../db.server";
 
 function clean(value: FormDataEntryValue | null) {
@@ -597,6 +601,10 @@ export default function VendorCostBook() {
         </Layout.Section>
 
         <Layout.Section>
+          <SpektraLiveCostBookCard />
+        </Layout.Section>
+
+        <Layout.Section>
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">Add vendor cost item</Text>
@@ -657,5 +665,77 @@ export default function VendorCostBook() {
         </Layout.Section>
       </Layout>
     </Page>
+  );
+}
+
+
+/* 2026-10-06 — Spektra / Flex Packaging live cost book (read-only). Rows come
+ * from the generated artifact; the owner discount is applied in display only
+ * (wholesale = exact public total x 0.75). Nothing here writes anywhere. */
+function SpektraLiveCostBookCard() {
+  const meta = SPEKTRA_COST_BOOK_META;
+  const summary = spektraMatrixSummary();
+  const [size, setSize] = useState<string>("");
+  const [material, setMaterial] = useState<string>("");
+  const [finish, setFinish] = useState<string>("");
+  const [open, setOpen] = useState(false);
+  const rows = SPEKTRA_OBSERVED_ROWS.filter((r) => (!size || r.size === size) && (!material || r.material === material) && (!finish || r.finish === finish));
+  const sel: React.CSSProperties = { padding: 6, border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12 };
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <InlineStack align="space-between" blockAlign="center" wrap>
+          <BlockStack gap="100">
+            <Text as="h2" variant="headingMd">Spektra / Flex Packaging — live cost book ({meta.sourceDate})</Text>
+            <Text as="p" tone="subdued">Vendor-finished pouches. Source: {meta.source}. Account discount {meta.discount.pct}% ({meta.discount.status}). Vendor pricing status: {meta.vendorProductPricing}. Freight: {meta.freight.status}.</Text>
+          </BlockStack>
+          <InlineStack gap="200" wrap>
+            <Badge tone={meta.researchFilePresent ? "success" : "critical"}>{meta.researchFilePresent ? `${meta.rowCount} observed rows` : "RESEARCH MATRIX NOT LOADED"}</Badge>
+            <Badge tone="warning">Freight unverified ($85 assumption)</Badge>
+            <Badge>{meta.version}</Badge>
+          </InlineStack>
+        </InlineStack>
+        <Text as="p" tone="subdued">
+          Catalog: {SPEKTRA_SIZES.map((s) => `${s.label} (${s.capacityLabel})`).join(" · ")}. Materials: {SPEKTRA_MATERIALS.join(" / ")}. Finishes: {SPEKTRA_FINISHES.join(" / ")}. Spot gloss: {SPEKTRA_SPOT_OPTIONS.join(" / ")} (not on Glossy). Zipper: {SPEKTRA_ZIPPER_OPTIONS.join(" / ")}. Top feature: {SPEKTRA_TOP_FEATURES.join(" / ")} + optional clear gusset. Published tiers: {SPEKTRA_PUBLISHED_TIERS.join(" / ")}. Extra SKU: $185 public = $138.75 wholesale. Public price includes {meta.includedInPublicPrice.join(", ")}. Die-cut: {meta.dieCut.publicStatus} on the public site.
+        </Text>
+        <Text as="p" tone="subdued">{SPEKTRA_FREIGHT_ASSUMPTION.label}: {SPEKTRA_FREIGHT_ASSUMPTION.note} {meta.moq.note}</Text>
+        <Text as="p" tone="subdued">
+          DTP catalog status: {DTP_CATALOG.map((e) => `${e.size} — ${e.status === "CURRENT_STANDARD" ? "current" : "LEGACY, no current catalog match"}${e.ownerLadder === "NONE_OWNER_DECISION_REQUIRED" ? " (no owner sell ladder yet)" : ""}`).join(" · ")}.
+        </Text>
+        {!meta.researchFilePresent ? (
+          <Text as="p" tone="critical">The research file {meta.sourceFile} is not in the repository, so no observed vendor price is loaded. Every DTP vendor-cost lookup against this book returns REQUEST CURRENT VENDOR QUOTE until the file is committed and <code>node tools/generate-spektra-cost-book.mjs</code> is run.</Text>
+        ) : (
+          <BlockStack gap="200">
+            <InlineStack gap="200" wrap>
+              <select style={sel} value={size} onChange={(e) => setSize(e.currentTarget.value)}><option value="">All sizes</option>{summary.sizes.map((v) => <option key={v} value={v}>{v}</option>)}</select>
+              <select style={sel} value={material} onChange={(e) => setMaterial(e.currentTarget.value)}><option value="">All materials</option>{summary.materials.map((v) => <option key={v} value={v}>{v}</option>)}</select>
+              <select style={sel} value={finish} onChange={(e) => setFinish(e.currentTarget.value)}><option value="">All finishes</option>{summary.finishes.map((v) => <option key={v} value={v}>{v}</option>)}</select>
+              <Button onClick={() => setOpen((v) => !v)}>{open ? "Hide rows" : `Show ${rows.length} row(s)`}</Button>
+            </InlineStack>
+            <Text as="p" tone="subdued">Coverage: sizes {summary.sizes.join(", ")} · quantities {summary.quantities.join(", ")} · SKU counts {summary.skuCounts.join(", ")}.</Text>
+            {open ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Size</th><th align="left">Material</th><th align="left">Finish</th><th align="left">Spot</th><th align="left">Zipper</th><th align="left">Top</th><th>Gusset</th><th>Qty</th><th>SKUs</th><th>Public total</th><th>Wholesale total</th><th>Wholesale unit</th><th align="left">Observed</th></tr></thead>
+                  <tbody>
+                    {rows.slice(0, 400).map((r, i) => {
+                      const wt = wholesaleTotalFromPublicTotal(r.publicTotal);
+                      return (
+                        <tr key={i} style={{ borderTop: "1px solid #e5e7eb" }}>
+                          <td>{r.size}</td><td>{r.material}</td><td>{r.finish}</td><td>{r.spot}</td><td>{r.zipper}</td><td>{r.topFeature}</td><td align="center">{r.clearGusset ? "clear" : "—"}</td>
+                          <td align="right">{r.quantity.toLocaleString()}</td><td align="right">{r.skuCount}</td>
+                          <td align="right">${r.publicTotal.toFixed(2)}</td><td align="right">${wt.toFixed(2)}</td><td align="right">${(wt / r.quantity).toFixed(4)}</td><td>{r.observedAt}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {rows.length > 400 ? <Text as="p" tone="subdued">Showing the first 400 of {rows.length} rows — narrow the filters.</Text> : null}
+              </div>
+            ) : null}
+          </BlockStack>
+        )}
+      </BlockStack>
+    </Card>
   );
 }

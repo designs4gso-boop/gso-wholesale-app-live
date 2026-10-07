@@ -1,6 +1,10 @@
 import type React from "react";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
+// 2026-10-06: DTP vendor economics (Spektra live cost book) + owner shaped-pouch rules — read-only.
+import { SPEKTRA_COST_BOOK_META, SPEKTRA_COST_STATUS_LABEL, SPEKTRA_PUBLISHED_TIERS, lookupSpektraVendorCost } from "../lib/spektra-live-cost-book";
+import { DTP_CATALOG, SPEKTRA_FREIGHT_ASSUMPTION } from "../lib/dtp-catalog";
+import { DTP_CUSTOM_SHAPE_SURCHARGE_PCT, DTP_NEW_DIE_TOOLING_FEE, DTP_SHAPED_BAG_POLICY_SOURCE } from "../lib/dtp-shaped-bag-policy";
 import db from "../db.server";
 import {
   PRE_LAUNCH_REASON,
@@ -213,6 +217,37 @@ export default function PricingIntelligence() {
             {busy ? "Refreshing…" : "Refresh Shopify evidence (read-only)"}
           </button>
         </Form>
+      </section>
+
+      <section style={{ ...card, borderColor: "#fde68a" }}>
+        <h2 style={{ margin: "0 0 6px" }}>DTP (Spektra) economics — vendor cost book {SPEKTRA_COST_BOOK_META.sourceDate}</h2>
+        <p style={{ margin: "0 0 8px", fontSize: 13, color: "#374151" }}>
+          Cost source: {SPEKTRA_COST_BOOK_META.source} (observed {SPEKTRA_COST_BOOK_META.sourceDate}); GSO account discount {SPEKTRA_COST_BOOK_META.discount.pct}% ({SPEKTRA_COST_BOOK_META.discount.status}). Freight: <b>{SPEKTRA_FREIGHT_ASSUMPTION.status}</b> ($85 historical assumption). Public market reference: <b>no market-pricing master document is present in the repository</b> — commercial position cannot be stated.
+        </p>
+        {!SPEKTRA_COST_BOOK_META.researchFilePresent ? (
+          <p style={{ margin: "0 0 8px", fontSize: 13, color: "#991b1b", fontWeight: 700 }}>LIVE MATRIX NOT LOADED — {SPEKTRA_COST_BOOK_META.sourceFile} is not in the repository. Current and proposed sell prices cannot be recomputed; every cell below reads REQUEST CURRENT VENDOR QUOTE until the research is committed and generated.</p>
+        ) : null}
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 5 }}>Size</th><th align="left">Catalog status</th><th align="left">Owner sell ladder</th>{SPEKTRA_PUBLISHED_TIERS.map((q) => <th key={q}>{q.toLocaleString()}</th>)}</tr></thead>
+            <tbody>
+              {DTP_CATALOG.map((entry) => (
+                <tr key={entry.size} style={{ borderTop: "1px solid #e5e7eb" }}>
+                  <td style={{ padding: 5 }}><b>{entry.size}</b>{entry.capacityLabel ? ` (${entry.capacityLabel})` : ""}</td>
+                  <td>{entry.status === "CURRENT_STANDARD" ? "current standard" : "LEGACY — no current catalog match"}</td>
+                  <td>{entry.ownerLadder === "EXISTS_2026-07-24" ? "exists (2026-07-24)" : "none — owner decision required"}</td>
+                  {SPEKTRA_PUBLISHED_TIERS.map((q) => {
+                    if (entry.status !== "CURRENT_STANDARD") return <td key={q} align="center" style={{ color: "#6b7280" }}>n/a</td>;
+                    const look = lookupSpektraVendorCost({ size: entry.size as any, material: "White PET", finish: "Glossy", spot: "None", zipper: "None", topFeature: "No Tear Notch", clearGusset: false, quantity: q, skuCount: 1 });
+                    return <td key={q} align="center" title={look.basis} style={{ color: look.status === "REQUEST_CURRENT_VENDOR_QUOTE" ? "#92400e" : "#166534" }}>{look.wholesaleUnit != null ? `${look.wholesaleUnit.toFixed(4)}` : SPEKTRA_COST_STATUS_LABEL[look.status]}</td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ margin: "8px 0 0", fontSize: 12, color: "#6b7280" }}>Reference configuration for the cells: White PET, Glossy, no spot, no zipper, no tear notch, 1 SKU (wholesale unit = exact public total x 0.75 / quantity). Old Spektra seed costs (4x5x2 $0.9897 / $0.4922 / $0.4033 / $0.3232 at 1,000 / 2,500 / 5,000 / 7,500, etc.) remain on the historical VendorProduct rows for old quotes and are not comparable until the live matrix is loaded.</p>
+        <p style={{ margin: "8px 0 0", fontSize: 12, color: "#374151" }}><b>Shaped / die-cut pouches ({DTP_SHAPED_BAG_POLICY_SOURCE}):</b> base = the standard DTP customer price for the same configuration; +{DTP_CUSTOM_SHAPE_SURCHARGE_PCT}% shape surcharge on the product price; ${DTP_NEW_DIE_TOOLING_FEE} per unique NEW die shown as a separate tooling line; existing die on file = $0 tooling (surcharge still applies).</p>
       </section>
 
       <section style={card}>

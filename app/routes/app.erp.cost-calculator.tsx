@@ -49,6 +49,9 @@ import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { buildCanonicalPricingSnapshot } from "../lib/pricing-snapshot";
 import { officialMoqForFamily } from "../lib/product-family-sales-rules";
 import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, ownerPriceForQuantity, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
+// 2026-10-06: owner shaped-pouch policy (+10 % surcharge, $700 per new die) and the DTP catalog / freight status.
+import { applyShapedPolicyToDtpRow, type DtpDieChoice } from "../lib/dtp-shaped-bag-policy";
+import { SPEKTRA_FREIGHT_ASSUMPTION, dtpSizeForVendorSku } from "../lib/dtp-catalog";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -1097,19 +1100,32 @@ export async function loader({ request }: { request: Request }) {
             freightAmount: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
             override: { phrase: String(eparams.get("eophrase") || ""), reason: String(eparams.get("eoreason") || "") },
           });
+          // 2026-10-06 owner shaped-pouch policy: +10 % on the standard customer
+          // product price, $700 per NEW die as a separate line (never per unit).
+          const dieP: DtpDieChoice = eparams.get("pdtpdie") === "existing"
+            ? { mode: "existing", dieId: String(eparams.get("pdtpdieid") || ""), reference: String(eparams.get("pdtpdieref") || "") }
+            : { mode: "new" };
+          const shapedP = applyShapedPolicyToDtpRow({
+            quantity: qty, shape: eparams.get("pdtpshape") === "custom" ? "custom" : "standard", die: dieP,
+            ladderUnitPrice: dtpRow.unitPrice, customerBaseSubtotal: dtpRow.customerBaseSubtotal, extraDesignFees: dtpRow.extraDesignFees,
+            customerTotal: dtpRow.customerTotal, grossProfit: dtpRow.grossProfit,
+          });
           return {
             quantity: qty, requested: qty === requestedQtyP,
             jobCost: run.totalCost, unitCost: run.unitCost,
-            marginPct: Math.round(dtpRow.grossMarginPct * 10) / 10,
-            unitPrice: dtpRow.unitPrice, totalPrice: dtpRow.customerTotal,
-            profit: dtpRow.grossProfit, actualMarginPct: dtpRow.grossMarginPct,
-            belowFloor: dtpRow.grossMarginPct < dtpRow.hardFloorPct,
-            draftOnly: run.missing.length > 0,
+            marginPct: Math.round(shapedP.marginPct * 10) / 10,
+            unitPrice: shapedP.unitPrice, totalPrice: shapedP.totalPrice,
+            profit: shapedP.profit, actualMarginPct: shapedP.marginPct,
+            belowFloor: shapedP.marginPct < dtpRow.hardFloorPct,
+            draftOnly: run.missing.length > 0 || shapedP.blocked,
             freightTotal: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
             freightSource: dtpInputP ? dtpInputP.freightSource : "verified",
             setupTotal: run.setupTotal,
-            status: dtpRow.status,
+            status: shapedP.blocked ? "BLOCKED" : dtpRow.status,
+            blockers: shapedP.reasons,
             dtp: {
+              shaped: shapedP.shaped,
+              freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
               vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
               ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
               defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
@@ -1434,6 +1450,9 @@ export async function loader({ request }: { request: Request }) {
           optional: addOns.filter((addOn: any) => addOn.enabled && /option/i.test(addOn.pricingType)).map((addOn: any) => ({ name: addOn.name, amount: addOn.amount })),
           moq: officialMoqForFamily("dtp-pouches") || 1000,
           freightDefault: SPEKTRA_FREIGHT_PER_PO,
+          // 2026-10-06: the $85 is an UNVERIFIED assumption; the catalog entry flags legacy sizes.
+          freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
+          catalog: dtpSizeForVendorSku((pickedBlankRef as any)?.sku || (pickedBlankRef as any)?.vendorSku || null),
         };
       })(),
       printConfig: pFamily && canonicalUiFamily(pFamily) === "dtp-bags"
@@ -1928,19 +1947,31 @@ export async function action({ request }: { request: Request }) {
           freightAmount: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
           override: { phrase: fRead("eophrase"), reason: fRead("eoreason") },
         });
+        // 2026-10-06 owner shaped-pouch policy — loader parity.
+        const dieSave: DtpDieChoice = fRead("pdtpdie") === "existing"
+          ? { mode: "existing", dieId: fRead("pdtpdieid"), reference: fRead("pdtpdieref") }
+          : { mode: "new" };
+        const shapedSave = applyShapedPolicyToDtpRow({
+          quantity: qty, shape: fRead("pdtpshape") === "custom" ? "custom" : "standard", die: dieSave,
+          ladderUnitPrice: dtpRow.unitPrice, customerBaseSubtotal: dtpRow.customerBaseSubtotal, extraDesignFees: dtpRow.extraDesignFees,
+          customerTotal: dtpRow.customerTotal, grossProfit: dtpRow.grossProfit,
+        });
         return {
           quantity: qty, requested: qty === savedRequestedQty,
           jobCost: run.totalCost, unitCost: run.unitCost,
-          marginPct: Math.round(dtpRow.grossMarginPct * 10) / 10,
-          unitPrice: dtpRow.unitPrice, totalPrice: dtpRow.customerTotal,
-          profit: dtpRow.grossProfit, actualMarginPct: dtpRow.grossMarginPct,
-          belowFloor: dtpRow.grossMarginPct < dtpRow.hardFloorPct,
-          draftOnly: run.missing.length > 0,
+          marginPct: Math.round(shapedSave.marginPct * 10) / 10,
+          unitPrice: shapedSave.unitPrice, totalPrice: shapedSave.totalPrice,
+          profit: shapedSave.profit, actualMarginPct: shapedSave.marginPct,
+          belowFloor: shapedSave.marginPct < dtpRow.hardFloorPct,
+          draftOnly: run.missing.length > 0 || shapedSave.blocked,
           freightTotal: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
           freightSource: savedDtpInput ? savedDtpInput.freightSource : "verified",
           setupTotal: run.setupTotal,
-          status: dtpRow.status,
+          status: shapedSave.blocked ? "BLOCKED" : dtpRow.status,
+          blockers: shapedSave.reasons,
           dtp: {
+            shaped: shapedSave.shaped,
+            freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
             vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
             ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
             defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
@@ -3477,6 +3508,32 @@ function ProductDrivenForm() {
             <input name="pdtpcustomprice" type="number" step="0.0001" min={0} style={inputStyle} />
           </label>
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtprepeat" value="1" /> Exact repeat order — waive customer design fee (no art changes)</label>
+          {/* 2026-10-06 OWNER SHAPED-POUCH POLICY: standard vs custom shape; new die ($700, once per unique shape) vs existing die (Die ID required). */}
+          <label style={{ fontSize: 12 }}>Shape
+            <select name="pdtpshape" defaultValue={canonParams.get("pdtpshape") || "standard"} style={inputStyle}>
+              <option value="standard">Standard pouch (catalog shape)</option>
+              <option value="custom">Custom shape / die-cut (+10% owner surcharge)</option>
+            </select>
+          </label>
+          <label style={{ fontSize: 12 }}>Custom die
+            <select name="pdtpdie" defaultValue={canonParams.get("pdtpdie") || "new"} style={inputStyle}>
+              <option value="new">NEW SHAPE — NEW $700 DIE</option>
+              <option value="existing">EXISTING SHAPE / DIE ON FILE ($0 tooling)</option>
+            </select>
+          </label>
+          <label style={{ fontSize: 12 }}>Die ID / Shape ID (required for an existing die)<input name="pdtpdieid" defaultValue={canonParams.get("pdtpdieid") || ""} style={inputStyle} placeholder="e.g. DIE-0007" /></label>
+          <label style={{ fontSize: 12 }}>Die reference (job / customer / date if no ID yet)<input name="pdtpdieref" defaultValue={canonParams.get("pdtpdieref") || ""} style={inputStyle} /></label>
+          <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+            Custom shape: +10% on the standard DTP customer product price (owner rule 2026-10-06), and ONE $700 tooling fee per unique physical shape — not per design, SKU, artwork or quantity tier; $0 on a reorder with the same usable die. Dies are never matched by dimensions alone: an existing die needs its ID or a clear reference. A durable Die ID registry needs a future schema approval; until then the Die ID is saved inside the quote snapshot.
+          </p>
+          {pm?.dtpSpec?.catalog?.status === "LEGACY_NO_CURRENT_STANDARD_CATALOG_MATCH" ? (
+            <div style={{ gridColumn: "1 / -1", border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", borderRadius: 8, padding: 8, fontSize: 12, fontWeight: 700 }}>
+              LEGACY SIZE — NO CURRENT STANDARD CATALOG MATCH: {pm.dtpSpec.catalog.note}
+            </div>
+          ) : null}
+          <div style={{ gridColumn: "1 / -1", border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", borderRadius: 8, padding: 8, fontSize: 12 }}>
+            <b>{SPEKTRA_FREIGHT_ASSUMPTION.label}</b> — {SPEKTRA_FREIGHT_ASSUMPTION.note}
+          </div>
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtpfreightpass" value="1" /> Pass freight through to customer (backs the $85 out of the ladder subtotal — never recovered twice)</label>
           <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>One production-ready design included; extra designs bill $25 (1,000–2,499) / $20 (2,500–4,999) / $15 (5,000+) each. Below-floor or below-$500-profit prices need the owner phrase + reason in Advanced Pricing Controls.</p>
         </>) : null}
@@ -4388,7 +4445,15 @@ Configuration: ${pm.printConfig || "—"}
 Unit price: ${money2(selected.unitPrice)}${selected.dtp.customUnitPrice != null ? " (owner custom)" : " (owner ladder)"}
 Base pouch subtotal: ${money2(selected.dtp.baseSubtotal)}
 Additional design fees: ${selected.dtp.designFeeWaived ? "$0.00 (repeat order — waived)" : `${money2(selected.dtp.extraDesignFees)}${selected.dtp.extraDesignCount ? ` (${selected.dtp.extraDesignCount} extra @ ${money2(selected.dtp.extraDesignFeeEach)})` : " (first design included)"}`}
-Freight: ${selected.dtp.freightTreatment === "pass_through" ? `${money2(selected.dtp.customerFreight)} (passed through)` : "included in unit pricing"}
+Freight: ${selected.dtp.freightTreatment === "pass_through" ? `${money2(selected.dtp.customerFreight)} (passed through)` : "included in unit pricing"} — ${SPEKTRA_FREIGHT_ASSUMPTION.label}${selected.dtp.shaped && selected.dtp.shaped.shape === "custom" ? `
+
+CUSTOM SHAPED POUCHES
+Includes: standard DTP configuration + custom shape surcharge +${selected.dtp.shaped.surchargePct}% (${money2(selected.dtp.shaped.shapeSurcharge)})
+Product subtotal: ${money2(selected.dtp.shaped.productTotal)}
+
+CUSTOM TOOLING
+${selected.dtp.shaped.toolingRequired ? `New reusable custom die: ${money2(selected.dtp.shaped.toolingFee)}` : `Existing die on file (${selected.dtp.shaped.dieId || selected.dtp.shaped.dieReference || "reference required"}): $0.00`}
+` : ""}
 Total: ${money2(selected.totalPrice)}`}
         </pre>
         ) : (

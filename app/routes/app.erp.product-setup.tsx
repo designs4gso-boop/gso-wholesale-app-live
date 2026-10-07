@@ -13,6 +13,7 @@ import {
 import { materialKind, materialKindLabel } from "../lib/material-classify";
 // 2026-10-05 read-only fixed-product spec summary (ONE authority; no editable duplicate here)
 import { resolveActiveJarProfile } from "../lib/jar-active-scope";
+import { DTP_CATALOG, SPEKTRA_FREIGHT_ASSUMPTION } from "../lib/dtp-catalog";
 import { describeStandardSpec, getProductProductionSpec } from "../lib/product-production-spec";
 
 // 15B: recipe-family vocabulary is REGISTRY-first (shared product-family
@@ -1895,6 +1896,27 @@ export default function ProductSetupRecipeBuilder() {
           </p>
         </div>
       ) : null}
+
+      <div className="card" id="dtp-catalog">
+        <h3>DTP (Spektra) catalog status — 2026-10-06 (read-only)</h3>
+        <p className="muted">Current public Spektra catalog vs the ERP's DTP products. Nothing is deleted or remapped here; new sizes become quotable only after the live vendor matrix is loaded and the owner sets a sell ladder.</p>
+        <table className="table" style={{ fontSize: 12 }}>
+          <thead><tr><th>Size</th><th>Status</th><th>Capacity</th><th>Vendor cost source</th><th>Owner sell ladder</th><th>Note</th></tr></thead>
+          <tbody>
+            {DTP_CATALOG.map((entry) => (
+              <tr key={entry.size}>
+                <td><strong>{entry.size}</strong></td>
+                <td>{entry.status === "CURRENT_STANDARD" ? <span className="badge green">Current standard</span> : <span className="badge yellow">LEGACY — no current catalog match</span>}</td>
+                <td>{entry.capacityLabel ?? "—"}</td>
+                <td>{entry.vendorCost === "LIVE_COST_BOOK_2026-10-06" ? "live cost book 2026-10-06" : "legacy seed only"}</td>
+                <td>{entry.ownerLadder === "EXISTS_2026-07-24" ? "exists" : <span className="badge yellow">owner decision required</span>}</td>
+                <td className="muted">{entry.note}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="muted">{SPEKTRA_FREIGHT_ASSUMPTION.label}: {SPEKTRA_FREIGHT_ASSUMPTION.note}</p>
+      </div>
 
       <div className="card" id="calculator-rules">
         <h2>3. Calculator Rules — shared family registry</h2>
