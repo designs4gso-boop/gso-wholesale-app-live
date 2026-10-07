@@ -62,3 +62,6 @@ export const SPEKTRA_FREIGHT_ASSUMPTION = {
   label: "FREIGHT ASSUMPTION — OWNER / VENDOR CONFIRMATION NEEDED",
   note: "Historical $85 flat per Spektra purchase order. The current public site exposes no usable freight; this figure has not been verified and is kept only because existing DTP quoting needs a freight line. Not part of the 2026-10-06 live cost book.",
 };
+
+/** The ERP comparable standard configuration (legacy product spec = soft-touch lamination + CR zipper included). Client-safe. */
+export const DTP_COMPARABLE_CONFIG = { material: "White PET", finish: "Soft Touch", spot: "None", zipper: "Child Resistant", topFeature: "No Tear Notch", clearGusset: false, skuCount: 1 } as const;
