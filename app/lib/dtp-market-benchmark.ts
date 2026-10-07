@@ -27,6 +27,19 @@ export const DESIGN_AND_CUSTOMIZE_BENCHMARK = {
 
 export const DTP_MARKET_BENCHMARK_QUANTITIES = [1000, 1500, 2500, 5000, 10000] as const;
 
+/**
+ * Owner-supplied Design & Customize CUSTOM-SHAPE evidence (3.5 g, Gloss or
+ * Matte) — MARKET EVIDENCE ONLY. Supports GSO shaped positioning (+10% on the
+ * standard price, $700 die separately, MOQ 2,500); never copied as a GSO price.
+ */
+export const DESIGN_AND_CUSTOMIZE_SHAPED_EVIDENCE = {
+  competitor: "Design & Customize",
+  product: "3.5 g custom shape, Gloss or Matte",
+  ladder: { 1250: 1.8, 1500: 1.55, 2000: 1.3, 2500: 1.2, 4000: 0.9 } as Record<number, number>,
+  use: "Market evidence for shaped positioning only — do not copy these prices; GSO shaped = standard customer price x 1.10 + $700 per new die (separate).",
+  classification: "MARKET RESEARCH — owner-supplied published pricing (2026-10-07)" as const,
+};
+
 /** GSO market position statement — wording approved 2026-10-06 (no thickness claim until documented). */
 export const GSO_DTP_MARKET_POSITION = {
   label: "PREMIUM DOMESTIC DTP",

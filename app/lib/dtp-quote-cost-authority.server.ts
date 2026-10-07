@@ -33,7 +33,8 @@ export type DtpQuoteCostStatus =
   | "ESTIMATED_FROM_VALIDATED_VENDOR_RULE"
   | "ESTIMATED_CONSERVATIVE_STEP"
   | "REQUEST_CURRENT_VENDOR_QUOTE"
-  | "LEGACY_VENDOR_SEED";
+  | "LEGACY_VENDOR_SEED"
+  | "LEGACY_MANUAL_REVIEW";
 
 export type DtpQuoteCost = {
   version: string;
@@ -103,6 +104,25 @@ export function resolveDtpQuoteCost(input: {
   const catalog = dtpSizeForVendorSku(input.vendorSku);
   const base = { version: DTP_QUOTE_COST_AUTHORITY_VERSION, skuCount, quantity, artCost, freight, freightStatus: SPEKTRA_FREIGHT_ASSUMPTION.status };
 
+  // 2026-10-07: a LEGACY size with no current catalog match (5x4x2) is not
+  // quoted automatically any more — MANUAL / VENDOR REVIEW REQUIRED. The
+  // historical VendorProduct rows and old quote snapshots are untouched.
+  if (catalog && catalog.status === "LEGACY_NO_CURRENT_STANDARD_CATALOG_MATCH") {
+    return {
+      ...base,
+      authority: "LEGACY_VENDOR_SEED",
+      status: "LEGACY_MANUAL_REVIEW",
+      basis: `${catalog.size}: LEGACY / NO CURRENT STANDARD CATALOG MATCH — new quotes need MANUAL / VENDOR REVIEW (current vendor quote); not quoted automatically. Historical quotes unchanged.`,
+      config: null,
+      vendorSubtotal: input.legacy.vendorSubtotal,
+      vendorUnit: input.legacy.vendorSubtotal != null && quantity > 0 ? input.legacy.vendorSubtotal / quantity : null,
+      extraSkuCost: 0,
+      landedCost: input.legacy.totalCost,
+      missing: true,
+      missingReason: `LEGACY ${catalog.size} — MANUAL / VENDOR REVIEW REQUIRED before quoting (no current Spektra catalog match; legacy cost shown for reference only)`,
+      costBookVersion: null,
+    };
+  }
   if (!catalog || catalog.quoteCostAuthority !== "LIVE_COST_BOOK" || catalog.status !== "CURRENT_STANDARD") {
     return {
       ...base,

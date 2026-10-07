@@ -28,7 +28,6 @@ import { buildCanonicalJarLineMetadata, priceJarConfiguration } from "../app/lib
 
 const OWNER_LADDER_PINS: Record<string, number[]> = {
   dtp_4x5x2: [1.3, 0.71, 0.46, 0.46, 0.37], // OWNER-APPROVED 2026-10-06; 7,500 steps to the 5,000 price
-  dtp_5x4x2: [1.76, 0.97, 0.86, 0.72, 0.71],
   dtp_6x5x2: [1.84, 1.04, 0.96, 0.81, 0.81],
   dtp_8x5x2: [2.05, 1.23, 1.23, 1.05, 1.05],
 };
@@ -80,9 +79,12 @@ describe("owner DTP ladder consumption (authority — 15C.2, never re-derived)",
       expect(dtpLaunchInfoForType(type)?.sku).toBe(sku);
     }
     const a = priced("dtp_4x5x2", 2500);
-    const b = priced("dtp_5x4x2", 2500);
-    if (!a.ok || !b.ok) throw new Error("expected ok");
-    expect(a.unitPrice).not.toBe(b.unitPrice);
+    if (!a.ok) throw new Error("expected ok");
+    expect(a.unitPrice).toBe(0.71);
+    // 2026-10-07: legacy 5x4x2 is never auto-priced by the storefront adapter (manual quote after vendor review)
+    const b = priceDtpConfiguration({ productType: "dtp_5x4x2", quantity: 2500 });
+    expect(b.ok).toBe(false);
+    if (!b.ok) expect(b.requestQuote).toBe(true);
   });
 });
 

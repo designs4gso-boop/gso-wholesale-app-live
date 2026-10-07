@@ -72,6 +72,11 @@ export function priceDtpConfiguration(selection: { productType: string; quantity
   if (!info) {
     return { ok: false, requestQuote: false, reason: "This pouch size is not available for online pricing yet." };
   }
+  // 2026-10-07: legacy 5x4x2 has no current Spektra catalog match — quoted
+  // manually after vendor review, never auto-priced (ladder kept for history).
+  if (info.sku === "spektra-dtp-5x4x2") {
+    return { ok: false, requestQuote: true, reason: "The 5x4x2 pouch is a legacy size with no current vendor catalog match — it is quoted manually after vendor review." };
+  }
   const quantity = Math.floor(Number(selection.quantity) || 0);
   if (quantity < DTP_STOREFRONT_MIN_QTY) {
     return { ok: false, requestQuote: false, reason: `Minimum order is ${DTP_STOREFRONT_MIN_QTY.toLocaleString()} pouches (vendor MOQ).` };

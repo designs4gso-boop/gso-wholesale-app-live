@@ -6,6 +6,7 @@ import { SPEKTRA_COST_BOOK_META, SPEKTRA_COST_STATUS_LABEL, SPEKTRA_PUBLISHED_TI
 import { DTP_CATALOG, SPEKTRA_FREIGHT_ASSUMPTION } from "../lib/dtp-catalog";
 import { DTP_CUSTOM_SHAPE_SURCHARGE_PCT, DTP_NEW_DIE_TOOLING_FEE, DTP_SHAPED_BAG_POLICY_SOURCE } from "../lib/dtp-shaped-bag-policy";
 import { buildDtpLiveEconomics } from "../lib/dtp-live-economics.server";
+import { buildDtpProposedLadders } from "../lib/dtp-proposed-ladders.server";
 import { DESIGN_AND_CUSTOMIZE_BENCHMARK, GSO_DTP_MARKET_POSITION } from "../lib/dtp-market-benchmark";
 import { DTP_SHAPED_MOQ } from "../lib/dtp-shaped-bag-policy";
 import db from "../db.server";
@@ -65,6 +66,8 @@ export async function loader({ request }: { request: Request }) {
     // 2026-10-06: DTP live economics (current Spektra cost vs legacy seed vs current owner ladder; proposals not applied).
     dtpEconomics: buildDtpLiveEconomics("Soft Touch"),
     dtpEconomicsGlossy: buildDtpLiveEconomics("Glossy"),
+    // 2026-10-07: remaining-size proposals + 4x5 25,000 recommendation (PROPOSED OWNER PRICING — not read by the quote engine).
+    dtpProposals: buildDtpProposedLadders(),
     preLaunch: {
       total: localPreLaunch + cachedShopifyPreLaunch + staleShopifyPreLaunch,
       local: localPreLaunch,
@@ -159,7 +162,7 @@ const card: React.CSSProperties = { marginTop: 16, border: "1px solid #e5e7eb", 
 const stat: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px", minWidth: 150, background: "#f9fafb" };
 
 export default function PricingIntelligence() {
-  const { totals, excluded, review, baskets, shopify, liveFrom, preLaunch, dtpEconomics, dtpEconomicsGlossy } = useLoaderData<typeof loader>();
+  const { totals, excluded, review, baskets, shopify, liveFrom, preLaunch, dtpEconomics, dtpEconomicsGlossy, dtpProposals } = useLoaderData<typeof loader>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -290,6 +293,53 @@ export default function PricingIntelligence() {
         </div>
         <p style={{ margin: "8px 0 0", fontSize: 12, color: "#6b7280" }}>Reference configuration for the cells: White PET, Glossy, no spot, no zipper, no tear notch, 1 SKU (wholesale unit = exact public total x 0.75 / quantity). Old Spektra seed costs (4x5x2 $0.9897 / $0.4922 / $0.4033 / $0.3232 at 1,000 / 2,500 / 5,000 / 7,500, etc.) remain on the historical VendorProduct rows for old quotes and are not comparable until the live matrix is loaded.</p>
         <p style={{ margin: "8px 0 0", fontSize: 12, color: "#374151" }}><b>Shaped / die-cut pouches ({DTP_SHAPED_BAG_POLICY_SOURCE}):</b> base = the standard DTP customer price for the same configuration; +{DTP_CUSTOM_SHAPE_SURCHARGE_PCT}% shape surcharge on the product price; ${DTP_NEW_DIE_TOOLING_FEE} per unique NEW die shown as a separate tooling line; existing die on file = $0 tooling; shaped MOQ {DTP_SHAPED_MOQ.toLocaleString()}; same physical shape with several designs = one fee, a different physical shape = a new fee (surcharge still applies).</p>
+      </section>
+
+      <section style={{ ...card, borderColor: "#c7d2fe" }}>
+        <h2 style={{ margin: "0 0 6px" }}>PROPOSED OWNER PRICING — remaining DTP sizes + 25,000 tier ({dtpProposals.status})</h2>
+        <p style={{ margin: "0 0 8px", fontSize: 13, color: "#374151" }}>
+          Method (owner direction 2026-10-07): the OWNER-APPROVED 4x5x2 ladder is the market anchor (Design &amp; Customize 4x5 = controlling competitor). Each size is priced from its REAL live Spektra landed-cost difference versus 4x5x2 at the same quantity (G = GP parity), lifted where the 30/35/38% floors (H) or the $500 job-profit rule (I) need more, then commercially rounded. Landed = live product cost + art $8.33 + freight $85 (UNVERIFIED). Nothing here is read by the quote engine until the owner approves it. {dtpProposals.marketNote}
+        </p>
+        {dtpProposals.anchor.recommended25k ? (
+          <p style={{ margin: "0 0 8px", fontSize: 13, color: "#1e3a8a", fontWeight: 600 }}>
+            4x5x2 at 25,000 — RECOMMENDED {"$"}{dtpProposals.anchor.recommended25k.price.toFixed(2)} ({dtpProposals.anchor.recommended25k.method}; landed {"$"}{dtpProposals.anchor.recommended25k.landedUnit.toFixed(4)}/unit; GM {dtpProposals.anchor.recommended25k.gmPct.toFixed(1)}% / GP {"$"}{dtpProposals.anchor.recommended25k.gp.toFixed(0)}; boundary drop vs 24,999 x {"$"}{dtpProposals.anchor.recommended25k.continuity.priceAt10k.toFixed(2)}: {dtpProposals.anchor.recommended25k.continuity.boundaryDropPct}%). {dtpProposals.anchor.recommended25k.status}. {dtpProposals.anchor.recommended25k.competitor}.
+          </p>
+        ) : null}
+        {dtpProposals.ladders.map((ladder) => (
+          <div key={ladder.size} style={{ overflowX: "auto", marginBottom: 12 }}>
+            <b style={{ fontSize: 12 }}>{ladder.size}{ladder.capacityLabel ? ` (${ladder.capacityLabel})` : ""} — {ladder.status}</b>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead><tr style={{ background: "#f3f4f6" }}><th style={{ padding: 4 }}>Qty</th><th>A product</th><th>B art</th><th>C freight</th><th>D landed total</th><th>D landed/unit</th><th>E 4x5 anchor</th><th>F Δ landed/unit</th><th>G GP parity</th><th>H floor</th><th>I $500 GP</th><th>PROPOSED</th><th>GM / GP</th><th>Floor</th><th>D&amp;C 4x5 CR ref</th></tr></thead>
+              <tbody>
+                {ladder.rows.map((r) => (
+                  <tr key={r.quantity} style={{ borderTop: "1px solid #e5e7eb" }}>
+                    <td align="center" style={{ padding: 4 }}>{r.quantity.toLocaleString()}</td>
+                    <td align="center">{r.A_productCost != null ? r.A_productCost.toFixed(2) : "—"}</td>
+                    <td align="center">{r.B_art.toFixed(2)}</td>
+                    <td align="center">{r.C_freight} (unverified)</td>
+                    <td align="center">{r.D_landedTotal != null ? r.D_landedTotal.toFixed(2) : "—"}</td>
+                    <td align="center">{r.D_landedUnit != null ? r.D_landedUnit.toFixed(4) : "—"}</td>
+                    <td align="center">{r.E_anchorPrice != null ? `${r.E_anchorPrice.toFixed(2)}${r.E_anchorBasis.includes("RECOMMENDATION") ? " (rec.)" : ""}` : "—"}</td>
+                    <td align="center">{r.F_landedDeltaUnit != null ? `${r.F_landedDeltaUnit >= 0 ? "+" : ""}${r.F_landedDeltaUnit.toFixed(4)} (${r.F_landedDeltaPct}%)` : "—"}</td>
+                    <td align="center">{r.G_gpParityPrice != null ? r.G_gpParityPrice.toFixed(4) : "—"}</td>
+                    <td align="center">{r.H_floorPrice != null ? r.H_floorPrice.toFixed(4) : "—"}</td>
+                    <td align="center">{r.I_minProfitPrice != null ? r.I_minProfitPrice.toFixed(4) : "—"}</td>
+                    <td align="center" style={{ fontWeight: 700, color: "#1e3a8a" }}>{r.proposed ? r.proposed.price.toFixed(2) : "—"}</td>
+                    <td align="center">{r.proposed ? `${r.proposed.gmPct.toFixed(1)}% / ${r.proposed.gp.toFixed(0)}` : "—"}</td>
+                    <td align="center">{r.floorPct}%</td>
+                    <td align="center" title="Design & Customize 4x5 comparable CR reference; exact-size competitor NOT CURRENTLY VERIFIED">{r.benchmarkComparableCrUnit != null ? r.benchmarkComparableCrUnit.toFixed(3) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {ladder.rows[0]?.acquisitionOption ? (
+              <p style={{ margin: "4px 0 0", fontSize: 12, color: "#92400e" }}>
+                1,000 optional acquisition price (NOT inherited from 4x5x2; needs an explicit owner exception): {"$"}{ladder.rows[0].acquisitionOption.price.toFixed(2)} — {ladder.rows[0].acquisitionOption.gmPct.toFixed(1)}% / GP {"$"}{ladder.rows[0].acquisitionOption.gp.toFixed(0)} ({"$"}{ladder.rows[0].acquisitionOption.gpBelowNormalTarget.toFixed(0)} below the $500 target). {ladder.rows[0].acquisitionOption.recommendation}
+              </p>
+            ) : null}
+            <p style={{ margin: "4px 0 0", fontSize: 12, color: "#374151" }}>Continuity (order-total drop at each step vs one unit below; reference = the approved 4x5x2 steps): {ladder.continuity.map((c) => `${c.fromQty.toLocaleString()}→${c.toQty.toLocaleString()} ${c.dropPct}%${c.cliff ? " CLIFF" : ""}`).join(" · ")}. Exact-size competitor: NOT CURRENTLY VERIFIED.</p>
+          </div>
+        ))}
       </section>
 
       <section style={card}>
