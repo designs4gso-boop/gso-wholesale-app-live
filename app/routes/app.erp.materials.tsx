@@ -807,6 +807,9 @@ export default function MaterialsPage() {
   useEffect(() => {
     if (fetcher.data?.materials) setMaterials(fetcher.data.materials);
   }, [fetcher.data]);
+  // 2026-10-07: surface the action result (e.g. "archived instead of deleted") — it was silently dropped before.
+  const actionFeedback = (fetcher.data as any)?.error || (fetcher.data as any)?.message || null;
+  const actionFeedbackIsError = Boolean((fetcher.data as any)?.error);
 
   useEffect(() => {
     const rule = getUnitRule(finalMaterialType);
@@ -1077,6 +1080,7 @@ export default function MaterialsPage() {
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
       primaryAction={{ content: "New Material", onAction: resetForm }}
     >
+      {actionFeedback ? <div style={{ margin: "0 0 12px", padding: 10, borderRadius: 10, border: actionFeedbackIsError ? "1px solid #fecaca" : "1px solid #bbf7d0", background: actionFeedbackIsError ? "#fef2f2" : "#f0fdf4", fontSize: 13, fontWeight: 600 }}>{actionFeedback}</div> : null}
       <Layout>
         <Layout.Section>
           <Card>

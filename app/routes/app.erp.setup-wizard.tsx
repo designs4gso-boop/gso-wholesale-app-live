@@ -142,7 +142,7 @@ export async function loader({ request }: { request: Request }) {
     queueReadyItems,
     queueConvertedItems,
   ] = await Promise.all([
-    db.erpAdminSetting.count({ where: { shop } }),
+    db.erpAdminSetting.count({ where: { shop, key: { notIn: [] }, NOT: [{ key: { startsWith: "ownerConfig." } }, { category: "pricing-feedback" }] } }),
     db.material.count({ where: { shop, active: true } }),
     db.machine.count({ where: { shop, active: true } }),
     db.vendor.count({ where: { shop, active: true } }),

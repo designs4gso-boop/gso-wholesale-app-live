@@ -464,6 +464,9 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
     const id = String(formData.get("id") || "");
     const expectedArrivalRaw = String(formData.get("expectedArrivalDate") || "");
     const followUpRaw = String(formData.get("followUpDate") || "");
+    // 2026-10-07: fields not posted by the button keep their saved values (the button used to null them).
+    const existing = await db.purchaseRequest.findFirst({ where: { shop, id }, select: { vendorConfirmationNumber: true, expectedArrivalDate: true } });
+    const postedConfirmation = String(formData.get("vendorConfirmationNumber") || "");
     await db.purchaseRequest.updateMany({
       where: { shop, id },
       data: {
@@ -471,8 +474,8 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
         sentBy: String(formData.get("sentBy") || "GSO") || null,
         status: "ordered",
         orderedAt: new Date(),
-        vendorConfirmationNumber: String(formData.get("vendorConfirmationNumber") || "") || null,
-        expectedArrivalDate: expectedArrivalRaw ? new Date(`${expectedArrivalRaw}T12:00:00`) : null,
+        vendorConfirmationNumber: formData.has("vendorConfirmationNumber") ? postedConfirmation || null : existing?.vendorConfirmationNumber ?? null,
+        expectedArrivalDate: expectedArrivalRaw ? new Date(`${expectedArrivalRaw}T12:00:00`) : formData.has("expectedArrivalDate") ? null : existing?.expectedArrivalDate ?? null,
         followUpNeeded: true,
         followUpDate: followUpRaw ? new Date(`${followUpRaw}T12:00:00`) : addDays(2),
       },

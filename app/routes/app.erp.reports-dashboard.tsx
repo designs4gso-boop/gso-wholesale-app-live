@@ -290,7 +290,10 @@ export async function loader({ request }: { request: Request }) {
     printSqft: sum(printLogs, (log) => log.sqft),
     printInkMl: sum(printLogs, (log) => log.inkMl),
     printMinutes: sum(printLogs, (log) => log.printMinutes),
-    materialStockValue: sum(materials, (material) => number(material.stockOnHand) * number(material.costPerUnit || material.calculatedUnitCost || material.purchaseCost)),
+    // 2026-10-07: stockOnHand is counted in PURCHASE units, so only the purchase-unit cost is a valid multiplier
+    // (costPerUnit / calculatedUnitCost are per base unit such as sqft or ml). Materials without a purchase cost are excluded and counted.
+    materialStockValue: sum(materials, (material) => (number(material.purchaseCost) > 0 ? number(material.stockOnHand) * number(material.purchaseCost) : 0)),
+    materialStockUncosted: materials.filter((material: any) => number(material.stockOnHand) > 0 && !(number(material.purchaseCost) > 0)).length,
     openPoValue: sum(openPurchaseRequests, (po) => po.estimatedCost),
   };
 
@@ -638,7 +641,7 @@ export default function ReportsDashboard() {
         <MetricCard label="Active job revenue" value={hasJobs ? money(metrics.jobRevenue) : NOT_RECORDED} sub={hasJobs ? `${counts.jobs} active job(s) | est. margin ${pct(actualMargin)}` : "No active jobs"} />
         <MetricCard label="Est. profit on active jobs" value={hasJobs ? money(metrics.jobFinalProfit) : NOT_RECORDED} sub={hasJobs ? `Est. cost ${money(metrics.jobActualCost)} (actuals where recorded, otherwise estimates)` : "No active jobs"} />
         <MetricCard label="Print logs in range" value={hasPrintLogs ? `${counts.printLogRows} row(s)` : NOT_RECORDED} sub={hasPrintLogs ? `${metrics.printSqft > 0 ? `${metrics.printSqft.toFixed(2)} sqft` : `sqft ${NOT_RECORDED}`} | ${metrics.printInkMl > 0 ? `${metrics.printInkMl.toFixed(2)} ml ink` : `ink ${NOT_RECORDED}`} | ${metrics.printMinutes > 0 ? `${metrics.printMinutes.toFixed(2)} print min` : `minutes ${NOT_RECORDED}`}` : "No RIP / print logs imported for this range"} />
-        <MetricCard label="Inventory value on hand" value={hasStockValue ? money(metrics.materialStockValue) : NOT_RECORDED} sub={hasStockValue ? `${counts.lowStock} of ${counts.activeMaterials} active material(s) at or below reorder point` : `${counts.activeMaterials} active material(s); no stock counts recorded`} />
+        <MetricCard label="Inventory value on hand" value={hasStockValue ? money(metrics.materialStockValue) : NOT_RECORDED} sub={hasStockValue ? `${counts.lowStock} of ${counts.activeMaterials} active material(s) at or below reorder point` : `${counts.activeMaterials} active material(s); no stock counts recorded`} /> {/* purchase-unit cost x stock on hand; materials with no purchase cost are excluded */}
       </div>
       <p style={{ margin: "10px 0 0", fontSize: 12, color: "#666" }}>
         Not reported here yet (no data source): material waste, per-machine usage, and quote-to-order conversion rate. Setup coverage: {counts.vendors} vendor(s), {counts.costBookItems} active cost book item(s), {counts.activeMaterials} active material(s).

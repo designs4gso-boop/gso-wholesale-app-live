@@ -92,7 +92,7 @@ function rowToCsvCells(row: AuditRow) {
     row.matchLevel, row.matchSummary,
     row.erpCostLow == null ? "" : row.erpCostLow, row.erpCostHigh == null ? "" : row.erpCostHigh,
     row.erpCostSource, row.erpCostLabel,
-    row.deltaPct ? row.deltaPct.toFixed(2) : "0",
+    row.deltaPct == null ? "" : row.deltaPct.toFixed(2),
     AUDIT_STATUS_LABELS[row.status],
     row.view, String(row.costFactorCandidate), row.hiddenReason || "",
   ];
@@ -491,7 +491,7 @@ export default function ShopifyCostAuditRoute() {
                       <td style={{ padding: 8 }} align="right">{money(row.price)}</td>
                       <td style={{ padding: 8 }} align="right"><b>{row.unitCost == null ? "—" : money(row.unitCost)}</b></td>
                       <td style={{ padding: 8 }}>{row.erpCostLabel || "—"}{row.erpCostSource ? <div style={smallHelp}>{row.erpCostSource.replace(/_/g, " ")}</div> : null}</td>
-                      <td style={{ padding: 8 }} align="right">{row.deltaPct ? `${row.deltaPct > 0 ? "+" : ""}${row.deltaPct.toFixed(1)}%` : "—"}</td>
+                      <td style={{ padding: 8 }} align="right">{row.deltaPct == null ? "—" : `${row.deltaPct > 0 ? "+" : ""}${row.deltaPct.toFixed(1)}%`}</td>
                       <td style={{ padding: 8 }}>
                         {row.matchSummary || "No ERP record matched"}
                         {row.matchLevel !== "none" ? <div style={smallHelp}>matched by {row.matchLevel.replace(/_/g, " ")}</div> : null}

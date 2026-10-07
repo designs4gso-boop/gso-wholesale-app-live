@@ -227,7 +227,7 @@ function MaterialCard({ material, lowStockOnly = false }: { material: any; lowSt
         <InlineStack gap="300" wrap>
           <Text as="p">Suggested reorder: <strong>{qty(suggestion.suggestedQty)}</strong></Text>
           <Text as="p">Approx cost: <strong>${money(suggestedCost)}</strong></Text>
-          <Text as="p">Lead time: <strong>{material.leadTimeDays || preferredVendor?.leadTimeDays || "Not set"} days</strong></Text>
+          <Text as="p">Lead time: <strong>{material.leadTimeDays || preferredVendor?.leadTimeDays ? `${material.leadTimeDays || preferredVendor?.leadTimeDays} days` : "Not set"}</strong></Text>
         </InlineStack>
 
         <Text as="p" tone="subdued">

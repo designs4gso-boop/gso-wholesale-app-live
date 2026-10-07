@@ -450,7 +450,7 @@ export default function VendorCenter() {
                         <Text as="p" tone="subdued">Lead time: {vendor.leadTimeDays ? `${vendor.leadTimeDays} day(s)` : "not set"} | Payment terms: {vendor.paymentTerms || "not set"}</Text>
                       </BlockStack>
                       <InlineStack gap="200">
-                        {vendor.website ? <Button url={vendor.website} target="_blank">Website</Button> : null}
+                        {vendor.website ? <Button url={/^https?:\/\//i.test(String(vendor.website)) ? vendor.website : `https://${String(vendor.website).replace(/^\/+/, "")}`} target="_blank">Website</Button> : null}
                         <Form method="post">
                           <input type="hidden" name="intent" value="toggleVendorActive" />
                           <input type="hidden" name="id" value={vendor.id} />

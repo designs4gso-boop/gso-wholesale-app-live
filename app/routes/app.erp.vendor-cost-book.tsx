@@ -461,7 +461,8 @@ function VendorOptions({ vendors }: { vendors: any[] }) {
 }
 
 function CostItemCard({ item, vendors }: { item: any; vendors: any[] }) {
-  const activeTier = (item.tiers || []).find((tier: any) => Number(tier.minQty || 0) <= Number(item.moq || 1)) || null;
+  // highest qualifying break at the MOQ (tiers are loaded ascending; the lowest break is the most expensive price)
+  const activeTier = [...(item.tiers || [])].sort((a: any, b: any) => Number(b.minQty || 0) - Number(a.minQty || 0)).find((tier: any) => Number(tier.minQty || 0) <= Number(item.moq || 1)) || null;
   const bestCost = activeTier?.unitCost || item.unitCost;
   const vendorDisplay = item.vendorRecord?.name || item.vendorName || "";
   const costMissing = Number(item.unitCost || 0) <= 0;
@@ -691,7 +692,7 @@ function SpektraLiveCostBookCard() {
           </BlockStack>
           <InlineStack gap="200" wrap>
             <Badge tone={meta.researchFilePresent ? "success" : "critical"}>{meta.researchFilePresent ? `${meta.rowCount} observed rows` : "RESEARCH MATRIX NOT LOADED"}</Badge>
-            <Badge tone="warning">Freight unverified ($85 assumption)</Badge>
+            <Badge tone="warning">{`Freight unverified ($${SPEKTRA_FREIGHT_ASSUMPTION.amount} assumption)`}</Badge>
             <Badge>{meta.version}</Badge>
           </InlineStack>
         </InlineStack>

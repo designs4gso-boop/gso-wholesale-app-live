@@ -736,7 +736,7 @@ export default function CostVerificationRoute() {
               <li>Ink <b>usage per sqft</b> (0.0075 seeded; the $/sqft estimate profiles) — calibrate from RIP actuals (13A)</li>
               <li>Machine hourly rate — $5/hr on Machines vs $8/hr calculator default; owner picks one later</li>
               <li>Print speed / setup minutes (finish speed curve; cut time from cutter speed later — 12.5 cm/s effective estimate)</li>
-              <li>Known-job replay: 0 of 7 recorded (section below)</li>
+              <li>Known-job replay: recorded manually on the printout below — not tracked in the app</li>
             </ul>
           </div>
         </div>
@@ -928,7 +928,7 @@ export default function CostVerificationRoute() {
           { label: "Machine + labor", value: `${data.summary.machineCount} machines`, ok: data.summary.machineLaborReady },
           { label: "Vendor tiers", value: `${data.summary.tierRowCount} tier rows`, ok: data.summary.vendorTiersReady },
           { label: "RIP actual costs", value: data.summary.ripCount ? `${data.summary.ripCount} GSOQ results` : "none yet", ok: data.summary.ripReady },
-          { label: "Known-job tests", value: "0 of 7 recorded", ok: false },
+          { label: "Known-job tests", value: "manual (not tracked in the app)", ok: false },
           { label: "Critical issues", value: String(data.summary.criticalCount), ok: data.summary.criticalCount === 0 },
           { label: "Warnings", value: String(data.summary.warningCount), ok: data.summary.warningCount === 0 },
         ].map((card) => (
@@ -1114,7 +1114,7 @@ export default function CostVerificationRoute() {
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Known Job Replay Prep (0 of 7 recorded)</h2>
+        <h2 style={{ marginTop: 0 }}>Known Job Replay Prep (recorded manually)</h2>
         <p style={{ fontSize: 13, color: "#4b5563" }}>
           Seven test jobs, ready to run once you want to prove the calculator against reality. Each slot prefills the Cost Calculator where the
           record exists; enter real label/art sizes on the page. When checking labor lines, compare against the <b>Labor Standards</b> table above

@@ -785,7 +785,7 @@ export default function ErpPricingRulesRoute() {
         <p style={{ margin: "0 0 6px", color: "#666" }}>{version}</p>
         <h1 style={{ margin: 0 }}>Tier Rule Manager</h1>
         <p style={{ border: "2px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 12, padding: "10px 14px", fontSize: 13, fontWeight: 700, maxWidth: 900 }}>
-          Owner / advanced tool — changes here can affect live pricing, mappings, or Shopify behavior.
+          LEGACY / DIAGNOSTIC — these tier rules are read only by the Shopify Cost Audit as a cost reference. They do not price quotes, the storefront, or checkout (those use the ERP engine and owner ladders).
         </p>
         <p style={{ maxWidth: 900, lineHeight: 1.5 }}>
           Build tier rules connected to existing Shopify products and
@@ -1378,7 +1378,7 @@ export default function ErpPricingRulesRoute() {
             {!isBagRecipe && !isJarRecipe && !isStickerRecipe ? (
               <label style={{ display: "block", marginTop: 10 }}>
                 Recipe notes
-                <textarea name="recipeNotes" placeholder="Describe what this recipe includes. More recipe-specific fields will be added for DTP bags, boxes, and custom products in the next build." style={{ ...inputStyle, minHeight: 90 }} />
+                <textarea name="recipeNotes" placeholder="Describe what this recipe includes. DTP bags, boxes and custom products are priced through the Cost Calculator and owner ladders, not here." style={{ ...inputStyle, minHeight: 90 }} />
               </label>
             ) : null}
           </section>
@@ -1574,49 +1574,6 @@ export default function ErpPricingRulesRoute() {
             </article>
           ))}
         </div>
-      </section>
-
-      <section
-        style={{
-          marginTop: 20,
-          border: "1px solid #ddd",
-          borderRadius: 14,
-          padding: 20,
-          background: "#fafafa",
-        }}
-      >
-        <h2 style={{ marginTop: 0 }}>Build roadmap</h2>
-        <ol style={{ lineHeight: 1.7 }}>
-          <li>
-            <strong>v1.0:</strong> Save global, collection, product, and variant
-            tier rules. This page.
-          </li>
-          <li>
-            <strong>v1.1:</strong> Add Shopify product/collection search and
-            attach production recipe metadata. This page.
-          </li>
-          <li>
-            <strong>v1.2:</strong> Recipe-specific setup fields for stock/sticker bags, jars, and stickers. This page.
-          </li>
-          <li>
-            <strong>v1.3:</strong> Flexible pricing methods: cost-based margin, % off, manual cost + margin, or fixed price.
-          </li>
-          <li>
-            <strong>v1.4:</strong> MOQ, quantity increment, default quantity, and case-pack rules attached to pricing rules.
-          </li>
-          <li>
-            <strong>v1.5:</strong> Clean staff setup UI: pricing-method-specific tier fields, Safety rules, and Quantity rules.
-          </li>
-          <li>
-            <strong>v1.6:</strong> Preview affected variants and generate safe tier prices from recipe/backend cost assumptions. This page.
-          </li>
-          <li>
-            <strong>v1.7:</strong> Save generated tier tables for storefront product-page and cart display.
-          </li>
-          <li>
-            <strong>v2.0:</strong> Shopify Discount Function checkout enforcement.
-          </li>
-        </ol>
       </section>
     </main>
   );

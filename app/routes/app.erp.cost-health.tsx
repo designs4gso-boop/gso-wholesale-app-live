@@ -487,7 +487,7 @@ export async function loader({ request }: { request: Request }) {
     { label: "Active materials", value: activeMaterials.length, status: activeMaterials.length > 0 ? "ready" : "critical", help: "Materials available for recipes/calculator." },
     { label: "Roll media ready", value: rollMediaReady, status: rollMediaReady > 0 ? "ready" : "critical", help: "Roll media with usable cost per square inch." },
     { label: "Ink materials ready", value: inkMaterialsReady, status: inkMaterialsReady > 0 ? "ready" : "critical", help: "Ink/coating materials with usable cost per ml." },
-    { label: "Printer machines ready", value: `${machinesReady}/${activePrinterMachines.length}`, status: machinesReady > 0 ? "warning" : "critical", help: "Active printer machines with at least one usable ink channel. Outsourced/vendor placeholders are ignored." },
+    { label: "Printer machines ready", value: `${machinesReady}/${activePrinterMachines.length}`, status: activePrinterMachines.length > 0 && machinesReady === activePrinterMachines.length ? "ready" : machinesReady > 0 ? "warning" : "critical", help: "Active printer machines with at least one usable ink channel. Outsourced/vendor placeholders are ignored." },
     { label: "Critical issues", value: criticalCount, status: criticalCount === 0 ? "ready" : "critical", help: "Must be fixed before trusting auto-pricing." },
     { label: "Warnings", value: warningCount, status: warningCount === 0 ? "ready" : "warning", help: "Can calculate, but results may be estimates/manual fallback." },
   ];
@@ -533,7 +533,7 @@ export async function loader({ request }: { request: Request }) {
 }
 
 function money(value: number, digits = 4): string {
-  if (!Number.isFinite(value) || value <= 0) return "$0.0000";
+  if (!Number.isFinite(value) || value <= 0) return "—";
   return `$${value.toFixed(digits)}`;
 }
 
