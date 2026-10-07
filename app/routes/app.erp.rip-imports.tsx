@@ -320,7 +320,7 @@ export default function RipImports() {
         </p>
         <p style={{ margin: "8px 0 0", fontSize: 11, color: "#c7d2fe" }}>
           Parser status: VersaWorks CSV rows are parsed in full; .vw and RasterLink files are stored with a placeholder row
-          until their formats are confirmed. Foundation reference: v14.0.
+          until their formats are confirmed.
         </p>
       </section>
 

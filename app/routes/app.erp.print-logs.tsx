@@ -505,7 +505,7 @@ export default function PrintLogImportPage() {
                     <InlineStack gap="300" wrap>
                       <Text as="p">Sqft: {money(logImport.totalSqft)}</Text>
                       <Text as="p">Ink: {money(logImport.totalInkMl)} ml</Text>
-                      <Text as="p">Print time: {money(logImport.totalPrintMinutes)} min</Text>
+                      <Text as="p">Print time: {Number(logImport.totalPrintMinutes) > 0 ? `${money(logImport.totalPrintMinutes)} min` : "not recorded"}</Text>
                     </InlineStack>
                     <Divider />
                     {(logImport.entries || []).slice(0, 8).map((entry: any) => (
@@ -534,7 +534,6 @@ export default function PrintLogImportPage() {
                 happens on RIP Import Review (step 3): it shows candidate suggestions, requires explicit confirmation,
                 protects against stale data, and keeps a full audit trail.
               </Text>
-              <Text as="p" tone="subdued" variant="bodyXs">Manual-match retirement reference: 13A.6E.</Text>
               <InlineStack gap="200">
                 <Button variant="primary" onClick={() => navigate("/app/erp/rip-import-review")}>Open RIP Import Review</Button>
               </InlineStack>

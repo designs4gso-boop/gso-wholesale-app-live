@@ -12,6 +12,29 @@ function labelForStatus(status: string) {
   return String(status || "new").replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+// A customer proof link only moves a job that is still at the proof stage; a job
+// already in production keeps its status (the proof fields and event are still recorded).
+const PROOF_STAGE_STATUSES = ["new", "prepress", "proof_needed", "proof_sent", "proof_approved", "on_hold"];
+function atProofStage(status: unknown) {
+  return PROOF_STAGE_STATUSES.includes(String(status || "new"));
+}
+
+/** Customer-safe summary of the stored option JSON (never raw JSON on the portal). */
+function describeSelectedOptions(raw: unknown): string {
+  if (!raw) return "";
+  if (typeof raw !== "string") return "";
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return "";
+    return Object.entries(parsed)
+      .filter(([key, value]) => !String(key).startsWith("_") && value != null && typeof value !== "object" && String(value).trim() !== "")
+      .map(([key, value]) => `${String(key).replace(/[_-]+/g, " ")}: ${String(value)}`)
+      .join(" · ");
+  } catch {
+    return "";
+  }
+}
+
 function bestImage(job: any) {
   return job.productImageUrl || job.items?.find((item: any) => item.productImageUrl)?.productImageUrl || "";
 }
@@ -71,7 +94,7 @@ export async function action({ request, params }: { request: Request; params: an
     await db.productionJob.update({
       where: { id: job.id },
       data: {
-        status: "proof_approved",
+        ...(atProofStage(job.status) ? { status: "proof_approved" } : {}),
         proofStatus: "approved",
         proofApprovedAt: new Date(),
         proofCustomerName: customerName || job.customerName,
@@ -79,7 +102,7 @@ export async function action({ request, params }: { request: Request; params: an
         proofCustomerComment: comment || "Approved through customer proof portal.",
       },
     });
-    await createEvent(job.shop, job.id, "proof_approved_customer", `Customer approved proof.${comment ? ` Comment: ${comment}` : ""}`);
+    await createEvent(job.shop, job.id, "proof_approved_customer", `Customer approved proof.${comment ? ` Comment: ${comment}` : ""}${atProofStage(job.status) ? "" : " (job already past the proof stage — production status unchanged)"}`);
     return Response.json({ ok: true, message: "Proof approved. Thank you — production has been notified." });
   }
 
@@ -88,7 +111,7 @@ export async function action({ request, params }: { request: Request; params: an
     await db.productionJob.update({
       where: { id: job.id },
       data: {
-        status: "proof_needed",
+        ...(atProofStage(job.status) ? { status: "proof_needed" } : {}),
         proofStatus: "changes_requested",
         proofRejectedAt: new Date(),
         proofCustomerName: customerName || job.customerName,
@@ -96,7 +119,7 @@ export async function action({ request, params }: { request: Request; params: an
         proofCustomerComment: comment,
       },
     });
-    await createEvent(job.shop, job.id, "proof_changes_requested", `Customer requested proof changes: ${comment}`);
+    await createEvent(job.shop, job.id, "proof_changes_requested", `Customer requested proof changes: ${comment}${atProofStage(job.status) ? "" : " (job already past the proof stage — production status unchanged; staff review required)"}`);
     return Response.json({ ok: true, message: "Change request sent. GSO will review and update your proof." });
   }
 
@@ -140,7 +163,7 @@ export default function CustomerProofApproval() {
           <div>
             <div className="logo">GSO PACKAGING</div>
             <h1>Proof Approval</h1>
-            <span className="pill">Job Ticket: {job.jobTicket || job.id}</span>
+            <span className="pill">Job Ticket: {job.jobTicket || "Pending"}</span>
             <span className="pill">Status: {labelForStatus(job.proofStatus || job.status)}</span>
             <span className="pill">Date: {safeDate(new Date())}</span>
           </div>
@@ -201,7 +224,7 @@ export default function CustomerProofApproval() {
                   <td>{item.productTitle}</td>
                   <td>{item.variantTitle || ""}<br />{item.sku || ""}</td>
                   <td>{item.quantity}</td>
-                  <td>{item.selectedFinish || item.selectedAddOns || ""}</td>
+                  <td>{item.selectedFinish || describeSelectedOptions(item.selectedAddOns)}</td>
                 </tr>
               ))}
             </tbody>

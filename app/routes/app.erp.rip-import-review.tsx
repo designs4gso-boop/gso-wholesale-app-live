@@ -498,7 +498,6 @@ export default function RipImportReview() {
           <Link to="/app/erp/rip-imports" style={{ color: "#c4b5fd" }}>RIP Imports</Link>{" · "}
           <Link to="/app/erp/print-log-settings" style={{ color: "#c4b5fd" }}>Auto Import Settings</Link>
         </p>
-        <p style={{ margin: "8px 0 0", fontSize: 11, color: "#c4b5fd" }}>Engine reference: review workflow 13A.6C · backfill audit 13A.7C.</p>
       </section>
 
       <PrintFlowStrip current="/app/erp/rip-import-review" />
@@ -549,7 +548,6 @@ export default function RipImportReview() {
           ambiguity flags, plus file and row dedupe. Rows imported <i>before</i> that hardening may still carry silent
           first-match attachments; spot-check older rows in the &quot;Attached&quot; view and correct them here.
         </span>
-        <div style={finePrint}>Hardening reference: 13A.6D.</div>
       </section>
 
       <section style={card}>
@@ -580,14 +578,14 @@ export default function RipImportReview() {
               </label>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6, fontSize: 13, marginTop: 8 }}>
-              <div><b>Source:</b> {row.source}</div>
+              <div><b>Source:</b> {({ versaworks: "VersaWorks (Roland)", rasterlink: "RasterLink (Mimaki)", manual_csv: "Manual CSV" } as Record<string, string>)[String(row.source)] || row.source}</div>
               <div><b>Import file:</b> {row.importFileName || "—"}</div>
               <div><b>Ticket:</b> {row.jobTicket || "not detected"}</div>
               <div><b>Result:</b> {row.status || "—"}</div>
               <div><b>Machine:</b> {row.machineName || "—"}</div>
               <div><b>Media:</b> {row.mediaName || "—"}</div>
               <div><b>Ink:</b> {row.inkMl.toFixed(2)} ml</div>
-              <div><b>Print time:</b> {row.printMinutes.toFixed(1)} min</div>
+              <div><b>Print time:</b> {row.printMinutes ? `${row.printMinutes.toFixed(1)} min` : "not recorded in the import (see the audit section for the derived duration)"}</div>
               <div><b>Started:</b> {row.startedAt ? new Date(row.startedAt).toLocaleString() : "—"}</div>
               <div><b>Completed:</b> {row.completedAt ? new Date(row.completedAt).toLocaleString() : "—"}</div>
               <div><b>Imported:</b> {new Date(row.importedAt).toLocaleString()}</div>
@@ -693,7 +691,6 @@ export default function RipImportReview() {
 
       <section style={{ ...card, borderColor: "#7c2d12", borderWidth: 2 }}>
         <h2 style={{ margin: "0 0 4px" }}>Print time &amp; item attribution audit</h2>
-        <p style={{ ...finePrint, marginTop: 0, marginBottom: 6 }}>Backfill engine reference: 13A.7C (Roland duration + item attribution).</p>
         <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
           Read-only audit of the {data.backfillAudit.counts.attachedRows} most recent attached rows. Duration precedence:
           exact print start/end stamps from the row&apos;s own source data (derived, plausibility-checked) &gt; imported

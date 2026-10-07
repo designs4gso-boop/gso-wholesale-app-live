@@ -270,7 +270,6 @@ export default function PrintIntake() {
           never a guess), copies it to the printer&apos;s hot folder under the exact ERP RIP name, archives the original,
           and logs the outcome below. Files it cannot match stay where staff put them and show up as Needs review.
         </p>
-        <p style={{ margin: "8px 0 0", fontSize: 11, color: "#c7d2fe" }}>Engine reference: intake automation 13A.6G · review queue 15H.3.</p>
       </section>
 
       <PrintFlowStrip current="/app/erp/print-intake" />
@@ -290,8 +289,7 @@ export default function PrintIntake() {
           <b>White and/or gloss &rarr; Roland LG-640 (the Mimaki is CMYK only).</b> CMYK-only jobs explicitly assigned to Roland in the ERP, or
           named with the standalone <code>ROLAND</code> filename tag, also route to Roland. All other CMYK-only jobs
           default to the <b>Mimaki UCJV300</b>. Contradictory data (for example a white/gloss job explicitly assigned to
-          the CMYK-only Mimaki) is blocked and goes to Needs review. A file name with no printer tag is treated as a
-          Mimaki job. Roland-bound plans stay in Needs review with the blocking reason until the Roland hot folder is
+          the CMYK-only Mimaki) is blocked and goes to Needs review. A CMYK-only file with no printer tag is treated as a Mimaki job; white or gloss work always goes to the Roland. Roland-bound plans stay in Needs review with the blocking reason until the Roland hot folder is
           confirmed and enabled in the agent config.
         </div>
         <details style={{ ...finePrint, color: "#6b7280" }}>
@@ -334,7 +332,7 @@ export default function PrintIntake() {
                     <td style={{ padding: 6, maxWidth: 260, wordBreak: "break-all" }}>{row.fileName}</td>
                     <td><code>{row.hash8}</code></td>
                     <td>{row.printer || "—"}{row.printMode ? ` / ${row.printMode}` : ""}</td>
-                    <td><span style={STATUS_STYLE[row.status || ""] || chip}>{row.status}</span></td>
+                    <td><span style={STATUS_STYLE[row.status || ""] || chip}>{({ retry_allowed: "Retry allowed", needs_review: "Needs review", assigned: "Assigned", rejected: "Rejected", new: "New", auto_created: "Auto-created" } as Record<string, string>)[String(row.status || "")] || String(row.status || "").replaceAll("_", " ")}</span></td>
                     <td style={{ maxWidth: 240 }}>{row.reasonLabel}</td>
                     <td>{row.ticket || (row.matchedProductionJobId || row.generatedProductionJobId ? "linked" : "—")}</td>
                     <td style={{ whiteSpace: "nowrap" }}>{new Date(row.updatedAt).toLocaleString()}</td>
@@ -449,7 +447,6 @@ export default function PrintIntake() {
           originals destructively and routed by filename guesses. If a copy still exists on any shop PC, delete it and
           never schedule it; <code>gso-print-intake-agent.ps1</code> is the only intake agent.
         </p>
-        <p style={finePrint}>Retirement reference: 15Z.1.</p>
       </section>
 
       <section style={{ ...card, borderColor: "#fcd34d", background: "#fffbeb" }}>
@@ -460,7 +457,6 @@ export default function PrintIntake() {
           <Link to="/app/erp/print-log-settings">Print Log Settings</Link> — the new token is shown exactly once at
           rotation and never again. Never commit the real config — it is git-ignored.
         </p>
-        <p style={finePrint}>Credential masking reference: 15G.1A.</p>
         {!credential.configured ? (
           <p style={{ fontSize: 13, color: "#991b1b" }}>
             No credential is configured yet — open Print Log Settings and rotate the token to create one.

@@ -515,7 +515,7 @@ function permanentDeleteMachine(id: string) {
                 </InlineStack>
               </InlineStack>
               <Text as="p" tone="subdued">
-                Roland is set up for CMYK + white + gloss/emboss. Mimaki is set up for CMYK + white, with gloss routed to Roland by default. "Install missing defaults" never touches a printer that already exists.
+                Roland is set up for CMYK + white + gloss/emboss. The Mimaki runs CMYK only — white, clear/gloss and spot-gloss work is routed to the Roland. "Install missing defaults" never touches a printer that already exists.
               </Text>
             </BlockStack>
           </Card>

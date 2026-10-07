@@ -1,4 +1,5 @@
 import { Page, Layout, Card, Text, Badge, Button, InlineStack, BlockStack, Divider } from "@shopify/polaris";
+import { isStaffProductionStatus } from "../lib/production-status-vocabulary";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -71,18 +72,6 @@ function dueText(job: any) {
   return `Due in ${diff} day(s)`;
 }
 
-function suggestedMachine(job: any) {
-  const itemText = (job.items || [])
-    .map((item: any) => `${item.productTitle || ""} ${item.recipeName || ""} ${item.machineSummary || ""}`)
-    .join(" ")
-    .toLowerCase();
-  // 15F.0K.4B: display label is LG-640 (the shop's actual Roland); the
-  // lg-540 MATCHING token stays so historical records still classify.
-  if (itemText.includes("roland") || itemText.includes("lg-540") || itemText.includes("lg-640") || itemText.includes("label")) return "Roland LG-640";
-  if (itemText.includes("mimaki") || itemText.includes("ucjv")) return "Mimaki UCJV300-130";
-  if (itemText.includes("box") || itemText.includes("outsource")) return "Outsource / Vendor";
-  return "Unassigned machine";
-}
 
 function jobSearchText(job: any) {
   return [
@@ -150,7 +139,7 @@ export async function loader({ request }: { request: Request }) {
   }));
 
   const machineCounts = filteredJobs.reduce((acc: Record<string, number>, job: any) => {
-    const machine = suggestedMachine(job);
+    const machine = "Not assigned";
     acc[machine] = (acc[machine] || 0) + 1;
     return acc;
   }, {});
@@ -171,6 +160,7 @@ export async function action({ request }: { request: Request }) {
 
     const dueDate = String(formData.get("dueDate") || "");
     const status = String(formData.get("status") || job.status || "new");
+    if (!isStaffProductionStatus(status)) return Response.json({ ok: false, message: "Unknown production status." }, { status: 400 });
     const priority = String(formData.get("priority") || job.priority || "normal");
     const assignedTo = String(formData.get("assignedTo") || "").trim();
     const oldSummary = `${job.status || ""}|${job.priority || ""}|${dateInput(job.dueDate)}|${job.assignedTo || ""}`;
@@ -188,6 +178,9 @@ export async function action({ request }: { request: Request }) {
     });
 
     await createEvent(shop, jobId, "schedule_updated", "Production schedule updated from calendar board.", oldSummary, newSummary);
+    if (status !== job.status) {
+      await createEvent(shop, jobId, "status_change", `Status changed from ${job.status || "new"} to ${status} (calendar board).`, job.status || "", status);
+    }
     return Response.json({ ok: true, message: "Production schedule updated." });
   }
 
@@ -296,7 +289,7 @@ function JobMiniCard({ job }: { job: any }) {
             <div key={item.id} style={{ padding: 10, border: "1px solid #eee", borderRadius: 10 }}>
               <Text as="p" fontWeight="bold">{item.productTitle}</Text>
               <Text as="p" tone="subdued">Item ticket: {item.itemTicket || "Not set"} | Qty: {item.quantity} | Variant: {item.variantTitle || "None"}</Text>
-              <Text as="p" tone="subdued">Machine: {item.machineSummary || suggestedMachine(job)} | SKU: {item.sku || "None"}</Text>
+              <Text as="p" tone="subdued">Machine: {item.machineSummary || "Not assigned"} | SKU: {item.sku || "None"}</Text>
             </div>
           ))}
         </BlockStack>
@@ -377,7 +370,8 @@ export default function ProductionCalendar() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Status + machine snapshot</Text>
+              <Text as="h2" variant="headingMd">Status and machine summary</Text>
+              {statusCounts.every((status: any) => !status.count) ? <Text as="p" tone="subdued">No jobs scheduled yet.</Text> : null}
               <InlineStack gap="200" wrap>
                 {statusCounts.filter((status: any) => status.count > 0).map((status: any) => <Badge key={status.value}>{status.label}: {status.count}</Badge>)}
               </InlineStack>

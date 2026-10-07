@@ -8,10 +8,16 @@ import {
   machineRatePerHour,
   type BrandInkRates,
 } from "../lib/rip-actual-costs.server";
+import { resolvePrintDuration } from "../lib/rip-duration.server";
+import { staffStatusLabel } from "../lib/production-status-vocabulary";
 
 function money(value: any) {
-  return (Number(value) || 0).toFixed(2);
+  // Blank / missing = not entered (never shown as a confirmed 0.00).
+  if (value == null || value === "" || Number.isNaN(Number(value))) return "—";
+  return Number(value).toFixed(2);
 }
+
+const CHECKLIST_SECTION_LABEL: Record<string, string> = { prepress: "Prepress", production: "Production", qc: "QC", packing: "Packing" };
 
 // 15G.2: the printable work order prices print-log actuals through the SAME
 // canonical helpers as the Production Board and Actual Cost Dashboard —
@@ -21,10 +27,13 @@ function money(value: any) {
 function summarizeActualPrintLogs(job: any, entries: any[], brandRates: BrandInkRates[], ratePerHour: number) {
   const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const estimatedCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
-  const actualSqft = entries.reduce((sum, entry) => sum + Number(entry.sqft || 0), 0);
-  const actualInkMl = entries.reduce((sum, entry) => sum + Number(entry.inkMl || 0), 0);
-  const actualPrintMinutes = entries.reduce((sum, entry) => sum + Number(entry.printMinutes || 0), 0);
-  const actualInkCost = entries.reduce((sum, entry) => {
+  // Parity with the Production Board: cut rows are excluded from ink/time and
+  // print time comes from the shared duration resolver (imported rows store 0).
+  const printEntries = entries.filter((entry: any) => !String(entry.status || "").toLowerCase().startsWith("cut:"));
+  const actualSqft = printEntries.reduce((sum, entry) => sum + Number(entry.sqft || 0), 0);
+  const actualInkMl = printEntries.reduce((sum, entry) => sum + Number(entry.inkMl || 0), 0);
+  const actualPrintMinutes = printEntries.reduce((sum, entry) => sum + resolvePrintDuration(entry).minutes, 0);
+  const actualInkCost = printEntries.reduce((sum, entry) => {
     const costs = computeEntryCosts(
       {
         machineName: entry.machineName,
@@ -143,7 +152,7 @@ function safeDate(value: any) {
 }
 
 function labelForStatus(status: string) {
-  return String(status || "new").replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  return staffStatusLabel(String(status || "new")).replaceAll("_", " ");
 }
 
 export async function loader({ request, params }: { request: Request; params: any }) {
@@ -218,7 +227,6 @@ export default function PrintProductionJob() {
             <div className="logo">GSO PACKAGING</div>
             <h1>Production Work Order</h1>
             <div className="muted">Job Ticket: {job.jobTicket || job.id}</div>
-            <div className="muted">Job ID: {job.id}</div>
             <div className="muted">Quote ID: {job.quoteId || "N/A"}</div>
           </div>
           <div>
@@ -349,8 +357,9 @@ export default function PrintProductionJob() {
         <div className="grid">
           <div className="card">
             <h2>Production Checklist</h2>
+            {!(job.checklistItems || []).length ? <div className="muted">No checklist items recorded for this job.</div> : null}
             {(job.checklistItems || []).map((check: any) => (
-              <div className="checkline" key={check.id}>[ {check.completed ? "X" : " "} ] {check.section}: {check.label}</div>
+              <div className="checkline" key={check.id}>[ {check.completed ? "X" : " "} ] {CHECKLIST_SECTION_LABEL[check.section] || check.section} — {check.label}</div>
             ))}
           </div>
           <div className="card">

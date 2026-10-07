@@ -1,4 +1,5 @@
 import { Form, useActionData, useLoaderData } from "react-router";
+import { staffStatusLabel } from "../lib/production-status-vocabulary";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -10,8 +11,12 @@ function safeDate(value: any) {
 }
 
 function labelForStatus(status: string) {
-  return String(status || "new").replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  return staffStatusLabel(String(status || "new")).replaceAll("_", " ");
 }
+
+// Proof approval only moves a job that is still at the proof stage. A job that is
+// already printing, finished, shipped or cancelled keeps its status (reopen / reprint instead).
+const PROOF_STAGE_STATUSES = ["new", "prepress", "proof_needed", "proof_sent", "proof_approved", "on_hold"];
 
 function bestImage(job: any) {
   return job.productImageUrl || job.items?.find((item: any) => item.productImageUrl)?.productImageUrl || "";
@@ -151,8 +156,13 @@ export async function action({ request, params }: { request: Request; params: an
   }
 
   if (intent === "approveProof") {
+    const current = await db.productionJob.findFirst({ where: { shop, id }, select: { status: true } });
+    if (!current) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
+    if (!PROOF_STAGE_STATUSES.includes(String(current.status || "new"))) {
+      return Response.json({ ok: false, message: `Proof approval is not allowed while the job is "${labelForStatus(current.status)}" — use Reopen or Reprint on the Production Board instead.` }, { status: 400 });
+    }
     await db.productionJob.update({ where: { id }, data: { status: "proof_approved" } });
-    await createEvent(shop, id, "proof_approved", "Proof approved internally/customer-approved and job moved to Proof Approved.");
+    await createEvent(shop, id, "proof_approved", "Proof approved by staff (internal approval) — job moved to Proof Approved.");
     return Response.json({ ok: true, message: "Proof approved." });
   }
 
@@ -164,7 +174,7 @@ export default function StandardGsoProofSheet() {
   const actionData = useActionData<any>();
   const productImage = bestImage(job);
   const artwork = bestArtwork(job);
-  const revisionCount = (job.files || []).filter((file: any) => file.fileType === "proof").length || 1;
+  const revisionCount = (job.files || []).filter((file: any) => file.fileType === "proof").length;
 
   return (
     <div style={{ fontFamily: "Arial, sans-serif", color: "#111", padding: 24 }}>
@@ -193,7 +203,7 @@ export default function StandardGsoProofSheet() {
           <div className="grid">
             <div className="card">
               <strong>Edit proof assets</strong>
-              <p>Use Shopify/customer artwork links, then save a revision. The printable proof below updates immediately after refresh.</p>
+              <p>Use Shopify/customer artwork links, then save a revision. The printable proof below updates after you save a revision.</p>
               <label>Product image URL</label>
               <input name="productImageUrl" defaultValue={productImage} />
               <br /><br />
@@ -225,12 +235,11 @@ export default function StandardGsoProofSheet() {
             <div className="logo">GSO PACKAGING</div>
             <h1>Production Proof Sheet</h1>
             <span className="pill">Ticket: {job.jobTicket || job.id}</span>
-            <span className="pill">Job: {job.id}</span>
             <span className="pill">Quote: {job.quoteId || "N/A"}</span>
             <span className="pill">Status: {labelForStatus(job.status)}</span>
           </div>
           <div style={{ textAlign: "right" }}>
-            <h2>REV {revisionCount}</h2>
+            <h2>{revisionCount ? `REV ${revisionCount}` : "NO SAVED PROOF REVISION"}</h2>
             <div>{safeDate(new Date())}</div>
             <div>{job.company || job.customerName || "Customer"}</div>
             <div>{job.jobTicket || "No job ticket"}</div>
