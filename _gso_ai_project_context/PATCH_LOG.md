@@ -650,3 +650,10 @@ Pricing: app/lib/jar-commercial-pricing.ts (owner 16D ladder resolution, quantit
 UI: app.tsx nav (24 grouped links), app._index.tsx dashboard (needs-attention counts, advanced tools), walkthrough wording, pricing-settings dead-control marking, print-intake/rip-imports/rip-import-review/print-logs flow strip + copy, cost-verification pricing authorities, erp-ui-tokens.ts, product-setup spec card lines, quotes/production/agent-review-queue/ops-hub copy pass, materials/machines/vendors/vendor-cost-book/reports copy pass.
 Not changed: any true cost, weeding/application/geometry number, schema, migrations, ops safety defaults, Slack/worker behaviour, printer routing.
 Owner: docs/GSO_ERP_FINAL_OWNER_CHECKLIST.md.
+
+## Patch SPEKTRA-SHAPED-2026-10-06 - Spektra live cost book scaffold + owner shaped-pouch rule (LOCAL, research files absent)
+
+Added: app/lib/spektra-live-cost-book.ts, app/lib/generated/spektra-live-price-matrix-2026-10-06.ts (empty, fail-closed), tools/generate-spektra-cost-book.mjs, app/lib/dtp-catalog.ts, app/lib/dtp-shaped-bag-policy.ts, tests/spektra-cost-book-and-shaped-bags-2026-10-06.test.ts, four docs.
+Changed: cost-calculator route (shape/die controls, policy in both paths, tooling separate, freight UNVERIFIED label, legacy-size warning), vendor-cost-book (Spektra card), pricing-intelligence (DTP economics section), product-setup (DTP catalog card).
+Not changed: DTP sell ladders, $85 runtime freight, MOQ 1,000, any true cost, schema.
+Blocked on owner: commit the research CSV/notes, freight basis, new-size ladders, Die ID schema.
