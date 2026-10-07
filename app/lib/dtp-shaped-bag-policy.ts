@@ -22,6 +22,8 @@ export const DTP_SHAPED_BAG_POLICY_VERSION = "dtp-shaped-bag-policy/1.0.0-2026-1
 export const DTP_SHAPED_BAG_POLICY_SOURCE = "OWNER DECISION 2026-10-06 — GSO commercial rule (not a public Spektra website price)";
 export const DTP_CUSTOM_SHAPE_SURCHARGE_PCT = 10;
 export const DTP_NEW_DIE_TOOLING_FEE = 700;
+/** Shaped pouch minimum order (owner rule 2026-10-06). Standard DTP MOQ (1,000) is unchanged. */
+export const DTP_SHAPED_MOQ = 2500;
 
 export type DtpShape = "standard" | "custom";
 export type DtpDieChoice =
@@ -69,6 +71,7 @@ export function priceShapedPouch(input: {
   const shape: DtpShape = input.shape === "custom" ? "custom" : "standard";
   const die: DtpDieChoice = shape === "custom" ? (input.die ?? { mode: "new" }) : { mode: "none" };
   if (shape === "custom" && die.mode === "none") errors.push("A custom shape needs a die choice: NEW SHAPE — NEW $700 DIE, or EXISTING SHAPE / DIE ON FILE.");
+  if (shape === "custom" && quantity < DTP_SHAPED_MOQ) errors.push(`Shaped pouch minimum order is ${DTP_SHAPED_MOQ.toLocaleString()} units (owner rule 2026-10-06); requested ${quantity.toLocaleString()}.`);
   let dieId: string | null = null;
   let dieReference: string | null = null;
   if (die.mode === "existing") {
