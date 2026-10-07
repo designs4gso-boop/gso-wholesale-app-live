@@ -51,7 +51,9 @@ import { officialMoqForFamily } from "../lib/product-family-sales-rules";
 import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, ownerPriceForQuantity, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
 // 2026-10-06: owner shaped-pouch policy (+10 % surcharge, $700 per new die) and the DTP catalog / freight status.
 import { applyShapedPolicyToDtpRow, type DtpDieChoice } from "../lib/dtp-shaped-bag-policy";
-import { SPEKTRA_FREIGHT_ASSUMPTION, dtpSizeForVendorSku } from "../lib/dtp-catalog";
+import { DTP_COMPARABLE_CONFIG, SPEKTRA_FREIGHT_ASSUMPTION, dtpSizeForVendorSku } from "../lib/dtp-catalog";
+// 2026-10-06: live Spektra cost book (research 2026-10-06) — shown next to the legacy seed cost; NOT yet the quote cost authority.
+import { SPEKTRA_COST_BOOK_META, SPEKTRA_COST_STATUS_LABEL, SPEKTRA_FINISHES, SPEKTRA_MATERIALS, SPEKTRA_SPOT_OPTIONS, SPEKTRA_TOP_FEATURES, SPEKTRA_ZIPPER_OPTIONS, lookupSpektraVendorCost } from "../lib/spektra-live-cost-book";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -1105,6 +1107,23 @@ export async function loader({ request }: { request: Request }) {
           const dieP: DtpDieChoice = eparams.get("pdtpdie") === "existing"
             ? { mode: "existing", dieId: String(eparams.get("pdtpdieid") || ""), reference: String(eparams.get("pdtpdieref") || "") }
             : { mode: "new" };
+          // 2026-10-06: live Spektra vendor economics for the SAME configuration (display + snapshot only).
+          const liveP = (() => {
+            const catalog = dtpSizeForVendorSku((pickedBlank as any)?.sku || (pickedBlank as any)?.vendorSku || null);
+            if (!catalog || catalog.status !== "CURRENT_STANDARD") return { status: "REQUEST_CURRENT_VENDOR_QUOTE", basis: catalog ? "Legacy size with no current catalog match." : "No current catalog size for this product.", config: null, wholesaleUnit: null, wholesaleTotal: null, extraSkuCost: 0, landedLive: null, statusLabel: SPEKTRA_COST_STATUS_LABEL.REQUEST_CURRENT_VENDOR_QUOTE, version: SPEKTRA_COST_BOOK_META.version, sourceDate: SPEKTRA_COST_BOOK_META.sourceDate };
+            const look = lookupSpektraVendorCost({
+              size: catalog.size as any,
+              material: (eparams.get("pdtpmaterial") || DTP_COMPARABLE_CONFIG.material) as any,
+              finish: (eparams.get("pdtpfinish") || DTP_COMPARABLE_CONFIG.finish) as any,
+              spot: (eparams.get("pdtpspot") || DTP_COMPARABLE_CONFIG.spot) as any,
+              zipper: (eparams.get("pdtpzipper") || DTP_COMPARABLE_CONFIG.zipper) as any,
+              topFeature: (eparams.get("pdtptop") || DTP_COMPARABLE_CONFIG.topFeature) as any,
+              clearGusset: eparams.get("pdtpgusset") === "1",
+              quantity: qty, skuCount: Math.max(1, Number(eparams.get("pdesigns") || 1)),
+            });
+            const artLive = OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(eparams.get("pdesigns") || 1));
+            return { status: look.status, basis: look.basis, config: look.config, wholesaleUnit: look.wholesaleUnit, wholesaleTotal: look.wholesaleTotal, extraSkuCost: look.wholesaleExtraSkuCost, landedLive: look.wholesaleTotal != null ? look.wholesaleTotal + artLive + SPEKTRA_FREIGHT_PER_PO : null, statusLabel: SPEKTRA_COST_STATUS_LABEL[look.status], version: look.version, sourceDate: look.sourceDate };
+          })();
           const shapedP = applyShapedPolicyToDtpRow({
             quantity: qty, shape: eparams.get("pdtpshape") === "custom" ? "custom" : "standard", die: dieP,
             ladderUnitPrice: dtpRow.unitPrice, customerBaseSubtotal: dtpRow.customerBaseSubtotal, extraDesignFees: dtpRow.extraDesignFees,
@@ -1126,6 +1145,7 @@ export async function loader({ request }: { request: Request }) {
             dtp: {
               shaped: shapedP.shaped,
               freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
+              liveVendor: liveP,
               vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
               ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
               defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
@@ -1951,6 +1971,23 @@ export async function action({ request }: { request: Request }) {
         const dieSave: DtpDieChoice = fRead("pdtpdie") === "existing"
           ? { mode: "existing", dieId: fRead("pdtpdieid"), reference: fRead("pdtpdieref") }
           : { mode: "new" };
+        // 2026-10-06 loader parity: live Spektra vendor economics (display + snapshot only).
+        const liveSave = (() => {
+          const catalog = dtpSizeForVendorSku(savedFetched?.meta?.vendorSku || null);
+          if (!catalog || catalog.status !== "CURRENT_STANDARD") return { status: "REQUEST_CURRENT_VENDOR_QUOTE", basis: catalog ? "Legacy size with no current catalog match." : "No current catalog size for this product.", config: null, wholesaleUnit: null, wholesaleTotal: null, extraSkuCost: 0, landedLive: null, statusLabel: SPEKTRA_COST_STATUS_LABEL.REQUEST_CURRENT_VENDOR_QUOTE, version: SPEKTRA_COST_BOOK_META.version, sourceDate: SPEKTRA_COST_BOOK_META.sourceDate };
+          const look = lookupSpektraVendorCost({
+            size: catalog.size as any,
+            material: (fRead("pdtpmaterial") || DTP_COMPARABLE_CONFIG.material) as any,
+            finish: (fRead("pdtpfinish") || DTP_COMPARABLE_CONFIG.finish) as any,
+            spot: (fRead("pdtpspot") || DTP_COMPARABLE_CONFIG.spot) as any,
+            zipper: (fRead("pdtpzipper") || DTP_COMPARABLE_CONFIG.zipper) as any,
+            topFeature: (fRead("pdtptop") || DTP_COMPARABLE_CONFIG.topFeature) as any,
+            clearGusset: fRead("pdtpgusset") === "1",
+            quantity: qty, skuCount: Math.max(1, Number(fRead("pdesigns") || 1)),
+          });
+          const artLive = OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(fRead("pdesigns") || 1));
+          return { status: look.status, basis: look.basis, config: look.config, wholesaleUnit: look.wholesaleUnit, wholesaleTotal: look.wholesaleTotal, extraSkuCost: look.wholesaleExtraSkuCost, landedLive: look.wholesaleTotal != null ? look.wholesaleTotal + artLive + SPEKTRA_FREIGHT_PER_PO : null, statusLabel: SPEKTRA_COST_STATUS_LABEL[look.status], version: look.version, sourceDate: look.sourceDate };
+        })();
         const shapedSave = applyShapedPolicyToDtpRow({
           quantity: qty, shape: fRead("pdtpshape") === "custom" ? "custom" : "standard", die: dieSave,
           ladderUnitPrice: dtpRow.unitPrice, customerBaseSubtotal: dtpRow.customerBaseSubtotal, extraDesignFees: dtpRow.extraDesignFees,
@@ -1972,6 +2009,7 @@ export async function action({ request }: { request: Request }) {
           dtp: {
             shaped: shapedSave.shaped,
             freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
+            liveVendor: liveSave,
             vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
             ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
             defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
@@ -3508,6 +3546,26 @@ function ProductDrivenForm() {
             <input name="pdtpcustomprice" type="number" step="0.0001" min={0} style={inputStyle} />
           </label>
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtprepeat" value="1" /> Exact repeat order — waive customer design fee (no art changes)</label>
+          {/* 2026-10-06 LIVE SPEKTRA CONFIGURATION (research 2026-10-06): drives the live vendor economics shown next to the legacy cost. Defaults = the legacy product spec (White PET, Soft Touch, CR zipper, No Tear Notch). */}
+          <label style={{ fontSize: 12 }}>Material (Spektra)
+            <select name="pdtpmaterial" defaultValue={canonParams.get("pdtpmaterial") || DTP_COMPARABLE_CONFIG.material} style={inputStyle}>{SPEKTRA_MATERIALS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}>Finish / lamination
+            <select name="pdtpfinish" defaultValue={canonParams.get("pdtpfinish") || DTP_COMPARABLE_CONFIG.finish} style={inputStyle}>{SPEKTRA_FINISHES.map((m) => <option key={m} value={m}>{m}{m === "Glossy" ? " (lowest cost; no spot gloss)" : ""}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}>Spot gloss
+            <select name="pdtpspot" defaultValue={canonParams.get("pdtpspot") || DTP_COMPARABLE_CONFIG.spot} style={inputStyle}>{SPEKTRA_SPOT_OPTIONS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}>Zipper
+            <select name="pdtpzipper" defaultValue={canonParams.get("pdtpzipper") || DTP_COMPARABLE_CONFIG.zipper} style={inputStyle}>{SPEKTRA_ZIPPER_OPTIONS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}>Top feature
+            <select name="pdtptop" defaultValue={canonParams.get("pdtptop") || DTP_COMPARABLE_CONFIG.topFeature} style={inputStyle}>{SPEKTRA_TOP_FEATURES.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtpgusset" value="1" defaultChecked={canonParams.get("pdtpgusset") === "1"} /> Clear gusset (separate toggle)</label>
+          <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+            Defaults shown are the legacy product spec. These selections drive the LIVE SPEKTRA ECONOMICS line (research {SPEKTRA_COST_BOOK_META.sourceDate}, 25% account discount on the exact public total). The quote price and status still come from the owner DTP ladder and the legacy vendor cost until the owner adopts the live book.
+          </p>
           {/* 2026-10-06 OWNER SHAPED-POUCH POLICY: standard vs custom shape; new die ($700, once per unique shape) vs existing die (Die ID required). */}
           <label style={{ fontSize: 12 }}>Shape
             <select name="pdtpshape" defaultValue={canonParams.get("pdtpshape") || "standard"} style={inputStyle}>
@@ -4445,7 +4503,12 @@ Configuration: ${pm.printConfig || "—"}
 Unit price: ${money2(selected.unitPrice)}${selected.dtp.customUnitPrice != null ? " (owner custom)" : " (owner ladder)"}
 Base pouch subtotal: ${money2(selected.dtp.baseSubtotal)}
 Additional design fees: ${selected.dtp.designFeeWaived ? "$0.00 (repeat order — waived)" : `${money2(selected.dtp.extraDesignFees)}${selected.dtp.extraDesignCount ? ` (${selected.dtp.extraDesignCount} extra @ ${money2(selected.dtp.extraDesignFeeEach)})` : " (first design included)"}`}
-Freight: ${selected.dtp.freightTreatment === "pass_through" ? `${money2(selected.dtp.customerFreight)} (passed through)` : "included in unit pricing"} — ${SPEKTRA_FREIGHT_ASSUMPTION.label}${selected.dtp.shaped && selected.dtp.shaped.shape === "custom" ? `
+Freight: ${selected.dtp.freightTreatment === "pass_through" ? `${money2(selected.dtp.customerFreight)} (passed through)` : "included in unit pricing"} — ${SPEKTRA_FREIGHT_ASSUMPTION.label}${selected.dtp.liveVendor ? `
+
+LIVE SPEKTRA ECONOMICS (research ${selected.dtp.liveVendor.sourceDate}; not yet the quote cost authority)
+Vendor product: ${selected.dtp.liveVendor.wholesaleTotal != null ? `${money2(selected.dtp.liveVendor.wholesaleTotal)} (${Number(selected.dtp.liveVendor.wholesaleUnit).toFixed(4)}/unit, incl. extra SKUs ${money2(selected.dtp.liveVendor.extraSkuCost)})` : "—"} — ${selected.dtp.liveVendor.statusLabel}
+Art: ${money2(OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(new URLSearchParams(search).get("pdesigns") || 1)))} · Freight: ${money2(SPEKTRA_FREIGHT_ASSUMPTION.amount)} / UNVERIFIED
+Landed total (live): ${selected.dtp.liveVendor.landedLive != null ? money2(selected.dtp.liveVendor.landedLive) : "—"} vs legacy landed ${money2(selected.jobCost ?? 0)}` : ""}${selected.dtp.shaped && selected.dtp.shaped.shape === "custom" ? `
 
 CUSTOM SHAPED POUCHES
 Includes: standard DTP configuration + custom shape surcharge +${selected.dtp.shaped.surchargePct}% (${money2(selected.dtp.shaped.shapeSurcharge)})

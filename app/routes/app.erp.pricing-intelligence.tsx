@@ -5,6 +5,7 @@ import { authenticate } from "../shopify.server";
 import { SPEKTRA_COST_BOOK_META, SPEKTRA_COST_STATUS_LABEL, SPEKTRA_PUBLISHED_TIERS, lookupSpektraVendorCost } from "../lib/spektra-live-cost-book";
 import { DTP_CATALOG, SPEKTRA_FREIGHT_ASSUMPTION } from "../lib/dtp-catalog";
 import { DTP_CUSTOM_SHAPE_SURCHARGE_PCT, DTP_NEW_DIE_TOOLING_FEE, DTP_SHAPED_BAG_POLICY_SOURCE } from "../lib/dtp-shaped-bag-policy";
+import { buildDtpLiveEconomics } from "../lib/dtp-live-economics.server";
 import db from "../db.server";
 import {
   PRE_LAUNCH_REASON,
@@ -59,6 +60,9 @@ export async function loader({ request }: { request: Request }) {
     review: local.review.slice(0, 50),
     baskets: baskets.slice(0, 100),
     liveFrom: liveFrom ? { iso: liveFrom.iso, note: liveFrom.note, changedAt: liveFrom.changedAt } : null,
+    // 2026-10-06: DTP live economics (current Spektra cost vs legacy seed vs current owner ladder; proposals not applied).
+    dtpEconomics: buildDtpLiveEconomics("Soft Touch"),
+    dtpEconomicsGlossy: buildDtpLiveEconomics("Glossy"),
     preLaunch: {
       total: localPreLaunch + cachedShopifyPreLaunch + staleShopifyPreLaunch,
       local: localPreLaunch,
@@ -153,7 +157,7 @@ const card: React.CSSProperties = { marginTop: 16, border: "1px solid #e5e7eb", 
 const stat: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px", minWidth: 150, background: "#f9fafb" };
 
 export default function PricingIntelligence() {
-  const { totals, excluded, review, baskets, shopify, liveFrom, preLaunch } = useLoaderData<typeof loader>();
+  const { totals, excluded, review, baskets, shopify, liveFrom, preLaunch, dtpEconomics, dtpEconomicsGlossy } = useLoaderData<typeof loader>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -222,12 +226,42 @@ export default function PricingIntelligence() {
       <section style={{ ...card, borderColor: "#fde68a" }}>
         <h2 style={{ margin: "0 0 6px" }}>DTP (Spektra) economics — vendor cost book {SPEKTRA_COST_BOOK_META.sourceDate}</h2>
         <p style={{ margin: "0 0 8px", fontSize: 13, color: "#374151" }}>
-          Cost source: {SPEKTRA_COST_BOOK_META.source} (observed {SPEKTRA_COST_BOOK_META.sourceDate}); GSO account discount {SPEKTRA_COST_BOOK_META.discount.pct}% ({SPEKTRA_COST_BOOK_META.discount.status}). Freight: <b>{SPEKTRA_FREIGHT_ASSUMPTION.status}</b> ($85 historical assumption). Public market reference: <b>no market-pricing master document is present in the repository</b> — commercial position cannot be stated.
+          Cost source: {SPEKTRA_COST_BOOK_META.source} (observed {SPEKTRA_COST_BOOK_META.sourceDate}); GSO account discount {SPEKTRA_COST_BOOK_META.discount.pct}% ({SPEKTRA_COST_BOOK_META.discount.status}) on the exact public total. Freight: <b>{SPEKTRA_FREIGHT_ASSUMPTION.status}</b> ($85 historical assumption, included in landed cost for comparability only). Public market reference: <b>no DTP market-pricing document is present in the repository</b> — commercial position cannot be stated.
         </p>
         {!SPEKTRA_COST_BOOK_META.researchFilePresent ? (
           <p style={{ margin: "0 0 8px", fontSize: 13, color: "#991b1b", fontWeight: 700 }}>LIVE MATRIX NOT LOADED — {SPEKTRA_COST_BOOK_META.sourceFile} is not in the repository. Current and proposed sell prices cannot be recomputed; every cell below reads REQUEST CURRENT VENDOR QUOTE until the research is committed and generated.</p>
-        ) : null}
-        <div style={{ overflowX: "auto" }}>
+        ) : (
+          <p style={{ margin: "0 0 8px", fontSize: 13, color: "#166534", fontWeight: 700 }}>LIVE MATRIX LOADED — {SPEKTRA_COST_BOOK_META.rowCount.toLocaleString()} directly observed rows ({SPEKTRA_COST_BOOK_META.version}).</p>
+        )}
+        {[{ label: "Comparable configuration (legacy spec): White PET / Soft Touch / no spot / CR zipper / No Tear Notch / 1 SKU", data: dtpEconomics }, { label: "Lowest-cost configuration: White PET / Glossy / no spot / CR zipper / No Tear Notch / 1 SKU", data: dtpEconomicsGlossy }].map(({ label, data }) => (
+          <div key={label} style={{ overflowX: "auto", marginBottom: 10 }}>
+            <b style={{ fontSize: 12 }}>{label}</b>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 4 }}>Size</th><th>Qty</th><th>Live vendor unit</th><th>Old seed unit</th><th>Change</th><th>Landed unit (art + $85 unverified)</th><th>Current sell</th><th>Current GM / GP</th><th>Floor</th><th align="left">A hold price</th><th align="left">B pass-through</th><th align="left">C split</th></tr></thead>
+              <tbody>
+                {data.cells.map((c) => {
+                  const p = (k: string) => c.proposals.find((x) => x.key === k);
+                  const fmt = (x?: { sellUnit: number; gmPct: number; gp: number; meetsFloor: boolean; meetsMinProfit: boolean }) => (x ? `${x.sellUnit.toFixed(2)} · ${x.gmPct.toFixed(1)}% · ${x.gp.toFixed(0)}${x.meetsFloor ? "" : " BELOW FLOOR"}${x.meetsMinProfit ? "" : " <$500"}` : "—");
+                  return (
+                    <tr key={`${c.size}-${c.quantity}`} style={{ borderTop: "1px solid #e5e7eb" }}>
+                      <td style={{ padding: 4 }}><b>{c.size}</b></td><td align="center">{c.quantity.toLocaleString()}</td>
+                      <td align="center" style={{ color: c.vendorStatus === "OBSERVED_VENDOR_PRICE" ? "#166534" : "#92400e" }}>{c.vendorUnit != null ? `${c.vendorUnit.toFixed(4)}` : SPEKTRA_COST_STATUS_LABEL[c.vendorStatus as keyof typeof SPEKTRA_COST_STATUS_LABEL]}</td>
+                      <td align="center">{c.oldVendorUnit != null ? `${c.oldVendorUnit.toFixed(4)}` : "—"}</td>
+                      <td align="center">{c.oldVendorChangePct != null ? `${c.oldVendorChangePct.toFixed(1)}%` : "—"}</td>
+                      <td align="center">{c.landedUnit != null ? `${c.landedUnit.toFixed(4)}` : "—"}</td>
+                      <td align="center">{c.currentSellUnit != null ? `${c.currentSellUnit.toFixed(2)}` : "no ladder"}</td>
+                      <td align="center">{c.currentGmPct != null ? `${c.currentGmPct.toFixed(1)}% / ${(c.currentGp ?? 0).toFixed(0)}` : "—"}</td>
+                      <td align="center">{c.hardFloorPct}%</td>
+                      <td>{fmt(p("hold_price"))}</td><td>{fmt(p("hold_margin"))}</td><td>{fmt(p("split"))}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ))}
+        <p style={{ margin: "0 0 8px", fontSize: 12, color: "#374151" }}>Proposals: A holds today's owner ladder (all vendor savings become margin); B passes the vendor change through (holds the margin the ladder earned on the OLD cost); C splits the improvement. New sizes show the 30/35/38% floor and 40% target anchors only. Nothing here changes a live price — owner decision. Commercial position: NO DTP MARKET REFERENCE IN REPOSITORY.</p>
+        <div style={{ overflowX: "auto", display: "none" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 5 }}>Size</th><th align="left">Catalog status</th><th align="left">Owner sell ladder</th>{SPEKTRA_PUBLISHED_TIERS.map((q) => <th key={q}>{q.toLocaleString()}</th>)}</tr></thead>
             <tbody>
