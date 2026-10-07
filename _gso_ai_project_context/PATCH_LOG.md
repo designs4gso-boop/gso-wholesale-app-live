@@ -657,3 +657,6 @@ Added: app/lib/spektra-live-cost-book.ts, app/lib/generated/spektra-live-price-m
 Changed: cost-calculator route (shape/die controls, policy in both paths, tooling separate, freight UNVERIFIED label, legacy-size warning), vendor-cost-book (Spektra card), pricing-intelligence (DTP economics section), product-setup (DTP catalog card).
 Not changed: DTP sell ladders, $85 runtime freight, MOQ 1,000, any true cost, schema.
 Blocked on owner: commit the research CSV/notes, freight basis, new-size ladders, Die ID schema.
+
+## Patch SPEKTRA-LOADED-2026-10-06 - live matrix generated + DTP economics (LOCAL)
+Added tools/lib/spektra-csv-import.mjs (fail-closed import contract, features parsing), app/lib/dtp-live-economics.server.ts, tests/spektra-import-contract-2026-10-06.test.ts, tests/dtp-live-economics-2026-10-06.test.ts, docs/generated/dtp-live-economics-*.md. Regenerated app/lib/generated/spektra-live-price-matrix-2026-10-06.ts (1,084 rows). Cost book discount keeps full precision. Calculator: DTP configuration selects + live economics line (both paths). Pricing Intelligence: economics tables. No live price, freight, MOQ or schema change.

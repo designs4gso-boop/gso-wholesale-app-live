@@ -2,20 +2,24 @@
 
 Status legend used throughout: **VENDOR OBSERVED DATA** (read from the live public calculator), **OWNER-APPROVED COMMERCIAL RULE**, **MARKET RESEARCH**, **UNVERIFIED ASSUMPTION**.
 
-## 1. What was found, and what was not
+## 1. Research package status (UPDATED 2026-10-06, later the same day)
 
-| Input named in the task | Status in the repository on 2026-10-06 |
+The three research files are now committed under `docs/vendor-research/`. The import contract was fixed (the research header uses `features`, e.g. "Sombrero + Clear Gusset", parsed into topFeature + clearGusset; the CSV was not modified). Generation result:
+
+| Metric | Value |
 |---|---|
-| `docs/vendor-research/SPEKTRA_FLEX_LIVE_PRICE_MATRIX_2026-10-06.csv` | **NOT PRESENT** (not in the working tree, any branch, the stash, or the user's Downloads / Desktop / Documents) |
-| `docs/vendor-research/SPEKTRA_FLEX_PRICING_RULES_2026-10-06.md` | NOT PRESENT |
-| `docs/vendor-research/SPEKTRA_OLD_VS_CURRENT_2026-10-06.md` | NOT PRESENT |
-| "master market-pricing research already collected in the branch" | NOT PRESENT (no market-pricing master document exists; the only competitor study, `GSO_ERP_COMPETITOR_MARGIN_STUDY.md` 2026-07-25, contains no DTP prices) |
+| CSV rows read | 1,084 |
+| unique rows accepted | 1,084 |
+| rows rejected | 0 |
+| exact duplicate rows | 0 |
+| conflicting duplicates | 0 |
+| generated artifact rows | 1,084 (all DIRECTLY OBSERVED; derived/estimated prices are never stored) |
 
-Consequence: **no observed Spektra price was loaded.** Nothing was invented. The cost book, generator, lookup, catalog, freight labelling and shaped-bag policy are complete and tested; the observed-row artifact is empty and every vendor-cost lookup fails closed to REQUEST CURRENT VENDOR QUOTE until the CSV is committed and generated.
+Verified against the CSV (`tests/spektra-import-contract-2026-10-06.test.ts`): every one of the 1,084 rows round-trips through the lookup as OBSERVED with wholesale = exact website total x 0.75 (no intermediate cent rounding); 4x5x2 White PET Glossy / no spot / Child Resistant / No Tear Notch / 1 SKU at 1,000 / 2,500 / 5,000 / 10,000 / 25,000 = public $982.15 / $1,197.71 / $1,554.24 / $2,492.39 / $5,019.27 -> wholesale $736.6125 / $898.2825 / $1,165.68 / $1,869.2925 / $3,764.4525; plus one Clear Gusset, Punch Hole, Sombrero, Standard spot, Raised UV, non-White, 8x5x2, 10-SKU, 7,500 and 10 mm row each. Derived SKU counts are labelled ESTIMATED FROM VALIDATED VENDOR RULE; unsupported configurations and untested custom quantities still return REQUEST CURRENT VENDOR QUOTE.
 
 ## 2. Architecture (VENDOR OBSERVED DATA container + rules)
 
-- `app/lib/generated/spektra-live-price-matrix-2026-10-06.ts` — the generated observed-row artifact (checked in; currently `SPEKTRA_MATRIX_SOURCE_PRESENT = false`, 0 rows). Produced by `tools/generate-spektra-cost-book.mjs` from the CSV; the generator **refuses to run** without the file and refuses incomplete rows. The app never reads a CSV at runtime.
+- `app/lib/generated/spektra-live-price-matrix-2026-10-06.ts` — the generated observed-row artifact (checked in; 1,084 rows, `SPEKTRA_MATRIX_SOURCE_PRESENT = true`). Produced by `tools/generate-spektra-cost-book.mjs` (import contract `tools/lib/spektra-csv-import.mjs`); the generator refuses to run without the file, with a missing required column, with any rejected row (unknown material / finish / spot / zipper / feature text, Glossy + spot, bad numbers, wrong discount, wholesale figures that disagree with website_total x 0.75) or with conflicting duplicates. The app never reads a CSV at runtime.
 - `app/lib/spektra-live-cost-book.ts` (`spektra-live-cost-book/2026-10-06`): catalog, discount rule, SKU rule, lookup, matrix summary.
 - `app/lib/dtp-catalog.ts`: current-vs-legacy size classification and the freight assumption marker.
 
@@ -55,15 +59,12 @@ Before/after economics: unchanged (no price moved). Owner decision: confirm a fr
 
 ## 4. Old vendor rows vs current research
 
-Old seed (`tools/seed-spektra-dtp.mjs`, VendorProductTier, status owner-verified 15C): 4x5x2 0.9897 / 0.4922 / 0.4033 / 0.3232; 5x4x2 1.0504 / 0.5419 / 0.4697 / 0.3818; 6x5x2 1.1048 / 0.5864 / 0.5290 / 0.4341; 8x5x2 1.2418 / 0.6991 / 0.6799 / 0.5674 at 1,000 / 2,500 / 5,000 / 7,500. These remain on the historical VendorProduct rows for old quotes. **No savings figure is stated**: with no observed current rows loaded, and with the old rows' material / finish / zipper / feature / SKU / freight assumptions not preserved, a like-for-like comparison is not possible yet.
+Old seed (`tools/seed-spektra-dtp.mjs`, VendorProductTier, status owner-verified 15C): 4x5x2 0.9897 / 0.4922 / 0.4033 / 0.3232; 5x4x2 1.0504 / 0.5419 / 0.4697 / 0.3818; 6x5x2 1.1048 / 0.5864 / 0.5290 / 0.4341; 8x5x2 1.2418 / 0.6991 / 0.6799 / 0.5674 at 1,000 / 2,500 / 5,000 / 7,500. These remain on the historical VendorProduct rows for old quotes. Scenario comparison (White PET / Soft Touch / no spot / CR zipper / No Tear Notch / 1 SKU, the legacy product spec): 4x5x2 -22.5% / -22.1% / -36.8% / -34.6% at 1,000 / 2,500 / 5,000 / 10,000 (live $0.7674 / $0.3833 / $0.2548 / $0.2113 vs old $0.9897 / $0.4922 / $0.4033 / $0.3232); 6x5x2 -23.2% / -23.8% / -40.4% / -36.5%; 8x5x2 -24.2% / -25.8% / -43.9% / -38.2%; Glossy is lower still (4x5x2 x5,000 -42.2%). These are scenarios, not proven like-for-like savings: the old rows did not record material / finish / zipper / feature / SKU / freight scope. 5x4x2 has no approved mapping and no comparison.
 
 ## 5. Historical quotes
 
 Old DTP quote snapshots keep their vendor cost, sell price, margins, freight assumption and pricing source/version. New quotes record the policy version and shaped-bag context in the price snapshot. No recalculation of history (test-pinned).
 
-## 6. To finish this authority
+## 6. Status
 
-1. Commit the three research files under `docs/vendor-research/`.
-2. `node tools/generate-spektra-cost-book.mjs` (deterministic; refuses incomplete rows).
-3. Run `npx vitest run tests/spektra-cost-book-and-shaped-bags-2026-10-06.test.ts` and extend it with the exact observed 4x5 rows.
-4. Recompute the DTP sell ladders (section 6 of `GSO_PRICING_AUTHORITY_MATRIX.md`) and record the owner's decision on freight and on the new 3.5x4.5x2 / 5x5x2 ladders.
+Loaded and verified. Runtime: the live book is shown in the Cost Calculator (LIVE SPEKTRA ECONOMICS line, configuration selects for material / finish / spot / zipper / top feature / clear gusset), the Vendor Cost Book card (filters + expandable rows) and Pricing Intelligence (economics tables). The quote price and status still come from the owner DTP ladder and the legacy vendor cost until the owner adopts the live book as the cost authority (see `GSO_PRICING_AUTHORITY_MATRIX.md`).

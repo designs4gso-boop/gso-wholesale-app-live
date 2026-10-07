@@ -12,12 +12,15 @@ Classification: **MARKET RESEARCH** index. This page records what market evidenc
 | Jar launch ladder | `app/lib/canonical-jar-pricing.ts` | Miron / standard jars | 2026-08-12 | OWNER-APPROVED (market-driven by owner decision; no competitor data in repo) |
 | DTP owner sell ladders + floors | `app/lib/dtp-owner-pricing.server.ts` | 4 legacy DTP sizes | 2026-07-24 | OWNER-APPROVED (study not in repo) |
 
+## Present since 2026-10-06 (vendor research, not market research)
+
+- Spektra / Flex Packaging live price matrix (1,084 rows), pricing rules and old-vs-current notes (`docs/vendor-research/*`) — VENDOR OBSERVED DATA. These are vendor COSTS; they do not establish a customer market price.
+
 ## NOT present in the repository (named by the owner, not found)
 
-- Spektra / Flex Packaging live price matrix, pricing rules and old-vs-current notes dated 2026-10-06 (`docs/vendor-research/*`).
 - A "master market-pricing research" document for DTP pouches or jars.
 - Beastcoast jar research; any competitor jar price; the 100ml Wide target schedule; the $620.80 historical order record.
 
 ## Consequence for DTP commercial position
 
-With no public DTP market reference and no observed current vendor cost loaded, the DTP position (competitive lower-middle / middle target, "MARKET BELOW CURRENT VENDOR ECONOMICS" flags) cannot be computed. Pricing Intelligence states this on screen instead of guessing. Once the research files are committed, fill the table in `GSO_PRICING_AUTHORITY_MATRIX.md` and record the owner's decision per size and tier.
+Current vendor cost is now loaded, but with no public DTP market reference the DTP position (competitive lower-middle / middle target, "MARKET BELOW CURRENT VENDOR ECONOMICS" flags) still cannot be computed. Pricing Intelligence states this on screen instead of guessing; the economics tables in `GSO_PRICING_AUTHORITY_MATRIX.md` give the owner cost, current GM/GP and three policy-derived options per size and tier.
