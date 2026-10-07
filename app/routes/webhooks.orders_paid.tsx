@@ -1,4 +1,5 @@
 import { authenticate, unauthenticated } from "../shopify.server";
+import { sendProductionAlertSafe, unrecognizedPaidOrderQueueItem } from "../lib/production-alert.server";
 import db from "../db.server";
 import { createProductionJobFromSource } from "../lib/production-job-source.server";
 import { createAdminGraphql } from "../lib/personalization-assets.server";
@@ -182,6 +183,19 @@ export const action = async ({ request }: { request: Request }) => {
     actor: "orders_paid_webhook",
     personalizationResolver: await buildPersonalizationResolver(shop),
   });
+
+  // 2026-10-07: the same production alert the board / quotes paths send, and a
+  // visible review-queue trail when a PAID order produced no job. Neither can
+  // fail the webhook (Shopify always gets 200 once the job decision is made).
+  try {
+    if (result.created && result.job) {
+      await sendProductionAlertSafe(result.job, "paid Shopify order (webhook)");
+    } else if (!result.job) {
+      await db.agentReviewQueueItem.create({ data: unrecognizedPaidOrderQueueItem(shop, order) as any });
+    }
+  } catch (error) {
+    console.error("orders_paid post-create trail failed", error);
+  }
 
   return new Response(result.reason || "OK", { status: 200 });
 };
