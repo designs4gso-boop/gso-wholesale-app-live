@@ -74,13 +74,13 @@ describe("cost book metadata and catalog (VENDOR OBSERVED DATA)", () => {
     expect(!bad.ok && bad.errors[0]).toMatch(/not available on the Glossy laminate/);
   });
 
-  it("the generated artifact is EMPTY and honest about it (research file absent)", () => {
-    expect(SPEKTRA_COST_BOOK_META.researchFilePresent).toBe(false);
-    expect(SPEKTRA_COST_BOOK_META.rowCount).toBe(0);
-    expect(SPEKTRA_OBSERVED_ROWS).toEqual([]);
+  it("the generated artifact is loaded from the research CSV (1,084 directly observed rows, none derived)", () => {
+    expect(SPEKTRA_COST_BOOK_META.researchFilePresent).toBe(true);
+    expect(SPEKTRA_COST_BOOK_META.rowCount).toBe(1084);
+    expect(SPEKTRA_OBSERVED_ROWS.length).toBe(1084);
     const artifact = readFileSync("app/lib/generated/spektra-live-price-matrix-2026-10-06.ts", "utf8");
-    expect(artifact).toContain("NOT PRESENT");
-    expect(artifact).not.toMatch(/publicTotal: [0-9]/); // no invented prices
+    expect(artifact).toContain("DIRECTLY OBSERVED");
+    expect(artifact).not.toContain("NOT PRESENT");
   });
 });
 
@@ -89,10 +89,10 @@ describe("owner-confirmed discount rule and validated SKU rule", () => {
   it("wholesale = EXACT public total x 0.75; unit = discounted total / delivered qty (never from the rounded displayed unit)", () => {
     expect(SPEKTRA_ACCOUNT_DISCOUNT_FACTOR).toBe(0.75);
     expect(wholesaleTotalFromPublicTotal(1000)).toBe(750);
-    expect(wholesaleTotalFromPublicTotal(1234.57)).toBe(925.93);
+    expect(wholesaleTotalFromPublicTotal(1234.57)).toBeCloseTo(925.9275, 9); // fractional cents retained, never rounded
     expect(wholesaleUnitCost(1234.57, 1000)).toBeCloseTo(0.92593, 5);
     // a displayed unit of $1.23 x 1000 = $1,230 would give the WRONG answer ($922.50)
-    expect(wholesaleTotalFromPublicTotal(1234.57)).not.toBe(922.5);
+    expect(wholesaleTotalFromPublicTotal(1234.57)).not.toBeCloseTo(922.5, 2);
     expect(wholesaleUnitCost(1000, 0)).toBe(0);
   });
 
@@ -116,14 +116,16 @@ const ROW = (over: Partial<SpektraObservedRow> = {}): SpektraObservedRow => ({
 const CFG = { size: "4x5x2" as const, material: "White PET" as const, finish: "Glossy" as const, spot: "None" as const, zipper: "None" as const, topFeature: "No Tear Notch" as const, clearGusset: false };
 
 describe("lookup — fails closed; observed vs estimated vs request quote", () => {
-  it("with the real (empty) artifact every lookup is REQUEST CURRENT VENDOR QUOTE for every size / material / finish / tier", () => {
+  it("with the real artifact every base combination (5 sizes x 4 materials x 3 finishes x 6 tiers, CR zipper) is OBSERVED; the empty-matrix path still fails closed", () => {
     for (const size of SPEKTRA_SIZES) for (const material of SPEKTRA_MATERIALS) for (const finish of SPEKTRA_FINISHES) for (const quantity of SPEKTRA_PUBLISHED_TIERS) {
-      const look = lookupSpektraVendorCost({ ...CFG, size: size.key, material, finish, quantity });
-      expect(look.status, `${size.key} ${material} ${finish} ${quantity}`).toBe("REQUEST_CURRENT_VENDOR_QUOTE");
-      expect(look.wholesaleUnit).toBeNull();
-      expect(look.basis).toMatch(/NOT PRESENT/);
+      const look = lookupSpektraVendorCost({ ...CFG, size: size.key, material, finish, zipper: "Child Resistant", quantity });
+      expect(look.status, `${size.key} ${material} ${finish} ${quantity}`).toBe("OBSERVED_VENDOR_PRICE");
+      expect(look.wholesaleUnit!).toBeGreaterThan(0);
       expect(look.freightStatus).toBe("UNVERIFIED");
     }
+    const empty = lookupSpektraVendorCost({ ...CFG, quantity: 1000 }, []);
+    expect(empty.status).toBe("REQUEST_CURRENT_VENDOR_QUOTE");
+    expect(empty.basis).toMatch(/No observed Spektra rows are loaded/);
   });
 
   it("exact observed row -> OBSERVED VENDOR PRICE with the discount applied to the exact public total", () => {
@@ -131,7 +133,7 @@ describe("lookup — fails closed; observed vs estimated vs request quote", () =
     const look = lookupSpektraVendorCost({ ...CFG, quantity: 1000 }, rows);
     expect(look.status).toBe("OBSERVED_VENDOR_PRICE");
     expect(look.publicTotal).toBe(1234.57);
-    expect(look.wholesaleTotal).toBe(925.93);
+    expect(look.wholesaleTotal).toBeCloseTo(925.9275, 9);
     expect(look.wholesaleUnit).toBeCloseTo(0.92593, 5);
     expect(look.observedRow).toBe(rows[0]);
   });
@@ -163,7 +165,7 @@ describe("lookup — fails closed; observed vs estimated vs request quote", () =
     const two = lookupSpektraVendorCost({ ...CFG, quantity: 1000, skuCount: 2 }, rows);
     expect(two.status).toBe("ESTIMATED_FROM_VALIDATED_VENDOR_RULE");
     expect(two.publicTotal).toBe(1185);
-    expect(two.wholesaleTotal).toBe(888.75);
+    expect(two.wholesaleTotal).toBeCloseTo(888.75, 9);
     expect(two.wholesaleExtraSkuCost).toBe(138.75);
     const five = lookupSpektraVendorCost({ ...CFG, quantity: 1000, skuCount: 5 }, rows);
     expect(five.status).toBe("OBSERVED_VENDOR_PRICE");
@@ -192,7 +194,7 @@ describe("lookup — fails closed; observed vs estimated vs request quote", () =
   it("matrix summary describes coverage", () => {
     const s = spektraMatrixSummary([ROW(), ROW({ size: "8x5x2", quantity: 2500, skuCount: 2 })]);
     expect(s).toMatchObject({ rowCount: 2, sizes: ["4x5x2", "8x5x2"], quantities: [1000, 2500], skuCounts: [1, 2] });
-    expect(spektraMatrixSummary().rowCount).toBe(0);
+    expect(spektraMatrixSummary().rowCount).toBe(1084);
   });
 });
 
@@ -308,7 +310,10 @@ describe("owner shaped-pouch policy (OWNER DECISION 2026-10-06)", () => {
 describe("calculator wiring and historical snapshot safety", () => {
   const calc = readFileSync("app/routes/app.erp.cost-calculator.tsx", "utf8");
   it("shape / die controls exist and both pricing paths apply the policy (parity)", () => {
-    for (const field of ["pdtpshape", "pdtpdie", "pdtpdieid", "pdtpdieref"]) expect(calc).toContain(`name="${field}"`);
+    for (const field of ["pdtpshape", "pdtpdie", "pdtpdieid", "pdtpdieref", "pdtpmaterial", "pdtpfinish", "pdtpspot", "pdtpzipper", "pdtptop", "pdtpgusset"]) expect(calc).toContain(`name="${field}"`);
+    expect(calc.split("lookupSpektraVendorCost({").length - 1).toBe(2); // live economics in loader + save (display + snapshot only)
+    expect(calc).toContain("LIVE SPEKTRA ECONOMICS");
+    expect(calc).toContain("not yet the quote cost authority");
     expect(calc).toContain("NEW SHAPE — NEW $700 DIE");
     expect(calc).toContain("EXISTING SHAPE / DIE ON FILE");
     expect(calc.split("applyShapedPolicyToDtpRow({").length - 1).toBe(2);
