@@ -6,6 +6,8 @@ import { SPEKTRA_COST_BOOK_META, SPEKTRA_COST_STATUS_LABEL, SPEKTRA_PUBLISHED_TI
 import { DTP_CATALOG, SPEKTRA_FREIGHT_ASSUMPTION } from "../lib/dtp-catalog";
 import { DTP_CUSTOM_SHAPE_SURCHARGE_PCT, DTP_NEW_DIE_TOOLING_FEE, DTP_SHAPED_BAG_POLICY_SOURCE } from "../lib/dtp-shaped-bag-policy";
 import { buildDtpLiveEconomics } from "../lib/dtp-live-economics.server";
+import { DESIGN_AND_CUSTOMIZE_BENCHMARK, GSO_DTP_MARKET_POSITION } from "../lib/dtp-market-benchmark";
+import { DTP_SHAPED_MOQ } from "../lib/dtp-shaped-bag-policy";
 import db from "../db.server";
 import {
   PRE_LAUNCH_REASON,
@@ -233,11 +235,14 @@ export default function PricingIntelligence() {
         ) : (
           <p style={{ margin: "0 0 8px", fontSize: 13, color: "#166534", fontWeight: 700 }}>LIVE MATRIX LOADED — {SPEKTRA_COST_BOOK_META.rowCount.toLocaleString()} directly observed rows ({SPEKTRA_COST_BOOK_META.version}).</p>
         )}
+        <p style={{ margin: "0 0 8px", fontSize: 13, color: "#1e3a8a", fontWeight: 700 }}>
+          4x5x2 = OWNER-APPROVED DTP ladder 2026-10-06 ($1.30 / $0.71 / $0.46 / $0.37 at 1,000 / 2,500 / 5,000 / 10,000; 25,000 = OWNER PRICING REVIEW REQUIRED; the 1,000 tier is the owner acquisition exception with a $350+ gross-profit target). Market benchmark of record: {DESIGN_AND_CUSTOMIZE_BENCHMARK.competitor} — {DESIGN_AND_CUSTOMIZE_BENCHMARK.status} (published 4x5 Gloss/Matte $1.00 / $0.80 / $0.60 / $0.40 / $0.30 at 1,000 / 1,500 / 2,500 / 5,000 / 10,000; CR zipper +5% → comparable $1.05 / $0.63 / $0.42 / $0.315). GSO position: {GSO_DTP_MARKET_POSITION.label} — {GSO_DTP_MARKET_POSITION.wording}. Competitor prices are market evidence, never GSO costs. 3.5x4.5x2 / 5x5x2 / 6x5x2 / 8x5x2 customer ladders: OWNER PRICING REVIEW REQUIRED (not derived from 4x5x2).
+        </p>
         {[{ label: "Comparable configuration (legacy spec): White PET / Soft Touch / no spot / CR zipper / No Tear Notch / 1 SKU", data: dtpEconomics }, { label: "Lowest-cost configuration: White PET / Glossy / no spot / CR zipper / No Tear Notch / 1 SKU", data: dtpEconomicsGlossy }].map(({ label, data }) => (
           <div key={label} style={{ overflowX: "auto", marginBottom: 10 }}>
             <b style={{ fontSize: 12 }}>{label}</b>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-              <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 4 }}>Size</th><th>Qty</th><th>Live vendor unit</th><th>Old seed unit</th><th>Change</th><th>Landed unit (art + $85 unverified)</th><th>Current sell</th><th>Current GM / GP</th><th>Floor</th><th align="left">A hold price</th><th align="left">B pass-through</th><th align="left">C split</th></tr></thead>
+              <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 4 }}>Size</th><th>Qty</th><th>Live vendor unit</th><th>Old seed unit</th><th>Change</th><th>Landed unit (art + $85 unverified)</th><th>Ladder</th><th>Current sell</th><th>Current GM / GP</th><th>Floor / GP target</th><th>D&amp;C comparable CR</th><th>GSO premium</th><th align="left">A hold price</th><th align="left">B pass-through</th><th align="left">C split</th></tr></thead>
               <tbody>
                 {data.cells.map((c) => {
                   const p = (k: string) => c.proposals.find((x) => x.key === k);
@@ -249,9 +254,12 @@ export default function PricingIntelligence() {
                       <td align="center">{c.oldVendorUnit != null ? `${c.oldVendorUnit.toFixed(4)}` : "—"}</td>
                       <td align="center">{c.oldVendorChangePct != null ? `${c.oldVendorChangePct.toFixed(1)}%` : "—"}</td>
                       <td align="center">{c.landedUnit != null ? `${c.landedUnit.toFixed(4)}` : "—"}</td>
-                      <td align="center">{c.currentSellUnit != null ? `${c.currentSellUnit.toFixed(2)}` : "no ladder"}</td>
-                      <td align="center">{c.currentGmPct != null ? `${c.currentGmPct.toFixed(1)}% / ${(c.currentGp ?? 0).toFixed(0)}` : "—"}</td>
-                      <td align="center">{c.hardFloorPct}%</td>
+                      <td align="center" title={c.ladderNote} style={{ color: c.ladderStatus === "OWNER_APPROVED" ? "#1e3a8a" : "#92400e", fontWeight: 600 }}>{c.ladderStatus === "OWNER_APPROVED" ? "APPROVED 2026-10-06" : "REVIEW REQUIRED"}</td>
+                      <td align="center">{c.currentSellUnit != null ? `${c.currentSellUnit.toFixed(2)}` : c.ladderStatus === "OWNER_APPROVED" ? "—" : "no approved price"}</td>
+                      <td align="center" style={{ color: c.meetsProtection === false ? "#991b1b" : undefined }}>{c.currentGmPct != null ? `${c.currentGmPct.toFixed(1)}% / ${(c.currentGp ?? 0).toFixed(0)}${c.meetsProtection === false ? " BELOW" : ""}` : "—"}</td>
+                      <td align="center">{c.hardFloorPct}% / ${c.minJobProfit}</td>
+                      <td align="center">{c.benchmark.competitorComparableUnit != null ? c.benchmark.competitorComparableUnit.toFixed(4) : "—"}</td>
+                      <td align="center">{c.benchmark.premiumPct != null ? `+${c.benchmark.premiumPct.toFixed(1)}%` : "—"}</td>
                       <td>{fmt(p("hold_price"))}</td><td>{fmt(p("hold_margin"))}</td><td>{fmt(p("split"))}</td>
                     </tr>
                   );
@@ -260,7 +268,7 @@ export default function PricingIntelligence() {
             </table>
           </div>
         ))}
-        <p style={{ margin: "0 0 8px", fontSize: 12, color: "#374151" }}>Proposals: A holds today's owner ladder (all vendor savings become margin); B passes the vendor change through (holds the margin the ladder earned on the OLD cost); C splits the improvement. New sizes show the 30/35/38% floor and 40% target anchors only. Nothing here changes a live price — owner decision. Commercial position: NO DTP MARKET REFERENCE IN REPOSITORY.</p>
+        <p style={{ margin: "0 0 8px", fontSize: 12, color: "#374151" }}>Proposals (shown only for ladders still OWNER PRICING REVIEW REQUIRED; the approved 4x5x2 ladder is decided): A holds today's owner ladder (all vendor savings become margin); B passes the vendor change through (holds the margin the ladder earned on the OLD cost); C splits the improvement. New sizes show the 30/35/38% floor and 40% target anchors only. Nothing here changes a live price — owner decision. Commercial position: NO DTP MARKET REFERENCE IN REPOSITORY.</p>
         <div style={{ overflowX: "auto", display: "none" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 5 }}>Size</th><th align="left">Catalog status</th><th align="left">Owner sell ladder</th>{SPEKTRA_PUBLISHED_TIERS.map((q) => <th key={q}>{q.toLocaleString()}</th>)}</tr></thead>
@@ -281,7 +289,7 @@ export default function PricingIntelligence() {
           </table>
         </div>
         <p style={{ margin: "8px 0 0", fontSize: 12, color: "#6b7280" }}>Reference configuration for the cells: White PET, Glossy, no spot, no zipper, no tear notch, 1 SKU (wholesale unit = exact public total x 0.75 / quantity). Old Spektra seed costs (4x5x2 $0.9897 / $0.4922 / $0.4033 / $0.3232 at 1,000 / 2,500 / 5,000 / 7,500, etc.) remain on the historical VendorProduct rows for old quotes and are not comparable until the live matrix is loaded.</p>
-        <p style={{ margin: "8px 0 0", fontSize: 12, color: "#374151" }}><b>Shaped / die-cut pouches ({DTP_SHAPED_BAG_POLICY_SOURCE}):</b> base = the standard DTP customer price for the same configuration; +{DTP_CUSTOM_SHAPE_SURCHARGE_PCT}% shape surcharge on the product price; ${DTP_NEW_DIE_TOOLING_FEE} per unique NEW die shown as a separate tooling line; existing die on file = $0 tooling (surcharge still applies).</p>
+        <p style={{ margin: "8px 0 0", fontSize: 12, color: "#374151" }}><b>Shaped / die-cut pouches ({DTP_SHAPED_BAG_POLICY_SOURCE}):</b> base = the standard DTP customer price for the same configuration; +{DTP_CUSTOM_SHAPE_SURCHARGE_PCT}% shape surcharge on the product price; ${DTP_NEW_DIE_TOOLING_FEE} per unique NEW die shown as a separate tooling line; existing die on file = $0 tooling; shaped MOQ {DTP_SHAPED_MOQ.toLocaleString()}; same physical shape with several designs = one fee, a different physical shape = a new fee (surcharge still applies).</p>
       </section>
 
       <section style={card}>

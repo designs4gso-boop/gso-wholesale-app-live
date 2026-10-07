@@ -51,6 +51,8 @@ import { officialMoqForFamily } from "../lib/product-family-sales-rules";
 import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, ownerPriceForQuantity, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
 // 2026-10-06: owner shaped-pouch policy (+10 % surcharge, $700 per new die) and the DTP catalog / freight status.
 import { applyShapedPolicyToDtpRow, type DtpDieChoice } from "../lib/dtp-shaped-bag-policy";
+import { resolveDtpQuoteCost } from "../lib/dtp-quote-cost-authority.server";
+import { compareToBenchmark } from "../lib/dtp-market-benchmark";
 import { DTP_COMPARABLE_CONFIG, SPEKTRA_FREIGHT_ASSUMPTION, dtpSizeForVendorSku } from "../lib/dtp-catalog";
 // 2026-10-06: live Spektra cost book (research 2026-10-06) — shown next to the legacy seed cost; NOT yet the quote cost authority.
 import { SPEKTRA_COST_BOOK_META, SPEKTRA_COST_STATUS_LABEL, SPEKTRA_FINISHES, SPEKTRA_MATERIALS, SPEKTRA_SPOT_OPTIONS, SPEKTRA_TOP_FEATURES, SPEKTRA_ZIPPER_OPTIONS, lookupSpektraVendorCost } from "../lib/spektra-live-cost-book";
@@ -1090,11 +1092,21 @@ export async function loader({ request }: { request: Request }) {
         // 15C.2: DTP prices come from the OWNER ladder (hybrid model) — never
         // a margin formula. Custom price applies to the requested qty only.
         if (isDtpP) {
+          // 2026-10-06 OWNER DECISION: 4x5x2 quotes cost from the live Spektra
+          // book by EXACT configuration (the approved ladder was priced on live
+          // landed cost); other sizes keep the legacy 15C engine cost.
+          const costP = resolveDtpQuoteCost({
+            vendorSku: (pickedBlank as any)?.sku || (pickedBlank as any)?.vendorSku || null,
+            quantity: qty, designs: Number(eparams.get("pdesigns") || 1),
+            selection: { material: eparams.get("pdtpmaterial"), finish: eparams.get("pdtpfinish"), spot: eparams.get("pdtpspot"), zipper: eparams.get("pdtpzipper"), topFeature: eparams.get("pdtptop"), clearGusset: eparams.get("pdtpgusset") === "1" },
+            legacy: { totalCost: run.totalCost, missing: run.missing.length > 0, vendorSubtotal: run.lines.find((line) => line.key === "blank")?.amount ?? null },
+            freightPerOrder: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+          });
           const dtpRow = priceDtpQuote({
             ladderSku: String((pickedBlank as any)?.sku || ""),
             quantity: qty,
-            landedCost: run.totalCost,
-            missingCost: run.missing.length > 0,
+            landedCost: costP.landedCost,
+            missingCost: costP.missing,
             designs: Number(eparams.get("pdesigns") || 0),
             customUnitPrice: qty === requestedQtyP && Number(eparams.get("pdtpcustomprice") || 0) > 0 ? Number(eparams.get("pdtpcustomprice")) : null,
             repeatOrder: eparams.get("pdtprepeat") === "1",
@@ -1129,23 +1141,32 @@ export async function loader({ request }: { request: Request }) {
             ladderUnitPrice: dtpRow.unitPrice, customerBaseSubtotal: dtpRow.customerBaseSubtotal, extraDesignFees: dtpRow.extraDesignFees,
             customerTotal: dtpRow.customerTotal, grossProfit: dtpRow.grossProfit,
           });
+          const benchmarkP = compareToBenchmark(dtpRow.ladderSku === "spektra-dtp-4x5x2" ? dtpRow.unitPrice : null, qty);
           return {
             quantity: qty, requested: qty === requestedQtyP,
-            jobCost: run.totalCost, unitCost: run.unitCost,
+            jobCost: costP.landedCost, unitCost: qty > 0 ? costP.landedCost / qty : 0,
             marginPct: Math.round(shapedP.marginPct * 10) / 10,
             unitPrice: shapedP.unitPrice, totalPrice: shapedP.totalPrice,
             profit: shapedP.profit, actualMarginPct: shapedP.marginPct,
             belowFloor: shapedP.marginPct < dtpRow.hardFloorPct,
-            draftOnly: run.missing.length > 0 || shapedP.blocked,
+            draftOnly: costP.missing || shapedP.blocked,
             freightTotal: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
             freightSource: dtpInputP ? dtpInputP.freightSource : "verified",
             setupTotal: run.setupTotal,
             status: shapedP.blocked ? "BLOCKED" : dtpRow.status,
-            blockers: shapedP.reasons,
+            blockers: [...shapedP.reasons, ...(costP.missingReason ? [costP.missingReason] : [])],
             dtp: {
               shaped: shapedP.shaped,
               freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
               liveVendor: liveP,
+              costAuthority: costP,
+              pricingSource: dtpRow.pricingSource,
+              ladderStatus: dtpRow.ladderStatus,
+              marketBenchmark: dtpRow.marketBenchmark,
+              benchmark: benchmarkP,
+              commercialPolicy: dtpRow.commercialPolicy,
+              acquisitionTierException: dtpRow.acquisitionTierException,
+              minJobProfit: dtpRow.minJobProfit,
               vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
               ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
               defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
@@ -1954,12 +1975,20 @@ export async function action({ request }: { request: Request }) {
       const run = qty === savedRequestedQty ? productSnapshot! : computeProductDrivenCost({ ...productInputSave, quantity: qty });
       const tierFreight = savedIsDtp ? { total: 0, perUnit: 0, source: "verified" as const, note: "" } : computeFreight(freightInputsSave, qty, 0);
       if (savedIsDtp) {
+        // 2026-10-06 loader parity: quote cost authority (live book by configuration for 4x5x2).
+        const costSave = resolveDtpQuoteCost({
+          vendorSku: savedFetched?.meta?.vendorSku || null,
+          quantity: qty, designs: Number(fRead("pdesigns") || 1),
+          selection: { material: fRead("pdtpmaterial"), finish: fRead("pdtpfinish"), spot: fRead("pdtpspot"), zipper: fRead("pdtpzipper"), topFeature: fRead("pdtptop"), clearGusset: fRead("pdtpgusset") === "1" },
+          legacy: { totalCost: run.totalCost, missing: run.missing.length > 0, vendorSubtotal: run.lines.find((line) => line.key === "blank")?.amount ?? null },
+          freightPerOrder: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+        });
         // 15C.2: recompute the owner-ladder price server-side — posted totals ignored
         const dtpRow = priceDtpQuote({
           ladderSku: String(savedFetched?.meta?.vendorSku || ""),
           quantity: qty,
-          landedCost: run.totalCost,
-          missingCost: run.missing.length > 0,
+          landedCost: costSave.landedCost,
+          missingCost: costSave.missing,
           designs: Number(fRead("pdesigns") || 0),
           customUnitPrice: qty === savedRequestedQty && Number(fRead("pdtpcustomprice") || 0) > 0 ? Number(fRead("pdtpcustomprice")) : null,
           repeatOrder: fRead("pdtprepeat") === "1",
@@ -1993,23 +2022,32 @@ export async function action({ request }: { request: Request }) {
           ladderUnitPrice: dtpRow.unitPrice, customerBaseSubtotal: dtpRow.customerBaseSubtotal, extraDesignFees: dtpRow.extraDesignFees,
           customerTotal: dtpRow.customerTotal, grossProfit: dtpRow.grossProfit,
         });
+        const benchmarkSave = compareToBenchmark(dtpRow.ladderSku === "spektra-dtp-4x5x2" ? dtpRow.unitPrice : null, qty);
         return {
           quantity: qty, requested: qty === savedRequestedQty,
-          jobCost: run.totalCost, unitCost: run.unitCost,
+          jobCost: costSave.landedCost, unitCost: qty > 0 ? costSave.landedCost / qty : 0,
           marginPct: Math.round(shapedSave.marginPct * 10) / 10,
           unitPrice: shapedSave.unitPrice, totalPrice: shapedSave.totalPrice,
           profit: shapedSave.profit, actualMarginPct: shapedSave.marginPct,
           belowFloor: shapedSave.marginPct < dtpRow.hardFloorPct,
-          draftOnly: run.missing.length > 0 || shapedSave.blocked,
+          draftOnly: costSave.missing || shapedSave.blocked,
           freightTotal: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
           freightSource: savedDtpInput ? savedDtpInput.freightSource : "verified",
           setupTotal: run.setupTotal,
           status: shapedSave.blocked ? "BLOCKED" : dtpRow.status,
-          blockers: shapedSave.reasons,
+          blockers: [...shapedSave.reasons, ...(costSave.missingReason ? [costSave.missingReason] : [])],
           dtp: {
             shaped: shapedSave.shaped,
             freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
             liveVendor: liveSave,
+            costAuthority: costSave,
+            pricingSource: dtpRow.pricingSource,
+            ladderStatus: dtpRow.ladderStatus,
+            marketBenchmark: dtpRow.marketBenchmark,
+            benchmark: benchmarkSave,
+            commercialPolicy: dtpRow.commercialPolicy,
+            acquisitionTierException: dtpRow.acquisitionTierException,
+            minJobProfit: dtpRow.minJobProfit,
             vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
             ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
             defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
@@ -2370,13 +2408,36 @@ export async function action({ request }: { request: Request }) {
         grossProfit: savedSelectedTier.profit,
         grossMarginPct: savedSelectedTier.actualMarginPct,
         hardFloorPct: savedSelectedTier.dtp.hardFloorPct,
-        minJobProfit: 500,
+        minJobProfit: savedSelectedTier.dtp.minJobProfit ?? 500,
         strategicMinJobProfit: 350,
         marginWarningTargetPct: 40,
         status: savedSelectedTier.status,
         statusReasons: savedSelectedTier.dtp.statusReasons,
         overrideRequired: savedSelectedTier.dtp.overrideRequired,
         overrideReason: savedSelectedTier.dtp.overrideSatisfied ? fRead("eoreason").trim() : null,
+        // 2026-10-06 provenance: ladder source, controlling market benchmark,
+        // commercial policy (incl. the 4x5x2 1,000-unit exception) and the
+        // cost authority that produced landedCost. Historical snapshots
+        // without these fields are never rewritten.
+        pricingSource: savedSelectedTier.dtp.pricingSource,
+        ladderStatus: savedSelectedTier.dtp.ladderStatus,
+        marketBenchmark: savedSelectedTier.dtp.marketBenchmark,
+        competitorBenchmark: savedSelectedTier.dtp.benchmark,
+        commercialPolicy: savedSelectedTier.dtp.commercialPolicy,
+        acquisitionTierException: savedSelectedTier.dtp.acquisitionTierException,
+        vendorCost: savedSelectedTier.dtp.costAuthority ? {
+          authority: savedSelectedTier.dtp.costAuthority.authority,
+          status: savedSelectedTier.dtp.costAuthority.status,
+          basis: savedSelectedTier.dtp.costAuthority.basis,
+          configuration: savedSelectedTier.dtp.costAuthority.config,
+          skuCount: savedSelectedTier.dtp.costAuthority.skuCount,
+          vendorSubtotal: savedSelectedTier.dtp.costAuthority.vendorSubtotal,
+          vendorUnit: savedSelectedTier.dtp.costAuthority.vendorUnit,
+          artCost: savedSelectedTier.dtp.costAuthority.artCost,
+          freight: savedSelectedTier.dtp.costAuthority.freight,
+          freightStatus: savedSelectedTier.dtp.costAuthority.freightStatus,
+          costBookVersion: savedSelectedTier.dtp.costAuthority.costBookVersion,
+        } : null,
       } : null,
       dtp: savedIsDtpSnapshot && productSnapshot ? (() => {
         const blankLine = productSnapshot.lines.find((line) => line.key === "blank");
@@ -3545,6 +3606,10 @@ function ProductDrivenForm() {
           <label style={{ fontSize: 12 }}>Custom unit price $ (owner — blank = owner ladder)
             <input name="pdtpcustomprice" type="number" step="0.0001" min={0} style={inputStyle} />
           </label>
+          {/* 2026-10-06 OWNER DECISION: 4x5x2 = approved standard DTP anchor (Design & Customize = controlling benchmark); 1,000 tier = acquisition exception ($350+ GP); 25,000+ and the other sizes = OWNER PRICING REVIEW REQUIRED. Numbers live in dtp-owner-pricing.server.ts only. */}
+          <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+            4x5x2 uses the OWNER-APPROVED ladder of 2026-10-06 (pricing source OWNER_APPROVED_DTP_4X5_2026_10_06; benchmark DESIGN_AND_CUSTOMIZE_PRIMARY — premium / heavy-duty pouch positioning). Its 1,000-unit tier is the owner acquisition exception (about $350+ gross profit instead of $500); 2,500+ keeps the normal protection. 4x5x2 at 25,000+ and the 3.5x4.5x2 / 5x5x2 / 6x5x2 / 8x5x2 customer ladders remain OWNER PRICING REVIEW REQUIRED (the 2026-07-24 ladders for 6x5x2 / 8x5x2 stay in force meanwhile). 4x5x2 quote cost = live Spektra book by the exact configuration below; other sizes still cost from the legacy vendor tiers.
+          </p>
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtprepeat" value="1" /> Exact repeat order — waive customer design fee (no art changes)</label>
           {/* 2026-10-06 LIVE SPEKTRA CONFIGURATION (research 2026-10-06): drives the live vendor economics shown next to the legacy cost. Defaults = the legacy product spec (White PET, Soft Touch, CR zipper, No Tear Notch). */}
           <label style={{ fontSize: 12 }}>Material (Spektra)
@@ -3570,7 +3635,7 @@ function ProductDrivenForm() {
           <label style={{ fontSize: 12 }}>Shape
             <select name="pdtpshape" defaultValue={canonParams.get("pdtpshape") || "standard"} style={inputStyle}>
               <option value="standard">Standard pouch (catalog shape)</option>
-              <option value="custom">Custom shape / die-cut (+10% owner surcharge)</option>
+              <option value="custom">Custom shape / die-cut (+10% owner surcharge; MOQ 2,500)</option>
             </select>
           </label>
           <label style={{ fontSize: 12 }}>Custom die
@@ -4505,7 +4570,9 @@ Base pouch subtotal: ${money2(selected.dtp.baseSubtotal)}
 Additional design fees: ${selected.dtp.designFeeWaived ? "$0.00 (repeat order — waived)" : `${money2(selected.dtp.extraDesignFees)}${selected.dtp.extraDesignCount ? ` (${selected.dtp.extraDesignCount} extra @ ${money2(selected.dtp.extraDesignFeeEach)})` : " (first design included)"}`}
 Freight: ${selected.dtp.freightTreatment === "pass_through" ? `${money2(selected.dtp.customerFreight)} (passed through)` : "included in unit pricing"} — ${SPEKTRA_FREIGHT_ASSUMPTION.label}${selected.dtp.liveVendor ? `
 
-LIVE SPEKTRA ECONOMICS (research ${selected.dtp.liveVendor.sourceDate}; not yet the quote cost authority)
+LIVE SPEKTRA ECONOMICS (research ${selected.dtp.liveVendor.sourceDate}; ${selected.dtp.costAuthority?.authority === "LIVE_COST_BOOK_BY_CONFIGURATION" ? "QUOTE COST AUTHORITY for this size by exact configuration — " + String(selected.dtp.costAuthority.status).replace(/_/g, " ") : "not yet the quote cost authority for this size"})
+Pricing source: ${selected.dtp.pricingSource ?? "—"}${selected.dtp.marketBenchmark ? ` · benchmark ${selected.dtp.marketBenchmark}` : ""}${selected.dtp.benchmark?.competitorComparableUnit != null ? ` · Design & Customize comparable CR ${money2(selected.dtp.benchmark.competitorComparableUnit)}/unit → GSO premium ${selected.dtp.benchmark.premiumPct}%` : ""}
+Commercial policy: ${selected.dtp.commercialPolicy ?? "—"}
 Vendor product: ${selected.dtp.liveVendor.wholesaleTotal != null ? `${money2(selected.dtp.liveVendor.wholesaleTotal)} (${Number(selected.dtp.liveVendor.wholesaleUnit).toFixed(4)}/unit, incl. extra SKUs ${money2(selected.dtp.liveVendor.extraSkuCost)})` : "—"} — ${selected.dtp.liveVendor.statusLabel}
 Art: ${money2(OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(new URLSearchParams(search).get("pdesigns") || 1)))} · Freight: ${money2(SPEKTRA_FREIGHT_ASSUMPTION.amount)} / UNVERIFIED
 Landed total (live): ${selected.dtp.liveVendor.landedLive != null ? money2(selected.dtp.liveVendor.landedLive) : "—"} vs legacy landed ${money2(selected.jobCost ?? 0)}` : ""}${selected.dtp.shaped && selected.dtp.shaped.shape === "custom" ? `

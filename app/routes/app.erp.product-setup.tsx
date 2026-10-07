@@ -3,7 +3,7 @@ import { salesRulesForFamily } from "../lib/product-family-sales-rules";
 import { authenticate } from "../shopify.server";
 import { deriveProductVerification, productSetupFamilyLabels } from "../lib/product-family-registry";
 import { classifyCalculatorProduct } from "../lib/product-driven-costing.server";
-import { DTP_EXTRA_DESIGN_FEES, DTP_HARD_FLOOR_BANDS, DTP_INTERNAL_ART_COST_PER_DESIGN, DTP_LADDER_QUANTITIES, DTP_MIN_JOB_PROFIT, DTP_OWNER_PRICE_LADDERS, DTP_PRICING_SOURCE, DTP_STRATEGIC_MIN_JOB_PROFIT } from "../lib/dtp-owner-pricing.server";
+import { DTP_ACQUISITION_TIER_EXCEPTIONS, DTP_EXTRA_DESIGN_FEES, DTP_HARD_FLOOR_BANDS, DTP_INTERNAL_ART_COST_PER_DESIGN, DTP_LADDER_QUANTITIES, DTP_LADDER_SOURCES, DTP_MIN_JOB_PROFIT, DTP_OWNER_PRICE_LADDERS, DTP_PRICING_SOURCE, DTP_STRATEGIC_MIN_JOB_PROFIT } from "../lib/dtp-owner-pricing.server";
 import db from "../db.server";
 import {
   QUOTE_RECIPE_PRICING_INCLUDE,
@@ -741,7 +741,13 @@ export async function loader({ request }: { request: Request }) {
   const dtpPricingRules = {
     source: DTP_PRICING_SOURCE,
     quantities: DTP_LADDER_QUANTITIES,
-    ladders: Object.entries(DTP_OWNER_PRICE_LADDERS).map(([sku, ladder]) => ({ sku, prices: DTP_LADDER_QUANTITIES.map((qty) => (ladder as Record<number, number>)[qty] ?? null) })),
+    ladders: Object.entries(DTP_OWNER_PRICE_LADDERS).map(([sku, ladder]) => ({
+      sku,
+      prices: DTP_LADDER_QUANTITIES.map((qty) => (ladder as Record<number, number>)[qty] ?? null),
+      // 2026-10-06: per-ladder provenance (4x5x2 OWNER APPROVED; others OWNER PRICING REVIEW REQUIRED)
+      source: DTP_LADDER_SOURCES[sku] ?? null,
+      exception: DTP_ACQUISITION_TIER_EXCEPTIONS[sku] ?? null,
+    })),
     floors: DTP_HARD_FLOOR_BANDS,
     minJobProfit: DTP_MIN_JOB_PROFIT,
     strategicMinJobProfit: DTP_STRATEGIC_MIN_JOB_PROFIT,
@@ -1877,12 +1883,15 @@ export default function ProductSetupRecipeBuilder() {
           </p>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead><tr><th align="left">Size (sku)</th>{(dtpPricingRules as any).quantities.map((qty: number) => <th key={qty}>{qty.toLocaleString()}</th>)}</tr></thead>
+              <thead><tr><th align="left">Size (sku)</th>{(dtpPricingRules as any).quantities.map((qty: number) => <th key={qty}>{qty.toLocaleString()}</th>)}<th align="left">Status / source</th></tr></thead>
               <tbody>
                 {(dtpPricingRules as any).ladders.map((row: any) => (
                   <tr key={row.sku} style={{ borderTop: "1px solid #e5e7eb" }}>
                     <td>{row.sku}</td>
-                    {row.prices.map((price: number | null, index: number) => <td key={index} align="center">{price != null ? `$${price.toFixed(2)}` : "—"}</td>)}
+                    {row.prices.map((price: number | null, index: number) => <td key={index} align="center">{price != null ? `$${price.toFixed(2)}` : "— (steps to the lower tier)"}</td>)}
+                    <td style={{ fontSize: 12, color: row.source?.status === "OWNER_APPROVED" ? "#1e3a8a" : "#92400e" }}>
+                      {row.source ? `${row.source.status === "OWNER_APPROVED" ? "OWNER APPROVED" : "OWNER PRICING REVIEW REQUIRED"} — ${row.source.pricingSource} (${row.source.approvedOn})${row.source.marketBenchmark ? `; benchmark ${row.source.marketBenchmark}` : ""}${row.source.reviewRequiredFromQuantity ? `; ${row.source.reviewRequiredFromQuantity.toLocaleString()}+ OWNER PRICING REVIEW REQUIRED` : ""}${row.exception ? `; ${row.exception.tier.toLocaleString()} tier GP target $${row.exception.minJobProfit} (owner exception ${row.exception.approvedOn})` : ""}` : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
