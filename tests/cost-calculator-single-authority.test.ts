@@ -18,7 +18,7 @@ const component = src.slice(src.indexOf("function ProductBreakdown()"), src.inde
 describe("cost calculator — single authoritative calculation", () => {
   it("labels the legacy 14C.2 breakdown as diagnostics whenever a canonical result exists", () => {
     expect(component).toMatch(/const canonicalAuthoritative = Boolean\(canonical\) && !emergency\.productMode\?\.isDtp;/);
-    expect(component).toMatch(/Legacy per-line diagnostics \(engine 14C\.2\) — NOT the job cost; the CANONICAL TRUE COST above is authoritative/);
+    expect(component).toMatch(/Legacy per-line diagnostics — NOT the job cost; the verified true cost above is authoritative/);
   });
 
   it("shows the canonical total as the job cost and the legacy total only as a comparison; a blocked canonical cost quotes nothing", () => {

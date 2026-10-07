@@ -425,7 +425,6 @@ export default function PricingSettings() {
 
       <section style={{ ...card, borderColor: evidenceLiveFrom ? "#bbf7d0" : "#fecaca", background: evidenceLiveFrom ? "#f0fdf4" : "#fef2f2" }}>
         <b>Pricing evidence start date (READ-ONLY here)<ClassTag kind="display" note="evidence cutoff, not a price input" /></b>
-        <span style={{ fontSize: 11, color: "#6b7280", marginLeft: 8 }}>(15F.0K.4H)</span>
         <p style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.7 }}>
           {evidenceLiveFrom ? (
             <>
@@ -438,15 +437,15 @@ export default function PricingSettings() {
             </>
           ) : (
             <b style={{ color: "#991b1b" }}>
-              Not set — Pricing Intelligence may count pre-launch test transactions as evidence. Run the owner
-              activation script (tools/apply-15f0k4h-live-from.mjs) to set it.
+              Not set — Pricing Intelligence may count pre-launch test transactions as evidence. Ask the developer to set the
+              evidence start date (owner action; it is not editable on this page).
             </b>
           )}
         </p>
       </section>
 
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
-        <b>What is editable on this page</b> <span style={{ fontSize: 11, color: "#6b7280" }}>(15F.0K.1 – 15F.0K.3)</span>
+        <b>What is editable on this page</b>
         <ul style={{ fontSize: 13, margin: "6px 0 0", paddingLeft: 20, lineHeight: 1.8 }}>
           <li>Minimum gross-profit floors, minimum order totals, and the sticker area-floor bands — all <b>active authority</b>.</li>
           <li>Per-family margin curves (quantity bands) — <b>active authority</b>, except the two rows marked “not used” below. Displayed tier quantity ladders — <b>display only</b>.</li>
@@ -633,7 +632,6 @@ export default function PricingSettings() {
 
       <section style={card}>
         <h2 style={{ margin: "0 0 6px" }}>Verified market targets — 4x5 sticker-applied bags only<ClassTag kind="override" note="Target column" /><ClassTag kind="display" note="all other columns" /></h2>
-        <span style={{ fontSize: 11, color: "#6b7280" }}>(15F.0K.3)</span>
         <SourceBadge resolution={resolutions[keys.marketTargets]} />
         <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
           Owner decision 2026-07-26: standard 4x5 sticker-applied bags normally target the verified competitor median.
@@ -722,7 +720,7 @@ export default function PricingSettings() {
           <li>Invalid/corrupt value → code default (source “INVALID saved value”), with the exact reason shown above.</li>
           <li>Validation is all-or-nothing per group: a save is either fully valid or refused with the reason — partial merges never happen.</li>
           <li>Every save records the acting staff session and the required note; the prior valid version is kept for one-step restore.</li>
-          <li>All reads and writes are shop-scoped. No Shopify data is touched. No migration — values live in ErpAdminSetting.</li>
+          <li>All reads and writes are shop-scoped. No Shopify data is touched. Values are stored in the ERP settings table; no database migration is involved.</li>
         </ul>
       </section>
     </main>

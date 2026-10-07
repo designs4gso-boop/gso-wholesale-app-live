@@ -1922,8 +1922,9 @@ export default function QuotesPage() {
   }
 
   let tone: "success" | "warning" | "critical" = "success";
-  if (totals.margin < 25) tone = "critical";
-  else if (totals.margin < 40) tone = "warning";
+  const hasPricedItems = Number(totals.revenue || 0) > 0;
+  if (hasPricedItems && totals.margin < 25) tone = "critical";
+  else if (hasPricedItems && totals.margin < 40) tone = "warning";
 
   return (
     <Page
@@ -1970,7 +1971,7 @@ export default function QuotesPage() {
                     Who is this quote for. Customer tier only changes terms wording; it never changes cost.
                   </Text>
                 </BlockStack>
-                <Badge tone={tone}>{`Margin ${totals.margin.toFixed(1)}% — ${totals.margin < 40 ? "below 40% floor" : "meets floor"}`}</Badge>
+                <Badge tone={tone}>{hasPricedItems ? `Margin ${totals.margin.toFixed(1)}% — ${totals.margin < 40 ? "below 40% floor" : "meets floor"}` : "No priced items yet"}</Badge>
               </InlineStack>
 
               <InlineStack gap="300">
@@ -2252,7 +2253,7 @@ export default function QuotesPage() {
                 <Text as="p">Total Cost: ${totals.cost.toFixed(2)}</Text>
                 <Text as="p">Total Profit: ${totals.profit.toFixed(2)}</Text>
                 <Text as="p">Margin: {totals.margin.toFixed(1)}%</Text>
-                <Badge tone={tone}>{totals.margin < 40 ? "OWNER CONFIRMATION PENDING — below 40% margin floor (approval required before Sent / Approved / Won)" : "Margin meets floor"}</Badge>
+                <Badge tone={tone}>{!hasPricedItems ? "Add priced items to see the margin check" : totals.margin < 40 ? "OWNER CONFIRMATION PENDING — below 40% margin floor (approval required before Sent / Approved / Won)" : "Margin meets floor"}</Badge>
               </InlineStack>
               <TextField label="Quote Notes" value={notes} onChange={setNotes} multiline={4} autoComplete="off" />
               <Select label="Status" value={status} onChange={setStatus} options={statuses} helpText="Saved with the quote. Sent / Approved / Won are refused by the server while a low-margin approval is outstanding." />

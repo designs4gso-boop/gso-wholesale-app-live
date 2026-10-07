@@ -30,6 +30,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/quotes">Sales · Quotes / CRM</s-link>
+        <s-link href="/app/wholesale/customers">Sales · Wholesale Applications</s-link>
         <s-link href="/app/erp/cost-calculator">Sales · Cost Calculator</s-link>
         <s-link href="/app/erp/production">Production · Production Board</s-link>
         <s-link href="/app/erp/print-intake">Production · Print Intake</s-link>

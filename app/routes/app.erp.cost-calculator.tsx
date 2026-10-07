@@ -2572,7 +2572,7 @@ export async function action({ request }: { request: Request }) {
     });
   }
   const quote = saveOutcome.created;
-  return Response.json({ ok: true, message: `Draft quote ${quote.id.slice(0, 8)}… saved with the full tier snapshot${verdict.ok ? "" : " (DRAFT ONLY — has warnings)"}. Open Quotes to finish it.` });
+  return Response.json({ ok: true, quoteId: quote.id, message: `Draft quote ${quote.id} saved with the full pricing record${verdict.ok ? "" : " (DRAFT ONLY — has warnings)"}. Open Quotes to finish it.` });
 }
 
 const inputStyle: React.CSSProperties = { width: "100%", padding: 10, border: "1px solid #d1d5db", borderRadius: 8 };
@@ -2758,7 +2758,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a> · <a href="/app/erp/cost-health">Cost Health</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v2.1 (13A.3): owner labor standards are LIVE for comparable labor lines — jar/4x5/14x16 application, design setup, gloss/white setup. Print media costs come from the Materials database, blank/vendor items use quantity cost tiers, waste math matches the quote engine, and the form only recalculates when you press Calculate.</p>
+        <p style={{ marginBottom: 0 }}>Owner labor standards are live for comparable labor lines — jar/4x5/14x16 application, design setup, gloss/white setup. Print media costs come from the Materials database, blank/vendor items use quantity cost tiers, waste math matches the quote engine, and the form only recalculates when you press Calculate.</p>
       </section>
 
       <section style={{ marginTop: 16, border: "2px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 12, padding: "12px 16px", fontWeight: 700 }}>
@@ -2864,12 +2864,12 @@ Setup/design fee included in pricing.`}
       <details style={{ marginTop: 12 }}><summary style={{ fontWeight: 700, cursor: "pointer", fontSize: 13 }}>Advanced Overrides (tier quantities, per-tier margin edits, freight/handling, owner override — job-level only, never global standards)</summary>
       <h2 style={{ marginTop: 0 }}>Pricing Tiers &amp; Margin Review — family curves, {emergency.floor}% margin floor</h2>
       <p style={smallHelp}>
-        PROVISIONAL margin curve (60/55/50/45/40 — editable per tier) until competitor research is done. Setup spreads
+        Margin curve 60/55/50/45/40 by tier (editable per tier; owner-approved research curves apply where configured). Setup spreads
         across each tier quantity; every tier prices from its OWN cost (never a discount off tier 1). Freight stays a
         separate visible line. Prices below {emergency.floor}% margin are blocked without the owner override.
       </p>
       {actionData?.message ? (
-        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600 }}>{actionData.message}</div>
+        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600 }}>{actionData.message}{(actionData as any).quoteId ? <> <a href="/app/quotes" style={{ marginLeft: 8, fontWeight: 700 }}>Open Quotes / CRM →</a></> : null}</div>
       ) : null}
       <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 10 }}>
         <b>Product family:</b> {emergency.family.label} · <b>Default curve:</b> {emergency.family.configured ? emergency.family.curve.join(" / ") + "%" : "provisional 60/55/50/45/40%"} ·{" "}
@@ -3694,7 +3694,7 @@ function ProductDrivenForm() {
         </label>
         <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Gloss coverage % (blank = 90% pre-art estimate)<input name="pglosscoverage" type="number" min={0} max={100} step="1" placeholder="90% estimated" style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Specialty file prep (15G.4C)
+        <label style={{ fontSize: 12 }}>Specialty file prep
           <select name="pfileprep" style={inputStyle}>
             <option value="">Customer supplied production-ready mask — $0</option>
             <option value="1">{SPECIALTY_FILE_PREP_LABEL}</option>
@@ -3996,7 +3996,7 @@ function CanonicalTrueCost() {
           {canonical.status}
         </span>
         <span style={{ fontSize: 12, color: "#374151" }}>
-          {canonical.family} → {CANONICAL_DISPATCH[canonical.family]?.entry}
+          {canonical.family}
         </span>
         <span style={{ fontSize: 11, color: "#6b7280" }}>{canonical.version}</span>
       </div>
@@ -4173,8 +4173,8 @@ function ProductBreakdown() {
     <div style={{ marginTop: 10 }}>
       <b style={{ fontSize: 13 }}>
         {canonicalAuthoritative
-          ? "Legacy per-line diagnostics (engine 14C.2) — NOT the job cost; the CANONICAL TRUE COST above is authoritative"
-          : `Cost breakdown (engine ${emergency.productMode?.isDtp ? "15C-spektra-dtp" : "14C.2"} — all values derived by the server)`}
+          ? "Legacy per-line diagnostics — NOT the job cost; the verified true cost above is authoritative"
+          : "Cost breakdown (all values derived by the server)"}
       </b>
       {emergency.productMode?.isDtp ? (
         <p style={smallHelp}>Vendor-finished Spektra pouches — no in-house sqft/material/machine derivation. Vendor tier cost + GSO design charge + flat per-PO freight only.</p>
@@ -4280,7 +4280,7 @@ function ProductBreakdown() {
         const floorControls = String(requestedTier?.commercial?.controllingRule || "").includes("safety floor");
         return (
           <div style={{ border: "1px solid #fbcfe8", background: "#fdf2f8", borderRadius: 8, padding: 8, fontSize: 12, marginTop: 8 }}>
-            <b>UV specialty commercial pricing (15G.4C):</b>{" "}
+            <b>UV specialty commercial pricing:</b>{" "}
             {spec.deepBuild ? (
               <b style={{ color: "#9d174d" }}>{spec.message}</b>
             ) : (
@@ -4412,7 +4412,7 @@ function ProductTiers() {
           </div>
         )}
         {actionData?.message ? (
-          <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}</div>
+          <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}{(actionData as any).quoteId ? <> <a href="/app/quotes" style={{ marginLeft: 8, fontWeight: 700 }}>Open Quotes / CRM →</a></> : null}</div>
         ) : null}
         <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 8 }}>
           <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />
@@ -4453,7 +4453,7 @@ function ProductTiers() {
           <div style={{ border: `1px solid ${ol.raisedByFloor ? "#fde68a" : "#bbf7d0"}`, background: ol.raisedByFloor ? "#fffbeb" : "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
             <b>Owner storefront price for this jar at {requested.quantity.toLocaleString()}:</b> {money2(ol.unitPrice)}/jar ({money2(ol.totalPrice)} total; {ol.ladderMarginPct != null ? `${ol.ladderMarginPct.toFixed(1)}% margin on true cost` : ""}).
             {ol.raisedByFloor
-              ? <> <b style={{ color: "#92400e" }}>OWNER CONFIRMATION PENDING:</b> that price is below the {ol.floorPct}% minimum margin, so the quote is held at the margin floor ({money2(requested.unitPrice)}/jar, {ol.finalVsLadderPct != null ? `+${ol.finalVsLadderPct.toFixed(0)}%` : ""} above the ladder). The owner can lower the jar margin floor or revise the ladder in docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md.</>
+              ? <> <b style={{ color: "#92400e" }}>OWNER CONFIRMATION PENDING:</b> that price is below the {ol.floorPct}% minimum margin, so the quote is held at the margin floor ({money2(requested.unitPrice)}/jar, {ol.finalVsLadderPct != null ? `+${ol.finalVsLadderPct.toFixed(0)}%` : ""} above the ladder). Only the owner can lower the jar margin floor or revise the jar ladder.</>
               : <> The owner ladder controls this price (above the margin floor).</>}
           </div>
         );
@@ -4529,7 +4529,7 @@ function ProductTiers() {
         </table>
       </div>
       {pm.isDtp ? (
-        <p style={smallHelp}>Owner ladder prices (DTP pricing study, owner-approved 2026-07-24). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
+        <p style={smallHelp}>Owner ladder prices (4x5x2: owner-approved 2026-10-06; other sizes: 2026-07-24 ladder, owner pricing review pending). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
       ) : null}
       {/* 15F.0K.3: direct-print crossover advisory (requested-quantity row) —
           advisory + live DTP comparison only; the owner chooses the product. */}
@@ -4555,9 +4555,7 @@ function ProductTiers() {
           </div>
         );
       })()}
-      <button type="button" onClick={() => setSelectedQty(selected.quantity)} style={{ ...secondaryButtonStyle, marginTop: 8, fontWeight: 700 }}>
-        Use this price — {selected.quantity.toLocaleString()} @ {money2(selected.unitPrice)}/unit
-      </button>
+      <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700 }}>Selected: {selected.quantity.toLocaleString()} @ {money2(selected.unitPrice)}/unit — use the radio in the table to change the quoted tier.</div>
       <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 8 }}>
         <b>Customer price summary</b> (internal costs and profit are not shown here):
         {selected.dtp ? (
@@ -4633,7 +4631,7 @@ Total: ${money2(selected.totalPrice)}`}
         {selected.draftOnly && selected.dtp ? <div style={{ color: "#991b1b", fontWeight: 700, marginTop: 6 }}>DRAFT ONLY — missing costs must be verified before this price is final.</div> : null}
       </div>
       {actionData?.message ? (
-        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}</div>
+        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}{(actionData as any).quoteId ? <> <a href="/app/quotes" style={{ marginLeft: 8, fontWeight: 700 }}>Open Quotes / CRM →</a></> : null}</div>
       ) : null}
       <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 8 }}>
         <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />

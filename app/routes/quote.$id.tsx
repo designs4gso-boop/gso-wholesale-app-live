@@ -17,10 +17,21 @@ const STATUS_LABELS: Record<string, string> = {
   paid: "Paid",
   production: "In production",
   completed: "Completed",
+  won: "Confirmed",
+  lost: "Closed",
+  canceled: "Canceled",
+  cancelled: "Canceled",
+  expired: "Expired",
 };
 
 function statusLabel(status: string) {
-  return STATUS_LABELS[status] || status;
+  return STATUS_LABELS[status] || String(status || "").replaceAll("_", " ");
+}
+
+function statusColor(status: string): string {
+  if (["lost", "canceled", "cancelled", "expired"].includes(status)) return "#ef4444";
+  if (["draft", "sent"].includes(status)) return "#94a3b8";
+  return "#22c55e";
 }
 
 // Public route: only this explicit customer-safe selection may ever be returned.
@@ -84,7 +95,7 @@ export default function QuotePortal() {
             <h1 style={styles.title}>GSO Packaging Quote</h1>
             <p style={styles.subtitle}>Custom wholesale packaging invoice portal</p>
           </div>
-          <div style={styles.badge}>{statusLabel(quote.status)}</div>
+          <div style={{ ...styles.badge, background: statusColor(quote.status) }}>{statusLabel(quote.status)}</div>
         </div>
 
         <div style={styles.infoGrid}>
@@ -118,7 +129,7 @@ export default function QuotePortal() {
               </div>
 
               <div style={styles.itemNumbers}>
-                <p>Qty: {item.quantity}</p>
+                <p>Qty: {Number(item.quantity || 0)}</p>
                 <p>Unit: ${Number(item.unitPrice || 0).toFixed(2)}</p>
                 <strong>${lineTotal.toFixed(2)}</strong>
               </div>

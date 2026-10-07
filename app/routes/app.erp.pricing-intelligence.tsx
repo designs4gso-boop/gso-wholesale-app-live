@@ -186,7 +186,7 @@ export default function PricingIntelligence() {
       ) : null}
 
       <section style={{ ...card, borderColor: shopify.accessBlocked ? "#fecaca" : "#bfdbfe", background: shopify.accessBlocked ? "#fef2f2" : "#eff6ff" }}>
-        <b>Shopify historical-order evidence (15F.0K.4E — read-only)</b>
+        <b>Shopify historical-order evidence (read-only)</b>
         <div style={{ fontSize: 13, marginTop: 6 }}>
           {shopify.accessBlocked ? (
             <span style={{ color: "#991b1b", fontWeight: 700 }}>{shopify.blockedMessage}</span>
@@ -216,7 +216,7 @@ export default function PricingIntelligence() {
           ) : (
             <b style={{ color: "#991b1b" }}>
               No live-sales start date is set — pre-launch test transactions could be counted as evidence. Set
-              pricingEvidenceLiveFrom (owner action) before trusting any counts here.
+              the pricing evidence start date (owner action, on Pricing Settings) before trusting any counts here.
             </b>
           )}
         </div>
@@ -253,15 +253,15 @@ export default function PricingIntelligence() {
                   return (
                     <tr key={`${c.size}-${c.quantity}`} style={{ borderTop: "1px solid #e5e7eb" }}>
                       <td style={{ padding: 4 }}><b>{c.size}</b></td><td align="center">{c.quantity.toLocaleString()}</td>
-                      <td align="center" style={{ color: c.vendorStatus === "OBSERVED_VENDOR_PRICE" ? "#166534" : "#92400e" }}>{c.vendorUnit != null ? `${c.vendorUnit.toFixed(4)}` : SPEKTRA_COST_STATUS_LABEL[c.vendorStatus as keyof typeof SPEKTRA_COST_STATUS_LABEL]}</td>
-                      <td align="center">{c.oldVendorUnit != null ? `${c.oldVendorUnit.toFixed(4)}` : "—"}</td>
+                      <td align="center" style={{ color: c.vendorStatus === "OBSERVED_VENDOR_PRICE" ? "#166534" : "#92400e" }}>{c.vendorUnit != null ? `$${c.vendorUnit.toFixed(4)}` : SPEKTRA_COST_STATUS_LABEL[c.vendorStatus as keyof typeof SPEKTRA_COST_STATUS_LABEL]}</td>
+                      <td align="center">{c.oldVendorUnit != null ? `$${c.oldVendorUnit.toFixed(4)}` : "—"}</td>
                       <td align="center">{c.oldVendorChangePct != null ? `${c.oldVendorChangePct.toFixed(1)}%` : "—"}</td>
-                      <td align="center">{c.landedUnit != null ? `${c.landedUnit.toFixed(4)}` : "—"}</td>
+                      <td align="center">{c.landedUnit != null ? `$${c.landedUnit.toFixed(4)}` : "—"}</td>
                       <td align="center" title={c.ladderNote} style={{ color: c.ladderStatus === "OWNER_APPROVED" ? "#1e3a8a" : "#92400e", fontWeight: 600 }}>{c.ladderStatus === "OWNER_APPROVED" ? "APPROVED 2026-10-06" : "REVIEW REQUIRED"}</td>
-                      <td align="center">{c.currentSellUnit != null ? `${c.currentSellUnit.toFixed(2)}` : c.ladderStatus === "OWNER_APPROVED" ? "—" : "no approved price"}</td>
+                      <td align="center">{c.currentSellUnit != null ? `$${c.currentSellUnit.toFixed(2)}` : c.ladderStatus === "OWNER_APPROVED" ? "—" : "no approved price"}</td>
                       <td align="center" style={{ color: c.meetsProtection === false ? "#991b1b" : undefined }}>{c.currentGmPct != null ? `${c.currentGmPct.toFixed(1)}% / ${(c.currentGp ?? 0).toFixed(0)}${c.meetsProtection === false ? " BELOW" : ""}` : "—"}</td>
                       <td align="center">{c.hardFloorPct}% / ${c.minJobProfit}</td>
-                      <td align="center">{c.benchmark.competitorComparableUnit != null ? c.benchmark.competitorComparableUnit.toFixed(4) : "—"}</td>
+                      <td align="center">{c.benchmark.competitorComparableUnit != null ? `$${c.benchmark.competitorComparableUnit.toFixed(4)}` : "—"}</td>
                       <td align="center">{c.benchmark.premiumPct != null ? `+${c.benchmark.premiumPct.toFixed(1)}%` : "—"}</td>
                       <td>{fmt(p("hold_price"))}</td><td>{fmt(p("hold_margin"))}</td><td>{fmt(p("split"))}</td>
                     </tr>
@@ -272,25 +272,6 @@ export default function PricingIntelligence() {
           </div>
         ))}
         <p style={{ margin: "0 0 8px", fontSize: 12, color: "#374151" }}>Proposals (shown only for ladders still OWNER PRICING REVIEW REQUIRED; the approved 4x5x2 ladder is decided): A holds today's owner ladder (all vendor savings become margin); B passes the vendor change through (holds the margin the ladder earned on the OLD cost); C splits the improvement. New sizes show the 30/35/38% floor and 40% target anchors only. Nothing here changes a live price — owner decision. Commercial position: NO DTP MARKET REFERENCE IN REPOSITORY.</p>
-        <div style={{ overflowX: "auto", display: "none" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead><tr style={{ background: "#f3f4f6" }}><th align="left" style={{ padding: 5 }}>Size</th><th align="left">Catalog status</th><th align="left">Owner sell ladder</th>{SPEKTRA_PUBLISHED_TIERS.map((q) => <th key={q}>{q.toLocaleString()}</th>)}</tr></thead>
-            <tbody>
-              {DTP_CATALOG.map((entry) => (
-                <tr key={entry.size} style={{ borderTop: "1px solid #e5e7eb" }}>
-                  <td style={{ padding: 5 }}><b>{entry.size}</b>{entry.capacityLabel ? ` (${entry.capacityLabel})` : ""}</td>
-                  <td>{entry.status === "CURRENT_STANDARD" ? "current standard" : "LEGACY — no current catalog match"}</td>
-                  <td>{entry.ownerLadder === "EXISTS_2026-07-24" ? "exists (2026-07-24)" : "none — owner decision required"}</td>
-                  {SPEKTRA_PUBLISHED_TIERS.map((q) => {
-                    if (entry.status !== "CURRENT_STANDARD") return <td key={q} align="center" style={{ color: "#6b7280" }}>n/a</td>;
-                    const look = lookupSpektraVendorCost({ size: entry.size as any, material: "White PET", finish: "Glossy", spot: "None", zipper: "None", topFeature: "No Tear Notch", clearGusset: false, quantity: q, skuCount: 1 });
-                    return <td key={q} align="center" title={look.basis} style={{ color: look.status === "REQUEST_CURRENT_VENDOR_QUOTE" ? "#92400e" : "#166534" }}>{look.wholesaleUnit != null ? `${look.wholesaleUnit.toFixed(4)}` : SPEKTRA_COST_STATUS_LABEL[look.status]}</td>;
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
         <p style={{ margin: "8px 0 0", fontSize: 12, color: "#6b7280" }}>Reference configuration for the cells: White PET, Glossy, no spot, no zipper, no tear notch, 1 SKU (wholesale unit = exact public total x 0.75 / quantity). Old Spektra seed costs (4x5x2 $0.9897 / $0.4922 / $0.4033 / $0.3232 at 1,000 / 2,500 / 5,000 / 7,500, etc.) remain on the historical VendorProduct rows for old quotes and are not comparable until the live matrix is loaded.</p>
         <p style={{ margin: "8px 0 0", fontSize: 12, color: "#374151" }}><b>Shaped / die-cut pouches ({DTP_SHAPED_BAG_POLICY_SOURCE}):</b> base = the standard DTP customer price for the same configuration; +{DTP_CUSTOM_SHAPE_SURCHARGE_PCT}% shape surcharge on the product price; ${DTP_NEW_DIE_TOOLING_FEE} per unique NEW die shown as a separate tooling line; existing die on file = $0 tooling; shaped MOQ {DTP_SHAPED_MOQ.toLocaleString()}; same physical shape with several designs = one fee, a different physical shape = a new fee (surcharge still applies).</p>
       </section>
@@ -417,7 +398,7 @@ export default function PricingIntelligence() {
                     <td style={{ color: basket.confidence.eligible ? "#166534" : "#92400e" }}>{basket.confidence.message}</td>
                     <td align="center">
                       {basket.confidence.eligible && basket.acceptedMedian != null
-                        ? `$${basket.acceptedLow?.toFixed(2)} / $${basket.acceptedMedian?.toFixed(2)} / $${basket.acceptedHigh?.toFixed(2)}`
+                        ? [basket.acceptedLow, basket.acceptedMedian, basket.acceptedHigh].map((v: number | null | undefined) => (v == null ? "n/a" : `$${Number(v).toFixed(2)}`)).join(" / ")
                         : "withheld (thresholds not met)"}
                     </td>
                   </tr>
@@ -434,7 +415,7 @@ export default function PricingIntelligence() {
           Conservative shared exclusion (one helper everywhere) plus Shopify-specific rules: test orders, canceled,
           not-paid financial statuses, fully refunded orders, refunded lines, gift cards, free/zero-net lines, and
           unclassifiable lines. Incomplete-price rows (discount allocation unavailable) NEVER enter medians.
-          Since 15F.0K.4G, production-job twins of counted Shopify sales are excluded as "Duplicate of Shopify
+          Production-job twins of counted Shopify sales are excluded as "Duplicate of Shopify
           order-line evidence" (one sale = one row; Shopify wins with its realized net price), and ERP jobs created
           by Shopify TEST orders are excluded as "Paid by Shopify test order" via exact id joins.
         </p>

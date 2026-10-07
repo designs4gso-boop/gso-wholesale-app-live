@@ -1022,12 +1022,12 @@ export default function MarginReviewPage() {
       <section className="card">
         <strong>Safe review workflow</strong>
         <p className="muted">
-          This version is still read-only, but now uses the same recipe pieces we built in Product Setup: base materials, label zones, media options, waste, setup/prepress, packing, and per-side application labor. It does not update Shopify prices yet.
+          Reviews recipe cost against the current Shopify price using the same recipe pieces built in Product Setup: base materials, label zones, media options, waste, setup/prepress, packing, and per-side application labor. Shopify prices change only through the explicit approval step further down this page — never from the review itself.
         </p>
-        <Badge tone="green">Read-only</Badge>
+        <Badge tone="green">Review first — push only after approval</Badge>
         <Badge tone="yellow">Clear cost breakdown</Badge>
         <Badge tone="yellow">Tier-aware review</Badge>
-        <Badge tone="yellow">v11 wholesale quantity breaks</Badge>
+        <Badge tone="yellow">Wholesale quantity breaks (preview)</Badge>
         <Badge tone="yellow">Approval queue records</Badge>
         <Badge tone="yellow">Saved shop assumptions</Badge>
         <Badge tone="yellow">Recipe cost review flags</Badge>
@@ -1068,7 +1068,7 @@ export default function MarginReviewPage() {
         <p className="muted" style={{ marginTop: 8 }}>
           Current audit assumptions: {money(assumptions.laborRatePerHour)}/hr labor, {money(assumptions.applicationLaborCostPerSide)} per printed side floor, {assumptions.auditLimit} rows max, {assumptions.warningBandPct}% warning band.
           These are DIAGNOSTIC REFERENCES only — never a pricing authority. Canonical application labor is the owner standard per applied LABEL
-          (4x5 bags: $0.078125/label at 256 labels/hr; conservative planning reference 180 labels/hr = $0.1111/label; jars: $0.20/label), applied inside the canonical engine (15G.2A).
+          (4x5 bags: $0.078125/label at 256 labels/hr; conservative planning reference 180 labels/hr = $0.1111/label; jars: $0.20/label), applied inside the canonical engine.
         </p>
         {flagsSynced ? (
           <div className="success-note">Recipe cost review flags synced. Flagged {syncedFlagged} recipe(s) and cleared {syncedCleared} recipe(s) from the current audit.</div>
@@ -1088,9 +1088,9 @@ export default function MarginReviewPage() {
           </div>
         ) : null}
         <div className="flag-panel">
-          <strong>v8.1 Recipe Cost Review Flags + Details</strong>
+          <strong>Recipe cost review flags</strong>
           <p className="muted">
-            This sync pushes hard cost-review results back into Product Setup. Missing base cost, missing zones, or missing media cost will show as Cost Review in Product Setup. Labor floor use is now a warning only and will not block approval by itself. This still does not update Shopify prices.
+            This sync pushes hard cost-review results back into Product Setup. Missing base cost, missing zones, or missing media cost will show as Cost Review in Product Setup. Labor floor use is now a warning only and will not block approval by itself.
           </p>
           <div className="queue-actions">
             <Badge tone={recipeFlagPreview?.flagCount ? "yellow" : "green"}>{recipeFlagPreview?.flagCount || 0} recipe(s) to flag</Badge>
@@ -1124,7 +1124,6 @@ export default function MarginReviewPage() {
             <input type="hidden" name="clearRecipeIds" value={(recipeFlagPreview?.clearRecipeIds || []).join(",")} />
             <input type="hidden" name="flagRecipeReasonsJson" value={JSON.stringify(recipeFlagPreview?.flagRecipeReasons || {})} />
             <button type="submit">Sync recipe review flags</button>
-            <span className="button secondary disabled">Shopify updates still locked</span>
           </Form>
         </div>
       </section>
@@ -1172,18 +1171,18 @@ export default function MarginReviewPage() {
         <div className="stat"><span className="muted">Hard cost holds</span><strong>{summary.costReview}</strong></div>
         <div className="stat"><span className="muted">Cost warnings</span><strong>{summary.costWarnings || 0}</strong></div>
         <div className="stat"><span className="muted">Tier issues</span><strong>{summary.tierReview}</strong></div>
-        <div className="stat"><span className="muted">Avg est. cost</span><strong>{money(summary.avgCost)}</strong></div>
+        <div className="stat"><span className="muted">Avg est. cost</span><strong>{summary.avgCost ? money(summary.avgCost) : "Not available"}</strong></div>
       </section>
 
       <section className="card">
-        <h2 style={{ marginTop: 0 }}>v11 Wholesale Quantity Break Preview</h2>
+        <h2 style={{ marginTop: 0 }}>Wholesale quantity break preview</h2>
         <div className="queue-note">
           <strong>Margin-safe quantity discounts.</strong> This preview calculates safe wholesale prices for 1,000 / 2,000 / 5,000 / 10,000 units using the same recipe cost engine, saved labor assumptions, and target margin. It does not update Shopify yet.
         </div>
         <div className="queue-actions">
           <Badge tone="green">{summary.wholesaleRows || 0} row(s) checked</Badge>
           <Badge tone={(summary.wholesaleReview || 0) ? "yellow" : "green"}>{summary.wholesaleReview || 0} tier price review(s)</Badge>
-          <Badge tone="yellow">Shopify quantity pricing still locked</Badge>
+          <Badge tone="yellow">Quantity pricing is preview only</Badge>
         </div>
         {rows?.length ? (
           <div className="wholesale-grid">
@@ -1213,7 +1212,7 @@ export default function MarginReviewPage() {
                     </tbody>
                   </table>
                 </div>
-                <p className="muted" style={{ marginBottom: 0 }}>Target margin: {pct(row.targetMargin)}. Quantity pricing is preview-only until v12/v13.</p>
+                <p className="muted" style={{ marginBottom: 0 }}>Target margin: {pct(row.targetMargin)}. Quantity pricing is preview only.</p>
               </div>
             ))}
           </div>
@@ -1364,7 +1363,7 @@ export default function MarginReviewPage() {
                   </details>
                   <details className="cost-details">
                     <summary>Tier review</summary>
-                    <div className="tier-note">Tier costs are recalculated at each tier quantity so setup/prepress cost spreads correctly. This is read-only and does not update Shopify.</div>
+                    <div className="tier-note">Tier costs are recalculated at each tier quantity so setup/prepress cost spreads correctly. Tier review is informational and never changes a Shopify price.</div>
                     <div className="tier-table">
                       <table>
                         <thead>
@@ -1391,10 +1390,10 @@ export default function MarginReviewPage() {
                         </tbody>
                       </table>
                     </div>
-                    <div className="tier-note">Current Shopify base price: {money(row.currentPrice)}. v11 now previews quantity-break wholesale pricing. Future patches will let staff edit/approve those tiers and sync them to product pages safely.</div>
+                    <div className="tier-note">Current Shopify base price: {money(row.currentPrice)}. Quantity-break wholesale pricing is shown as a preview; editing and approving those tiers is not available yet.</div>
                   </details>
                 </td>
-                <td className="right"><strong>{money(row.currentPrice)}</strong></td>
+                <td className="right"><strong>{row.currentPrice ? money(row.currentPrice) : "No price"}</strong></td>
                 <td className="right">{pct(row.targetMargin)}</td>
                 <td className="right">
                   {row.currentMargin === null ? <span className="price-low">No price</span> : <span className={row.currentMargin >= row.targetMargin ? "healthy-text" : "price-low"}>{pct(row.currentMargin)}</span>}
@@ -1413,14 +1412,6 @@ export default function MarginReviewPage() {
         </table>
       </section>
 
-      <section className="card">
-        <h2 style={{ marginTop: 0 }}>Next phase</h2>
-        <p className="muted">This read-only audit now includes saved shop assumptions, tier-aware cost recalculation, and safe recipe cost-review flag syncing. Next patches should add approval records and safe Shopify price updates.</p>
-        <Badge tone="green">v7 saved assumptions</Badge>
-        <Badge tone="green">v8 recipe review flags</Badge>
-        <Badge tone="gray">v9 approval records</Badge>
-        <Badge tone="gray">v10 update Shopify prices</Badge>
-      </section>
     </div>
   );
 }

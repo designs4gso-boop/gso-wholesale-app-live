@@ -13,6 +13,7 @@ const dashboardSource = readFileSync(resolve(ROOT, "app/routes/app._index.tsx"),
 const EXPECTED_NAV_HREFS = [
   "/app",
   "/app/quotes",
+  "/app/wholesale/customers",
   "/app/erp/cost-calculator",
   "/app/erp/production",
   "/app/erp/print-intake",
@@ -76,9 +77,9 @@ function navLinks(source: string): { href: string; label: string }[] {
 describe("ERP sidebar nav (app/routes/app.tsx)", () => {
   const links = navLinks(navSource);
 
-  it("contains exactly the 24 grouped hrefs in order", () => {
+  it("contains exactly the 25 grouped hrefs in order", () => {
     expect(links.map((l) => l.href)).toEqual(EXPECTED_NAV_HREFS);
-    expect(links).toHaveLength(24);
+    expect(links).toHaveLength(25);
   });
 
   it("does not contain any removed href", () => {

@@ -653,7 +653,7 @@ describe("live-sales cutoff (4H) — Shopify orders", () => {
     expect(page).toContain("isPreLaunchEvidence(record.evidenceAt, liveFrom?.date ?? null)"); // stale-cache defense
     const settings = readFileSync("app/routes/app.erp.pricing-settings.tsx", "utf8");
     expect(settings).toContain("READ-ONLY here");
-    expect(settings).toContain("tools/apply-15f0k4h-live-from.mjs");
+    expect(settings).toContain("Ask the developer to set the"); // 2026-10-07: staff copy no longer names the script file
   });
 });
 

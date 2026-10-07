@@ -627,7 +627,7 @@ describe("automatic tier flow pins (14C.2)", () => {
   });
 
   it("customer price selection populates the summary; internal cost/profit stay out of the customer card", () => {
-    expect(src3).toContain("Use this price");
+    expect(src3).toContain("use the radio in the table to change the quoted tier"); // 2026-10-07: the no-op "Use this price" button was removed; the radio is the selector
     expect(src3).toContain("Customer price summary");
     expect(src3).toContain("internal costs and profit are not shown here");
     expect(src3).toContain("Setup/design: included in unit pricing");
