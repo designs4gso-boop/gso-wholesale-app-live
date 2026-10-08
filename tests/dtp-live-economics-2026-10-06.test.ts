@@ -19,7 +19,7 @@ describe("DTP live economics (analysis only — ladders unchanged)", () => {
     expect(legacySeedUnit("4x5x2", 1500)).toBe(0.9897);
     expect(legacySeedUnit("4x5x2", 25000)).toBe(0.3232);
     expect(legacySeedUnit("5x5x2", 1000)).toBeNull();
-    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).toEqual({ 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37 }); // OWNER-APPROVED 2026-10-06
+    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).toEqual({ 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37, 25000: 0.3 }); // OWNER-APPROVED 2026-10-06 (+25k 2026-10-07)
   });
 
   it("4x5x2 x1000 (Soft Touch): live vendor $0.767362/unit vs old $0.9897 (-22.5%); landed includes art + $85 (unverified); APPROVED $1.30 ladder GM/GP + benchmark computed", () => {
@@ -49,21 +49,26 @@ describe("DTP live economics (analysis only — ladders unchanged)", () => {
     expect(c2.currentSellUnit).toBe(0.71);
     expect(c2.minJobProfit).toBe(500);
     expect(c2.meetsProtection).toBe(true);
-    // 25,000: vendor cost shown, but NO owner sell price (OWNER PRICING REVIEW REQUIRED)
+    // 25,000: approved $0.30 (2026-10-07); above 25,000 no price
     const c25 = dtpEconomicsCell("4x5x2", 25000);
     expect(c25.vendorStatus).toBe("OBSERVED_VENDOR_PRICE");
-    expect(c25.currentSellUnit).toBeNull();
-    expect(c25.ladderStatus).toBe("OWNER_PRICING_REVIEW_REQUIRED");
-    expect(c25.ladderNote).toContain("OWNER PRICING REVIEW REQUIRED");
+    expect(c25.currentSellUnit).toBe(0.3);
+    expect(c25.ladderStatus).toBe("OWNER_APPROVED");
+    expect(c25.meetsProtection).toBe(true);
   });
 
-  it("new sizes (3.5x4.5x2, 5x5x2) have vendor cost but no owner ladder: floor and target anchors only", () => {
+  it("new sizes (3.5x4.5x2, 5x5x2) now carry OWNER-APPROVED ladders (2026-10-07): no proposals, protection met", () => {
     const c = dtpEconomicsCell("5x5x2", 2500);
     expect(c.vendorStatus).toBe("OBSERVED_VENDOR_PRICE");
-    expect(c.currentSellUnit).toBeNull();
+    expect(c.currentSellUnit).toBe(0.75);
     expect(c.oldVendorUnit).toBeNull();
-    expect(c.proposals.map((p) => p.key)).toEqual(["hold_margin", "split"]);
-    expect(c.proposals[0].meetsFloor).toBe(true);
+    expect(c.ladderStatus).toBe("OWNER_APPROVED");
+    expect(c.proposals).toEqual([]);
+    expect(c.meetsProtection).toBe(true);
+    const c1 = dtpEconomicsCell("3.5x4.5x2", 1000);
+    expect(c1.currentSellUnit).toBe(1.3);
+    expect(c1.minJobProfit).toBe(350);
+    expect(c1.meetsProtection).toBe(true);
   });
 
   it("500 units: vendor cost observed but the owner ladder has no price below 1,000 (MOQ retained)", () => {

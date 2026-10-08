@@ -50,14 +50,14 @@ function quote(quantity: number, overrides: Partial<Parameters<typeof priceDtpQu
 }
 
 describe("OWNER-APPROVED 4x5x2 DTP ladder (2026-10-06)", () => {
-  it("pins 1,000 = $1.30, 2,500 = $0.71, 5,000 = $0.46, 10,000 = $0.37; no 7,500 or 25,000 price", () => {
-    expect(DTP_OWNER_PRICE_LADDERS[SKU]).toEqual({ 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37 });
+  it("pins 1,000 = $1.30, 2,500 = $0.71, 5,000 = $0.46, 10,000 = $0.37, 25,000 = $0.30 (added 2026-10-07); no 7,500 price", () => {
+    expect(DTP_OWNER_PRICE_LADDERS[SKU]).toEqual({ 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37, 25000: 0.3 });
     expect(ownerPriceForQuantity(SKU, 1000)).toMatchObject({ tierUsed: 1000, unitPrice: 1.3 });
     expect(ownerPriceForQuantity(SKU, 2500)).toMatchObject({ tierUsed: 2500, unitPrice: 0.71 });
     expect(ownerPriceForQuantity(SKU, 5000)).toMatchObject({ tierUsed: 5000, unitPrice: 0.46 });
     expect(ownerPriceForQuantity(SKU, 10000)).toMatchObject({ tierUsed: 10000, unitPrice: 0.37 });
     expect(ownerPriceForQuantity(SKU, 7500)).toMatchObject({ tierUsed: 5000, unitPrice: 0.46 }); // steps, never interpolated
-    expect(DTP_LADDER_SOURCES[SKU]).toMatchObject({ pricingSource: DTP_4X5_PRICING_SOURCE, status: "OWNER_APPROVED", marketBenchmark: DTP_MARKET_BENCHMARK_KEY, reviewRequiredFromQuantity: 25000 });
+    expect(DTP_LADDER_SOURCES[SKU]).toMatchObject({ pricingSource: DTP_4X5_PRICING_SOURCE, status: "OWNER_APPROVED", marketBenchmark: DTP_MARKET_BENCHMARK_KEY, requestQuoteAboveQuantity: 25000 });
     expect(DTP_4X5_PRICING_SOURCE).toBe("OWNER_APPROVED_DTP_4X5_2026_10_06");
     expect(DTP_MARKET_BENCHMARK_KEY).toBe("DESIGN_AND_CUSTOMIZE_PRIMARY");
   });
@@ -101,35 +101,32 @@ describe("OWNER-APPROVED 4x5x2 DTP ladder (2026-10-06)", () => {
     expect(thin.statusReasons.join(" ")).toContain("$500");
   });
 
-  it("25,000 is NOT assigned an invented sell price: OWNER PRICING REVIEW REQUIRED (vendor cost still available)", () => {
-    const owner = ownerPriceForQuantity(SKU, 25000);
-    expect(owner.unitPrice).toBeNull();
-    expect(owner.reviewRequired).toContain("OWNER PRICING REVIEW REQUIRED");
-    const q = quote(25000);
+  it("25,000 = $0.30 (OWNER APPROVED 2026-10-07); above 25,000 = REQUEST CURRENT VENDOR QUOTE (no invented price)", () => {
+    expect(ownerPriceForQuantity(SKU, 25000)).toMatchObject({ tierUsed: 25000, unitPrice: 0.3 });
+    const above = ownerPriceForQuantity(SKU, 25001);
+    expect(above.unitPrice).toBeNull();
+    expect(above.reviewRequired).toContain("REQUEST CURRENT VENDOR QUOTE");
+    const q = priceDtpQuote({ ladderSku: SKU, quantity: 25001, landedCost: 0, missingCost: true, designs: 1, customUnitPrice: null, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
     expect(q.status).toBe("BLOCKED");
-    expect(q.unitPrice).toBe(0);
-    expect(q.statusReasons.join(" ")).toContain("OWNER PRICING REVIEW REQUIRED");
     expect(lookupSpektraVendorCost({ size: "4x5x2", ...SOFT_TOUCH, quantity: 25000, skuCount: 1 } as any).status).toBe("OBSERVED_VENDOR_PRICE");
     expect(ownerPriceForQuantity(SKU, 24999)).toMatchObject({ tierUsed: 10000, unitPrice: 0.37 });
   });
 
-  it("other DTP sizes do not inherit the 4x5 ladder and remain OWNER PRICING REVIEW REQUIRED", () => {
-    for (const sku of ["spektra-dtp-5x4x2", "spektra-dtp-6x5x2", "spektra-dtp-8x5x2"]) {
-      expect(dtpLadderSource(sku)?.status).toBe("OWNER_PRICING_REVIEW_REQUIRED");
-      expect(dtpLadderSource(sku)?.pricingSource).not.toBe(DTP_4X5_PRICING_SOURCE);
-      for (const qty of DTP_LADDER_QUANTITIES) {
-        expect(ownerPriceForQuantity(sku, qty).unitPrice, `${sku}@${qty}`).not.toBe(ownerPriceForQuantity(SKU, qty).unitPrice);
-      }
+  it("other DTP sizes have their OWN owner-approved ladders (2026-10-07) — never a copy of 4x5x2; 5x4x2 stays legacy", () => {
+    for (const sku of ["spektra-dtp-3.5x4.5x2", "spektra-dtp-5x5x2", "spektra-dtp-6x5x2", "spektra-dtp-8x5x2"]) {
+      expect(dtpLadderSource(sku)?.status).toBe("OWNER_APPROVED");
+      expect(dtpLadderSource(sku)?.pricingSource).toBe("OWNER_APPROVED_DTP_LADDERS_2026_10_07");
+      expect(DTP_OWNER_PRICE_LADDERS[sku]).not.toEqual(DTP_OWNER_PRICE_LADDERS[SKU]);
     }
-    // unchanged 2026-07-24 ladders (still in force for quoting)
-    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-6x5x2"]).toEqual({ 1000: 1.84, 2500: 1.04, 5000: 0.96, 7500: 0.81, 10000: 0.81 });
-    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-8x5x2"]).toEqual({ 1000: 2.05, 2500: 1.23, 5000: 1.23, 7500: 1.05, 10000: 1.05 });
-    // new sizes: no ladder at all
-    for (const size of ["3.5x4.5x2", "5x5x2"]) expect(DTP_CATALOG.find((e) => e.size === size)?.ownerLadder).toBe("NONE_OWNER_DECISION_REQUIRED");
-    // the 1,000-unit exception never applies to another ladder
-    const other = priceDtpQuote({ ladderSku: "spektra-dtp-6x5x2", quantity: 1000, landedCost: 1840 - 450, missingCost: false, designs: 1, customUnitPrice: null, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
-    expect(other.minJobProfit).toBe(500);
-    expect(other.status).toBe("OWNER OVERRIDE REQUIRED");
+    expect(dtpLadderSource("spektra-dtp-5x4x2")?.status).toBe("OWNER_PRICING_REVIEW_REQUIRED");
+    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-6x5x2"]).toEqual({ 1000: 1.4, 2500: 0.78, 5000: 0.54, 10000: 0.46, 25000: 0.4 });
+    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-8x5x2"]).toEqual({ 1000: 1.5, 2500: 0.86, 5000: 0.65, 10000: 0.59, 25000: 0.52 });
+    for (const size of ["3.5x4.5x2", "5x5x2"]) expect(DTP_CATALOG.find((e) => e.size === size)?.ownerLadder).toBe("OWNER_APPROVED_2026-10-07");
+    // the 1,000-unit exception is per approved ladder; the legacy 5x4x2 ladder has none
+    const legacy5x4 = priceDtpQuote({ ladderSku: "spektra-dtp-5x4x2", quantity: 1000, landedCost: 1760 - 450, missingCost: false, designs: 1, customUnitPrice: null, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
+    expect(legacy5x4.minJobProfit).toBe(500);
+    expect(legacy5x4.status).toBe("OWNER OVERRIDE REQUIRED");
+    expect(DTP_LADDER_QUANTITIES).toEqual([1000, 2500, 5000, 10000, 25000]);
   });
 });
 
@@ -203,13 +200,16 @@ describe("quote cost authority: 4x5x2 = live book by EXACT configuration (never 
     expect(priceDtpQuote({ ladderSku: SKU, quantity: 1000, landedCost: glossySpot.landedCost, missingCost: glossySpot.missing, designs: 1, customUnitPrice: null, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } }).status).toBe("BLOCKED");
   });
 
-  it("other sizes keep the legacy vendor seed as quote cost until reviewed; 5x4x2 stays legacy", () => {
-    for (const sku of ["spektra-dtp-6x5x2", "spektra-dtp-8x5x2", "spektra-dtp-5x4x2"]) {
+  it("every current size costs from the live book by configuration (2026-10-07); 5x4x2 stays legacy manual review", () => {
+    for (const sku of ["spektra-dtp-3.5x4.5x2", "spektra-dtp-5x5x2", "spektra-dtp-6x5x2", "spektra-dtp-8x5x2"]) {
       const cost = resolveDtpQuoteCost({ vendorSku: sku, quantity: 1000, designs: 1, selection: SOFT_TOUCH, legacy });
-      expect(cost.authority, sku).toBe("LEGACY_VENDOR_SEED");
-      expect(cost.landedCost).toBe(legacy.totalCost);
-      expect(dtpSizeForVendorSku(sku)?.quoteCostAuthority).toBe("LEGACY_VENDOR_SEED");
+      expect(cost.authority, sku).toBe("LIVE_COST_BOOK_BY_CONFIGURATION");
+      expect(cost.status, sku).toBe("OBSERVED_VENDOR_PRICE");
+      expect(dtpSizeForVendorSku(sku)?.quoteCostAuthority).toBe("LIVE_COST_BOOK");
     }
+    const legacyCost = resolveDtpQuoteCost({ vendorSku: "spektra-dtp-5x4x2", quantity: 1000, designs: 1, selection: SOFT_TOUCH, legacy });
+    expect(legacyCost.authority).toBe("LEGACY_VENDOR_SEED");
+    expect(legacyCost.status).toBe("LEGACY_MANUAL_REVIEW");
     expect(dtpSizeForVendorSku(SKU)?.quoteCostAuthority).toBe("LIVE_COST_BOOK");
     expect(dtpSizeForVendorSku("spektra-dtp-5x4x2")?.status).toBe("LEGACY_NO_CURRENT_STANDARD_CATALOG_MATCH");
   });
@@ -270,10 +270,10 @@ describe("historical safety + route wiring", () => {
       expect(src, field).toContain(field);
     }
     expect(src).toContain("MOQ 2,500");
-    expect(src).toContain("OWNER_APPROVED_DTP_4X5_2026_10_06");
+    expect(src).toContain("OWNER-APPROVED ladders");
     expect(src).not.toMatch(/= 1\.3\b|= 0\.71\b|= 0\.46\b|= 0\.37\b/); // prices live in the pricing module only
     const pi = readFileSync(new URL("../app/routes/app.erp.pricing-intelligence.tsx", import.meta.url), "utf8");
-    expect(pi).toContain("OWNER-APPROVED DTP ladder 2026-10-06");
+    expect(pi).toContain("OWNER-APPROVED DTP ladders");
     expect(pi).toContain("GSO premium");
     const setup = readFileSync(new URL("../app/routes/app.erp.product-setup.tsx", import.meta.url), "utf8");
     expect(setup).toContain("DTP_LADDER_SOURCES");

@@ -209,10 +209,10 @@ describe("DTP catalog status and freight assumption", () => {
   });
 
   it("new sizes have no owner sell ladder (owner decision) and the legacy ladders are untouched", () => {
-    expect(dtpCatalogEntry("3.5x4.5x2")!.ownerLadder).toBe("NONE_OWNER_DECISION_REQUIRED");
-    expect(dtpCatalogEntry("5x5x2")!.ownerLadder).toBe("NONE_OWNER_DECISION_REQUIRED");
-    expect(Object.keys(DTP_OWNER_PRICE_LADDERS).sort()).toEqual(["spektra-dtp-4x5x2", "spektra-dtp-5x4x2", "spektra-dtp-6x5x2", "spektra-dtp-8x5x2"]);
-    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).toEqual({ 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37 }); // OWNER-APPROVED 2026-10-06
+    expect(dtpCatalogEntry("3.5x4.5x2")!.ownerLadder).toBe("OWNER_APPROVED_2026-10-07");
+    expect(dtpCatalogEntry("5x5x2")!.ownerLadder).toBe("OWNER_APPROVED_2026-10-07");
+    expect(Object.keys(DTP_OWNER_PRICE_LADDERS).sort()).toEqual(["spektra-dtp-3.5x4.5x2", "spektra-dtp-4x5x2", "spektra-dtp-5x4x2", "spektra-dtp-5x5x2", "spektra-dtp-6x5x2", "spektra-dtp-8x5x2"]);
+    expect(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).toEqual({ 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37, 25000: 0.3 }); // OWNER-APPROVED 2026-10-06 (+25k 2026-10-07)
   });
 
   it("freight: the $85 runtime assumption is unchanged but labelled UNVERIFIED everywhere it is surfaced", () => {

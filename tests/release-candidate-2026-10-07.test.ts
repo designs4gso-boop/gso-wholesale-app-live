@@ -104,7 +104,7 @@ describe("sales / admin honesty fixes (source pins)", () => {
     expect((s.match(/Open Quotes \/ CRM →/g) || []).length).toBe(3);
     expect(s).not.toContain("setSelectedQty(selected.quantity)");
     expect(s).not.toContain("owner-approved 2026-07-24).");
-    expect(s).toContain("4x5x2: owner-approved 2026-10-06");
+    expect(s).toContain("OWNER-APPROVED 2026-10-06 / 2026-10-07 for all five current sizes");
     expect(s).not.toContain("CANONICAL_DISPATCH[canonical.family]?.entry}");
   });
   it("customer quote page labels and colours every status; quotes board hides the margin badge until items are priced", () => {

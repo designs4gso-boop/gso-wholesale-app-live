@@ -19,13 +19,13 @@ import { DESIGN_AND_CUSTOMIZE_SHAPED_EVIDENCE, benchmarkComparableCrUnit } from 
 import { DTP_NEW_DIE_TOOLING_FEE, priceShapedPouch } from "../app/lib/dtp-shaped-bag-policy";
 
 describe("4x5x2 commercial quantity steps (owner direction 2026-10-07)", () => {
-  it("pins every step boundary; never interpolates; 25,000+ has no activated ladder", () => {
+  it("pins every step boundary; never interpolates; above 25,000 has no activated ladder", () => {
     const expected: Array<[number, number | null]> = [
-      [1000, 1.3], [1500, 1.3], [2499, 1.3], [2500, 0.71], [4999, 0.71], [5000, 0.46], [7500, 0.46], [9999, 0.46], [10000, 0.37], [24999, 0.37], [25000, null], [30000, null],
+      [1000, 1.3], [1500, 1.3], [2499, 1.3], [2500, 0.71], [4999, 0.71], [5000, 0.46], [7500, 0.46], [9999, 0.46], [10000, 0.37], [24999, 0.37], [25000, 0.3], [25001, null], [30000, null],
     ];
     for (const [qty, price] of expected) expect(ownerPriceForQuantity("spektra-dtp-4x5x2", qty).unitPrice, String(qty)).toBe(price);
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25000).reviewRequired).toContain("OWNER PRICING REVIEW REQUIRED");
-    expect(Object.keys(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).map(Number).sort((a, b) => a - b)).toEqual([1000, 2500, 5000, 10000]);
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25001).reviewRequired).toContain("REQUEST CURRENT VENDOR QUOTE");
+    expect(Object.keys(DTP_OWNER_PRICE_LADDERS["spektra-dtp-4x5x2"]).map(Number).sort((a, b) => a - b)).toEqual([1000, 2500, 5000, 10000, 25000]);
   });
 
   it("Design & Customize comparable CR references include the 1,500 tier ($0.84)", () => {
@@ -69,7 +69,7 @@ describe("5x4x2 legacy: MANUAL / VENDOR REVIEW for new quotes; history untouched
 describe("remaining-size PROPOSED ladders (not active)", () => {
   const data = buildDtpProposedLadders();
 
-  it("covers 3.5x4.5x2 / 5x5x2 / 6x5x2 / 8x5x2 at 1,000 / 2,500 / 5,000 / 10,000 / 25,000 with full A–I economics", () => {
+  it("derivation record covers 3.5x4.5x2 / 5x5x2 / 6x5x2 / 8x5x2 at 1,000 / 2,500 / 5,000 / 10,000 / 25,000 with full A–I economics", () => {
     expect(data.status).toBe(DTP_PROPOSAL_STATUS);
     expect(data.ladders.map((l) => l.size)).toEqual(DTP_REMAINING_SIZES);
     for (const ladder of data.ladders) {
@@ -81,7 +81,7 @@ describe("remaining-size PROPOSED ladders (not active)", () => {
         expect(r.proposed!.meetsMinProfit).toBe(true); // normal protection — no inherited $350 exception
         expect(r.proposed!.price).toBeGreaterThanOrEqual(Math.max(r.G_gpParityPrice!, r.H_floorPrice!, r.I_minProfitPrice!) - 1e-9);
         expect(r.exactSizeCompetitor).toBe("NOT CURRENTLY VERIFIED");
-        expect(r.E_anchorBasis).toBe(r.quantity === 25000 ? "4x5x2 25,000 RECOMMENDATION (not approved)" : "OWNER APPROVED 4x5x2");
+        expect(r.E_anchorBasis).toBe("OWNER APPROVED 4x5x2"); // the 25,000 anchor was approved 2026-10-07
       }
       expect(ladder.rows[0].acquisitionOption).not.toBeNull();
       expect(ladder.rows[0].acquisitionOption!.gp).toBeGreaterThanOrEqual(350);
@@ -105,13 +105,13 @@ describe("remaining-size PROPOSED ladders (not active)", () => {
     expect(commercialRound(0.6949)).toBe(0.7);
     expect(commercialRound(0.71)).toBe(0.71);
     const rec = recommended4x5At25k()!;
-    expect(rec.status).toBe("OWNER APPROVAL REQUIRED");
+    expect(rec.status).toBe("OWNER APPROVED 2026-10-07");
     expect(rec.size).toBe(ANCHOR_SIZE);
     expect(rec.price).toBe(0.3);
     expect(rec.gmPct).toBeGreaterThanOrEqual(40);
     expect(rec.meetsFloor).toBe(true);
     expect(rec.continuity.priceAt10k).toBe(0.37);
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25000).unitPrice).toBeNull(); // still NOT activated
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25000).unitPrice).toBe(0.3); // activated 2026-10-07 at the recommended value
   });
 
   it("continuity flags step cliffs; the approved 4x5 ladder's own steps are the reference", () => {
@@ -127,7 +127,7 @@ describe("remaining-size PROPOSED ladders (not active)", () => {
 
   it("writes the owner review markdown to docs/generated", () => {
     const md = dtpProposedLaddersMarkdown();
-    expect(md).toContain("PROPOSED FOR OWNER APPROVAL — NOT ACTIVE");
+    expect(md).toContain("DERIVATION RECORD — ladders OWNER APPROVED 2026-10-07");
     expect(md).toContain("## 8x5x2");
     mkdirSync(new URL("../docs/generated/", import.meta.url), { recursive: true });
     const path = new URL("../docs/generated/dtp-proposed-ladders-2026-10-07.md", import.meta.url);

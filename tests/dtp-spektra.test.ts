@@ -279,14 +279,16 @@ import {
 const LANDED_4X5X2_2500 = 0.38328 * 2500 + 85 + 25 / 3;
 
 describe("DTP owner price ladders (15C.2)", () => {
-  it("holds the exact owner prices, keyed by stable vendorSku (4x5x2 = OWNER-APPROVED 2026-10-06; no 7,500 tier)", () => {
+  it("holds the exact owner prices, keyed by stable vendorSku (OWNER-APPROVED 2026-10-06 / 2026-10-07; 5x4x2 legacy)", () => {
     const expected: Record<string, Array<number | null>> = {
-      "spektra-dtp-4x5x2": [1.3, 0.71, 0.46, null, 0.37],
-      "spektra-dtp-5x4x2": [1.76, 0.97, 0.86, 0.72, 0.71],
-      "spektra-dtp-6x5x2": [1.84, 1.04, 0.96, 0.81, 0.81],
-      "spektra-dtp-8x5x2": [2.05, 1.23, 1.23, 1.05, 1.05],
+      "spektra-dtp-3.5x4.5x2": [1.3, 0.7, 0.45, 0.36, 0.29],
+      "spektra-dtp-4x5x2": [1.3, 0.71, 0.46, 0.37, 0.3],
+      "spektra-dtp-5x5x2": [1.35, 0.75, 0.49, 0.41, 0.35],
+      "spektra-dtp-6x5x2": [1.4, 0.78, 0.54, 0.46, 0.4],
+      "spektra-dtp-8x5x2": [1.5, 0.86, 0.65, 0.59, 0.52],
+      "spektra-dtp-5x4x2": [1.76, 0.97, 0.86, 0.71, null],
     };
-    expect(DTP_LADDER_QUANTITIES).toEqual([1000, 2500, 5000, 7500, 10000]);
+    expect(DTP_LADDER_QUANTITIES).toEqual([1000, 2500, 5000, 10000, 25000]);
     for (const [sku, prices] of Object.entries(expected)) {
       DTP_LADDER_QUANTITIES.forEach((qty, index) => {
         expect(DTP_OWNER_PRICE_LADDERS[sku][qty] ?? null, `${sku}@${qty}`).toBe(prices[index]);
@@ -294,15 +296,16 @@ describe("DTP owner price ladders (15C.2)", () => {
     }
   });
 
-  it("lookup: exact tier, highest-reached between tiers, 7,500 steps to 5,000, 25,000 = OWNER PRICING REVIEW REQUIRED — never interpolated", () => {
+  it("lookup: exact tier, highest-reached between tiers, 7,500 steps to 5,000, 25,000 approved, above 25,000 = vendor quote — never interpolated", () => {
     expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 2500)).toEqual({ tierUsed: 2500, unitPrice: 0.71 });
     expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 1500)).toEqual({ tierUsed: 1000, unitPrice: 1.3 });
     expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 3000)).toEqual({ tierUsed: 2500, unitPrice: 0.71 });
     expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 6000)).toEqual({ tierUsed: 5000, unitPrice: 0.46 });
     expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 8000)).toEqual({ tierUsed: 5000, unitPrice: 0.46 }); // no 7,500 price -> steps to 5,000
     expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 24999)).toEqual({ tierUsed: 10000, unitPrice: 0.37 });
-    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25000)).toEqual({ tierUsed: null, unitPrice: null, reviewRequired: expect.stringContaining("OWNER PRICING REVIEW REQUIRED") });
-    expect(ownerPriceForQuantity("spektra-dtp-6x5x2", 25000)).toEqual({ tierUsed: 10000, unitPrice: 0.81 }); // other ladders unchanged
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25000)).toEqual({ tierUsed: 25000, unitPrice: 0.3 }); // approved 2026-10-07
+    expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 25001)).toEqual({ tierUsed: null, unitPrice: null, reviewRequired: expect.stringContaining("REQUEST CURRENT VENDOR QUOTE") });
+    expect(ownerPriceForQuantity("spektra-dtp-6x5x2", 25000)).toEqual({ tierUsed: 25000, unitPrice: 0.4 });
     expect(ownerPriceForQuantity("spektra-dtp-4x5x2", 500).unitPrice).toBeNull(); // below MOQ
     expect(ownerPriceForQuantity("unknown-sku", 2500).unitPrice).toBeNull(); // no ladder — never guessed
   });

@@ -27,9 +27,12 @@ import { decideMachine } from "../app/lib/print-intake-routing.server";
 import { buildCanonicalJarLineMetadata, priceJarConfiguration } from "../app/lib/canonical-jar-pricing";
 
 const OWNER_LADDER_PINS: Record<string, number[]> = {
-  dtp_4x5x2: [1.3, 0.71, 0.46, 0.46, 0.37], // OWNER-APPROVED 2026-10-06; 7,500 steps to the 5,000 price
-  dtp_6x5x2: [1.84, 1.04, 0.96, 0.81, 0.81],
-  dtp_8x5x2: [2.05, 1.23, 1.23, 1.05, 1.05],
+  // OWNER-APPROVED 2026-10-06 / 2026-10-07 — online options stop at the 10,000 storefront cap
+  dtp_3_5x4_5x2: [1.3, 0.7, 0.45, 0.36],
+  dtp_4x5x2: [1.3, 0.71, 0.46, 0.37],
+  dtp_5x5x2: [1.35, 0.75, 0.49, 0.41],
+  dtp_6x5x2: [1.4, 0.78, 0.54, 0.46],
+  dtp_8x5x2: [1.5, 0.86, 0.65, 0.59],
 };
 
 function priced(productType: string, quantity: number) {
@@ -38,13 +41,13 @@ function priced(productType: string, quantity: number) {
 
 describe("owner DTP ladder consumption (authority — 15C.2, never re-derived)", () => {
   it("prices every size at every ladder tier exactly from the owner ladders", () => {
-    expect(DTP_QUANTITY_OPTIONS).toEqual([1000, 2500, 5000, 7500, 10000]);
+    expect(DTP_QUANTITY_OPTIONS).toEqual([1000, 2500, 5000, 10000]);
     for (const [type, prices] of Object.entries(OWNER_LADDER_PINS)) {
       DTP_QUANTITY_OPTIONS.forEach((quantity, index) => {
         const result = priced(type, quantity);
         if (!result.ok) throw new Error(`${type}@${quantity}: ${result.reason}`);
         expect(result.unitPrice, `${type}@${quantity}`).toBe(prices[index]);
-        expect(result.tierUsed).toBe(type === "dtp_4x5x2" && quantity === 7500 ? 5000 : quantity);
+        expect(result.tierUsed).toBe(quantity);
         // the storefront number IS the owner ladder number
         expect(result.unitPrice).toBe(ownerPriceForQuantity(dtpLaunchInfoForType(type)!.sku, quantity).unitPrice);
       });
@@ -70,6 +73,8 @@ describe("owner DTP ladder consumption (authority — 15C.2, never re-derived)",
   const DTP_LAUNCH_INFO_SKUS: Record<string, string> = {
     dtp_4x5x2: "spektra-dtp-4x5x2",
     dtp_5x4x2: "spektra-dtp-5x4x2",
+    dtp_3_5x4_5x2: "spektra-dtp-3.5x4.5x2",
+    dtp_5x5x2: "spektra-dtp-5x5x2",
     dtp_6x5x2: "spektra-dtp-6x5x2",
     dtp_8x5x2: "spektra-dtp-8x5x2",
   };
@@ -114,8 +119,8 @@ describe("MOQ and quote boundaries", () => {
 
   it("serves the full break ladder per size", () => {
     const breaks = dtpPriceBreaks("dtp_8x5x2");
-    expect(breaks.map((entry) => entry.minQty)).toEqual([1000, 2500, 5000, 7500, 10000]);
-    expect(breaks.map((entry) => entry.priceEach)).toEqual([2.05, 1.23, 1.23, 1.05, 1.05]);
+    expect(breaks.map((entry) => entry.minQty)).toEqual([1000, 2500, 5000, 10000, 25000]);
+    expect(breaks.map((entry) => entry.priceEach)).toEqual([1.5, 0.86, 0.65, 0.59, 0.52]);
   });
 });
 
