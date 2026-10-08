@@ -193,7 +193,7 @@ inkCost = calculatedInkMl × currentCanonicalInkCostPerMl
 **No money is ever stored on a calibration row.** Current provisional rates:
 Roland $149/750 mL = $0.1986667/mL · Mimaki $176/1000 mL = $0.176/mL ·
 Poseidon Matte $213 / 675 sqft = **$0.3155556/sqft** (verified 2026‑07‑17; the
-historical $0.2889 is retired). Equipment recovery $8/hr.
+historical $0.2889 is retired). Equipment recovery **$5/hr — OWNER APPROVED 2026-10-07** for both the Roland LG-640 and the Mimaki UCJV300-130 (basis: retail replacement value ~$24,395 / ~$21,995 vs ~$10,000 purchase each, high utilization — minimum 8 h/day x 5 d/wk, Roland normally 16–18 h/day, Mimaki 8–12 h/day — plus maintenance / electricity / contingency; covers capital replacement reserve, maintenance/service, electricity/operating allowance and equipment contingency only, never labor, ink, media, setup, cutting, weeding, application or commercial profit). Previous: $8/hr PROVISIONAL (13A.7B). Environment override `GSO_MACHINE_RATE_PER_HOUR` preserved; the canonical default is $5.00.
 
 ---
 
@@ -251,9 +251,9 @@ Combined printer burden per machine-occupancy hour:
 
 | | $/hr |
 |---|---|
-| Equipment recovery | 8.00 |
+| Equipment recovery (owner approved 2026-10-07; was 8.00 provisional) | 5.00 |
 | Operator attention (10% × $25) | 2.50 |
-| **Combined** | **10.50** |
+| **Combined** | **7.50** |
 
 Classification `OWNER_APPROVED_PROVISIONAL` — it makes a job `PROVISIONAL`,
 never `DRAFT_ONLY`. Currently 10% for Mimaki CMYK, Roland CMYK, Roland White
@@ -418,3 +418,24 @@ commercial questions are therefore NOT part of the CORE release.
   handling/setup + legitimate outside charges. Boxes: vendor box cost +
   tooling/die/setup + Southwest inbound freight + GSO handling. Owner/vendor
   data incomplete.
+
+
+## Machine recovery rate change — 2026-10-07 ($8/hr provisional → $5/hr owner approved)
+
+Only the machine-recovery lines of the canonical true cost moved; every other component was verified identical line by line (the historical $8 captures are still checked in the test suite with the rate pinned explicitly). New control values: 3x3 sticker control 1,000 = **$79.617252 / $0.079617** (was $84.143290 / $0.084143); Miron 100ml Tall 128 Side + Lid = **$428.5026 / $3.3477** (was $430.0861 / $3.3600). DTP (outsourced) does not move. Customer pricing authorities are unchanged; market-target-controlled prices did not move, cost-floor-controlled prices (specialty 5X / 7X gloss bags, holographic + 3X, cost-plus Product Setup recipes) follow the lower true cost by their existing owner-approved rule — see the release readiness document.
+
+# Machine recovery rate impact — $8/hr (provisional) -> $5/hr (OWNER APPROVED 2026-10-07)
+
+Only the machine-recovery lines move; every other component is identical (verified line by line). DTP (outsourced) does not move.
+
+| Control | Old total @ $8 | New total @ $5 | $ diff | Old unit | New unit | Unit diff | % diff | Lines that changed |
+|---|---|---|---|---|---|---|---|---|
+| 3x3 sticker control (1,000 matte, AUTO CMYK) | $84.1433 | $79.6173 | -4.5260 | $0.084143 | $0.079617 | -0.004526 | -5.38% | machine 12.0694 -> 7.5434 |
+| 4x5 Sticker Bag (100, 1 face, 40% coverage) | $38.9603 | $37.9174 | -1.0429 | $0.389603 | $0.379174 | -0.010429 | -2.68% | machine 2.7810 -> 1.7381 |
+| Roland CMYK job (1,000 x 3x3 matte, explicit Roland) | $73.5176 | $70.5870 | -2.9306 | $0.073518 | $0.070587 | -0.002931 | -3.99% | machine 7.8149 -> 4.8843 |
+| Roland WHITE job (1,000 x 3x3, 1 white layer, 100% coverage) | $167.2918 | $158.8543 | -8.4375 | $0.167292 | $0.158854 | -0.008437 | -5.04% | machine_white 14.6851 -> 9.1782; machine 7.8149 -> 4.8843 |
+| Roland GLOSS job (1,000 x 3x3, 1 gloss layer) | $109.7254 | $103.8643 | -5.8612 | $0.109725 | $0.103864 | -0.005861 | -5.34% | machine_gloss 7.8149 -> 4.8843; machine 7.8149 -> 4.8843 |
+| Miron jar control (100ml Tall, 128, Side + Lid, AUTO CMYK) | $430.0861 | $428.5026 | -1.5835 | $3.360048 | $3.347677 | -0.012371 | -0.37% | machine 4.2228 -> 2.6392 |
+| Stock Bag (100, 1 face, matte, representative $0.25 blank) | $59.9266 | $58.8948 | -1.0318 | $0.599266 | $0.588948 | -0.010318 | -1.72% | (none) |
+| Banner control (one 3x6 ft, plain) | $31.4672 | $30.1299 | -1.3372 | $31.467151 | $30.129941 | -1.337209 | -4.25% | machine 3.5659 -> 2.2287 |
+| DTP 4x5x2 x 1,000 (outsourced — must not move) | $860.6958 | $860.6958 | 0.0000 | $0.860696 | $0.860696 | 0.000000 | 0.00% | (none) |

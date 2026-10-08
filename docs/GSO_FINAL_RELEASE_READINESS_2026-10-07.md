@@ -19,7 +19,22 @@ Columns: **Area · Problem · Impact · Severity · Owner decision needed · Nex
 
 ## B. OWNER DECISION REQUIRED BEFORE RELEASE
 
-None remaining for the release. All 13 decisions are answered and applied; the only open items (machine-rate record alignment, vendor freight basis, post-launch schema work) do not block deployment.
+None remaining for the release. All 13 decisions plus the machine recovery rate ($5/hr, 2026-10-07) are answered and applied; the only open items (vendor freight basis, post-launch schema work) do not block deployment.
+
+### Machine recovery rate $8 → $5/hr (OWNER APPROVED 2026-10-07) — effect on customer prices
+
+True manufacturing cost fell on every in-house printed job (only the machine-recovery lines moved; DTP is outsourced and did not move). Customer pricing authorities were NOT changed; prices moved only where the existing owner-approved rule is cost-based:
+
+| Surface | Rule | Price effect |
+|---|---|---|
+| Standard 4x5 sticker bags (1X / 3X, single and double) | market target controls | unchanged ($1.05 / $1.45 at 1,000 etc.) |
+| Specialty 4x5 bags where the 40% cost floor controls (5X / 7X double) | floor = cost / 0.60 | 500 double: 5X $1,203.53 → $1,165; 7X $1,501.23 → $1,445. 1,000 double: 5X $2,377.67 → $2,300; 7X $2,973.07 → $2,860 |
+| Holographic + 3X double at 1,000 | floor-controlled | $2.24 → $2.16 per unit |
+| Product Setup cost-plus recipes (margin % on cost) | cost / (1 − margin) | moves with the lower machine cost (e.g. the 10-sqft recipe fixture $2.0533 → $2.0333 per unit) |
+| Stickers / labels, banners, jars | market floors / owner ladders / 16D jar ladder | ladders and market floors unchanged; cost-based candidates and margins improve |
+| DTP | owner ladders | unchanged |
+
+Margins on every market-target or ladder-priced item rise by the machine-cost saving (e.g. 3x3 sticker control GM improves by $4.53 per 1,000; Miron 128 jar set by $1.58). If the owner wants the floor-controlled specialty bag prices held at their former values, that is a new owner pricing rule (not applied).
 
 ## C. MEASUREMENT / VENDOR DATA STILL NEEDED
 

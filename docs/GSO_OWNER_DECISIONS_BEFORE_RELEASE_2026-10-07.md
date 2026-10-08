@@ -14,13 +14,13 @@
 | 8 | Owner-only gating | Keep the typed-phrase gates; e-mail allow-list POST-LAUNCH | unchanged |
 | 9 | Mimaki white | Mimaki UCJV300 is CMYK-only for ERP routing; white and gloss on the Roland only; no Mimaki white channel exposed | `app.erp.machines.tsx` preset (white slots disabled); routing authority unchanged |
 | 10 | Jar MOQ | KEEP 128 (50 belongs to other product rules) | unchanged |
-| 11 | Machine rate | NOT changed in this pass (see the report for the exact current values) | unchanged |
+| 11 | Machine rate | APPROVED $5.00/hr for both printers (2026-10-07; retail replacement basis; was $8 provisional) | `app/lib/owner-standards.ts`, Machines presets, Cost Health / Verification |
 | 12 | Shaped pouch policy | unchanged (MOQ 2,500; ×1.10; $700 per new die separately; $0 reuse; one fee per physical shape) | unchanged |
 | 13 | Design & Customize | remains PRIMARY / CONTROLLING; secondary competitors never change owner ladders automatically | `dtp-market-benchmark.ts` |
 
 ## Still genuinely open (do not block the release)
 
-1. **Machine hourly rate** — the owner standard used by every pricing and actual-cost path is `OWNER_STANDARDS.machineRecoveryPerHour` = **$8/hr** (`app/lib/rip-actual-costs-shared.ts` → `machineRatePerHour()`, env override `GSO_MACHINE_RATE_PER_HOUR`); the Machines page preset also seeds `costPerHour: 8`. The Cost Health page still reports a legacy "$5/hr" machine record where one exists in the database. Decide separately whether the stored machine record should be aligned to $8 (SMALL, data only).
+1. ~~Machine hourly rate~~ — ANSWERED 2026-10-07: **$5.00/hr owner-approved machine recovery for both the Roland LG-640 and the Mimaki UCJV300-130** (retail replacement value + high utilization + maintenance/electricity contingency; previous $8/hr provisional). Applied in `OWNER_STANDARDS.machineRecoveryPerHour`; every runtime path inherits it. Existing production machine records at $5/hr are now consistent with the standard (no DB write needed); a record at any other value is flagged on Cost Health / Cost Verification.
 2. **Freight basis** — when the vendor confirms a freight basis, replace the $85 constant or switch to a quoted line (SMALL).
 3. **Post-launch schema items** — durable die registry; owner e-mail allow-list; unique index on the production-job source key plus a webhook-receipt table.
 

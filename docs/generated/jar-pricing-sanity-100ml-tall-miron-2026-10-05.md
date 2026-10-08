@@ -3,16 +3,16 @@
 True cost = canonical engine with the production-shaped Mimaki CMYK calibration. Prices = owner 16D ladder with 45% minimum margin protection and the quantity-break envelope. Generated 2026-10-08.
 
 
-Residual steps where the 45% floor binds at a Miron blank cost tier (staff are told the larger order is cheaper): 246->247: 1473.96 -> 1370.45 (cheaper to order 247); 494->495: 2709.55 -> 2505.60 (cheaper to order 495); 989->990: 4984.65 -> 4680.28 (cheaper to order 990)
+Residual steps where the 45% floor binds at a Miron blank cost tier (staff are told the larger order is cheaper): 246->247: 1468.59 -> 1365.08 (cheaper to order 247); 494->495: 2698.90 -> 2494.95 (cheaper to order 495); 989->990: 4963.66 -> 4659.29 (cheaper to order 990)
 | qty | true unit cost | true job cost | owner ladder $/jar | recommended unit price | total | gross profit | gross margin | pricing source |
 |---|---|---|---|---|---|---|---|---|
-| 64 | 3.4567 | 221.23 | 4.95 | 6.28 | 402.23 | 181.00 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
-| 100 | 3.3470 | 334.70 | 4.50 | 6.09 | 608.55 | 273.85 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
-| 127 | 3.3624 | 427.02 | 4.50 | 6.11 | 776.40 | 349.38 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
-| 128 | 3.3600 | 430.09 | 4.50 | 6.11 | 781.97 | 351.89 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
-| 129 | 3.3578 | 433.15 | 4.50 | 6.11 | 787.55 | 354.40 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
-| 250 | 3.0489 | 762.23 | 4.00 | 5.54 | 1385.87 | 623.64 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
-| 256 | 3.0490 | 780.53 | 4.00 | 5.54 | 1419.15 | 638.62 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
-| 500 | 2.7821 | 1391.07 | 3.75 | 5.06 | 2529.21 | 1138.15 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
-| 640 | 2.7842 | 1781.90 | 3.75 | 5.06 | 3239.81 | 1457.91 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
-| 1000 | 2.5998 | 2599.77 | 3.50 | 4.73 | 4726.85 | 2127.08 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 64 | 3.4439 | 220.41 | 4.95 | 6.26 | 400.75 | 180.34 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 100 | 3.3351 | 333.51 | 4.50 | 6.06 | 606.37 | 272.87 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 127 | 3.3499 | 425.44 | 4.50 | 6.09 | 773.52 | 348.08 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 128 | 3.3477 | 428.50 | 4.50 | 6.09 | 779.10 | 350.59 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 129 | 3.3455 | 431.57 | 4.50 | 6.08 | 784.67 | 353.10 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 250 | 3.0371 | 759.28 | 4.00 | 5.52 | 1380.50 | 621.23 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 256 | 3.0368 | 777.41 | 4.00 | 5.52 | 1413.47 | 636.06 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 500 | 2.7704 | 1385.21 | 3.75 | 5.04 | 2518.56 | 1133.35 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 640 | 2.7723 | 1774.29 | 3.75 | 5.04 | 3225.97 | 1451.69 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
+| 1000 | 2.5881 | 2588.05 | 3.50 | 4.71 | 4705.55 | 2117.50 | 45.0% | Minimum margin protection — 45% family minimum (cost / (1 - 45%)) |
