@@ -1,3 +1,4 @@
+import { completionGuardApplies, evaluateQcForCompletion } from "../lib/production-qc-guard";
 import {
   Page,
   Layout,
@@ -841,6 +842,16 @@ export async function action({ request }: { request: Request }) {
     if (!isStaffProductionStatus(status)) return Response.json({ ok: false, message: `Invalid production status "${status}".` }, { status: 400 });
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
     if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
+    // OWNER DECISION 2026-10-07: QC PASS REQUIRED BEFORE COMPLETION (existing
+    // QC events only; no schema; already-completed jobs are never touched).
+    if (completionGuardApplies(job.status, status)) {
+      const [items, events] = await Promise.all([
+        db.productionJobItem.findMany({ where: { shop, jobId }, select: { id: true, itemTicket: true, productTitle: true } }),
+        db.productionJobEvent.findMany({ where: { shop, jobId, eventType: { in: ["qc_result", "production_run_qc_passed", "production_run_qc_hold", "production_run_qc_failed"] } }, orderBy: { createdAt: "asc" }, select: { eventType: true, message: true, oldValue: true, newValue: true, createdAt: true } }),
+      ]);
+      const verdict = evaluateQcForCompletion(items, events);
+      if (!verdict.ok) return Response.json({ ok: false, message: verdict.message }, { status: 400 });
+    }
 
     await db.productionJob.update({
       where: { id: jobId },

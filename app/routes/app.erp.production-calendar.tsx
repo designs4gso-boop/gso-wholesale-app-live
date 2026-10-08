@@ -1,4 +1,5 @@
 import { Page, Layout, Card, Text, Badge, Button, InlineStack, BlockStack, Divider } from "@shopify/polaris";
+import { completionGuardApplies, evaluateQcForCompletion } from "../lib/production-qc-guard";
 import { isStaffProductionStatus } from "../lib/production-status-vocabulary";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -161,6 +162,15 @@ export async function action({ request }: { request: Request }) {
     const dueDate = String(formData.get("dueDate") || "");
     const status = String(formData.get("status") || job.status || "new");
     if (!isStaffProductionStatus(status)) return Response.json({ ok: false, message: "Unknown production status." }, { status: 400 });
+    // OWNER DECISION 2026-10-07: QC PASS REQUIRED BEFORE COMPLETION (same guard as the Production Board).
+    if (completionGuardApplies(job.status, status)) {
+      const [items, events] = await Promise.all([
+        db.productionJobItem.findMany({ where: { shop, jobId }, select: { id: true, itemTicket: true, productTitle: true } }),
+        db.productionJobEvent.findMany({ where: { shop, jobId, eventType: { in: ["qc_result", "production_run_qc_passed", "production_run_qc_hold", "production_run_qc_failed"] } }, orderBy: { createdAt: "asc" }, select: { eventType: true, message: true, oldValue: true, newValue: true, createdAt: true } }),
+      ]);
+      const verdict = evaluateQcForCompletion(items, events);
+      if (!verdict.ok) return Response.json({ ok: false, message: verdict.message }, { status: 400 });
+    }
     const priority = String(formData.get("priority") || job.priority || "normal");
     const assignedTo = String(formData.get("assignedTo") || "").trim();
     const oldSummary = `${job.status || ""}|${job.priority || ""}|${dateInput(job.dueDate)}|${job.assignedTo || ""}`;
