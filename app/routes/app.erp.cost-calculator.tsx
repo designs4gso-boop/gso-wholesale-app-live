@@ -803,7 +803,7 @@ export async function loader({ request }: { request: Request }) {
         spotGloss: eparams.get("egloss") === "1",
         inkMlPerSqft: Number(eparams.get("einkml") || 0.6),
         machineMinutesPerSqft: Number(eparams.get("emachmin") || 0),
-        machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+        machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // owner standard $5/hr (approved 2026-10-07; single source)
         blankUnitCost: eBlank > 0 ? eBlank : null,
         blankLabel: String(eparams.get("eblanklabel") || "Blank item"),
         lidUnitCost: Number(eparams.get("elid") || 0) > 0 ? Number(eparams.get("elid")) : null,
@@ -1000,7 +1000,7 @@ export async function loader({ request }: { request: Request }) {
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(eparams.get("pmachmin") || 0),
       machineSqftPerHour: printer === "roland" ? printerSqftPerHour.roland : printerSqftPerHour.mimaki, // 15F.0-D verified speed
-      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // owner standard $5/hr (approved 2026-10-07; single source)
       cutType: normalizeCutType(eparams.get("pcut")), // 15F.0-E (legacy kiss/weeded -> square-rect)
       cutRequiresWeeding: eparams.get("pcut") === "weeded",
       hemming: eparams.get("phem") === "1",
@@ -1737,7 +1737,7 @@ export async function action({ request }: { request: Request }) {
       sides: form.get("esides") === "2" ? 2 : 1, labelWidthIn: Number(form.get("ewidth") || 0), labelHeightIn: Number(form.get("eheight") || 0),
       materialCostPerSqft: Number(form.get("ematsqft") || 0) > 0 ? Number(form.get("ematsqft")) : null, materialLabel: String(form.get("ematlabel") || "Material"),
       printer: form.get("eprinter") === "roland" ? "roland" : "mimaki", whiteInk: form.get("ewhite") === "1", spotGloss: form.get("egloss") === "1",
-      inkMlPerSqft: Number(form.get("einkml") || 0.6), machineMinutesPerSqft: Number(form.get("emachmin") || 0), machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+      inkMlPerSqft: Number(form.get("einkml") || 0.6), machineMinutesPerSqft: Number(form.get("emachmin") || 0), machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // owner standard $5/hr (approved 2026-10-07; single source)
       blankUnitCost: eBlank > 0 ? eBlank : null, blankLabel: String(form.get("eblanklabel") || "Blank item"),
       lidUnitCost: Number(form.get("elid") || 0) > 0 ? Number(form.get("elid")) : null, lidLabel: String(form.get("elidlabel") || "Miron lid"),
       boxes: Number(form.get("eboxes") || 0), wastePct: form.get("ewaste") ? eWaste : -1,
@@ -1912,7 +1912,7 @@ export async function action({ request }: { request: Request }) {
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(fRead("pmachmin") || 0),
       machineSqftPerHour: printerSave === "roland" ? printerSpeedsSave.roland : printerSpeedsSave.mimaki, // 15F.0-D verified speed
-      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // owner standard $5/hr (approved 2026-10-07; single source)
       cutType: normalizeCutType(fRead("pcut")), // 15F.0-E (legacy kiss/weeded -> square-rect)
       cutRequiresWeeding: fRead("pcut") === "weeded",
       hemming: fRead("phem") === "1",
@@ -4252,7 +4252,7 @@ function ProductBreakdown() {
       {/* 15G.3-M: compact trust/source card — why this number is trusted. */}
       <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 4 }}>
         <div><b>Pricing engine:</b> {canonicalAuthoritative ? `Canonical true cost ${canonical?.version ?? "17D.7"} (authoritative) · legacy 14C.2 lines are diagnostics` : `Canonical Product Engine (${emergency.productMode?.isDtp ? "15C Spektra DTP ladder" : "15F.0 production-ready + owner policy"})`}</div>
-        <div><b>Machine rate:</b> Owner standard — $8/hr</div>
+        <div><b>Machine rate:</b> Owner standard — {"$"}{OWNER_STANDARDS.machineRecoveryPerHour.value}/hr (approved 2026-10-07, both printers)</div>
         {/* 2026-10-05 live smoke follow-up: the application standard shown here is
             the one the CANONICAL engine priced with (per family), never the legacy
             4x5 bag rate on a jar quote. The legacy figure stays visible only when

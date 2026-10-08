@@ -1,3 +1,4 @@
+import { OWNER_STANDARDS } from "../lib/owner-standards";
 import {
   Page,
   Layout,
@@ -74,11 +75,12 @@ const DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL = 0.0075;
 const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
   {
     // 15F.0K.4B: LG-640 is the shop's actual Roland (13A.7B operational
-    // evidence); recovery preset = the owner-approved $8/hr, never the stale $5.
+    // evidence); recovery preset = the owner-approved $5/hr (2026-10-07, retail
+    // replacement basis) — the same rate as the Mimaki.
     name: "Roland TrueVIS LG-640",
     machineType: "printer",
     maxWidthIn: 52.9,
-    costPerHour: 8,
+    costPerHour: OWNER_STANDARDS.machineRecoveryPerHour.value,
     sqftPerHour: 150,
     setupWastePct: 10,
     allowOverflow: true,
@@ -99,7 +101,7 @@ const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
     name: "Mimaki UCJV300-130",
     machineType: "printer",
     maxWidthIn: 53.6,
-    costPerHour: 8,
+    costPerHour: OWNER_STANDARDS.machineRecoveryPerHour.value,
     sqftPerHour: 150,
     setupWastePct: 10,
     allowOverflow: false,

@@ -162,7 +162,7 @@ function money(value: any) {
 // 13A.7B: the legacy hardcoded ink rates (Roland 156.99/750, Mimaki 190/1000)
 // and the $5 recovery constant are REMOVED. Ink cost comes from the shared
 // verified channel-cost engine (same as Audit Actual Costs / 13A.7A) and the
-// machine rate from the ONE configurable source machineRatePerHour() ($8/hr).
+// machine rate from the ONE configurable source machineRatePerHour() ($5/hr owner standard).
 function summarizeActualPrintLogs(job: any, entries: any[], rates: BrandInkRates[], ratePerHour: number) {
   const revenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const estimatedCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);

@@ -13,7 +13,7 @@
 //   never merged silently.
 //
 // Rates come exclusively from the verified shared engine: DB machine channel
-// costs for ink and the ONE configured machine rate (13A.7B: $8/hr via
+// costs for ink and the ONE configured machine rate ($5/hr owner standard via
 // machineRatePerHour()/MACHINE_RATE_CURRENT). The preview total is ink +
 // machine ONLY so it always equals the Production Board / writeback total;
 // media/material cost is shown as a separate preview-only reference

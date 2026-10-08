@@ -20,7 +20,7 @@ export function machineCost(printMinutes: number, ratePerHour: number) {
   return (Math.max(0, safeNumber(printMinutes)) / 60) * safeNumber(ratePerHour);
 }
 
-// The ONE configurable machine-rate source (owner decision 13A.7B: $8/hr).
+// The ONE configurable machine-rate source (owner standard $5/hr, approved 2026-10-07; env override GSO_MACHINE_RATE_PER_HOUR).
 // Env override GSO_MACHINE_RATE_PER_HOUR wins when set to a positive number;
 // otherwise the shared MACHINE_RATE_CURRENT constant applies. Board previews,
 // the audit page, and print-log writeback must all call this.

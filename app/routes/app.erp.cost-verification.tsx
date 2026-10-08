@@ -1,4 +1,5 @@
 import type React from "react";
+import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -203,8 +204,8 @@ export async function loader({ request }: { request: Request }) {
 
     if (!(Number(machine.costPerHour) > 0)) {
       pushIssue(issues, { area: "Machine / labor", item: machine.name, severity: "critical", problem: "No machine hourly cost.", verify: "Real recovery rate (power + maintenance + depreciation)", fixPath: "/app/erp/machines", fixLabel: "Machines" });
-    } else if (nearlyEqual(Number(machine.costPerHour), SEEDED_FINGERPRINTS.machineRatePerHour)) {
-      pushIssue(issues, { area: "Machine / labor", item: machine.name, severity: "warning", problem: "Machine rate is the seeded $5/hr default — and the Cost Calculator's input defaults to $8/hr, so the app disagrees with itself.", verify: "Pick ONE verified hourly rate; use it in Machines and the calculator", fixPath: "/app/erp/machines", fixLabel: "Machines" });
+    } else if (!nearlyEqual(Number(machine.costPerHour), OWNER_STANDARDS.machineRecoveryPerHour.value)) {
+      pushIssue(issues, { area: "Machine / labor", item: machine.name, severity: "warning", problem: `Machine record says $${Number(machine.costPerHour).toFixed(2)}/hr but the owner machine recovery standard is $${OWNER_STANDARDS.machineRecoveryPerHour.value}/hr (approved 2026-10-07); pricing and actuals use the owner standard.`, verify: "Pick ONE verified hourly rate; use it in Machines and the calculator", fixPath: "/app/erp/machines", fixLabel: "Machines" });
     }
 
     for (const channel of machine.inkChannels.filter((c) => c.enabled)) {
@@ -468,8 +469,8 @@ export async function loader({ request }: { request: Request }) {
       tierMaxQty: null,
       moq: null,
       source: "Machine.costPerHour",
-      confidence: rate <= 0 ? "missing" : nearlyEqual(rate, SEEDED_FINGERPRINTS.machineRatePerHour) ? "seeded" : "manual",
-      issue: rate <= 0 ? "No hourly cost." : nearlyEqual(rate, SEEDED_FINGERPRINTS.machineRatePerHour) ? "Seeded $5/hr — conflicts with the calculator's $8/hr default input." : "",
+      confidence: rate <= 0 ? "missing" : nearlyEqual(rate, OWNER_STANDARDS.machineRecoveryPerHour.value) ? "verified" : "manual",
+      issue: rate <= 0 ? "No hourly cost." : nearlyEqual(rate, OWNER_STANDARDS.machineRecoveryPerHour.value) ? "" : `Differs from the $${OWNER_STANDARDS.machineRecoveryPerHour.value}/hr owner machine recovery standard (approved 2026-10-07).`,
       verify: "Real recovery rate (power + maintenance + depreciation)",
       fixPage: "Machines",
     });
@@ -734,7 +735,7 @@ export default function CostVerificationRoute() {
             <ul style={{ margin: "6px 0 0 18px", lineHeight: 1.7 }}>
               <li><b>Labor standards partially LIVE in the calculator (13A.3)</b> — jar/bag application, design setup, and gloss/white setup use owner standards; cutting/weeding/packout still on previous rules (review needed); replay validation still open</li>
               <li>Ink <b>usage per sqft</b> (0.0075 seeded; the $/sqft estimate profiles) — calibrate from RIP actuals (13A)</li>
-              <li>Machine hourly rate — $5/hr on Machines vs $8/hr calculator default; owner picks one later</li>
+              <li>Machine hourly rate — OWNER APPROVED $5/hr for both printers (2026-10-07, retail replacement basis); machine records at $5 are consistent</li>
               <li>Print speed / setup minutes (finish speed curve; cut time from cutter speed later — 12.5 cm/s effective estimate)</li>
               <li>Known-job replay: recorded manually on the printout below — not tracked in the app</li>
             </ul>

@@ -13,7 +13,7 @@
 // The ACTIVE assumption source compared against is MachineInkChannel
 // (mlPerSqft1Pct seeded 0.0075 per 1% coverage per channel + verified
 // costPerMl) — the exact values recipe-pricing.server.ts uses — plus the
-// single $8/hr machine rate. Observed ml/sqft is TOTAL ink per area; the
+// single $5/hr owner machine rate. Observed ml/sqft is TOTAL ink per area; the
 // assumption is per-1%-coverage, so comparisons state the reference coverage
 // explicitly and APPLY IS DELIBERATELY NOT BUILT (writing mlPerSqft1Pct from
 // observed totals would bake in a guessed coverage percentage).

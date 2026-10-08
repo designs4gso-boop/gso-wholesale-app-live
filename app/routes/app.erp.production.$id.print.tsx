@@ -21,7 +21,7 @@ const CHECKLIST_SECTION_LABEL: Record<string, string> = { prepress: "Prepress", 
 
 // 15G.2: the printable work order prices print-log actuals through the SAME
 // canonical helpers as the Production Board and Actual Cost Dashboard —
-// machineRatePerHour() ($8/hr owner standard) + canonical brand ink rates.
+// machineRatePerHour() ($5/hr owner standard) + canonical brand ink rates.
 // The retired hardcoded machine/ink rate literals are gone; this page can
 // never again show different actuals than the board for the same job.
 function summarizeActualPrintLogs(job: any, entries: any[], brandRates: BrandInkRates[], ratePerHour: number) {

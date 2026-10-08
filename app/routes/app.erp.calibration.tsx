@@ -20,7 +20,7 @@ import {
 // Audit - Calibration (13A.8A): READ-ONLY recommendations from verified
 // actual production data. NO action export — this page cannot write anything.
 // Recommendations compare observed medians against the ACTIVE assumption
-// sources (MachineInkChannel mlPerSqft1Pct + verified costPerMl, and the $8/hr
+// sources (MachineInkChannel mlPerSqft1Pct + verified costPerMl, and the $5/hr
 // machine rate). Apply is deliberately NOT built: observed ml/sqft is total
 // ink per area while the engine assumption is per-1%-coverage per channel —
 // converting one to the other needs coverage data the RIP logs do not record.

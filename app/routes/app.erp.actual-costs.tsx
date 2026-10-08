@@ -57,7 +57,7 @@ export async function loader({ request }: { request: Request }) {
   ]);
 
   const rates = buildBrandRates(machines);
-  const ratePerHour = machineRatePerHour(); // the ONE configured rate ($8/hr) - same source as board + writeback
+  const ratePerHour = machineRatePerHour(); // the ONE configured rate ($5/hr owner standard) - same source as board + writeback
   const printMaterials = materials.filter((material) => materialKind(material) === "print");
 
   const gsoqEntries = entries.filter((entry) => /^GSOQ-/i.test(String(entry.jobTicket || "")));

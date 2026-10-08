@@ -1,4 +1,5 @@
 import { Link, useLoaderData } from "react-router";
+import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -353,13 +354,13 @@ export async function loader({ request }: { request: Request }) {
     if (!machine.active || !machineIsPrinter(machine)) continue;
     const name = machine.name || "Unnamed machine";
 
-    if (num(machine.costPerHour) === 5) {
+    if (num(machine.costPerHour) > 0 && Math.abs(num(machine.costPerHour) - OWNER_STANDARDS.machineRecoveryPerHour.value) > 0.0001) {
       issues.push({
         area: "Rates",
         item: name,
         status: "warning",
-        message: "Machine rate is exactly $5/hr — the seeded GSO preset default. The Cost Calculator meanwhile defaults to $8/hr, so the app currently disagrees with itself about machine cost.",
-        fix: "Decide the real machine recovery rate (power, maintenance, depreciation) and save it here; use the same number in the calculator.",
+        message: `Machine record says $${num(machine.costPerHour).toFixed(2)}/hr; the owner machine recovery standard is $${OWNER_STANDARDS.machineRecoveryPerHour.value}/hr (approved 2026-10-07, both printers). Pricing and actual costs use the owner standard, so this record is informational until aligned.`,
+        fix: "Save the owner standard rate on the machine record so every screen shows the same number.",
       });
     }
 

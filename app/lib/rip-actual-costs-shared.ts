@@ -2,14 +2,15 @@
 // the route COMPONENT, so they must not live in a .server module. The math
 // helpers stay in rip-actual-costs.server.ts (loader-only).
 
-// Machine hourly rate. 15G.2: the NUMBER lives in exactly one place — the
-// owner-standards registry ($8/hr, owner decision 13A.7B / 15F.0K.4B). This
-// constant is a binding, not a second definition; the server accessor
-// machineRatePerHour() in rip-actual-costs.server.ts remains the ONE
-// env-aware runtime authority for actuals/writeback. The stale
-// erpAdminSetting `defaultMachineRecoveryHr` ($5) is reference-only and can
-// never reprice anything. LOW remains only for the audit dashboard's
-// historical range display.
+// Machine hourly rate. The NUMBER lives in exactly one place — the
+// owner-standards registry ($5/hr, OWNER APPROVED 2026-10-07; previously the
+// $8/hr provisional 13A.7B figure). This constant is a binding, not a second
+// definition; the server accessor machineRatePerHour() in
+// rip-actual-costs.server.ts remains the ONE env-aware runtime authority for
+// actuals/writeback (GSO_MACHINE_RATE_PER_HOUR override preserved). The
+// erpAdminSetting `defaultMachineRecoveryHr` is reference-only and can never
+// reprice anything. LOW is the historical seeded-preset value kept for the
+// audit dashboard's range display (it now equals the approved rate).
 import { OWNER_STANDARDS } from "./owner-standards";
 
 export const MACHINE_RATE_LOW = 5;

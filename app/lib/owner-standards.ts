@@ -128,10 +128,10 @@ export const OWNER_STANDARDS = {
     status: "owner_verified",
   } as OwnerStandard,
   machineRecoveryPerHour: {
-    value: 8,
+    value: 5,
     unit: "$ per machine hour",
-    basis: "PROVISIONAL owner standard (13A.7B decision) — supersedes the legacy $25/hour figure",
-    status: "provisional",
+    basis: "OWNER APPROVED 2026-10-07 — $5/hr for BOTH the Roland LG-640 and the Mimaki UCJV300-130. Basis: retail replacement value (Roland ~$24,395; Mimaki ~$21,995; owner purchase ~$10,000 each) + high utilization (minimum 8 h/day x 5 d/wk; Roland normally 16–18 h/day, Mimaki 8–12 h/day) + maintenance / electricity / contingency allowance. Covers capital replacement reserve, maintenance/service, electricity/operating allowance and equipment contingency ONLY — never labor, ink, media, setup, cutting, weeding, application or commercial profit. Supersedes the $8/hr PROVISIONAL figure (13A.7B) and the legacy $25/hour.",
+    status: "owner_verified",
   } as OwnerStandard,
 } as const;
 
