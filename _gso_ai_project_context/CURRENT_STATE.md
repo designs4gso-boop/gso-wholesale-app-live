@@ -1,6 +1,10 @@
 # GSO ERP / Shopify Configurator — Current State
 
-Updated: 2026-10-07 (release candidate on local branch `gso-erp-overnight-finishline-2026-10-05`; production = `a3c79c8`)
+Updated: 2026-10-08 (October 2026 release MERGED and LIVE on Render as `a17efc3`; Shopify app/extension deploy + Render env var + sync click pending owner)
+
+## 2026-10-08 — OCTOBER 2026 RELEASE LIVE (web); SHOPIFY DEPLOY PENDING OWNER
+PR #1 merged to `main` = `a17efc3`; Render auto-deployed (bundle verified against the local build). Production seed for the two new Spektra DTP sizes ran once after a verified logical backup (VendorProduct 23→25, tiers 70→80, add-ons 37→47; everything else byte-identical). NOT yet done (owner, Thursday morning): `shopify app deploy` (cart-transform key fix + extensions), "Save settings & sync functions", Render `GSO_OPS_REPOSITORY=prisma`, live paid-order smoke. Agent platform stays reasoning OFF / execution OFF / worker manual / Slack decision-only. Report: `docs/GSO_THURSDAY_MORNING_RELEASE_REPORT_2026-10-08.md`.
+
 
 ## 2026-10-07 — RELEASE CANDIDATE (LOCAL BRANCH, NOT DEPLOYED)
 Production is `main` = `origin/main` = `a3c79c8`. The local branch holds: the Spektra live cost book (1,084 observed rows, fail-closed import), the OWNER-APPROVED 4x5x2 DTP ladder ($1.30 / $0.71 / $0.46 / $0.37; 25k review required; $350 GP exception at 1,000 only; Design & Customize = benchmark of record), PROPOSED ladders for 3.5x4.5x2 / 5x5x2 / 6x5x2 / 8x5x2 + a 25k recommendation (Pricing Intelligence, not active), 5x4x2 = manual/vendor review, shaped DTP policy (+10%, $700 die, MOQ 2,500), and the overnight release-candidate cleanup (sales/production/admin wording and guards, QC card, proof guards, paid-order Slack alert + review-queue trail, cart-transform key compatibility). Agent platform stays reasoning OFF / execution OFF / worker unscheduled / Slack decision-only. Owner control docs: `docs/GSO_FINAL_RELEASE_READINESS_2026-10-07.md`, `docs/GSO_OWNER_DECISIONS_BEFORE_RELEASE_2026-10-07.md`, `docs/GSO_DTP_FINAL_PRICING_REVIEW_2026-10-07.md`. Older sections below describe earlier states.
