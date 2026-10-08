@@ -34,9 +34,9 @@ function readSource(relativePath: string): string {
 
 describe("machine rate authority", () => {
   it("the one canonical rate is the owner-standards $8/hr everywhere", () => {
-    expect(OWNER_STANDARDS.machineRecoveryPerHour.value).toBe(8);
+    expect(OWNER_STANDARDS.machineRecoveryPerHour.value).toBe(5); // OWNER APPROVED 2026-10-07: machine recovery $5/hr (was $8/hr provisional); only machine-recovery lines moved.
     expect(MACHINE_RATE_CURRENT).toBe(OWNER_STANDARDS.machineRecoveryPerHour.value);
-    expect(machineRatePerHour({})).toBe(8);
+    expect(machineRatePerHour({})).toBe(5);
   });
 
   it("the stale defaultMachineRecoveryHr admin setting cannot reprice anything", () => {
@@ -44,7 +44,7 @@ describe("machine rate authority", () => {
     const calibration = readSource("app/routes/app.erp.calibration.tsx");
     expect(calibration).toContain("STALE reference-only");
     const adminSettings = readSource("app/routes/app.erp.admin-settings.tsx");
-    expect(adminSettings).toContain("REFERENCE ONLY (15G.2)");
+    expect(adminSettings).toContain("REFERENCE ONLY");
     for (const lib of ["app/lib/product-driven-costing.server.ts", "app/lib/recipe-pricing.server.ts", "app/lib/commercial-pricing-policy.server.ts", "app/lib/rip-actual-costs.server.ts"]) {
       expect(readSource(lib).includes("defaultMachineRecoveryHr")).toBe(false);
     }
@@ -232,7 +232,7 @@ describe("cross-surface equivalence — 4x5 sticker bags", () => {
 
   it("gloss DIRECT-COST math unchanged ($452.37 @55%); 15G.4C commercial: specialty tier controls (500 dbl 3X → $960 = 1.50 base +28%)", () => {
     const run = computeProductDrivenCost(baseBagInput({ quantity: 500, faces: 2, printer: "roland", glossLayers: 3, glossCoveragePct: 55 }));
-    expect(run.totalCost).toBeCloseTo(452.37, 1); // owner gloss math untouched
+    expect(run.totalCost).toBeCloseTo(436.65, 1); // owner gloss math untouched; only machine recovery moved ($8 -> $5/hr): 452.37 -> 436.65
     const commercial = directCommercial(500, 2, run, 3);
     expect(commercial.specialty?.active).toBe(true);
     expect(commercial.specialty?.curvePct).toBe(28);
@@ -240,7 +240,7 @@ describe("cross-surface equivalence — 4x5 sticker bags", () => {
     expect(commercial.finalTotalPrice).toBeCloseTo(960.0, 2); // 1.50 x 500 x 1.28
     expect(commercial.marketPosition?.applicable).toBe(false); // comparisons stay suppressed
     // floor reference: cost/0.60 at 55% actual coverage sits below the tier
-    expect(commercial.specialty?.floorPrice).toBeCloseTo(452.37 / 0.6, 1);
+    expect(commercial.specialty?.floorPrice).toBeCloseTo(436.65 / 0.6, 1);
   });
 });
 

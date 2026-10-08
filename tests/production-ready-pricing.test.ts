@@ -24,7 +24,7 @@ import { INK_RATES, resolveMarginFamily } from "../app/lib/calculator-emergency.
 import { OWNER_STANDARDS } from "../app/lib/owner-standards";
 
 const POSEIDON_PER_SQFT = 213 / ((54 / 12) * 150); // cmoxmgvx80000jj28acnr8ycp
-const MACHINE_RATE = OWNER_STANDARDS.machineRecoveryPerHour.value; // $8/hr
+const MACHINE_RATE = OWNER_STANDARDS.machineRecoveryPerHour.value; // $5/hr (owner approved 2026-10-07)
 // 15F.0G.2 printer-specific profiles (never one global constant): Roland =
 // additive 150 CMYK + 110/75 per layer; Mimaki UCJV300-130 = COMBINED
 // RasterLink table (600x1200 VD / 32-pass / Bi / Fast Print High) x 1.15
@@ -148,7 +148,7 @@ describe("multi-design stickers (15F.0-J)", () => {
     // 100.74 sqft -> 0.6716 + 2.7475 = 3.4191 hr -> ~205.15 min -> ~$27.35.
     const machineHours = wasteSqft / SPEED + (wasteSqft / 110) * 3;
     expect(machineHours).toBeCloseTo(3.4189, 3);
-    expect(machineHours * MACHINE_RATE).toBeCloseTo(27.3513, 3);
+    expect(machineHours * MACHINE_RATE).toBeCloseTo(17.0946, 3); // was 27.3513 at $8/hr
     const machineLine = gloss.lines.find((line) => line.key === "machine")!;
     expect(machineLine.amount).toBeCloseTo(machineHours * MACHINE_RATE, 6);
     expect(machineLine.label).toContain(`${(machineHours * 60).toFixed(1)} min`); // 205.1 — hours x60, never x6
@@ -169,16 +169,16 @@ describe("multi-design stickers (15F.0-J)", () => {
     expect(glossInkLine.note).toContain("15F.0J.3-roland-measured-ink");
     expect(gloss.lines.find((line) => line.key === "gloss_setup")!.amount).toBeCloseTo(18.75, 10);
     expect(gloss.totalCost).toBeCloseTo(expectedGloss, 4);
-    expect(gloss.totalCost).toBeCloseTo(314.4711, 3); // was 312.7120 pre-4B (−$16.99 coverage, +$18.75 gloss setup)
+    expect(gloss.totalCost).toBeCloseTo(304.2144, 3); // 314.4711 at $8/hr machine recovery; $5/hr since 2026-10-07
     expect(gloss.missing).toHaveLength(0);
     const plain = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, printer: "roland", printerHasGloss: true, glossLayers: 0, machineSqftPerHour: SPEED }));
-    expect(plain.totalCost).toBeCloseTo(120.8239, 3); // CMYK measured 1.05 (was 111.82 at 0.6)
+    expect(plain.totalCost).toBeCloseTo(118.8092, 3); // CMYK measured 1.05 (was 111.82 at 0.6)
     // commercial: premium 56% vs basic 52% at 585
     const stickersRule = resolveMarginFamily("stickers-labels")!;
     const glossPrice = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: gloss.totalCost, marginRule: stickersRule, premiumEligible: true });
     const plainPrice = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: plain.totalCost, marginRule: stickersRule, premiumEligible: false });
-    expect(glossPrice.finalTotalPrice).toBeCloseTo(314.4711 / 0.44, 3); // 714.71 premium (15F.0K.4B repriced)
-    expect(plainPrice.finalTotalPrice).toBeCloseTo(251.7165, 3); // 120.82 / 0.48 — CMYK path unchanged
+    expect(glossPrice.finalTotalPrice).toBeCloseTo(304.2144 / 0.44, 3); // premium 56% on the $5/hr cost (714.71 at $8)
+    expect(plainPrice.finalTotalPrice).toBeCloseTo(247.5192, 3); // 120.82 / 0.48 — CMYK path unchanged
   });
 
   it("owner white-layer examples: 1 layer = sqft/75 hours exactly (never a hidden 3x); 3 layers = 3x that", () => {
@@ -207,7 +207,7 @@ describe("multi-design stickers (15F.0-J)", () => {
     }));
     expect(contour.missing).toHaveLength(0); // READY — simple contour quotes automatically
     expect(contour.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(5 * 6.53 * 1.15, 5); // 37.5475
-    expect(contour.totalCost).toBeCloseTo(314.4711 + 5 * 6.53 * 0.15, 3); // 319.3686 (15F.0K.4B: 90% coverage + gloss setup)
+    expect(contour.totalCost).toBeCloseTo(304.2144 + 5 * 6.53 * 0.15, 3); // 309.1119 at $5/hr machine recovery (319.3686 at $8)
     const priced = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 585, completeCost: contour.totalCost, marginRule: resolveMarginFamily("stickers-labels")!, premiumEligible: true, finishedSqft: contour.derived.baseSqft, setupTotal: contour.setupTotal });
     expect(priced.finalTotalPrice).toBeCloseTo(contour.totalCost / 0.44, 4); // 725.84 — premium 56%
     expect(priced.controllingRule).toContain("Premium finish floor");
@@ -241,7 +241,7 @@ describe("multi-line sticker jobs (15F.0-K)", () => {
       + (wasteB / SPEED + wasteB / 110) * MACHINE_RATE // owner mode speeds: CMYK + one gloss layer
       + CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(sqftB / 20.25) // 2 pages
       + (25 / 3 + 1);
-    expect(lineB).toBeCloseTo(43.3816, 3);
+    expect(lineB).toBeCloseTo(41.9225, 3); // was 43.3816 at $8/hr
     const combined = combineStickerLines({
       lines: [
         { name: "A", quantity: 100, designs: 1, glossOrWhite: false, lineCost: lineA, missing: [], finishedSqft: 6.25, setupTotal: 25 / 3 + 1 },
@@ -309,12 +309,12 @@ describe("fixtures 8/9 (N): Chiron 150ml jars", () => {
       + CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(baseSqft / 20.25) // 2 pages
       + 2 * Math.ceil(585 / 100) + (25 / 3 + 1);
     expect(run.totalCost).toBeCloseTo(expected, 5);
-    expect(run.totalCost).toBeCloseTo(1279.1284, 3);
+    expect(run.totalCost).toBeCloseTo(1277.3176, 3); // was 1279.1284 at $8/hr
     const chiron = resolveMarginFamily("chiron-jars")!;
     expect(marginPctForQuantity(chiron, 585)).toBe(50);
     const priced = computeCommercialPrice({ familyKey: "premium-jars", quantity: 585, completeCost: run.totalCost, marginRule: chiron, premiumEligible: false });
-    expect(priced.finalTotalPrice).toBeCloseTo(2558.2569, 3);
-    expect(priced.finalUnitPrice).toBeCloseTo(4.3731, 4);
+    expect(priced.finalTotalPrice).toBeCloseTo(2554.6353, 3); // 2558.2569 at $8/hr
+    expect(priced.finalUnitPrice).toBeCloseTo(4.3669, 4);
   });
 
   it("585 jars, three DIFFERENT labels (2x2 side, 2x2 lid, 2x1 additional) — $1,524.84 -> $3,049.68 at 50%", () => {
@@ -337,9 +337,9 @@ describe("fixtures 8/9 (N): Chiron 150ml jars", () => {
     expect(run.derived.baseSqft).toBeCloseTo(baseSqft, 8);
     expect(run.derived.applicationCount).toBe(1755);
     expect(run.totalCost).toBeCloseTo(expected, 5);
-    expect(run.totalCost).toBeCloseTo(1530.4818, 3);
+    expect(run.totalCost).toBeCloseTo(1527.4638, 3); // was 1530.4818 at $8/hr
     const priced = computeCommercialPrice({ familyKey: "premium-jars", quantity: 585, completeCost: run.totalCost, marginRule: resolveMarginFamily("chiron-jars")!, premiumEligible: false });
-    expect(priced.finalTotalPrice).toBeCloseTo(3060.9637, 3);
+    expect(priced.finalTotalPrice).toBeCloseTo(3054.9277, 3); // 3060.9637 at $8/hr
   });
 });
 
@@ -507,10 +507,10 @@ describe("contour cutting model (15F.0-FINAL-E)", () => {
     const simple100 = computeProductDrivenCost(stickerInput({ cutType: "kiss-simple" }));
     expect(simple100.missing).toHaveLength(0); // READY
     expect(simple100.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(6.53 * 1.15, 6); // 7.5095
-    expect(simple100.totalCost).toBeCloseTo(22.026181 - 6.53 + 6.53 * 1.15, 4); // 23.0057 (RasterLink 51.6)
+    expect(simple100.totalCost).toBeCloseTo(21.561873 - 6.53 + 6.53 * 1.15, 4); // 22.5414 at $5/hr (23.0057 at $8)
     const simple1000 = computeProductDrivenCost(stickerInput({ quantity: 1000, cutType: "kiss-simple" }));
     expect(simple1000.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(6.53 * 1.15 * 4, 6); // 4 pages
-    expect(simple1000.totalCost).toBeCloseTo(82.9998, 3);
+    expect(simple1000.totalCost).toBeCloseTo(78.3567, 3);
     const moderate = computeProductDrivenCost(stickerInput({ cutType: "kiss-moderate" }));
     expect(moderate.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(6.53 * 1.35, 6);
     const complex = computeProductDrivenCost(stickerInput({ cutType: "kiss-complex" }));
@@ -523,10 +523,10 @@ describe("contour cutting model (15F.0-FINAL-E)", () => {
 
   it("fixture 3/4 (J) prices: 100 simple contour -> $63.25 cost-based; 1,000 simple contour -> area floor $209.33 still controls", () => {
     const rule = resolveMarginFamily("stickers-labels")!;
-    const small = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 100, completeCost: 23.005681, marginRule: rule, premiumEligible: false, finishedSqft: 6.25, setupTotal: 25 / 3 + 1 });
-    expect(small.finalTotalPrice).toBeCloseTo(23.005681 / 0.35, 4); // 65.73 — cost-based (RasterLink profile)
+    const small = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 100, completeCost: 22.541373, marginRule: rule, premiumEligible: false, finishedSqft: 6.25, setupTotal: 25 / 3 + 1 });
+    expect(small.finalTotalPrice).toBeCloseTo(22.541373 / 0.35, 4); // 65.73 — cost-based (RasterLink profile)
     expect(small.controllingRule).toContain("Cost-based");
-    const big = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 1000, completeCost: 82.999814, marginRule: rule, premiumEligible: false, finishedSqft: 62.5, setupTotal: 25 / 3 + 1 });
+    const big = computeCommercialPrice({ familyKey: "stickers-labels", quantity: 1000, completeCost: 78.356714, marginRule: rule, premiumEligible: false, finishedSqft: 62.5, setupTotal: 25 / 3 + 1 });
     expect(big.finalTotalPrice).toBeCloseTo(209.3333, 3); // floor absorbs the contour delta
     expect(big.controllingRule).toContain("Sticker market floor");
   });
@@ -549,7 +549,7 @@ describe("banner finishing (15F.0-FINAL-G)", () => {
     expect(grommets.amount).toBeCloseTo(Math.ceil(216 / 24) * BANNER_FINISHING_STANDARDS.grommetEach, 6); // 9 x $0.30
     expect(finished.lines.find((line) => line.key === "finishing_setup")!.amount).toBe(5);
     // fixture 14 (J): trimmed base 28.9679 + 5 + 10.80 + 2.70 = 47.4679
-    expect(finished.totalCost).toBeCloseTo(49.9672, 3);
+    expect(finished.totalCost).toBeCloseTo(48.6299, 3); // was 49.9672 at $8/hr
     const priced = computeCommercialPrice({ familyKey: "banners", quantity: 1, completeCost: finished.totalCost, marginRule: resolveMarginFamily("banners")!, premiumEligible: false });
     expect(priced.finalTotalPrice).toBeCloseTo(finished.totalCost / 0.4, 4); // $118.67 at the 60% band — READY
     expect(priced.controllingRule).toContain("Cost-based");

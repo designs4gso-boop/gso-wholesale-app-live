@@ -53,12 +53,12 @@ describe("priceRecipeAtQuantity", () => {
   it("prices margin-based recipes as cost / (1 - margin%)", () => {
     const priced = priceRecipeAtQuantity(inHouseRecipe(), 10, {});
 
-    // 15F.0K.4B: machine recovery now always uses the authoritative $8/hr
-    // owner rate (machineRatePerHour) — the fixture's $0 Machine record can
-    // no longer zero the machine component. 10 sqft / 150 sqft/hr x $8 =
-    // $0.5333 job machine cost = $0.05333/unit on top of the $2 material.
-    expect(priced.unitCost).toBeCloseTo(2 + 8 / 150, 5);
-    expect(priced.unitPrice).toBeCloseTo((2 + 8 / 150) / 0.5, 5); // cost / (1 - 0.5)
+    // Machine recovery always uses the authoritative owner rate (machineRatePerHour;
+    // $5/hr since 2026-10-07, was $8/hr) — the fixture's $0 Machine record can
+    // no longer zero the machine component. 10 sqft / 150 sqft/hr x $5 =
+    // $0.3333 job machine cost = $0.03333/unit on top of the $2 material.
+    expect(priced.unitCost).toBeCloseTo(2 + 5 / 150, 5);
+    expect(priced.unitPrice).toBeCloseTo((2 + 5 / 150) / 0.5, 5); // cost / (1 - 0.5)
     expect(priced.marginActual).toBeCloseTo(50, 5);
     expect(priced.pricingSource).toBe("recipe_in_house");
   });

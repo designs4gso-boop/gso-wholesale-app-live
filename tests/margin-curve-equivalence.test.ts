@@ -314,21 +314,21 @@ describe("15F.0K.2-B deliberate bag calibration (exact prices; no decreases)", (
   };
 
   it("bag COSTS are unchanged (margin-only calibration): fixture cost pins hold", () => {
-    expect(computeProductDrivenCost(bagInput({ quantity: 1000, facesPerUnit: 1 })).totalCost).toBeCloseTo(317.6761, 3);
-    expect(computeProductDrivenCost(bagInput({ quantity: 1000, facesPerUnit: 2 })).totalCost).toBeCloseTo(534.0188, 3);
+    expect(computeProductDrivenCost(bagInput({ quantity: 1000, facesPerUnit: 1 })).totalCost).toBeCloseTo(307.3581, 3); // was 317.6761 at $8/hr machine recovery
+    expect(computeProductDrivenCost(bagInput({ quantity: 1000, facesPerUnit: 2 })).totalCost).toBeCloseTo(513.3829, 3); // was 534.0188 at $8/hr
   });
 
   it("exact anchors at 1,000: Stage-B cost-based candidates 705.95/1112.54; 15G.4C UV target lifts the FINAL to $1,050.00 / $1,450.00", () => {
     const single = priceAt(1, 1000, defaults);
     expect(single.result.marginPctApplied).toBe(55);
     expect(single.result.candidates.costBasedPrice).toBeCloseTo(single.cost / 0.45, 10);
-    expect(single.result.candidates.costBasedPrice).toBeCloseTo(705.9468, 3); // Stage-B cost-based (unchanged by K.3)
+    expect(single.result.candidates.costBasedPrice).toBeCloseTo(683.018, 3); // Stage-B cost-based at $5/hr (705.9468 at $8); the FINAL stays the market target
     expect(single.result.finalTotalPrice).toBeCloseTo(1050, 6); // owner-approved 15G.4C: $1.05/unit at 1,000
     expect(single.result.controllingRule).toBe("Verified market target (owner config)");
     const double = priceAt(2, 1000, defaults);
     expect(double.result.marginPctApplied).toBe(52);
     expect(double.result.candidates.costBasedPrice).toBeCloseTo(double.cost / 0.48, 10);
-    expect(double.result.candidates.costBasedPrice).toBeCloseTo(1112.5392, 3);
+    expect(double.result.candidates.costBasedPrice).toBeCloseTo(1069.5476, 3); // 1112.5392 at $8/hr; the FINAL stays the market target
     expect(double.result.finalTotalPrice).toBeCloseTo(1450, 6); // owner-approved 15G.4C: $1.45/unit at 1,000
     expect(double.result.controllingRule).toBe("Verified market target (owner config)");
   });

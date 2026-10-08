@@ -180,8 +180,8 @@ describe("2D-4C1 (2) control fixture through the real route path", () => {
     expect(result.status).toBe("PROVISIONAL");
     expect(result.blockers).toHaveLength(0);
     expect(result.unitCost).not.toBeNull();
-    expect(result.unitCost!).toBeCloseTo(0.084143, 6);
-    expect(result.totalCost).toBeCloseTo(84.143290, 5);
+    expect(result.unitCost!).toBeCloseTo(0.079617, 6);
+    expect(result.totalCost).toBeCloseTo(79.617252, 5);
 
     expect(result.diagnostics.inkableArtworkSqft).toBeCloseTo(62.5, 6);
     expect(result.diagnostics.ripLayoutSqft!).toBeCloseTo(62.6875, 6);
@@ -223,7 +223,7 @@ const withBlocker: CanonicalCostLike = {
   blockers: ["BANNER_FINISHING_RATE_REQUIRED: hemming"],
 };
 const usable: CanonicalCostLike = {
-  family: "stickers-labels", status: "PROVISIONAL", unitCost: 0.084143, totalCost: 84.143290,
+  family: "stickers-labels", status: "PROVISIONAL", unitCost: 0.079617, totalCost: 79.617252,
   blockers: [], reasons: ["FREIGHT_NOT_MODELED"],
 };
 
@@ -474,7 +474,7 @@ describe("2D-4C1 per-tier quantity actually scales the job", () => {
       expect(rungs[i].unitCost!).toBeLessThan(rungs[i - 1].unitCost!);
     }
     expect(new Set(rungs.map((r) => r.totalCost)).size).toBe(3);
-    expect(rungs[1].unitCost!).toBeCloseTo(0.084143, 6);
+    expect(rungs[1].unitCost!).toBeCloseTo(0.079617, 6);
   });
 
   it("BAG and BANNER ladders scale too", async () => {

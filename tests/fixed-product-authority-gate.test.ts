@@ -44,6 +44,14 @@ const run = (q: string) => {
   expect(input, q).not.toBeNull();
   return assembleCanonicalJob(input!, CAL);
 };
+// The 2026-10-05 jar capture was taken at the then-provisional $8/hr machine recovery rate
+// (owner standard since 2026-10-07: $5/hr); the capture comparison pins the historical rate
+// explicitly so every non-machine line is still verified unchanged.
+const runAt8 = (q: string) => {
+  const input = normalizeCanonicalInput(new URLSearchParams(q));
+  expect(input, q).not.toBeNull();
+  return assembleCanonicalJob({ ...input!, equipmentRatePerHour: 8 }, CAL);
+};
 const jarQs = (key: string, set: { side: boolean; lid: boolean; tamper: boolean }, extra = "") => {
   const p = ACTIVE_JAR_PROFILES.find((x) => x.key === key)!;
   return `pfamily=${p.uiFamily}&pqty=200&pjar=${key}${p.brand === "standard" ? "&pjarvariant=black_white" : ""}${set.side ? "&pjarside=1" : ""}${set.lid ? "&pjarlid=1" : ""}${set.tamper ? "&pjartamper=1" : ""}&pcmykcoverage=40${extra}`;
@@ -248,7 +256,7 @@ describe("ZERO cost change: 30 jar fixtures, control case, weeding and applicati
   it("every supported jar x label set totals and lines equal the pre-gate capture", () => {
     const before = JSON.parse(readFileSync("tests/fixtures/jar-fixtures-2026-10-05.json", "utf8"));
     for (const p of ACTIVE_JAR_PROFILES) for (const s of LABEL_SETS) {
-      const r = run(jarQs(p.key, s.selection));
+      const r = runAt8(jarQs(p.key, s.selection));
       const key = `${p.key}/${s.key}`;
       expect(before[key], key).toBeDefined();
       expect(r.status, key).toBe(before[key].status);

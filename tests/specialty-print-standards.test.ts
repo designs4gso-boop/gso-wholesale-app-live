@@ -2,7 +2,7 @@
 // (2026-07-26): Mimaki UCJV300-130 is CMYK ONLY; Roland LG-640 owns
 // white/gloss; $6.25 gloss-layer Illustrator setup per gloss DESIGN (never
 // per stage); 90% pre-art gloss coverage with actual-artwork override
-// (0-100 validated); $8/hr machine recovery everywhere including the recipe
+// (0-100 validated); $5/hr machine recovery (owner approved 2026-10-07) everywhere including the recipe
 // engine (stale Machine.costPerHour can never underprice again).
 
 import { readFileSync } from "node:fs";
@@ -159,36 +159,37 @@ describe("gloss coverage — 90% pre-art estimate, actual-artwork override, 0-10
   });
 });
 
-describe("machine recovery — $8/hr everywhere; stale $5 records can never underprice", () => {
-  it("recipe pricing uses $8/hr even when the Machine record says $5 (or $0)", () => {
+describe("machine recovery — the $5/hr owner standard everywhere; machine records can never reprice", () => {
+  it("recipe pricing uses the $5/hr owner standard even when the Machine record says something else (or $0)", () => {
     const recipe = {
       widthIn: 3, heightIn: 3, wastePct: 10, laborMinutes: 0, operatorLaborPct: 0,
       materials: [],
-      machineRules: [{ preferredMachine: { costPerHour: 5, sqftPerHour: 150, inkChannels: [] } }],
+      machineRules: [{ preferredMachine: { costPerHour: 9, sqftPerHour: 150, inkChannels: [] } }],
     };
     const result: any = calculateInHouseRecipe(recipe, 1000, "base");
     const totalSqft = ((3 * 3 * 1000) / 144) / 0.9;
     const runHours = totalSqft / 150;
     expect(result.breakdown.machineRunCost).toBeCloseTo(runHours * machineRatePerHour(), 6);
-    expect(result.breakdown.machineRunCost).toBeCloseTo(runHours * 8, 6);
+    expect(result.breakdown.machineRunCost).toBeCloseTo(runHours * 5, 6);
     const zeroRecord: any = calculateInHouseRecipe({ ...recipe, machineRules: [{ preferredMachine: { costPerHour: 0, sqftPerHour: 150, inkChannels: [] } }] }, 1000, "base");
-    expect(zeroRecord.breakdown.machineRunCost).toBeCloseTo(runHours * 8, 6);
+    expect(zeroRecord.breakdown.machineRunCost).toBeCloseTo(runHours * 5, 6);
   });
 
-  it("product-driven pricing remains pinned to the $8/hr owner standard", () => {
-    expect(machineRatePerHour()).toBe(8);
-    expect(OWNER_STANDARDS.machineRecoveryPerHour.value).toBe(8);
+  it("product-driven pricing remains pinned to the $5/hr owner standard (approved 2026-10-07)", () => {
+    expect(machineRatePerHour()).toBe(5);
+    expect(OWNER_STANDARDS.machineRecoveryPerHour.value).toBe(5);
+    expect(OWNER_STANDARDS.machineRecoveryPerHour.status).toBe("owner_verified");
     const run = computeProductDrivenCost(stickerInput({}));
     const machineLine = run.lines.find((line) => line.key === "machine")!;
-    expect(machineLine.note || "").toContain("$8/hr owner recovery standard");
-    expect(machineLine.formula || "").toContain("$8/hr");
+    expect(machineLine.note || "").toContain("$5/hr owner recovery standard");
+    expect(machineLine.formula || "").toContain("$5/hr");
   });
 
-  it("machine presets create records at $8/hr and LG-640 naming (no $5 presets remain)", () => {
+  it("machine presets create records at the owner standard rate (no hardcoded hourly literal) and LG-640 naming", () => {
     const source = readFileSync("app/routes/app.erp.machines.tsx", "utf8");
     expect(source).toContain('name: "Roland TrueVIS LG-640"');
-    expect((source.match(/costPerHour: 8/g) || []).length).toBeGreaterThanOrEqual(2);
-    expect(source.includes("costPerHour: 5")).toBe(false);
+    expect((source.match(/costPerHour: OWNER_STANDARDS\.machineRecoveryPerHour\.value/g) || []).length).toBe(2);
+    expect(source).not.toMatch(/costPerHour: [0-9]/);
   });
 });
 
@@ -221,11 +222,11 @@ describe("regression — verified 4x5 bag outputs are unchanged (CMYK Mimaki pat
   it("15G.4C: 1,000 single-sided = $1.05/unit and double-sided $1.45/unit (UV market target controlling)", () => {
     const defaults = defaultPricingPolicyValues();
     const single = computeProductDrivenCost(bagInput(1));
-    expect(single.totalCost).toBeCloseTo(317.6761, 3);
+    expect(single.totalCost).toBeCloseTo(307.3581, 3); // 317.6761 at $8/hr machine recovery
     const singlePrice = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: single.totalCost, marginRule: bagsRule, premiumEligible: false, policyValues: defaults, marginCurveKey: marginCurveKeyFor("bags-4x5", 1) });
     expect(singlePrice.finalUnitPrice).toBeCloseTo(1.05, 10);
     const double = computeProductDrivenCost(bagInput(2));
-    expect(double.totalCost).toBeCloseTo(534.0188, 3);
+    expect(double.totalCost).toBeCloseTo(513.3829, 3);
     const doublePrice = computeCommercialPrice({ familyKey: "sticker-bags", quantity: 1000, completeCost: double.totalCost, marginRule: bagsRule, premiumEligible: false, policyValues: defaults, marginCurveKey: marginCurveKeyFor("bags-4x5", 2) });
     expect(doublePrice.finalUnitPrice).toBeCloseTo(1.45, 10);
   });
