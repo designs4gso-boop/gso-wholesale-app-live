@@ -421,6 +421,42 @@ export default function MachinesPage() {
     setSqftPerHour(String(machine.sqftPerHour || ""));
     setSetupWastePct(String(machine.setupWastePct || ""));
     setAllowOverflow(machine.allowOverflow ? "true" : "false");
+    // HOTFIX 2026-10-08: the editor renders INLINE inside the machine's own card
+    // (it used to fill the "Add Machine" form at the top of the page with no
+    // visible change next to the button). Bring it into view as well.
+    if (typeof document !== "undefined") {
+      requestAnimationFrame(() => document.getElementById(`machine-editor-${machine.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+    }
+  }
+
+  /** Machine-level fields only (name, type, width, hourly cost, throughput, setup waste, overflow). Ink slots keep their own controls. */
+  function machineFields() {
+    return (
+      <>
+        <InlineStack gap="300">
+          <TextField label="Machine name" value={name} onChange={setName} autoComplete="off" helpText="Use the model name, e.g. Roland TrueVIS LG-640." />
+          <Select label="Machine type" value={machineType} onChange={setMachineType} options={machineTypes} />
+          <TextField label="Max print width (in)" suffix="in" value={maxWidthIn} onChange={setMaxWidthIn} autoComplete="off" />
+        </InlineStack>
+
+        <InlineStack gap="300">
+          <TextField label="Machine cost ($ per hour)" prefix="$" suffix="/ hr" value={costPerHour} onChange={setCostPerHour} autoComplete="off" helpText={`Owner recovery rate for running this machine. Owner standard: $${OWNER_STANDARDS.machineRecoveryPerHour.value.toFixed(2)}/hr (approved 2026-10-07) — pricing and actual costs use the standard; this record is shown on reports.`} />
+          <TextField label="Throughput (sqft per hour)" suffix="sqft / hr" value={sqftPerHour} onChange={setSqftPerHour} autoComplete="off" />
+          <TextField label="Setup waste (%)" suffix="%" value={setupWastePct} onChange={setSetupWastePct} autoComplete="off" helpText="Extra media burned per job for setup and test prints." />
+        </InlineStack>
+
+        <Select
+          label="Accept overflow jobs"
+          helpText="Yes = jobs can be routed here when their usual machine is busy."
+          value={allowOverflow}
+          onChange={setAllowOverflow}
+          options={[
+            { label: "No", value: "false" },
+            { label: "Yes", value: "true" },
+          ]}
+        />
+      </>
+    );
   }
 
   function deleteMachine(id: string) {
@@ -509,7 +545,7 @@ function permanentDeleteMachine(id: string) {
                 <BlockStack gap="100">
                   <Text as="h2" variant="headingMd">GSO default printer profiles</Text>
                   <Text as="p" tone="subdued">
-                    Install the Roland LG-640 and Mimaki UCJV300-130 with starting widths, speeds, ink slots, cartridge sizes, and coverage defaults ($8 per hour owner recovery rate; Mimaki is CMYK only). Default numbers are estimates: replace them with your real invoices and print logs.
+                    Install the Roland LG-640 and Mimaki UCJV300-130 with starting widths, speeds, ink slots, cartridge sizes, and coverage defaults ($5 per hour owner recovery rate, approved 2026-10-07; Mimaki is CMYK only). Default numbers are estimates: replace them with your real invoices and print logs.
                   </Text>
                 </BlockStack>
                 <InlineStack gap="200">
@@ -527,39 +563,21 @@ function permanentDeleteMachine(id: string) {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <Text as="h2" variant="headingMd">
-                {editingMachineId ? "Edit Machine" : "Add Machine"}
-              </Text>
-
-              <InlineStack gap="300">
-                <TextField label="Machine name" value={name} onChange={setName} autoComplete="off" helpText="Use the model name, e.g. Roland TrueVIS LG-640." />
-                <Select label="Machine type" value={machineType} onChange={setMachineType} options={machineTypes} />
-                <TextField label="Max print width (in)" suffix="in" value={maxWidthIn} onChange={setMaxWidthIn} autoComplete="off" />
-              </InlineStack>
-
-              <InlineStack gap="300">
-                <TextField label="Machine cost ($ per hour)" prefix="$" suffix="/ hr" value={costPerHour} onChange={setCostPerHour} autoComplete="off" helpText="Owner recovery rate for running this machine." />
-                <TextField label="Throughput (sqft per hour)" suffix="sqft / hr" value={sqftPerHour} onChange={setSqftPerHour} autoComplete="off" />
-                <TextField label="Setup waste (%)" suffix="%" value={setupWastePct} onChange={setSetupWastePct} autoComplete="off" helpText="Extra media burned per job for setup and test prints." />
-              </InlineStack>
-
-              <Select
-                label="Accept overflow jobs"
-                helpText="Yes = jobs can be routed here when their usual machine is busy."
-                value={allowOverflow}
-                onChange={setAllowOverflow}
-                options={[
-                  { label: "No", value: "false" },
-                  { label: "Yes", value: "true" },
-                ]}
-              />
-
-              <InlineStack gap="300">
-                <Button variant="primary" onClick={saveMachine}>
-                  {editingMachineId ? "Update machine" : "Save machine"}
-                </Button>
-                <Button onClick={resetMachineForm}>Clear</Button>
-              </InlineStack>
+              <Text as="h2" variant="headingMd">Add Machine</Text>
+              {editingMachineId ? (
+                <InlineStack gap="300" blockAlign="center">
+                  <Text as="p" tone="subdued">Editing {name || "a machine"} — the edit form is open inside that machine's card below.</Text>
+                  <Button onClick={resetMachineForm}>Cancel edit</Button>
+                </InlineStack>
+              ) : (
+                <>
+                  {machineFields()}
+                  <InlineStack gap="300">
+                    <Button variant="primary" onClick={saveMachine}>Save machine</Button>
+                    <Button onClick={resetMachineForm}>Clear</Button>
+                  </InlineStack>
+                </>
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -608,6 +626,23 @@ function permanentDeleteMachine(id: string) {
                         {" | Throughput: "}{Number(machine.sqftPerHour || 0) > 0 ? `${Number(machine.sqftPerHour).toFixed(2)} sqft per hour` : "not set"}
                         {" | Setup waste: "}{Number(machine.setupWastePct || 0).toFixed(2)}%
                       </Text>
+
+                      {editingMachineId === machine.id ? (
+                        <div id={`machine-editor-${machine.id}`} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 10, padding: 12 }}>
+                          <BlockStack gap="300">
+                            <InlineStack align="space-between" blockAlign="center">
+                              <Text as="h3" variant="headingSm">Edit machine — {machine.name}</Text>
+                              <Badge tone="info">Editing</Badge>
+                            </InlineStack>
+                            {machineFields()}
+                            <InlineStack gap="300">
+                              <Button variant="primary" onClick={saveMachine}>Update machine</Button>
+                              <Button onClick={resetMachineForm}>Cancel</Button>
+                            </InlineStack>
+                            <Text as="p" tone="subdued">Ink slots are edited with their own controls below; they are not changed by this form.</Text>
+                          </BlockStack>
+                        </div>
+                      ) : null}
 
                       {presetForMachine(machine)?.notes && (
                         <details>
