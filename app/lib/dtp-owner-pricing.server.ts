@@ -17,7 +17,12 @@ import { OWNER_STANDARDS } from "./owner-standards";
 export const DTP_PRICING_ENGINE_VERSION = "15C.2-dtp-owner-price-ladders";
 export const DTP_PRICING_SOURCE = "DTP pricing study (owner-approved 2026-07-24)";
 export const DTP_4X5_PRICING_SOURCE = "OWNER_APPROVED_DTP_4X5_2026_10_06";
+/** 2026-10-07: the four remaining current sizes + the 25,000 tier for every current size. */
+export const DTP_CURRENT_LADDERS_PRICING_SOURCE = "OWNER_APPROVED_DTP_LADDERS_2026_10_07";
 export const DTP_OWNER_REVIEW_REQUIRED = "OWNER PRICING REVIEW REQUIRED";
+export const DTP_REQUEST_VENDOR_QUOTE = "REQUEST CURRENT VENDOR QUOTE";
+/** Highest approved customer tier. Above it there is no customer price: REQUEST CURRENT VENDOR QUOTE (owner 2026-10-07). */
+export const DTP_MAX_APPROVED_QUANTITY = 25000;
 
 export type DtpLadderStatus = "OWNER_APPROVED" | "OWNER_PRICING_REVIEW_REQUIRED";
 export type DtpLadderSource = {
@@ -27,6 +32,8 @@ export type DtpLadderSource = {
   marketBenchmark: string | null;
   /** Quantities at or above this need a separate owner decision (no invented price). */
   reviewRequiredFromQuantity: number | null;
+  /** Quantities ABOVE this have no customer price: REQUEST CURRENT VENDOR QUOTE (never an extended vendor row). */
+  requestQuoteAboveQuantity: number | null;
   note: string;
 };
 
@@ -34,22 +41,32 @@ export type DtpLadderSource = {
 // the 2026-07-24 ladders for the other sizes stay in force for quoting but
 // are flagged OWNER PRICING REVIEW REQUIRED and are never derived from 4x5x2.
 export const DTP_LADDER_SOURCES: Record<string, DtpLadderSource> = {
-  "spektra-dtp-4x5x2": { pricingSource: DTP_4X5_PRICING_SOURCE, approvedOn: "2026-10-06", status: "OWNER_APPROVED", marketBenchmark: DTP_MARKET_BENCHMARK_KEY, reviewRequiredFromQuantity: 25000, note: "Standard 4x5x2 DTP commercial anchor. 25,000+ has no approved customer price yet." },
-  "spektra-dtp-5x4x2": { pricingSource: DTP_PRICING_SOURCE, approvedOn: "2026-07-24", status: "OWNER_PRICING_REVIEW_REQUIRED", marketBenchmark: null, reviewRequiredFromQuantity: null, note: "Legacy size with no current catalog match; 2026-07-24 ladder still in force." },
-  "spektra-dtp-6x5x2": { pricingSource: DTP_PRICING_SOURCE, approvedOn: "2026-07-24", status: "OWNER_PRICING_REVIEW_REQUIRED", marketBenchmark: null, reviewRequiredFromQuantity: null, note: "2026-07-24 ladder still in force until separately approved; not derived from 4x5x2." },
-  "spektra-dtp-8x5x2": { pricingSource: DTP_PRICING_SOURCE, approvedOn: "2026-07-24", status: "OWNER_PRICING_REVIEW_REQUIRED", marketBenchmark: null, reviewRequiredFromQuantity: null, note: "2026-07-24 ladder still in force until separately approved; not derived from 4x5x2." },
+  // OWNER APPROVED 2026-10-06 (1,000–10,000) + 2026-10-07 (25,000 tier). Design & Customize = benchmark of record.
+  "spektra-dtp-4x5x2": { pricingSource: DTP_4X5_PRICING_SOURCE, approvedOn: "2026-10-06 (25,000 tier 2026-10-07)", status: "OWNER_APPROVED", marketBenchmark: DTP_MARKET_BENCHMARK_KEY, reviewRequiredFromQuantity: null, requestQuoteAboveQuantity: DTP_MAX_APPROVED_QUANTITY, note: "Standard 4x5x2 DTP commercial anchor. Above 25,000: REQUEST CURRENT VENDOR QUOTE." },
+  // OWNER APPROVED 2026-10-07 — derived from the real live Spektra landed-cost delta vs the 4x5x2 anchor (docs/GSO_DTP_FINAL_PRICING_REVIEW_2026-10-07.md); never a size multiplier.
+  "spektra-dtp-3.5x4.5x2": { pricingSource: DTP_CURRENT_LADDERS_PRICING_SOURCE, approvedOn: "2026-10-07", status: "OWNER_APPROVED", marketBenchmark: DTP_MARKET_BENCHMARK_KEY, reviewRequiredFromQuantity: null, requestQuoteAboveQuantity: DTP_MAX_APPROVED_QUANTITY, note: "Anchored on 4x5x2 by landed-cost delta; exact-size competitor NOT CURRENTLY VERIFIED." },
+  "spektra-dtp-5x5x2": { pricingSource: DTP_CURRENT_LADDERS_PRICING_SOURCE, approvedOn: "2026-10-07", status: "OWNER_APPROVED", marketBenchmark: DTP_MARKET_BENCHMARK_KEY, reviewRequiredFromQuantity: null, requestQuoteAboveQuantity: DTP_MAX_APPROVED_QUANTITY, note: "Anchored on 4x5x2 by landed-cost delta; exact-size competitor NOT CURRENTLY VERIFIED." },
+  "spektra-dtp-6x5x2": { pricingSource: DTP_CURRENT_LADDERS_PRICING_SOURCE, approvedOn: "2026-10-07", status: "OWNER_APPROVED", marketBenchmark: DTP_MARKET_BENCHMARK_KEY, reviewRequiredFromQuantity: null, requestQuoteAboveQuantity: DTP_MAX_APPROVED_QUANTITY, note: "Replaces the 2026-07-24 ladder ($1.84 / $1.04 / $0.96 / $0.81 / $0.81) for NEW quotes; historical quotes unchanged." },
+  "spektra-dtp-8x5x2": { pricingSource: DTP_CURRENT_LADDERS_PRICING_SOURCE, approvedOn: "2026-10-07", status: "OWNER_APPROVED", marketBenchmark: DTP_MARKET_BENCHMARK_KEY, reviewRequiredFromQuantity: null, requestQuoteAboveQuantity: DTP_MAX_APPROVED_QUANTITY, note: "Replaces the 2026-07-24 ladder ($2.05 / $1.23 / $1.23 / $1.05 / $1.05) for NEW quotes; historical quotes unchanged." },
+  // LEGACY: 5x4x2 has no current catalog match — MANUAL / VENDOR REVIEW for new quotes (owner 2026-10-07); the July ladder is kept for historical display only.
+  "spektra-dtp-5x4x2": { pricingSource: DTP_PRICING_SOURCE, approvedOn: "2026-07-24", status: "OWNER_PRICING_REVIEW_REQUIRED", marketBenchmark: null, reviewRequiredFromQuantity: null, requestQuoteAboveQuantity: null, note: "LEGACY / NO CURRENT STANDARD CATALOG MATCH — new quotes need MANUAL / VENDOR REVIEW; never mapped to another size." },
 };
 
 export function dtpLadderSource(ladderSku: string): DtpLadderSource | null {
   return DTP_LADDER_SOURCES[String(ladderSku || "").toLowerCase()] ?? null;
 }
 
-// OWNER-APPROVED 1,000-UNIT EXCEPTION (2026-10-06): the 4x5x2 1,000 tier is a
+// OWNER-APPROVED 1,000-UNIT ACQUISITION EXCEPTIONS (4x5x2 2026-10-06; the four
+// other current sizes 2026-10-07): the 1,000 tier of each CURRENT DTP size is a
 // competitive / acquisition tier allowed below the normal $500 GP target with
-// an approximately $350+ minimum. It applies ONLY to this ladder and tier —
-// 2,500+ and every other product keep the normal $500 protection.
+// a $350 minimum. They apply ONLY to these ladders at the 1,000 tier — 2,500+
+// and every other product keep the normal $500 protection.
 export const DTP_ACQUISITION_TIER_EXCEPTIONS: Record<string, { tier: number; minJobProfit: number; label: string; approvedOn: string }> = {
   "spektra-dtp-4x5x2": { tier: 1000, minJobProfit: 350, label: "DTP 1,000-unit competitive/acquisition tier (owner exception 2026-10-06)", approvedOn: "2026-10-06" },
+  "spektra-dtp-3.5x4.5x2": { tier: 1000, minJobProfit: 350, label: "DTP 1,000-unit competitive/acquisition tier (owner exception 2026-10-07)", approvedOn: "2026-10-07" },
+  "spektra-dtp-5x5x2": { tier: 1000, minJobProfit: 350, label: "DTP 1,000-unit competitive/acquisition tier (owner exception 2026-10-07)", approvedOn: "2026-10-07" },
+  "spektra-dtp-6x5x2": { tier: 1000, minJobProfit: 350, label: "DTP 1,000-unit competitive/acquisition tier (owner exception 2026-10-07)", approvedOn: "2026-10-07" },
+  "spektra-dtp-8x5x2": { tier: 1000, minJobProfit: 350, label: "DTP 1,000-unit competitive/acquisition tier (owner exception 2026-10-07)", approvedOn: "2026-10-07" },
 };
 
 export function dtpAcquisitionTierException(ladderSku: string, tierUsed: number | null) {
@@ -57,19 +74,24 @@ export function dtpAcquisitionTierException(ladderSku: string, tierUsed: number 
   return rule && tierUsed != null && tierUsed === rule.tier ? rule : null;
 }
 
-// Owner ladder quantities (vendor tiers stop at 7,500; the ladder adds 10,000).
-export const DTP_LADDER_QUANTITIES = [1000, 2500, 5000, 7500, 10000];
+// Owner ladder quantities = the commercial steps (owner 2026-10-07):
+// 1,000–2,499 / 2,500–4,999 / 5,000–9,999 / 10,000–24,999 / exactly 25,000.
+// Above 25,000: REQUEST CURRENT VENDOR QUOTE. Never interpolated.
+export const DTP_LADDER_QUANTITIES = [1000, 2500, 5000, 10000, 25000];
 
 // Owner CUSTOMER selling prices per unit, keyed by the stable vendorSku so a
 // mislabeled product NAME can never pull the wrong ladder (the pricing study
 // found a historical 5x4x2-priced-as-4x5x2 example — sku is the identity).
 export const DTP_OWNER_PRICE_LADDERS: Record<string, Record<number, number>> = {
-  // OWNER-APPROVED 2026-10-06 (benchmark: Design & Customize). No 7,500 tier
-  // (7,500 steps to the 5,000 price); 25,000 = OWNER PRICING REVIEW REQUIRED.
-  "spektra-dtp-4x5x2": { 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37 },
+  // OWNER APPROVED — 4x5x2 2026-10-06 (25,000 added 2026-10-07); the other four current sizes 2026-10-07.
+  // Steps: 1,000–2,499 / 2,500–4,999 / 5,000–9,999 / 10,000–24,999 / 25,000 exactly; above 25,000 = REQUEST CURRENT VENDOR QUOTE.
+  "spektra-dtp-3.5x4.5x2": { 1000: 1.3, 2500: 0.7, 5000: 0.45, 10000: 0.36, 25000: 0.29 },
+  "spektra-dtp-4x5x2": { 1000: 1.3, 2500: 0.71, 5000: 0.46, 10000: 0.37, 25000: 0.3 },
+  "spektra-dtp-5x5x2": { 1000: 1.35, 2500: 0.75, 5000: 0.49, 10000: 0.41, 25000: 0.35 },
+  "spektra-dtp-6x5x2": { 1000: 1.4, 2500: 0.78, 5000: 0.54, 10000: 0.46, 25000: 0.4 },
+  "spektra-dtp-8x5x2": { 1000: 1.5, 2500: 0.86, 5000: 0.65, 10000: 0.59, 25000: 0.52 },
+  // LEGACY 5x4x2 (2026-07-24) — historical display only; new quotes are MANUAL / VENDOR REVIEW.
   "spektra-dtp-5x4x2": { 1000: 1.76, 2500: 0.97, 5000: 0.86, 7500: 0.72, 10000: 0.71 },
-  "spektra-dtp-6x5x2": { 1000: 1.84, 2500: 1.04, 5000: 0.96, 7500: 0.81, 10000: 0.81 },
-  "spektra-dtp-8x5x2": { 1000: 2.05, 2500: 1.23, 5000: 1.23, 7500: 1.05, 10000: 1.05 },
 };
 
 // DTP safeguards (owner study): 40% stays a visible WARNING target, not a
@@ -111,6 +133,9 @@ export function ownerPriceForQuantity(ladderSku: string, quantity: number): { ti
   const ladder = DTP_OWNER_PRICE_LADDERS[key];
   if (!ladder) return { tierUsed: null, unitPrice: null };
   const source = DTP_LADDER_SOURCES[key];
+  if (source?.requestQuoteAboveQuantity != null && quantity > source.requestQuoteAboveQuantity) {
+    return { tierUsed: null, unitPrice: null, reviewRequired: `${DTP_REQUEST_VENDOR_QUOTE} — ${quantity.toLocaleString()} units is above the ${source.requestQuoteAboveQuantity.toLocaleString()} approved tier (no customer price beyond the 25,000 vendor row)` };
+  }
   if (source?.reviewRequiredFromQuantity != null && quantity >= source.reviewRequiredFromQuantity) {
     return { tierUsed: null, unitPrice: null, reviewRequired: `${DTP_OWNER_REVIEW_REQUIRED} — ${key} at ${source.reviewRequiredFromQuantity.toLocaleString()}+ units has no approved customer price yet` };
   }

@@ -28,7 +28,8 @@ export const DTP_STOREFRONT_MIN_QTY = 1000;
 // Online orders cap at the top owner ladder tier; larger runs are quoted
 // (freight/PO assumptions need human review beyond this point).
 export const DTP_STOREFRONT_MAX_QTY = 10000;
-export const DTP_QUANTITY_OPTIONS = [...DTP_LADDER_QUANTITIES];
+// Online quantity options stop at the storefront cap; 25,000-unit runs are quoted by staff.
+export const DTP_QUANTITY_OPTIONS = DTP_LADDER_QUANTITIES.filter((q) => q <= DTP_STOREFRONT_MAX_QTY);
 
 // Customer-facing included-spec labels (informational single-option lists —
 // there is nothing to choose because everything is included).
@@ -39,7 +40,9 @@ export const DTP_FINISH_LABEL = DTP_FINISH_OPTIONS[0];
 export type DtpLaunchInfo = { sku: string; size: string };
 
 export const DTP_LAUNCH_TYPE_INFO: Record<string, DtpLaunchInfo> = {
+  dtp_3_5x4_5x2: { sku: "spektra-dtp-3.5x4.5x2", size: "3.5x4.5x2" },
   dtp_4x5x2: { sku: "spektra-dtp-4x5x2", size: "4x5x2" },
+  dtp_5x5x2: { sku: "spektra-dtp-5x5x2", size: "5x5x2" },
   dtp_5x4x2: { sku: "spektra-dtp-5x4x2", size: "5x4x2" },
   dtp_6x5x2: { sku: "spektra-dtp-6x5x2", size: "6x5x2" },
   dtp_8x5x2: { sku: "spektra-dtp-8x5x2", size: "8x5x2" },

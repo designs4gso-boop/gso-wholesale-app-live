@@ -25,7 +25,9 @@ import {
   type SpektraObservedRow,
 } from "./spektra-live-cost-book";
 
-export const DTP_QUOTE_COST_AUTHORITY_VERSION = "dtp-quote-cost-authority/2026-10-06";
+export const DTP_QUOTE_COST_AUTHORITY_VERSION = "dtp-quote-cost-authority/2026-10-07";
+/** Highest published Spektra tier; nothing above it is costed automatically (owner 2026-10-07). */
+export const DTP_MAX_VENDOR_TIER_QUANTITY = 25000;
 
 export type DtpQuoteCostAuthority = "LIVE_COST_BOOK_BY_CONFIGURATION" | "LEGACY_VENDOR_SEED";
 export type DtpQuoteCostStatus =
@@ -154,7 +156,12 @@ export function resolveDtpQuoteCost(input: {
   };
   let look = lookupSpektraVendorCost({ ...selection, quantity, skuCount }, rows);
   let status: DtpQuoteCostStatus = look.status;
-  if (look.wholesaleTotal == null && look.config && quantity > 0) {
+  // Owner 2026-10-07: the 25,000 vendor row is never extended upward — above
+  // 25,000 the quote needs a CURRENT VENDOR QUOTE (no step, no interpolation).
+  if (quantity > DTP_MAX_VENDOR_TIER_QUANTITY) {
+    look = { ...look, status: "REQUEST_CURRENT_VENDOR_QUOTE", publicTotal: null, wholesaleTotal: null, wholesaleUnit: null, basis: `${quantity.toLocaleString()} units is above the highest published tier (${DTP_MAX_VENDOR_TIER_QUANTITY.toLocaleString()}); the vendor row is not extended.` };
+    status = "REQUEST_CURRENT_VENDOR_QUOTE";
+  } else if (look.wholesaleTotal == null && look.config && quantity > 0) {
     const step = conservativeStep(look.config, quantity, skuCount, rows);
     if (step) { look = step; status = "ESTIMATED_CONSERVATIVE_STEP"; }
   }

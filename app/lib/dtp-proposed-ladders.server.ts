@@ -33,7 +33,7 @@ import { SPEKTRA_FREIGHT_PER_PO } from "./product-driven-costing.server";
 import { lookupSpektraVendorCost, type SpektraSizeKey } from "./spektra-live-cost-book";
 
 export const DTP_PROPOSED_LADDERS_VERSION = "dtp-proposed-ladders/2026-10-07";
-export const DTP_PROPOSAL_STATUS = "PROPOSED FOR OWNER APPROVAL — NOT ACTIVE" as const;
+export const DTP_PROPOSAL_STATUS = "DERIVATION RECORD — ladders OWNER APPROVED 2026-10-07 (see dtp-owner-pricing.server.ts for the live prices)" as const;
 export const DTP_PROPOSAL_TIERS = [1000, 2500, 5000, 10000, 25000] as const;
 export const DTP_REMAINING_SIZES: SpektraSizeKey[] = ["3.5x4.5x2", "5x5x2", "6x5x2", "8x5x2"];
 export const ANCHOR_SIZE: SpektraSizeKey = "4x5x2";
@@ -77,7 +77,7 @@ export function recommended4x5At25k() {
   const tenK = ownerPriceForQuantity("spektra-dtp-4x5x2", 10000).unitPrice ?? 0;
   const boundaryTotalBelow = tenK * 24999;
   return {
-    status: "OWNER APPROVAL REQUIRED" as const,
+    status: (ownerPriceForQuantity("spektra-dtp-4x5x2", 25000).unitPrice != null ? "OWNER APPROVED 2026-10-07" : "OWNER APPROVAL REQUIRED") as "OWNER APPROVED 2026-10-07" | "OWNER APPROVAL REQUIRED",
     size: ANCHOR_SIZE, quantity: 25000, landedUnit: r6(cell.landedUnit), landedTotal: r2(cell.landedTotal),
     method: `${DTP_MARGIN_WARNING_TARGET_PCT}% target on live landed cost, commercially rounded`,
     rawPrice: r4(raw), ...e, floorPct: floor, meetsFloor: e.gmPct >= floor, meetsMinProfit: e.gp >= DTP_MIN_JOB_PROFIT,
@@ -109,8 +109,10 @@ export function proposeRow(size: SpektraSizeKey, quantity: number): DtpProposalR
   let E: number | null = null;
   let basis: DtpProposalRow["E_anchorBasis"] = "none";
   if (quantity >= 25000) {
+    const approved25 = ownerPriceForQuantity("spektra-dtp-4x5x2", 25000).unitPrice;
     const rec = recommended4x5At25k();
-    if (rec) { E = rec.price; basis = "4x5x2 25,000 RECOMMENDATION (not approved)"; }
+    if (approved25 != null) { E = approved25; basis = "OWNER APPROVED 4x5x2"; }
+    else if (rec) { E = rec.price; basis = "4x5x2 25,000 RECOMMENDATION (not approved)"; }
   } else {
     E = ownerPriceForQuantity("spektra-dtp-4x5x2", quantity).unitPrice;
     if (E != null) basis = "OWNER APPROVED 4x5x2";

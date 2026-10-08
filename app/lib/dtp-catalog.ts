@@ -20,7 +20,7 @@ export type DtpCatalogEntry = {
   /** Existing ERP vendorSku (ladder + vendor seed identity) or null for a size the ERP has not sold before. */
   vendorSku: string | null;
   /** Whether an owner CUSTOMER price ladder exists (dtp-owner-pricing.server.ts). */
-  ownerLadder: "EXISTS_2026-07-24" | "NONE_OWNER_DECISION_REQUIRED";
+  ownerLadder: "EXISTS_2026-07-24" | "OWNER_APPROVED_2026-10-07" | "NONE_OWNER_DECISION_REQUIRED";
   /** Vendor cost source for NEW calculations. */
   vendorCost: "LIVE_COST_BOOK_2026-10-06" | "LEGACY_SEED_ONLY";
   /**
@@ -35,11 +35,11 @@ export type DtpCatalogEntry = {
 };
 
 export const DTP_CATALOG: DtpCatalogEntry[] = [
-  { size: "3.5x4.5x2", status: "CURRENT_STANDARD", capacityLabel: "1 g", vendorSku: null, ownerLadder: "NONE_OWNER_DECISION_REQUIRED", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LEGACY_VENDOR_SEED", note: "NEW in the current catalog; ERP-ready for costing once the live matrix is loaded; no Shopify product is created by this change." },
-  { size: "4x5x2", status: "CURRENT_STANDARD", capacityLabel: "3.5 g", vendorSku: "spektra-dtp-4x5x2", ownerLadder: "EXISTS_2026-07-24", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LIVE_COST_BOOK", note: "Existing product; OWNER-APPROVED 4x5 ladder 2026-10-06 priced on live landed cost, so new quotes cost from the live book by exact configuration. Legacy seed tiers remain for historical quotes." },
-  { size: "5x5x2", status: "CURRENT_STANDARD", capacityLabel: "7 g", vendorSku: null, ownerLadder: "NONE_OWNER_DECISION_REQUIRED", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LEGACY_VENDOR_SEED", note: "NEW in the current catalog; not a replacement for the legacy 5x4x2." },
-  { size: "6x5x2", status: "CURRENT_STANDARD", capacityLabel: "14 g", vendorSku: "spektra-dtp-6x5x2", ownerLadder: "EXISTS_2026-07-24", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LEGACY_VENDOR_SEED", note: "Existing product; customer ladder OWNER PRICING REVIEW REQUIRED (2026-07-24 ladder still in force)." },
-  { size: "8x5x2", status: "CURRENT_STANDARD", capacityLabel: "28 g", vendorSku: "spektra-dtp-8x5x2", ownerLadder: "EXISTS_2026-07-24", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LEGACY_VENDOR_SEED", note: "Existing product; customer ladder OWNER PRICING REVIEW REQUIRED (2026-07-24 ladder still in force)." },
+    { size: "3.5x4.5x2", status: "CURRENT_STANDARD", capacityLabel: "1 g", vendorSku: "spektra-dtp-3.5x4.5x2", ownerLadder: "OWNER_APPROVED_2026-10-07", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LIVE_COST_BOOK", note: "Current catalog size; OWNER-APPROVED ladder 2026-10-07 priced on live landed cost. The VendorProduct row is created by tools/seed-spektra-dtp-current-sizes-2026-10-07.mjs at deployment; no Shopify product is created." },
+    { size: "4x5x2", status: "CURRENT_STANDARD", capacityLabel: "3.5 g", vendorSku: "spektra-dtp-4x5x2", ownerLadder: "OWNER_APPROVED_2026-10-07", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LIVE_COST_BOOK", note: "Existing product; OWNER-APPROVED 4x5 ladder 2026-10-06 (+25,000 tier 2026-10-07) priced on live landed cost, so new quotes cost from the live book by exact configuration. Legacy seed tiers remain for historical quotes." },
+    { size: "5x5x2", status: "CURRENT_STANDARD", capacityLabel: "7 g", vendorSku: "spektra-dtp-5x5x2", ownerLadder: "OWNER_APPROVED_2026-10-07", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LIVE_COST_BOOK", note: "Current catalog size (not a replacement for the legacy 5x4x2); OWNER-APPROVED ladder 2026-10-07. The VendorProduct row is created by tools/seed-spektra-dtp-current-sizes-2026-10-07.mjs at deployment." },
+    { size: "6x5x2", status: "CURRENT_STANDARD", capacityLabel: "14 g", vendorSku: "spektra-dtp-6x5x2", ownerLadder: "OWNER_APPROVED_2026-10-07", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LIVE_COST_BOOK", note: "Existing product; OWNER-APPROVED ladder 2026-10-07 priced on live landed cost (replaces the July 2026 ladder for new quotes)." },
+    { size: "8x5x2", status: "CURRENT_STANDARD", capacityLabel: "28 g", vendorSku: "spektra-dtp-8x5x2", ownerLadder: "OWNER_APPROVED_2026-10-07", vendorCost: "LIVE_COST_BOOK_2026-10-06", quoteCostAuthority: "LIVE_COST_BOOK", note: "Existing product; OWNER-APPROVED ladder 2026-10-07 priced on live landed cost (replaces the July 2026 ladder for new quotes)." },
   { size: "5x4x2", status: "LEGACY_NO_CURRENT_STANDARD_CATALOG_MATCH", capacityLabel: null, vendorSku: "spektra-dtp-5x4x2", ownerLadder: "EXISTS_2026-07-24", vendorCost: "LEGACY_SEED_ONLY", quoteCostAuthority: "LEGACY_VENDOR_SEED", note: "No confirmed current Spektra catalog match. Do NOT map to 4x5x2 or 5x5x2 without owner approval; new quotes need a current vendor quote; historical quotes unchanged." },
 ];
 

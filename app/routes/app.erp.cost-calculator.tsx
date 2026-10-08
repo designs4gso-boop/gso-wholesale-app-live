@@ -3608,7 +3608,7 @@ function ProductDrivenForm() {
           </label>
           {/* 2026-10-06 OWNER DECISION: 4x5x2 = approved standard DTP anchor (Design & Customize = controlling benchmark); 1,000 tier = acquisition exception ($350+ GP); 25,000+ and the other sizes = OWNER PRICING REVIEW REQUIRED. Numbers live in dtp-owner-pricing.server.ts only. */}
           <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
-            4x5x2 uses the OWNER-APPROVED ladder of 2026-10-06 (pricing source OWNER_APPROVED_DTP_4X5_2026_10_06; benchmark DESIGN_AND_CUSTOMIZE_PRIMARY — premium / heavy-duty pouch positioning). Its 1,000-unit tier is the owner acquisition exception (about $350+ gross profit instead of $500); 2,500+ keeps the normal protection. 4x5x2 at 25,000+ and the 3.5x4.5x2 / 5x5x2 / 6x5x2 / 8x5x2 customer ladders remain OWNER PRICING REVIEW REQUIRED (the 2026-07-24 ladders for 6x5x2 / 8x5x2 stay in force meanwhile). 4x5x2 quote cost = live Spektra book by the exact configuration below; other sizes still cost from the legacy vendor tiers.
+            All five current DTP sizes use OWNER-APPROVED ladders (4x5x2 2026-10-06; 3.5x4.5x2 / 5x5x2 / 6x5x2 / 8x5x2 and every 25,000 tier 2026-10-07; benchmark DESIGN_AND_CUSTOMIZE_PRIMARY — premium / heavy-duty pouch positioning). Steps: 1,000–2,499 / 2,500–4,999 / 5,000–9,999 / 10,000–24,999 / 25,000; above 25,000 = REQUEST CURRENT VENDOR QUOTE. Every 1,000 tier is the owner acquisition exception ($350 gross-profit target instead of $500); 2,500+ keeps the normal protection. Quote cost = live Spektra book by the exact configuration below. 5x4x2 is legacy: MANUAL / VENDOR REVIEW.
           </p>
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtprepeat" value="1" /> Exact repeat order — waive customer design fee (no art changes)</label>
           {/* 2026-10-06 LIVE SPEKTRA CONFIGURATION (research 2026-10-06): drives the live vendor economics shown next to the legacy cost. Defaults = the legacy product spec (White PET, Soft Touch, CR zipper, No Tear Notch). */}
@@ -4529,7 +4529,7 @@ function ProductTiers() {
         </table>
       </div>
       {pm.isDtp ? (
-        <p style={smallHelp}>Owner ladder prices (4x5x2: owner-approved 2026-10-06; other sizes: 2026-07-24 ladder, owner pricing review pending). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
+        <p style={smallHelp}>Owner ladder prices (OWNER-APPROVED 2026-10-06 / 2026-10-07 for all five current sizes; 5x4x2 legacy = manual review). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
       ) : null}
       {/* 15F.0K.3: direct-print crossover advisory (requested-quantity row) —
           advisory + live DTP comparison only; the owner chooses the product. */}
