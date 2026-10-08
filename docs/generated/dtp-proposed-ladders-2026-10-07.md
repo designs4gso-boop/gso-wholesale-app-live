@@ -65,4 +65,3 @@ Anchored on the OWNER-APPROVED 4x5x2 ladder (Design & Customize 4x5 = controllin
 1,000 optional acquisition price: $1.50 (31.1% / $466; $34 below the $500 target). Recommend the normal-protection price $1.55 (GP $516) as default; approve $1.50 (GP $466, 31.1%) only as an explicit acquisition exception for this size.
 
 Continuity: 1,000->2,500 44.49% · 2,500->5,000 24.4% · 5,000->10,000 9.22% · 10,000->25,000 11.86%
-

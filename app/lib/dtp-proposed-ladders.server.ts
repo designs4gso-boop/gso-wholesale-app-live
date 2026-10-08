@@ -243,5 +243,6 @@ export function dtpProposedLaddersMarkdown(): string {
     if (acq) L.push("", `1,000 optional acquisition price: $${acq.price.toFixed(2)} (${acq.gmPct.toFixed(1)}% / $${acq.gp.toFixed(0)}; $${acq.gpBelowNormalTarget.toFixed(0)} below the $500 target). ${acq.recommendation}`);
     L.push("", `Continuity: ${ladder.continuity.map((c) => `${c.fromQty.toLocaleString()}->${c.toQty.toLocaleString()} ${c.dropPct}%${c.cliff ? " CLIFF" : ""}`).join(" · ")}`, "");
   }
-  return L.join("\n") + "\n";
+  // single trailing newline (git diff --check rejects a blank line at EOF)
+  return L.join("\n").replace(/\n+$/, "") + "\n";
 }
