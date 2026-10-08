@@ -1,4 +1,27 @@
-# GSO DTP Final Pricing Review — 2026-10-07 (Wednesday morning owner review)
+# GSO DTP Final Pricing Review — 2026-10-07 (FINAL — owner decisions applied)
+
+## 0. FINAL CURRENT DTP SELL LADDERS — OWNER APPROVED 2026-10-07 (live in the quote engine)
+
+| Size | 1,000–2,499 | 2,500–4,999 | 5,000–9,999 | 10,000–24,999 | 25,000 | above 25,000 |
+|---|---|---|---|---|---|---|
+| 3.5x4.5x2 (1 g) | **$1.30** | **$0.70** | **$0.45** | **$0.36** | **$0.29** | REQUEST CURRENT VENDOR QUOTE |
+| 4x5x2 (3.5 g) | **$1.30** | **$0.71** | **$0.46** | **$0.37** | **$0.30** | REQUEST CURRENT VENDOR QUOTE |
+| 5x5x2 (7 g) | **$1.35** | **$0.75** | **$0.49** | **$0.41** | **$0.35** | REQUEST CURRENT VENDOR QUOTE |
+| 6x5x2 (14 g) | **$1.40** | **$0.78** | **$0.54** | **$0.46** | **$0.40** | REQUEST CURRENT VENDOR QUOTE |
+| 8x5x2 (28 g) | **$1.50** | **$0.86** | **$0.65** | **$0.59** | **$0.52** | REQUEST CURRENT VENDOR QUOTE |
+
+Landed cost (live Spektra comparable spec + art $8.33 + $85 freight UNVERIFIED OWNER ASSUMPTION), GM and GP at each tier:
+
+| Size | 1,000 landed / GM / GP | 2,500 | 5,000 | 10,000 | 25,000 |
+|---|---|---|---|---|---|
+| 3.5x4.5x2 | $0.8413 · 35.3% · $459 | $0.4055 · 42.1% · $736 | $0.2598 · 42.3% · $951 | $0.2053 · 43.0% · $1,547 | $0.1628 · 43.8% · $3,179 |
+| 4x5x2 | $0.8607 · 33.8% · $439 | $0.4206 · 40.8% · $723 | $0.2735 · 40.6% · $933 | $0.2206 · 40.4% · $1,494 | $0.1784 · 40.5% · $3,039 |
+| 5x5x2 | $0.9030 · 33.1% · $447 | $0.4536 · 39.5% · $741 | $0.3033 · 38.1% · $934 | $0.2540 · 38.0% · $1,560 | $0.2114 · 39.6% · $3,464 |
+| 6x5x2 | $0.9423 · 32.7% · $458 | $0.4843 · 37.9% · $739 | $0.3340 · 38.1% · $1,030 | $0.2851 · 38.0% · $1,749 | $0.2429 · 39.3% · $3,928 |
+| 8x5x2 | $1.0342 · 31.1% · $466 | $0.5561 · 35.3% · $760 | $0.3999 · 38.5% · $1,251 | $0.3600 · 39.0% · $2,300 | $0.3168 · 39.1% · $5,080 |
+
+Every 1,000 tier is an owner acquisition exception ($350 GP target, 30% floor — all five pass); 2,500+ keeps the normal $500 GP target and the 35/38% floors (all pass, test-pinned). Sell prices are never interpolated; the 25,000 vendor row is never extended. 5x4x2 = LEGACY, manual / vendor review. The sections below are the derivation record that produced these numbers.
+
 
 Every figure below is produced by code in this branch (`app/lib/dtp-owner-pricing.server.ts`, `app/lib/dtp-market-benchmark.ts`, `app/lib/dtp-proposed-ladders.server.ts`) and pinned by tests. Three labels are used and never mixed:
 
@@ -18,9 +41,10 @@ Pricing source `OWNER_APPROVED_DTP_4X5_2026_10_06` · market benchmark `DESIGN_A
 | 2,500 – 4,999 | **$0.71** | $0.4206 | $500 | $723 | 40.8% | $0.63 | +12.7% |
 | 5,000 – 9,999 | **$0.46** | $0.2735 | $500 | $933 | 40.6% | $0.42 | +9.5% |
 | 10,000 – 24,999 | **$0.37** | $0.2206 | $500 | $1,494 | 40.4% | $0.315 | +17.5% |
-| 25,000+ | OWNER PRICING REVIEW REQUIRED | $0.1784 | — | — | — | not published | — |
+| 25,000 exactly | **$0.30** | $0.1784 | $500 | $3,039 | 40.5% | not published | — |
+| above 25,000 | REQUEST CURRENT VENDOR QUOTE | — | — | — | — | — | — |
 
-Examples (test-pinned): 1,500 → $1.30 · 2,499 → $1.30 · 2,500 → $0.71 · 4,999 → $0.71 · 7,500 → $0.46 · 9,999 → $0.46 · 10,000 → $0.37 · 24,999 → $0.37 · 25,000 → no activated ladder. Sell prices are never interpolated; vendor cost stays exact/observed per configuration (extra SKUs by the validated $138.75 rule; custom quantities by a labelled conservative step; unsupported combinations block the quote).
+Examples (test-pinned): 1,500 → $1.30 · 2,499 → $1.30 · 2,500 → $0.71 · 4,999 → $0.71 · 7,500 → $0.46 · 9,999 → $0.46 · 10,000 → $0.37 · 24,999 → $0.37 · 25,000 → $0.30 · 25,001 → REQUEST CURRENT VENDOR QUOTE. Sell prices are never interpolated; vendor cost stays exact/observed per configuration (extra SKUs by the validated $138.75 rule; custom quantities by a labelled conservative step; unsupported combinations block the quote).
 
 **1,000-unit exception:** only ladder `spektra-dtp-4x5x2`, tier 1,000. $350 GP target instead of $500; hard floor 30% and the $350 absolute floor still apply. 2,500+ keeps the normal protection; no other product or size inherits it.
 
@@ -45,7 +69,7 @@ Standard DTP customer price × 1.10; new unique die +$700 as a separate line (ne
 
 4x5x2 × 2,500: $0.71 → **$0.781** / unit before customer-facing rounding; product $1,952.50; + $700 if a new die = $2,652.50; reorder on the same die $1,952.50.
 
-## 4. Remaining sizes — PROPOSED FOR OWNER APPROVAL (not active)
+## 4. Remaining sizes — derivation record (APPROVED 2026-10-07 at the 1,000 acquisition prices; see §0)
 
 Method (owner direction): 4x5x2 is the market anchor. Each size is priced from its real live landed-cost difference vs 4x5x2 at the same quantity (G = GP parity), lifted where the 30/35/38% floors (H) or the $500 GP rule (I) require more, then commercially rounded (≥ $1 to the next $0.05; < $1 to the next cent). 1,000-tier proposals use NORMAL protection; the optional acquisition price is shown separately and needs an explicit owner exception. 25,000 rows anchor on the 4x5 25k RECOMMENDATION (itself not approved).
 
@@ -99,9 +123,9 @@ Current (July 2026) ladder for comparison: $1.84 / $1.04 / $0.96 / $0.81 / $0.81
 
 Current (July 2026) ladder: $2.05 / $1.23 / $1.23 / $1.05 / $1.05. Recommendation: approve the proposal. Sourcing note: 8x5x2 vendor cost falls much less with quantity than 4x5x2 (+63% landed at 10,000 vs +20% at 1,000), so the floors, not GP parity, set the 5,000+ prices.
 
-### 25,000 tier — RECOMMENDED, OWNER APPROVAL REQUIRED
+### 25,000 tier — APPROVED 2026-10-07 at the recommended values
 
-4x5x2 at 25,000: **$0.30** (40% target on live landed $0.1784; GM 40.5%, GP $3,039; order-total drop at the 24,999 → 25,000 boundary 18.9%, in line with the approved 10,000 step's 19.6%). Design & Customize publishes no 25,000 price. Other sizes at 25,000 (above) anchor on this recommendation: 3.5x4.5x2 $0.29 · 5x5x2 $0.35 · 6x5x2 $0.40 · 8x5x2 $0.52.
+4x5x2 at 25,000: **$0.30** (40% target on live landed $0.1784; GM 40.5%, GP $3,039; order-total drop at the 24,999 → 25,000 boundary 18.9%, in line with the approved 10,000 step's 19.6%). Design & Customize publishes no 25,000 price. Other sizes at 25,000: 3.5x4.5x2 $0.29 · 5x5x2 $0.35 · 6x5x2 $0.40 · 8x5x2 $0.52. Above 25,000 there is no customer price and the vendor row is not extended: REQUEST CURRENT VENDOR QUOTE.
 
 ## 5. Quantity continuity and cliffs
 
