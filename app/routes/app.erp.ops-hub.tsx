@@ -303,7 +303,7 @@ export default function OpsHub() {
 
               <BlockStack gap="200">
                 <Text as="h3" variant="headingSm">STAGE 4 — GUARDED TEST JOB TRANSITION</Text>
-                <Text as="p" tone="subdued">Locked to ticket <strong>{s4.ticket}</strong>: {s4.from} → {s4.target}. Creation posts a SANDBOX / STAGE 4 TEST card; approval happens in Slack; execution happens ONLY through the owner button below, which calls the centralized transition executor. The job id is resolved server-side from the ticket. (Stage 4 passed live on 2026-10-04; the ticket is now <em>printing</em>, so preflight is expected to report the status mismatch until a new test job is chosen.)</Text>
+                <Text as="p" tone="subdued">Locked to ticket <strong>{s4.ticket}</strong>: {s4.from} → {s4.target}. Creation posts a SANDBOX / STAGE 4 TEST card; approval happens in Slack; execution happens ONLY through the owner button below, which calls the centralized transition executor. The job id is resolved server-side from the ticket. Stage 4 PASSED live on 2026-10-04 — this card is kept as the historical test record; a red preflight here means only that the test ticket has since moved on, not that anything is wrong.</Text>
                 <InlineStack gap="200" wrap>
                   <Badge tone={executionOn ? "critical" : "success"}>{`Execution kill switch: ${executionOn ? "ON" : "OFF"}`}</Badge>
                   <Badge tone={r.reasoningEnabled === "YES" ? "warning" : "success"}>{`Reasoning: ${r.reasoningEnabled === "YES" ? "ON" : "OFF"}`}</Badge>

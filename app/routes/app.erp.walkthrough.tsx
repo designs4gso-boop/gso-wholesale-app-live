@@ -121,6 +121,17 @@ const SECTIONS: SopSection[] = [
     ],
   },
   {
+    title: "8b. Agent safety posture (what is OFF)",
+    what: "The operations agent platform ships locked: agent reasoning OFF, agent execution OFF, the worker is never scheduled (manual trigger only), and Slack cards record decisions only.",
+    why: "Nothing an agent or a Slack button does can create, price, move or send anything on its own. Staff stay the only actors until the owner changes the switches in the server environment.",
+    path: "Sidebar -> Operations · Operations Hub -> read the badges: Reasoning OFF, Execution kill switch OFF, Worker schedule manual only, Slack sandbox-only, Repository.",
+    links: [{ label: "Operations Hub", url: "/app/erp/ops-hub" }],
+    callouts: [
+      "If any badge on the Operations Hub reads ON or LIVE, stop and tell the owner — those switches are environment settings, not page controls.",
+      "A red Stage 4 preflight on the hub is the historical test record, not a fault.",
+    ],
+  },
+  {
     title: "9. Agent Review Queue to draft quote",
     what: "Every agent lead (and staff-entered lead) lands here for review. Details expands the full request inline. Converting requires explicitly choosing a quote-ready recipe.",
     why: "This is the only bridge from external leads to real quotes, and it is staff-gated on purpose. The draft it creates is internal - nothing is sent to the customer.",
