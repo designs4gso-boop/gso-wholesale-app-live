@@ -1,4 +1,5 @@
 import type React from "react";
+import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -8,6 +9,10 @@ import { buildCsv } from "../lib/shopify-cost-audit-shared";
 import { applyApprovedCostUpdates, previewApprovedCostUpdates } from "../lib/approved-cost-updates.server";
 // 2026-10-05 read-only production standards (weeding + fixed-product specs + jar application timings)
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
+import { ERP_CARD_STYLE, ERP_SMALL_HELP, ERP_TD_STYLE, ERP_TH_STYLE } from "../lib/erp-ui-tokens";
+import { JAR_BASE_PRICES, JAR_PRICING_VERSION } from "../lib/canonical-jar-pricing";
+import { FAMILY_MARGIN_RULES, MARGIN_FLOOR_PCT } from "../lib/calculator-emergency.server";
+import { FAMILY_COMMERCIAL_POLICIES } from "../lib/commercial-pricing-policy.server";
 import { describeStandardSpec, listProductSpecs } from "../lib/product-production-spec";
 import { APPLICATION_LABOR_RATE_PER_HOUR, JAR_APPLICATION_SECONDS_BY_SIZE } from "../lib/jar-cost-inputs.server";
 import {
@@ -199,8 +204,8 @@ export async function loader({ request }: { request: Request }) {
 
     if (!(Number(machine.costPerHour) > 0)) {
       pushIssue(issues, { area: "Machine / labor", item: machine.name, severity: "critical", problem: "No machine hourly cost.", verify: "Real recovery rate (power + maintenance + depreciation)", fixPath: "/app/erp/machines", fixLabel: "Machines" });
-    } else if (nearlyEqual(Number(machine.costPerHour), SEEDED_FINGERPRINTS.machineRatePerHour)) {
-      pushIssue(issues, { area: "Machine / labor", item: machine.name, severity: "warning", problem: "Machine rate is the seeded $5/hr default — and the Cost Calculator's input defaults to $8/hr, so the app disagrees with itself.", verify: "Pick ONE verified hourly rate; use it in Machines and the calculator", fixPath: "/app/erp/machines", fixLabel: "Machines" });
+    } else if (!nearlyEqual(Number(machine.costPerHour), OWNER_STANDARDS.machineRecoveryPerHour.value)) {
+      pushIssue(issues, { area: "Machine / labor", item: machine.name, severity: "warning", problem: `Machine record says $${Number(machine.costPerHour).toFixed(2)}/hr but the owner machine recovery standard is $${OWNER_STANDARDS.machineRecoveryPerHour.value}/hr (approved 2026-10-07); pricing and actuals use the owner standard.`, verify: "Pick ONE verified hourly rate; use it in Machines and the calculator", fixPath: "/app/erp/machines", fixLabel: "Machines" });
     }
 
     for (const channel of machine.inkChannels.filter((c) => c.enabled)) {
@@ -464,8 +469,8 @@ export async function loader({ request }: { request: Request }) {
       tierMaxQty: null,
       moq: null,
       source: "Machine.costPerHour",
-      confidence: rate <= 0 ? "missing" : nearlyEqual(rate, SEEDED_FINGERPRINTS.machineRatePerHour) ? "seeded" : "manual",
-      issue: rate <= 0 ? "No hourly cost." : nearlyEqual(rate, SEEDED_FINGERPRINTS.machineRatePerHour) ? "Seeded $5/hr — conflicts with the calculator's $8/hr default input." : "",
+      confidence: rate <= 0 ? "missing" : nearlyEqual(rate, OWNER_STANDARDS.machineRecoveryPerHour.value) ? "verified" : "manual",
+      issue: rate <= 0 ? "No hourly cost." : nearlyEqual(rate, OWNER_STANDARDS.machineRecoveryPerHour.value) ? "" : `Differs from the $${OWNER_STANDARDS.machineRecoveryPerHour.value}/hr owner machine recovery standard (approved 2026-10-07).`,
       verify: "Real recovery rate (power + maintenance + depreciation)",
       fixPage: "Machines",
     });
@@ -613,14 +618,22 @@ export async function loader({ request }: { request: Request }) {
       })),
       applicationRatePerHour: APPLICATION_LABOR_RATE_PER_HOUR,
       specs: listProductSpecs().map((spec) => ({ family: spec.family, productKey: spec.productKey, displayName: spec.displayName, status: spec.status, authorityStatus: spec.authorityStatus, conflictCount: spec.referenceConflicts.length, sharedSizeKey: Boolean(spec.sharedSizeKeyNote), dims: describeStandardSpec(spec), source: spec.source.module })),
+      // 2026-10-05: customer-pricing authorities, read-only (the calculator is the only place prices are produced).
+      pricing: {
+        jarLadder: { version: JAR_PRICING_VERSION, approved: "2026-08-12 (owner)", rows: Object.entries(JAR_BASE_PRICES).map(([size, tiers]) => ({ size, tiers: tiers.map((t) => `${t.minQty}+ ${t.priceEach.toFixed(2)}`).join(" · ") })) },
+        marginFloors: { globalFloorPct: MARGIN_FLOOR_PCT, families: FAMILY_MARGIN_RULES.map((rule) => ({ key: rule.key, label: rule.label, curve: rule.curve.join("/"), familyMinPct: rule.familyMinPct })) },
+        minimumProfit: FAMILY_COMMERCIAL_POLICIES.map((p) => ({ family: p.familyKey, minimumGrossProfit: p.minimumGrossProfit, minimumOrderTotal: p.minimumOrderTotal })),
+        note: "Jars: owner 16D ladder with minimum-margin protection (curve not used). Bags: owner-calibrated bands + market targets. Stickers: curve + area floor. Banners: curve. The 65/58/52/47/45 Miron curve is retained ONLY as a legacy reference (see docs/GSO_JAR_PRICING_AUTHORITY_AUDIT.md).",
+      },
     },
   };
 }
 
-const cardStyle: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 12, padding: 14, background: "white" };
-const smallHelp: React.CSSProperties = { color: "#6b7280", fontSize: 12, marginTop: 4 };
-const thStyle: React.CSSProperties = { background: "#f3f4f6", textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb", fontSize: 12 };
-const tdStyle: React.CSSProperties = { padding: 8, borderBottom: "1px solid #e5e7eb", fontSize: 12, verticalAlign: "top" };
+// 2026-10-05: shared ERP UI tokens (one definition for every inline-styled route).
+const cardStyle = ERP_CARD_STYLE;
+const smallHelp = ERP_SMALL_HELP;
+const thStyle = ERP_TH_STYLE;
+const tdStyle = ERP_TD_STYLE;
 
 const confidenceStyle: Record<Confidence, React.CSSProperties> = {
   verified: { background: "#dcfce7", color: "#166534", borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
@@ -722,9 +735,9 @@ export default function CostVerificationRoute() {
             <ul style={{ margin: "6px 0 0 18px", lineHeight: 1.7 }}>
               <li><b>Labor standards partially LIVE in the calculator (13A.3)</b> — jar/bag application, design setup, and gloss/white setup use owner standards; cutting/weeding/packout still on previous rules (review needed); replay validation still open</li>
               <li>Ink <b>usage per sqft</b> (0.0075 seeded; the $/sqft estimate profiles) — calibrate from RIP actuals (13A)</li>
-              <li>Machine hourly rate — $5/hr on Machines vs $8/hr calculator default; owner picks one later</li>
+              <li>Machine hourly rate — OWNER APPROVED $5/hr for both printers (2026-10-07, retail replacement basis); machine records at $5 are consistent</li>
               <li>Print speed / setup minutes (finish speed curve; cut time from cutter speed later — 12.5 cm/s effective estimate)</li>
-              <li>Known-job replay: 0 of 7 recorded (section below)</li>
+              <li>Known-job replay: recorded manually on the printout below — not tracked in the app</li>
             </ul>
           </div>
         </div>
@@ -760,6 +773,18 @@ export default function CostVerificationRoute() {
                 ))}
               </tbody>
             </table>
+          </div>
+          <div>
+            <b>Customer pricing authorities</b> <span style={smallHelp}>read-only</span>
+            <div style={{ marginTop: 6, fontSize: 12 }}>
+              <div><b>Jar price ladder</b> ({data.productionStandards.pricing.jarLadder.version}, owner-approved {data.productionStandards.pricing.jarLadder.approved}):</div>
+              <ul style={{ margin: "4px 0 6px 18px", lineHeight: 1.6 }}>
+                {data.productionStandards.pricing.jarLadder.rows.map((row) => <li key={row.size}><b>{row.size}</b>: {row.tiers}</li>)}
+              </ul>
+              <div><b>Margin protection</b>: global floor {data.productionStandards.pricing.marginFloors.globalFloorPct}% · family minimums {data.productionStandards.pricing.marginFloors.families.map((f) => `${f.label} ${f.familyMinPct}%`).join(" · ")}</div>
+              <div><b>Minimum gross profit</b>: {data.productionStandards.pricing.minimumProfit.map((p) => `${p.family} ${p.minimumGrossProfit ?? 0}`).join(" · ")}</div>
+              <div style={smallHelp}>{data.productionStandards.pricing.note}</div>
+            </div>
           </div>
           <div>
             <b>Fixed-product production specs</b> <span style={smallHelp}>product-production-spec.ts</span>
@@ -904,7 +929,7 @@ export default function CostVerificationRoute() {
           { label: "Machine + labor", value: `${data.summary.machineCount} machines`, ok: data.summary.machineLaborReady },
           { label: "Vendor tiers", value: `${data.summary.tierRowCount} tier rows`, ok: data.summary.vendorTiersReady },
           { label: "RIP actual costs", value: data.summary.ripCount ? `${data.summary.ripCount} GSOQ results` : "none yet", ok: data.summary.ripReady },
-          { label: "Known-job tests", value: "0 of 7 recorded", ok: false },
+          { label: "Known-job tests", value: "manual (not tracked in the app)", ok: false },
           { label: "Critical issues", value: String(data.summary.criticalCount), ok: data.summary.criticalCount === 0 },
           { label: "Warnings", value: String(data.summary.warningCount), ok: data.summary.warningCount === 0 },
         ].map((card) => (
@@ -1090,7 +1115,7 @@ export default function CostVerificationRoute() {
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Known Job Replay Prep (0 of 7 recorded)</h2>
+        <h2 style={{ marginTop: 0 }}>Known Job Replay Prep (recorded manually)</h2>
         <p style={{ fontSize: 13, color: "#4b5563" }}>
           Seven test jobs, ready to run once you want to prove the calculator against reality. Each slot prefills the Cost Calculator where the
           record exists; enter real label/art sizes on the page. When checking labor lines, compare against the <b>Labor Standards</b> table above

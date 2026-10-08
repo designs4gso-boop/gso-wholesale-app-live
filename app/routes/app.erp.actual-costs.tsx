@@ -22,6 +22,7 @@ import {
   filterVarianceRows,
   type VarianceReportRow,
 } from "../lib/actual-variance.server";
+import { ERP_CARD_STYLE, ERP_SMALL_HELP, ERP_TD_STYLE, ERP_TH_STYLE } from "../lib/erp-ui-tokens";
 
 // Actual Cost Dashboard (13A.5): READ-ONLY. Turns imported RIP/print-log rows
 // into actual dollars using the verified DB channel costs. No action export,
@@ -56,7 +57,7 @@ export async function loader({ request }: { request: Request }) {
   ]);
 
   const rates = buildBrandRates(machines);
-  const ratePerHour = machineRatePerHour(); // the ONE configured rate ($8/hr) - same source as board + writeback
+  const ratePerHour = machineRatePerHour(); // the ONE configured rate ($5/hr owner standard) - same source as board + writeback
   const printMaterials = materials.filter((material) => materialKind(material) === "print");
 
   const gsoqEntries = entries.filter((entry) => /^GSOQ-/i.test(String(entry.jobTicket || "")));
@@ -189,10 +190,11 @@ export async function loader({ request }: { request: Request }) {
   return { summary, rows: rows.slice(0, 200), rowTotal: rows.length, rollups, gsoqRows, varianceRows, varianceSummary, varianceFilters, varianceError };
 }
 
-const cardStyle: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 12, padding: 14, background: "white" };
-const thStyle: React.CSSProperties = { background: "#f3f4f6", textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb", fontSize: 12 };
-const tdStyle: React.CSSProperties = { padding: 8, borderBottom: "1px solid #e5e7eb", fontSize: 12, verticalAlign: "top" };
-const smallHelp: React.CSSProperties = { color: "#6b7280", fontSize: 12, marginTop: 4 };
+// 2026-10-05: shared ERP UI tokens.
+const cardStyle = ERP_CARD_STYLE;
+const thStyle = ERP_TH_STYLE;
+const tdStyle = ERP_TD_STYLE;
+const smallHelp = ERP_SMALL_HELP;
 const warnStyle: React.CSSProperties = { color: "#92400e", fontSize: 11 };
 
 const statusBadge: Record<MatchStatus, React.CSSProperties> = {
@@ -214,7 +216,7 @@ export default function ActualCostsRoute() {
       </p>
       <section style={{ background: "linear-gradient(135deg,#111827,#7c2d12)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>Actual Cost Dashboard</h1>
-        <p style={{ marginBottom: 0 }}>v1 (13A.5): actual ink/machine dollars computed from imported RIP/print-log rows using the verified database channel costs.</p>
+        <p style={{ marginBottom: 0 }}>Actual ink/machine dollars computed from imported RIP/print-log rows using the verified database channel costs.</p>
         <p style={{ margin: "8px 0 0", fontSize: 13 }}>
           Unmatched or ambiguous rows? <Link to="/app/erp/rip-import-review" style={{ color: "#c4b5fd" }}>Open RIP Import Review</Link> to attach them safely.
         </p>
@@ -318,7 +320,7 @@ export default function ActualCostsRoute() {
         <h2 style={{ marginTop: 0 }}>Quote-time GSOQ RIP results (separate from production actuals)</h2>
         <p style={{ fontSize: 13, color: "#4b5563" }}>
           These are quote-time RIP results synced from the NAS for pricing in the Cost Calculator's Actual mode — they are not production print
-          runs. Their ink dollars come from the NAS script's own constant (script recovery is on the 13A.4 collection list); the production rows
+          runs. Their ink dollars come from the NAS script's own constant (script recovery is a pending data-collection item); the production rows
           above use the verified database channel costs.
         </p>
         <div style={{ overflowX: "auto" }}>
@@ -367,7 +369,7 @@ function VarianceSection({ data }: { data: ReturnType<typeof useLoaderData<typeo
 
   return (
     <section style={{ ...cardStyle, marginTop: 16, borderColor: "#7c2d12", borderWidth: 2 }}>
-      <h2 style={{ marginTop: 0 }}>Estimated vs Actual variance (13A.7A — read-only preview)</h2>
+      <h2 style={{ marginTop: 0 }}>Estimated vs Actual variance (read-only preview)</h2>
       <p style={{ ...smallHelp, marginTop: 0 }}>
         PARTIAL preview by design: the total covers ink (verified shared channel costs) + machine time at the current
         configured rate — the SAME math and total as the Production Board writeback. Media/material is shown as a

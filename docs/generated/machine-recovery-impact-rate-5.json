@@ -1,0 +1,169 @@
+{
+  "rate": 5,
+  "controls": {
+    "3x3 sticker control (1,000 matte, AUTO CMYK)": {
+      "total": 79.61725236657722,
+      "unit": 0.07961725236657721,
+      "status": "PROVISIONAL",
+      "lines": {
+        "blank_sets": 0,
+        "print_media": 20.945,
+        "ink": 20.79,
+        "art_setup": 8.333333333333334,
+        "print_setup": 1,
+        "run_labor": 3.7716979166666667,
+        "application": 0,
+        "cutting_machine": 7.543231961836613,
+        "cutting_attention": 2.3572599880739413,
+        "weeding": 5.333333333333333,
+        "machine": 7.543395833333333,
+        "planned_overage": 0,
+        "packout": 2,
+        "inbound_freight": 0
+      }
+    },
+    "4x5 Sticker Bag (100, 1 face, 40% coverage)": {
+      "total": 37.91737437885113,
+      "unit": 0.37917374378851126,
+      "status": "PROVISIONAL",
+      "lines": {
+        "blank_sets": 9,
+        "print_media": 4.733333333333333,
+        "ink": 1.8479999999999999,
+        "art_setup": 8.333333333333334,
+        "print_setup": 1,
+        "run_labor": 0.869074074074074,
+        "application": 5.555555555555556,
+        "cutting_machine": 1.1478831246273105,
+        "cutting_attention": 0.3587134764460345,
+        "weeding": 1.3333333333333333,
+        "machine": 1.7381481481481482,
+        "planned_overage": 0,
+        "packout": 2,
+        "inbound_freight": 0
+      }
+    },
+    "Roland CMYK job (1,000 x 3x3 matte, explicit Roland)": {
+      "total": 70.58699208780561,
+      "unit": 0.07058699208780561,
+      "status": "PROVISIONAL",
+      "lines": {
+        "blank_sets": 0,
+        "print_media": 20.945,
+        "ink": 17.548475,
+        "art_setup": 8.333333333333334,
+        "print_setup": 1,
+        "run_labor": 2.442149305555556,
+        "application": 0,
+        "cutting_machine": 6.171735241502684,
+        "cutting_attention": 1.9286672629695887,
+        "weeding": 5.333333333333333,
+        "machine": 4.884298611111111,
+        "planned_overage": 0,
+        "packout": 2,
+        "inbound_freight": 0
+      }
+    },
+    "Roland WHITE job (1,000 x 3x3, 1 white layer, 100% coverage)": {
+      "total": 158.8542733378056,
+      "unit": 0.1588542733378056,
+      "status": "PROVISIONAL",
+      "lines": {
+        "blank_sets": 0,
+        "print_media": 20.945,
+        "ink": 17.548475,
+        "art_setup": 8.333333333333334,
+        "print_setup": 1,
+        "run_labor": 2.442149305555556,
+        "application": 0,
+        "cutting_machine": 6.171735241502684,
+        "cutting_attention": 1.9286672629695887,
+        "weeding": 5.333333333333333,
+        "ink_white": 74.5,
+        "machine_white": 9.1781875,
+        "attention_white": 4.589093750000001,
+        "machine": 4.884298611111111,
+        "planned_overage": 0,
+        "packout": 2,
+        "inbound_freight": 0
+      }
+    },
+    "Roland GLOSS job (1,000 x 3x3, 1 gloss layer)": {
+      "total": 103.8642733378056,
+      "unit": 0.1038642733378056,
+      "status": "PROVISIONAL",
+      "lines": {
+        "blank_sets": 0,
+        "print_media": 20.945,
+        "ink": 17.548475,
+        "art_setup": 8.333333333333334,
+        "print_setup": 1,
+        "run_labor": 2.442149305555556,
+        "application": 0,
+        "cutting_machine": 6.171735241502684,
+        "cutting_attention": 1.9286672629695887,
+        "weeding": 5.333333333333333,
+        "ink_gloss": 25.950833333333332,
+        "machine_gloss": 4.884298611111111,
+        "attention_gloss": 2.442149305555556,
+        "machine": 4.884298611111111,
+        "planned_overage": 0,
+        "packout": 2,
+        "inbound_freight": 0
+      }
+    },
+    "Miron jar control (100ml Tall, 128, Side + Lid, AUTO CMYK)": {
+      "total": 428.5026124684896,
+      "unit": 3.347676659910075,
+      "status": "PROVISIONAL",
+      "lines": {
+        "blank_sets": 361.4,
+        "print_media": 6.999416666666666,
+        "ink": 6.681759647184025,
+        "art_setup": 8.333333333333334,
+        "print_setup": 1,
+        "run_labor": 1.3196116840277778,
+        "application": 15.644444444444446,
+        "cutting_machine": 2.004309834751299,
+        "cutting_attention": 0.6263468233597809,
+        "weeding": 2.6666666666666665,
+        "machine": 2.6392233680555552,
+        "planned_overage": 0,
+        "packout": 7,
+        "inbound_freight": 12.1875
+      }
+    },
+    "Stock Bag (100, 1 face, matte, representative $0.25 blank)": {
+      "total": 58.89480963090567,
+      "unit": 0.5889480963090566,
+      "status": "product-driven",
+      "lines": {}
+    },
+    "Banner control (one 3x6 ft, plain)": {
+      "total": 30.129941429801896,
+      "unit": 30.129941429801896,
+      "status": "product-driven",
+      "lines": {
+        "material": 5.925925925925926,
+        "ink_cmyk": 2.1119999999999997,
+        "machine": 2.228682170542635,
+        "cutting": 6.53,
+        "art_setup": 8.333333333333334,
+        "print_setup": 1,
+        "packing": 4,
+        "freight": 0,
+        "shipping_outbound": 0
+      }
+    },
+    "DTP 4x5x2 x 1,000 (outsourced — must not move)": {
+      "total": 860.6958333333333,
+      "unit": 0.8606958333333333,
+      "status": "OBSERVED_VENDOR_PRICE",
+      "lines": {
+        "vendor": 767.3625,
+        "art": 8.333333333333334,
+        "freight": 85
+      }
+    }
+  }
+}

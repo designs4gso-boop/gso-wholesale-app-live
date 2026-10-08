@@ -12,10 +12,13 @@ const NO_CHANGES = {
   operations: [],
 };
 
+// 2026-10-07: the live theme writes `_GSO Price Each` / `_GSO Matched Tier`
+// (see extensions/wholesale-theme/assets/gso-product-configurator.js); the
+// `_GSO ERP ...` spelling is kept for compatibility. Either key is honoured.
 function attr(line, key) {
   if (key === "_gso_configurator") return line.gsoConfigurator?.value || "";
-  if (key === "_GSO ERP Price Each") return line.gsoErpPriceEach?.value || "";
-  if (key === "_GSO ERP Matched Tier") return line.gsoErpMatchedTier?.value || "";
+  if (key === "_GSO ERP Price Each") return line.gsoErpPriceEach?.value || line.gsoPriceEach?.value || "";
+  if (key === "_GSO ERP Matched Tier") return line.gsoErpMatchedTier?.value || line.gsoMatchedTier?.value || "";
   return "";
 }
 

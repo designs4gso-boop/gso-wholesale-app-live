@@ -31,10 +31,10 @@ const BANNER_PER_SQFT = 140 / ((54 / 12) * 105);
 // owner-verified RasterLink COMBINED-layer table (600x1200 VD / 32-pass /
 // Bi-direction / Fast Print High): 1-layer 51.6 sqft/hr (2/3/4-layer
 // 18.2/11.8/8.6) x 1.15 turnaround, applied once. Roland stays the 150
-// sqft/hr additive baseline. Recovery = $8/hr OWNER standard.
+// sqft/hr additive baseline. Recovery = $5/hr OWNER standard (approved 2026-10-07; was $8 provisional).
 const MIMAKI_1LAYER_SQFT_PER_HOUR = 51.6;
 const MIMAKI_TURNAROUND = 1.15;
-const MACHINE_RATE = OWNER_STANDARDS.machineRecoveryPerHour.value; // $8/hr
+const MACHINE_RATE = OWNER_STANDARDS.machineRecoveryPerHour.value; // $5/hr (owner approved 2026-10-07)
 const CALC_INK_ML_PER_SQFT = 0.6;
 
 function baseInput(overrides: Partial<ProductDrivenInput>): ProductDrivenInput {
@@ -129,19 +129,19 @@ describe("15F.0-A fixture 1: 100 x 3x3 matte square-cut stickers (corrected quot
   const wasteSqft = 6.25 / 0.9;
   const material = POSEIDON_PER_SQFT * wasteSqft; // 2.191358
   const ink = INK_RATES.mimakiCmykPerMl * CALC_INK_ML_PER_SQFT * wasteSqft; // 0.733333
-  const machine = (wasteSqft / MIMAKI_1LAYER_SQFT_PER_HOUR) * MIMAKI_TURNAROUND * MACHINE_RATE; // 1.2382 (9.29 min — owner example)
+  const machine = (wasteSqft / MIMAKI_1LAYER_SQFT_PER_HOUR) * MIMAKI_TURNAROUND * MACHINE_RATE; // 0.7738 (9.29 min — owner example at $5/hr)
   const cutting = CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(6.25 / 20.25); // 6.53
   const packing = 2; // single-box floor
   const setup = OWNER_LABOR.artSetupPerDesign + OWNER_LABOR.printSetupPerDesign; // 9.333333
 
   it("complete cost = material + ink + machine + cutting + packing + setup = $22.03 (was $12.26 with silent $0s)", () => {
     expect(run.lines.find((line) => line.key === "machine")!.amount).toBeCloseTo(machine, 6);
-    expect(machine).toBeCloseTo(1.2382, 4); // machine recovery ~$1.24 (owner example)
+    expect(machine).toBeCloseTo(0.7738, 4); // machine recovery ~$0.77 at $5/hr (was ~$1.24 at $8)
     expect((wasteSqft / MIMAKI_1LAYER_SQFT_PER_HOUR) * MIMAKI_TURNAROUND * 60).toBeCloseTo(9.2862, 3); // ~9.29 min (owner example)
     expect(run.lines.find((line) => line.key === "cutting")!.amount).toBeCloseTo(6.53, 10);
     expect(run.lines.find((line) => line.key === "packing")!.amount).toBe(2);
     expect(run.totalCost).toBeCloseTo(material + ink + machine + cutting + packing + setup, 6);
-    expect(run.totalCost).toBeCloseTo(22.0262, 4);
+    expect(run.totalCost).toBeCloseTo(21.5619, 4); // was 22.0262 at $8/hr machine recovery
     expect(run.missing).toHaveLength(0); // genuinely READY — nothing silent
   });
 
@@ -158,13 +158,13 @@ describe("15F.0-A fixture 1: 100 x 3x3 matte square-cut stickers (corrected quot
     expect(machineLine.label).toContain("CMYK machine time");
     expect(machineLine.note).not.toContain("150 sqft/hr"); // never a generic statement on Mimaki
     expect(machineLine.note).not.toContain("169"); // retired incorrect figure
-    expect(machineLine.note).toContain("$8/hr");
+    expect(machineLine.note).toContain("$5/hr");
   });
 
   it("price at the researched 65% band = $62.93 total ($0.63/unit) — in the $50-80 market range", () => {
     const priced = marginMath(run.totalCost, 65);
-    expect(priced.price).toBeCloseTo(62.9319, 3);
-    expect(priced.price / 100).toBeCloseTo(0.6293, 4);
+    expect(priced.price).toBeCloseTo(61.6054, 3); // was 62.9319 at $8/hr
+    expect(priced.price / 100).toBeCloseTo(0.6161, 4); // was 0.6293 at $8/hr
   });
 
   it("missing machine speed BLOCKS instead of pricing $0 (gate L) — Roland without a record; Mimaki 5+ layers", () => {
@@ -197,10 +197,10 @@ describe("15F.0-M remaining forensic fixtures (corrected engine)", () => {
       + CUT_SQUARE_RECT_STANDARD.costPerPage * Math.ceil(62.5 / 20.25) // 4 pages
       + 2 + 9.333333333333334;
     expect((wasteSqft / MIMAKI_1LAYER_SQFT_PER_HOUR) * MIMAKI_TURNAROUND * 60).toBeCloseTo(92.862, 2);
-    expect((wasteSqft / MIMAKI_1LAYER_SQFT_PER_HOUR) * MIMAKI_TURNAROUND * MACHINE_RATE).toBeCloseTo(12.3816, 3);
+    expect((wasteSqft / MIMAKI_1LAYER_SQFT_PER_HOUR) * MIMAKI_TURNAROUND * MACHINE_RATE).toBeCloseTo(7.7385, 3); // was 12.3816 at $8/hr
     expect(run.totalCost).toBeCloseTo(expected, 5);
-    expect(run.totalCost).toBeCloseTo(79.0818, 3);
-    expect(marginMath(run.totalCost, 40).price).toBeCloseTo(131.8030, 3); // cost-based candidate (RasterLink profile)
+    expect(run.totalCost).toBeCloseTo(74.4387, 3); // was 79.0818 at $8/hr
+    expect(marginMath(run.totalCost, 40).price).toBeCloseTo(124.0645, 3); // cost-based candidate (RasterLink profile; 131.8030 at $8/hr)
     // 62.5 finished sqft -> $3.20/sqft anchor band + setup recovery = $209.33
     const commercial = computeCommercialPrice({
       familyKey: "stickers-labels", quantity: 1000, completeCost: run.totalCost,
@@ -226,10 +226,10 @@ describe("15F.0-M remaining forensic fixtures (corrected engine)", () => {
       + OWNER_STANDARDS.bagApplicationPerLabel4x5.value * 1000
       + 9.333333333333334 + 2;
     expect(one.totalCost).toBeCloseTo(expectedOne, 5);
-    expect(one.totalCost).toBeCloseTo(317.6761, 3);
+    expect(one.totalCost).toBeCloseTo(307.3581, 3); // was 317.6761 at $8/hr
     const two = computeProductDrivenCost(baseInput({ family: "bags-4x5", quantity: 1000, facesPerUnit: 2, widthIn: 4, heightIn: 5, blank }));
     expect(two.derived.totalPieces).toBe(2000);
-    expect(two.totalCost).toBeCloseTo(534.0188, 3);
+    expect(two.totalCost).toBeCloseTo(513.3829, 3); // was 534.0188 at $8/hr
   });
 
   it("fixture 5: 585 Chiron jars x 3 same-size 2x2 labels — machine/cutting/packing all real now", () => {
@@ -252,24 +252,25 @@ describe("15F.0-M remaining forensic fixtures (corrected engine)", () => {
       + 2 * Math.ceil(585 / 100) // jar family default 100/box
       + 9.333333333333334;
     expect(run.totalCost).toBeCloseTo(expected, 5);
-    expect(run.totalCost).toBeCloseTo(1477.3936, 3);
+    expect(run.totalCost).toBeCloseTo(1473.7719, 3); // was 1477.3936 at $8/hr
   });
 
-  it("fixture 6: 2,500 Spektra DTP 4x5x2 — UNCHANGED (owner ladder preserved exactly)", () => {
-    const landed = 0.4922 * 2500 + 25 / 3 + 85;
-    expect(landed).toBeCloseTo(1323.83, 2);
+  it("fixture 6: 2,500 Spektra DTP 4x5x2 — OWNER-APPROVED 2026-10-06 ladder on the live landed cost", () => {
+    // live book: White PET / Soft Touch / no spot / CR / No Tear Notch / 1 SKU x 2,500 = $1,277.60 public x 0.75 = $958.20
+    const landed = 0.38328 * 2500 + 25 / 3 + 85;
+    expect(landed).toBeCloseTo(1051.53, 2);
     const quote = priceDtpQuote({
       ladderSku: "spektra-dtp-4x5x2", quantity: 2500, landedCost: landed, missingCost: false,
       designs: 1, customUnitPrice: null, repeatOrder: false, passThroughFreight: false,
       freightAmount: 85, override: { phrase: "", reason: "" },
     });
-    expect(quote.unitPrice).toBe(0.88);
-    expect(quote.customerTotal).toBeCloseTo(2200, 6);
-    expect(quote.grossMarginPct).toBeCloseTo(((2200 - landed) / 2200) * 100, 4);
-    // 15F.0-FINAL: meets the 35% floor + $500 target -> READY with an
-    // informational note; floors/profit rules/overrides unchanged.
+    expect(quote.unitPrice).toBe(0.71);
+    expect(quote.customerTotal).toBeCloseTo(1775, 6);
+    expect(quote.grossMarginPct).toBeCloseTo(((1775 - landed) / 1775) * 100, 4);
+    // meets the 35% floor + $500 target (2,500 tier keeps the normal protection) -> READY
     expect(quote.status).toBe("READY");
-    expect(quote.statusReasons.join(" ")).toContain("meets the 35% DTP floor");
+    expect(quote.minJobProfit).toBe(500);
+    expect(quote.pricingSource).toBe("OWNER_APPROVED_DTP_4X5_2026_10_06");
   });
 
   it("fixture 7: one 3x6 ft banner — tube packing + deterministic hems/grommets quote automatically (15F.0-FINAL)", () => {
@@ -282,10 +283,10 @@ describe("15F.0-M remaining forensic fixtures (corrected engine)", () => {
       + 9.333333333333334;
     const plain = computeProductDrivenCost(baseInput({ family: "banners", quantity: 1, widthIn: 36, heightIn: 72, material: { name: "Banner Vinyl", costPerSqft: BANNER_PER_SQFT } }));
     expect(plain.totalCost).toBeCloseTo(baseCost, 5);
-    expect(plain.totalCost).toBeCloseTo(31.4672, 3);
+    expect(plain.totalCost).toBeCloseTo(30.1299, 3); // was 31.4672 at $8/hr
     expect(plain.lines.find((line) => line.key === "packing")!.label).toContain("tube");
     expect(plain.missing).toHaveLength(0);
-    expect(marginMath(plain.totalCost, 60).price).toBeCloseTo(78.6679, 3); // trimmed banner, $60-90 market range
+    expect(marginMath(plain.totalCost, 60).price).toBeCloseTo(75.3249, 3); // trimmed banner, $60-90 market range (78.6679 at $8/hr)
     // hems: perimeter 18 ft x $0.60 + $5 finishing setup — READY, no blocker
     const hemmed = computeProductDrivenCost(baseInput({ family: "banners", quantity: 1, widthIn: 36, heightIn: 72, hemming: true, material: { name: "Banner Vinyl", costPerSqft: BANNER_PER_SQFT } }));
     expect(hemmed.missing).toHaveLength(0);

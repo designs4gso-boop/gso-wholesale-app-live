@@ -252,7 +252,7 @@ describe("privacy (D6)", () => {
     // Shopify section — same invariant, new mechanism: the page renders the
     // Shopify source read-only and surfaces the blocked state, still with
     // zero identity fields.
-    expect(src).toContain("Shopify historical-order evidence (15F.0K.4E — read-only)");
+    expect(src).toContain("Shopify historical-order evidence (read-only)");
     expect(src).toContain("SHOPIFY_ACCESS_BLOCKED_MESSAGE");
   });
 });

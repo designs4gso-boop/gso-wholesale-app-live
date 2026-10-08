@@ -3,7 +3,7 @@
 // Every fixture comes from repo authority (jar-active-scope + jar-label-geometry
 // + the jar adapter rules). No dollar values are invented: dollar pins are
 // RELATIONSHIPS the engine must keep (additivity, no double counts, determinism)
-// plus the existing 17D.7 control case which the repo already pins at 84.143290.
+// plus the existing 17D.7 control case (79.617252 at the $5/hr owner machine rate approved 2026-10-07; 84.143290 at the former $8/hr).
 import { describe, expect, it } from "vitest";
 
 import {
@@ -175,12 +175,12 @@ describe("17D.7 control case still pins after the spec/weeding refactor", () => 
   };
   const CONTROL = "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=auto&pwhitelayers=0&pglosslayers=0";
 
-  it("1000 x 3x3 matte AUTO CMYK = 84.143290 total / 0.084143 unit, PROVISIONAL", async () => {
+  it("1000 x 3x3 matte AUTO CMYK = 79.617252 total / 0.079617 unit, PROVISIONAL ($5/hr machine recovery, 2026-10-07)", async () => {
     const input = normalizeCanonicalInput(new URLSearchParams(CONTROL))!;
     const result = await computeCanonicalJob({ db, shop: SHOP }, input);
     expect(result.status).toBe("PROVISIONAL");
-    expect(result.totalCost).toBeCloseTo(84.14329, 5);
-    expect(result.unitCost!).toBeCloseTo(0.084143, 6);
+    expect(result.totalCost).toBeCloseTo(79.617252, 5);
+    expect(result.unitCost!).toBeCloseTo(0.079617, 6);
     expect(result.diagnostics.inkableArtworkSqft).toBeCloseTo(62.5, 6);
     expect(result.diagnostics.productSpec).toBeNull(); // custom labels have no fixed spec
     expect(result.diagnostics.finishingBreakdown?.weeding).toBeCloseTo(result.diagnostics.weedingPages! * WEEDING_STANDARD.costPerPage, 9);

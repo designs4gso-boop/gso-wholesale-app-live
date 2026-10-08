@@ -101,7 +101,7 @@ const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: st
       { label: "Bottle", value: "bottle" },
       { label: "Pouch", value: "pouch" },
     ],
-    baseUnits: [{ label: "ML", value: "ml" }],
+    baseUnits: [{ label: "ml", value: "ml" }],
     defaultPurchaseUnit: "cartridge",
     defaultBaseUnit: "ml",
     defaultVolumeMl: "750",
@@ -241,7 +241,7 @@ const smartUnitRules: Record<string, { purchaseUnits: { label: string; value: st
       { label: "Each", value: "each" },
       { label: "Sq Ft", value: "sqft" },
       { label: "Sq In", value: "sqin" },
-      { label: "ML", value: "ml" },
+      { label: "ml", value: "ml" },
       { label: "Hour", value: "hour" },
     ],
     defaultPurchaseUnit: "each",
@@ -280,6 +280,17 @@ function formatBaseUnitLabel(unit: string) {
   if (unit === "sqin") return "sq in";
   if (unit === "ml") return "ml";
   return unit || "each";
+}
+
+// Display-only: "$0.001234 per sqft" style money labels (no rounding changes).
+function moneyPer(value: any, unit: string, decimals = 6) {
+  return `$${Number(value || 0).toFixed(decimals)} per ${formatBaseUnitLabel(unit)}`;
+}
+
+function formatDate(value: any) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
 }
 
 function NativeInput({ label, value, onChange, type = "text", prefix, suffix, helpText }: any) {
@@ -796,6 +807,9 @@ export default function MaterialsPage() {
   useEffect(() => {
     if (fetcher.data?.materials) setMaterials(fetcher.data.materials);
   }, [fetcher.data]);
+  // 2026-10-07: surface the action result (e.g. "archived instead of deleted") — it was silently dropped before.
+  const actionFeedback = (fetcher.data as any)?.error || (fetcher.data as any)?.message || null;
+  const actionFeedbackIsError = Boolean((fetcher.data as any)?.error);
 
   useEffect(() => {
     const rule = getUnitRule(finalMaterialType);
@@ -1062,10 +1076,11 @@ export default function MaterialsPage() {
   return (
     <Page
       title="Material Center"
-      subtitle="Materials use clean types, multi-family routing, smart units, review flags, color variants, inventory, vendors, and cost history."
+      subtitle="Everything you buy to make product: what it costs per unit, how much is on hand, who supplies it, and which product families use it."
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
       primaryAction={{ content: "New Material", onAction: resetForm }}
     >
+      {actionFeedback ? <div style={{ margin: "0 0 12px", padding: 10, borderRadius: 10, border: actionFeedbackIsError ? "1px solid #fecaca" : "1px solid #bbf7d0", background: actionFeedbackIsError ? "#fef2f2" : "#f0fdf4", fontSize: 13, fontWeight: 600 }}>{actionFeedback}</div> : null}
       <Layout>
         <Layout.Section>
           <Card>
@@ -1075,11 +1090,11 @@ export default function MaterialsPage() {
               </Text>
 
                <InlineStack gap="300">
-                <NativeInput label="Material Name" value={name} onChange={setName} />
-                <NativeSelect label="Material Type" value={materialType} onChange={setMaterialType} options={availableMaterialTypeOptions} />
+                <NativeInput label="Material name" value={name} onChange={setName} />
+                <NativeSelect label="Material type" value={materialType} onChange={setMaterialType} options={availableMaterialTypeOptions} />
                 {materialType === "custom" && (
                   <NativeInput
-                    label="Custom Material Type"
+                    label="Custom material type"
                     value={customMaterialType}
                     onChange={setCustomMaterialType}
                     helpText="Example: Foil, Specialty Film, Hang Tag. It becomes reusable after saving."
@@ -1089,7 +1104,7 @@ export default function MaterialsPage() {
 
                 <InlineStack gap="300">
                 <NativeSelect
-                    label="Purchase / Inventory Unit"
+                    label="Purchase / inventory unit"
                     value={purchaseUnit}
                     onChange={(value: string) => {
                       setPurchaseUnit(value);
@@ -1101,15 +1116,15 @@ export default function MaterialsPage() {
                 />
 
                 <NativeInput
-                    label={`Purchase Cost / ${purchaseUnit}`}
+                    label={`Purchase cost ($ per ${purchaseUnit})`}
                     prefix="$"
                     value={purchaseCost}
                     onChange={setPurchaseCost}
-                    helpText="Example: 156.99 per Roland cartridge/pouch."
+                    helpText="What you pay for one purchase unit. Example: 156.99 per Roland cartridge/pouch."
                 />
 
                 <NativeSelect
-                    label="Recipe / Costing Unit"
+                    label="Recipe / costing unit"
                     value={baseUnit}
                     onChange={setBaseUnit}
                     options={currentBaseUnitOptions}
@@ -1119,14 +1134,14 @@ export default function MaterialsPage() {
 
                 {purchaseUnit === "roll" && (
                 <InlineStack gap="300">
-                    <NativeInput label="Roll Width Inches" value={rollWidthIn} onChange={setRollWidthIn} />
-                    <NativeInput label="Roll Length Feet" value={rollLengthFt} onChange={setRollLengthFt} />
+                    <NativeInput label="Roll width (in)" value={rollWidthIn} onChange={setRollWidthIn} suffix="in" />
+                    <NativeInput label="Roll length (ft)" value={rollLengthFt} onChange={setRollLengthFt} suffix="ft" />
                 </InlineStack>
                 )}
 
                 {["cartridge", "bottle", "pouch"].includes(purchaseUnit) && (
                 <NativeInput
-                    label={`ML per ${purchaseUnit}`}
+                    label={`Size (ml per ${purchaseUnit})`}
                     value={volumeMl}
                     onChange={setVolumeMl}
                     suffix="ml"
@@ -1146,20 +1161,20 @@ export default function MaterialsPage() {
                 <Card>
                   <BlockStack gap="100">
                     <Text as="p" fontWeight="bold">Calculated cost preview</Text>
-                    <Text as="p">${Number(calculatedPreview || 0).toFixed(6)} / {formatBaseUnitLabel(baseUnit)}</Text>
-                    <Text as="p" tone="subdued">Stock is counted in {purchaseUnit}. Available recipe units: {Number(availablePreview || 0).toFixed(2)} {formatBaseUnitLabel(baseUnit)}.</Text>
+                    <Text as="p">{moneyPer(calculatedPreview, baseUnit)}</Text>
+                    <Text as="p" tone="subdued">Stock is counted in {purchaseUnit}. Available for recipes: {Number(availablePreview || 0).toFixed(2)} {formatBaseUnitLabel(baseUnit)}.</Text>
                   </BlockStack>
                 </Card>
 
                 <InlineStack gap="300">
-                <NativeSelect label="Primary Vendor" value={primaryVendorId} onChange={choosePrimaryVendor} options={vendorOptions} />
-                <NativeInput label="Vendor Text / Fallback" value={vendor} onChange={setVendor} />
-                <NativeInput label="Vendor / Material SKU" value={sku} onChange={setSku} />
+                <NativeSelect label="Primary vendor (Vendor Center)" value={primaryVendorId} onChange={choosePrimaryVendor} options={vendorOptions} helpText="Pick a vendor record. Its name fills the vendor name field." />
+                <NativeInput label="Vendor name (only if not in Vendor Center)" value={vendor} onChange={setVendor} helpText="Free-text fallback. Ignored when a Vendor Center vendor is selected." />
+                <NativeInput label="Vendor SKU / part number" value={sku} onChange={setSku} />
                 </InlineStack>
 
                 <Card>
                   <BlockStack gap="200">
-                    <Text as="p" fontWeight="bold">Product Families</Text>
+                    <Text as="p" fontWeight="bold">Product families</Text>
                     <Text as="p" tone="subdued">Pick every product family this material should appear in during recipe/cost setup.</Text>
                     <InlineStack gap="200" wrap>
                       {availableFamilyOptions.filter((family) => family.value !== "custom").map((family) => (
@@ -1204,28 +1219,28 @@ export default function MaterialsPage() {
                 </Card>
 
                 <InlineStack gap="300">
-                <NativeInput label={`Stock On Hand (${purchaseUnit})`} value={stockOnHand} onChange={setStockOnHand} />
-                <NativeInput label={`Reorder Point (${purchaseUnit})`} value={reorderPoint} onChange={setReorderPoint} />
-                <NativeInput label="Lead Time Days" value={leadTimeDays} onChange={setLeadTimeDays} />
+                <NativeInput label={`Stock on hand (${purchaseUnit})`} value={stockOnHand} onChange={setStockOnHand} helpText="Leave blank if you do not track stock for this material." />
+                <NativeInput label={`Reorder point (${purchaseUnit})`} value={reorderPoint} onChange={setReorderPoint} helpText="Low-stock warning shows when stock is at or below this." />
+                <NativeInput label="Lead time (days)" value={leadTimeDays} onChange={setLeadTimeDays} helpText="Blank = use the vendor's lead time." />
                 </InlineStack>
 
                 <InlineStack gap="300">
                   <label style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid #ddd", borderRadius: 8, padding: "8px 10px" }}>
                     <input type="checkbox" checked={costReviewNeeded} onChange={(event) => setCostReviewNeeded(event.currentTarget.checked)} />
-                    <span>Cost Review Needed</span>
+                    <span>Cost needs review (flag as provisional)</span>
                   </label>
                   <label style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid #ddd", borderRadius: 8, padding: "8px 10px" }}>
                     <input type="checkbox" checked={useInRecipes} onChange={(event) => setUseInRecipes(event.currentTarget.checked)} />
-                    <span>Use in Recipes</span>
+                    <span>Available in recipes</span>
                   </label>
                 </InlineStack>
 
-                <NativeInput label="Reason For Cost Change" value={reason} onChange={setReason} />
+                <NativeInput label="Reason for cost change" value={reason} onChange={setReason} helpText="Recorded in cost history when an existing material's unit cost changes. Not needed for new materials." />
                 <NativeTextarea label="Notes" value={notes} onChange={setNotes} />
 
                 <InlineStack gap="300">
                 <Button variant="primary" onClick={saveMaterial}>
-                    {editingId ? "Update Material" : "Save Material"}
+                    {editingId ? "Update material" : "Save material"}
                 </Button>
 
                 <Button onClick={resetForm}>
@@ -1239,7 +1254,10 @@ export default function MaterialsPage() {
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">
-                Vendor Comparison
+                Alternate vendor pricing
+              </Text>
+              <Text as="p" tone="subdued">
+                Record what other vendors charge for the same material so you can compare before reordering. This does not change the material's cost; use Edit on the material to change that.
               </Text>
 
               <Select
@@ -1257,28 +1275,28 @@ export default function MaterialsPage() {
 
               <InlineStack gap="300">
                 <Select
-                  label="Vendor Center Vendor"
+                  label="Vendor (Vendor Center)"
                   value={vendorCenterId}
                   onChange={chooseComparisonVendor}
                   options={vendorOptions}
                 />
 
                 <TextField
-                  label="Vendor Name / Fallback"
+                  label="Vendor name (only if not in Vendor Center)"
                   value={vendorName}
                   onChange={setVendorName}
                   autoComplete="off"
                 />
 
                 <TextField
-                  label="Vendor SKU"
+                  label="Vendor SKU / part number"
                   value={vendorSku}
                   onChange={setVendorSku}
                   autoComplete="off"
                 />
 
                 <TextField
-                  label="Unit Cost"
+                  label="Unit cost ($ per item)"
                   prefix="$"
                   value={vendorUnitCost}
                   onChange={setVendorUnitCost}
@@ -1288,22 +1306,22 @@ export default function MaterialsPage() {
 
               <InlineStack gap="300">
                 <TextField
-                  label="MOQ"
+                  label="Minimum order qty (MOQ)"
                   value={vendorMoq}
                   onChange={setVendorMoq}
                   autoComplete="off"
                 />
 
                 <TextField
-                  label="Lead Time Days"
+                  label="Lead time (days)"
                   value={vendorLeadTimeDays}
                   onChange={setVendorLeadTimeDays}
                   autoComplete="off"
                 />
               </InlineStack>
 
-              <Button onClick={addVendor}>
-                Add Vendor Option
+              <Button onClick={addVendor} disabled={!vendorMaterialId || !vendorName.trim()}>
+                Add alternate vendor price
               </Button>
             </BlockStack>
           </Card>
@@ -1311,25 +1329,25 @@ export default function MaterialsPage() {
                 <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Material Aliases / Color Variants</Text>
-              <Text as="p" tone="subdued">Use variants for colors, aliases, or sub-stock under one material, like 4x5 blank bag colors. The parent material keeps the main cost calculation.</Text>
+              <Text as="h2" variant="headingMd">Color variants / aliases</Text>
+              <Text as="p" tone="subdued">Use variants for colors, aliases, or sub-stock under one material, like 4x5 blank bag colors. The parent material keeps the cost; variants only track their own stock.</Text>
               <NativeSelect
-                label="Parent Material"
+                label="Parent material"
                 value={variantMaterialId}
                 onChange={setVariantMaterialId}
                 options={[{ label: "Select material", value: "" }, ...materials.map((m) => ({ label: m.name, value: m.id }))]}
               />
               <InlineStack gap="300">
-                <NativeInput label="Variant / Alias Name" value={variantName} onChange={setVariantName} helpText="Example: Black, Clear, White, Gold, Mixed Colors." />
+                <NativeInput label="Variant / alias name" value={variantName} onChange={setVariantName} helpText="Example: Black, Clear, White, Gold, Mixed Colors." />
                 <NativeInput label="Color" value={variantColor} onChange={setVariantColor} />
                 <NativeInput label="Variant SKU" value={variantSku} onChange={setVariantSku} />
               </InlineStack>
               <InlineStack gap="300">
-                <NativeInput label="Variant Stock" value={variantStockOnHand} onChange={setVariantStockOnHand} helpText="Optional. Leave blank if you only track parent stock." />
-                <NativeInput label="Variant Reorder Point" value={variantReorderPoint} onChange={setVariantReorderPoint} />
+                <NativeInput label="Variant stock (count)" value={variantStockOnHand} onChange={setVariantStockOnHand} helpText="Optional. Leave blank if you only track parent stock." />
+                <NativeInput label="Variant reorder point" value={variantReorderPoint} onChange={setVariantReorderPoint} />
               </InlineStack>
-              <NativeTextarea label="Variant Notes" value={variantNotes} onChange={setVariantNotes} />
-              <Button onClick={addMaterialVariant}>Add Variant / Alias</Button>
+              <NativeTextarea label="Variant notes" value={variantNotes} onChange={setVariantNotes} />
+              <Button onClick={addMaterialVariant} disabled={!variantMaterialId || !variantName.trim()}>Add variant / alias</Button>
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -1406,9 +1424,21 @@ export default function MaterialsPage() {
               <Divider />
 
               {filteredMaterials.length === 0 ? (
-                <Text as="p" tone="subdued">
-                  No materials yet.
-                </Text>
+                materials.length === 0 ? (
+                  <BlockStack gap="100">
+                    <Text as="p" fontWeight="bold">No materials yet.</Text>
+                    <Text as="p" tone="subdued">
+                      Add your first material with the form above. Start with the things you buy most: roll media, ink, blank bags, and boxes.
+                    </Text>
+                  </BlockStack>
+                ) : (
+                  <BlockStack gap="100">
+                    <Text as="p" fontWeight="bold">No materials match these filters.</Text>
+                    <Text as="p" tone="subdued">
+                      {materialCounts.total} material(s) exist ({materialCounts.active} active, {materialCounts.inactive} inactive). Use Reset filters to see them all.
+                    </Text>
+                  </BlockStack>
+                )
               ) : (
                 filteredMaterials.map((material) => {
                   const lowStock =
@@ -1416,6 +1446,12 @@ export default function MaterialsPage() {
                     material.reorderPoint !== null &&
                     Number(material.stockOnHand) <=
                       Number(material.reorderPoint);
+                  const unitCost = Number(material.calculatedUnitCost || material.costPerUnit || 0);
+                  const costUnit = material.baseUnit || material.unit || "each";
+                  const vendorDisplay = material.primaryVendor?.name || material.vendor || "";
+                  const stockRecorded = material.stockOnHand !== null && material.stockOnHand !== undefined;
+                  const alternateVendors = (material.vendors || []).filter((row: any) => row.active !== false);
+                  const costHistory = material.costHistory || [];
 
                   return (
                     <Card key={material.id}>
@@ -1425,7 +1461,7 @@ export default function MaterialsPage() {
                             {material.name}
                           </Text>
 
-                          <InlineStack gap="200">
+                          <InlineStack gap="200" wrap>
                             <Badge>
                               {materialTypeLabel(material.materialType)}
                             </Badge>
@@ -1434,46 +1470,49 @@ export default function MaterialsPage() {
                               <Badge key={family}>{familyLabel(family)}</Badge>
                             ))}
 
-                            {material.costReviewNeeded && <Badge tone="warning">COST REVIEW</Badge>}
-                            {material.useInRecipes === false && <Badge tone="info">HIDDEN FROM RECIPES</Badge>}
-
-                            {material.active === false && (
-                              <Badge tone="warning">
-                                INACTIVE
-                              </Badge>
-                            )}
-
-                            {lowStock && (
-                              <Badge tone="critical">
-                                LOW STOCK
-                              </Badge>
-                            )}
+                            {unitCost <= 0 && <Badge tone="critical">Cost missing</Badge>}
+                            {unitCost > 0 && material.costReviewNeeded && <Badge tone="warning">Cost needs review</Badge>}
+                            {!vendorDisplay && <Badge tone="critical">Vendor not set</Badge>}
+                            {material.useInRecipes === false && <Badge tone="info">Hidden from recipes</Badge>}
+                            {material.active === false && <Badge>Inactive</Badge>}
+                            {lowStock && <Badge tone="critical">Low stock</Badge>}
                           </InlineStack>
                         </InlineStack>
 
                         <Text as="p">
-                          Cost: $
-                          {Number(
-                            material.calculatedUnitCost ||
-                              material.costPerUnit ||
-                              0
-                          ).toFixed(6)}{" "}
-                          / {material.baseUnit || material.unit}
+                          Cost: {moneyPer(unitCost, costUnit)}
+                          {" | Purchase: "}
+                          ${Number(material.purchaseCost || 0).toFixed(2)} per {material.purchaseUnit || "each"}
                         </Text>
 
                         <Text as="p">
-                          Purchase: ${Number(material.purchaseCost || 0).toFixed(2)} / {material.purchaseUnit || "each"}
+                          {stockRecorded
+                            ? `Stock: ${Number(material.stockOnHand || 0).toFixed(2)} ${material.purchaseUnit || "each"} | Available for recipes: ${Number(calculateAvailableUnits(material) || 0).toFixed(2)} ${formatBaseUnitLabel(costUnit)}`
+                            : "Stock: not recorded"}
+                          {material.reorderPoint !== null && material.reorderPoint !== undefined ? ` | Reorder at: ${Number(material.reorderPoint).toFixed(2)} ${material.purchaseUnit || "each"}` : ""}
                         </Text>
 
                         <Text as="p">
-                          Stock: {Number(material.stockOnHand || 0).toFixed(2)} {material.purchaseUnit || "each"}
-                          {" | Available: "}
-                          {Number(calculateAvailableUnits(material) || 0).toFixed(2)} {formatBaseUnitLabel(material.baseUnit || material.unit)}
+                          Vendor: {vendorDisplay || "not set"}
+                          {material.sku ? ` | SKU: ${material.sku}` : ""}
+                          {material.leadTimeDays ? ` | Lead time: ${material.leadTimeDays} day(s)` : " | Lead time: not set"}
                         </Text>
 
-                        <Text as="p">
-                          Vendor: {material.vendor || "N/A"}
-                        </Text>
+                        {material.notes ? <Text as="p" tone="subdued">{material.notes}</Text> : null}
+
+                        {alternateVendors.length ? (
+                          <Card>
+                            <BlockStack gap="150">
+                              <Text as="p" fontWeight="bold">Alternate vendor prices</Text>
+                              {alternateVendors.map((row: any) => (
+                                <Text as="p" key={row.id}>
+                                  {row.vendorName}{row.vendorSku ? ` · SKU ${row.vendorSku}` : ""} · {moneyPer(row.unitCost, row.unit || "each", 4)}
+                                  {row.moq ? ` · MOQ ${row.moq}` : ""}{row.leadTimeDays ? ` · ${row.leadTimeDays} day lead` : ""}
+                                </Text>
+                              ))}
+                            </BlockStack>
+                          </Card>
+                        ) : null}
 
                         {(material.variants || []).length ? (
                           <Card>
@@ -1489,12 +1528,26 @@ export default function MaterialsPage() {
                                   {variant.active === false ? (
                                     <Button onClick={() => restoreMaterialVariant(variant.id)}>Restore variant</Button>
                                   ) : (
-                                    <Button tone="critical" onClick={() => archiveMaterialVariant(variant.id)}>Archive variant</Button>
+                                    <Button tone="critical" onClick={() => archiveMaterialVariant(variant.id)}>Archive variant (hide, keeps history)</Button>
                                   )}
                                 </InlineStack>
                               ))}
                             </BlockStack>
                           </Card>
+                        ) : null}
+
+                        {costHistory.length ? (
+                          <details>
+                            <summary style={{ cursor: "pointer", fontSize: 12, color: "#6d7175" }}>Cost history (last {costHistory.length})</summary>
+                            <BlockStack gap="050">
+                              {costHistory.map((entry: any) => (
+                                <Text as="p" key={entry.id} tone="subdued">
+                                  {formatDate(entry.createdAt)}: {moneyPer(entry.oldCost, costUnit)} to {moneyPer(entry.newCost, costUnit)}
+                                  {entry.reason ? ` — ${entry.reason}` : ""}{entry.vendor ? ` (${entry.vendor})` : ""}
+                                </Text>
+                              ))}
+                            </BlockStack>
+                          </details>
                         ) : null}
 
                         <InlineStack gap="200">
@@ -1508,12 +1561,12 @@ export default function MaterialsPage() {
                             </Button>
                           ) : (
                             <Button tone="critical" onClick={() => archiveMaterial(material.id)}>
-                              Archive
+                              Archive (hide, keeps history)
                             </Button>
                           )}
 
                           <Button tone="critical" onClick={() => permanentDeleteMaterial(material)}>
-                            Delete Forever
+                            Delete permanently
                           </Button>
                         </InlineStack>
                       </BlockStack>

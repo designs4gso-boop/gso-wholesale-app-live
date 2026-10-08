@@ -20,7 +20,7 @@ import {
 // Audit - Calibration (13A.8A): READ-ONLY recommendations from verified
 // actual production data. NO action export — this page cannot write anything.
 // Recommendations compare observed medians against the ACTIVE assumption
-// sources (MachineInkChannel mlPerSqft1Pct + verified costPerMl, and the $8/hr
+// sources (MachineInkChannel mlPerSqft1Pct + verified costPerMl, and the $5/hr
 // machine rate). Apply is deliberately NOT built: observed ml/sqft is total
 // ink per area while the engine assumption is per-1%-coverage per channel —
 // converting one to the other needs coverage data the RIP logs do not record.
@@ -156,7 +156,7 @@ export async function loader({ request }: { request: Request }) {
       machineRatePerHour: ratePerHour,
       adminDuplicateRate: adminRateValue,
       adminDuplicateFlag: adminRateValue != null && Number(adminRateValue) !== ratePerHour
-        ? `erpAdminSetting.defaultMachineRecoveryHr = ${adminRateValue} is a STALE reference-only value. The one canonical machine-rate authority is machineRatePerHour() = $${ratePerHour}/hr (owner-standards registry); the admin setting never prices anything and is not a competing source (15G.2).`
+        ? `The admin "machine recovery" setting (${adminRateValue}) is a STALE reference-only value. The one machine-rate authority is the owner standard $${ratePerHour}/hr; the admin setting never prices anything and is not a competing source.`
         : null,
       seededFingerprint: 0.0075,
       channelRates: rates.map((rate) => `${rate.machineName}: CMYK ${rate.cmykPerMl == null ? "n/a" : `$${rate.cmykPerMl.toFixed(4)}/ml`}`),
@@ -192,7 +192,7 @@ export default function CalibrationRoute() {
       <section style={{ background: "linear-gradient(135deg,#111827,#3f6212)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>Calibration Recommendations</h1>
         <p style={{ margin: "8px 0 0" }}>
-          13A.8A — READ-ONLY. Verified actual production data vs the ACTIVE pricing assumptions (machine ink channels +
+          READ-ONLY. Verified actual production data vs the ACTIVE pricing assumptions (machine ink channels +
           the ${data.assumptions.machineRatePerHour}/hr rate). Nothing on this page changes pricing, costs, quotes,
           products, machines, or history — recommendations are informational until a separate owner-approved apply exists.
         </p>
@@ -223,7 +223,7 @@ export default function CalibrationRoute() {
         </div>
         <p style={{ fontSize: 12, color: "#6b7280", marginTop: 8 }}>
           Verified channel rates in use: {data.assumptions.channelRates.join(" · ") || "none"} · Seeded fingerprint under calibration: {data.assumptions.seededFingerprint} ml/sqft per 1% coverage per channel.
-          Test rows (standalone TEST token) are {data.filters.includeTest ? "INCLUDED (toggle below)" : "excluded by default"} — the schema has no production/test flag, so the token filter is the documented safe strategy.
+          Test rows (standalone TEST token) are {data.filters.includeTest ? "INCLUDED (toggle below)" : "excluded by default"} — rows are classified as test by the TEST token in the file name.
         </p>
       </section>
 

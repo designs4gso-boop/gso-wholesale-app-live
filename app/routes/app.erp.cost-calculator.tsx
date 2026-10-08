@@ -42,11 +42,20 @@ import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // owns the value; client components cannot import .server modules).
 const MAX_ADDITIONAL_LINES_UI = 8;
 import { calculatorFamilies, calculatorFamilyValues, familyByKeyOrAlias } from "../lib/product-family-registry";
+// 2026-10-05: owner jar price ladder + quantity-break envelope (see jar-commercial-pricing.ts)
+import { JAR_PRICE_BREAK_SUPPORT_QUANTITIES, applyQuantityBreakEnvelope, dropSupportRows, jarSpecialtyXFromLayers, resolveJarOwnerLadder } from "../lib/jar-commercial-pricing";
 import { resolveProductDisplayName } from "../lib/commercial-name-resolver.server";
 import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { buildCanonicalPricingSnapshot } from "../lib/pricing-snapshot";
 import { officialMoqForFamily } from "../lib/product-family-sales-rules";
 import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, ownerPriceForQuantity, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
+// 2026-10-06: owner shaped-pouch policy (+10 % surcharge, $700 per new die) and the DTP catalog / freight status.
+import { applyShapedPolicyToDtpRow, type DtpDieChoice } from "../lib/dtp-shaped-bag-policy";
+import { resolveDtpQuoteCost } from "../lib/dtp-quote-cost-authority.server";
+import { compareToBenchmark } from "../lib/dtp-market-benchmark";
+import { DTP_COMPARABLE_CONFIG, SPEKTRA_FREIGHT_ASSUMPTION, dtpSizeForVendorSku } from "../lib/dtp-catalog";
+// 2026-10-06: live Spektra cost book (research 2026-10-06) — shown next to the legacy seed cost; NOT yet the quote cost authority.
+import { SPEKTRA_COST_BOOK_META, SPEKTRA_COST_STATUS_LABEL, SPEKTRA_FINISHES, SPEKTRA_MATERIALS, SPEKTRA_SPOT_OPTIONS, SPEKTRA_TOP_FEATURES, SPEKTRA_ZIPPER_OPTIONS, lookupSpektraVendorCost } from "../lib/spektra-live-cost-book";
 import { materialKind } from "../lib/material-classify";
 import {
   WIRED_LABOR,
@@ -794,7 +803,7 @@ export async function loader({ request }: { request: Request }) {
         spotGloss: eparams.get("egloss") === "1",
         inkMlPerSqft: Number(eparams.get("einkml") || 0.6),
         machineMinutesPerSqft: Number(eparams.get("emachmin") || 0),
-        machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+        machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // owner standard $5/hr (approved 2026-10-07; single source)
         blankUnitCost: eBlank > 0 ? eBlank : null,
         blankLabel: String(eparams.get("eblanklabel") || "Blank item"),
         lidUnitCost: Number(eparams.get("elid") || 0) > 0 ? Number(eparams.get("elid")) : null,
@@ -991,7 +1000,7 @@ export async function loader({ request }: { request: Request }) {
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(eparams.get("pmachmin") || 0),
       machineSqftPerHour: printer === "roland" ? printerSqftPerHour.roland : printerSqftPerHour.mimaki, // 15F.0-D verified speed
-      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // owner standard $5/hr (approved 2026-10-07; single source)
       cutType: normalizeCutType(eparams.get("pcut")), // 15F.0-E (legacy kiss/weeded -> square-rect)
       cutRequiresWeeding: eparams.get("pcut") === "weeded",
       hemming: eparams.get("phem") === "1",
@@ -1026,9 +1035,24 @@ export async function loader({ request }: { request: Request }) {
       // 2D-4C1A FIX 2: a multi-line label job has no approved way to split a
       // new total across customer-entered lines, so alternate rungs are
       // SUPPRESSED — the job as entered is the only quotable quantity.
+      // 2026-10-05: jar families price hidden SUPPORT rows at every known price
+      // break so the quantity-break envelope can cap any requested quantity.
+      const jarPricingFamilyP = canonicalUiFamily(pFamily) === "premium-jars" || canonicalUiFamily(pFamily) === "standard-jars";
+      const supportQuantitiesP = jarPricingFamilyP ? JAR_PRICE_BREAK_SUPPORT_QUANTITIES : [];
+      const displayQuantitySetP = new Set([...baseTierQuantities, requestedQtyP]);
       const tierQuantities = canonicalSupportsTierLadder(canonicalInput)
-        ? [...new Set([...baseTierQuantities, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b)
+        ? [...new Set([...baseTierQuantities, ...supportQuantitiesP, requestedQtyP])].filter((value) => value > 0).sort((a, b) => a - b)
         : [requestedQtyP].filter((value) => value > 0);
+      const jarProfileP = jarPricingFamilyP ? resolveActiveJarProfile(pickedBlank?.name || "") : null;
+      const jarHoloP = /holo/i.test(productInput.material?.name || "");
+      const jarLadderFor = (qty: number) => {
+        if (!jarProfileP) return null;
+        const resolved = resolveJarOwnerLadder({
+          brand: jarProfileP.brand, sizeKey: jarProfileP.size, quantity: qty, holographic: jarHoloP,
+          specialtyX: jarSpecialtyXFromLayers({ glossLayers: Number(eparams.get("pglosslayers") || 0), whiteLayers: Number(eparams.get("pwhitelayers") || 0), holographic: jarHoloP }),
+        });
+        return resolved.ok ? { unitPrice: resolved.quote.unitPrice, source: resolved.quote.source, label: resolved.quote.label } : null;
+      };
       // 15F.0-C: margin comes from each row's QUANTITY (researched band), never
       // from row count/position — adding the requested row cannot shift the
       // standard rows (forensic P0-1 fix). Families without a researched curve
@@ -1068,11 +1092,21 @@ export async function loader({ request }: { request: Request }) {
         // 15C.2: DTP prices come from the OWNER ladder (hybrid model) — never
         // a margin formula. Custom price applies to the requested qty only.
         if (isDtpP) {
+          // 2026-10-06 OWNER DECISION: 4x5x2 quotes cost from the live Spektra
+          // book by EXACT configuration (the approved ladder was priced on live
+          // landed cost); other sizes keep the legacy 15C engine cost.
+          const costP = resolveDtpQuoteCost({
+            vendorSku: (pickedBlank as any)?.sku || (pickedBlank as any)?.vendorSku || null,
+            quantity: qty, designs: Number(eparams.get("pdesigns") || 1),
+            selection: { material: eparams.get("pdtpmaterial"), finish: eparams.get("pdtpfinish"), spot: eparams.get("pdtpspot"), zipper: eparams.get("pdtpzipper"), topFeature: eparams.get("pdtptop"), clearGusset: eparams.get("pdtpgusset") === "1" },
+            legacy: { totalCost: run.totalCost, missing: run.missing.length > 0, vendorSubtotal: run.lines.find((line) => line.key === "blank")?.amount ?? null },
+            freightPerOrder: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+          });
           const dtpRow = priceDtpQuote({
             ladderSku: String((pickedBlank as any)?.sku || ""),
             quantity: qty,
-            landedCost: run.totalCost,
-            missingCost: run.missing.length > 0,
+            landedCost: costP.landedCost,
+            missingCost: costP.missing,
             designs: Number(eparams.get("pdesigns") || 0),
             customUnitPrice: qty === requestedQtyP && Number(eparams.get("pdtpcustomprice") || 0) > 0 ? Number(eparams.get("pdtpcustomprice")) : null,
             repeatOrder: eparams.get("pdtprepeat") === "1",
@@ -1080,19 +1114,59 @@ export async function loader({ request }: { request: Request }) {
             freightAmount: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
             override: { phrase: String(eparams.get("eophrase") || ""), reason: String(eparams.get("eoreason") || "") },
           });
+          // 2026-10-06 owner shaped-pouch policy: +10 % on the standard customer
+          // product price, $700 per NEW die as a separate line (never per unit).
+          const dieP: DtpDieChoice = eparams.get("pdtpdie") === "existing"
+            ? { mode: "existing", dieId: String(eparams.get("pdtpdieid") || ""), reference: String(eparams.get("pdtpdieref") || "") }
+            : { mode: "new" };
+          // 2026-10-06: live Spektra vendor economics for the SAME configuration (display + snapshot only).
+          const liveP = (() => {
+            const catalog = dtpSizeForVendorSku((pickedBlank as any)?.sku || (pickedBlank as any)?.vendorSku || null);
+            if (!catalog || catalog.status !== "CURRENT_STANDARD") return { status: "REQUEST_CURRENT_VENDOR_QUOTE", basis: catalog ? "Legacy size with no current catalog match." : "No current catalog size for this product.", config: null, wholesaleUnit: null, wholesaleTotal: null, extraSkuCost: 0, landedLive: null, statusLabel: SPEKTRA_COST_STATUS_LABEL.REQUEST_CURRENT_VENDOR_QUOTE, version: SPEKTRA_COST_BOOK_META.version, sourceDate: SPEKTRA_COST_BOOK_META.sourceDate };
+            const look = lookupSpektraVendorCost({
+              size: catalog.size as any,
+              material: (eparams.get("pdtpmaterial") || DTP_COMPARABLE_CONFIG.material) as any,
+              finish: (eparams.get("pdtpfinish") || DTP_COMPARABLE_CONFIG.finish) as any,
+              spot: (eparams.get("pdtpspot") || DTP_COMPARABLE_CONFIG.spot) as any,
+              zipper: (eparams.get("pdtpzipper") || DTP_COMPARABLE_CONFIG.zipper) as any,
+              topFeature: (eparams.get("pdtptop") || DTP_COMPARABLE_CONFIG.topFeature) as any,
+              clearGusset: eparams.get("pdtpgusset") === "1",
+              quantity: qty, skuCount: Math.max(1, Number(eparams.get("pdesigns") || 1)),
+            });
+            const artLive = OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(eparams.get("pdesigns") || 1));
+            return { status: look.status, basis: look.basis, config: look.config, wholesaleUnit: look.wholesaleUnit, wholesaleTotal: look.wholesaleTotal, extraSkuCost: look.wholesaleExtraSkuCost, landedLive: look.wholesaleTotal != null ? look.wholesaleTotal + artLive + SPEKTRA_FREIGHT_PER_PO : null, statusLabel: SPEKTRA_COST_STATUS_LABEL[look.status], version: look.version, sourceDate: look.sourceDate };
+          })();
+          const shapedP = applyShapedPolicyToDtpRow({
+            quantity: qty, shape: eparams.get("pdtpshape") === "custom" ? "custom" : "standard", die: dieP,
+            ladderUnitPrice: dtpRow.unitPrice, customerBaseSubtotal: dtpRow.customerBaseSubtotal, extraDesignFees: dtpRow.extraDesignFees,
+            customerTotal: dtpRow.customerTotal, grossProfit: dtpRow.grossProfit,
+          });
+          const benchmarkP = compareToBenchmark(dtpRow.ladderSku === "spektra-dtp-4x5x2" ? dtpRow.unitPrice : null, qty);
           return {
             quantity: qty, requested: qty === requestedQtyP,
-            jobCost: run.totalCost, unitCost: run.unitCost,
-            marginPct: Math.round(dtpRow.grossMarginPct * 10) / 10,
-            unitPrice: dtpRow.unitPrice, totalPrice: dtpRow.customerTotal,
-            profit: dtpRow.grossProfit, actualMarginPct: dtpRow.grossMarginPct,
-            belowFloor: dtpRow.grossMarginPct < dtpRow.hardFloorPct,
-            draftOnly: run.missing.length > 0,
+            jobCost: costP.landedCost, unitCost: qty > 0 ? costP.landedCost / qty : 0,
+            marginPct: Math.round(shapedP.marginPct * 10) / 10,
+            unitPrice: shapedP.unitPrice, totalPrice: shapedP.totalPrice,
+            profit: shapedP.profit, actualMarginPct: shapedP.marginPct,
+            belowFloor: shapedP.marginPct < dtpRow.hardFloorPct,
+            draftOnly: costP.missing || shapedP.blocked,
             freightTotal: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
             freightSource: dtpInputP ? dtpInputP.freightSource : "verified",
             setupTotal: run.setupTotal,
-            status: dtpRow.status,
+            status: shapedP.blocked ? "BLOCKED" : dtpRow.status,
+            blockers: [...shapedP.reasons, ...(costP.missingReason ? [costP.missingReason] : [])],
             dtp: {
+              shaped: shapedP.shaped,
+              freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
+              liveVendor: liveP,
+              costAuthority: costP,
+              pricingSource: dtpRow.pricingSource,
+              ladderStatus: dtpRow.ladderStatus,
+              marketBenchmark: dtpRow.marketBenchmark,
+              benchmark: benchmarkP,
+              commercialPolicy: dtpRow.commercialPolicy,
+              acquisitionTierException: dtpRow.acquisitionTierException,
+              minJobProfit: dtpRow.minJobProfit,
               vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
               ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
               defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
@@ -1154,11 +1228,13 @@ export async function loader({ request }: { request: Request }) {
             blockers: [...run.missing, ...authority.blockers],
             commercial: null,
             status: "BLOCKED",
+            supportRow: !displayQuantitySetP.has(qty), floorPct: floorForFamily,
           };
         }
         const completeCost = authority.completeCost;
         const commercial = computeCommercialPrice({
           familyKey: canonicalUiFamily(pFamily), quantity: qty, completeCost,
+          ownerLadder: jarLadderFor(qty), // 2026-10-05 owner jar ladder (null for non-jar / Chiron)
           marginRule: marginRuleForPricingP, premiumEligible: premiumEligibleP,
           marginPctOverride: overrideMargin,
           finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
@@ -1200,12 +1276,15 @@ export async function loader({ request }: { request: Request }) {
           freightSource: tierFreight.source,
           setupTotal: run.setupTotal,
           blockers: [...run.missing, ...authority.blockers],
-          commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP, marketPosition: commercial.marketPosition, specialty: commercial.specialty }, // 15F.0K.3 + 15G.4C
+          commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleP, marketPosition: commercial.marketPosition, specialty: commercial.specialty, ownerLadder: commercial.ownerLadder ?? null }, // 15F.0K.3 + 15G.4C + 2026-10-05 owner ladder
+          supportRow: !displayQuantitySetP.has(qty), floorPct: floorForFamily,
           // A canonical family with no usable true cost can never read READY
           // TO QUOTE, whatever the legacy engine and the margin gate think.
           status: (run.missing.length || !authority.eligible) ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
         };
       });
+      // 2026-10-05: quantity-break envelope for jars, then hide the support rows.
+      productTiers = dropSupportRows(jarPricingFamilyP ? applyQuantityBreakEnvelope(productTiers) : productTiers);
     }
     // 15F.0J.2: multi-line sticker jobs. The PRIMARY sticker form is ALWAYS
     // Line 1; pslcount counts ADDITIONAL lines (>=1 activates multi-line —
@@ -1384,6 +1463,12 @@ export async function loader({ request }: { request: Request }) {
             return ladder.unitPrice != null ? { qty: requestedQtyP, unitPrice: ladder.unitPrice, total: ladder.unitPrice * requestedQtyP, tierUsed: ladder.tierUsed } : null;
           })()
         : null,
+      // 2026-10-05: one staff sentence describing the commercial basis for jars.
+      pricingBasis: productTiers && productTiers.some((tier: any) => tier.commercial?.ownerLadder)
+        ? { kind: "owner_ladder", text: "Owner jar price ladder (16D, approved 2026-08-12) with minimum margin protection — the margin curve is not used for this product." }
+        : productTiers && (canonicalUiFamily(pFamily) === "premium-jars" || canonicalUiFamily(pFamily) === "standard-jars")
+          ? { kind: "curve_with_envelope", text: "No owner price ladder for this jar (Chiron / out of ladder range): quantity-band margin curve with the quantity-break envelope (totals never fall when quantity rises)." }
+          : null,
       marginFamily: productMarginRule
         ? { key: productMarginRule.key, label: productMarginRule.label, curve: productMarginRule.curve, minPct: productMarginRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
         : { key: productMarginKey || "", label: "FAMILY MARGIN RULE NOT CONFIGURED", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
@@ -1406,6 +1491,9 @@ export async function loader({ request }: { request: Request }) {
           optional: addOns.filter((addOn: any) => addOn.enabled && /option/i.test(addOn.pricingType)).map((addOn: any) => ({ name: addOn.name, amount: addOn.amount })),
           moq: officialMoqForFamily("dtp-pouches") || 1000,
           freightDefault: SPEKTRA_FREIGHT_PER_PO,
+          // 2026-10-06: the $85 is an UNVERIFIED assumption; the catalog entry flags legacy sizes.
+          freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
+          catalog: dtpSizeForVendorSku((pickedBlankRef as any)?.sku || (pickedBlankRef as any)?.vendorSku || null),
         };
       })(),
       printConfig: pFamily && canonicalUiFamily(pFamily) === "dtp-bags"
@@ -1649,7 +1737,7 @@ export async function action({ request }: { request: Request }) {
       sides: form.get("esides") === "2" ? 2 : 1, labelWidthIn: Number(form.get("ewidth") || 0), labelHeightIn: Number(form.get("eheight") || 0),
       materialCostPerSqft: Number(form.get("ematsqft") || 0) > 0 ? Number(form.get("ematsqft")) : null, materialLabel: String(form.get("ematlabel") || "Material"),
       printer: form.get("eprinter") === "roland" ? "roland" : "mimaki", whiteInk: form.get("ewhite") === "1", spotGloss: form.get("egloss") === "1",
-      inkMlPerSqft: Number(form.get("einkml") || 0.6), machineMinutesPerSqft: Number(form.get("emachmin") || 0), machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+      inkMlPerSqft: Number(form.get("einkml") || 0.6), machineMinutesPerSqft: Number(form.get("emachmin") || 0), machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // owner standard $5/hr (approved 2026-10-07; single source)
       blankUnitCost: eBlank > 0 ? eBlank : null, blankLabel: String(form.get("eblanklabel") || "Blank item"),
       lidUnitCost: Number(form.get("elid") || 0) > 0 ? Number(form.get("elid")) : null, lidLabel: String(form.get("elidlabel") || "Miron lid"),
       boxes: Number(form.get("eboxes") || 0), wastePct: form.get("ewaste") ? eWaste : -1,
@@ -1824,7 +1912,7 @@ export async function action({ request }: { request: Request }) {
       inkMlPerSqft: 0.6,
       machineMinutesPerSqft: Number(fRead("pmachmin") || 0),
       machineSqftPerHour: printerSave === "roland" ? printerSpeedsSave.roland : printerSpeedsSave.mimaki, // 15F.0-D verified speed
-      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // provisional owner standard (15B: single source)
+      machineRatePerHour: OWNER_STANDARDS.machineRecoveryPerHour.value, // owner standard $5/hr (approved 2026-10-07; single source)
       cutType: normalizeCutType(fRead("pcut")), // 15F.0-E (legacy kiss/weeded -> square-rect)
       cutRequiresWeeding: fRead("pcut") === "weeded",
       hemming: fRead("phem") === "1",
@@ -1846,9 +1934,23 @@ export async function action({ request }: { request: Request }) {
     const configLadderSave = pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamilySave)] ?? pricingPolicy.values.tierLadders.defaultLadder;
     const baseQuantitiesSave = !fRead("eqty") ? (savedIsDtp ? DTP_LADDER_QUANTITIES : configLadderSave) : quantities;
     // 2D-4C1A FIX 2 — loader parity: multi-line label jobs quote only as entered.
+    // 2026-10-05 loader parity: jar support rows for the quantity-break envelope.
+    const jarPricingFamilySave = canonicalUiFamily(pFamilySave) === "premium-jars" || canonicalUiFamily(pFamilySave) === "standard-jars";
+    const supportQuantitiesSave = jarPricingFamilySave ? JAR_PRICE_BREAK_SUPPORT_QUANTITIES : [];
+    const displayQuantitySetSave = new Set([...baseQuantitiesSave, savedRequestedQty]);
     const tierQuantitiesSave = canonicalSupportsTierLadder(canonicalInputSave)
-      ? [...new Set([...baseQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b)
+      ? [...new Set([...baseQuantitiesSave, ...supportQuantitiesSave, savedRequestedQty])].filter((value) => value > 0).sort((a, b) => a - b)
       : [savedRequestedQty].filter((value) => value > 0);
+    const jarProfileSave = jarPricingFamilySave ? resolveActiveJarProfile(savedBlank?.name || "") : null;
+    const jarHoloSave = /holo/i.test(productInputSave.material?.name || "");
+    const jarLadderForSave = (qty: number) => {
+      if (!jarProfileSave) return null;
+      const resolved = resolveJarOwnerLadder({
+        brand: jarProfileSave.brand, sizeKey: jarProfileSave.size, quantity: qty, holographic: jarHoloSave,
+        specialtyX: jarSpecialtyXFromLayers({ glossLayers: Number(fRead("pglosslayers") || 0), whiteLayers: Number(fRead("pwhitelayers") || 0), holographic: jarHoloSave }),
+      });
+      return resolved.ok ? { unitPrice: resolved.quote.unitPrice, source: resolved.quote.source, label: resolved.quote.label } : null;
+    };
     const validMargins = margins.filter((value) => Number.isFinite(value) && value > 0);
     // 15F.0-C: quantity-band margins at save — identical resolver to the loader.
     const provisionalRuleSave: FamilyMarginRule = { key: "provisional-universal", label: "Provisional universal curve", curve: [...PROVISIONAL_MARGIN_CURVE], familyMinPct: MARGIN_FLOOR_PCT, aliases: [] };
@@ -1873,12 +1975,20 @@ export async function action({ request }: { request: Request }) {
       const run = qty === savedRequestedQty ? productSnapshot! : computeProductDrivenCost({ ...productInputSave, quantity: qty });
       const tierFreight = savedIsDtp ? { total: 0, perUnit: 0, source: "verified" as const, note: "" } : computeFreight(freightInputsSave, qty, 0);
       if (savedIsDtp) {
+        // 2026-10-06 loader parity: quote cost authority (live book by configuration for 4x5x2).
+        const costSave = resolveDtpQuoteCost({
+          vendorSku: savedFetched?.meta?.vendorSku || null,
+          quantity: qty, designs: Number(fRead("pdesigns") || 1),
+          selection: { material: fRead("pdtpmaterial"), finish: fRead("pdtpfinish"), spot: fRead("pdtpspot"), zipper: fRead("pdtpzipper"), topFeature: fRead("pdtptop"), clearGusset: fRead("pdtpgusset") === "1" },
+          legacy: { totalCost: run.totalCost, missing: run.missing.length > 0, vendorSubtotal: run.lines.find((line) => line.key === "blank")?.amount ?? null },
+          freightPerOrder: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+        });
         // 15C.2: recompute the owner-ladder price server-side — posted totals ignored
         const dtpRow = priceDtpQuote({
           ladderSku: String(savedFetched?.meta?.vendorSku || ""),
           quantity: qty,
-          landedCost: run.totalCost,
-          missingCost: run.missing.length > 0,
+          landedCost: costSave.landedCost,
+          missingCost: costSave.missing,
           designs: Number(fRead("pdesigns") || 0),
           customUnitPrice: qty === savedRequestedQty && Number(fRead("pdtpcustomprice") || 0) > 0 ? Number(fRead("pdtpcustomprice")) : null,
           repeatOrder: fRead("pdtprepeat") === "1",
@@ -1886,19 +1996,58 @@ export async function action({ request }: { request: Request }) {
           freightAmount: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
           override: { phrase: fRead("eophrase"), reason: fRead("eoreason") },
         });
+        // 2026-10-06 owner shaped-pouch policy — loader parity.
+        const dieSave: DtpDieChoice = fRead("pdtpdie") === "existing"
+          ? { mode: "existing", dieId: fRead("pdtpdieid"), reference: fRead("pdtpdieref") }
+          : { mode: "new" };
+        // 2026-10-06 loader parity: live Spektra vendor economics (display + snapshot only).
+        const liveSave = (() => {
+          const catalog = dtpSizeForVendorSku(savedFetched?.meta?.vendorSku || null);
+          if (!catalog || catalog.status !== "CURRENT_STANDARD") return { status: "REQUEST_CURRENT_VENDOR_QUOTE", basis: catalog ? "Legacy size with no current catalog match." : "No current catalog size for this product.", config: null, wholesaleUnit: null, wholesaleTotal: null, extraSkuCost: 0, landedLive: null, statusLabel: SPEKTRA_COST_STATUS_LABEL.REQUEST_CURRENT_VENDOR_QUOTE, version: SPEKTRA_COST_BOOK_META.version, sourceDate: SPEKTRA_COST_BOOK_META.sourceDate };
+          const look = lookupSpektraVendorCost({
+            size: catalog.size as any,
+            material: (fRead("pdtpmaterial") || DTP_COMPARABLE_CONFIG.material) as any,
+            finish: (fRead("pdtpfinish") || DTP_COMPARABLE_CONFIG.finish) as any,
+            spot: (fRead("pdtpspot") || DTP_COMPARABLE_CONFIG.spot) as any,
+            zipper: (fRead("pdtpzipper") || DTP_COMPARABLE_CONFIG.zipper) as any,
+            topFeature: (fRead("pdtptop") || DTP_COMPARABLE_CONFIG.topFeature) as any,
+            clearGusset: fRead("pdtpgusset") === "1",
+            quantity: qty, skuCount: Math.max(1, Number(fRead("pdesigns") || 1)),
+          });
+          const artLive = OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(fRead("pdesigns") || 1));
+          return { status: look.status, basis: look.basis, config: look.config, wholesaleUnit: look.wholesaleUnit, wholesaleTotal: look.wholesaleTotal, extraSkuCost: look.wholesaleExtraSkuCost, landedLive: look.wholesaleTotal != null ? look.wholesaleTotal + artLive + SPEKTRA_FREIGHT_PER_PO : null, statusLabel: SPEKTRA_COST_STATUS_LABEL[look.status], version: look.version, sourceDate: look.sourceDate };
+        })();
+        const shapedSave = applyShapedPolicyToDtpRow({
+          quantity: qty, shape: fRead("pdtpshape") === "custom" ? "custom" : "standard", die: dieSave,
+          ladderUnitPrice: dtpRow.unitPrice, customerBaseSubtotal: dtpRow.customerBaseSubtotal, extraDesignFees: dtpRow.extraDesignFees,
+          customerTotal: dtpRow.customerTotal, grossProfit: dtpRow.grossProfit,
+        });
+        const benchmarkSave = compareToBenchmark(dtpRow.ladderSku === "spektra-dtp-4x5x2" ? dtpRow.unitPrice : null, qty);
         return {
           quantity: qty, requested: qty === savedRequestedQty,
-          jobCost: run.totalCost, unitCost: run.unitCost,
-          marginPct: Math.round(dtpRow.grossMarginPct * 10) / 10,
-          unitPrice: dtpRow.unitPrice, totalPrice: dtpRow.customerTotal,
-          profit: dtpRow.grossProfit, actualMarginPct: dtpRow.grossMarginPct,
-          belowFloor: dtpRow.grossMarginPct < dtpRow.hardFloorPct,
-          draftOnly: run.missing.length > 0,
+          jobCost: costSave.landedCost, unitCost: qty > 0 ? costSave.landedCost / qty : 0,
+          marginPct: Math.round(shapedSave.marginPct * 10) / 10,
+          unitPrice: shapedSave.unitPrice, totalPrice: shapedSave.totalPrice,
+          profit: shapedSave.profit, actualMarginPct: shapedSave.marginPct,
+          belowFloor: shapedSave.marginPct < dtpRow.hardFloorPct,
+          draftOnly: costSave.missing || shapedSave.blocked,
           freightTotal: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
           freightSource: savedDtpInput ? savedDtpInput.freightSource : "verified",
           setupTotal: run.setupTotal,
-          status: dtpRow.status,
+          status: shapedSave.blocked ? "BLOCKED" : dtpRow.status,
+          blockers: [...shapedSave.reasons, ...(costSave.missingReason ? [costSave.missingReason] : [])],
           dtp: {
+            shaped: shapedSave.shaped,
+            freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
+            liveVendor: liveSave,
+            costAuthority: costSave,
+            pricingSource: dtpRow.pricingSource,
+            ladderStatus: dtpRow.ladderStatus,
+            marketBenchmark: dtpRow.marketBenchmark,
+            benchmark: benchmarkSave,
+            commercialPolicy: dtpRow.commercialPolicy,
+            acquisitionTierException: dtpRow.acquisitionTierException,
+            minJobProfit: dtpRow.minJobProfit,
             vendorTierLabel: run.lines.find((line) => line.key === "blank")?.label || null,
             ownerPriceTierUsed: dtpRow.ownerPriceTierUsed,
             defaultOwnerUnitPrice: dtpRow.defaultOwnerUnitPrice,
@@ -1941,11 +2090,13 @@ export async function action({ request }: { request: Request }) {
           blockers: [...run.missing, ...authority.blockers],
           commercial: null,
           status: "BLOCKED",
+          supportRow: !displayQuantitySetSave.has(qty), floorPct: floorForFamilySave,
         };
       }
       const completeCost = authority.completeCost;
       const commercial = computeCommercialPrice({
         familyKey: canonicalUiFamily(pFamilySave), quantity: qty, completeCost,
+        ownerLadder: jarLadderForSave(qty), // 2026-10-05 owner jar ladder (loader parity)
         marginRule: marginRuleForPricingSave, premiumEligible: premiumEligibleSave,
         marginPctOverride: overrideMarginSave,
         finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
@@ -1968,10 +2119,13 @@ export async function action({ request }: { request: Request }) {
         unitPrice: qty > 0 ? (commercial.finalTotalPrice + filePrepFeeSave) / qty : commercial.finalUnitPrice, totalPrice: commercial.finalTotalPrice + filePrepFeeSave, profit: commercial.achievedProfit + filePrepFeeSave, actualMarginPct: commercial.achievedMarginPct, belowFloor,
         draftOnly: run.missing.length > 0 || !authority.eligible, freightTotal: tierFreight.total, freightSource: tierFreight.source, setupTotal: run.setupTotal,
         blockers: [...run.missing, ...authority.blockers],
-        commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave, marketPosition: commercial.marketPosition, specialty: commercial.specialty }, // 15F.0K.3 + 15G.4C
+        commercial: { version: commercial.version, candidates: commercial.candidates, controllingRule: commercial.controllingRule, marginSource: commercial.marginSource, premiumApplied: premiumEligibleSave, marketPosition: commercial.marketPosition, specialty: commercial.specialty, ownerLadder: commercial.ownerLadder ?? null }, // 15F.0K.3 + 15G.4C + 2026-10-05 owner ladder
+        supportRow: !displayQuantitySetSave.has(qty), floorPct: floorForFamilySave,
         status: (run.missing.length || !authority.eligible) ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
       };
     });
+    // 2026-10-05: quantity-break envelope (jars) then drop hidden support rows — loader parity.
+    savedTiers = dropSupportRows(jarPricingFamilySave ? applyQuantityBreakEnvelope(savedTiers) : savedTiers);
     const selectedTierQty = Math.floor(Number(fRead("pseltier") || 0));
     savedSelectedTier = savedTiers.find((tier) => tier.quantity === selectedTierQty)
       || savedTiers.find((tier) => tier.requested)
@@ -2254,13 +2408,36 @@ export async function action({ request }: { request: Request }) {
         grossProfit: savedSelectedTier.profit,
         grossMarginPct: savedSelectedTier.actualMarginPct,
         hardFloorPct: savedSelectedTier.dtp.hardFloorPct,
-        minJobProfit: 500,
+        minJobProfit: savedSelectedTier.dtp.minJobProfit ?? 500,
         strategicMinJobProfit: 350,
         marginWarningTargetPct: 40,
         status: savedSelectedTier.status,
         statusReasons: savedSelectedTier.dtp.statusReasons,
         overrideRequired: savedSelectedTier.dtp.overrideRequired,
         overrideReason: savedSelectedTier.dtp.overrideSatisfied ? fRead("eoreason").trim() : null,
+        // 2026-10-06 provenance: ladder source, controlling market benchmark,
+        // commercial policy (incl. the 4x5x2 1,000-unit exception) and the
+        // cost authority that produced landedCost. Historical snapshots
+        // without these fields are never rewritten.
+        pricingSource: savedSelectedTier.dtp.pricingSource,
+        ladderStatus: savedSelectedTier.dtp.ladderStatus,
+        marketBenchmark: savedSelectedTier.dtp.marketBenchmark,
+        competitorBenchmark: savedSelectedTier.dtp.benchmark,
+        commercialPolicy: savedSelectedTier.dtp.commercialPolicy,
+        acquisitionTierException: savedSelectedTier.dtp.acquisitionTierException,
+        vendorCost: savedSelectedTier.dtp.costAuthority ? {
+          authority: savedSelectedTier.dtp.costAuthority.authority,
+          status: savedSelectedTier.dtp.costAuthority.status,
+          basis: savedSelectedTier.dtp.costAuthority.basis,
+          configuration: savedSelectedTier.dtp.costAuthority.config,
+          skuCount: savedSelectedTier.dtp.costAuthority.skuCount,
+          vendorSubtotal: savedSelectedTier.dtp.costAuthority.vendorSubtotal,
+          vendorUnit: savedSelectedTier.dtp.costAuthority.vendorUnit,
+          artCost: savedSelectedTier.dtp.costAuthority.artCost,
+          freight: savedSelectedTier.dtp.costAuthority.freight,
+          freightStatus: savedSelectedTier.dtp.costAuthority.freightStatus,
+          costBookVersion: savedSelectedTier.dtp.costAuthority.costBookVersion,
+        } : null,
       } : null,
       dtp: savedIsDtpSnapshot && productSnapshot ? (() => {
         const blankLine = productSnapshot.lines.find((line) => line.key === "blank");
@@ -2363,7 +2540,18 @@ export async function action({ request }: { request: Request }) {
         data: {
           shop, status: "draft", customerName: String(form.get("ecustomer") || "") || fRead("pcustomer") || null,
           notes: `${productSnapshot ? (savedIsDtpSnapshot ? "15C DTP calculator draft" : "14C.2 product calculator draft") : "14B.0 emergency calculator draft"}${fRead("pnotes") ? " — " + fRead("pnotes").slice(0, 240) : ""}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}${canonicalSnapshot && canonicalSnapshot.status === "DRAFT_ONLY" ? " — CANONICAL TRUE COST DRAFT_ONLY: " + canonicalSnapshot.blockers.slice(0, 4).join("; ") : ""}`,
-          items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({ unitPrice: primary.unitPrice, marginPct: primary.marginPct, tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })) }) }] },
+          items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({
+            unitPrice: primary.unitPrice, marginPct: primary.marginPct,
+            tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })),
+            // 2026-10-05: enough context to explain this price later (never rewritten; new quotes only).
+            pricingPolicyVersion: COMMERCIAL_PRICING_VERSION,
+            priceSource: (primary as any).commercial?.controllingRule ?? null,
+            pricingBasis: (primary as any).commercial?.marginSource ?? null,
+            ownerLadder: (primary as any).commercial?.ownerLadder ?? null,
+            envelopeCappedTo: (primary as any).envelopeCappedTo ?? null,
+            recommendedUnitPrice: primary.unitPrice, recommendedTotalPrice: primary.totalPrice,
+            ownerMarginOverride: gate.belowFloor ? { reason: gate.reason } : null,
+          }) }] },
         },
       });
 
@@ -2384,7 +2572,7 @@ export async function action({ request }: { request: Request }) {
     });
   }
   const quote = saveOutcome.created;
-  return Response.json({ ok: true, message: `Draft quote ${quote.id.slice(0, 8)}… saved with the full tier snapshot${verdict.ok ? "" : " (DRAFT ONLY — has warnings)"}. Open Quotes to finish it.` });
+  return Response.json({ ok: true, quoteId: quote.id, message: `Draft quote ${quote.id} saved with the full pricing record${verdict.ok ? "" : " (DRAFT ONLY — has warnings)"}. Open Quotes to finish it.` });
 }
 
 const inputStyle: React.CSSProperties = { width: "100%", padding: 10, border: "1px solid #d1d5db", borderRadius: 8 };
@@ -2570,7 +2758,7 @@ export default function ErpCostCalculatorRoute() {
       <p><a href="/app/erp/rip-imports">← RIP Imports</a> · <a href="/app/erp/product-setup">Product Setup / Recipes</a> · <a href="/app/erp/materials">Materials</a> · <a href="/app/erp/cost-health">Cost Health</a></p>
       <section style={{ background: "linear-gradient(135deg,#111827,#14532d)", color: "white", padding: 24, borderRadius: 16 }}>
         <h1 style={{ margin: 0 }}>GSO Quote Builder / Cost Calculator</h1>
-        <p style={{ marginBottom: 0 }}>v2.1 (13A.3): owner labor standards are LIVE for comparable labor lines — jar/4x5/14x16 application, design setup, gloss/white setup. Print media costs come from the Materials database, blank/vendor items use quantity cost tiers, waste math matches the quote engine, and the form only recalculates when you press Calculate.</p>
+        <p style={{ marginBottom: 0 }}>Owner labor standards are live for comparable labor lines — jar/4x5/14x16 application, design setup, gloss/white setup. Print media costs come from the Materials database, blank/vendor items use quantity cost tiers, waste math matches the quote engine, and the form only recalculates when you press Calculate.</p>
       </section>
 
       <section style={{ marginTop: 16, border: "2px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 12, padding: "12px 16px", fontWeight: 700 }}>
@@ -2627,12 +2815,17 @@ function EmergencySection() {
       {/* 14B.1a: Automatic Costing form (Recommended) — server computes everything */}
       <div style={{ borderTop: "2px solid #b45309", marginTop: 14, paddingTop: 12 }}>
         <h3 style={{ margin: "0 0 4px" }}>Cost Calculator</h3>
-        <p style={smallHelp}>Choose a product family and enter the job details to begin.</p>
-        <p style={smallHelp}>Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
+        <p style={smallHelp}>Choose a product family and enter the job details to begin. Press CALCULATE COST: you get the true manufacturing cost first, then the recommended customer price. Legacy diagnostics are collapsed at the bottom. Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
         <ProductDrivenForm />
         <CanonicalTrueCost />
-        <ProductBreakdown />
         <ProductTiers />
+        {/* 2026-10-05: legacy per-line diagnostics are secondary — collapsed under the canonical result and the customer price. */}
+        {emergency.productMode?.result ? (
+          <details style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 10, padding: "6px 10px", background: "#fafafa" }}>
+            <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#6b7280" }}>Advanced diagnostics — legacy 14C.2 per-line breakdown (not the job cost)</summary>
+            <ProductBreakdown />
+          </details>
+        ) : null}
         {(emergency as any).autoCost ? (
           <div style={{ marginTop: 10 }}>
             <b style={{ fontSize: 13 }}>Automatic cost breakdown</b>
@@ -2671,12 +2864,12 @@ Setup/design fee included in pricing.`}
       <details style={{ marginTop: 12 }}><summary style={{ fontWeight: 700, cursor: "pointer", fontSize: 13 }}>Advanced Overrides (tier quantities, per-tier margin edits, freight/handling, owner override — job-level only, never global standards)</summary>
       <h2 style={{ marginTop: 0 }}>Pricing Tiers &amp; Margin Review — family curves, {emergency.floor}% margin floor</h2>
       <p style={smallHelp}>
-        PROVISIONAL margin curve (60/55/50/45/40 — editable per tier) until competitor research is done. Setup spreads
+        Margin curve 60/55/50/45/40 by tier (editable per tier; owner-approved research curves apply where configured). Setup spreads
         across each tier quantity; every tier prices from its OWN cost (never a discount off tier 1). Freight stays a
         separate visible line. Prices below {emergency.floor}% margin are blocked without the owner override.
       </p>
       {actionData?.message ? (
-        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600 }}>{actionData.message}</div>
+        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600 }}>{actionData.message}{(actionData as any).quoteId ? <> <a href="/app/quotes" style={{ marginLeft: 8, fontWeight: 700 }}>Open Quotes / CRM →</a></> : null}</div>
       ) : null}
       <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 10 }}>
         <b>Product family:</b> {emergency.family.label} · <b>Default curve:</b> {emergency.family.configured ? emergency.family.curve.join(" / ") + "%" : "provisional 60/55/50/45/40%"} ·{" "}
@@ -2700,7 +2893,10 @@ Setup/design fee included in pricing.`}
           </select>
         </label>
         <label style={{ fontSize: 12 }}>Tier quantities (comma list)<input name="eqty" defaultValue={emergency.quantities.join(",")} style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Tier margins % (comma list, blank = curve)<input name="emargin" defaultValue={emergency.margins.join(",")} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Tier margins % (comma list, blank = recommended)
+          <input name="emargin" defaultValue={emergency.margins.join(",")} style={inputStyle} />
+          <span style={smallHelp}>A margin entered here REPLACES the recommended price for that tier (the tier table shows the resulting price and realized margin side by side). Below the family minimum or the global floor the quote cannot be saved without the owner override phrase and a reason. Overrides never change the true manufacturing cost.</span>
+        </label>
         {!emergency.productMode ? (
           <>
             {/* 15G.3: manual cost entry exists ONLY for unsupported/manual jobs.
@@ -3190,6 +3386,23 @@ function ProductDrivenForm() {
     }
   }
   const jarOverrideActive = jarCustom && ["sidew", "sideh", "lidd", "tamperw", "tamperh"].some((key) => ov(key) != null);
+  /* 2026-10-05 overnight: label-count helper derives from the CURRENT quantity
+   * field (canonLine.qty tracks pqty on every form change). Never a stale or
+   * hard-coded number; neutral wording when the quantity is missing/invalid. */
+  const jarQtyForCopy = (() => {
+    const n = Number(canonLine.qty);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+  })();
+  const jarLabelCountCopy = (() => {
+    const pieces: string[] = [];
+    if (jarSelection.side) pieces.push("side label");
+    if (jarSelection.lid) pieces.push("lid label");
+    if (jarSelection.tamper) pieces.push("tamper band");
+    if (!pieces.length) return "Choose a label set: one label of each selected kind is printed and applied per jar.";
+    if (jarQtyForCopy == null) return `One ${pieces.join(", one ")} per jar. Enter the quantity to see the label counts.`;
+    const fmt = (n: number) => n.toLocaleString();
+    return `${fmt(jarQtyForCopy)} jar${jarQtyForCopy === 1 ? "" : "s"}: ${pieces.map((p) => `${fmt(jarQtyForCopy)} ${p}${jarQtyForCopy === 1 ? "" : "s"}`).join(" + ")}.`;
+  })();
   const overrideBadge = <span style={{ marginLeft: 8, background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11 }}>CUSTOM SIZE OVERRIDE</span>;
 
   const chironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "CHIRON");
@@ -3271,7 +3484,7 @@ function ProductDrivenForm() {
             <select name="pjarset" value={jarSetSel} onChange={(event) => setJarSetSel(event.currentTarget.value)} style={inputStyle}>
               {LABEL_SETS.map((set) => <option key={set.key} value={set.key}>{set.label}</option>)}
             </select>
-            <div style={smallHelp}>One label per piece per jar: Side + Lid on 128 jars is 128 side labels and 128 lid labels.</div>
+            <div style={smallHelp}>{jarLabelCountCopy}</div>
           </label>
           {jarTamperAllowed ? (
             <label style={{ fontSize: 12 }}>
@@ -3393,7 +3606,57 @@ function ProductDrivenForm() {
           <label style={{ fontSize: 12 }}>Custom unit price $ (owner — blank = owner ladder)
             <input name="pdtpcustomprice" type="number" step="0.0001" min={0} style={inputStyle} />
           </label>
+          {/* 2026-10-06 OWNER DECISION: 4x5x2 = approved standard DTP anchor (Design & Customize = controlling benchmark); 1,000 tier = acquisition exception ($350+ GP); 25,000+ and the other sizes = OWNER PRICING REVIEW REQUIRED. Numbers live in dtp-owner-pricing.server.ts only. */}
+          <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+            All five current DTP sizes use OWNER-APPROVED ladders (4x5x2 2026-10-06; 3.5x4.5x2 / 5x5x2 / 6x5x2 / 8x5x2 and every 25,000 tier 2026-10-07; benchmark DESIGN_AND_CUSTOMIZE_PRIMARY — premium / heavy-duty pouch positioning). Steps: 1,000–2,499 / 2,500–4,999 / 5,000–9,999 / 10,000–24,999 / 25,000; above 25,000 = REQUEST CURRENT VENDOR QUOTE. Every 1,000 tier is the owner acquisition exception ($350 gross-profit target instead of $500); 2,500+ keeps the normal protection. Quote cost = live Spektra book by the exact configuration below. 5x4x2 is legacy: MANUAL / VENDOR REVIEW.
+          </p>
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtprepeat" value="1" /> Exact repeat order — waive customer design fee (no art changes)</label>
+          {/* 2026-10-06 LIVE SPEKTRA CONFIGURATION (research 2026-10-06): drives the live vendor economics shown next to the legacy cost. Defaults = the legacy product spec (White PET, Soft Touch, CR zipper, No Tear Notch). */}
+          <label style={{ fontSize: 12 }}>Material (Spektra)
+            <select name="pdtpmaterial" defaultValue={canonParams.get("pdtpmaterial") || DTP_COMPARABLE_CONFIG.material} style={inputStyle}>{SPEKTRA_MATERIALS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}>Finish / lamination
+            <select name="pdtpfinish" defaultValue={canonParams.get("pdtpfinish") || DTP_COMPARABLE_CONFIG.finish} style={inputStyle}>{SPEKTRA_FINISHES.map((m) => <option key={m} value={m}>{m}{m === "Glossy" ? " (lowest cost; no spot gloss)" : ""}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}>Spot gloss
+            <select name="pdtpspot" defaultValue={canonParams.get("pdtpspot") || DTP_COMPARABLE_CONFIG.spot} style={inputStyle}>{SPEKTRA_SPOT_OPTIONS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}>Zipper
+            <select name="pdtpzipper" defaultValue={canonParams.get("pdtpzipper") || DTP_COMPARABLE_CONFIG.zipper} style={inputStyle}>{SPEKTRA_ZIPPER_OPTIONS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}>Top feature
+            <select name="pdtptop" defaultValue={canonParams.get("pdtptop") || DTP_COMPARABLE_CONFIG.topFeature} style={inputStyle}>{SPEKTRA_TOP_FEATURES.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+          </label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtpgusset" value="1" defaultChecked={canonParams.get("pdtpgusset") === "1"} /> Clear gusset (separate toggle)</label>
+          <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+            Defaults shown are the legacy product spec. These selections drive the LIVE SPEKTRA ECONOMICS line (research {SPEKTRA_COST_BOOK_META.sourceDate}, 25% account discount on the exact public total). The quote price and status still come from the owner DTP ladder and the legacy vendor cost until the owner adopts the live book.
+          </p>
+          {/* 2026-10-06 OWNER SHAPED-POUCH POLICY: standard vs custom shape; new die ($700, once per unique shape) vs existing die (Die ID required). */}
+          <label style={{ fontSize: 12 }}>Shape
+            <select name="pdtpshape" defaultValue={canonParams.get("pdtpshape") || "standard"} style={inputStyle}>
+              <option value="standard">Standard pouch (catalog shape)</option>
+              <option value="custom">Custom shape / die-cut (+10% owner surcharge; MOQ 2,500)</option>
+            </select>
+          </label>
+          <label style={{ fontSize: 12 }}>Custom die
+            <select name="pdtpdie" defaultValue={canonParams.get("pdtpdie") || "new"} style={inputStyle}>
+              <option value="new">NEW SHAPE — NEW $700 DIE</option>
+              <option value="existing">EXISTING SHAPE / DIE ON FILE ($0 tooling)</option>
+            </select>
+          </label>
+          <label style={{ fontSize: 12 }}>Die ID / Shape ID (required for an existing die)<input name="pdtpdieid" defaultValue={canonParams.get("pdtpdieid") || ""} style={inputStyle} placeholder="e.g. DIE-0007" /></label>
+          <label style={{ fontSize: 12 }}>Die reference (job / customer / date if no ID yet)<input name="pdtpdieref" defaultValue={canonParams.get("pdtpdieref") || ""} style={inputStyle} /></label>
+          <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+            Custom shape: +10% on the standard DTP customer product price (owner rule 2026-10-06), and ONE $700 tooling fee per unique physical shape — not per design, SKU, artwork or quantity tier; $0 on a reorder with the same usable die. Dies are never matched by dimensions alone: an existing die needs its ID or a clear reference. A durable Die ID registry needs a future schema approval; until then the Die ID is saved inside the quote snapshot.
+          </p>
+          {pm?.dtpSpec?.catalog?.status === "LEGACY_NO_CURRENT_STANDARD_CATALOG_MATCH" ? (
+            <div style={{ gridColumn: "1 / -1", border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", borderRadius: 8, padding: 8, fontSize: 12, fontWeight: 700 }}>
+              LEGACY SIZE — NO CURRENT STANDARD CATALOG MATCH: {pm.dtpSpec.catalog.note}
+            </div>
+          ) : null}
+          <div style={{ gridColumn: "1 / -1", border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", borderRadius: 8, padding: 8, fontSize: 12 }}>
+            <b>{SPEKTRA_FREIGHT_ASSUMPTION.label}</b> — {SPEKTRA_FREIGHT_ASSUMPTION.note}
+          </div>
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtpfreightpass" value="1" /> Pass freight through to customer (backs the $85 out of the ladder subtotal — never recovered twice)</label>
           <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>One production-ready design included; extra designs bill $25 (1,000–2,499) / $20 (2,500–4,999) / $15 (5,000+) each. Below-floor or below-$500-profit prices need the owner phrase + reason in Advanced Pricing Controls.</p>
         </>) : null}
@@ -3431,7 +3694,7 @@ function ProductDrivenForm() {
         </label>
         <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Gloss coverage % (blank = 90% pre-art estimate)<input name="pglosscoverage" type="number" min={0} max={100} step="1" placeholder="90% estimated" style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Specialty file prep (15G.4C)
+        <label style={{ fontSize: 12 }}>Specialty file prep
           <select name="pfileprep" style={inputStyle}>
             <option value="">Customer supplied production-ready mask — $0</option>
             <option value="1">{SPECIALTY_FILE_PREP_LABEL}</option>
@@ -3733,7 +3996,7 @@ function CanonicalTrueCost() {
           {canonical.status}
         </span>
         <span style={{ fontSize: 12, color: "#374151" }}>
-          {canonical.family} → {CANONICAL_DISPATCH[canonical.family]?.entry}
+          {canonical.family}
         </span>
         <span style={{ fontSize: 11, color: "#6b7280" }}>{canonical.version}</span>
       </div>
@@ -3910,8 +4173,8 @@ function ProductBreakdown() {
     <div style={{ marginTop: 10 }}>
       <b style={{ fontSize: 13 }}>
         {canonicalAuthoritative
-          ? "Legacy per-line diagnostics (engine 14C.2) — NOT the job cost; the CANONICAL TRUE COST above is authoritative"
-          : `Cost breakdown (engine ${emergency.productMode?.isDtp ? "15C-spektra-dtp" : "14C.2"} — all values derived by the server)`}
+          ? "Legacy per-line diagnostics — NOT the job cost; the verified true cost above is authoritative"
+          : "Cost breakdown (all values derived by the server)"}
       </b>
       {emergency.productMode?.isDtp ? (
         <p style={smallHelp}>Vendor-finished Spektra pouches — no in-house sqft/material/machine derivation. Vendor tier cost + GSO design charge + flat per-PO freight only.</p>
@@ -3989,7 +4252,7 @@ function ProductBreakdown() {
       {/* 15G.3-M: compact trust/source card — why this number is trusted. */}
       <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 4 }}>
         <div><b>Pricing engine:</b> {canonicalAuthoritative ? `Canonical true cost ${canonical?.version ?? "17D.7"} (authoritative) · legacy 14C.2 lines are diagnostics` : `Canonical Product Engine (${emergency.productMode?.isDtp ? "15C Spektra DTP ladder" : "15F.0 production-ready + owner policy"})`}</div>
-        <div><b>Machine rate:</b> Owner standard — $8/hr</div>
+        <div><b>Machine rate:</b> Owner standard — {"$"}{OWNER_STANDARDS.machineRecoveryPerHour.value}/hr (approved 2026-10-07, both printers)</div>
         {/* 2026-10-05 live smoke follow-up: the application standard shown here is
             the one the CANONICAL engine priced with (per family), never the legacy
             4x5 bag rate on a jar quote. The legacy figure stays visible only when
@@ -4017,7 +4280,7 @@ function ProductBreakdown() {
         const floorControls = String(requestedTier?.commercial?.controllingRule || "").includes("safety floor");
         return (
           <div style={{ border: "1px solid #fbcfe8", background: "#fdf2f8", borderRadius: 8, padding: 8, fontSize: 12, marginTop: 8 }}>
-            <b>UV specialty commercial pricing (15G.4C):</b>{" "}
+            <b>UV specialty commercial pricing:</b>{" "}
             {spec.deepBuild ? (
               <b style={{ color: "#9d174d" }}>{spec.message}</b>
             ) : (
@@ -4149,7 +4412,7 @@ function ProductTiers() {
           </div>
         )}
         {actionData?.message ? (
-          <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}</div>
+          <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}{(actionData as any).quoteId ? <> <a href="/app/quotes" style={{ marginLeft: 8, fontWeight: 700 }}>Open Quotes / CRM →</a></> : null}</div>
         ) : null}
         <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 8 }}>
           <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />
@@ -4173,12 +4436,28 @@ function ProductTiers() {
   const productLabel = pm.productLabel || familyEntryForLabel?.label || "";
   return (
     <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
-      <b style={{ fontSize: 13 }}>Automatic pricing tiers — generated from the calculated job (no re-entry)</b>
+      <b style={{ fontSize: 15 }}>RECOMMENDED CUSTOMER PRICE</b>
+      <div style={{ ...smallHelp, marginTop: 2 }}>Automatic pricing tiers — generated from the calculated job (no re-entry). Customer price is commercial policy; it never changes the true manufacturing cost above.</div>
       <p style={{ ...smallHelp, marginTop: 4 }}>
-        {mf.configured
+        {pm.pricingBasis
+          ? <><b>Pricing basis:</b> {pm.pricingBasis.text} Family minimum {mf.configured ? mf.minPct : emergency.floor}% · global floor {emergency.floor}%.</>
+          : mf.configured
           ? <>Margin family: <b>{mf.label}</b> · researched curve {mf.curve.join(" / ")}% · family minimum {mf.minPct}% · global floor {emergency.floor}% · source: {mf.source}</>
           : <><b style={{ color: "#92400e" }}>FAMILY MARGIN RULE NOT CONFIGURED</b> — provisional universal curve with the {emergency.floor}% global floor. Margins are editable in Advanced Pricing Controls.</>}
       </p>
+      {(() => {
+        // 2026-10-05: owner-ladder vs floor conflict, stated once for the requested row.
+        const ol = requested?.commercial?.ownerLadder;
+        if (!ol) return null;
+        return (
+          <div style={{ border: `1px solid ${ol.raisedByFloor ? "#fde68a" : "#bbf7d0"}`, background: ol.raisedByFloor ? "#fffbeb" : "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
+            <b>Owner storefront price for this jar at {requested.quantity.toLocaleString()}:</b> {money2(ol.unitPrice)}/jar ({money2(ol.totalPrice)} total; {ol.ladderMarginPct != null ? `${ol.ladderMarginPct.toFixed(1)}% margin on true cost` : ""}).
+            {ol.raisedByFloor
+              ? <> <b style={{ color: "#92400e" }}>OWNER CONFIRMATION PENDING:</b> that price is below the {ol.floorPct}% minimum margin, so the quote is held at the margin floor ({money2(requested.unitPrice)}/jar, {ol.finalVsLadderPct != null ? `+${ol.finalVsLadderPct.toFixed(0)}%` : ""} above the ladder). Only the owner can lower the jar margin floor or revise the jar ladder.</>
+              : <> The owner ladder controls this price (above the margin floor).</>}
+          </div>
+        );
+      })()}
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           {pm.isDtp ? (
@@ -4250,7 +4529,7 @@ function ProductTiers() {
         </table>
       </div>
       {pm.isDtp ? (
-        <p style={smallHelp}>Owner ladder prices (DTP pricing study, owner-approved 2026-07-24). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
+        <p style={smallHelp}>Owner ladder prices (OWNER-APPROVED 2026-10-06 / 2026-10-07 for all five current sizes; 5x4x2 legacy = manual review). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
       ) : null}
       {/* 15F.0K.3: direct-print crossover advisory (requested-quantity row) —
           advisory + live DTP comparison only; the owner chooses the product. */}
@@ -4276,9 +4555,7 @@ function ProductTiers() {
           </div>
         );
       })()}
-      <button type="button" onClick={() => setSelectedQty(selected.quantity)} style={{ ...secondaryButtonStyle, marginTop: 8, fontWeight: 700 }}>
-        Use this price — {selected.quantity.toLocaleString()} @ {money2(selected.unitPrice)}/unit
-      </button>
+      <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700 }}>Selected: {selected.quantity.toLocaleString()} @ {money2(selected.unitPrice)}/unit — use the radio in the table to change the quoted tier.</div>
       <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 8 }}>
         <b>Customer price summary</b> (internal costs and profit are not shown here):
         {selected.dtp ? (
@@ -4289,7 +4566,22 @@ Configuration: ${pm.printConfig || "—"}
 Unit price: ${money2(selected.unitPrice)}${selected.dtp.customUnitPrice != null ? " (owner custom)" : " (owner ladder)"}
 Base pouch subtotal: ${money2(selected.dtp.baseSubtotal)}
 Additional design fees: ${selected.dtp.designFeeWaived ? "$0.00 (repeat order — waived)" : `${money2(selected.dtp.extraDesignFees)}${selected.dtp.extraDesignCount ? ` (${selected.dtp.extraDesignCount} extra @ ${money2(selected.dtp.extraDesignFeeEach)})` : " (first design included)"}`}
-Freight: ${selected.dtp.freightTreatment === "pass_through" ? `${money2(selected.dtp.customerFreight)} (passed through)` : "included in unit pricing"}
+Freight: ${selected.dtp.freightTreatment === "pass_through" ? `${money2(selected.dtp.customerFreight)} (passed through)` : "included in unit pricing"} — ${SPEKTRA_FREIGHT_ASSUMPTION.label}${selected.dtp.liveVendor ? `
+
+LIVE SPEKTRA ECONOMICS (research ${selected.dtp.liveVendor.sourceDate}; ${selected.dtp.costAuthority?.authority === "LIVE_COST_BOOK_BY_CONFIGURATION" ? "QUOTE COST AUTHORITY for this size by exact configuration — " + String(selected.dtp.costAuthority.status).replace(/_/g, " ") : "not yet the quote cost authority for this size"})
+Pricing source: ${selected.dtp.pricingSource ?? "—"}${selected.dtp.marketBenchmark ? ` · benchmark ${selected.dtp.marketBenchmark}` : ""}${selected.dtp.benchmark?.competitorComparableUnit != null ? ` · Design & Customize comparable CR ${money2(selected.dtp.benchmark.competitorComparableUnit)}/unit → GSO premium ${selected.dtp.benchmark.premiumPct}%` : ""}
+Commercial policy: ${selected.dtp.commercialPolicy ?? "—"}
+Vendor product: ${selected.dtp.liveVendor.wholesaleTotal != null ? `${money2(selected.dtp.liveVendor.wholesaleTotal)} (${Number(selected.dtp.liveVendor.wholesaleUnit).toFixed(4)}/unit, incl. extra SKUs ${money2(selected.dtp.liveVendor.extraSkuCost)})` : "—"} — ${selected.dtp.liveVendor.statusLabel}
+Art: ${money2(OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(new URLSearchParams(search).get("pdesigns") || 1)))} · Freight: ${money2(SPEKTRA_FREIGHT_ASSUMPTION.amount)} / UNVERIFIED
+Landed total (live): ${selected.dtp.liveVendor.landedLive != null ? money2(selected.dtp.liveVendor.landedLive) : "—"} vs legacy landed ${money2(selected.jobCost ?? 0)}` : ""}${selected.dtp.shaped && selected.dtp.shaped.shape === "custom" ? `
+
+CUSTOM SHAPED POUCHES
+Includes: standard DTP configuration + custom shape surcharge +${selected.dtp.shaped.surchargePct}% (${money2(selected.dtp.shaped.shapeSurcharge)})
+Product subtotal: ${money2(selected.dtp.shaped.productTotal)}
+
+CUSTOM TOOLING
+${selected.dtp.shaped.toolingRequired ? `New reusable custom die: ${money2(selected.dtp.shaped.toolingFee)}` : `Existing die on file (${selected.dtp.shaped.dieId || selected.dtp.shaped.dieReference || "reference required"}): $0.00`}
+` : ""}
 Total: ${money2(selected.totalPrice)}`}
         </pre>
         ) : (
@@ -4339,7 +4631,7 @@ Total: ${money2(selected.totalPrice)}`}
         {selected.draftOnly && selected.dtp ? <div style={{ color: "#991b1b", fontWeight: 700, marginTop: 6 }}>DRAFT ONLY — missing costs must be verified before this price is final.</div> : null}
       </div>
       {actionData?.message ? (
-        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}</div>
+        <div style={{ border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{actionData.message}{(actionData as any).quoteId ? <> <a href="/app/quotes" style={{ marginLeft: 8, fontWeight: 700 }}>Open Quotes / CRM →</a></> : null}</div>
       ) : null}
       <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 8 }}>
         <input type="hidden" name="intent" value="saveEmergencyQuoteDraft" />

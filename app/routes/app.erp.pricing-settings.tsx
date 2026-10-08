@@ -9,6 +9,7 @@ import {
   PRICING_MARKET_TARGETS_KEY,
   PRICING_MIN_GROSS_PROFIT_KEY,
   PRICING_MIN_ORDER_TOTALS_KEY,
+  PRICING_SPECIALTY_KEY,
   PRICING_TIER_LADDERS_KEY,
   clearOwnerConfigKey,
   ownerConfigKeyDefinition,
@@ -27,20 +28,31 @@ import { FAMILY_MARGIN_RULES } from "../lib/calculator-emergency.server";
 import { resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { loadPricingEvidenceLiveFrom } from "../lib/pricing-intelligence.server";
 
-// Pricing Settings (15F.0K.1) — the FIRST ownerConfig surface. Scope is
-// deliberately narrow: the three provisional value groups the commercial
-// pricing policy already uses (minimum gross profits, minimum order totals,
-// sticker area-floor bands) become owner-editable with validated JSON
-// envelopes, actor + note audit, and one-step rollback. Everything else
-// (margin curves, market targets, unit-price floors, rounding, override
-// rules) stays code-only until its later 15F.0K phase. With no saved config,
-// pricing is byte-for-byte identical to the code constants.
+// Pricing Settings (15F.0K.1 → 15F.0K.3) — the ownerConfig surface for the
+// commercial pricing policy. Six groups are owner-editable with validated
+// JSON envelopes, actor + note audit, and one-step rollback: minimum gross
+// profits, minimum order totals, sticker area-floor bands, per-family margin
+// curves, displayed tier ladders, and verified 4x5-bag market targets.
+// Unit-price floors stay inactive by owner decision (code always null);
+// rounding/override rules stay code-only; specialtyPricing is active but has
+// no UI yet (read-only note below). With no saved config, pricing is
+// byte-for-byte identical to the code constants.
+//
+// 2026-10-05 dead-control audit: two margin-curve rows (die-cut-bags, boxes)
+// and the market-target "premium target" column are never read by any
+// pricing path. The validator still requires them in the saved payload, so
+// they are rendered read-only / hidden (NOT disabled — disabled inputs do not
+// submit) and labelled as unused so staff are not misled.
 //
 // Client/server split rule (12B.1a / 13A.7B convention): the component below
 // consumes ONLY loader data — key strings, defaults, and resolutions all
 // travel through the loader so no .server export is referenced client-side.
 
 const MAX_BAND_ROWS = 8;
+
+// Margin-curve rows the validator requires but no runtime pricing path reads
+// (marginFamilyKeyFor never returns them; boxes is a non-canonical family).
+const UNUSED_MARGIN_CURVE_KEYS = ["die-cut-bags", "boxes"];
 
 export async function loader({ request }: { request: Request }) {
   const { session } = await authenticate.admin(request);
@@ -54,8 +66,9 @@ export async function loader({ request }: { request: Request }) {
     families: FAMILY_COMMERCIAL_POLICIES.map((policy) => ({ key: policy.familyKey, label: policy.label })),
     // 15F.0K.2-A: configurable margin families (DTP + provisional excluded)
     // plus the optional allowlisted variant rows (bags-4x5-double).
-    marginFamilies: MARGIN_CURVE_CONFIGURABLE_KEYS.map((key) => ({ key, label: ruleLabel(key), optional: false })),
-    marginVariants: Object.entries(MARGIN_CURVE_VARIANT_BASE).map(([key, baseKey]) => ({ key, baseKey, label: `${ruleLabel(baseKey)} — DOUBLE-SIDED variant (optional; blank = use the base curve)`, optional: true })),
+    // `unused` rows are still submitted (validator needs them) but rendered read-only.
+    marginFamilies: MARGIN_CURVE_CONFIGURABLE_KEYS.map((key) => ({ key, label: ruleLabel(key), optional: false, unused: UNUSED_MARGIN_CURVE_KEYS.includes(key) })),
+    marginVariants: Object.entries(MARGIN_CURVE_VARIANT_BASE).map(([key, baseKey]) => ({ key, baseKey, label: `${ruleLabel(baseKey)} — DOUBLE-SIDED variant (optional; blank = use the base curve)`, optional: true, unused: false })),
     minNoteLength: OWNER_CONFIG_MIN_NOTE_LENGTH,
     keys: {
       minGrossProfit: PRICING_MIN_GROSS_PROFIT_KEY,
@@ -64,6 +77,8 @@ export async function loader({ request }: { request: Request }) {
       marginCurves: PRICING_MARGIN_CURVES_KEY,
       tierLadders: PRICING_TIER_LADDERS_KEY,
       marketTargets: PRICING_MARKET_TARGETS_KEY,
+      // Read-only on this page: no editor exists yet, but the key is an active authority.
+      specialtyPricing: PRICING_SPECIALTY_KEY,
     },
     // 15F.0K.3: only verified standard 4x5 bag families may carry market targets.
     marketTargetFamilies: [
@@ -241,6 +256,37 @@ const SOURCE_LABEL: Record<string, string> = {
   invalid_config_fallback: "INVALID saved value — code default in use",
 };
 
+// 2026-10-05 legend: what a control on this page actually does to a price.
+type PriceEffectClass = "authority" | "override" | "display" | "unused";
+const PRICE_EFFECT_LABEL: Record<PriceEffectClass, string> = {
+  authority: "ACTIVE AUTHORITY",
+  override: "ACTIVE OVERRIDE (raising-only)",
+  display: "DISPLAY ONLY",
+  unused: "NOT USED",
+};
+const PRICE_EFFECT_STYLE: Record<PriceEffectClass, React.CSSProperties> = {
+  authority: { ...chip, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" },
+  override: { ...chip, background: "#dbeafe", color: "#1e40af", border: "1px solid #93c5fd" },
+  display: { ...chip, background: "#f3f4f6", color: "#374151", border: "1px solid #d1d5db" },
+  unused: { ...chip, background: "#fef3c7", color: "#92400e", border: "1px solid #fcd34d" },
+};
+const PRICE_EFFECT_DESCRIPTION: Record<PriceEffectClass, string> = {
+  authority: "Saving a new value changes live quote prices for new calculations.",
+  override: "Can only RAISE a cost-based price, never lower it. Blank = off.",
+  display: "Changes what staff see (tier rows, warnings, reference numbers) — never the price itself.",
+  unused: "No calculator path reads this. Kept only so saved config stays complete/valid.",
+};
+const UNUSED_ROW_NOTE = "Not used by any calculator path — kept for config completeness";
+const unusedInputStyle: React.CSSProperties = { ...inputStyle, background: "#fffbeb", borderColor: "#fcd34d", color: "#92400e" };
+
+function ClassTag({ kind, note }: { kind: PriceEffectClass; note?: string }) {
+  return (
+    <span style={{ ...PRICE_EFFECT_STYLE[kind], marginLeft: 8, verticalAlign: "middle", fontSize: 11 }} title={PRICE_EFFECT_DESCRIPTION[kind]}>
+      {PRICE_EFFECT_LABEL[kind]}{note ? ` — ${note}` : ""}
+    </span>
+  );
+}
+
 function SourceBadge({ resolution }: { resolution: any }) {
   return (
     <div style={{ marginBottom: 8 }}>
@@ -281,7 +327,7 @@ function EnvelopeActions({ keyName, resolution, busy }: { keyName: string; resol
   );
 }
 
-function MoneyMapSection({ title, keyName, resolution, effective, defaults, families, minNoteLength, busy, helpText }: {
+function MoneyMapSection({ title, keyName, resolution, effective, defaults, families, minNoteLength, busy, helpText, tag }: {
   title: string;
   keyName: string;
   resolution: any;
@@ -291,10 +337,11 @@ function MoneyMapSection({ title, keyName, resolution, effective, defaults, fami
   minNoteLength: number;
   busy: boolean;
   helpText: string;
+  tag: PriceEffectClass;
 }) {
   return (
     <section style={card}>
-      <h2 style={{ margin: "0 0 6px" }}>{title}</h2>
+      <h2 style={{ margin: "0 0 6px" }}>{title}<ClassTag kind={tag} /></h2>
       <SourceBadge resolution={resolution} />
       <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>{helpText} Blank = no minimum for that family (candidate skipped). Every save requires a source note.</p>
       <Form method="post">
@@ -343,10 +390,30 @@ export default function PricingSettings() {
       <section style={{ background: "linear-gradient(135deg,#111827,#1e3a5f)", color: "white", padding: 24, borderRadius: 14 }}>
         <h1 style={{ margin: 0 }}>Pricing Settings (owner config)</h1>
         <p style={{ margin: "8px 0 0", fontSize: 14 }}>
-          Phase 15F.0K.1 — these three groups now read from owner configuration with validated envelopes, actor + note
-          audit, and one-step restore. <b>With nothing saved, pricing uses the code defaults and is byte-for-byte
-          identical to before.</b> Invalid or corrupt saved values automatically fall back to the code defaults and are
-          flagged below — a bad value can never zero out or corrupt a price.
+          The pricing groups below read from owner configuration with validated save envelopes, a required change
+          note, the acting staff member recorded, and one-step restore. <b>With nothing saved, pricing uses the code
+          defaults and is byte-for-byte identical to before.</b> Invalid or corrupt saved values automatically fall
+          back to the code defaults and are flagged below — a bad value can never zero out or corrupt a price.
+        </p>
+      </section>
+
+      <section style={{ ...card, borderColor: "#c7d2fe", background: "#eef2ff" }}>
+        <b>What on this page actually changes a price?</b>
+        <p style={{ fontSize: 13, margin: "6px 0 8px", color: "#374151" }}>
+          Every section heading below carries one of these tags. Read the tag before editing — several controls here are
+          display-only or not used at all, and saving them will not move a single quote.
+        </p>
+        <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+          {(["authority", "override", "display", "unused"] as PriceEffectClass[]).map((kind) => (
+            <div key={kind} style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+              <span style={{ ...PRICE_EFFECT_STYLE[kind], minWidth: 230, textAlign: "center" }}>{PRICE_EFFECT_LABEL[kind]}</span>
+              <span>{PRICE_EFFECT_DESCRIPTION[kind]}</span>
+            </div>
+          ))}
+        </div>
+        <p style={{ fontSize: 12, margin: "10px 0 0", color: "#6b7280" }}>
+          Not configurable anywhere: <b>minimum unit-price floors</b> are inactive by owner decision (the code always
+          leaves them off) — nothing on this page turns them on.
         </p>
       </section>
 
@@ -357,7 +424,7 @@ export default function PricingSettings() {
       ) : null}
 
       <section style={{ ...card, borderColor: evidenceLiveFrom ? "#bbf7d0" : "#fecaca", background: evidenceLiveFrom ? "#f0fdf4" : "#fef2f2" }}>
-        <b>Pricing evidence live-from date (15F.0K.4H — READ-ONLY here)</b>
+        <b>Pricing evidence start date (READ-ONLY here)<ClassTag kind="display" note="evidence cutoff, not a price input" /></b>
         <p style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.7 }}>
           {evidenceLiveFrom ? (
             <>
@@ -370,23 +437,36 @@ export default function PricingSettings() {
             </>
           ) : (
             <b style={{ color: "#991b1b" }}>
-              Not set — Pricing Intelligence may count pre-launch test transactions as evidence. Run the owner
-              activation script (tools/apply-15f0k4h-live-from.mjs) to set it.
+              Not set — Pricing Intelligence may count pre-launch test transactions as evidence. Ask the developer to set the
+              evidence start date (owner action; it is not editable on this page).
             </b>
           )}
         </p>
       </section>
 
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
-        <b>What is editable (15F.0K.1 + 15F.0K.2 Stage A)</b>
+        <b>What is editable on this page</b>
         <ul style={{ fontSize: 13, margin: "6px 0 0", paddingLeft: 20, lineHeight: 1.8 }}>
-          <li>Minimum gross-profit floors, minimum order totals, and the sticker area-floor bands (15F.0K.1).</li>
-          <li>Per-family margin curves (quantity bands) and displayed tier quantity ladders (15F.0K.2).</li>
-          <li>Verified market targets for standard 4x5 sticker-applied bags (15F.0K.3) — raising-only candidate + negotiation-floor display data + crossover flags; ACTIVE by owner decision 2026-07-26.</li>
-          <li><b>Not yet editable</b> (later phases, deliberately): minimum unit-price floors (kept inactive by owner decision), rounding and override rules (15F.0K.4).</li>
+          <li>Minimum gross-profit floors, minimum order totals, and the sticker area-floor bands — all <b>active authority</b>.</li>
+          <li>Per-family margin curves (quantity bands) — <b>active authority</b>, except the two rows marked “not used” below. Displayed tier quantity ladders — <b>display only</b>.</li>
+          <li>Verified market targets for standard 4x5 sticker-applied bags — the Target column is a <b>raising-only override</b>; the market low/median/high, negotiation floor and crossover columns are <b>display only</b>; source fields record where the numbers came from. Active by owner decision 2026-07-26.</li>
+          <li><b>Not editable here:</b> minimum unit-price floors (inactive by owner decision — no configuration exists), rounding and override rules (code-only), and the 4x5 bag specialty pricing authority (active, no editor yet — see the note below).</li>
           <li>DTP pouch pricing (owner ladders, floors, margin thresholds, design fees) is completely untouched by this page — DTP keys are rejected by validation.</li>
-          <li>Changing a value here changes live quote prices for new calculations. Historical quotes and snapshots are never rewritten.</li>
+          <li>Changing an <b>active</b> value here changes live quote prices for new calculations. Historical quotes and snapshots are never rewritten.</li>
         </ul>
+      </section>
+
+      <section style={{ ...card, borderColor: "#bbf7d0", background: "#f0fdf4" }}>
+        <b>4x5 bag specialty pricing<ClassTag kind="authority" note="no editor on this page" /></b>
+        {resolutions[keys.specialtyPricing] ? <div style={{ marginTop: 6 }}><SourceBadge resolution={resolutions[keys.specialtyPricing]} /></div> : null}
+        <p style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.7 }}>
+          The configuration key <code>{keys.specialtyPricing}</code> exists and is an <b>active pricing authority</b> for
+          4x5 sticker-bag specialty pricing. It has no edit form anywhere yet. Its values are currently
+          {resolutions[keys.specialtyPricing]?.source === "owner_config"
+            ? <> a <b>hand-written saved row</b> (see the badge above).</>
+            : <> the <b>code defaults</b> unless a row was hand-written directly in settings storage.</>}
+          {" "}Changing it requires a developer-run, audited update — not a casual edit.
+        </p>
       </section>
 
       <MoneyMapSection
@@ -399,6 +479,7 @@ export default function PricingSettings() {
         minNoteLength={minNoteLength}
         busy={busy}
         helpText="Dollar minimum gross profit per job, by family — the price candidate is (job cost + this amount)."
+        tag="authority"
       />
 
       <MoneyMapSection
@@ -411,10 +492,11 @@ export default function PricingSettings() {
         minNoteLength={minNoteLength}
         busy={busy}
         helpText="Flat minimum order total per job, by family — the price candidate is this amount."
+        tag="authority"
       />
 
       <section style={card}>
-        <h2 style={{ margin: "0 0 6px" }}>Sticker area market floor bands</h2>
+        <h2 style={{ margin: "0 0 6px" }}>Sticker area market floor bands<ClassTag kind="authority" note="stickers & labels only" /></h2>
         <SourceBadge resolution={bandsResolution} />
         <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
           Stickers &amp; Labels only: floor = $/sqft (banded by TOTAL finished sqft) × finished sqft + full setup
@@ -461,14 +543,19 @@ export default function PricingSettings() {
       </section>
 
       <section style={card}>
-        <h2 style={{ margin: "0 0 6px" }}>Per-family margin curves (quantity bands)</h2>
+        <h2 style={{ margin: "0 0 6px" }}>Per-family margin curves (quantity bands)<ClassTag kind="authority" note="except rows marked not used" /></h2>
         <SourceBadge resolution={resolutions[keys.marginCurves]} />
         <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
           Bands format: <code>minQty:targetPct, minQty:targetPct, …</code> — the last band whose minQty ≤ the quote
           quantity applies. The first band must start at minQty 1; targets are 40–95% and never below the family
-          minimum. Stage-A defaults reproduce the current five-point curves exactly (bands at 1/128/256/640/1000).
-          DTP margins are code-only and deliberately not listed. The double-sided variant row is optional — leave it
-          blank and double-sided 4x5 bags keep pricing on the single-sided curve (current behavior).
+          minimum. Code defaults use five bands (1/128/256/640/1000); 4x5 bags carry the owner-approved research
+          curves (2026-07-26), every other family carries its original curve. DTP margins are code-only and
+          deliberately not listed. The double-sided variant row is optional — leave it blank and double-sided 4x5 bags
+          keep pricing on the single-sided curve (current behavior).
+        </p>
+        <p style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "6px 10px", margin: "0 0 10px" }}>
+          Rows shaded amber are <b>{UNUSED_ROW_NOTE.toLowerCase()}</b>. They are read-only: the save still includes them
+          (the validator requires every family), but editing them would not change any price, so they are locked.
         </p>
         <Form method="post">
           <input type="hidden" name="intent" value="save" />
@@ -476,16 +563,22 @@ export default function PricingSettings() {
           <div style={{ display: "grid", gap: 10 }}>
             {[...marginFamilies, ...marginVariants].map((family) => {
               const entry = effective.marginCurves.families[family.key];
+              // Unused rows: readOnly (NOT disabled) so the validator payload stays complete.
+              const unused = family.unused;
+              const rowInput = unused ? unusedInputStyle : inputStyle;
               return (
-                <div key={family.key} style={{ display: "grid", gridTemplateColumns: "260px 140px 1fr", gap: 10, alignItems: "end" }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{family.label}{family.optional ? "" : ""}</div>
+                <div key={family.key} style={{ display: "grid", gridTemplateColumns: "260px 140px 1fr", gap: 10, alignItems: "end", ...(unused ? { background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: 8 } : {}) }} data-unused-row={unused ? family.key : undefined}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    {family.label}
+                    {unused ? <div style={{ fontSize: 11, fontWeight: 500, color: "#92400e", marginTop: 2 }}>{UNUSED_ROW_NOTE}</div> : null}
+                  </div>
                   <label style={{ fontSize: 12 }}>
                     Family min %
-                    <input name={`curve_min_${family.key}`} defaultValue={entry ? String(entry.familyMinPct) : ""} placeholder={family.optional ? "blank = not set" : ""} inputMode="decimal" style={inputStyle} />
+                    <input name={`curve_min_${family.key}`} defaultValue={entry ? String(entry.familyMinPct) : ""} placeholder={family.optional ? "blank = not set" : ""} inputMode="decimal" style={rowInput} readOnly={unused} aria-readonly={unused || undefined} title={unused ? UNUSED_ROW_NOTE : undefined} />
                   </label>
                   <label style={{ fontSize: 12 }}>
                     Bands (minQty:targetPct, …)
-                    <input name={`curve_bands_${family.key}`} defaultValue={entry ? entry.bands.map((band) => `${band.minQty}:${band.targetPct}`).join(", ") : ""} placeholder={family.optional ? "blank = use base curve" : ""} style={inputStyle} />
+                    <input name={`curve_bands_${family.key}`} defaultValue={entry ? entry.bands.map((band) => `${band.minQty}:${band.targetPct}`).join(", ") : ""} placeholder={family.optional ? "blank = use base curve" : ""} style={rowInput} readOnly={unused} aria-readonly={unused || undefined} title={unused ? UNUSED_ROW_NOTE : undefined} />
                   </label>
                 </div>
               );
@@ -503,7 +596,7 @@ export default function PricingSettings() {
       </section>
 
       <section style={card}>
-        <h2 style={{ margin: "0 0 6px" }}>Displayed tier quantity ladders</h2>
+        <h2 style={{ margin: "0 0 6px" }}>Displayed tier quantity ladders<ClassTag kind="display" note="which quantities appear as tier rows" /></h2>
         <SourceBadge resolution={resolutions[keys.tierLadders]} />
         <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
           Comma-separated quantities shown as tier rows when no manual "Tier quantities" list is entered in the
@@ -538,15 +631,20 @@ export default function PricingSettings() {
       </section>
 
       <section style={card}>
-        <h2 style={{ margin: "0 0 6px" }}>Verified market targets — 4x5 sticker-applied bags ONLY (15F.0K.3)</h2>
+        <h2 style={{ margin: "0 0 6px" }}>Verified market targets — 4x5 sticker-applied bags only<ClassTag kind="override" note="Target column" /><ClassTag kind="display" note="all other columns" /></h2>
         <SourceBadge resolution={resolutions[keys.marketTargets]} />
         <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 10px" }}>
           Owner decision 2026-07-26: standard 4x5 sticker-applied bags normally target the verified competitor median.
           The <b>Target</b> column is a <b>raising-only</b> price candidate (it can never lower the cost-based price);
-          blank Target = candidate OFF for that band (used at the 5,000+ direct-print crossover tiers). <b>Neg. floor</b>
-          is display/warning data only — it never blocks and never auto-raises. Only these two verified families may
-          carry market targets; every other family is rejected by validation. Untick Active to disable a family
-          entirely (restores pure cost-based pricing).
+          blank Target = candidate OFF for that band (used at the 5,000+ direct-print crossover tiers). <b>Mkt low /
+          Median / Mkt high / Neg. floor / Crossover</b> are display and warning data only — they never block, never
+          auto-raise, and never change a price. <b>Source date / Source / Confidence</b> record where the numbers came
+          from (provenance). Only these two verified families may carry market targets; every other family is rejected
+          by validation. Untick Active to disable a family entirely (restores pure cost-based pricing).
+        </p>
+        <p style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "6px 10px", margin: "0 0 10px" }}>
+          Premium target: recorded for reference only; no pricing math reads it. (Previously saved values are kept in the
+          payload unchanged but are no longer shown as an editable column.)
         </p>
         <Form method="post">
           <input type="hidden" name="intent" value="save" />
@@ -569,7 +667,7 @@ export default function PricingSettings() {
                     <thead>
                       <tr style={{ background: "#f3f4f6" }}>
                         <th style={{ padding: 4, textAlign: "left" }}>Min qty</th><th>Mkt low</th><th>Median</th><th>Mkt high</th>
-                        <th>Target (candidate)</th><th>Neg. floor</th><th>Premium tgt</th><th>Crossover</th>
+                        <th>Target (raising-only)</th><th>Neg. floor</th><th>Crossover</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -586,8 +684,9 @@ export default function PricingSettings() {
                             {cell("high", band?.high)}
                             {cell("tgt", band?.target)}
                             {cell("nf", band?.negotiationFloor)}
-                            {cell("prem", band?.premiumTarget)}
                             <td style={{ padding: 3 }}>
+                              {/* Premium target: not editable (no pricing math reads it); carried as hidden so saved payloads stay unchanged. */}
+                              <input type="hidden" name={`mt_${family.key}_prem_${index}`} value={band?.premiumTarget == null ? "" : String(band.premiumTarget)} />
                               <select name={`mt_${family.key}_cross_${index}`} defaultValue={band?.crossover || ""} style={{ ...inputStyle, width: 92, padding: 6 }}>
                                 <option value="">none</option>
                                 <option value="mild">mild</option>
@@ -621,7 +720,7 @@ export default function PricingSettings() {
           <li>Invalid/corrupt value → code default (source “INVALID saved value”), with the exact reason shown above.</li>
           <li>Validation is all-or-nothing per group: a save is either fully valid or refused with the reason — partial merges never happen.</li>
           <li>Every save records the acting staff session and the required note; the prior valid version is kept for one-step restore.</li>
-          <li>All reads and writes are shop-scoped. No Shopify data is touched. No migration — values live in ErpAdminSetting.</li>
+          <li>All reads and writes are shop-scoped. No Shopify data is touched. Values are stored in the ERP settings table; no database migration is involved.</li>
         </ul>
       </section>
     </main>

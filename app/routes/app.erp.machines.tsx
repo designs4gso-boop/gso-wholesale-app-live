@@ -1,3 +1,4 @@
+import { OWNER_STANDARDS } from "../lib/owner-standards";
 import {
   Page,
   Layout,
@@ -74,11 +75,12 @@ const DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL = 0.0075;
 const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
   {
     // 15F.0K.4B: LG-640 is the shop's actual Roland (13A.7B operational
-    // evidence); recovery preset = the owner-approved $8/hr, never the stale $5.
+    // evidence); recovery preset = the owner-approved $5/hr (2026-10-07, retail
+    // replacement basis) — the same rate as the Mimaki.
     name: "Roland TrueVIS LG-640",
     machineType: "printer",
     maxWidthIn: 52.9,
-    costPerHour: 8,
+    costPerHour: OWNER_STANDARDS.machineRecoveryPerHour.value,
     sqftPerHour: 150,
     setupWastePct: 10,
     allowOverflow: true,
@@ -99,7 +101,7 @@ const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
     name: "Mimaki UCJV300-130",
     machineType: "printer",
     maxWidthIn: 53.6,
-    costPerHour: 8,
+    costPerHour: OWNER_STANDARDS.machineRecoveryPerHour.value,
     sqftPerHour: 150,
     setupWastePct: 10,
     allowOverflow: false,
@@ -110,8 +112,9 @@ const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
       { slotNumber: 2, inkName: "Magenta", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
       { slotNumber: 3, inkName: "Yellow", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
       { slotNumber: 4, inkName: "Black", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
-      { slotNumber: 5, inkName: "White", inkType: "white", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL },
-      { slotNumber: 6, inkName: "White", inkType: "white", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_WHITE_GLOSS_ML_PER_SQFT_1PCT_PER_CHANNEL },
+      // OWNER DECISION 2026-10-07: the Mimaki is CMYK-only for ERP routing — white (and gloss) run on the Roland only. No Mimaki white channel is exposed.
+      { slotNumber: 5, inkName: "Unused - white routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
+      { slotNumber: 6, inkName: "Unused - white routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
       { slotNumber: 7, inkName: "Unused - gloss routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
       { slotNumber: 8, inkName: "Unused - gloss routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
     ],
@@ -120,6 +123,38 @@ const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
 
 function costPerMl(slot: DefaultInkSlot) {
   return slot.cartridgeMl > 0 ? slot.cartridgeCost / slot.cartridgeMl : 0;
+}
+
+// Display-only helpers: readable labels for stored type keys, and detection of
+// slots/machines still sitting on the seeded GSO default numbers (which the
+// preset notes themselves describe as estimates to be tuned from invoices).
+function machineTypeLabel(value: string | null | undefined) {
+  return machineTypes.find((option) => option.value === value)?.label || String(value || "Other");
+}
+
+function inkTypeLabel(value: string | null | undefined) {
+  return inkTypes.find((option) => option.value === value)?.label || String(value || "Other");
+}
+
+function presetForMachine(machine: any) {
+  return gsoDefaultMachinePresets.find((preset) => preset.name === machine?.name) || null;
+}
+
+function machineUsesDefaultValues(machine: any) {
+  const preset = presetForMachine(machine);
+  if (!preset) return false;
+  return (
+    Number(machine.costPerHour) === preset.costPerHour &&
+    Number(machine.sqftPerHour) === preset.sqftPerHour &&
+    Number(machine.setupWastePct) === preset.setupWastePct
+  );
+}
+
+function slotUsesDefaultValues(machine: any, ink: any) {
+  const preset = presetForMachine(machine);
+  const slot = preset?.inkSlots.find((row) => row.slotNumber === ink.slotNumber);
+  if (!slot || !ink.inkName) return false;
+  return Number(ink.cartridgeCost) === slot.cartridgeCost && Number(ink.cartridgeMl) === slot.cartridgeMl;
 }
 
 async function installDefaultMachinePreset(shop: string, preset: DefaultMachinePreset, overwriteExisting = false) {
@@ -438,6 +473,7 @@ function permanentDeleteMachine(id: string) {
   }
 
   function clearSlot(ink: any) {
+    if (!confirm(`Clear ink slot ${ink.slotNumber}? This erases the ink name, cartridge cost and size for this slot.`)) return;
     fetcher.submit(
       { intent: "clearSlot", id: ink.id },
       { method: "post", encType: "application/json" }
@@ -447,7 +483,7 @@ function permanentDeleteMachine(id: string) {
   function installGsoDefaults(overwriteExisting = false) {
     if (
       overwriteExisting &&
-      !confirm("Refresh Roland and Mimaki default values? This can overwrite default printer slots you already edited.")
+      !confirm("Reset the Roland and Mimaki profiles to the GSO default values? This overwrites widths, rates and ink slot costs you may have edited on those two printers.")
     ) {
       return;
     }
@@ -461,7 +497,7 @@ function permanentDeleteMachine(id: string) {
   return (
     <Page
       title="Machine Center"
-      subtitle="Printers, 8 ink slots, cartridge costs, cost per ML, coverage rates, and overflow routing."
+      subtitle="Each printer's hourly cost, speed, print width, and the cost of every ink in its slots. Recipes and quotes read these numbers."
       backAction={{ content: "Dashboard", onAction: () => navigate("/app") }}
       primaryAction={{ content: "New Machine", onAction: resetMachineForm }}
     >
@@ -471,18 +507,18 @@ function permanentDeleteMachine(id: string) {
             <BlockStack gap="300">
               <InlineStack align="space-between">
                 <BlockStack gap="100">
-                  <Text as="h2" variant="headingMd">GSO Default Printer Profiles</Text>
+                  <Text as="h2" variant="headingMd">GSO default printer profiles</Text>
                   <Text as="p" tone="subdued">
-                    Install the Roland LG-640 and Mimaki UCJV300-130 with researched starting widths, speeds, ink slots, cartridge sizes, and coverage defaults ($8/hr owner recovery rate; Mimaki is CMYK only). Tune these values with your real invoices and print logs.
+                    Install the Roland LG-640 and Mimaki UCJV300-130 with starting widths, speeds, ink slots, cartridge sizes, and coverage defaults ($8 per hour owner recovery rate; Mimaki is CMYK only). Default numbers are estimates: replace them with your real invoices and print logs.
                   </Text>
                 </BlockStack>
                 <InlineStack gap="200">
-                  <Button onClick={() => installGsoDefaults(false)}>Install Missing Defaults</Button>
-                  <Button tone="critical" onClick={() => installGsoDefaults(true)}>Refresh Defaults</Button>
+                  <Button onClick={() => installGsoDefaults(false)}>Install missing defaults</Button>
+                  <Button tone="critical" onClick={() => installGsoDefaults(true)}>Reset defaults (overwrites edits)</Button>
                 </InlineStack>
               </InlineStack>
               <Text as="p" tone="subdued">
-                Roland is set up for CMYK + white + gloss/emboss. Mimaki is set up for CMYK + white, with gloss routed to Roland by default.
+                Roland is set up for CMYK + white + gloss/emboss. The Mimaki runs CMYK only — white, clear/gloss and spot-gloss work is routed to the Roland. "Install missing defaults" never touches a printer that already exists.
               </Text>
             </BlockStack>
           </Card>
@@ -496,19 +532,20 @@ function permanentDeleteMachine(id: string) {
               </Text>
 
               <InlineStack gap="300">
-                <TextField label="Machine Name" value={name} onChange={setName} autoComplete="off" />
-                <Select label="Machine Type" value={machineType} onChange={setMachineType} options={machineTypes} />
-                <TextField label="Max Width Inches" value={maxWidthIn} onChange={setMaxWidthIn} autoComplete="off" />
+                <TextField label="Machine name" value={name} onChange={setName} autoComplete="off" helpText="Use the model name, e.g. Roland TrueVIS LG-640." />
+                <Select label="Machine type" value={machineType} onChange={setMachineType} options={machineTypes} />
+                <TextField label="Max print width (in)" suffix="in" value={maxWidthIn} onChange={setMaxWidthIn} autoComplete="off" />
               </InlineStack>
 
               <InlineStack gap="300">
-                <TextField label="Machine Cost Per Hour" prefix="$" value={costPerHour} onChange={setCostPerHour} autoComplete="off" />
-                <TextField label="Sq Ft Per Hour" value={sqftPerHour} onChange={setSqftPerHour} autoComplete="off" />
-                <TextField label="Setup Waste %" suffix="%" value={setupWastePct} onChange={setSetupWastePct} autoComplete="off" />
+                <TextField label="Machine cost ($ per hour)" prefix="$" suffix="/ hr" value={costPerHour} onChange={setCostPerHour} autoComplete="off" helpText="Owner recovery rate for running this machine." />
+                <TextField label="Throughput (sqft per hour)" suffix="sqft / hr" value={sqftPerHour} onChange={setSqftPerHour} autoComplete="off" />
+                <TextField label="Setup waste (%)" suffix="%" value={setupWastePct} onChange={setSetupWastePct} autoComplete="off" helpText="Extra media burned per job for setup and test prints." />
               </InlineStack>
 
               <Select
-                label="Allow Overflow Jobs"
+                label="Accept overflow jobs"
+                helpText="Yes = jobs can be routed here when their usual machine is busy."
                 value={allowOverflow}
                 onChange={setAllowOverflow}
                 options={[
@@ -519,7 +556,7 @@ function permanentDeleteMachine(id: string) {
 
               <InlineStack gap="300">
                 <Button variant="primary" onClick={saveMachine}>
-                  {editingMachineId ? "Update Machine" : "Save Machine"}
+                  {editingMachineId ? "Update machine" : "Save machine"}
                 </Button>
                 <Button onClick={resetMachineForm}>Clear</Button>
               </InlineStack>
@@ -530,87 +567,117 @@ function permanentDeleteMachine(id: string) {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Machines</Text>
+              <BlockStack gap="050">
+                <Text as="h2" variant="headingMd">Machines</Text>
+                <Text as="p" tone="subdued">
+                  {machines.length} machine(s): {machines.filter((machine) => machine.active).length} active, {machines.filter((machine) => !machine.active).length} inactive.
+                </Text>
+              </BlockStack>
               <Divider />
 
               {machines.length === 0 ? (
-                <Text as="p" tone="subdued">
-                  No machines yet. Use "Install Missing Defaults" above to create the GSO Roland LG-640 and Mimaki UCJV300-130 profiles (page loads never create machines automatically).
-                </Text>
+                <BlockStack gap="100">
+                  <Text as="p" fontWeight="bold">No machines yet.</Text>
+                  <Text as="p" tone="subdued">
+                    Use "Install missing defaults" above to create the GSO Roland LG-640 and Mimaki UCJV300-130 profiles, or add a machine with the form. Nothing is created automatically.
+                  </Text>
+                </BlockStack>
               ) : (
-                machines.map((machine) => (
+                machines.map((machine) => {
+                  const hourlyRateMissing = Number(machine.costPerHour || 0) <= 0;
+                  const usingDefaults = machineUsesDefaultValues(machine);
+                  const inkChannels = machine.inkChannels || [];
+
+                  return (
                   <Card key={machine.id}>
                     <BlockStack gap="300">
                       <InlineStack align="space-between">
                         <Text as="p" fontWeight="bold">{machine.name}</Text>
-                        <InlineStack gap="200">
-                          <Badge>{machine.machineType}</Badge>
-                          {machine.allowOverflow && <Badge tone="success">Overflow Allowed</Badge>}
-                          {!machine.active && <Badge tone="warning">Inactive</Badge>}
+                        <InlineStack gap="200" wrap>
+                          <Badge>{machineTypeLabel(machine.machineType)}</Badge>
+                          {machine.allowOverflow && <Badge tone="info">Accepts overflow</Badge>}
+                          {hourlyRateMissing && <Badge tone="critical">Hourly rate missing</Badge>}
+                          {!hourlyRateMissing && usingDefaults && <Badge tone="warning">Default values (estimated)</Badge>}
+                          {!machine.active && <Badge>Inactive</Badge>}
                         </InlineStack>
                       </InlineStack>
 
                       <Text as="p">
-                        Max Width: {machine.maxWidthIn || "N/A"} in | Cost/hr: ${Number(machine.costPerHour || 0).toFixed(2)} | Sqft/hr: {Number(machine.sqftPerHour || 0).toFixed(2)}
+                        Max print width: {machine.maxWidthIn ? `${machine.maxWidthIn} in` : "not set"}
+                        {" | Machine cost: "}{hourlyRateMissing ? "not set" : `$${Number(machine.costPerHour).toFixed(2)} per hour`}
+                        {" | Throughput: "}{Number(machine.sqftPerHour || 0) > 0 ? `${Number(machine.sqftPerHour).toFixed(2)} sqft per hour` : "not set"}
+                        {" | Setup waste: "}{Number(machine.setupWastePct || 0).toFixed(2)}%
                       </Text>
 
-                      <Text as="p">Setup Waste: {Number(machine.setupWastePct || 0).toFixed(2)}%</Text>
-
-                      {gsoDefaultMachinePresets.find((preset) => preset.name === machine.name)?.notes && (
-                        <Text as="p" tone="subdued">
-                          {gsoDefaultMachinePresets.find((preset) => preset.name === machine.name)?.notes}
-                        </Text>
+                      {presetForMachine(machine)?.notes && (
+                        <details>
+                          <summary style={{ cursor: "pointer", fontSize: 12, color: "#6d7175" }}>GSO default profile notes</summary>
+                          <Text as="p" tone="subdued">{presetForMachine(machine)?.notes}</Text>
+                        </details>
                       )}
 
                       <InlineStack gap="200">
-                        <Button onClick={() => editMachine(machine)}>Edit Machine</Button>
+                        <Button onClick={() => editMachine(machine)}>Edit machine</Button>
 
                         {machine.active ? (
                             <Button tone="critical" onClick={() => deleteMachine(machine.id)}>
-                            Archive Machine
+                            Archive machine (hide, keeps slots)
                             </Button>
                         ) : (
                             <Button onClick={() => restoreMachine(machine.id)}>
-                            Restore Machine
+                            Restore machine
                             </Button>
                         )}
 
                         <Button tone="critical" onClick={() => permanentDeleteMachine(machine.id)}>
-                            Permanent Delete
+                            Delete permanently (with ink slots)
                         </Button>
                         </InlineStack>
 
                       <Divider />
 
-                      <Text as="p" fontWeight="bold">Ink Slots</Text>
+                      <BlockStack gap="050">
+                        <Text as="p" fontWeight="bold">Ink slots</Text>
+                        <Text as="p" tone="subdued">Cost per ml is calculated from cartridge cost and size. Ink use per sqft at 1% coverage drives ink cost in recipes.</Text>
+                      </BlockStack>
+
+                      {inkChannels.length === 0 ? (
+                        <Text as="p" tone="subdued">No ink slots recorded for this machine.</Text>
+                      ) : null}
 
                       <BlockStack gap="300">
-                        {machine.inkChannels?.map((ink: any) => {
+                        {inkChannels.map((ink: any) => {
                           const cartridgeCost = Number(getSlotValue(ink, "cartridgeCost")) || 0;
                           const cartridgeMl = Number(getSlotValue(ink, "cartridgeMl")) || 0;
                           const liveCostPerMl = cartridgeMl > 0 ? cartridgeCost / cartridgeMl : 0;
+                          const slotEmpty = !String(ink.inkName || "").trim();
+                          const slotCostMissing = !slotEmpty && ink.enabled !== false && (Number(ink.cartridgeCost || 0) <= 0 || Number(ink.cartridgeMl || 0) <= 0);
+                          const slotDefaults = !slotCostMissing && slotUsesDefaultValues(machine, ink);
 
                           return (
                             <Card key={ink.id}>
                               <BlockStack gap="300">
                                 <InlineStack align="space-between">
-                                  <Text as="p" fontWeight="bold">Slot {ink.slotNumber}</Text>
-                                  <InlineStack gap="200">
-                                    <Badge>{slotEdits[ink.id]?.inkType ?? ink.inkType}</Badge>
-                                    {ink.enabled === false && <Badge tone="warning">Disabled</Badge>}
+                                  <Text as="p" fontWeight="bold">Slot {ink.slotNumber}{ink.inkName ? ` — ${ink.inkName}` : ""}</Text>
+                                  <InlineStack gap="200" wrap>
+                                    <Badge>{inkTypeLabel(slotEdits[ink.id]?.inkType ?? ink.inkType)}</Badge>
+                                    {ink.enabled === false && <Badge>Disabled</Badge>}
+                                    {slotEmpty && ink.enabled !== false && <Badge>Empty slot</Badge>}
+                                    {slotCostMissing && <Badge tone="critical">Ink cost missing</Badge>}
+                                    {slotDefaults && <Badge tone="warning">Default cost (estimated)</Badge>}
                                   </InlineStack>
                                 </InlineStack>
 
                                 <InlineStack gap="300">
                                   <TextField
-                                    label="Ink Name"
+                                    label="Ink name"
                                     autoComplete="off"
                                     value={slotEdits[ink.id]?.inkName ?? ink.inkName ?? ""}
                                     onChange={(value) => updateSlotEdit(ink.id, "inkName", value)}
                                   />
 
                                   <Select
-                                    label="Ink Type"
+                                    label="Ink type"
                                     options={inkTypes}
                                     value={slotEdits[ink.id]?.inkType ?? ink.inkType}
                                     onChange={(value) => updateSlotEdit(ink.id, "inkType", value)}
@@ -619,7 +686,7 @@ function permanentDeleteMachine(id: string) {
 
                                 <InlineStack gap="300">
                                   <TextField
-                                    label="Bottle/Cartridge Cost"
+                                    label="Cartridge / bottle cost ($)"
                                     prefix="$"
                                     autoComplete="off"
                                     value={getSlotValue(ink, "cartridgeCost")}
@@ -627,14 +694,16 @@ function permanentDeleteMachine(id: string) {
                                   />
 
                                   <TextField
-                                    label="Bottle/Cartridge ML"
+                                    label="Cartridge / bottle size (ml)"
+                                    suffix="ml"
                                     autoComplete="off"
                                     value={getSlotValue(ink, "cartridgeMl")}
                                     onChange={(value) => updateSlotEdit(ink.id, "cartridgeMl", value)}
                                   />
 
                                   <TextField
-                                    label="ML Per SqFt @ 1% Coverage"
+                                    label="Ink use (ml per sqft at 1% coverage)"
+                                    suffix="ml"
                                     autoComplete="off"
                                     value={getSlotValue(ink, "mlPerSqft1Pct")}
                                     onChange={(value) => updateSlotEdit(ink.id, "mlPerSqft1Pct", value)}
@@ -642,12 +711,12 @@ function permanentDeleteMachine(id: string) {
                                 </InlineStack>
 
                                 <Text as="p">
-                                  Live Cost Per ML: ${liveCostPerMl.toFixed(4)}
+                                  Cost per ml: {cartridgeMl > 0 ? `$${liveCostPerMl.toFixed(4)} per ml` : "not available until cost and size are entered"}
                                 </Text>
 
                                 <InlineStack gap="200">
-                                  <Button onClick={() => saveSlot(ink)}>Save Slot</Button>
-                                  <Button tone="critical" onClick={() => clearSlot(ink)}>Clear Slot</Button>
+                                  <Button onClick={() => saveSlot(ink)}>Save slot</Button>
+                                  <Button tone="critical" onClick={() => clearSlot(ink)}>Clear slot (erase ink and cost)</Button>
                                 </InlineStack>
                               </BlockStack>
                             </Card>
@@ -656,7 +725,8 @@ function permanentDeleteMachine(id: string) {
                       </BlockStack>
                     </BlockStack>
                   </Card>
-                ))
+                  );
+                })
               )}
             </BlockStack>
           </Card>

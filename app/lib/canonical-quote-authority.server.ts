@@ -168,7 +168,7 @@ export function isCanonicalSupportedFamily(canonicalFamilyKey: string | null | u
 /**
  * Is a canonical result USABLE as a quote cost?
  *
- * PROVISIONAL is explicitly allowed — a provisional basis (the $8/hr machine
+ * PROVISIONAL is explicitly allowed — a provisional basis (e.g. a cut-path estimate; the machine
  * recovery, the 10% operator attention) is an owner classification, not a
  * defect, and such a job is fully costed. What disqualifies a result is a
  * missing number, not a cautious one.

@@ -1,4 +1,5 @@
-import { Form, useActionData, useLoaderData } from "react-router";
+import type React from "react";
+import { Form, Link, useActionData, useLoaderData } from "react-router";
 import crypto from "crypto";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -269,6 +270,42 @@ function moneyish(value: number) {
   return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+// Print flow strip (display only). The same four steps, in the same order,
+// appear on Print Intake, RIP Imports, RIP Import Review and Print Logs so
+// staff read them as one flow: artwork file -> matched job -> printer ->
+// RIP log -> actual usage -> review exceptions. Kept local to this file on
+// purpose (no shared module).
+const PRINT_FLOW_STEPS = [
+  { step: 1, label: "Print Intake", hint: "artwork → hot folder", to: "/app/erp/print-intake" },
+  { step: 2, label: "RIP Imports", hint: "printer logs in", to: "/app/erp/rip-imports" },
+  { step: 3, label: "RIP Import Review", hint: "fix unmatched", to: "/app/erp/rip-import-review" },
+  { step: 4, label: "Print Logs", hint: "actual usage", to: "/app/erp/print-logs" },
+] as const;
+
+function PrintFlowStrip({ current }: { current: string }) {
+  return (
+    <nav aria-label="Print flow" style={{ marginTop: 12, padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#f9fafb", fontSize: 13, lineHeight: 1.8 }}>
+      <span style={{ fontWeight: 700, color: "#6b7280", marginRight: 8 }}>Print flow:</span>
+      {PRINT_FLOW_STEPS.map((item, index) => {
+        const active = item.to === current;
+        const text = `${item.step} ${item.label} (${item.hint})`;
+        return (
+          <span key={item.to}>
+            {index > 0 ? <span style={{ color: "#9ca3af", margin: "0 6px" }}>·</span> : null}
+            {active ? (
+              <b aria-current="page" style={{ color: "#111827", background: "#e0e7ff", padding: "2px 8px", borderRadius: 999 }}>{text}</b>
+            ) : (
+              <Link to={item.to} style={{ color: "#1d4ed8" }}>{text}</Link>
+            )}
+          </span>
+        );
+      })}
+    </nav>
+  );
+}
+
+const finePrint: React.CSSProperties = { fontSize: 11, color: "#9ca3af", marginTop: 6 };
+
 export default function RipImports() {
   const { setting, credential, imports } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
@@ -276,8 +313,18 @@ export default function RipImports() {
     <main style={{ maxWidth: 1100, margin: "40px auto", padding: 16, fontFamily: "system-ui, sans-serif" }}>
       <section style={{ background: "linear-gradient(135deg,#111827,#4c1d95)", color: "white", padding: 24, borderRadius: 14 }}>
         <h1 style={{ margin: 0 }}>RIP Imports</h1>
-        <p style={{ margin: "8px 0 0" }}>v14.0 foundation: import VersaWorks CSV/.vw now, prepare RasterLink results next, and match files back to ERP job tickets.</p>
+        <p style={{ margin: "8px 0 0" }}>
+          Step 2 of the print flow. After a job prints, the printer software (VersaWorks on the Roland, RasterLink on the
+          Mimaki) writes a log of what it actually used. Bring that log in here; each row is matched back to the ERP job
+          ticket so the real ink and area land on the job.
+        </p>
+        <p style={{ margin: "8px 0 0", fontSize: 11, color: "#c7d2fe" }}>
+          Parser status: VersaWorks CSV rows are parsed in full; .vw and RasterLink files are stored with a placeholder row
+          until their formats are confirmed.
+        </p>
       </section>
+
+      <PrintFlowStrip current="/app/erp/rip-imports" />
 
       <section style={{ marginTop: 16, border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 12, padding: 16 }}>
         <b>Current shop folders</b>
@@ -290,7 +337,11 @@ export default function RipImports() {
       </section>
 
       <section style={{ marginTop: 16, border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "white" }}>
-        <h2>Manual import test</h2>
+        <h2>Upload a printer log by hand</h2>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "#6b7280" }}>
+          Pick the printer software, choose the exported log file, and import. Rows that match a job ticket attach
+          automatically; anything the matcher is unsure about is left for <Link to="/app/erp/rip-import-review">RIP Import Review</Link> (step 3).
+        </p>
         <Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: 12 }}>
           <label>RIP source<br />
             <select name="source" defaultValue="versaworks" style={{ width: "100%", padding: 10 }}>
@@ -305,23 +356,44 @@ export default function RipImports() {
         </Form>
         {actionData ? (
           <div style={{ marginTop: 12, border: actionData.ok ? "1px solid #bbf7d0" : "1px solid #fecaca", background: actionData.ok ? "#f0fdf4" : "#fef2f2", padding: 12, borderRadius: 10 }}>
-            {actionData.ok ? `Imported ${actionData.fileName}: ${actionData.rowCount} row(s), ${actionData.matchedCount} matched, ${actionData.unmatchedCount} unmatched, ${moneyish(actionData.totalInkMl || 0)} ml ink.` : actionData.error}
+            {actionData.ok ? (
+              `Imported ${actionData.fileName}: ${actionData.rowCount} row(s), ${actionData.matchedCount} matched, ${actionData.unmatchedCount} unmatched, ${moneyish(actionData.totalInkMl || 0)} ml ink.`
+            ) : (
+              <>
+                <b>The log was not imported — nothing was changed.</b>
+                <details style={{ marginTop: 6, fontSize: 13 }}>
+                  <summary style={{ cursor: "pointer" }}>Technical detail</summary>
+                  <code style={{ display: "block", marginTop: 4, whiteSpace: "pre-wrap" }}>{actionData.error}</code>
+                </details>
+              </>
+            )}
           </div>
         ) : null}
       </section>
 
       <section style={{ marginTop: 16, border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "white" }}>
         <h2>Recent imports</h2>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Created</th><th align="left">Source</th><th align="left">File</th><th>Rows</th><th>Matched</th><th>Total ink</th><th>Total sqft</th></tr></thead>
-          <tbody>
-            {imports.map((item) => (
-              <tr key={item.id} style={{ borderTop: "1px solid #e5e7eb" }}>
-                <td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.source}</td><td>{item.fileName}</td><td align="center">{item.rowCount}</td><td align="center">{item.matchedCount}</td><td align="center">{moneyish(item.totalInkMl)} ml</td><td align="center">{moneyish(item.totalSqft)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {imports.length === 0 ? (
+          <p style={{ color: "#6b7280", fontSize: 13 }}>
+            No RIP imports yet. Upload a VersaWorks or RasterLink log above (or let the shop-folder auto-import deliver
+            one); each import then appears here with its row count, matched count, and total ink and area.
+          </p>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Created</th><th align="left">Source</th><th align="left">File</th><th>Rows</th><th>Matched</th><th>Total ink</th><th>Total sqft</th></tr></thead>
+            <tbody>
+              {imports.map((item) => (
+                <tr key={item.id} style={{ borderTop: "1px solid #e5e7eb" }}>
+                  <td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.source}</td><td>{item.fileName}</td><td align="center">{item.rowCount}</td><td align="center">{item.matchedCount}</td><td align="center">{moneyish(item.totalInkMl)} ml</td><td align="center">{moneyish(item.totalSqft)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p style={finePrint}>
+          Unmatched rows from these imports are fixed on <Link to="/app/erp/rip-import-review">RIP Import Review</Link>; the
+          resulting actual usage shows on <Link to="/app/erp/print-logs">Print Logs</Link>.
+        </p>
       </section>
     </main>
   );

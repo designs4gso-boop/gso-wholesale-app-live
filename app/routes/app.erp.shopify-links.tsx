@@ -1250,13 +1250,11 @@ export default function ShopifyLinksPage() {
     {actionData?.message ? <div className={`notice ${actionData.ok ? "success" : "error"}`}>{actionData.message}</div> : null}
 
     <section className="card wide completion-card">
-      <h2>Shopify Links status</h2>
+      <h2>Shopify Links — what this page does</h2>
       <div className="pill-row">
-        <Badge tone="green">Products linked</Badge>
-        <Badge tone="green">Collections linked</Badge>
-        <Badge tone="green">Batch sync guarded</Badge>
-        <Badge tone="green">Auto-sync available</Badge>
-        <Badge tone="green">Exception review ready</Badge>
+        <Badge tone="neutral">Links ERP recipes to Shopify products / collections</Badge>
+        <Badge tone="neutral">Batch sync requires confirmation</Badge>
+        <Badge tone="neutral">Exceptions are listed below</Badge>
       </div>
       <p className="muted"><strong>Use this page for linking only.</strong> Pricing tiers stay in templates. Cost and price updates happen later in Margin Review / Price Audit.</p>
       <p className="muted"><strong>Safe workflow:</strong> link source → sync small batch → verify health → use auto-sync → review exceptions → move to Margin Review.</p>
@@ -1287,7 +1285,7 @@ export default function ShopifyLinksPage() {
           <input type="hidden" name="autoSync" value="1" />
           <button type="submit" className="secondary">{actionData.batch.autoSync ? "Continue auto-sync now" : "Start auto-sync"}</button>
         </Form>
-        {actionData.batch.autoSync ? <form><button type="submit" className="secondary">Pause auto-sync</button></form> : null}
+        {actionData.batch.autoSync ? <a className="button secondary" href="/app/erp/shopify-links">Pause auto-sync (reload without continuing)</a> : null}
       </div> : <p><Badge tone="green">No more Shopify pages reported</Badge></p>}
       {actionData.batch.autoContinue ? <div className="notice success auto-sync-banner">Auto-sync is running. Keep this tab open; the next safe batch will start automatically.</div> : null}
       {actionData.batch.autoContinue ? <script dangerouslySetInnerHTML={{ __html: `setTimeout(function(){var f=document.getElementById('auto-sync-next-batch-form'); if(f) f.requestSubmit ? f.requestSubmit() : f.submit();}, 2500);` }} /> : null}
@@ -1331,7 +1329,7 @@ export default function ShopifyLinksPage() {
         <p><strong>Bag color:</strong> {actionData.ruleTest.bagColor}</p>
         <p><strong>Needs review:</strong> {actionData.ruleTest.needsReview}</p>
       </div> : null}
-      <p className="muted">Next version can move these presets into database records. For now this gives you a safe tester before syncing large batches.</p>
+      <p className="muted"> For now this gives you a safe tester before syncing large batches.</p>
     </section>
 
     <section className="grid two">

@@ -86,8 +86,8 @@ describe("owner standards (15B)", () => {
     expect(OWNER_STANDARDS.printSetupPerDesign.value).toBeCloseTo(1.0, 10);
     expect(OWNER_STANDARDS.weedingPerPage54x54.value).toBeCloseTo(20 / 15, 10);
     expect(OWNER_STANDARDS.packoutPerBox.value).toBeCloseTo(2.0, 10);
-    expect(OWNER_STANDARDS.machineRecoveryPerHour.value).toBe(8);
-    expect(OWNER_STANDARDS.machineRecoveryPerHour.status).toBe("provisional");
+    expect(OWNER_STANDARDS.machineRecoveryPerHour.value).toBe(5); // OWNER APPROVED 2026-10-07: machine recovery $5/hr (was $8/hr provisional); only machine-recovery lines moved.
+    expect(OWNER_STANDARDS.machineRecoveryPerHour.status).toBe("owner_verified");
   });
 
   it("calculator OWNER_LABOR is wired to the shared standards (one source, same numbers)", () => {

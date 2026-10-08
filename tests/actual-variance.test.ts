@@ -158,8 +158,8 @@ describe("partial actual preview and honesty", () => {
     expect(row.components.ink).toBe("calculated");
     expect(row.inkCost).toBeCloseTo(round2(6.72 * 0.176), 2);
     expect(row.components.machineTime).toBe("calculated");
-    expect(row.machineCost).toBeCloseTo(round2((20 / 60) * 8), 2);
-    expect(row.machineRatePerHour).toBe(8);
+    expect(row.machineCost).toBeCloseTo(round2((20 / 60) * 5), 2); // OWNER APPROVED 2026-10-07: machine recovery $5/hr (was $8/hr provisional); only machine-recovery lines moved.
+    expect(row.machineRatePerHour).toBe(5); // owner standard 2026-10-07
     expect(row.components.material).toBe("calculated");
     expect(row.materialCost).toBeCloseTo(round2(10 * 0.3156), 2);
     // total = ink + machine ONLY - material never inflates the headline number
@@ -195,12 +195,12 @@ describe("partial actual preview and honesty", () => {
 describe("variance and margin math", () => {
   it("variance dollars/percent and preview margins use safe 2-decimal rounding at the single rate", () => {
     const row = computeJobVariance({ job: makeJob(), entries: [makeEntry()], rates: RATES, printMaterials: MATERIALS });
-    // ink 1.18 + machine 2.67 (20 min @ $8/hr); material 3.16 excluded
-    expect(row.previewTotal).toBeCloseTo(3.85, 2);
-    expect(row.variance).toBeCloseTo(round2(3.85 - 36), 2);
-    expect(row.variancePct).toBeCloseTo(round2(((3.85 - 36) / 36) * 100), 2);
-    expect(row.previewProfit).toBeCloseTo(round2(100 - 3.85), 2);
-    expect(row.previewMarginPct).toBeCloseTo(round2(((100 - 3.85) / 100) * 100), 2);
+    // ink 1.18 + machine 1.67 (20 min @ $5/hr owner standard 2026-10-07); material 3.16 excluded
+    expect(row.previewTotal).toBeCloseTo(2.85, 2);
+    expect(row.variance).toBeCloseTo(round2(2.85 - 36), 2);
+    expect(row.variancePct).toBeCloseTo(round2(((2.85 - 36) / 36) * 100), 2);
+    expect(row.previewProfit).toBeCloseTo(round2(100 - 2.85), 2);
+    expect(row.previewMarginPct).toBeCloseTo(round2(((100 - 2.85) / 100) * 100), 2);
     expect(row.severity).toBe("high"); // preview is far below the estimate -> big negative variance
   });
 

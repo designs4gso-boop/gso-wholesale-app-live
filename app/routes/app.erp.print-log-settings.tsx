@@ -202,7 +202,7 @@ Get-ChildItem -Path $IncomingFolder -File -Include *.csv,*.txt,*.xml -Recurse | 
                 <div style={{ padding: 10, border: "1px solid #ccc", borderRadius: 8, wordBreak: "break-all", background: "#f7f7f7" }}>{data.uploadEndpoint}</div>
                 <Text as="p"><strong>Print Intake Agent Credential:</strong> {credentialStatusLabel(data.credential)}</Text>
                 <Text as="p" tone="subdued">
-                  The full token is never displayed (15G.1A). Rotating shows the NEW token exactly once so you can paste
+                  The full token is never displayed. Rotating shows the NEW token exactly once so you can paste
                   it into the agent configs; the old token stops working immediately.
                 </Text>
                 {actionData?.rotatedTokenOnce ? (
@@ -274,14 +274,14 @@ Get-ChildItem -Path $IncomingFolder -File -Include *.csv,*.txt,*.xml -Recurse | 
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">RasterLink automatic sync (tools/gso-rasterlink-sync.ps1 — Patch 13A.6B)</Text>
+              <Text as="h2" variant="headingMd">RasterLink automatic sync (scheduled sync script)</Text>
               <Text as="p" tone="subdued">
                 Dedicated watcher for RasterLink result CSVs. It polls the rasterlink incoming NAS folder, uploads each stable CSV to this app's
                 RIP import endpoint (source=rasterlink), and moves the file to processed or error with logs, retries, and error sidecars. Server
                 duplicates are treated as success. Files are never deleted — only moved.
               </Text>
               <InlineStack gap="200">
-                <Button onClick={() => navigate("/app/erp/rip-import-review")}>Review unmatched / ambiguous rows (13A.6C)</Button>
+                <Button onClick={() => navigate("/app/erp/rip-import-review")}>Review unmatched / ambiguous rows</Button>
               </InlineStack>
               <Text as="p">
                 <b>1. Token:</b> use the upload token revealed once when you rotate it above (the full value is never displayed on any page). It is

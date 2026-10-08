@@ -290,7 +290,10 @@ export async function loader({ request }: { request: Request }) {
     printSqft: sum(printLogs, (log) => log.sqft),
     printInkMl: sum(printLogs, (log) => log.inkMl),
     printMinutes: sum(printLogs, (log) => log.printMinutes),
-    materialStockValue: sum(materials, (material) => number(material.stockOnHand) * number(material.costPerUnit || material.calculatedUnitCost || material.purchaseCost)),
+    // 2026-10-07: stockOnHand is counted in PURCHASE units, so only the purchase-unit cost is a valid multiplier
+    // (costPerUnit / calculatedUnitCost are per base unit such as sqft or ml). Materials without a purchase cost are excluded and counted.
+    materialStockValue: sum(materials, (material) => (number(material.purchaseCost) > 0 ? number(material.stockOnHand) * number(material.purchaseCost) : 0)),
+    materialStockUncosted: materials.filter((material: any) => number(material.stockOnHand) > 0 && !(number(material.purchaseCost) > 0)).length,
     openPoValue: sum(openPurchaseRequests, (po) => po.estimatedCost),
   };
 
@@ -384,6 +387,42 @@ function Section({ title, children, action }: { title: string; children: React.R
   );
 }
 
+// Display-only: readable labels for the loader's row keys, and "not recorded"
+// for null/blank values so a missing field never reads as a confirmed zero.
+const MINI_TABLE_LABELS: Record<string, string> = {
+  name: "Material",
+  unit: "Unit",
+  stockOnHand: "Stock on hand",
+  reorderPoint: "Reorder point",
+  vendor: "Vendor",
+  sku: "SKU",
+  leadTimeDays: "Lead time (days)",
+  jobTicket: "Job ticket",
+  customer: "Customer",
+  status: "Status",
+  dueDate: "Due date",
+  revenue: "Revenue",
+  priority: "Priority",
+  requestNumber: "PO request",
+  materialName: "Material",
+  expectedArrivalDate: "Expected arrival",
+  estimatedCost: "Estimated cost",
+};
+
+const MINI_TABLE_MONEY_KEYS = new Set(["revenue", "estimatedCost"]);
+
+function miniTableValue(key: string, value: any) {
+  if (value === null || value === undefined || value === "") return "not recorded";
+  if (key.toLowerCase().includes("date")) return dateOnly(value);
+  if (MINI_TABLE_MONEY_KEYS.has(key)) return money(value);
+  if (key === "status" || key === "priority") return String(value).replaceAll("_", " ");
+  return String(value);
+}
+
+function humanizeKey(value: string) {
+  return String(value || "").replaceAll("_", " ").replaceAll(/([A-Z])/g, " $1").trim() || "not set";
+}
+
 function MiniTable({ rows, empty }: { rows: any[]; empty: string }) {
   if (!rows.length) return <p style={{ color: "#666" }}>{empty}</p>;
   return (
@@ -392,8 +431,8 @@ function MiniTable({ rows, empty }: { rows: any[]; empty: string }) {
         <div key={row.id || row.label || index} style={{ border: "1px solid #e4e4e4", borderRadius: 10, padding: 10, background: "#fafafa" }}>
           {Object.entries(row).filter(([key]) => key !== "id").map(([key, value]) => (
             <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
-              <strong style={{ textTransform: "capitalize" }}>{key.replaceAll("_", " ").replaceAll(/([A-Z])/g, " $1")}:</strong>
-              <span>{key.toLowerCase().includes("date") ? dateOnly(value) : String(value ?? "")}</span>
+              <strong>{MINI_TABLE_LABELS[key] || humanizeKey(key)}:</strong>
+              <span style={{ color: value === null || value === undefined || value === "" ? "#888" : undefined }}>{miniTableValue(key, value)}</span>
             </div>
           ))}
         </div>
@@ -402,9 +441,9 @@ function MiniTable({ rows, empty }: { rows: any[]; empty: string }) {
   );
 }
 
-function BarList({ rows, valueLabel = "value" }: { rows: { label: string; count?: number; value?: number }[]; valueLabel?: string }) {
+function BarList({ rows, valueLabel = "value", empty = "Nothing recorded yet." }: { rows: { label: string; count?: number; value?: number }[]; valueLabel?: string; empty?: string }) {
   const max = Math.max(...rows.map((row) => number(row.value ?? row.count)), 1);
-  if (!rows.length) return <p style={{ color: "#666" }}>No data yet.</p>;
+  if (!rows.length) return <p style={{ color: "#666" }}>{empty}</p>;
   return (
     <div style={{ display: "grid", gap: 10 }}>
       {rows.map((row) => {
@@ -412,7 +451,7 @@ function BarList({ rows, valueLabel = "value" }: { rows: { label: string; count?
         return (
           <div key={row.label}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
-              <strong>{row.label}</strong>
+              <strong>{String(row.label || "").replaceAll("_", " ") || "not set"}</strong>
               <span>{valueLabel === "money" ? money(value) : row.count != null && row.value != null ? `${row.count} | ${money(row.value)}` : value}</span>
             </div>
             <div style={{ height: 8, background: "#eee", borderRadius: 999, overflow: "hidden" }}>
@@ -431,125 +470,25 @@ export default function ReportsDashboard() {
   const report = data.actualReport || null;
   const actualMargin = metrics.jobRevenue > 0 ? ((metrics.jobRevenue - metrics.jobActualCost) / metrics.jobRevenue) * 100 : 0;
   const quoteMargin = metrics.quoteRevenue > 0 ? (metrics.quoteProfit / metrics.quoteRevenue) * 100 : 0;
+  const rangeLabel = data.range === "all" ? "all time" : `last ${metrics.rangeDays} days`;
+
+  // Display-only guards: a zero that comes from "nothing recorded" renders as
+  // "not recorded", never as a confirmed $0 / 0%.
+  const hasFinalized = Boolean(report && report.exec.finalizedJobs > 0);
+  const hasQuotes = counts.quotes > 0;
+  const hasJobs = counts.jobs > 0;
+  const hasPrintLogs = counts.printLogRows > 0;
+  const hasStockValue = metrics.materialStockValue > 0;
+  const hasOpenPos = counts.openPurchaseRequests > 0;
+  const NOT_RECORDED = "not recorded";
 
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto", padding: 24 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
         <div>
           <Link to="/app">← Dashboard</Link>
           <h1 style={{ margin: "8px 0 4px", fontSize: 26 }}>Reports Dashboard</h1>
-      {report ? (
-        <section style={{ border: "2px solid #b45309", borderRadius: 14, padding: 16, background: "white", marginTop: 16 }}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>Actual-Cost Profitability (finalized jobs only)</h2>
-          <p style={{ fontSize: 12, color: "#666", margin: "4px 0 10px" }}>
-            Finalized-only policy: totals below come from locked final costs + immutable finalize snapshots. {report.exec.openJobs} open/unfinalized job(s) are EXCLUDED (incomplete data). {report.exec.legacyJobs ? `${report.exec.legacyJobs} legacy final(s) use columns only.` : ""} Pricing is never changed automatically.
-          </p>
-          {/* 1. Executive summary */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
-            <div><b>{report.exec.finalizedJobs}</b><div style={{ fontSize: 12, color: "#666" }}>Finalized jobs</div></div>
-            <div><b>{money(report.exec.revenue)}</b><div style={{ fontSize: 12, color: "#666" }}>Revenue</div></div>
-            <div><b>{money(report.exec.actualCost)}</b><div style={{ fontSize: 12, color: "#666" }}>Actual cost</div></div>
-            <div><b>{money(report.exec.profit)}</b><div style={{ fontSize: 12, color: "#666" }}>Profit</div></div>
-            <div><b>{pct(report.exec.weightedMarginPct)}</b><div style={{ fontSize: 12, color: "#666" }}>Weighted margin</div></div>
-            <div><b>{money(report.exec.varianceDollars)}</b><div style={{ fontSize: 12, color: "#666" }}>Cost variance vs estimate</div></div>
-            <div><b>{report.exec.belowFloorJobs}</b><div style={{ fontSize: 12, color: "#666" }}>Below family floor</div></div>
-            <div><b>{report.exec.warningJobs}</b><div style={{ fontSize: 12, color: "#666" }}>Warning finalizations</div></div>
-            <div><b>{report.exec.reopenedJobs}</b><div style={{ fontSize: 12, color: "#666" }}>Reopened</div></div>
-            <div><b>{money(report.exec.reprintCost)}</b><div style={{ fontSize: 12, color: "#666" }}>Reprint cost</div></div>
-            <div><b>{report.exec.topLeakageFamily}</b><div style={{ fontSize: 12, color: "#666" }}>Lowest-margin family</div></div>
-            <div><b>{report.exec.topProfitFamily}</b><div style={{ fontSize: 12, color: "#666" }}>Top profit family</div></div>
-          </div>
-          {/* Filters + exports */}
-          <form method="get" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end", marginTop: 12, fontSize: 12 }}>
-            <input type="hidden" name="range" value={data.range} />
-            <label>Family<br /><select name="rfamily" defaultValue={report.filters.rfamily}><option value="">All</option>{["sticker-bags","standard-jars","premium-jars","stickers-labels","banners","dtp-bags","default"].map((family: string) => <option key={family} value={family}>{family}</option>)}</select></label>
-            <label>Customer contains<br /><input name="rcustomer" defaultValue={report.filters.rcustomer} /></label>
-            <label>Actor contains<br /><input name="ractor" defaultValue={report.filters.ractor} /></label>
-            <label>Margin below %<br /><input name="rbelow" type="number" step="1" defaultValue={report.filters.rbelow || ""} style={{ width: 90 }} /></label>
-            <label><input type="checkbox" name="rwarnings" value="1" defaultChecked={report.filters.rwarnings} /> Warnings only</label>
-            <label><input type="checkbox" name="rreopened" value="1" defaultChecked={report.filters.rreopened} /> Reopened only</label>
-            <label>Variance<br /><select name="rvariance" defaultValue={report.filters.rvariance}><option value="">Any</option><option value="pos">Over estimate</option><option value="neg">Under estimate</option></select></label>
-            <button type="submit">Apply filters</button>
-            {["jobs","families","products","vendors","feedback"].map((kind: string) => <a key={kind} href={`?range=${data.range}&export=${kind}`} style={{ padding: "6px 10px", border: "1px solid #ccc", borderRadius: 8, textDecoration: "none" }}>CSV: {kind}</a>)}
-          </form>
-          {/* 2. Job profitability */}
-          <div style={{ overflowX: "auto", marginTop: 12 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Finalized</th><th align="left">Ticket</th><th align="left">Customer</th><th align="left">Product</th><th>Family</th><th>Qty</th><th>Est cost</th><th>Final cost</th><th>Final profit</th><th>Final margin</th><th>Var $</th><th>Var %</th><th align="left">Gate</th><th align="left">Actor</th><th align="left">Flags</th></tr></thead>
-              <tbody>
-                {report.rows.map((row: any) => (
-                  <tr key={row.jobId} style={{ borderTop: "1px solid #e5e7eb", background: (report.leakage[row.jobId] || []).length ? "#fffbeb" : undefined }}>
-                    <td>{row.finalizedAt ? new Date(row.finalizedAt).toLocaleDateString() : ""}{row.legacyFinal ? " (legacy final)" : ""}</td>
-                    <td><Link to={`/app/erp/production?job=${row.jobId}`}>{row.jobTicket}</Link></td>
-                    <td>{row.customerLabel}</td>
-                    <td>{row.productLabel}</td>
-                    <td align="center">{row.family}</td>
-                    <td align="center">{row.quantity.toLocaleString()}</td>
-                    <td align="center">{money(row.estimatedCost)}</td>
-                    <td align="center">{money(row.finalCost)}</td>
-                    <td align="center">{money(row.finalProfit)}</td>
-                    <td align="center">{pct(row.finalMarginPct)}</td>
-                    <td align="center">{money(row.varianceDollars)}</td>
-                    <td align="center">{row.variancePct == null ? "unavailable" : pct(row.variancePct)}</td>
-                    <td>{row.gateStatus}{row.finalizeReason ? ` — ${row.finalizeReason}` : ""}{row.reopenCount ? ` — reopened x${row.reopenCount}` : ""}</td>
-                    <td>{row.finalizedBy}</td>
-                    <td style={{ color: "#92400e" }}>{(report.leakage[row.jobId] || []).join("; ") || "—"}</td>
-                  </tr>
-                ))}
-                {!report.rows.length ? <tr><td colSpan={15} style={{ padding: 10, color: "#666" }}>No finalized jobs in this range/filter.</td></tr> : null}
-              </tbody>
-            </table>
-          </div>
-          {/* 3-6. Aggregates */}
-          {[["Families", report.families], ["Products / SKUs", report.products], ["Customers (provisional grouping: email, then company, then name)", report.customers], ["Vendors / DTP", report.vendors], ["Quantity bands", report.bands]].map(([title, rows]: any) => (
-            <div key={title} style={{ marginTop: 14 }}>
-              <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>{title}</h3>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                  <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Group</th><th>Jobs</th><th>Units</th><th>Revenue</th><th>Actual cost</th><th>Profit</th><th>Weighted margin</th><th>Var $</th><th>Var %</th><th>Below floor</th><th>Warnings</th><th>Reprint $</th><th>Labor var $</th><th>Freight var $</th><th>Vendor var $</th></tr></thead>
-                  <tbody>
-                    {rows.map((row: any) => (
-                      <tr key={row.key} style={{ borderTop: "1px solid #e5e7eb" }}>
-                        <td>{row.label}</td><td align="center">{row.jobs}</td><td align="center">{row.units.toLocaleString()}</td>
-                        <td align="center">{money(row.revenue)}</td><td align="center">{money(row.actualCost)}</td><td align="center">{money(row.profit)}</td>
-                        <td align="center"><b>{pct(row.weightedMarginPct)}</b></td>
-                        <td align="center">{money(row.varianceDollars)}</td><td align="center">{row.variancePct == null ? "unavailable" : pct(row.variancePct)}</td>
-                        <td align="center">{row.belowFloorJobs}</td><td align="center">{row.warningJobs}</td>
-                        <td align="center">{money(row.reprintCost)}</td><td align="center">{money(row.laborVarianceDollars)}</td>
-                        <td align="center">{money(row.freightVarianceDollars)}</td><td align="center">{money(row.vendorVarianceDollars)}</td>
-                      </tr>
-                    ))}
-                    {!rows.length ? <tr><td colSpan={15} style={{ padding: 8, color: "#666" }}>No finalized data.</td></tr> : null}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
-          {/* 10. Pricing feedback + owner review queue */}
-          <div style={{ marginTop: 14 }}>
-            <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>Pricing Feedback (owner review — never automatic)</h3>
-            <p style={{ fontSize: 12, color: "#666", margin: "0 0 8px" }}>Suggestions need 3+ comparable finalized jobs (same family/product/quantity band); 5+ = high confidence. Accepting records a decision only — apply changes manually in Product Setup / Vendor Cost Book / owner standards / DTP ladder.</p>
-            {report.feedback.length ? report.feedback.map((suggestion: any) => (
-              <div key={suggestion.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, marginBottom: 8, fontSize: 12, background: suggestion.decision ? "#f0fdf4" : "#fffbeb" }}>
-                <b>{suggestion.message}</b> <span style={{ color: "#666" }}>({suggestion.confidence} confidence — {suggestion.jobCount} jobs, {suggestion.dateRange})</span>
-                <div>Current: {suggestion.currentStandard} · Observed: {suggestion.actualObserved}{suggestion.variancePct != null ? ` · Variance ${Number(suggestion.variancePct).toFixed(1)}%` : ""} · Next step: {suggestion.projectedEffect}</div>
-                <div style={{ color: "#666" }}>Jobs: {suggestion.supportingJobs.join(", ")}</div>
-                {suggestion.decision ? (
-                  <div style={{ color: "#166534", fontWeight: 700 }}>Decision: {suggestion.decision.status} by {suggestion.decision.actor} ({new Date(suggestion.decision.at).toLocaleDateString()}){suggestion.decision.note ? ` — ${suggestion.decision.note}` : ""}</div>
-                ) : (
-                  <Form method="post" style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
-                    <input type="hidden" name="intent" value="reviewPricingFeedback" />
-                    <input type="hidden" name="suggestionId" value={suggestion.id} />
-                    <input name="decisionNote" placeholder="Optional note" style={{ padding: 4 }} />
-                    {["accepted", "dismissed", "deferred"].map((decision: string) => <button key={decision} type="submit" name="decision" value={decision} style={{ padding: "4px 10px" }}>{decision}</button>)}
-                  </Form>
-                )}
-              </div>
-            )) : <p style={{ fontSize: 12, color: "#666" }}>No suggestions — fewer than 3 comparable finalized jobs per group, or actuals track estimates.</p>}
-          </div>
-        </section>
-      ) : null}
-          <p style={{ margin: 0, color: "#666" }}>Owner-level snapshot of sales, production, purchasing, inventory, print logs, and profitability.</p>
+          <p style={{ margin: 0, color: "#666" }}>Owner snapshot of sales, profitability, production, purchasing, inventory and print logs for the {rangeLabel}.</p>
         </div>
         <form method="get" style={{ display: "flex", gap: 8, alignItems: "end" }}>
           <div>
@@ -566,63 +505,198 @@ export default function ReportsDashboard() {
         </form>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12, marginTop: 18 }}>
-        <MetricCard label="Quote Revenue" value={money(metrics.quoteRevenue)} sub={`Quote margin ${pct(quoteMargin)}`} />
-        <MetricCard label="Paid Revenue" value={money(metrics.paidRevenue)} sub={`Approved pipeline ${money(metrics.approvedRevenue)}`} />
-        <MetricCard label="Production Revenue" value={money(metrics.jobRevenue)} sub={`Actual margin ${pct(actualMargin)}`} />
-        <MetricCard label="Final Profit" value={money(metrics.jobFinalProfit)} sub={`Actual cost ${money(metrics.jobActualCost)}`} />
-        <MetricCard label="Open Quote Value" value={money(metrics.openQuoteValue)} sub={`${counts.quotes} quote(s) in range`} />
-        <MetricCard label="Print Logs" value={`${counts.printLogRows}`} sub={`${metrics.printSqft.toFixed(2)} sqft | ${metrics.printInkMl.toFixed(2)} ml | ${metrics.printMinutes.toFixed(2)} min`} />
-        <MetricCard label="Inventory Value" value={money(metrics.materialStockValue)} sub={`${counts.lowStock} low-stock material(s)`} />
-        <MetricCard label="Open PO Value" value={money(metrics.openPoValue)} sub={`${counts.openPurchaseRequests} open | ${counts.latePurchases} late`} />
+      {report ? (
+        <section style={{ border: "2px solid #b45309", borderRadius: 14, padding: 16, background: "white", marginTop: 16 }}>
+          <h2 style={{ margin: 0, fontSize: 18 }}>Actual profitability (finalized jobs only)</h2>
+          <p style={{ fontSize: 12, color: "#666", margin: "4px 0 10px" }}>
+            Only jobs whose final costs have been locked are counted. {report.exec.openJobs} open/unfinalized job(s) are EXCLUDED because their costs are not final yet.
+            {report.exec.legacyJobs ? ` ${report.exec.legacyJobs} older job(s) were finalized before snapshots existed and use stored totals only.` : ""} Nothing here changes pricing automatically.
+          </p>
+          {!hasFinalized ? (
+            <p style={{ fontSize: 13, color: "#92400e", background: "#fffbeb", padding: 10, borderRadius: 8, margin: "0 0 10px" }}>
+              No finalized jobs in this range{report.filters.rfamily || report.filters.rcustomer || report.filters.ractor || report.filters.rbelow || report.filters.rwarnings || report.filters.rreopened || report.filters.rvariance ? " with these filters" : ""}. Finalize a job's actual cost in Production to see real margin here. Totals below show "{NOT_RECORDED}" rather than zero.
+            </p>
+          ) : null}
+          {/* 1. Executive summary */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+            <div><b>{report.exec.finalizedJobs}</b><div style={{ fontSize: 12, color: "#666" }}>Finalized jobs</div></div>
+            <div><b>{hasFinalized ? money(report.exec.revenue) : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Revenue</div></div>
+            <div><b>{hasFinalized ? money(report.exec.actualCost) : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Actual cost</div></div>
+            <div><b>{hasFinalized ? money(report.exec.profit) : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Profit</div></div>
+            <div><b>{hasFinalized ? pct(report.exec.weightedMarginPct) : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Margin (weighted by revenue)</div></div>
+            <div><b>{hasFinalized ? money(report.exec.varianceDollars) : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Actual cost vs estimate</div></div>
+            <div><b>{hasFinalized ? report.exec.belowFloorJobs : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Jobs below family margin floor</div></div>
+            <div><b>{hasFinalized ? report.exec.warningJobs : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Finalized with warnings</div></div>
+            <div><b>{hasFinalized ? report.exec.reopenedJobs : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Reopened after finalizing</div></div>
+            <div><b>{hasFinalized ? money(report.exec.reprintCost) : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Reprint cost</div></div>
+            <div><b>{hasFinalized && report.exec.topLeakageFamily !== "none" ? report.exec.topLeakageFamily : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Lowest-margin family</div></div>
+            <div><b>{hasFinalized && report.exec.topProfitFamily !== "none" ? report.exec.topProfitFamily : NOT_RECORDED}</b><div style={{ fontSize: 12, color: "#666" }}>Most profitable family</div></div>
+          </div>
+          {/* Filters + exports */}
+          <form method="get" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end", marginTop: 12, fontSize: 12 }}>
+            <input type="hidden" name="range" value={data.range} />
+            <label>Product family<br /><select name="rfamily" defaultValue={report.filters.rfamily}><option value="">All</option>{["sticker-bags","standard-jars","premium-jars","stickers-labels","banners","dtp-bags","default"].map((family: string) => <option key={family} value={family}>{family}</option>)}</select></label>
+            <label>Customer contains<br /><input name="rcustomer" defaultValue={report.filters.rcustomer} /></label>
+            <label>Finalized by (name contains)<br /><input name="ractor" defaultValue={report.filters.ractor} /></label>
+            <label>Margin below %<br /><input name="rbelow" type="number" step="1" defaultValue={report.filters.rbelow || ""} style={{ width: 90 }} /></label>
+            <label><input type="checkbox" name="rwarnings" value="1" defaultChecked={report.filters.rwarnings} /> Finalized with warnings only</label>
+            <label><input type="checkbox" name="rreopened" value="1" defaultChecked={report.filters.rreopened} /> Reopened only</label>
+            <label>Cost vs estimate<br /><select name="rvariance" defaultValue={report.filters.rvariance}><option value="">Any</option><option value="pos">Cost over estimate</option><option value="neg">Cost under estimate</option></select></label>
+            <button type="submit">Apply filters</button>
+            <span style={{ color: "#666" }}>Download CSV:</span>
+            {["jobs","families","products","vendors","feedback"].map((kind: string) => <a key={kind} href={`?range=${data.range}&export=${kind}`} style={{ padding: "6px 10px", border: "1px solid #ccc", borderRadius: 8, textDecoration: "none" }}>{kind}</a>)}
+          </form>
+          {/* 2. Job profitability */}
+          <h3 style={{ margin: "14px 0 6px", fontSize: 15 }}>Finalized jobs</h3>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Finalized</th><th align="left">Job ticket</th><th align="left">Customer</th><th align="left">Product</th><th>Family</th><th>Qty</th><th>Est. cost</th><th>Final cost</th><th>Final profit</th><th>Final margin</th><th>Cost var ($)</th><th>Cost var (%)</th><th align="left">Finalize check</th><th align="left">Finalized by</th><th align="left">Margin flags</th></tr></thead>
+              <tbody>
+                {report.rows.map((row: any) => (
+                  <tr key={row.jobId} style={{ borderTop: "1px solid #e5e7eb", background: (report.leakage[row.jobId] || []).length ? "#fffbeb" : undefined }}>
+                    <td>{row.finalizedAt ? new Date(row.finalizedAt).toLocaleDateString() : NOT_RECORDED}{row.legacyFinal ? " (older job, stored totals)" : ""}</td>
+                    <td><Link to={`/app/erp/production?job=${row.jobId}`}>{row.jobTicket}</Link></td>
+                    <td>{row.customerLabel}</td>
+                    <td>{row.productLabel}</td>
+                    <td align="center">{row.family}</td>
+                    <td align="center">{row.quantity.toLocaleString()}</td>
+                    <td align="center">{row.estimatedCost > 0 ? money(row.estimatedCost) : NOT_RECORDED}</td>
+                    <td align="center">{money(row.finalCost)}</td>
+                    <td align="center">{money(row.finalProfit)}</td>
+                    <td align="center">{pct(row.finalMarginPct)}</td>
+                    <td align="center">{row.estimatedCost > 0 ? money(row.varianceDollars) : NOT_RECORDED}</td>
+                    <td align="center">{row.variancePct == null ? NOT_RECORDED : pct(row.variancePct)}</td>
+                    <td>{row.gateStatus}{row.finalizeReason ? ` — ${row.finalizeReason}` : ""}{row.reopenCount ? ` — reopened x${row.reopenCount}` : ""}</td>
+                    <td>{row.finalizedBy}</td>
+                    <td style={{ color: "#92400e" }}>{(report.leakage[row.jobId] || []).join("; ") || "none"}</td>
+                  </tr>
+                ))}
+                {!report.rows.length ? <tr><td colSpan={15} style={{ padding: 10, color: "#666" }}>No finalized jobs in this range or filter.</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+          {/* 3-6. Aggregates */}
+          {[["By product family", report.families, ""], ["By product", report.products, ""], ["By customer", report.customers, "Grouped by email, then company, then name — treat as approximate until customer records are unified."], ["By vendor (outsourced / DTP work)", report.vendors, ""], ["By quantity band", report.bands, ""]].map(([title, rows, note]: any) => (
+            <div key={title} style={{ marginTop: 14 }}>
+              <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>{title}</h3>
+              {note ? <p style={{ fontSize: 11, color: "#666", margin: "0 0 6px" }}>{note}</p> : null}
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Group</th><th>Jobs</th><th>Units</th><th>Revenue</th><th>Actual cost</th><th>Profit</th><th>Margin</th><th>Cost var ($)</th><th>Cost var (%)</th><th>Below floor</th><th>Warnings</th><th>Reprint ($)</th><th>Labor var ($)</th><th>Freight var ($)</th><th>Vendor var ($)</th></tr></thead>
+                  <tbody>
+                    {rows.map((row: any) => (
+                      <tr key={row.key} style={{ borderTop: "1px solid #e5e7eb" }}>
+                        <td>{row.label}</td><td align="center">{row.jobs}</td><td align="center">{row.units.toLocaleString()}</td>
+                        <td align="center">{money(row.revenue)}</td><td align="center">{money(row.actualCost)}</td><td align="center">{money(row.profit)}</td>
+                        <td align="center"><b>{pct(row.weightedMarginPct)}</b></td>
+                        <td align="center">{row.estimatedCost > 0 ? money(row.varianceDollars) : NOT_RECORDED}</td><td align="center">{row.variancePct == null ? NOT_RECORDED : pct(row.variancePct)}</td>
+                        <td align="center">{row.belowFloorJobs}</td><td align="center">{row.warningJobs}</td>
+                        <td align="center">{money(row.reprintCost)}</td><td align="center">{money(row.laborVarianceDollars)}</td>
+                        <td align="center">{money(row.freightVarianceDollars)}</td><td align="center">{money(row.vendorVarianceDollars)}</td>
+                      </tr>
+                    ))}
+                    {!rows.length ? <tr><td colSpan={15} style={{ padding: 8, color: "#666" }}>No finalized jobs to group yet.</td></tr> : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+          {/* 10. Pricing feedback + owner review queue */}
+          <div style={{ marginTop: 14 }}>
+            <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>Pricing feedback (owner review — never automatic)</h3>
+            <p style={{ fontSize: 12, color: "#666", margin: "0 0 8px" }}>A suggestion appears once 3 or more comparable finalized jobs (same family, product and quantity band) show actuals drifting from the standard; 5 or more = high confidence. Accepting only records your decision — apply the change yourself in Product Setup, Vendor Cost Book or owner standards.</p>
+            {report.feedback.length ? report.feedback.map((suggestion: any) => (
+              <div key={suggestion.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, marginBottom: 8, fontSize: 12, background: suggestion.decision ? "#f0fdf4" : "#fffbeb" }}>
+                <b>{suggestion.message}</b> <span style={{ color: "#666" }}>({suggestion.confidence} confidence — {suggestion.jobCount} jobs, {suggestion.dateRange})</span>
+                <div>Current standard: {suggestion.currentStandard} · Observed: {suggestion.actualObserved}{suggestion.variancePct != null ? ` · Variance ${Number(suggestion.variancePct).toFixed(1)}%` : ""} · Next step: {suggestion.projectedEffect}</div>
+                <div style={{ color: "#666" }}>Jobs: {suggestion.supportingJobs.join(", ")}</div>
+                {suggestion.decision ? (
+                  <div style={{ color: "#166534", fontWeight: 700 }}>Decision: {suggestion.decision.status} by {suggestion.decision.actor} ({new Date(suggestion.decision.at).toLocaleDateString()}){suggestion.decision.note ? ` — ${suggestion.decision.note}` : ""}</div>
+                ) : (
+                  <Form method="post" style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+                    <input type="hidden" name="intent" value="reviewPricingFeedback" />
+                    <input type="hidden" name="suggestionId" value={suggestion.id} />
+                    <input name="decisionNote" placeholder="Optional note" style={{ padding: 4 }} />
+                    {["accepted", "dismissed", "deferred"].map((decision: string) => <button key={decision} type="submit" name="decision" value={decision} style={{ padding: "4px 10px" }}>{decision}</button>)}
+                  </Form>
+                )}
+              </div>
+            )) : <p style={{ fontSize: 12, color: "#666" }}>No pricing suggestions yet. Either fewer than 3 comparable finalized jobs exist per group, or actual costs are tracking the estimates.</p>}
+          </div>
+        </section>
+      ) : null}
+
+      <h2 style={{ margin: "22px 0 8px", fontSize: 18 }}>Sales and pipeline ({rangeLabel})</h2>
+      <p style={{ margin: "0 0 10px", fontSize: 12, color: "#666" }}>From quotes created in the range. Quote margin uses the cost on each quote line, which is an estimate, not an actual.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <MetricCard label="Quoted revenue" value={hasQuotes ? money(metrics.quoteRevenue) : NOT_RECORDED} sub={hasQuotes ? `Est. quote margin ${pct(quoteMargin)} across ${counts.quotes} quote(s)` : "No quotes created in this range"} />
+        <MetricCard label="Paid / in production / completed" value={hasQuotes ? money(metrics.paidRevenue) : NOT_RECORDED} sub={hasQuotes ? `Approved, not yet paid: ${money(metrics.approvedRevenue)}` : "No quotes created in this range"} />
+        <MetricCard label="Open quote value" value={hasQuotes ? money(metrics.openQuoteValue) : NOT_RECORDED} sub={hasQuotes ? "Quotes not yet paid, in production, completed or cancelled" : "No quotes created in this range"} />
+        <MetricCard label="Open PO commitments" value={hasOpenPos ? money(metrics.openPoValue) : "No open POs"} sub={`${counts.openPurchaseRequests} open | ${counts.latePurchases} late | ${counts.followUpPurchases} need follow-up`} />
       </div>
 
-      <Section title="Action Needed" action={<Link to="/app/erp/production-calendar">Production Calendar</Link>}>
+      <h2 style={{ margin: "22px 0 8px", fontSize: 18 }}>Active production (estimates, not finalized)</h2>
+      <p style={{ margin: "0 0 10px", fontSize: 12, color: "#666" }}>All active jobs, priced from their line items. Costs here are estimates until a job is finalized; use the finalized section above for real margin.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <MetricCard label="Active job revenue" value={hasJobs ? money(metrics.jobRevenue) : NOT_RECORDED} sub={hasJobs ? `${counts.jobs} active job(s) | est. margin ${pct(actualMargin)}` : "No active jobs"} />
+        <MetricCard label="Est. profit on active jobs" value={hasJobs ? money(metrics.jobFinalProfit) : NOT_RECORDED} sub={hasJobs ? `Est. cost ${money(metrics.jobActualCost)} (actuals where recorded, otherwise estimates)` : "No active jobs"} />
+        <MetricCard label="Print logs in range" value={hasPrintLogs ? `${counts.printLogRows} row(s)` : NOT_RECORDED} sub={hasPrintLogs ? `${metrics.printSqft > 0 ? `${metrics.printSqft.toFixed(2)} sqft` : `sqft ${NOT_RECORDED}`} | ${metrics.printInkMl > 0 ? `${metrics.printInkMl.toFixed(2)} ml ink` : `ink ${NOT_RECORDED}`} | ${metrics.printMinutes > 0 ? `${metrics.printMinutes.toFixed(2)} print min` : `minutes ${NOT_RECORDED}`}` : "No RIP / print logs imported for this range"} />
+        <MetricCard label="Inventory value on hand" value={hasStockValue ? money(metrics.materialStockValue) : NOT_RECORDED} sub={hasStockValue ? `${counts.lowStock} of ${counts.activeMaterials} active material(s) at or below reorder point` : `${counts.activeMaterials} active material(s); no stock counts recorded`} /> {/* purchase-unit cost x stock on hand; materials with no purchase cost are excluded */}
+      </div>
+      <p style={{ margin: "10px 0 0", fontSize: 12, color: "#666" }}>
+        Not reported here yet (no data source): material waste, per-machine usage, and quote-to-order conversion rate. Setup coverage: {counts.vendors} vendor(s), {counts.costBookItems} active cost book item(s), {counts.activeMaterials} active material(s).
+      </p>
+
+      <Section title="Jobs needing attention" action={<Link to="/app/erp/production-calendar">Production calendar</Link>}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-          <MetricCard label="Overdue Jobs" value={String(counts.overdueJobs)} />
-          <MetricCard label="Due This Week" value={String(counts.dueThisWeek)} />
-          <MetricCard label="Rush / Critical" value={String(counts.rushJobs)} />
-          <MetricCard label="No Due Date" value={String(counts.noDueDateJobs)} />
+          <MetricCard label="Overdue jobs" value={String(counts.overdueJobs)} />
+          <MetricCard label="Due in the next 7 days" value={String(counts.dueThisWeek)} />
+          <MetricCard label="Rush / critical" value={String(counts.rushJobs)} />
+          <MetricCard label="Open jobs with no due date" value={String(counts.noDueDateJobs)} />
         </div>
       </Section>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Section title="Production Status">
-          <BarList rows={data.statusCounts} />
+        <Section title="Active jobs by status">
+          <BarList rows={data.statusCounts} empty="No active jobs." />
         </Section>
-        <Section title="Proof Status">
-          <BarList rows={data.proofCounts} />
-        </Section>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Section title="Top Customers" action={<Link to="/app/quotes">Quotes</Link>}>
-          <BarList rows={data.topCustomers} valueLabel="money" />
-        </Section>
-        <Section title="Top Products">
-          <BarList rows={data.topProducts} valueLabel="money" />
+        <Section title="Active jobs by proof status">
+          <BarList rows={data.proofCounts} empty="No active jobs." />
         </Section>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Section title="Low Stock Materials" action={<Link to="/app/erp/reorder-report">Reorder Report</Link>}>
-          <MiniTable rows={data.lowStockMaterials} empty="No low-stock materials right now." />
+        <Section title="Quotes by status" action={<Link to="/app/quotes">Quotes</Link>}>
+          <BarList rows={data.quoteStatusCounts} empty="No quotes created in this range." />
         </Section>
-        <Section title="Late / Follow-up POs" action={<Link to="/app/erp/purchase-requests">PO Requests</Link>}>
-          <MiniTable rows={data.latePurchases} empty="No late purchase orders right now." />
+        <Section title="Top customers by quoted revenue">
+          <BarList rows={data.topCustomers} valueLabel="money" empty="No quotes created in this range." />
         </Section>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Section title="Overdue Jobs">
+        <Section title="Top products by quoted revenue">
+          <BarList rows={data.topProducts} valueLabel="money" empty="No quote line items in this range." />
+        </Section>
+        <Section title="Low stock materials" action={<Link to="/app/erp/reorder-report">Reorder report</Link>}>
+          <MiniTable rows={data.lowStockMaterials} empty="No materials at or below their reorder point. Materials without a reorder point are not checked." />
+        </Section>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Section title="Late purchase orders" action={<Link to="/app/erp/purchase-requests">PO requests</Link>}>
+          <MiniTable rows={data.latePurchases} empty="No purchase orders past their expected arrival date." />
+        </Section>
+        <Section title="Overdue jobs">
           <MiniTable rows={data.overdueJobs} empty="No overdue jobs." />
         </Section>
-        <Section title="Rush / Critical Jobs">
-          <MiniTable rows={data.rushJobs} empty="No rush or critical jobs." />
-        </Section>
       </div>
 
-      <Section title="Recent Production Events">
+      <Section title="Rush / critical jobs">
+        <MiniTable rows={data.rushJobs} empty="No rush or critical jobs." />
+      </Section>
+
+      <Section title="Recent production events">
         {/* 15E.3: human-readable summaries — raw JSON only inside collapsed audit details */}
         {data.recentProductionEvents.length ? (
           <div style={{ display: "grid", gap: 8 }}>
@@ -666,34 +740,37 @@ export default function ReportsDashboard() {
         ) : <p style={{ color: "#666" }}>No recent production events.</p>}
       </Section>
 
-      <Section title="Historical Name Audit (dry run — read-only)">
-        {data.nameAudit ? (
-          <div>
-            <p style={{ fontSize: 12, color: "#666", margin: "0 0 8px" }}>
-              DRY RUN — nothing was changed. Only HIGH-confidence rows (the known placeholder-corruption pattern) are eligible for a future owner-approved backfill
-              (process: dry run → CSV → owner review → apply selected high-confidence IDs with per-record audit events preserving prior values — not built in this patch).
-            </p>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Type</th><th align="left">Record ID</th><th align="left">Related</th><th align="left">Current stored value</th><th align="left">Proposed display value</th><th align="left">Reason</th><th>Confidence</th></tr></thead>
-                <tbody>
-                  {data.nameAudit.map((row: any) => (
-                    <tr key={`${row.recordType}-${row.recordId}`} style={{ borderTop: "1px solid #e5e7eb", background: row.confidence === "high" ? "#fffbeb" : undefined }}>
-                      <td>{row.recordType}</td><td>{row.recordId.slice(0, 10)}…</td><td>{row.related || ""}</td>
-                      <td style={{ overflowWrap: "anywhere" }}>{row.current}</td><td>{row.proposed}</td><td>{row.reason}</td>
-                      <td align="center"><b>{row.confidence}</b></td>
-                    </tr>
-                  ))}
-                  {!data.nameAudit.length ? <tr><td colSpan={7} style={{ padding: 8, color: "#666" }}>No malformed historical names found.</td></tr> : null}
-                </tbody>
-              </table>
+      <Section title="Data cleanup: product name check (read-only)">
+        <details open={Boolean(data.nameAudit)}>
+          <summary style={{ cursor: "pointer", fontSize: 12, color: "#666" }}>Maintenance tool — finds quote and job line names that were stored as placeholders. Nothing is changed by running it.</summary>
+          {data.nameAudit ? (
+            <div style={{ marginTop: 8 }}>
+              <p style={{ fontSize: 12, color: "#666", margin: "0 0 8px" }}>
+                Read-only scan: nothing was changed. Rows marked high confidence match the known placeholder pattern and could be cleaned up in a future owner-approved step; the proposed value is what the app already shows on screen.
+              </p>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead><tr style={{ background: "#f3f4f6" }}><th align="left">Record type</th><th align="left">Quote / ticket</th><th align="left">Stored name</th><th align="left">Shown as</th><th align="left">Reason</th><th>Confidence</th><th align="left" style={{ color: "#999" }}>Record ID</th></tr></thead>
+                  <tbody>
+                    {data.nameAudit.map((row: any) => (
+                      <tr key={`${row.recordType}-${row.recordId}`} style={{ borderTop: "1px solid #e5e7eb", background: row.confidence === "high" ? "#fffbeb" : undefined }}>
+                        <td>{row.recordType === "QuoteItem" ? "Quote line" : row.recordType === "ProductionJobItem" ? "Job line" : row.recordType}</td><td>{row.related || NOT_RECORDED}</td>
+                        <td style={{ overflowWrap: "anywhere" }}>{row.current}</td><td>{row.proposed}</td><td>{row.reason}</td>
+                        <td align="center"><b>{row.confidence}</b></td>
+                        <td style={{ color: "#999", fontSize: 11 }}>{row.recordId.slice(0, 10)}…</td>
+                      </tr>
+                    ))}
+                    {!data.nameAudit.length ? <tr><td colSpan={7} style={{ padding: 8, color: "#666" }}>No placeholder names found in recent quotes and jobs.</td></tr> : null}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        ) : (
-          <p style={{ fontSize: 12, color: "#666" }}>
-            <a href={`?range=${data.range}&nameaudit=1`}>Run the dry-run historical name audit</a> — scans recent QuoteItem and ProductionJobItem names for placeholder corruption. Read-only; stored values are never changed.
-          </p>
-        )}
+          ) : (
+            <p style={{ fontSize: 12, color: "#666", marginTop: 8 }}>
+              <a href={`?range=${data.range}&nameaudit=1`}>Run the product name check</a> — scans the most recent 300 quote lines and 300 job lines. Read-only; stored values are never changed.
+            </p>
+          )}
+        </details>
       </Section>
     </div>
   );

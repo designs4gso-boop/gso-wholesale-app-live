@@ -593,7 +593,7 @@ export default function PricingHealth() {
               </Text>
               <Divider />
               <Text as="p" tone="subdued">
-                Pricing Health is read-only in this version. Future versions can add approval workflows, recommended price changes, and Shopify price sync after review.
+                Pricing Health is read-only: it reports, and never changes a price or writes to Shopify.
               </Text>
             </BlockStack>
           </Card>

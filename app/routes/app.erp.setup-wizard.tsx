@@ -142,7 +142,7 @@ export async function loader({ request }: { request: Request }) {
     queueReadyItems,
     queueConvertedItems,
   ] = await Promise.all([
-    db.erpAdminSetting.count({ where: { shop } }),
+    db.erpAdminSetting.count({ where: { shop, key: { notIn: [] }, NOT: [{ key: { startsWith: "ownerConfig." } }, { category: "pricing-feedback" }] } }),
     db.material.count({ where: { shop, active: true } }),
     db.machine.count({ where: { shop, active: true } }),
     db.vendor.count({ where: { shop, active: true } }),
@@ -350,10 +350,12 @@ export async function loader({ request }: { request: Request }) {
         `${activeAgentCredentials} active credential(s)`,
         `${queueReadyItems} queue item(s) ready to quote`,
         `${queueConvertedItems} queue item(s) converted`,
+        "Safety posture: agent reasoning OFF · agent execution OFF · worker manual only (no schedule) · Slack decision-only — live state on the Operations Hub",
       ],
       links: [
         { label: "Agent Security", url: "/app/erp/agent-security" },
         { label: "Agent Review Queue", url: "/app/erp/agent-review-queue" },
+        { label: "Operations Hub (safety switches)", url: "/app/erp/ops-hub" },
       ],
     },
     {

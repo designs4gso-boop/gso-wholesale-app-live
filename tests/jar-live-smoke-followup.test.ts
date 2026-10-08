@@ -38,11 +38,16 @@ const db = {
 const FIXTURE = JSON.parse(readFileSync("tests/fixtures/jar-live-smoke-100ml-tall-2026-10-05.json", "utf8"));
 const LIVE = FIXTURE.query as string;
 const compute = (q: string) => computeCanonicalJob({ db, shop: SHOP }, normalizeCanonicalInput(new URLSearchParams(q))!);
+// The live observation was captured at the then-provisional $8/hr machine recovery rate
+// (owner standard since 2026-10-07: $5/hr). The capture comparisons run with the historical
+// rate pinned explicitly so every non-machine line is still verified unchanged.
+const HISTORICAL_MACHINE_RATE = 8;
+const computeAt8 = (q: string) => computeCanonicalJob({ db, shop: SHOP }, { ...normalizeCanonicalInput(new URLSearchParams(q))!, equipmentRatePerHour: HISTORICAL_MACHINE_RATE });
 const line = (r: Awaited<ReturnType<typeof compute>>, key: string) => r.trueCost.lines.filter((l) => l.key === key).reduce((t, l) => t + l.amount, 0);
 
 describe("live smoke fixture — 100ml Tall Miron, 128, Side + Lid, AUTO, CMYK", () => {
   it("reproduces the live observation exactly (430.0861 / 3.3600, PROVISIONAL, CUT_PATH_ESTIMATE_REQUIRED)", async () => {
-    const r = await compute(LIVE);
+    const r = await computeAt8(LIVE);
     expect(r.status).toBe("PROVISIONAL");
     expect(r.totalCost).toBeCloseTo(430.0861, 4);
     expect(r.unitCost!).toBeCloseTo(3.36, 4);
@@ -52,7 +57,7 @@ describe("live smoke fixture — 100ml Tall Miron, 128, Side + Lid, AUTO, CMYK",
   });
 
   it("every line and total equals the pre-change capture", async () => {
-    const r = await compute(LIVE);
+    const r = await computeAt8(LIVE);
     expect(r.totalCost).toBe(FIXTURE.totalCost);
     expect(r.unitCost).toBe(FIXTURE.unitCost);
     expect(r.trueCost.lines.map((l) => ({ key: l.key, amount: l.amount }))).toEqual(FIXTURE.lines);
@@ -60,7 +65,7 @@ describe("live smoke fixture — 100ml Tall Miron, 128, Side + Lid, AUTO, CMYK",
   });
 
   it("piece counts are unchanged: 256 application events, 128 physical items, 2 per item, 2 weeding pages", async () => {
-    const d = (await compute(LIVE)).diagnostics;
+    const d = (await computeAt8(LIVE)).diagnostics;
     expect(d.applicationEvents).toBe(256);
     expect(d.physicalItems).toBe(128);
     expect(d.applicationsPerItem).toBe(2);
@@ -73,7 +78,7 @@ describe("live smoke fixture — 100ml Tall Miron, 128, Side + Lid, AUTO, CMYK",
   });
 
   it("owner-confirmation geometry warning remains intact on the live product", async () => {
-    const d = (await compute(LIVE)).diagnostics;
+    const d = (await computeAt8(LIVE)).diagnostics;
     expect(d.productSpec).toMatchObject({
       productKey: "miron/100ml_tall",
       authorityStatus: "CANONICAL_COSTING_PENDING_CONFIRMATION",
@@ -103,7 +108,7 @@ describe("ISSUE 1 — CUT_PATH_ESTIMATE_REQUIRED on a fixed Side + Lid jar", () 
   });
 
   it("the live job's provisional state is explained (length exact, rate borrowed) and remains PROVISIONAL", async () => {
-    const r = await compute(LIVE);
+    const r = await computeAt8(LIVE);
     expect(r.status).toBe("PROVISIONAL");
     expect(r.diagnostics.cutPathBasis).toMatchObject({ lengthExact: true, rateExact: false });
     expect(r.diagnostics.cutPathBasis!.bands.map((b) => b.group)).toEqual(["lid"]);
@@ -112,7 +117,7 @@ describe("ISSUE 1 — CUT_PATH_ESTIMATE_REQUIRED on a fixed Side + Lid jar", () 
   });
 
   it("a Side Only jar job carries no cut-path estimate flag (so the flag is lid-specific, not jar-wide)", async () => {
-    const r = await compute(LIVE.replace("&pjarlid=1", "").replace("pjarset=side_lid", "pjarset=side_only"));
+    const r = await computeAt8(LIVE.replace("&pjarlid=1", "").replace("pjarset=side_lid", "pjarset=side_only"));
     expect(r.reasons).not.toContain("CUT_PATH_ESTIMATE_REQUIRED");
     expect(r.reasons).toEqual([]);
     expect(r.diagnostics.cutPathBasis).toMatchObject({ lengthExact: true, rateExact: true, provisionalReason: null });
@@ -128,7 +133,7 @@ describe("ISSUE 1 — CUT_PATH_ESTIMATE_REQUIRED on a fixed Side + Lid jar", () 
 
 describe("ISSUE 2/3 — application authority reconciliation", () => {
   it("canonical application = 128 x (12 s + 10 s) / 3600 x $20 = 15.6444 (owner per-size timings)", async () => {
-    const r = await compute(LIVE);
+    const r = await computeAt8(LIVE);
     expect(line(r, "application")).toBeCloseTo(15.644444, 5);
     expect(JAR_APPLICATION_SECONDS_BY_SIZE["100ml_tall"]).toEqual({ side: 12, lid: 10, tamper: 12 });
     expect(APPLICATION_LABOR_RATE_PER_HOUR).toBe(20);
@@ -142,7 +147,7 @@ describe("ISSUE 2/3 — application authority reconciliation", () => {
   });
 
   it("the legacy $0.20/label figure is NOT the canonical value and does not enter the canonical cost", async () => {
-    const r = await compute(LIVE);
+    const r = await computeAt8(LIVE);
     const legacy = OWNER_STANDARDS.jarApplicationPerLabel.value * 256; // 51.20 — legacy 14C.2 diagnostics only
     expect(legacy).toBeCloseTo(51.2, 9);
     expect(line(r, "application")).not.toBeCloseTo(legacy, 2);
@@ -152,7 +157,7 @@ describe("ISSUE 2/3 — application authority reconciliation", () => {
   });
 
   it("the legacy 4x5 bag rate ($0.078125) never enters a jar cost", async () => {
-    const r = await compute(LIVE);
+    const r = await computeAt8(LIVE);
     const bagRate = OWNER_STANDARDS.bagApplicationPerLabel4x5.value;
     expect(bagRate).toBeCloseTo(0.078125, 9);
     expect(r.trueCost.lines.some((l) => Math.abs(l.amount - bagRate * 256) < 1e-6)).toBe(false);
@@ -161,7 +166,7 @@ describe("ISSUE 2/3 — application authority reconciliation", () => {
   });
 
   it("the canonical view and snapshot JSON carry the application breakdown and the cut-path basis", async () => {
-    const view = canonicalViewOf(await compute(LIVE));
+    const view = canonicalViewOf(await computeAt8(LIVE));
     const stored = JSON.parse(JSON.stringify(view)).diagnostics;
     expect(stored.applicationBreakdown.totalLabels).toBe(256);
     expect(stored.cutPathBasis.lengthExact).toBe(true);
@@ -208,9 +213,18 @@ describe("freezes", () => {
     expect(WEEDING_STANDARD.costPerPage).toBeCloseTo(1.333333, 6);
   });
 
-  it("3x3 sticker control remains 84.143290", async () => {
-    const r = await compute("pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=auto&pwhitelayers=0&pglosslayers=0");
-    expect(r.totalCost).toBeCloseTo(84.14329, 5);
+  it("3x3 sticker control = 79.617252 at the $5/hr owner machine rate (84.143290 at the historical $8)", async () => {
+    const q = "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=auto&pwhitelayers=0&pglosslayers=0";
+    const r = await compute(q);
+    expect(r.totalCost).toBeCloseTo(79.617252, 5);
+    expect((await computeAt8(q)).totalCost).toBeCloseTo(84.14329, 5);
+    // the live jar observation at the approved $5/hr: only the machine line moves
+    const live5 = await compute(LIVE);
+    expect(live5.totalCost).toBeCloseTo(428.5026, 4);
+    expect(live5.unitCost!).toBeCloseTo(3.3477, 4);
+    const live8 = await computeAt8(LIVE);
+    const moved = live8.trueCost.lines.filter((l8) => Math.abs(l8.amount - (live5.trueCost.lines.find((l5) => l5.key === l8.key)?.amount ?? 0)) > 1e-9).map((l) => l.key);
+    expect(moved).toEqual(["machine"]);
     expect(r.diagnostics.applicationBreakdown).toBeNull();
   });
 });

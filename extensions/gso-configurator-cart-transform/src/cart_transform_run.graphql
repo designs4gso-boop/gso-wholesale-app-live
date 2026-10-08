@@ -19,6 +19,16 @@ query CartTransformRunInput {
         value
       }
 
+      gsoPriceEach: attribute(key: "_GSO Price Each") {
+        key
+        value
+      }
+
+      gsoMatchedTier: attribute(key: "_GSO Matched Tier") {
+        key
+        value
+      }
+
       material: attribute(key: "Material") {
         key
         value

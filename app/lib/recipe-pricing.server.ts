@@ -237,7 +237,7 @@ export function calculateInHouseRecipe(recipe: any, quantity: number, selectedFi
   const setupHours = safeNumber(recipe.laborMinutes) / 60;
   const operatorRate = safeNumber(recipe.operatorLaborPct, 25);
   // 15F.0K.4B (owner-approved): machine recovery uses the ONE authoritative
-  // owner rate ($8/hr via machineRatePerHour, env-overridable) — the stale
+  // owner rate ($5/hr via machineRatePerHour, env-overridable) — the stale
   // Machine.costPerHour column ($5 seeded records) can never silently
   // underprice recipe-generated quotes again. Machine speed still comes from
   // the record; only the RATE is centralized.

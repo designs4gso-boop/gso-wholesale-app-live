@@ -1922,8 +1922,9 @@ export default function QuotesPage() {
   }
 
   let tone: "success" | "warning" | "critical" = "success";
-  if (totals.margin < 25) tone = "critical";
-  else if (totals.margin < 40) tone = "warning";
+  const hasPricedItems = Number(totals.revenue || 0) > 0;
+  if (hasPricedItems && totals.margin < 25) tone = "critical";
+  else if (hasPricedItems && totals.margin < 40) tone = "warning";
 
   return (
     <Page
@@ -1938,20 +1939,40 @@ export default function QuotesPage() {
       ]}
     >
       <Layout>
+        {/* 2026-10-05 staff flow strip: display only — same state, same handlers. */}
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="200">
+              <InlineStack align="space-between" blockAlign="center" wrap>
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingMd">{editingId ? "Editing an existing quote" : "Building a new quote"}</Text>
+                  <Text as="p" tone="subdued">
+                    Order of work: 1 Customer → 2 Product → 3 Quantity → 4 Material / finish → 5 Cost → 6 Price → 7 Margin → 8 Notes → 9 Save.
+                    Jars, sticker/stock bags, labels and banners get their true cost from the Cost Calculator; this page prices Product Setup recipes and manual one-offs.
+                  </Text>
+                </BlockStack>
+                <InlineStack gap="200">
+                  <Button variant="primary" onClick={resetQuote}>New quote</Button>
+                  <Button onClick={() => navigate("/app/erp/cost-calculator")}>Open Cost Calculator</Button>
+                </InlineStack>
+              </InlineStack>
+              {lastMessage ? <Text as="p" tone={fetcher.data?.error ? "critical" : "subdued"}>{lastMessage}</Text> : null}
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
               <InlineStack align="space-between" blockAlign="center">
                 <BlockStack gap="100">
-                  <Text as="h2" variant="headingMd">Quote Details</Text>
+                  <Text as="h2" variant="headingMd">1 · Customer</Text>
                   <Text as="p" tone="subdued">
-                    Pick a product setup recipe first whenever possible. Manual lines are still available for one-off work.
+                    Who is this quote for. Customer tier only changes terms wording; it never changes cost.
                   </Text>
                 </BlockStack>
-                <Badge tone={tone}>Margin {totals.margin.toFixed(1)}%</Badge>
+                <Badge tone={tone}>{hasPricedItems ? `Margin ${totals.margin.toFixed(1)}% — ${totals.margin < 40 ? "below 40% floor" : "meets floor"}` : "No priced items yet"}</Badge>
               </InlineStack>
-
-              {lastMessage ? <Text as="p" tone={fetcher.data?.error ? "critical" : "subdued"}>{lastMessage}</Text> : null}
 
               <InlineStack gap="300">
                 <TextField label="Customer Name" value={customerName} onChange={setCustomerName} autoComplete="off" />
@@ -1961,7 +1982,6 @@ export default function QuotesPage() {
               <InlineStack gap="300">
                 <TextField label="Email" value={email} onChange={setEmail} autoComplete="off" />
                 <TextField label="Phone" value={phone} onChange={setPhone} autoComplete="off" />
-                <Select label="Status" value={status} onChange={setStatus} options={statuses} />
                 <Select
                   label="Customer tier"
                   value={customerTier}
@@ -1984,22 +2004,24 @@ export default function QuotesPage() {
 
         <Layout.Section>
           <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Optional Shopify Product Picker</Text>
-              <InlineStack gap="300" blockAlign="end">
-                <TextField
-                  label="Search Shopify products"
-                  value={productSearch}
-                  onChange={setProductSearch}
-                  autoComplete="off"
-                  placeholder="Example: 4x5 Custom Pouch"
-                />
-                <Button onClick={searchProducts}>Search Products</Button>
-              </InlineStack>
-              <Text as="p" tone="subdued">
-                Use this only when quoting an item that has not been set up in Product Setup yet.
-              </Text>
-            </BlockStack>
+            <details>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>Advanced: look up a Shopify product (identity only — never sets cost or price)</summary>
+              <BlockStack gap="300">
+                <InlineStack gap="300" blockAlign="end">
+                  <TextField
+                    label="Search Shopify products"
+                    value={productSearch}
+                    onChange={setProductSearch}
+                    autoComplete="off"
+                    placeholder="Example: 4x5 Custom Pouch"
+                  />
+                  <Button onClick={searchProducts}>Search Products</Button>
+                </InlineStack>
+                <Text as="p" tone="subdued">
+                  Use this only when quoting an item that has not been set up in Product Setup yet. Results appear in each manual item's product picker.
+                </Text>
+              </BlockStack>
+            </details>
           </Card>
         </Layout.Section>
 
@@ -2007,7 +2029,10 @@ export default function QuotesPage() {
           <Card>
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
-                <Text as="h2" variant="headingMd">Quote Items</Text>
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingMd">2–7 · Items: product, quantity, material / finish, cost, price, margin</Text>
+                  <Text as="p" tone="subdued">One card per line. Cost comes before price; the margin badge tells you whether the line needs owner approval.</Text>
+                </BlockStack>
                 <Button onClick={addItem}>Add Item</Button>
               </InlineStack>
 
@@ -2027,16 +2052,17 @@ export default function QuotesPage() {
                     <BlockStack gap="400">
                       <InlineStack align="space-between" blockAlign="center">
                         <BlockStack gap="100">
-                          <Text as="h3" variant="headingMd">Item {index + 1}</Text>
+                          <Text as="h3" variant="headingMd">Item {index + 1}{item.productName ? ` — ${item.productName}` : ""}</Text>
                           <Text as="p" tone="subdued">
-                            Start with ERP pricing whenever this product has been set up. Manual is only for one-off items.
+                            Start from a Product Setup recipe whenever this product has been set up. Manual is only for one-off items.
                           </Text>
                         </BlockStack>
                         <InlineStack gap="200">
-                          {isErpMode ? <Badge tone="success">ERP mode</Badge> : <Badge>Manual mode</Badge>}
-                          {item.pricingSource && item.pricingSource !== "manual" && item.pricingSource !== "recipe_pending" ? <Badge tone="success">ERP priced</Badge> : null}
-                          {item.tierLabel ? <Badge>{item.tierLabel}</Badge> : null}
-                          {belowMinimum ? <Badge tone="critical">Below minimum</Badge> : null}
+                          {isErpMode ? <Badge>Priced from Product Setup</Badge> : <Badge>Manual pricing</Badge>}
+                          {item.pricingSource && item.pricingSource !== "manual" && item.pricingSource !== "recipe_pending" ? <Badge tone="success">VERIFIED — cost & price from recipe</Badge> : isErpMode ? <Badge tone="attention">PROVISIONAL — not calculated yet</Badge> : null}
+                          {quoteItemCostIsProtected(item.costSnapshot) ? <Badge tone="success">VERIFIED — canonical true cost</Badge> : null}
+                          {item.tierLabel ? <Badge>{`Tier: ${item.tierLabel}`}</Badge> : null}
+                          {belowMinimum ? <Badge tone="critical">BLOCKED — below minimum quantity</Badge> : null}
                         </InlineStack>
                       </InlineStack>
 
@@ -2044,17 +2070,17 @@ export default function QuotesPage() {
                         <BlockStack gap="300">
                           <InlineStack align="space-between" blockAlign="center">
                             <BlockStack gap="100">
-                              <Text as="h3" variant="headingSm">Pricing Source</Text>
+                              <Text as="h3" variant="headingSm">2 · Product → 3 · Quantity → 4 · Material / finish</Text>
                               <Text as="p" tone="subdued">
-                                Use Product Setup to pull saved costs, margins, tiers, finishes, and vendor add-ons automatically.
+                                A Product Setup recipe pulls saved costs, margins, tiers, finishes, and vendor add-ons automatically.
                               </Text>
                             </BlockStack>
                             <InlineStack gap="200">
                               <Button pressed={isErpMode} variant={isErpMode ? "primary" : "secondary"} onClick={() => setItemPricingMode(item.id, "erp")}>
-                                ERP Recipe
+                                Product Setup recipe
                               </Button>
                               <Button pressed={!isErpMode} onClick={() => setItemPricingMode(item.id, "manual")}>
-                                Manual Item
+                                Manual item
                               </Button>
                             </InlineStack>
                           </InlineStack>
@@ -2062,7 +2088,7 @@ export default function QuotesPage() {
                           {isErpMode ? (
                             <BlockStack gap="300">
                               <Select
-                                label="Product Setup / ERP Recipe"
+                                label="Product (from Product Setup)"
                                 value={item.recipeId || ""}
                                 onChange={(recipeId) => selectRecipe(item.id, recipeId)}
                                 options={recipeSelectOptions}
@@ -2072,8 +2098,8 @@ export default function QuotesPage() {
                                 <BlockStack gap="300">
                                   <InlineStack gap="300">
                                     <Badge>{selectedRecipe.productTypeProfile?.name || selectedRecipe.productType}</Badge>
-                                    <Badge>{selectedRecipe.productionMode}</Badge>
-                                    <Badge>Min {selectedRecipe.minQuantity || 1}</Badge>
+                                    <Badge>{selectedRecipe.productionMode === "outsourced" ? "Outsourced" : selectedRecipe.productionMode === "in_house" ? "In-house" : String(selectedRecipe.productionMode || "").replace(/_/g, " ")}</Badge>
+                                    <Badge>{`Minimum order ${selectedRecipe.minQuantity || 1}`}</Badge>
                                   </InlineStack>
 
                                   <InlineStack gap="300" blockAlign="end">
@@ -2084,7 +2110,7 @@ export default function QuotesPage() {
                                       autoComplete="off"
                                     />
                                     <Button onClick={() => priceRecipeForItem(item)} variant="primary">
-                                      Calculate from ERP
+                                      Calculate cost & price from Product Setup
                                     </Button>
                                     {belowMinimum ? (
                                       <Button onClick={() => updateItem(item.id, "quantity", item.minQuantity || "1")}>
@@ -2120,14 +2146,14 @@ export default function QuotesPage() {
                                 </BlockStack>
                               ) : (
                                 <Text as="p" tone="subdued">
-                                  Choose a Product Setup / ERP Recipe, enter a quantity, then click Calculate from ERP.
+                                  Choose a product from Product Setup, enter a quantity, then click Calculate cost &amp; price from Product Setup.
                                 </Text>
                               )}
                             </BlockStack>
                           ) : (
                             <BlockStack gap="300">
                               <Select
-                                label="Optional Shopify product / variant"
+                                label="Optional: pick a product found by the Shopify lookup (identity only)"
                                 value=""
                                 onChange={(variantId) => selectProductVariant(item.id, variantId)}
                                 options={productSelectOptions}
@@ -2137,6 +2163,7 @@ export default function QuotesPage() {
                                 <TextField label="Variant / Options" value={item.variant} onChange={(value) => updateItem(item.id, "variant", value)} autoComplete="off" />
                                 <TextField label="SKU" value={item.sku} onChange={(value) => updateItem(item.id, "sku", value)} autoComplete="off" />
                               </InlineStack>
+                              <Text as="h3" variant="headingSm">5 · Cost → 6 · Price → 7 · Margin (manual — you are responsible for the numbers)</Text>
                               <InlineStack gap="300">
                                 <TextField
                                   label="Quantity"
@@ -2144,10 +2171,11 @@ export default function QuotesPage() {
                                   onChange={(value) => updateItem(item.id, "quantity", value)}
                                   autoComplete="off"
                                 />
-                                <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
                                 <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off"
                                   disabled={quoteItemCostIsProtected(item.costSnapshot)}
-                                  helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Re-quote in the Cost Calculator to change it." : undefined} />
+                                  helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Re-quote in the Cost Calculator to change it." : "Unverified manual cost — the quote stays PROVISIONAL until the cost is checked."} />
+                                <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
+                                <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" />
                               </InlineStack>
                             </BlockStack>
                           )}
@@ -2157,11 +2185,11 @@ export default function QuotesPage() {
                       <Card>
                         <BlockStack gap="300">
                           <InlineStack align="space-between" blockAlign="center">
-                            <Text as="h3" variant="headingSm">Pricing Output</Text>
+                            <Text as="h3" variant="headingSm">{isErpMode ? "5 · Cost → 6 · Price → 7 · Margin" : "Line result"}</Text>
                             {isErpMode ? (
-                              <Text as="p" tone="subdued">ERP values fill after Calculate from ERP. Override only when needed.</Text>
+                              <Text as="p" tone="subdued">Values fill after Calculate. Override the price only when needed; the cost is the recipe's.</Text>
                             ) : (
-                              <Text as="p" tone="subdued">Manual item values are controlled by the user.</Text>
+                              <Text as="p" tone="subdued">Totals for this manual line.</Text>
                             )}
                           </InlineStack>
                           {isErpMode ? (
@@ -2171,23 +2199,33 @@ export default function QuotesPage() {
                               <TextField label="SKU" value={item.sku} onChange={(value) => updateItem(item.id, "sku", value)} autoComplete="off" />
                             </InlineStack>
                           ) : null}
-                          <InlineStack gap="300">
-                            <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off"
-                              disabled={quoteItemCostIsProtected(item.costSnapshot)}
-                              helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Re-quote in the Cost Calculator to change it." : undefined} />
-                            <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
-                            <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" />
-                          </InlineStack>
-                          <InlineStack gap="300" blockAlign="end">
-                            {item.productImageUrl ? <img src={item.productImageUrl} alt="Product" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 10, border: "1px solid #ddd" }} /> : null}
-                            <TextField label="Product image URL" value={item.productImageUrl || ""} onChange={(value) => updateItem(item.id, "productImageUrl", value)} autoComplete="off" />
-                            <TextField label="Artwork URL optional" value={item.artworkUrl || ""} onChange={(value) => updateItem(item.id, "artworkUrl", value)} autoComplete="off" />
-                          </InlineStack>
+                          {isErpMode ? (
+                            <InlineStack gap="300">
+                              <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off"
+                                disabled={quoteItemCostIsProtected(item.costSnapshot)}
+                                helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Re-quote in the Cost Calculator to change it." : undefined} />
+                              <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
+                              <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" />
+                            </InlineStack>
+                          ) : null}
                           <InlineStack gap="300">
                             <Text as="p">Line Revenue: ${lineRevenue.toFixed(2)}</Text>
                             <Text as="p">Line Cost: ${lineCost.toFixed(2)}</Text>
                             <Text as="p">Line Profit: ${lineProfit.toFixed(2)}</Text>
                           </InlineStack>
+                          <details>
+                            <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Advanced: product image, artwork link, pricing source</summary>
+                            <BlockStack gap="200">
+                              <InlineStack gap="300" blockAlign="end">
+                                {item.productImageUrl ? <img src={item.productImageUrl} alt="Product" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 10, border: "1px solid #ddd" }} /> : null}
+                                <TextField label="Product image URL" value={item.productImageUrl || ""} onChange={(value) => updateItem(item.id, "productImageUrl", value)} autoComplete="off" />
+                                <TextField label="Artwork URL optional" value={item.artworkUrl || ""} onChange={(value) => updateItem(item.id, "artworkUrl", value)} autoComplete="off" />
+                              </InlineStack>
+                              <Text as="p" tone="subdued">
+                                Pricing source: {item.pricingSource || "manual"}{item.recipeName ? ` · recipe ${item.recipeName}` : ""}{item.selectedFinish ? ` · finish ${item.selectedFinish}` : ""}{item.minQuantity ? ` · minimum ${item.minQuantity}` : ""}
+                              </Text>
+                            </BlockStack>
+                          </details>
                         </BlockStack>
                       </Card>
 
@@ -2208,13 +2246,17 @@ export default function QuotesPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Quote Summary</Text>
+              <Text as="h2" variant="headingMd">8 · Notes → 9 · Save</Text>
               <Divider />
-              <Text as="p">Total Revenue: ${totals.revenue.toFixed(2)}</Text>
-              <Text as="p">Total Cost: ${totals.cost.toFixed(2)}</Text>
-              <Text as="p">Total Profit: ${totals.profit.toFixed(2)}</Text>
-              <Text as="p">Margin: {totals.margin.toFixed(1)}%</Text>
+              <InlineStack gap="300" wrap>
+                <Text as="p">Total Revenue: ${totals.revenue.toFixed(2)}</Text>
+                <Text as="p">Total Cost: ${totals.cost.toFixed(2)}</Text>
+                <Text as="p">Total Profit: ${totals.profit.toFixed(2)}</Text>
+                <Text as="p">Margin: {totals.margin.toFixed(1)}%</Text>
+                <Badge tone={tone}>{!hasPricedItems ? "Add priced items to see the margin check" : totals.margin < 40 ? "OWNER CONFIRMATION PENDING — below 40% margin floor (approval required before Sent / Approved / Won)" : "Margin meets floor"}</Badge>
+              </InlineStack>
               <TextField label="Quote Notes" value={notes} onChange={setNotes} multiline={4} autoComplete="off" />
+              <Select label="Status" value={status} onChange={setStatus} options={statuses} helpText="Saved with the quote. Sent / Approved / Won are refused by the server while a low-margin approval is outstanding." />
               <InlineStack gap="300">
                 <Button variant="primary" onClick={saveQuote}>{editingId ? "Update Quote" : "Save Quote"}</Button>
                 <Button onClick={printQuote}>Download / Print PDF</Button>
@@ -2275,7 +2317,7 @@ export default function QuotesPage() {
                                   {tierRule(quote.customerTier).manualTermsOnly ? (
                                     <Badge tone="attention">Manual terms</Badge>
                                   ) : null}
-                                  {productionJob ? <Badge tone="success">Production: {productionJob.status}</Badge> : null}
+                                  {productionJob ? <Badge tone={productionJob.status === "completed" ? "success" : undefined}>{`Production: ${String(productionJob.status || "").replace(/_/g, " ")}`}</Badge> : null}
                                   <Text as="p" tone="subdued">${quoteRevenue.toFixed(2)} | {new Date(quote.updatedAt || quote.createdAt).toLocaleString()}</Text>
                                   {quote.marginState ? (
                                     <Text as="p" tone="subdued">

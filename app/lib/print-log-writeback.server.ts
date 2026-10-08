@@ -7,7 +7,7 @@
 // Owner decisions encoded here:
 // - only ink + machine-time are write-grade; MATERIAL/media cost stays
 //   preview-only (name-based matching is not write-grade);
-// - machine time uses the ONE configurable rate source ($8/hr current);
+// - machine time uses the ONE configurable rate source ($5/hr owner standard);
 // - a partial print-cost writeback is NEVER a finalized job cost;
 // - labor/packing/shipping/outsourcing/reprint-extras stay manual.
 //

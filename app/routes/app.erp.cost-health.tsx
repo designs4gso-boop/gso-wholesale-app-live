@@ -1,4 +1,5 @@
 import { Link, useLoaderData } from "react-router";
+import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -353,13 +354,13 @@ export async function loader({ request }: { request: Request }) {
     if (!machine.active || !machineIsPrinter(machine)) continue;
     const name = machine.name || "Unnamed machine";
 
-    if (num(machine.costPerHour) === 5) {
+    if (num(machine.costPerHour) > 0 && Math.abs(num(machine.costPerHour) - OWNER_STANDARDS.machineRecoveryPerHour.value) > 0.0001) {
       issues.push({
         area: "Rates",
         item: name,
         status: "warning",
-        message: "Machine rate is exactly $5/hr — the seeded GSO preset default. The Cost Calculator meanwhile defaults to $8/hr, so the app currently disagrees with itself about machine cost.",
-        fix: "Decide the real machine recovery rate (power, maintenance, depreciation) and save it here; use the same number in the calculator.",
+        message: `Machine record says $${num(machine.costPerHour).toFixed(2)}/hr; the owner machine recovery standard is $${OWNER_STANDARDS.machineRecoveryPerHour.value}/hr (approved 2026-10-07, both printers). Pricing and actual costs use the owner standard, so this record is informational until aligned.`,
+        fix: "Save the owner standard rate on the machine record so every screen shows the same number.",
       });
     }
 
@@ -487,7 +488,7 @@ export async function loader({ request }: { request: Request }) {
     { label: "Active materials", value: activeMaterials.length, status: activeMaterials.length > 0 ? "ready" : "critical", help: "Materials available for recipes/calculator." },
     { label: "Roll media ready", value: rollMediaReady, status: rollMediaReady > 0 ? "ready" : "critical", help: "Roll media with usable cost per square inch." },
     { label: "Ink materials ready", value: inkMaterialsReady, status: inkMaterialsReady > 0 ? "ready" : "critical", help: "Ink/coating materials with usable cost per ml." },
-    { label: "Printer machines ready", value: `${machinesReady}/${activePrinterMachines.length}`, status: machinesReady > 0 ? "warning" : "critical", help: "Active printer machines with at least one usable ink channel. Outsourced/vendor placeholders are ignored." },
+    { label: "Printer machines ready", value: `${machinesReady}/${activePrinterMachines.length}`, status: activePrinterMachines.length > 0 && machinesReady === activePrinterMachines.length ? "ready" : machinesReady > 0 ? "warning" : "critical", help: "Active printer machines with at least one usable ink channel. Outsourced/vendor placeholders are ignored." },
     { label: "Critical issues", value: criticalCount, status: criticalCount === 0 ? "ready" : "critical", help: "Must be fixed before trusting auto-pricing." },
     { label: "Warnings", value: warningCount, status: warningCount === 0 ? "ready" : "warning", help: "Can calculate, but results may be estimates/manual fallback." },
   ];
@@ -533,7 +534,7 @@ export async function loader({ request }: { request: Request }) {
 }
 
 function money(value: number, digits = 4): string {
-  if (!Number.isFinite(value) || value <= 0) return "$0.0000";
+  if (!Number.isFinite(value) || value <= 0) return "—";
   return `$${value.toFixed(digits)}`;
 }
 

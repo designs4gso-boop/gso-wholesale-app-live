@@ -3,7 +3,7 @@ import { salesRulesForFamily } from "../lib/product-family-sales-rules";
 import { authenticate } from "../shopify.server";
 import { deriveProductVerification, productSetupFamilyLabels } from "../lib/product-family-registry";
 import { classifyCalculatorProduct } from "../lib/product-driven-costing.server";
-import { DTP_EXTRA_DESIGN_FEES, DTP_HARD_FLOOR_BANDS, DTP_INTERNAL_ART_COST_PER_DESIGN, DTP_LADDER_QUANTITIES, DTP_MIN_JOB_PROFIT, DTP_OWNER_PRICE_LADDERS, DTP_PRICING_SOURCE, DTP_STRATEGIC_MIN_JOB_PROFIT } from "../lib/dtp-owner-pricing.server";
+import { DTP_ACQUISITION_TIER_EXCEPTIONS, DTP_EXTRA_DESIGN_FEES, DTP_HARD_FLOOR_BANDS, DTP_INTERNAL_ART_COST_PER_DESIGN, DTP_LADDER_QUANTITIES, DTP_LADDER_SOURCES, DTP_MIN_JOB_PROFIT, DTP_OWNER_PRICE_LADDERS, DTP_PRICING_SOURCE, DTP_STRATEGIC_MIN_JOB_PROFIT } from "../lib/dtp-owner-pricing.server";
 import db from "../db.server";
 import {
   QUOTE_RECIPE_PRICING_INCLUDE,
@@ -13,6 +13,7 @@ import {
 import { materialKind, materialKindLabel } from "../lib/material-classify";
 // 2026-10-05 read-only fixed-product spec summary (ONE authority; no editable duplicate here)
 import { resolveActiveJarProfile } from "../lib/jar-active-scope";
+import { DTP_CATALOG, SPEKTRA_FREIGHT_ASSUMPTION } from "../lib/dtp-catalog";
 import { describeStandardSpec, getProductProductionSpec } from "../lib/product-production-spec";
 
 // 15B: recipe-family vocabulary is REGISTRY-first (shared product-family
@@ -740,7 +741,13 @@ export async function loader({ request }: { request: Request }) {
   const dtpPricingRules = {
     source: DTP_PRICING_SOURCE,
     quantities: DTP_LADDER_QUANTITIES,
-    ladders: Object.entries(DTP_OWNER_PRICE_LADDERS).map(([sku, ladder]) => ({ sku, prices: DTP_LADDER_QUANTITIES.map((qty) => (ladder as Record<number, number>)[qty] ?? null) })),
+    ladders: Object.entries(DTP_OWNER_PRICE_LADDERS).map(([sku, ladder]) => ({
+      sku,
+      prices: DTP_LADDER_QUANTITIES.map((qty) => (ladder as Record<number, number>)[qty] ?? null),
+      // 2026-10-06: per-ladder provenance (4x5x2 OWNER APPROVED; others OWNER PRICING REVIEW REQUIRED)
+      source: DTP_LADDER_SOURCES[sku] ?? null,
+      exception: DTP_ACQUISITION_TIER_EXCEPTIONS[sku] ?? null,
+    })),
     floors: DTP_HARD_FLOOR_BANDS,
     minJobProfit: DTP_MIN_JOB_PROFIT,
     strategicMinJobProfit: DTP_STRATEGIC_MIN_JOB_PROFIT,
@@ -1876,12 +1883,15 @@ export default function ProductSetupRecipeBuilder() {
           </p>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead><tr><th align="left">Size (sku)</th>{(dtpPricingRules as any).quantities.map((qty: number) => <th key={qty}>{qty.toLocaleString()}</th>)}</tr></thead>
+              <thead><tr><th align="left">Size (sku)</th>{(dtpPricingRules as any).quantities.map((qty: number) => <th key={qty}>{qty.toLocaleString()}</th>)}<th align="left">Status / source</th></tr></thead>
               <tbody>
                 {(dtpPricingRules as any).ladders.map((row: any) => (
                   <tr key={row.sku} style={{ borderTop: "1px solid #e5e7eb" }}>
                     <td>{row.sku}</td>
-                    {row.prices.map((price: number | null, index: number) => <td key={index} align="center">{price != null ? `$${price.toFixed(2)}` : "—"}</td>)}
+                    {row.prices.map((price: number | null, index: number) => <td key={index} align="center">{price != null ? `$${price.toFixed(2)}` : "— (steps to the lower tier)"}</td>)}
+                    <td style={{ fontSize: 12, color: row.source?.status === "OWNER_APPROVED" ? "#1e3a8a" : "#92400e" }}>
+                      {row.source ? `${row.source.status === "OWNER_APPROVED" ? "OWNER APPROVED" : "OWNER PRICING REVIEW REQUIRED"} — ${row.source.pricingSource} (${row.source.approvedOn})${row.source.marketBenchmark ? `; benchmark ${row.source.marketBenchmark}` : ""}${row.source.reviewRequiredFromQuantity ? `; ${row.source.reviewRequiredFromQuantity.toLocaleString()}+ OWNER PRICING REVIEW REQUIRED` : ""}${row.exception ? `; ${row.exception.tier.toLocaleString()} tier GP target $${row.exception.minJobProfit} (owner exception ${row.exception.approvedOn})` : ""}` : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1895,6 +1905,27 @@ export default function ProductSetupRecipeBuilder() {
           </p>
         </div>
       ) : null}
+
+      <div className="card" id="dtp-catalog">
+        <h3>DTP (Spektra) catalog status — 2026-10-06 (read-only)</h3>
+        <p className="muted">Current public Spektra catalog vs the ERP's DTP products. Nothing is deleted or remapped here; new sizes become quotable only after the live vendor matrix is loaded and the owner sets a sell ladder.</p>
+        <table className="table" style={{ fontSize: 12 }}>
+          <thead><tr><th>Size</th><th>Status</th><th>Capacity</th><th>Vendor cost source</th><th>Owner sell ladder</th><th>Note</th></tr></thead>
+          <tbody>
+            {DTP_CATALOG.map((entry) => (
+              <tr key={entry.size}>
+                <td><strong>{entry.size}</strong></td>
+                <td>{entry.status === "CURRENT_STANDARD" ? <span className="badge green">Current standard</span> : <span className="badge yellow">LEGACY — no current catalog match</span>}</td>
+                <td>{entry.capacityLabel ?? "—"}</td>
+                <td>{entry.vendorCost === "LIVE_COST_BOOK_2026-10-06" ? "live cost book 2026-10-06" : "legacy seed only"}</td>
+                <td>{entry.ownerLadder === "EXISTS_2026-07-24" ? "exists" : <span className="badge yellow">owner decision required</span>}</td>
+                <td className="muted">{entry.note}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="muted">{SPEKTRA_FREIGHT_ASSUMPTION.label}: {SPEKTRA_FREIGHT_ASSUMPTION.note}</p>
+      </div>
 
       <div className="card" id="calculator-rules">
         <h2>3. Calculator Rules — shared family registry</h2>
@@ -2011,6 +2042,7 @@ export default function ProductSetupRecipeBuilder() {
             {spec.sharedSizeKeyNote ? <p className="muted">{spec.sharedSizeKeyNote}</p> : null}
             <p className="muted">{spec.note}</p>
             <p className="muted">Label zones below are older admin estimates kept for reference; they never price a job. Change the standard only through the owner-decision process (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md).</p>
+            <p className="muted"><strong>Cost authority:</strong> canonical true cost (jar adapter). <strong>Pricing authority:</strong> owner 16D jar price ladder with minimum-margin protection (Chiron: margin curve + quantity-break envelope). <strong>MOQ:</strong> official 128 (sales rules); storefront ladder starts at 50. <strong>Missing owner decisions:</strong> physical dimension confirmation; jar margin floor vs owner ladder (docs/GSO_ERP_FINAL_OWNER_CHECKLIST.md).</p>
           </div>;
         })()}
         <p className="muted">Sections 4 (Features: recipe add-ons + vendor product add-ons above), 5 (Shopify: GID link fields below), and 6 (Production Recipe) all edit THIS selected recipe — the existing forms are reused, not duplicated.</p>

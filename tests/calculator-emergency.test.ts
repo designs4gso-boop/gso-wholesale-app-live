@@ -27,7 +27,7 @@ describe("owner standards and verified rates (14B.0)", () => {
     expect(OWNER_LABOR.jarApplicationPer).toBeCloseTo(0.2, 6);
     expect(OWNER_LABOR.bagLabelApplicationPer).toBeCloseTo(0.078125, 6);
     expect(OWNER_LABOR.packoutPerBox).toBe(2);
-    expect(MACHINE_RATE_CURRENT).toBe(8);
+    expect(MACHINE_RATE_CURRENT).toBe(5); // OWNER APPROVED 2026-10-07: machine recovery $5/hr (was $8/hr provisional); only machine-recovery lines moved.
   });
 
   it("ink rates: Mimaki verified, Roland provisional-uniform, Mimaki gloss MISSING (never guessed)", () => {

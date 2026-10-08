@@ -177,12 +177,71 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function statusTone(status: string) {
-  if (status === "ready_to_quote") return "success";
-  if (status === "rejected" || status === "archived") return "critical";
-  if (status === "needs_cost_review" || status === "missing_customer_info") return "warning";
+// Status tone (2026-10-05 staff copy): green only for ready/completed, amber
+// for anything still waiting on a human, red for blocked/rejected, grey for
+// informational (archived). Display only.
+function statusTone(status: string): "success" | "attention" | "warning" | "critical" | undefined {
+  if (status === "ready_to_quote" || status === "converted_by_staff") return "success";
+  if (status === "rejected" || status === "missing_customer_info") return "critical";
+  if (status === "archived") return undefined;
+  if (status === "needs_cost_review") return "warning";
   return "attention";
 }
+
+const STATUS_WORDS: Record<string, string> = {
+  new: "NEEDS DECISION",
+  needs_staff_review: "NEEDS DECISION",
+  missing_customer_info: "BLOCKED — missing info",
+  needs_cost_review: "NEEDS DECISION — cost review",
+  ready_to_quote: "READY TO QUOTE",
+  converted_by_staff: "COMPLETED — draft quote created",
+  rejected: "REJECTED",
+  archived: "ARCHIVED",
+};
+
+function statusWords(status: string) {
+  return STATUS_WORDS[status] || label(status).toUpperCase();
+}
+
+const REVIEW_LEVEL_WORDS: Record<string, string> = {
+  basic_staff_review: "Basic staff review",
+  cost_review_required: "Cost review required",
+  owner_review_required: "Owner review required",
+};
+
+function reviewLevelWords(value: string | null) {
+  if (!value) return "Not assessed";
+  return REVIEW_LEVEL_WORDS[value] || label(value);
+}
+
+/**
+ * Human decision brief — derived ONLY from the loaded queue item. Tells the
+ * reviewer what the agent wants, why, and whether a draft quote can be created
+ * right now. Nothing here changes what the action accepts.
+ */
+function decisionBrief(item: QueueItem, recipeCount: number) {
+  const why = jsonArray(item.escalationReasons).map(String).filter(Boolean);
+  const missing = jsonArray(item.missingFields).map(String).filter(Boolean);
+  const wants = item.recommendedStaffAction || "Review the intake details and decide the next step";
+  let eligibility: { word: string; tone: "success" | "attention" | "critical" | undefined; detail: string };
+  if (item.convertedQuoteId || item.status === "converted_by_staff") {
+    eligibility = { word: "COMPLETED", tone: "success", detail: "Internal draft quote already created. Open it in the Quote Builder." };
+  } else if (item.status === "ready_to_quote") {
+    eligibility = recipeCount
+      ? { word: "NEEDS DECISION", tone: "attention", detail: "Staff may create an internal draft quote now by choosing a quote-ready recipe." }
+      : { word: "BLOCKED", tone: "critical", detail: "No quote-ready recipes exist yet. Finish Product Setup first." };
+  } else if (item.status === "rejected" || item.status === "archived") {
+    eligibility = { word: "CLOSED", tone: undefined, detail: "No further action." };
+  } else if (item.status === "missing_customer_info" || missing.length) {
+    eligibility = { word: "BLOCKED", tone: "critical", detail: `Missing customer information${missing.length ? `: ${missing.join(", ")}` : ""}.` };
+  } else {
+    eligibility = { word: "NEEDS DECISION", tone: "attention", detail: "A draft quote cannot be created until staff mark this item Ready to quote." };
+  }
+  return { wants, why, missing, eligibility };
+}
+
+const IF_APPROVED_COPY =
+  "If you mark this Ready to quote, only the queue status changes. Create draft quote then writes an internal DRAFT quote for staff review and marks this item converted. Nothing is sent to the customer, Shopify, or production.";
 
 function actorNameFromSession(session: any) {
   return session.name || session.firstName || session.onlineAccessInfo?.associated_user?.first_name || null;
@@ -957,7 +1016,7 @@ export default function AgentReviewQueuePage() {
   return (
     <Page
       title="Agent Review Queue"
-      subtitle={`Read-only staff queue for ${data.shop}`}
+      subtitle="Human decision inbox — the agent proposes, staff decide. Nothing here executes on its own."
       primaryAction={{ content: "New internal queue item", onAction: () => navigate("/app/erp/agent-review-queue/new") }}
     >
       <BlockStack gap="400">
@@ -968,16 +1027,17 @@ export default function AgentReviewQueuePage() {
         ) : null}
         <Banner tone="info">
           <Text as="p">
-            This queue is read-only in this phase. Staff review is required before any quote, order,
-            customer communication, or production action.
+            Every item is a proposal that needs a staff decision. Approving a step here records the decision only:
+            no quote is sent, no order, invoice, customer message, or production job is created. The only write is
+            an internal DRAFT quote, created when staff explicitly click Create draft quote.
           </Text>
         </Banner>
 
         <InlineGrid columns={{ xs: 1, sm: 2, md: 5 }} gap="300">
           <SummaryCard label="Total items" value={data.summary.total} />
-          <SummaryCard label="Needs staff review" value={data.summary.needsStaffReview} />
-          <SummaryCard label="Ready to quote" value={data.summary.readyToQuote} />
-          <SummaryCard label="Needs cost review" value={data.summary.needsCostReview} />
+          <SummaryCard label="NEEDS DECISION" value={data.summary.needsStaffReview} />
+          <SummaryCard label="READY TO QUOTE" value={data.summary.readyToQuote} />
+          <SummaryCard label="NEEDS DECISION — cost review" value={data.summary.needsCostReview} />
           <SummaryCard label="Rejected / archived" value={data.summary.rejectedOrArchived} />
         </InlineGrid>
 
@@ -985,11 +1045,11 @@ export default function AgentReviewQueuePage() {
           <BlockStack gap="300">
             <BlockStack gap="100">
               <Text as="h2" variant="headingMd">
-                Queue items
+                Decision inbox
               </Text>
               <Text as="p" tone="subdued">
-                Notes and status actions only update the review queue and audit log. They do not send customer
-                messages or create quotes, Shopify orders, invoices, or production jobs.
+                Each row shows what the agent wants, why, the risk level, and what happens if you approve. Notes and
+                status actions only update the review queue and audit log.
               </Text>
               <Text as="p" tone="subdued">
                 Showing: {data.activeFilterLabel}
@@ -1039,10 +1099,8 @@ export default function AgentReviewQueuePage() {
                         "Product",
                         "Qty",
                         "Status",
-                        "Review level",
-                        "Recommended staff action",
-                        "Audit",
-                        "Safety",
+                        "What the agent wants / why",
+                        "Risk & what approval does",
                         "Actions",
                       ].map((heading) => (
                         <th key={heading} style={{ borderBottom: "1px solid #dfe3e8", padding: 10, textAlign: "left" }}>
@@ -1054,13 +1112,21 @@ export default function AgentReviewQueuePage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.items.map((item) => (
+                    {data.items.map((item) => {
+                      const brief = decisionBrief(item, data.recipeOptions.length);
+                      const audit = data.auditByItemId[item.id];
+                      return (
                       <Fragment key={item.id}>
                       <tr>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
-                          <Text as="span" variant="bodySm">
-                            {formatDate(item.createdAt)}
-                          </Text>
+                          <BlockStack gap="050">
+                            <Text as="span" variant="bodySm">
+                              {formatDate(item.createdAt)}
+                            </Text>
+                            <Text as="span" variant="bodySm" tone="subdued">
+                              via {label(item.source)}
+                            </Text>
+                          </BlockStack>
                         </td>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
                           <BlockStack gap="050">
@@ -1088,56 +1154,55 @@ export default function AgentReviewQueuePage() {
                           </Text>
                         </td>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
-                          <Badge tone={statusTone(item.status)}>{label(item.status)}</Badge>
+                          <Badge tone={statusTone(item.status)}>{statusWords(item.status)}</Badge>
                         </td>
-                        <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
-                          <Text as="span" variant="bodySm">
-                            {label(item.reviewLevel)}
-                          </Text>
-                        </td>
-                        <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
-                          <Text as="span" variant="bodySm">
-                            {item.recommendedStaffAction || "Review intake details"}
-                          </Text>
-                        </td>
-                        <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
-                          {data.auditByItemId[item.id] ? (
-                            <BlockStack gap="050">
-                              <Text as="span" variant="bodySm">
-                                Last: {label(data.auditByItemId[item.id].latestEventType)}
-                              </Text>
-                              {data.auditByItemId[item.id].latestActor ? (
-                                <Text as="span" variant="bodySm" tone="subdued">
-                                  By: {data.auditByItemId[item.id].latestActor}
-                                </Text>
-                              ) : null}
-                              {data.auditByItemId[item.id].latestNote ? (
-                                <Text as="span" variant="bodySm" tone="subdued">
-                                  Note: {data.auditByItemId[item.id].latestNote}
-                                </Text>
-                              ) : null}
-                              {item.status !== "converted_by_staff" && !item.convertedQuoteId ? (
-                                <ConversionFailureSummary failure={data.auditByItemId[item.id].conversionFailure} />
-                              ) : null}
-                              <Text as="span" variant="bodySm" tone="subdued">
-                                Events: {data.auditByItemId[item.id].eventCount}
-                              </Text>
-                            </BlockStack>
-                          ) : (
-                            <Text as="span" variant="bodySm" tone="subdued">
-                              No events yet
+                        <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top", maxWidth: 300 }}>
+                          <BlockStack gap="050">
+                            <Text as="span" variant="bodySm" fontWeight="semibold">
+                              Wants: {brief.wants}
                             </Text>
-                          )}
+                            <Text as="span" variant="bodySm" tone="subdued">
+                              Why: {brief.why.length ? brief.why.join("; ") : brief.missing.length ? `missing ${brief.missing.join(", ")}` : "customer request received by the agent"}
+                            </Text>
+                            {item.customerSafeSummary ? (
+                              <Text as="span" variant="bodySm" tone="subdued">
+                                Evidence: {truncatedText(item.customerSafeSummary)}
+                              </Text>
+                            ) : null}
+                            {audit ? (
+                              <Text as="span" variant="bodySm" tone="subdued">
+                                Last: {label(audit.latestEventType)}{audit.latestActor ? ` by ${audit.latestActor}` : ""} · {audit.eventCount} event(s)
+                              </Text>
+                            ) : (
+                              <Text as="span" variant="bodySm" tone="subdued">
+                                No events yet
+                              </Text>
+                            )}
+                            {item.status !== "converted_by_staff" && !item.convertedQuoteId ? (
+                              <ConversionFailureSummary failure={audit?.conversionFailure || null} />
+                            ) : null}
+                          </BlockStack>
                         </td>
-                        <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
-                          <InlineStack gap="100">
-                            <Badge tone={item.requiresStaffApproval ? "warning" : "critical"}>
-                              {item.requiresStaffApproval ? "Staff approval" : "Review required"}
-                            </Badge>
-                            <Badge tone={item.canBecomeRealQuoteAutomatically ? "critical" : "success"}>
-                              {item.canBecomeRealQuoteAutomatically ? "Auto quote risk" : "No auto quote"}
-                            </Badge>
-                          </InlineStack>
+                        <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top", maxWidth: 280 }}>
+                          <BlockStack gap="100">
+                            <InlineStack gap="100" wrap>
+                              <Badge tone={item.requiresStaffApproval ? "attention" : "critical"}>
+                                {item.requiresStaffApproval ? "NEEDS DECISION (staff)" : "APPROVAL FLAG MISSING"}
+                              </Badge>
+                              <Badge tone={item.canBecomeRealQuoteAutomatically ? "critical" : undefined}>
+                                {item.canBecomeRealQuoteAutomatically ? "AUTO QUOTE RISK" : "No automatic quote"}
+                              </Badge>
+                            </InlineStack>
+                            <Text as="span" variant="bodySm" tone="subdued">
+                              Risk level: {reviewLevelWords(item.reviewLevel)}
+                            </Text>
+                            <InlineStack gap="100" blockAlign="center">
+                              <Badge tone={brief.eligibility.tone}>{brief.eligibility.word}</Badge>
+                            </InlineStack>
+                            <Text as="span" variant="bodySm" tone="subdued">
+                              {brief.eligibility.detail}
+                            </Text>
+                          </BlockStack>
                         </td>
                         <td style={{ borderBottom: "1px solid #f1f2f4", padding: 10, verticalAlign: "top" }}>
                           <InlineStack gap="100">
@@ -1146,7 +1211,7 @@ export default function AgentReviewQueuePage() {
                             </Button>
                             {item.convertedQuoteId ? (
                               <Text as="span" variant="bodySm" tone="subdued">
-                                Draft quote created: {item.convertedQuoteId}
+                                Draft quote created (ID in Details)
                               </Text>
                             ) : null}
                             {item.status === "ready_to_quote" && !item.convertedQuoteId ? (
@@ -1226,8 +1291,9 @@ export default function AgentReviewQueuePage() {
                       </tr>
                       {expandedIds.has(item.id) ? (
                         <tr>
-                          <td colSpan={10} style={{ background: "#fafbfb", borderBottom: "1px solid #f1f2f4", padding: 14 }}>
+                          <td colSpan={8} style={{ background: "#fafbfb", borderBottom: "1px solid #f1f2f4", padding: 14 }}>
                             <BlockStack gap="300">
+                              <Text as="h3" variant="headingSm">Evidence the agent captured</Text>
                               <InlineGrid columns={{ xs: 1, sm: 2, md: 4 }} gap="300">
                                 <DetailField label="Customer" value={item.customerName || ""} />
                                 <DetailField label="Company" value={item.company || ""} />
@@ -1249,15 +1315,29 @@ export default function AgentReviewQueuePage() {
                                 <DetailField label="Customer-safe summary" value={item.customerSafeSummary || ""} />
                                 <DetailField label="Internal notes (staff only)" value={item.internalNotes || ""} />
                               </InlineGrid>
+                              <InlineGrid columns={{ xs: 1, md: 2 }} gap="300">
+                                <DetailField label="What happens if approved" value={IF_APPROVED_COPY} />
+                                <DetailField label="Execution eligibility right now" value={`${brief.eligibility.word} — ${brief.eligibility.detail}`} />
+                              </InlineGrid>
+                              {audit?.latestNote ? <DetailField label="Latest staff note" value={audit.latestNote} /> : null}
                               {item.status !== "converted_by_staff" && !item.convertedQuoteId ? (
-                                <ConversionFailureDetails failure={data.auditByItemId[item.id]?.conversionFailure || null} />
+                                <ConversionFailureDetails failure={audit?.conversionFailure || null} />
                               ) : null}
+                              <details>
+                                <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Technical details (ids, source, flags)</summary>
+                                <Text as="p" variant="bodySm" tone="subdued">
+                                  Queue item <code>{item.id}</code> · source {item.source} · created by {item.createdBy} · review level {item.reviewLevel || "none"} · requiresStaffApproval={String(item.requiresStaffApproval)} · canBecomeRealQuoteAutomatically={String(item.canBecomeRealQuoteAutomatically)}
+                                  {item.convertedQuoteId ? <> · draft quote <code>{item.convertedQuoteId}</code></> : null}
+                                  {" · updated "}{formatDate(item.updatedAt)}
+                                </Text>
+                              </details>
                             </BlockStack>
                           </td>
                         </tr>
                       ) : null}
                       </Fragment>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -173,8 +173,8 @@ describe("2D-4C2 (2) the owner control job costs through the live form shape", (
     expect(result.status).toBe("PROVISIONAL");
     expect(result.blockers).toHaveLength(0);
     expect(result.unitCost).not.toBeNull();
-    expect(result.unitCost!).toBeCloseTo(0.084143, 6);
-    expect(result.totalCost).toBeCloseTo(84.143290, 5);
+    expect(result.unitCost!).toBeCloseTo(0.079617, 6); // OWNER APPROVED 2026-10-07: machine recovery $5/hr (was $8/hr provisional); only machine-recovery lines moved.
+    expect(result.totalCost).toBeCloseTo(79.617252, 5);
 
     expect(result.diagnostics.inkableArtworkSqft).toBeCloseTo(62.5, 6);
     expect(result.diagnostics.ripLayoutSqft!).toBeCloseTo(62.6875, 6);

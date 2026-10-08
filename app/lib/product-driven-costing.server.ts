@@ -25,7 +25,7 @@ export const MULTILABEL_ENGINE_VERSION = "14C.2-multilabel-auto-tiers";
 export const PRODUCTION_READY_ENGINE_VERSION = "15F.0-production-ready-pricing";
 
 // ---------- 15F.0-D/E: machine + cutting standards (single location) ----------
-// Machine recovery: OWNER standard $8/hr (owner-standards registry) x a
+// Machine recovery: OWNER standard $5/hr (owner-standards registry, approved 2026-10-07) x a
 // PRODUCTION-TIME model. Time model precedence: Advanced minutes/sqft
 // override -> verified machine speed (Machine.sqftPerHour, both live
 // printers 150) -> BLOCKED (never silently $0 for in-house printing).

@@ -81,8 +81,11 @@ describe("storefront == canonical ERP engine (L parity matrix)", () => {
 
   it("specialty 1X/3X/5X/7X at 500 and 1,000 double match the 15G.4C finals (pre-art floors included)", () => {
     const expected: Record<number, Record<number, number>> = {
-      500: { 1: 840, 3: 960, 5: 1203.53, 7: 1501.23 },
-      1000: { 1: 1624, 3: 1856, 5: 2377.67, 7: 2973.07 },
+      // 1X / 3X are market-target controlled (unchanged); 5X / 7X are 40% floor-controlled and
+      // follow true cost — at the $5/hr owner machine rate (2026-10-07) they fell from
+      // 1203.53 / 1501.23 (500) and 2377.67 / 2973.07 (1,000) at the former $8/hr.
+      500: { 1: 840, 3: 960, 5: 1165, 7: 1445 },
+      1000: { 1: 1620, 3: 1860, 5: 2300, 7: 2860 },
     };
     for (const quantity of [500, 1000]) {
       for (const stages of [1, 3, 5, 7]) {
@@ -102,10 +105,10 @@ describe("storefront == canonical ERP engine (L parity matrix)", () => {
 
   it("holo + 3X (white auto-bundled) is floor-controlled pre-art at 1,000 — additive market 2,146 < 40% floor", () => {
     const combo = parity({ quantity: 1000, faces: 2, material: "Holographic", finish: "3X Spot Gloss" });
-    // cost@90 (holo + required white + 3X + $6.25 gloss setup) = 1,341.80
-    // → 40% floor 2,236.34 → unit 2.24 (rounded)
-    expect(combo.unitPrice).toBeCloseTo(2.24, 10);
-    expect(combo.totalPrice).toBeCloseTo(2240.0, 2);
+    // cost@90 (holo + required white + 3X + $6.25 gloss setup) at the $5/hr machine rate
+    // → 40% floor → unit 2.16 (rounded; 2.24 at the former $8/hr — floor-controlled, follows true cost)
+    expect(combo.unitPrice).toBeCloseTo(2.16, 10);
+    expect(combo.totalPrice).toBeCloseTo(2160.0, 2);
   });
 
   it("price breaks follow the approved ladder [50,100,250,500,1000,2500] — no invented 5,000+ break", () => {

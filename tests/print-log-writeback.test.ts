@@ -53,7 +53,7 @@ describe("guarded writeback computation", () => {
     expect(ink.unit).toBe("ml");
     expect(ink.usedQty).toBeCloseTo(6.72, 6);
     expect(machine.totalCost).toBeCloseTo(2.67, 2); // 20/60 x 8
-    expect(machine.costPerUnit).toBe(8);
+    expect(machine.costPerUnit).toBe(8); // this fixture passes machineRatePerHour: 8 explicitly (the runtime default is the $5/hr owner standard since 2026-10-07)
     expect(machine.unit).toBe("hour");
     expect(result.totalCost).toBeCloseTo(3.85, 2);
     for (const row of result.rows) {
@@ -208,12 +208,12 @@ describe("shared engine equality and machine rate", () => {
   });
 
   it("the current machine rate is $8/hour through the single configurable source", () => {
-    expect(MACHINE_RATE_CURRENT).toBe(8);
-    expect(machineRatePerHour({})).toBe(8);
+    expect(MACHINE_RATE_CURRENT).toBe(5);
+    expect(machineRatePerHour({})).toBe(5);
     expect(machineRatePerHour({ GSO_MACHINE_RATE_PER_HOUR: "10" })).toBe(10); // configurable, not hardcoded
-    expect(machineRatePerHour({ GSO_MACHINE_RATE_PER_HOUR: "garbage" })).toBe(8);
+    expect(machineRatePerHour({ GSO_MACHINE_RATE_PER_HOUR: "garbage" })).toBe(5);
     const result = compute([makeEntry()], makeJob(), machineRatePerHour({}));
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.rows.find((row) => row.componentKey === COMPONENT_MACHINE_TIME)?.costPerUnit).toBe(8);
+    if (result.ok) expect(result.rows.find((row) => row.componentKey === COMPONENT_MACHINE_TIME)?.costPerUnit).toBe(5);
   });
 });
