@@ -448,7 +448,7 @@ describe("2D-3C stock bag personalization — one NORMAL art setup event per per
     expect(r.personalization.internalSetupCost).toBeCloseTo(25 / 3, 10);
     expect(r.blockers).toHaveLength(0);
     // base physical production still computes exactly as before
-    expect(r.blankCost).toBeCloseTo(500 * 0.09, 10);
+    expect(r.blankCost).toBeCloseTo(500 * 0.11, 10);
     expect(r.labelQuantity).toBe(1000);
     expect(r.nesting.ok).toBe(true);
   });
@@ -544,8 +544,8 @@ describe("2D-3B preserves the approved 2D decisions", () => {
     expect(personalized.setup.print).toBe(plain.setup.print);
     expect(personalized.setup.art - plain.setup.art).toBeCloseTo(ART, 10);
     expect(personalized.setup.total - plain.setup.total).toBeCloseTo(ART, 10);
-    // 1000 bags at the owner-approved $0.09 blank
-    expect(plain.blankCost).toBeCloseTo(90, 10);
+    // 1000 bags at the owner-approved $0.11 blank (2026-10-08)
+    expect(plain.blankCost).toBeCloseTo(110, 10);
     // 2000 applied sides at 10s / $20 per hour
     expect(plain.application.applicationLaborCost).toBeCloseTo((2000 * 10 / 3600) * 20, 10);
   });

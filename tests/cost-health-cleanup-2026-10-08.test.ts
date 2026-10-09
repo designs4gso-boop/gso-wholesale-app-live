@@ -17,7 +17,7 @@ import {
 import { OWNER_STANDARDS } from "../app/lib/owner-standards";
 import { decideMachine } from "../app/lib/print-intake-routing.server";
 import { CANONICAL_INK_RATES } from "../app/lib/ink-rates-shared";
-import { BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION, BAG_4X5_BLANK_UNIT_COST, computeBagPhysical } from "../app/lib/bag-cost-inputs.server";
+import { BAG_4X5_BLANK_SUPERSEDED_SUPPLIER_BASE_2026_08_24, BAG_4X5_BLANK_UNIT_COST, computeBagPhysical } from "../app/lib/bag-cost-inputs.server";
 import { APPROVED_COST_TRUTH } from "../app/lib/approved-cost-updates.server";
 import { DTP_OWNER_PRICE_LADDERS, ownerPriceForQuantity } from "../app/lib/dtp-owner-pricing.server";
 
@@ -32,7 +32,7 @@ const rolandGloss: CostHealthMaterial = { ...rolandCmyk, id: "r3", name: "Roland
 const inkMaterials = [mimakiCmyk, mimakiWhite, rolandCmyk, rolandGloss, rolandWhite]; // alphabetical like the loader's orderBy name
 
 const packingSupplies: CostHealthMaterial = { id: "p1", name: "Packing Supplies", materialType: "packaging_supplies", productFamilies: "", unit: "each", baseUnit: "each", costPerUnit: 0, purchaseCost: 0, calculatedUnitCost: 0, active: true, useInRecipes: true, costReviewNeeded: false, recipeReferences: 0 };
-const bag4x5: CostHealthMaterial = { id: "b1", name: "4x5 Blank Bag", materialType: "blank_bags", productFamilies: "sticker_bags", unit: "each", baseUnit: "each", costPerUnit: 0.09, purchaseCost: 0.09, calculatedUnitCost: 0.09, active: true, useInRecipes: true, recipeReferences: 1 };
+const bag4x5: CostHealthMaterial = { id: "b1", name: "4x5 Blank Bag", materialType: "blank_bags", productFamilies: "sticker_bags", unit: "each", baseUnit: "each", costPerUnit: 0.11, purchaseCost: 0.11, calculatedUnitCost: 0.11, active: true, useInRecipes: true, recipeReferences: 1 };
 
 function slot(slotNumber: number, inkName: string, inkType: string, cartridgeCost: number, cartridgeMl: number, enabled = true) {
   return { id: `${inkName}-${slotNumber}`, slotNumber, inkName, inkType, costPerMl: cartridgeMl > 0 ? cartridgeCost / cartridgeMl : 0, cartridgeCost, cartridgeMl, mlPerSqft1Pct: 0.0075, mlPerSqft100: 0, enabled };
@@ -69,25 +69,23 @@ describe("ISSUE 1 — Packing Supplies health classification", () => {
   });
 });
 
-describe("ISSUE 2 — 4x5 blank bag live-data authority", () => {
-  it("canonical code, calculator preset, Approved Cost Updates and the live Material/VendorProduct agree on $0.09 supplier base; $0.11 is the RETIRED landed assumption", () => {
-    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.09);
-    expect(BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION).toBe(0.11);
-    expect(BAG_4X5_BLANK_UNIT_COST).not.toBe(BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION);
-    // calculator preset (hidden in production by the VendorProduct preset:blank-4x5-bag at $0.09)
-    expect(read("../app/routes/app.erp.cost-calculator.tsx")).toContain('fixed("preset:blank-4x5-bag", "Blank 4x5 bag", 0.09');
-    // no Approved Cost Update may push a different 4x5 figure
-    expect(APPROVED_COST_TRUTH.some((item) => /^bag-4x5$/i.test(String(item.key)))).toBe(false);
-    // the live Material row read 2026-10-08 ($0.09) is what Cost Health shows — consistent with the engine
-    expect(run().materialPreview.find((m) => m.name === "4x5 Blank Bag")?.costPerUnit).toBe(0.09);
+describe("ISSUE 2 — 4x5 blank bag live-data authority (resolved by owner decision 2026-10-08: $0.11)", () => {
+  it("canonical code, calculator preset, Approved Cost Updates and the Material/VendorProduct value agree on $0.11; $0.09 is SUPERSEDED", () => {
+    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.11);
+    expect(BAG_4X5_BLANK_SUPERSEDED_SUPPLIER_BASE_2026_08_24).toBe(0.09);
+    expect(read("../app/routes/app.erp.cost-calculator.tsx")).toContain('fixed("preset:blank-4x5-bag", "Blank 4x5 bag", 0.11');
+    const entry = APPROVED_COST_TRUTH.find((item) => item.key === "bag-4x5")!;
+    expect(entry.flatCost).toBe(0.11);
+    expect(entry.matchVendorSkus).toEqual(["preset:blank-4x5-bag"]);
+    expect(run().materialPreview.find((m) => m.name === "4x5 Blank Bag")?.costPerUnit).toBe(0.11);
   });
 
-  it("the canonical bag adapter charges the $0.09 base by default and would move if $0.11 were applied — which is why no production write was made without an owner re-decision", () => {
+  it("the canonical bag adapter charges the $0.11 base by default", () => {
     const base = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 as any });
-    const explicit09 = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 as any, blankUnitCost: 0.09 });
-    const landed11 = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 as any, blankUnitCost: 0.11 });
-    expect(base.blankCost).toBeCloseTo(explicit09.blankCost, 10);
-    expect(landed11.blankCost).toBeGreaterThan(base.blankCost);
+    const explicit11 = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 as any, blankUnitCost: 0.11 });
+    const superseded09 = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 as any, blankUnitCost: 0.09 });
+    expect(base.blankCost).toBeCloseTo(explicit11.blankCost, 10);
+    expect(superseded09.blankCost).toBeLessThan(base.blankCost);
   });
 });
 

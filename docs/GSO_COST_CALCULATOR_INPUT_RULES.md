@@ -98,7 +98,7 @@ sku/name) are deduped out of the pickers — the vendor record with tiers wins.
 ### Sticker Bags (data-driven, renamed from "4x5 Sticker Bags")
 Any active record with productType "bag" (dtp_/stock_/die excluded — different
 families; OZ bags excluded by owner rule 14C.2A) or a bag-named blank
-classifies bag_sticker: today 4x5 ($0.09 verified), 4x6 (cost NEUTRALIZED by
+classifies bag_sticker: today 4x5 ($0.11 owner-approved 2026-10-08; $0.09 SUPERSEDED), 4x6 (cost NEUTRALIZED by
 14C.2A1 — NO PRICE — not verified until the owner provides pricing), and 14x16
 ($1.00 verified); a future size appears with no route change. The
 owner-required size list 4x5/4x6/5x8/6x9/14x16 always renders: sizes without a
@@ -198,7 +198,7 @@ defaultUnitCost and renamed the record "4x6 Sticker Bag" (same record ID and
 vendorSku preset:blank-4x6-bag; nothing deleted; historical quote snapshots
 untouched). The calculator now shows "4x6 Sticker Bag — NO PRICE — not
 verified"; selecting it raises the missing blank-cost blocker and every tier
-stays Draft Only. Final statuses: 4x5 $0.09 Verified / 4x6 NO PRICE / 5x8 NO
+stays Draft Only. Final statuses: 4x5 $0.11 Verified (owner 2026-10-08) / 4x6 NO PRICE / 5x8 NO
 PRICE / 6x9 NO PRICE / 14x16 $1.00 Verified / OZ excluded. Standard Jars =
 3 oz + 4 oz + 5 oz + soda-can preset (the can is treated as a jar, owner
 rule); Chiron, Miron, and Miron tops stay excluded. Entering the owner cost in

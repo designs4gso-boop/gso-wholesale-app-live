@@ -23,11 +23,11 @@
       }
     },
     "4x5 Sticker Bag (100, 1 face, 40% coverage)": {
-      "total": 37.91737437885113,
-      "unit": 0.37917374378851126,
+      "total": 39.91737437885113,
+      "unit": 0.3991737437885113,
       "status": "PROVISIONAL",
       "lines": {
-        "blank_sets": 9,
+        "blank_sets": 11,
         "print_media": 4.733333333333333,
         "ink": 1.8479999999999999,
         "art_setup": 8.333333333333334,

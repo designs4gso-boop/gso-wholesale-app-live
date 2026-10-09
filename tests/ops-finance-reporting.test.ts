@@ -8,9 +8,9 @@ const now = new Date("2026-10-03T05:00:00Z");
 
 describe("purchasing agent", () => {
   it("prepares a PurchaseRequest-shaped draft from known vendor cost, freight null", () => {
-    const r = preparePurchaseOrder({ materialName: "4x5 blank", quantity: 400, unit: "each", neededBy: "2026-10-20" }, { vendor: "BagCo", vendorId: "v1", vendorSku: "BC", moq: 500, defaultUnitCost: 0.09, leadTimeDays: 7 }, now);
+    const r = preparePurchaseOrder({ materialName: "4x5 blank", quantity: 400, unit: "each", neededBy: "2026-10-20" }, { vendor: "BagCo", vendorId: "v1", vendorSku: "BC", moq: 500, defaultUnitCost: 0.11, leadTimeDays: 7 }, now);
     expect(r.status).toBe("PO_READY_FOR_APPROVAL");
-    expect(r.draft).toMatchObject({ status: "draft", requestedQty: 500, unitCost: 0.09, estimatedCost: 45, freight: null, priority: "normal", source: "production" });
+    expect(r.draft).toMatchObject({ status: "draft", requestedQty: 500, unitCost: 0.11, estimatedCost: 55, freight: null, priority: "normal", source: "production" });
     expect(r.warnings[0]).toMatch(/below vendor MOQ/);
     expect(r.approvalSummary).toMatch(/freight excluded/);
   });

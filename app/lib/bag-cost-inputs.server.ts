@@ -23,34 +23,38 @@ import { OWNER_STANDARDS } from "./owner-standards";
 export const BAG_COST_INPUTS_VERSION = "17D.6-bag-cost-inputs";
 
 /* ------------------------------------------------------------------ *
- * OWNER DECISION 1 — blank 4x5 bag (CORRECTED 2D-4C2D)
+ * OWNER DECISION 1 — blank 4x5 bag: $0.11 EACH (OWNER DECISION 2026-10-08)
  *
- * SUPPLIER BASE COST: $0.09 each, BEFORE inbound freight.
+ * TRUE BASE COST: $0.11 each, regardless of bag colour. Effective 2026-10-08.
+ * This is the ONE current authority for the 4x5 blank; the Material row, the
+ * VendorProduct preset:blank-4x5-bag, the calculator preset, Approved Cost
+ * Updates, Cost Health / Cost Verification and this constant all carry it.
  *
- * The $0.11 used since 2D-2 was effectively a LANDED-cost assumption — base
- * plus an unstated freight allowance — and was never verified as the supplier
- * price. Blending an unmeasured freight figure into the item cost hid it from
- * the freight component that is supposed to carry it, so the two are now
- * separated: this constant is the supplier price only.
+ * SUPERSEDED 2026-10-08: the 2D-4C2D rule "$0.09 supplier base BEFORE inbound
+ * freight (owner-corrected 2026-08-24)". The repo briefly held two competing
+ * authorities (an earlier handoff said $0.11, production stayed $0.09, a later
+ * decision moved canonical back to $0.09); the owner resolved the conflict on
+ * 2026-10-08 in favour of $0.11. $0.09 is never charged anywhere current.
  *
- * INBOUND FREIGHT IS NOT MODELLED HERE. Blank bags ship on the SAME pallet
- * method from the SAME supplier as jars (never Southwest Cargo, which applies
- * only to outsourced DTP bags and boxes). No pallet rate for them has been
- * measured, so freight stays a disclosed FREIGHT_NOT_MODELLED reason rather
- * than a fabricated $0.02 that would merely reproduce the old $0.11.
+ * NO GENERIC FREIGHT UPLIFT is added on top of $0.11. Blank bags ship on the
+ * SAME pallet method from the SAME supplier as jars (never Southwest Cargo,
+ * which applies only to outsourced DTP bags and boxes). No separate verified
+ * freight policy exists, so the inbound_freight component stays $0 and is
+ * disclosed as FREIGHT_NOT_MODELED rather than invented.
  *
  * Carton data recorded for that future allocation, unused today:
  *   coloured     1,000/carton, 12.5 x 9.5 x 10 in, 10 lb gross
  *   white/black  2,000/carton, 23.5 x 13 x 9 in,   29 lb gross
  * ------------------------------------------------------------------ */
-export const BAG_4X5_BLANK_UNIT_COST = 0.09;
-export const BAG_4X5_BLANK_SOURCE = "Owner-corrected 2026-08-24: 4x5 blank bag supplier base cost $0.09 each, BEFORE inbound freight. Inbound pallet freight is a separate, not-yet-modelled component — never folded into this number.";
+export const BAG_4X5_BLANK_UNIT_COST = 0.11;
+export const BAG_4X5_BLANK_SOURCE = "Owner decision 2026-10-08: 4x5 blank bag true base cost $0.11 each, regardless of colour (supersedes the 2026-08-24 $0.09-before-freight rule). No generic freight uplift is added; inbound freight stays a separate, not-yet-modelled component.";
+export const BAG_4X5_BLANK_EFFECTIVE_DATE = "2026-10-08";
 
 /**
- * The retired LANDED assumption. Kept only so a test can prove it is never
- * used as the supplier base cost again. It is not a verified figure.
+ * SUPERSEDED 2026-10-08. The 2026-08-24 "$0.09 supplier base before inbound
+ * freight" figure. Kept only so a test can prove it is never charged again.
  */
-export const BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION = 0.11;
+export const BAG_4X5_BLANK_SUPERSEDED_SUPPLIER_BASE_2026_08_24 = 0.09;
 
 /**
  * Carton facts for the future pallet-freight allocator. Recorded, not priced —
@@ -285,7 +289,7 @@ export type BagJobInput = {
   machineKey?: string;
   cutMode?: CutMode;
   loadedMediaWidthIn?: number;
-  /** Overrides the canonical $0.09 supplier base only when a verified alternative exists. */
+  /** Overrides the canonical $0.11 owner base cost only when a verified alternative exists. */
   blankUnitCost?: number | null;
   /**
    * Optional logo/QR personalization of the premade Stock Bag design.

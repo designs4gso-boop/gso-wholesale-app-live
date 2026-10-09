@@ -150,7 +150,7 @@ function bagSpec(family: "sticker-bags" | "stock-bags"): ProductProductionSpec {
     conflictSummary: null,
     sharedSizeKeyNote: null,
     statusNote: "Owner 4x5 artboard (2D-2); cutline 3.875 x 4.875 in derived by the GSO -0.0625 in rule.",
-    physical: { bag: "4x5 in", blankCost: "BAG_4X5_BLANK_UNIT_COST (owner-corrected supplier base, freight separate)" },
+    physical: { bag: "4x5 in", blankCost: "BAG_4X5_BLANK_UNIT_COST ($0.11 owner true base cost, 2026-10-08; no freight uplift)" },
     pieces: [{ piece: "label", shape: "rect", widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied label (per printed side)" }],
     labelSets: null,
     optionalTamperBand: null,

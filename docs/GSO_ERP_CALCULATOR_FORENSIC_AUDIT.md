@@ -92,7 +92,7 @@ candidate values: docs/GSO_ERP_PRICING_CORRECTION_PLAN.md.
   `cmozcqi3w0000fj285by7l644`: all channels $0.198667/ml (=$149/750).
   INK_RATES constants match the DB exactly. **Machine cost model exists in
   the DB and is unused by the calculator.**
-- 4x5 Blank Bag `cmrpjvdc50000av2atvnbt09e` $0.09 flat, no tiers ✓; 14x16
+- 4x5 Blank Bag `cmrpjvdc50000av2atvnbt09e` $0.09 flat, no tiers ✓ (SUPERSEDED 2026-10-08: now $0.11); 14x16
   `cmrpjvdgg0002av2a3g7029za` $1.00 ✓; 4x6 `cmrpjvdf10001av2aajhsnk4f` $0
   NO PRICE ✓ (blocks). Chiron `cmrzkm4om…` $1.80 / `cmrzkm4u8…` $1.90 flat,
   no tiers ✓. Spektra 4 records with 16 tiers match the seeded owner sheet

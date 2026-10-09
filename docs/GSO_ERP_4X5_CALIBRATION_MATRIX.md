@@ -1,6 +1,6 @@
 # GSO ERP — 4x5 Calibration Matrix (15F.0J-X, 2026-07-25)
 
-Fixtures: 4x5 DOUBLE-SIDED BAGS through the CURRENT engine (blank $0.09 +
+Fixtures: 4x5 DOUBLE-SIDED BAGS through the CURRENT engine (blank $0.09 — SUPERSEDED 2026-10-08, owner base now $0.11 — +
 2-sided label production + application + packing + setup; Mimaki RasterLink
 matte/CMYK, Roland additive for spot gloss; bags-4x5 curve 65/58/52/47/45;
 $75 min-profit candidate). Owner-truth = the historical finished-bag sheet

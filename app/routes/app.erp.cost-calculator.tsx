@@ -301,7 +301,7 @@ function presetBlankItems(): BlankItemOption[] {
     ({ id, source: "preset", isPreset: true, name, productType, unitCost, costWarning: null, defaultApplicationMode: app, applicationKey: key, wastePct, vendor });
   return [
     fixed("preset:customer-supplied", "Customer supplied item - $0.00", 0, "customer-supplied", "none", "customer", 0, "Customer"),
-    fixed("preset:blank-4x5-bag", "Blank 4x5 bag", 0.09, "bag", "apply-flat-bag", "blank-4x5-bag", 4, "SAFE CARE"),
+    fixed("preset:blank-4x5-bag", "Blank 4x5 bag", 0.11, "bag", "apply-flat-bag", "blank-4x5-bag", 4, "SAFE CARE"), // owner $0.11 (2026-10-08); hidden in production by the VendorProduct row
     fixed("preset:oz-bag", "OZ bag", 0.40, "bag", "apply-flat-bag", "oz-bag", 2, "SAFE CARE"),
     fixed("preset:pound-bag", "Pound bag", 1.00, "bag", "apply-flat-bag", "pound-bag", 2, "SAFE CARE"),
     fixed("preset:3oz-jar-clear", "3oz jar - clear", 0.50, "jar", "apply-jar", "safe-care-jar", 2, "SAFE CARE"),

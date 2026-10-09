@@ -39,7 +39,7 @@ const ROWS = Object.entries(CANONICAL_CALIBRATION_IDENTITIES).map(([key, identit
 }));
 const db = { machineProfileCalibration: { findMany: async ({ where }: any) => ROWS.filter((row) => Object.entries(where).every(([field, value]) => field === "shop" ? row.shop === value : (row as any)[field] === value)) } };
 const POLICY = defaultPricingPolicyValues();
-const BAG_INPUTS: any = { available: true, reasons: [], matte: { name: "Poseidon Matte", costPerSqft: 213 / 675 }, holographic: { name: "Holographic", costPerSqft: 0.7141463415 }, blank: { name: "Blank 4x5 bag (Safe Care)", unitCost: 0.09, tiers: [] }, rolandSqftPerHour: 150, policyValues: POLICY };
+const BAG_INPUTS: any = { available: true, reasons: [], matte: { name: "Poseidon Matte", costPerSqft: 213 / 675 }, holographic: { name: "Holographic", costPerSqft: 0.7141463415 }, blank: { name: "Blank 4x5 bag (Safe Care)", unitCost: 0.11, tiers: [] }, rolandSqftPerHour: 150, policyValues: POLICY };
 
 type Row = { surface: string; family: string; config: string; rate: number; cost: number | null; total: number | null; unit: number | null; rule: string; note?: string };
 

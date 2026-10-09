@@ -147,9 +147,9 @@ describe("2D-4D A4 contour needs a measured path length", () => {
  * ================================================================== */
 
 describe("2D-4D B bags", () => {
-  it("blank base is $0.09 and no $0.02 freight is assumed", () => {
-    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.09);
-    expect(computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 }).blankCost).toBeCloseTo(90, 10);
+  it("blank base is $0.11 (owner decision 2026-10-08) and no generic freight uplift is assumed", () => {
+    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.11);
+    expect(computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 }).blankCost).toBeCloseTo(110, 10);
     const code = readFileSync("app/lib/bag-cost-inputs.server.ts", "utf8")
       .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
     expect(code).not.toMatch(/0\.02/);

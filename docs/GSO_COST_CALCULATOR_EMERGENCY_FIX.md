@@ -9,7 +9,7 @@ finalization block (`COST NOT VERIFIED — OWNER REVIEW REQUIRED`), and **Save a
 draft quote** (full tier/freight/override snapshot into a draft Quote; history
 untouched). Margin math is divisor-based, identical to the engine (tested).
 
-**Verified inputs:** 4x5 bag $0.09; Chiron 150ml $1.90 cap-incl; Miron qty tiers;
+**Verified inputs:** 4x5 bag $0.09 (SUPERSEDED 2026-10-08: now $0.11); Chiron 150ml $1.90 cap-incl; Miron qty tiers;
 material $/sqft + roll dims (matte/gloss 54x150, holo 50x164, clear 54x50, banner
 54x150); Mimaki CMYK+white $0.176/ml; Roland $149/750 (provisional-uniform across
 channels, owner-approved); $8/hr machine; owner labor: art $8.3333/design, print

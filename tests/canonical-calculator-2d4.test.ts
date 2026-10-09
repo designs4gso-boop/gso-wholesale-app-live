@@ -307,10 +307,10 @@ describe("2D-4 bag integration", () => {
   it("the canonical adapter is authoritative and carries the owner facts", () => {
     const r = run(BAG_QS);
     expect(r.adapter.bag).not.toBeNull();
-    // $0.09 blank at production quantity
+    // $0.11 blank at production quantity (owner decision 2026-10-08)
     const blankLine = r.trueCost.lines.find((l) => l.key === "blank_sets")!;
     expect(blankLine.amount).toBeCloseTo(1000 * BAG_4X5_BLANK_UNIT_COST, 8);
-    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.09);
+    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.11);
     // 10s per applied side at $20/hr, 2 sides
     expect(BAG_APPLICATION_SECONDS_PER_SIDE).toBe(10);
     expect(r.trueCost.lines.find((l) => l.key === "application")!.amount)
