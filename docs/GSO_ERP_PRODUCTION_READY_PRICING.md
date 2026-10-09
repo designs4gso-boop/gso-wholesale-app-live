@@ -74,7 +74,7 @@ exactly one $85 Spektra charge per PO.
   designs share it (per-design setup only), split displayed with remainder.
   Multi-line: different sizes/finishes = separate lines, each on its own
   band/premium curve, packing once, combined price = sum of line prices.
-- **Sticker Bags**: verified blank costs (4x5 $0.09 / 14x16 $1.00; other
+- **Sticker Bags**: verified blank costs (4x5 $0.11 owner decision 2026-10-08 — $0.09 SUPERSEDED / 14x16 $1.00; other
   sizes NO PRICE -> BLOCKED), size-specific application standards, label
   cutting + machine now included; researched bags-4x5 curve.
 - **Jars**: exact Chiron flat / Miron tier + top rules unchanged; label

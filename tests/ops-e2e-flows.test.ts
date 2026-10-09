@@ -125,7 +125,7 @@ describe("GSO flow: sticker bag order from lead to invoice readiness", () => {
   });
 
   it("5 purchasing -> vendor cost missing blocker -> invoice readiness -> follow-up -> reorder -> exceptions -> reports", () => {
-    expect(preparePurchaseOrder({ materialName: "4x5 blank", quantity: 520, unit: "each" }, { vendor: "BagCo", moq: 500, defaultUnitCost: 0.09, leadTimeDays: 7 }, now)).toMatchObject({ status: "PO_READY_FOR_APPROVAL" });
+    expect(preparePurchaseOrder({ materialName: "4x5 blank", quantity: 520, unit: "each" }, { vendor: "BagCo", moq: 500, defaultUnitCost: 0.11, leadTimeDays: 7 }, now)).toMatchObject({ status: "PO_READY_FOR_APPROVAL" });
     const missing = preparePurchaseOrder({ materialName: "roland white ink", quantity: 1, unit: "cart" }, { vendor: "InkCo", defaultUnitCost: null }, now);
     expect(missing).toMatchObject({ status: "VENDOR_COST_REQUIRED", draft: null });
     expect(routeException({ code: "VENDOR_COST_MISSING", entity: "material:white-ink", summary: missing.approvalSummary, now }).destination).toBe("purchasing");

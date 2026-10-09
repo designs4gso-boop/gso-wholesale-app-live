@@ -523,10 +523,10 @@ export function buildReplayTests(context: {
       id: "T3",
       name: "1,000 × 4x5 sticker bags",
       quantity: 1000,
-      product: "4x5 blank bag (verified $0.09) + label media",
+      product: "4x5 blank bag (owner $0.11, 2026-10-08) + label media",
       finish: "CMYK",
       drivers: "Verified bag cost, media $/sqft, flat-bag application, cutting",
-      verify: "Compare against the live configurator price for the same combo; bag line at $0.09.",
+      verify: "Compare against the live configurator price for the same combo; bag line at $0.11.",
       href: context.bagItemId
         ? calculatorPrefillUrl({ lineCount: 1, lineName: "4x5 bag label", lineQty: 1000, lineLabelType: "front", itemMode: "inventory", itemId: context.bagItemId, applicationMode: "apply-flat-bag", cuttingMode: "square" })
         : null,

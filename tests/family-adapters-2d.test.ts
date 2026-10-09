@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
-  BAG_4X5_ARTBOARD_IN, BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION, BAG_4X5_BLANK_UNIT_COST, BAG_4X5_CUTLINE_IN,
+  BAG_4X5_ARTBOARD_IN, BAG_4X5_BLANK_SUPERSEDED_SUPPLIER_BASE_2026_08_24, BAG_4X5_BLANK_UNIT_COST, BAG_4X5_CUTLINE_IN,
   BAG_APPLICATION_LABOR_RATE_PER_HOUR, BAG_APPLICATION_RETIRED_LABELS_PER_HOUR,
   BAG_APPLICATION_SECONDS_PER_SIDE, BAG_REASONS, STOCK_BAG_MOQ,
   bagApplicationCost, bagSetupCost, computeBagPhysical,
@@ -84,15 +84,13 @@ describe("2D-1 labels / stickers", () => {
  * ================================================================== */
 
 describe("2D-2 4x5 sticker bag + stock bag", () => {
-  it("blank bag base is EXACTLY $0.09 supplier price, and the $0.11 landed assumption is retired", () => {
-    // 2D-4C2D reversal: $0.09 is the supplier base BEFORE inbound freight;
-    // $0.11 was a landed assumption that hid freight inside the item cost.
-    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.09);
-    expect(BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION).toBe(0.11);
+  it("blank bag base is EXACTLY $0.11 (owner decision 2026-10-08), and the $0.09-before-freight rule is superseded", () => {
+    expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.11);
+    expect(BAG_4X5_BLANK_SUPERSEDED_SUPPLIER_BASE_2026_08_24).toBe(0.09);
     const r = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 });
-    expect(r.blankCost).toBeCloseTo(1000 * 0.09, 10);
-    // the retired landed assumption is never charged
-    expect(r.blankCost).not.toBeCloseTo(1000 * 0.11, 2);
+    expect(r.blankCost).toBeCloseTo(1000 * 0.11, 10);
+    // the superseded $0.09 supplier base is never charged
+    expect(r.blankCost).not.toBeCloseTo(1000 * 0.09, 2);
   });
 
   it("cutline is 3.875 x 4.875 with a 17.20in perimeter — never the 4x5 artboard", () => {
@@ -141,7 +139,7 @@ describe("2D-2 4x5 sticker bag + stock bag", () => {
     expect(two.application.applicationLaborCost).toBeCloseTo(2 * one.application.applicationLaborCost, 10);
     // the bag itself is never charged twice — the blank line owns it
     expect(two.application.itemCost).toBe(0);
-    expect(two.blankCost).toBeCloseTo(1000 * 0.09, 10);
+    expect(two.blankCost).toBeCloseTo(1000 * 0.11, 10);
   });
 
   it("weeding is present and no legacy cut multiplier exists", () => {
@@ -191,19 +189,19 @@ describe("2D-2 4x5 sticker bag + stock bag", () => {
   it("STOCK BAG: no $0 template blank and no Zakeke dependency", () => {
     const stock = computeBagPhysical({ product: "stock_bag", bagQuantity: 1000, sides: 1 });
     expect(stock.blankCost).toBeGreaterThan(0);
-    expect(stock.blankCost).toBeCloseTo(1000 * 0.09, 10);
+    expect(stock.blankCost).toBeCloseTo(1000 * 0.11, 10);
     // check CODE, not prose — the header comment deliberately says "NO ZAKEKE"
     const src = readFileSync("app/lib/bag-cost-inputs.server.ts", "utf8");
     const code = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
     for (const t of ["Zakeke", "zakeke", "STOCK-BAG-4X5-TBD"]) expect(code.includes(t), t).toBe(false);
     expect(src.match(/^import /gm)!.every((i) => !/zakeke/i.test(i))).toBe(true);
-    // 2D-4C2D: 0.09 IS the charged supplier base now, and 0.11 survives only
-    // as the named retired landed assumption.
-    expect(code).toMatch(/BAG_4X5_BLANK_UNIT_COST = 0\.09/);
-    expect(code).toMatch(/BAG_4X5_BLANK_RETIRED_LANDED_ASSUMPTION = 0\.11/);
-    expect(code).toMatch(/BAG_4X5_BLANK_SOURCE[\s\S]*BEFORE inbound freight/);
-    // 0.11 is never the charged value
-    expect(code).not.toMatch(/BAG_4X5_BLANK_UNIT_COST = 0\.11/);
+    // 2026-10-08: 0.11 IS the charged owner base, and 0.09 survives only as
+    // the named SUPERSEDED supplier-base figure.
+    expect(code).toMatch(/BAG_4X5_BLANK_UNIT_COST = 0\.11/);
+    expect(code).toMatch(/BAG_4X5_BLANK_SUPERSEDED_SUPPLIER_BASE_2026_08_24 = 0\.09/);
+    expect(code).toMatch(/BAG_4X5_BLANK_SOURCE[\s\S]*2026-10-08/);
+    // 0.09 is never the charged value
+    expect(code).not.toMatch(/BAG_4X5_BLANK_UNIT_COST = 0\.09/);
   });
 
   it("stock bag setup never charges new-customer art, however many designs are passed", () => {
@@ -338,11 +336,12 @@ describe("2D-3A banners", () => {
  * ================================================================== */
 
 describe("2D cross-family", () => {
-  it("the Approved Cost Updates seed carries NO 4x5 blank-bag correction at all", () => {
-    // 2D-4C2D1: cancelled and removed, not restated as a no-op $0.09 write.
-    expect(APPROVED_COST_TRUTH.find((i) => i.key === "bag-4x5")).toBeUndefined();
-    expect(LEGACY_CONFLICTING_RATES.bag4x5Blank011LandedAssumption.value).toBe(0.11);
-    expect(LEGACY_CONFLICTING_RATES.bag4x5Blank011LandedAssumption.supersededBy).toMatch(/0\.09/);
+  it("the Approved Cost Updates seed carries the owner $0.11 4x5 blank-bag value (2026-10-08) and never creates a duplicate row", () => {
+    const entry = APPROVED_COST_TRUTH.find((i) => i.key === "bag-4x5")!;
+    expect(entry.flatCost).toBe(0.11);
+    expect(entry.creation).toBeUndefined();
+    expect(LEGACY_CONFLICTING_RATES.bag4x5Blank009SupplierBaseSuperseded.value).toBe(0.09);
+    expect(LEGACY_CONFLICTING_RATES.bag4x5Blank009SupplierBaseSuperseded.supersededBy).toMatch(/0\.11/);
   });
 
   it("the 256/hr application standard is retired from canonical bag costing", () => {

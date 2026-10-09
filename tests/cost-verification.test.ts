@@ -200,11 +200,11 @@ describe("approved cost updates (13.2.2)", () => {
       [1000, 0.7138], [2500, 0.4744], [5000, 0.4029], [7500, 0.3458], [10000, 0.3117],
     ]);
     const bags = APPROVED_COST_TRUTH.filter((item) => item.key.startsWith("bag-"));
-    // 2D-4C2D1: the 4x5 entry is REMOVED — production already holds the
-    // owner-confirmed $0.09 base, so there is no correction to offer.
+    // 2026-10-08: the 4x5 entry is back at the owner $0.11 (no creation spec);
     // 4x6 and 14x16 are unchanged and keep the 2026-07-17 marker.
-    expect(bags.map((bag) => bag.key)).toEqual(["bag-4x6", "bag-14x16"]);
-    expect(bags.map((bag) => bag.flatCost)).toEqual([0.1, 1.0]);
+    expect(bags.map((bag) => bag.key)).toEqual(["bag-4x5", "bag-4x6", "bag-14x16"]);
+    expect(bags.map((bag) => bag.flatCost)).toEqual([0.11, 0.1, 1.0]);
+    expect(bags[0].creation).toBeUndefined();
     expect(APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x6x2-pouch")!.policy).toBe("do_not_update");
     expect(APPROVED_COST_TRUTH.find((item) => item.key === "miron-black-metal-lids")!.policy).toBe("do_not_update");
     expect(APPROVED_COST_TRUTH.filter((item) => item.key.startsWith("template-")).every((item) => item.policy === "manual_review")).toBe(true);

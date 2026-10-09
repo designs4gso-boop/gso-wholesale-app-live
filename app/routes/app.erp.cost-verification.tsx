@@ -724,7 +724,7 @@ export default function CostVerificationRoute() {
             <b style={{ color: "#166534" }}>Raw costs VERIFIED (owner-approved 2026-07-17):</b>
             <ul style={{ margin: "6px 0 0 18px", lineHeight: 1.7 }}>
               <li>Miron jars + normal SAN lid (tiered) and SAFECARE 3oz/4oz/5oz jars (flat)</li>
-              <li>Blank bags: 4x5 $0.09 · 4x6 $0.10 · 14x16 $1.00</li>
+              <li>Blank bags: 4x5 $0.11 (owner decision 2026-10-08, any colour; supersedes $0.09) · 4x6 $0.10 · 14x16 $1.00</li>
               <li>DTP 4x5x2 blank pouch (approved tiered $0.7138 → $0.3117)</li>
               <li>Roll media: Poseidon matte/gloss $0.3156 · holographic $0.7141 · banner vinyl $0.2963 per sqft</li>
               <li>Raw ink: Mimaki $0.1760/ml · Roland $0.1987/ml</li>

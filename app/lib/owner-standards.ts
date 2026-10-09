@@ -146,15 +146,16 @@ export const LEGACY_CONFLICTING_RATES = {
     supersededBy: "bag-cost-inputs.server.ts BAG_APPLICATION_SECONDS_PER_SIDE = 10 seconds per applied side at $20/hr = $0.0555555556/side, $0.1111111111 front+back (owner 2026-08-22).",
   },
   /**
-   * 2D-4C2D REVERSAL. $0.09 is the CORRECT supplier base cost, and $0.11 is
-   * the retired landed-cost assumption. The planned production update
-   * $0.09 -> $0.11 is CANCELLED: the production VendorProduct row already
-   * holds the right number, so no DB change is outstanding.
+   * SUPERSEDED 2026-10-08. The 2D-4C2D "$0.09 supplier base before inbound
+   * freight" rule (owner-corrected 2026-08-24) competed with an earlier $0.11
+   * handoff; the owner resolved the conflict on 2026-10-08: the 4x5 blank bag
+   * true base cost is $0.11 each regardless of colour, with no generic
+   * freight uplift. Production Material + VendorProduct updated the same day.
    */
-  bag4x5Blank011LandedAssumption: {
-    value: 0.11,
-    location: "retired: bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST (2D-2 through 2D-4C2C) and the approved-cost-updates seed",
-    supersededBy: "bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST = $0.09 supplier base (owner-corrected 2026-08-24). Inbound pallet freight is a SEPARATE component and is not yet modelled; it must never be folded back into the item cost.",
+  bag4x5Blank009SupplierBaseSuperseded: {
+    value: 0.09,
+    location: "superseded: bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST (2D-4C2D, 2026-08-24 through 2026-10-08), production Material/VendorProduct until 2026-10-08",
+    supersededBy: "bag-cost-inputs.server.ts BAG_4X5_BLANK_UNIT_COST = $0.11 owner true base cost (owner decision 2026-10-08, any colour). Inbound freight remains a SEPARATE, not-yet-modelled component; no generic uplift is added on top of $0.11.",
   },
   bag4x5PerSideLegacy: {
     value: 20 / 180, // $0.1111 — WIRED_LABOR.bag4x5PerSide (13A.3 era)

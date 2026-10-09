@@ -60,7 +60,7 @@ describe("2D-4E2 sticker bag MOQ in the canonical adapter", () => {
   it("the MOQ is eligibility only — 49 bags still consume 49 bags of material and applications", () => {
     const below = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 49, sides: 2 });
     expect(below.labelQuantity).toBe(98);
-    expect(below.blankCost).toBeCloseTo(49 * 0.09, 10);
+    expect(below.blankCost).toBeCloseTo(49 * 0.11, 10);
     expect(below.application.applicationEvents).toBe(98);
     expect(below.nesting.materialFootprintSqft).toBeGreaterThan(0);
   });

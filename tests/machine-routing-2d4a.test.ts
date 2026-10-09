@@ -352,7 +352,7 @@ describe("2D-4A standard jobs route correctly by family", () => {
 
   it("bags keep every approved 2D fact under the new routing", () => {
     const r = resolvedFor(BAG);
-    expect(r.trueCost.lines.find((l: any) => l.key === "blank_sets")!.amount).toBeCloseTo(1000 * 0.09, 8);
+    expect(r.trueCost.lines.find((l: any) => l.key === "blank_sets")!.amount).toBeCloseTo(1000 * 0.11, 8); // owner $0.11 (2026-10-08)
     expect(r.trueCost.lines.find((l: any) => l.key === "application")!.amount).toBeCloseTo((1000 * 2 * 10 / 3600) * 20, 6);
     expect(r.diagnostics.cutPathIn).toBeCloseTo(2000 * 2 * (3.875 + 4.875), 6);
     expect(r.diagnostics.weedingPages).toBeGreaterThan(0);

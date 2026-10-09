@@ -112,7 +112,7 @@ LABELS (Cost Calculator, Stickers & Labels)
 4X5 STICKER BAGS
 - qty 49: BLOCKED `STICKER_BAG_BELOW_MOQ`; qty 50: eligible
 - Front only vs Front and back: different canonical cost (two sides cost more)
-- blank line shows $0.09 base before freight; `FREIGHT_NOT_MODELED` disclosed, not blocking
+- blank line shows $0.11 owner base (2026-10-08; $0.09-before-freight SUPERSEDED); `FREIGHT_NOT_MODELED` disclosed, not blocking
 - cutline shown 3.875 x 4.875 from the 4.000 x 5.000 artboard
 - save succeeds; Quotes shows canonical unit cost
 

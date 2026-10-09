@@ -9,7 +9,7 @@ BA=Banners, CU=Custom Item, DTP=DTP Bags.
 
 | Component | SB | SJ | PJ | ST | BA | CU | DTP |
 |---|---|---|---|---|---|---|---|
-| Blank/vendor item | INC (0.09/1.00; 4x6+sizes BLK) | INC (code presets, P3-4) | INC (flat Chiron / tiered Miron+top) | — | — | INC (owner-entered, Estimated) | INC (Spektra tiers) |
+| Blank/vendor item | INC (0.11/1.00 — 4x5 owner $0.11 since 2026-10-08; 4x6+sizes BLK) | INC (code presets, P3-4) | INC (flat Chiron / tiered Miron+top) | — | — | INC (owner-entered, Estimated) | INC (Spektra tiers) |
 | Material (media) | INC | INC | INC | INC | INC | INC when dims given | EXC (vendor-finished) |
 | CMYK ink | INC (0.6 ml/sqft PROV) | INC | INC | INC | INC | INC when dims | EXC |
 | White ink | INC (linear PROV) | INC | INC | INC | INC | INC | EXC |

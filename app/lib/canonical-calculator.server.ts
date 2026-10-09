@@ -632,7 +632,7 @@ export function assembleCanonicalJob(
       ok: true,
       unitCost: production > 0 ? bag.blankCost / production : 0,
       label: "4x5 blank bag",
-      source: "Owner-corrected 2026-08-24: $0.09 each, supplier base BEFORE inbound freight (pallet freight not yet modelled).",
+      source: "Owner decision 2026-10-08: $0.11 each, true base cost regardless of colour (supersedes the 2026-08-24 $0.09-before-freight rule); no generic freight uplift, inbound freight not modelled.",
     };
 
     setup = {
