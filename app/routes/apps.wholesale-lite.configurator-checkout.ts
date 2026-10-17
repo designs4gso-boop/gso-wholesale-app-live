@@ -301,6 +301,21 @@ export async function action({ request }: ActionFunctionArgs) {
       }
       const productFamily = familyGate.family;
 
+      // Basic-plan checkout authority (2026-10-17): a dtp_/sticker_ type with no
+      // launch pricer has no canonical price. It must fail closed here, never
+      // fall through to the 4x5 bag engine below and be charged as a bag.
+      if ((productFamily === "DTP Pouches" && !dtpLaunch) || (productFamily === "Stickers" && !stickerLaunch)) {
+        return jsonResponse(
+          {
+            ok: false,
+            code: "NO_PRICING_AUTHORITY",
+            error: "This product is not available for online pricing yet.",
+            item: { handle, productGid, productType },
+          },
+          { status: 400 },
+        );
+      }
+
       // 0D-F: required-design gate for product types whose artwork must come
       // from Zakeke. Scope, stated accurately:
       //   - PRE-ARMED for sticker_bag_4x5; it becomes effective once that

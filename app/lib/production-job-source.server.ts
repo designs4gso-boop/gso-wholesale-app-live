@@ -547,6 +547,18 @@ export function configuratorLinesOf(order: any): any[] {
 }
 
 /**
+ * Basic-plan checkout authority (2026-10-17): configured lines whose price the
+ * server never set. The configurator checkout creates CUSTOM draft-order lines
+ * (no variant) at a server-computed price; a storefront /cart/add line always
+ * carries a variant, and its Material/Finish/_GSO properties are buyer-set, so
+ * it was charged the variant price, not the configured price. Such lines must
+ * never auto-create a production job.
+ */
+export function unverifiedConfiguratorLinesOf(order: any): any[] {
+  return configuratorLinesOf(order).filter((line: any) => line?.variant_id != null && clean(line.variant_id) !== "");
+}
+
+/**
  * Phase 5: decode personalization identity off a paid order, before the
  * transaction opens (re-resolution makes network calls, which must never run
  * inside a Prisma transaction).
