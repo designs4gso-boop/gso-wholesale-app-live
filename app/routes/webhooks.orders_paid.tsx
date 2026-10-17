@@ -1,7 +1,11 @@
 import { authenticate, unauthenticated } from "../shopify.server";
-import { sendProductionAlertSafe, unrecognizedPaidOrderQueueItem } from "../lib/production-alert.server";
+import {
+  sendProductionAlertSafe,
+  unrecognizedPaidOrderQueueItem,
+  unverifiedPricePaidOrderQueueItem,
+} from "../lib/production-alert.server";
 import db from "../db.server";
-import { createProductionJobFromSource } from "../lib/production-job-source.server";
+import { createProductionJobFromSource, unverifiedConfiguratorLinesOf } from "../lib/production-job-source.server";
 import { createAdminGraphql } from "../lib/personalization-assets.server";
 import { resolveWithBoundedRetry } from "../lib/personalization-checkout.server";
 import type { PersonalizationProductionResolver } from "../lib/personalization-production.server";
@@ -172,6 +176,19 @@ export const action = async ({ request }: { request: Request }) => {
   if (quoteId) {
     const message = await applyQuotePaymentFromOrder(shop, quoteId, order, note);
     return new Response(message, { status: 200 });
+  }
+
+  // Basic-plan checkout authority (2026-10-17): configured lines bought through
+  // native /cart/add were charged the variant price, not the server-computed
+  // configured price — hold the order for review, never auto-create a job.
+  const unverifiedLines = unverifiedConfiguratorLinesOf(order);
+  if (unverifiedLines.length) {
+    try {
+      await db.agentReviewQueueItem.create({ data: unverifiedPricePaidOrderQueueItem(shop, order, unverifiedLines) as any });
+    } catch (error) {
+      console.error("orders_paid unverified-price hold trail failed", error);
+    }
+    return new Response("OK held for price review: configured line(s) bypassed the GSO checkout", { status: 200 });
   }
 
   // Configurator orders: same pseudo-quoteId idempotency, same ticket naming,

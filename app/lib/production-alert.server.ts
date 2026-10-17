@@ -63,3 +63,24 @@ export function unrecognizedPaidOrderQueueItem(shop: string, order: any) {
     createdBy: "orders_paid_webhook",
   };
 }
+
+/**
+ * Basic-plan checkout authority (2026-10-17): a paid order carrying configured
+ * lines that bypassed the server-priced draft-order checkout (native
+ * /cart/add). Held for staff price review instead of auto-creating a job.
+ */
+export function unverifiedPricePaidOrderQueueItem(shop: string, order: any, unverifiedLines: any[]) {
+  const base = unrecognizedPaidOrderQueueItem(shop, order);
+  const orderName = String(order?.name || order?.order_number || order?.id || "order");
+  const titles = unverifiedLines
+    .map((line: any) => `${line?.title || "line"} x${Number(line?.quantity || 0)} @ $${String(line?.price ?? "?")}`)
+    .slice(0, 10);
+  return {
+    ...base,
+    source: "shopify_order_unverified_price",
+    reviewLevel: "owner_review",
+    productFamily: "configured_unverified_price",
+    internalNotes: `PAID SHOPIFY ORDER ${orderName} created NO production job: configured line(s) were added through native Shopify add-to-cart, not the server-priced GSO checkout, so the charged price was never verified. Lines: ${titles.join("; ")}.`,
+    recommendedStaffAction: "Compare the charged price with the current GSO configured price before production; collect the difference or refund, then create the job manually.",
+  };
+}
