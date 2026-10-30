@@ -84,26 +84,26 @@ describe("material unit cost resolution", () => {
 });
 
 describe("blank/vendor item tiers", () => {
-  // Matches the seeded Miron 50ml jar tier table.
+  // Matches the seeded Miron 50ml jar tier table (owner-approved 2026-10-29).
   const mironTiers = [
-    { minQty: 1, maxQty: 249, unitCost: 2.46 },
-    { minQty: 250, maxQty: 499, unitCost: 2.24 },
-    { minQty: 500, maxQty: 999, unitCost: 2.03 },
-    { minQty: 1000, maxQty: 2499, unitCost: 1.89 },
-    { minQty: 2500, maxQty: null, unitCost: 1.74 },
+    { minQty: 1, maxQty: 249, unitCost: 2.47 },
+    { minQty: 250, maxQty: 499, unitCost: 2.26 },
+    { minQty: 500, maxQty: 999, unitCost: 2.06 },
+    { minQty: 1000, maxQty: 2499, unitCost: 1.93 },
+    { minQty: 2500, maxQty: null, unitCost: 1.77 },
   ];
 
   it("selects the tier whose range contains the quantity", () => {
-    expect(blankItemUnitCostAtQty(mironTiers, 2.46, 100).unitCost).toBe(2.46);
-    expect(blankItemUnitCostAtQty(mironTiers, 2.46, 250).unitCost).toBe(2.24);
-    expect(blankItemUnitCostAtQty(mironTiers, 2.46, 600).unitCost).toBe(2.03);
-    expect(blankItemUnitCostAtQty(mironTiers, 2.46, 2499).unitCost).toBe(1.89);
-    expect(blankItemUnitCostAtQty(mironTiers, 2.46, 5000).unitCost).toBe(1.74);
+    expect(blankItemUnitCostAtQty(mironTiers, 2.47, 100).unitCost).toBe(2.47);
+    expect(blankItemUnitCostAtQty(mironTiers, 2.47, 250).unitCost).toBe(2.26);
+    expect(blankItemUnitCostAtQty(mironTiers, 2.47, 600).unitCost).toBe(2.06);
+    expect(blankItemUnitCostAtQty(mironTiers, 2.47, 2499).unitCost).toBe(1.93);
+    expect(blankItemUnitCostAtQty(mironTiers, 2.47, 5000).unitCost).toBe(1.77);
   });
 
   it("labels the selected tier range", () => {
-    expect(blankItemUnitCostAtQty(mironTiers, 2.46, 600).tierLabel).toBe("500-999");
-    expect(blankItemUnitCostAtQty(mironTiers, 2.46, 5000).tierLabel).toBe("2500+");
+    expect(blankItemUnitCostAtQty(mironTiers, 2.47, 600).tierLabel).toBe("500-999");
+    expect(blankItemUnitCostAtQty(mironTiers, 2.47, 5000).tierLabel).toBe("2500+");
     expect(tierRangeLabel(null)).toBe("fixed");
   });
 

@@ -423,9 +423,22 @@ export function jarFreightPerUnit(brand: JarBrand, size: JarSizeKey): JarFreight
 
 export const MIRON_TIER_MIN_QTYS = [1, 250, 500, 1000, 2500];
 
-/** Complete-set cost ladders, indexed to MIRON_TIER_MIN_QTYS. */
+/**
+ * Complete-set cost ladders, indexed to MIRON_TIER_MIN_QTYS.
+ *
+ * ACQUISITION COST only — the jar + its top/lid. Labels, label application,
+ * tamper band, printing, ink, machine time and finishing are separate cost
+ * lines in the canonical engine and are never folded in here. These are not
+ * selling prices (the customer ladder is canonical-jar-pricing.ts).
+ *
+ * 50ml: OWNER-APPROVED 2026-10-29 — supersedes the 2026-10-28 ladder
+ * (2.31 / 2.08 / 1.88 / 1.75 / 1.60) and the 2026-07-17 ladder
+ * (2.46 / 2.24 / 2.03 / 1.89 / 1.74). Blank jar + lid ONLY. Bands 1–249 /
+ * 250–499 / 500–999 / 1,000–2,499 / 2,500+, stepped, never interpolated.
+ * Other sizes unchanged.
+ */
 export const MIRON_SET_COST: Partial<Record<JarSizeKey, number[]>> = {
-  "50ml": [2.46, 2.24, 2.03, 1.89, 1.74],
+  "50ml": [2.47, 2.26, 2.06, 1.93, 1.77],
   "100ml_tall": [2.78, 2.54, 2.31, 2.14, 1.99],
   "100ml_wide": [2.9, 2.67, 2.44, 2.26, 2.1],
   "150ml": [3.26, 3.0, 2.76, 2.54, 2.37],
@@ -455,6 +468,11 @@ export const CHIRON_SET_COST: Partial<Record<JarSizeKey, number>> = {
   "100ml_wide": 1.8,
   "150ml": 1.9,
   // 50ml deliberately absent — UNVERIFIED, must resolve MISSING_COST.
+};
+
+/** Per-size provenance for Miron ladders that have a dated owner record. */
+export const MIRON_SET_COST_PROVENANCE: Partial<Record<JarSizeKey, { status: "OWNER_VERIFIED"; record: string }>> = {
+  "50ml": { status: "OWNER_VERIFIED", record: "Owner-approved 50ml Miron blank jar + lid acquisition cost ladder, 2026-10-29" },
 };
 
 /** Per-size provenance for the Chiron flat costs. */

@@ -77,7 +77,7 @@ describe("quote prep readiness", () => {
     const r = prepareQuote(complete, { now });
     expect(JSON.stringify(r)).not.toMatch(/unitPrice|\$\d/);
     expect(r.blockedNextSteps).toContain("Setting final unit price");
-    expect(r.calculatorPath).toBe("/app/erp/cost-calculator");
+    expect(r.calculatorPath).toBe("/app/quotes"); // 2026-10-19: staff go to Quotes / CRM (calculator is owner only)
     expect(prepareQuote({ ...complete, quantity: 20 }, { now }).staffReviewTriggers.join(" ")).toMatch(new RegExp(`below official MOQ \\(${officialMoqForFamily("sticker-bags")}\\)`));
   });
 });

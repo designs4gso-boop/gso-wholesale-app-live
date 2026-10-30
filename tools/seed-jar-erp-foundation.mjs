@@ -13,13 +13,13 @@ const JARS = [
     vendor: "MIRON",
     vendorSku: "preset:miron-50ml",
     moq: 128,
-    defaultUnitCost: 2.46,
+    defaultUnitCost: 2.47, // owner-approved 2026-10-29 (blank jar + lid)
     tiers: [
-      { minQty: 1, maxQty: 249, unitCost: 2.46, notes: "Cost Calculator preset <250" },
-      { minQty: 250, maxQty: 499, unitCost: 2.24, notes: "Cost Calculator preset 250+" },
-      { minQty: 500, maxQty: 999, unitCost: 2.03, notes: "Cost Calculator preset 500+" },
-      { minQty: 1000, maxQty: 2499, unitCost: 1.89, notes: "Cost Calculator preset 1,000+" },
-      { minQty: 2500, maxQty: null, unitCost: 1.74, notes: "Cost Calculator preset 2,500+" },
+      { minQty: 1, maxQty: 249, unitCost: 2.47, notes: "Owner-approved 2026-10-29 <250" },
+      { minQty: 250, maxQty: 499, unitCost: 2.26, notes: "Owner-approved 2026-10-29 250+" },
+      { minQty: 500, maxQty: 999, unitCost: 2.06, notes: "Owner-approved 2026-10-29 500+" },
+      { minQty: 1000, maxQty: 2499, unitCost: 1.93, notes: "Owner-approved 2026-10-29 1,000+" },
+      { minQty: 2500, maxQty: null, unitCost: 1.77, notes: "Owner-approved 2026-10-29 2,500+" },
     ],
   },
   {

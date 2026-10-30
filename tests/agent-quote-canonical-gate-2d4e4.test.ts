@@ -45,7 +45,7 @@ describe("2D-4E4 the conversion gate", () => {
       expect(gate.code).toBe(AGENT_GATE_CONVERSION_ERROR_CODE);
       expect(gate.model).toBe("CANONICAL_COST_AUTHORITY");
       expect(gate.reason).toContain(AGENT_GATE_REASONS.canonicalAuthorityRequired);
-      expect(gate.reason).toContain("Cost Calculator");
+      expect(gate.reason).toContain("Owner Approval Required"); // 2026-10-19: staff are sent to Quotes / CRM, not the owner-only calculator
     }
     expect(AGENT_QUOTE_CANONICAL_GATE_VERSION).toContain("agent-quote-canonical-gate");
   });

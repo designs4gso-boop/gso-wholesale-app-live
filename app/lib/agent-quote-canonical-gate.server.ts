@@ -14,8 +14,8 @@
 // "clearly unusable draft" cannot be represented without inventing a number.
 // The safe existing architecture is therefore the conversion REFUSAL path the
 // route already has (conversion-failed event + redirect with a reason), and
-// staff build the quote in the Cost Calculator where canonical authority is
-// enforced.
+// the OWNER prices the job in the owner-only Cost & Pricing Calculator where
+// canonical authority is enforced (2026-10-19: staff are sent to Quotes / CRM).
 //
 // Non-canonical families (DTP pouches, boxes, custom/unknown) keep their
 // existing recipe-engine conversion unchanged. Nothing here guesses a family:
@@ -98,6 +98,6 @@ export function agentConversionCanonicalGate(recipe: {
     reason:
       `${AGENT_GATE_REASONS.canonicalAuthorityRequired}: recipe "${String(recipe.name || "")}" belongs to "${String(familyKey)}", a canonical-authority manufacturing family. ` +
       `The agent conversion prices from the recipe tier engine, which is not the canonical true manufacturing cost, and the canonical engine cannot be run from a recipe row without inventing job inputs. ` +
-      `No draft was created — build this quote in the Cost Calculator, where canonical authority is enforced.`,
+      `No draft was created — open Quotes / CRM: Owner Approval Required (the owner prices canonical jobs in the owner-only Cost & Pricing Calculator).`,
   };
 }

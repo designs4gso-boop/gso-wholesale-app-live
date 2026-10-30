@@ -4,17 +4,20 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { authenticate } from "../shopify.server";
+import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
+    // 2026-10-19: owner-only nav entries are hidden for staff (the routes themselves refuse non-owners server-side).
+    isOwner: resolveOwnerAuthorization(auth).isOwner,
   };
 };
 
 export default function App() {
-  const { apiKey } = useLoaderData<typeof loader>();
+  const { apiKey, isOwner } = useLoaderData<typeof loader>();
 
   return (
     <AppProvider embedded apiKey={apiKey}>
@@ -31,7 +34,7 @@ export default function App() {
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/quotes">Sales · Quotes / CRM</s-link>
         <s-link href="/app/wholesale/customers">Sales · Wholesale Applications</s-link>
-        <s-link href="/app/erp/cost-calculator">Sales · Cost Calculator</s-link>
+        {isOwner ? <s-link href="/app/erp/cost-calculator">Sales · Cost Calculator</s-link> : null}
         <s-link href="/app/erp/production">Production · Production Board</s-link>
         <s-link href="/app/erp/print-intake">Production · Print Intake</s-link>
         <s-link href="/app/erp/rip-imports">Production · RIP Imports & Review</s-link>
@@ -51,7 +54,7 @@ export default function App() {
         <s-link href="/app/erp/vendors">Setup · Vendors</s-link>
         <s-link href="/app/erp/vendor-cost-book">Setup · Vendor Cost Book</s-link>
         <s-link href="/app#advanced">Admin · Advanced Tools</s-link>
-        <s-link href="/app/erp/setup-wizard">Help · Setup Wizard</s-link>
+        <s-link href="/app/erp/setup-wizard">Help · Launch Readiness</s-link>
         <s-link href="/app/erp/walkthrough">Help · ERP Walkthrough</s-link>
       </s-app-nav>
 

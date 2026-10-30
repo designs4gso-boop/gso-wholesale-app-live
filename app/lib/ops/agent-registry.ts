@@ -168,7 +168,7 @@ export const AGENT_REGISTRY: AgentDefinition[] = [
   {
     id: "quote_prep",
     name: "Quote Prep",
-    purpose: "Decides quote readiness per family. Canonical families route to the Cost Calculator (canonical authority); DTP/Boxes route to outsourced review. Never prices.",
+    purpose: "Decides quote readiness per family. Canonical families route to Quotes / CRM with Owner Approval Required (the owner prices them under canonical authority); DTP/Boxes route to outsourced review. Never prices.",
     status: "ACTIVE",
     statusReason: "Deterministic on familyCostModel + intake completeness.",
     inputs: ["classified lead", "intake fields"],
@@ -176,7 +176,7 @@ export const AGENT_REGISTRY: AgentDefinition[] = [
     tools: ["ops/quote-prep", "canonical-quote-authority", "agent-quote-prep-rules"],
     forbidden: ["setting any price", "legacy manufacturing cost", "creating Quote records"],
     autonomy: { prepare_quote_prep_draft: "AUTO_INTERNAL" },
-    approvalPolicy: "Staff build the quote in the Cost Calculator; the agent only prepares.",
+    approvalPolicy: "Staff open the quote in Quotes / CRM; the owner approves the price (Owner Approval Required); the agent only prepares.",
     handoffTargets: ["art_preflight", "customer_followup"],
     promptVersion: "n/a",
     modelVersion: NO_MODEL,

@@ -35,19 +35,19 @@ const SECTIONS: SopSection[] = [
     title: "1. Daily flow at a glance",
     what: "The whole pipeline in one line: agent or staff intake -> Agent Review Queue -> pick a quote-ready recipe -> internal draft quote -> margin gate -> staff approval -> payment request -> customer pays -> production job -> proof -> reporting.",
     why: "Every screen in this app is one station on that line. If you know where you are on the line, you know which page to open.",
-    path: "Start each day at the Setup Wizard for a health check, then work the Agent Review Queue and the Quotes / CRM board.",
+    path: "Start each day at Launch Readiness for a health check, then work the Agent Review Queue and the Quotes / CRM board.",
     links: [
-      { label: "Setup Wizard", url: "/app/erp/setup-wizard" },
+      { label: "Launch Readiness", url: "/app/erp/setup-wizard" },
       { label: "Agent Review Queue", url: "/app/erp/agent-review-queue" },
       { label: "Quotes / CRM", url: "/app/quotes" },
     ],
   },
   {
-    title: "2. Setup Wizard: blockers vs warnings",
+    title: "2. Launch Readiness: blockers vs warnings",
     what: "A read-only readiness dashboard. Launch blockers stop any launch; warnings are fine for internal beta but should be reviewed before full customer launch.",
     why: "It separates 'cannot launch' from 'do not forget'. The Quote Pipeline card also deep-checks a sample of 10 quote-ready recipes with the same engine the queue uses.",
-    path: "Sidebar -> Help · Setup Wizard. Fix anything in the Launch blockers list first; each blocker has a direct action button.",
-    links: [{ label: "Setup Wizard", url: "/app/erp/setup-wizard" }],
+    path: "Sidebar -> Help · Launch Readiness. Fix anything in the Blockers list first; each blocker has a direct action button.",
+    links: [{ label: "Launch Readiness", url: "/app/erp/setup-wizard" }],
   },
   {
     title: "3. Product Setup / recipe readiness",
@@ -232,7 +232,7 @@ export default function ErpWalkthrough() {
     <Page
       title="ERP Walkthrough"
       subtitle="Staff SOP: how to run the shop through this app, start to finish"
-      secondaryActions={[{ content: "Open Setup Wizard", onAction: () => navigate("/app/erp/setup-wizard") }]}
+      secondaryActions={[{ content: "Open Launch Readiness", onAction: () => navigate("/app/erp/setup-wizard") }]}
     >
       <Layout>
         <Layout.Section>
@@ -297,7 +297,7 @@ export default function ErpWalkthrough() {
               <InlineStack gap="200">
                 <Button onClick={() => navigate("/app/erp/shopify-links")}>Shopify Links</Button>
                 <Button onClick={() => navigate("/app/erp/configurator")}>Configurator</Button>
-                <Button onClick={() => navigate("/app/erp/setup-wizard")}>Setup Wizard</Button>
+                <Button onClick={() => navigate("/app/erp/setup-wizard")}>Launch Readiness</Button>
               </InlineStack>
             </BlockStack>
           </Card>

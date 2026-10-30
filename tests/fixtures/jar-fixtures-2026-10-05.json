@@ -1,12 +1,12 @@
 {
  "miron/50ml/side_only": {
   "status": "PROVISIONAL",
-  "total": 550.5372759859869,
-  "unit": 2.7526863799299344,
+  "total": 552.5572759859868,
+  "unit": 2.7627863799299344,
   "lines": [
    [
     "blank_sets",
-    496.92
+    498.94000000000005
    ],
    [
     "print_media",
@@ -64,12 +64,12 @@
  },
  "miron/50ml/lid_only": {
   "status": "PROVISIONAL",
-  "total": 541.020345263588,
-  "unit": 2.70510172631794,
+  "total": 543.040345263588,
+  "unit": 2.7152017263179404,
   "lines": [
    [
     "blank_sets",
-    496.92
+    498.94000000000005
    ],
    [
     "print_media",
@@ -127,12 +127,12 @@
  },
  "miron/50ml/side_lid": {
   "status": "PROVISIONAL",
-  "total": 566.4683504162414,
-  "unit": 2.832341752081207,
+  "total": 568.4883504162414,
+  "unit": 2.8424417520812066,
   "lines": [
    [
     "blank_sets",
-    496.92
+    498.94000000000005
    ],
    [
     "print_media",

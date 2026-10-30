@@ -38,12 +38,13 @@ export type CanonicalPricingSnapshot = {
   marginPct: number | null;
   minimumApplied: string | null; // controlling floor/minimum if any
   marketAdvisory: string | null;
-  recommendedUnitPrice: number;
-  recommendedTotalPrice: number;
+  // 2026-10-19: null on a PROVISIONAL draft (no approved selling-price authority) — never a $0 price.
+  recommendedUnitPrice: number | null;
+  recommendedTotalPrice: number | null;
 };
 
 export function buildCanonicalPricingSnapshot(
-  input: Partial<CanonicalPricingSnapshot> & { quantity: number; totalCost: number; unitCost: number; recommendedUnitPrice: number; recommendedTotalPrice: number; engine: string },
+  input: Partial<CanonicalPricingSnapshot> & { quantity: number; totalCost: number; unitCost: number; recommendedUnitPrice: number | null; recommendedTotalPrice: number | null; engine: string },
 ): CanonicalPricingSnapshot {
   return {
     snapshotVersion: CANONICAL_PRICING_SNAPSHOT_VERSION,
