@@ -396,7 +396,8 @@ describe("2D-4C2 (8) calculate and save normalise identically", () => {
     expect(src.indexOf('name="pl0qty"')).toBeGreaterThan(formStart);
     expect(src.indexOf('name="pl0mat"')).toBeGreaterThan(formStart);
     // and the action still normalises from psearch, unchanged
-    expect(src).toContain("const canonicalInputSave = normalizeCanonicalInput(psearchParams);");
+    // (2026-10-28: then the server attaches verified Material Center rates by id)
+    expect(src).toContain("const canonicalInputSaveRaw = normalizeCanonicalInput(psearchParams);");
   });
 });
 

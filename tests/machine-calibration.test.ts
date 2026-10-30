@@ -517,7 +517,8 @@ describe("guard rails", () => {
     expect(finishRules).toContain("jar_100ml_tall: [2.78, 2.54, 2.31, 2.14, 1.99],");
     expect(finishRules.includes("[2.86, 2.63, 2.41, 2.22, 2.07]")).toBe(false);
     // every other Miron ladder is untouched
-    expect(finishRules).toContain("jar_50ml: [2.46, 2.24, 2.03, 1.89, 1.74],");
+    // 50ml: owner-approved 2026-10-28 jar + top ladder
+    expect(finishRules).toContain("jar_50ml: [2.47, 2.26, 2.06, 1.93, 1.77],");
     expect(finishRules).toContain("jar_100ml_wide: [2.90, 2.67, 2.44, 2.26, 2.10],");
     expect(finishRules).toContain("jar_150ml: [3.26, 3.00, 2.76, 2.54, 2.37],");
     expect(finishRules).toContain("jar_250ml: [3.92, 3.60, 3.32, 3.11, 2.92],");

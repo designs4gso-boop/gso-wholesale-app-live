@@ -53,6 +53,7 @@ import {
   computeLabelJob,
   type LabelJobResult,
   type LabelLine,
+  type VerifiedLabelMaterial,
 } from "./label-cost-inputs.server";
 import {
   computeLabelApplication,
@@ -157,6 +158,12 @@ export type CanonicalLabelInput = {
   /** Specialty/file-prep setup EVENTS (per design/file), never per copy. */
   specialtyPrepEvents?: number;
   specialtyPrepPerEvent?: number;
+  /**
+   * 2026-10-28: Material Center rates the SERVER verified for this job
+   * (attachVerifiedLabelMaterials). Never read from the query string; kept in
+   * the input so a saved snapshot records the rate it was costed at.
+   */
+  materials?: Record<string, VerifiedLabelMaterial>;
 };
 
 export type CanonicalBagInput = {
@@ -530,6 +537,7 @@ export function assembleCanonicalJob(
       machineKey: routing.machineKey,
       cutMode: input.cutMode,
       loadedMediaWidthIn: input.loadedMediaWidthIn,
+      materials: cfg.materials,
     });
     reasons.push(...label.reasons);
     blockers.push(...label.blockers);

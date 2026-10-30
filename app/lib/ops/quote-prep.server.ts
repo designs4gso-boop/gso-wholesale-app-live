@@ -2,7 +2,8 @@
 //
 // Decides quote READINESS, never price. Canonical families (stickers-labels,
 // sticker-bags, stock-bags, banners, standard-jars, premium-jars) are built
-// by staff in the Cost Calculator under the canonical cost authority. DTP
+// by the OWNER in the owner-only Cost & Pricing Calculator under the canonical
+// cost authority (2026-10-19: staff are pointed to Quotes / CRM, never the calculator). DTP
 // bags, boxes and custom items are LEGACY_OUTSOURCED and go to staff for
 // vendor-cost review. A canonical blocker (missing calibration, blank cost,
 // white coverage, MOQ) is reported, never estimated around.
@@ -66,10 +67,10 @@ export function prepareQuote(lead: LeadInput, options: { canonicalCheck?: Canoni
     return { ...base, status: "OUTSOURCED_REVIEW", costModel: "LEGACY_OUTSOURCED", canonicalBlocker: null, calculatorPath: "/app/erp/vendor-cost-book", handoffNote: `${family} is vendor-produced: staff confirm vendor cost, freight and lead time from the vendor cost book before quoting. Nothing is estimated.` };
   }
   if (assessment.missingFields.length) {
-    return { ...base, status: "NEEDS_INFO", costModel: "CANONICAL_COST_AUTHORITY", canonicalBlocker: null, calculatorPath: "/app/erp/cost-calculator", handoffNote: `Collect ${assessment.missingFields.join(", ")} before staff build the quote in the Cost Calculator.` };
+    return { ...base, status: "NEEDS_INFO", costModel: "CANONICAL_COST_AUTHORITY", canonicalBlocker: null, calculatorPath: "/app/quotes", handoffNote: `Collect ${assessment.missingFields.join(", ")}, then open Quotes / CRM. Owner Approval Required — the owner prices this job.` };
   }
   if (options.canonicalCheck && !options.canonicalCheck.usable) {
-    return { ...base, status: "CANONICAL_BLOCKED", costModel: "CANONICAL_COST_AUTHORITY", canonicalBlocker: options.canonicalCheck.reason ?? "canonical cost not usable", calculatorPath: "/app/erp/cost-calculator", handoffNote: `Canonical blocker: ${options.canonicalCheck.reason ?? "cost not usable"}. Owner/staff must supply the missing input; the quote must not be priced manually.` };
+    return { ...base, status: "CANONICAL_BLOCKED", costModel: "CANONICAL_COST_AUTHORITY", canonicalBlocker: options.canonicalCheck.reason ?? "canonical cost not usable", calculatorPath: "/app/quotes", handoffNote: `Canonical blocker: ${options.canonicalCheck.reason ?? "cost not usable"}. Owner Approval Required — staff collect the missing input in Quotes / CRM; the quote must not be priced manually.` };
   }
-  return { ...base, status: "READY_FOR_STAFF_QUOTE", costModel: "CANONICAL_COST_AUTHORITY", canonicalBlocker: null, calculatorPath: "/app/erp/cost-calculator", handoffNote: `Staff: build ${family} x ${Number(lead.quantity)} in the Cost Calculator (canonical authority), then review margin and send.${triggers.length ? ` Review triggers: ${triggers.join("; ")}.` : ""}` };
+  return { ...base, status: "READY_FOR_STAFF_QUOTE", costModel: "CANONICAL_COST_AUTHORITY", canonicalBlocker: null, calculatorPath: "/app/quotes", handoffNote: `Staff: open Quotes / CRM for ${family} x ${Number(lead.quantity)}. Owner Approval Required — the owner prices it (canonical authority); send once an approved price is on the quote.${triggers.length ? ` Review triggers: ${triggers.join("; ")}.` : ""}` };
 }

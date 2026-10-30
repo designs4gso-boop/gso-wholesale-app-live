@@ -18,6 +18,8 @@ import {
 // waste, labor, speed, and ink-usage profiles stay separate pricing factors.
 
 const MIRON_MARKER = "[VERIFIED 2026-07-17 owner-approved Miron jar + normal SAN lid sheet]";
+/** 2026-10-29 owner decision: the 50ml Miron blank jar + lid ladder (supersedes the 2026-10-28 and 2026-07-17 values). */
+const MIRON_50ML_MARKER = "[VERIFIED 2026-10-29 owner-approved 50ml Miron blank jar + lid cost ladder]";
 const SAFECARE_MARKER = "[VERIFIED 2026-07-17 owner-approved SAFECARE jar cost]";
 const BAG_MARKER = "[VERIFIED 2026-07-17 owner-approved blank bag cost]";
 /* ------------------------------------------------------------------ *
@@ -59,6 +61,8 @@ type ApprovedItem = {
   tiers?: ApprovedTier[];
   flatCost?: number;
   marker?: string;
+  /** Note stamped on each applied tier row (defaults to the 2026-07-17 approval). */
+  tierNote?: string;
   note?: string;
   // 13.2.3: vendor-product creation spec (field shape proven by the Vendor
   // Cost Book push and the jar seed).
@@ -85,7 +89,7 @@ const tiersFrom = (costs: number[]): ApprovedTier[] =>
 
 export const APPROVED_COST_TRUTH: ApprovedItem[] = [
   // 1. Miron jars — tiered, jar + normal black SAN/plastic lid included.
-  { key: "miron-50ml", label: "50ml Miron jar + lid", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["preset:miron-50ml"], matchName: /^50\s?ml.*miron/i, tiers: tiersFrom([2.46, 2.24, 2.03, 1.89, 1.74]), marker: MIRON_MARKER },
+  { key: "miron-50ml", label: "50ml Miron jar + lid", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["preset:miron-50ml"], matchName: /^50\s?ml.*miron/i, tiers: tiersFrom([2.47, 2.26, 2.06, 1.93, 1.77]), marker: MIRON_50ML_MARKER, tierNote: "Owner-approved 2026-10-29" },
   { key: "miron-100ml-tall", label: "100ml tall Miron jar + lid", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["preset:miron-100ml-tall"], matchName: /^100\s?ml.*tall.*miron/i, tiers: tiersFrom([2.78, 2.54, 2.31, 2.14, 1.99]), marker: MIRON_MARKER },
   { key: "miron-100ml-wide", label: "100ml wide Miron jar + lid", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["preset:miron-100ml-wide"], matchName: /^100\s?ml.*wide.*miron/i, tiers: tiersFrom([2.9, 2.67, 2.44, 2.26, 2.1]), marker: MIRON_MARKER },
   { key: "miron-150ml", label: "150ml Miron jar + lid", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["preset:miron-150ml"], matchName: /^150\s?ml.*miron/i, tiers: tiersFrom([3.26, 3.0, 2.76, 2.54, 2.37]), marker: MIRON_MARKER },
@@ -436,12 +440,12 @@ export async function applyApprovedCostUpdates(dbClient: any, shop: string) {
         if (item.kind === "tiered" && item.tiers) {
           await tx.vendorProductTier.deleteMany({ where: { shop, vendorProductId: record.id } });
           await tx.vendorProductTier.createMany({
-            data: item.tiers.map((tier) => ({ shop, vendorProductId: record.id, minQty: tier.minQty, maxQty: tier.maxQty, unitCost: tier.unitCost, notes: "Owner-approved 2026-07-17" })),
+            data: item.tiers.map((tier) => ({ shop, vendorProductId: record.id, minQty: tier.minQty, maxQty: tier.maxQty, unitCost: tier.unitCost, notes: item.tierNote ?? "Owner-approved 2026-07-17" })),
           });
           await tx.vendorProduct.update({ where: { id: record.id }, data: { defaultUnitCost: item.tiers[0].unitCost, ...(notes ? { notes } : {}) } });
         } else if (item.kind === "flat" && item.flatCost != null) {
           if (record.tiers.length === 1) {
-            await tx.vendorProductTier.update({ where: { id: record.tiers[0].id }, data: { unitCost: item.flatCost, notes: "Owner-approved 2026-07-17" } });
+            await tx.vendorProductTier.update({ where: { id: record.tiers[0].id }, data: { unitCost: item.flatCost, notes: item.tierNote ?? "Owner-approved 2026-07-17" } });
           }
           await tx.vendorProduct.update({ where: { id: record.id }, data: { defaultUnitCost: item.flatCost, ...(notes ? { notes } : {}) } });
         }
@@ -456,7 +460,7 @@ export async function applyApprovedCostUpdates(dbClient: any, shop: string) {
             vendorSku: item.creation.vendorSku, moq: 1, defaultUnitCost: flatDefault, active: true,
             notes: `Created by Approved Cost Updates (13.2.3).${item.marker ? `\n${item.marker}` : ""}`,
             ...(item.kind === "tiered" && item.tiers
-              ? { tiers: { create: item.tiers.map((tier) => ({ shop, minQty: tier.minQty, maxQty: tier.maxQty, unitCost: tier.unitCost, notes: "Owner-approved 2026-07-17" })) } }
+              ? { tiers: { create: item.tiers.map((tier) => ({ shop, minQty: tier.minQty, maxQty: tier.maxQty, unitCost: tier.unitCost, notes: item.tierNote ?? "Owner-approved 2026-07-17" })) } }
               : {}),
           },
         });

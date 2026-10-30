@@ -1,7 +1,11 @@
 import type React from "react";
-import { useState } from "react";
-import { Form, useActionData, useLoaderData, useLocation, useNavigation, useSubmit } from "react-router";
+import { Fragment, useState } from "react";
+import { Form, Link, isRouteErrorResponse, useActionData, useLoaderData, useLocation, useNavigation, useRouteError, useSubmit } from "react-router";
+import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
+// 2026-10-19 owner decision: the whole Cost & Pricing Calculator is OWNER ONLY (server-enforced).
+import { requireOwner } from "../lib/owner-authorization.server";
+import { COST_PRICING_OWNER_ONLY_MESSAGE } from "../lib/calculator-owner-view";
 import db from "../db.server";
 import {
   MARGIN_FLOOR_PCT,
@@ -30,13 +34,23 @@ import { resolveMultiLineLabelQuote, type MultiLineCanonicalQuote } from "../lib
 import { assembleCanonicalJob, canonicalInputForQuantity, canonicalSupportsTierLadder, canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput, resolveCanonicalMachineInputs } from "../lib/canonical-calculator.server";
 import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
 import { isCostedAuthority, persistQuoteIfCanonicalAllows, resolveCostAuthority } from "../lib/canonical-quote-authority.server";
-import { canonicalLabelCutType, canonicalLabelMaterialKey, canonicalCutTypeIsWireable } from "../lib/canonical-calculator-shared";
+import { canonicalLabelCutType, canonicalCutTypeIsWireable } from "../lib/canonical-calculator-shared";
+import { attachVerifiedLabelMaterials, materialCalculatorReadiness } from "../lib/material-calculator-readiness.server";
 import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
 import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
+import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE } from "../lib/jar-cost-inputs.server";
 // 2026-10-05 fixed-product spec layer (client-safe): standard jar dimensions are RESOLVED, never typed.
 import { JAR_LABEL_GEOMETRY, formatJarGeometry, type JarSizeKey } from "../lib/jar-label-geometry";
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
+// 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
+import { REQUIRED_FIELDS_MESSAGE, STOCK_BAG_CALCULATOR_OPTION, calculatorFamilyChoice, calculatorFamilyParams, missingRequiredCalculatorFields, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
+// 2026-10-19 owner decision C: Stock Bag quotes price through the SAME storefront authority the online checkout uses.
+import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
+import { priceStockBagTierRow, stockBagStorefrontSelection } from "../lib/stock-bag-quote-pricing.server";
+// 2026-10-19 owner decision E: a job with no approved selling-price authority saves as a PROVISIONAL draft only.
+import { resolveSellingPriceAuthority } from "../lib/calculator-owner-view";
+import { PROVISIONAL_PRICING_STATUS, type PricingAuthorityRecord } from "../lib/quote-pricing-authority";
 
 // UI copy of MAX_ADDITIONAL_STICKER_LINES (commercial-pricing-policy.server
 // owns the value; client components cannot import .server modules).
@@ -70,6 +84,20 @@ import {
   wiredApplicationRate,
 } from "../lib/cost-calculator.server";
 
+/**
+ * 2026-10-29: a Miron size with a dated owner cost record (MIRON_SET_COST_PROVENANCE)
+ * is costed from MIRON_SET_COST, never from its VendorProduct row. The picker shows
+ * that ladder, so a stale row price ("$2.46 — Verified") is never displayed as the cost.
+ */
+function ownerJarCostLabel(entry: any): string | null {
+  if (entry?.klass !== "jar_miron") return null;
+  const profile = resolveActiveJarProfile(entry.item?.name);
+  if (!profile || profile.brand !== "miron" || !MIRON_SET_COST_PROVENANCE[profile.size]) return null;
+  const ladder = MIRON_SET_COST[profile.size];
+  if (!ladder?.length) return null;
+  return `tiered $${ladder[0].toFixed(2)} → $${ladder[ladder.length - 1].toFixed(2)} (owner-approved jar cost) — Verified`;
+}
+
 type QuoteRipRow = {
   importedAt: string;
   quoteId: string;
@@ -96,6 +124,10 @@ type MaterialOption = {
   materialType: string;
   displayCostPerSqft: number;
   costWarning: string | null;
+  /** 2026-10-28: canonical label key from the record's structured fields (null = blocked). */
+  canonicalKey: string | null;
+  /** Plain-English reasons the record is not calculator-ready. */
+  calculatorMissing: string[];
 };
 
 type BlankItemTier = { minQty: number; maxQty: number | null; unitCost: number };
@@ -423,7 +455,10 @@ function packoutRule(mode: string, qty: number, customUnitCost: number, customFl
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // Owner only: a non-owner gets 403 before ANY cost / price / margin / diagnostic is computed.
+  requireOwner(auth);
+  const { session } = auth;
   const shop = session.shop;
   const url = new URL(request.url);
   const appOrigin = new URL(request.url).origin;
@@ -437,7 +472,9 @@ export async function loader({ request }: { request: Request }) {
    * loader's own searchParams; the action replays these exact bytes.
    * Returns null for DTP / Boxes / jars / custom, which keep their path. */
   let canonicalResult: Awaited<ReturnType<typeof computeCanonicalJob>> | null = null;
-  const canonicalInput = normalizeCanonicalInput(url.searchParams);
+  // 2026-10-28: Material Center rates are verified and attached SERVER side by id.
+  const canonicalInputRaw = normalizeCanonicalInput(url.searchParams);
+  const canonicalInput = canonicalInputRaw ? await attachVerifiedLabelMaterials({ db, shop }, canonicalInputRaw) : null;
   // 2D-4C1: the calibration lookup is resolved ONCE and reused, so a tier
   // ladder costs one DB round trip rather than one per rung. assembleCanonicalJob
   // is pure, so every rung is byte-identical to what the save side recomputes.
@@ -491,12 +528,15 @@ export async function loader({ request }: { request: Request }) {
     .filter((m) => materialKind(m) === "print")
     .map((m) => {
       const resolved = resolvePrintMaterialCostPerSqft(m);
+      const readiness = materialCalculatorReadiness(m);
       return {
         id: m.id,
         name: m.name,
         materialType: m.materialType,
         displayCostPerSqft: resolved.unitCost,
         costWarning: resolved.warning,
+        canonicalKey: readiness.canonicalKey,
+        calculatorMissing: readiness.missing,
       };
     });
   const materialById = new Map(materials.map((m) => [m.id, m]));
@@ -860,6 +900,8 @@ export async function loader({ request }: { request: Request }) {
   let productMarginKey: string | null = null;
   let requestedQtyP = 0;
   const pFamily = String(eparams.get("pfamily") || "");
+  // 2026-10-19: Stock Bags = pfamily=sticker-bags + pstockbag=1 (the canonical stock-bags family).
+  const stockBagP = pFamily === "sticker-bags" && eparams.get("pstockbag") === "1";
   // 15B: accepted values come from the shared registry (canonical + legacy
   // aliases of calculator-ENABLED families — reserved dtp-bags stays out).
   if (pFamily && calculatorFamilyValues().includes(pFamily)) {
@@ -1084,6 +1126,9 @@ export async function loader({ request }: { request: Request }) {
         manualPerUnit: Number(eparams.get("efmanual") || 0),
       };
       const floorForFamily = Math.max(marginCurveConfigFor(pricingPolicy.values, marginCurveKeyP)?.familyMinPct ?? productMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
+      // 2026-10-19 owner decision C: Stock Bag rows price through the storefront authority.
+      const stockBagInputsP = stockBagP ? await resolveCanonicalBagInputs(db, shop) : null;
+      const stockBagSelectionP = stockBagStorefrontSelection({ faces: eparams.get("pfaces"), materialName: productInput.material?.name, glossLayers: eparams.get("pglosslayers") });
       productTiers = tierQuantities.map((qty, index) => {
         const run = qty === productInput.quantity ? productCost! : computeProductDrivenCost({ ...productInput, quantity: qty });
         // 15C: DTP freight is a flat per-PO line INSIDE the engine run — the
@@ -1255,7 +1300,7 @@ export async function loader({ request }: { request: Request }) {
         // separate from the internal $6.25 setup cost (never double-counted).
         const filePrepFeeP = specialtyFilePrepFee({ requested: eparams.get("pfileprep") === "1", glossLayers: Number(eparams.get("pglosslayers") || 0), whiteLayers: Number(eparams.get("pwhitelayers") || 0) });
         const belowFloor = commercial.marginPctApplied < floorForFamily;
-        return {
+        const costedRow = {
           quantity: qty,
           requested: qty === requestedQtyP,
           filePrepFee: filePrepFeeP,
@@ -1282,6 +1327,7 @@ export async function loader({ request }: { request: Request }) {
           // TO QUOTE, whatever the legacy engine and the margin gate think.
           status: (run.missing.length || !authority.eligible) ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
         };
+        return stockBagInputsP ? priceStockBagTierRow(costedRow, stockBagInputsP, stockBagSelectionP) : costedRow;
       });
       // 2026-10-05: quantity-break envelope for jars, then hide the support rows.
       productTiers = dropSupportRows(jarPricingFamilyP ? applyQuantityBreakEnvelope(productTiers) : productTiers);
@@ -1446,6 +1492,7 @@ export async function loader({ request }: { request: Request }) {
       canonical: canonicalResult ? canonicalViewOf(canonicalResult) : null,
       canonicalDispatch: CANONICAL_DISPATCH,
       canonicalFamily: pFamily ? canonicalUiFamily(pFamily) : null,
+      stockBag: stockBagP,
       selectedClass,
       topRequired,
       autoBag: autoBag ? { value: autoBag.id, label: `${autoBag.name} — $${Number(autoBag.unitCost).toFixed(2)} — Verified (auto-selected)` } : null,
@@ -1532,7 +1579,7 @@ export async function loader({ request }: { request: Request }) {
         value: entry.item.id,
         group: entry.klass === "jar_chiron" ? "CHIRON" : entry.klass === "jar_miron" ? "MIRON" : null,
         label: formatComponentLabel(entry.item.name, entry.klass, entry.includesTop,
-          Number(entry.item.unitCost) > 0 ? `$${Number(entry.item.unitCost).toFixed(2)} — Verified` : (entry.item.tiers || []).length ? "tiered — Verified" : "NO PRICE — not verified"),
+          ownerJarCostLabel(entry) ?? (Number(entry.item.unitCost) > 0 ? `$${Number(entry.item.unitCost).toFixed(2)} — Verified` : (entry.item.tiers || []).length ? "tiered — Verified" : "NO PRICE — not verified")),
         // 2D-4D1: the canonical jar descriptor travels WITH the option, so the
         // form mirrors the operator's pick into pjar/pjarvariant and the server
         // never has to re-guess which jar a DB row is.
@@ -1552,12 +1599,16 @@ export async function loader({ request }: { request: Request }) {
         .slice(0, 40)
         // 2D-4C2: canonicalKey lets the form emit the canonical material for a
         // label line. It selects WHICH verified canonical material applies — it
-        // never carries a cost, and an unmapped material yields null so canonical
-        // costing blocks instead of guessing.
+        // never carries a cost, and a material that is not calculator-ready
+        // yields null so canonical costing blocks instead of guessing.
+        // 2026-10-28: the key comes from the record's structured fields
+        // (materialCalculatorReadiness), so a new Material Center record needs
+        // no code change; "Verified" now means calculator-ready.
         .map((material) => ({
           value: material.id,
-          label: `${material.name} — ${material.displayCostPerSqft > 0 ? `${material.displayCostPerSqft.toFixed(4)}/sqft — Verified` : "NO PRICE — Missing"}`,
-          canonicalKey: canonicalLabelMaterialKey(material.name),
+          label: `${material.name} — ${material.displayCostPerSqft > 0 ? `${material.displayCostPerSqft.toFixed(4)}/sqft — ${material.canonicalKey ? "Calculator ready" : "Needs cost setup"}` : "NO PRICE — Missing"}`,
+          canonicalKey: material.canonicalKey,
+          calculatorMissing: material.calculatorMissing,
         })),
     },
     family: eFamilyRule
@@ -1668,7 +1719,10 @@ export async function loader({ request }: { request: Request }) {
 // server RE-COMPUTES from the posted fields; below-floor margins require the
 // exact override phrase + reason; missing costs force draft-with-warnings.
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // Owner only: a direct POST from a non-owner is refused before the form is read.
+  requireOwner(auth);
+  const { session } = auth;
   const shop = session.shop;
   const form = await request.formData();
   if (String(form.get("intent")) !== "saveEmergencyQuoteDraft") return Response.json({ ok: false, message: "Unknown action." });
@@ -1690,7 +1744,8 @@ export async function action({ request }: { request: Request }) {
    * Deliberately built from `psearchParams` — the loader's own query string —
    * and NOT from the posted form fields, so the saved canonical cost is the
    * one that was displayed. Same normaliser, same assembler, same bytes. */
-  const canonicalInputSave = normalizeCanonicalInput(psearchParams);
+  const canonicalInputSaveRaw = normalizeCanonicalInput(psearchParams);
+  const canonicalInputSave = canonicalInputSaveRaw ? await attachVerifiedLabelMaterials({ db, shop }, canonicalInputSaveRaw) : null;
   const canonicalMachineSave = canonicalInputSave
     ? await resolveCanonicalMachineInputs({ db, shop }, canonicalInputSave)
     : null;
@@ -1762,6 +1817,8 @@ export async function action({ request }: { request: Request }) {
   let savedRequestedQty = 0;
   let savedBlankNameForNaming: string | null = null;
   const pFamilySave = String(fRead("pfamily") || "");
+  // 2026-10-19 loader parity: Stock Bags = pfamily=sticker-bags + pstockbag=1.
+  const savedStockBag = pFamilySave === "sticker-bags" && fRead("pstockbag") === "1";
   if (pFamilySave && calculatorFamilyValues().includes(pFamilySave)) {
     type FetchedComponent = { component: ResolvedComponent; meta: { name: string; productType?: string; vendor?: string; vendorSku?: string; addOns?: Array<{ name: string; pricingType: string; amount: number; enabled: boolean }> } | null };
     const fetchComponent = async (rawId: string): Promise<FetchedComponent | null> => {
@@ -1971,6 +2028,9 @@ export async function action({ request }: { request: Request }) {
       estimatedAllowance: Number(fRead("efallow") || 0), allocation: ((fRead("efalloc") as any) || "per_unit") as "per_unit" | "by_value" | "manual", manualPerUnit: Number(fRead("efmanual") || 0),
     };
     const floorForFamilySave = Math.max(marginCurveConfigFor(pricingPolicy.values, marginCurveKeySave)?.familyMinPct ?? savedMarginRule?.familyMinPct ?? MARGIN_FLOOR_PCT, MARGIN_FLOOR_PCT);
+    // 2026-10-19 owner decision C — loader parity: Stock Bag rows price through the storefront authority.
+    const stockBagInputsSave = savedStockBag ? await resolveCanonicalBagInputs(db, shop) : null;
+    const stockBagSelectionSave = stockBagStorefrontSelection({ faces: fRead("pfaces"), materialName: productInputSave.material?.name, glossLayers: fRead("pglosslayers") });
     savedTiers = tierQuantitiesSave.map((qty, index) => {
       const run = qty === savedRequestedQty ? productSnapshot! : computeProductDrivenCost({ ...productInputSave, quantity: qty });
       const tierFreight = savedIsDtp ? { total: 0, perUnit: 0, source: "verified" as const, note: "" } : computeFreight(freightInputsSave, qty, 0);
@@ -2113,7 +2173,7 @@ export async function action({ request }: { request: Request }) {
       });
       const filePrepFeeSave = specialtyFilePrepFee({ requested: fRead("pfileprep") === "1", glossLayers: Number(fRead("pglosslayers") || 0), whiteLayers: Number(fRead("pwhitelayers") || 0) });
       const belowFloor = commercial.marginPctApplied < floorForFamilySave;
-      return {
+      const costedRowSave = {
         quantity: qty, requested: qty === savedRequestedQty, filePrepFee: filePrepFeeSave, jobCost: completeCost, unitCost: authority.unitCost, marginPct: commercial.marginPctApplied,
         costAuthority: authority.authority, canonicalJobCost: authority.manufacturingJobCost, canonicalUnitCost: authority.manufacturingUnitCost, costBasisNote: authority.basis,
         unitPrice: qty > 0 ? (commercial.finalTotalPrice + filePrepFeeSave) / qty : commercial.finalUnitPrice, totalPrice: commercial.finalTotalPrice + filePrepFeeSave, profit: commercial.achievedProfit + filePrepFeeSave, actualMarginPct: commercial.achievedMarginPct, belowFloor,
@@ -2123,6 +2183,7 @@ export async function action({ request }: { request: Request }) {
         supportRow: !displayQuantitySetSave.has(qty), floorPct: floorForFamilySave,
         status: (run.missing.length || !authority.eligible) ? "BLOCKED" : belowFloor ? "BELOW FLOOR — override required" : "READY TO QUOTE",
       };
+      return stockBagInputsSave ? priceStockBagTierRow(costedRowSave, stockBagInputsSave, stockBagSelectionSave) : costedRowSave;
     });
     // 2026-10-05: quantity-break envelope (jars) then drop hidden support rows — loader parity.
     savedTiers = dropSupportRows(jarPricingFamilySave ? applyQuantityBreakEnvelope(savedTiers) : savedTiers);
@@ -2271,11 +2332,37 @@ export async function action({ request }: { request: Request }) {
   // the recomputed automatic tiers; manual/auto saves keep the legacy path.
   const ruleForSave = productSnapshot ? savedMarginRule : familyRule;
   const snapshotTiers: any[] = productSnapshot && savedTiers ? savedTiers : tiers;
+  /* ---- 2026-10-19 owner decision E: SELLING-PRICE AUTHORITY AT SAVE ------
+   * Re-derived here from the server-recomputed selected row — the same
+   * classifier the calculator UI shows. A job with a true cost but no approved
+   * selling-price authority saves as a PROVISIONAL DRAFT: the item carries NO
+   * customer price (customerUnitPrice null), the generic/unsourced reference price is
+   * kept only as a diagnostic, and the recorded `pricingAuthority` makes the
+   * Quotes page and the production source refuse send / approve / order /
+   * production on the server. Emergency/manual saves have no approved rule. */
+  const savedPriceAuthority = productSnapshot
+    ? resolveSellingPriceAuthority({
+        family: canonicalUiFamily(pFamilySave),
+        stockBag: savedStockBag,
+        marginRuleKey: savedMarginKey,
+        row: savedSelectedTier,
+        multiLine: savedMultiLine ? { combined: savedMultiLine } : null,
+      })
+    : { approved: false, kind: "none" as const, label: null, missing: "Manual / unsupported job — no approved selling-price rule.", ownerMarginEdit: false };
   // 15C.2: DTP uses its OWN floors (30/35/38 + $500/$350 profit rules,
   // enforced above with the owner phrase) — the generic 40% gate would wrongly
   // block owner-approved DTP prices. All other families keep the generic gate.
   const savedIsDtpGate = savedEngineFamily === "dtp-bags";
-  const gate = savedIsDtpGate && savedSelectedTier?.dtp
+  /* 2026-10-19 owner decisions round 2:
+   *  - PROVISIONAL (no approved authority): there is no customer price, so the
+   *    margin gate has nothing to judge — the draft saves; the pricing-authority
+   *    gate on the Quotes page holds it (Manual / Legacy saves included).
+   *  - Stock Bags: the EXACT storefront price is an approved authority — its
+   *    rows are exempt from the generic floor (warning only, never a block). */
+  const storefrontWarning = savedPriceAuthority.kind === "storefront_stock_bag" && (savedSelectedTier as any)?.belowMarginTarget ? String((savedSelectedTier as any).marginWarning) : null;
+  const gate: { allowed: boolean; belowFloor: boolean; reason: string | null } = !savedPriceAuthority.approved
+    ? { allowed: true, belowFloor: false, reason: null }
+    : savedIsDtpGate && savedSelectedTier?.dtp
     ? {
         allowed: true,
         belowFloor: Boolean(savedSelectedTier.dtp.overrideRequired),
@@ -2283,7 +2370,7 @@ export async function action({ request }: { request: Request }) {
           ? `OWNER OVERRIDE below the DTP floor/target: ${fRead("eoreason").trim()}`
           : savedSelectedTier.dtp.statusReasons.join("; ") || null,
       }
-    : checkMarginGate(Math.min(...snapshotTiers.map((tier: any) => tier.marginPct)), { phrase: fRead("eophrase"), reason: fRead("eoreason") }, ruleForSave?.familyMinPct ?? MARGIN_FLOOR_PCT);
+    : checkMarginGate(Math.min(100, ...snapshotTiers.filter((tier: any) => !tier.stockBagStorefront?.ok).map((tier: any) => tier.marginPct).filter((value: unknown) => typeof value === "number" && Number.isFinite(value))), { phrase: fRead("eophrase"), reason: fRead("eoreason") }, ruleForSave?.familyMinPct ?? MARGIN_FLOOR_PCT);
   const lines: CostLine[] = [
     { key: "variable_per_unit", label: "Per-unit variable cost (entered)", amount: eVar, source: eVar > 0 ? "manual_override" : "missing" },
     { key: "freight", label: "Freight", amount: freight.total, source: freight.source, note: freight.note },
@@ -2292,6 +2379,33 @@ export async function action({ request }: { request: Request }) {
   if (!verdict.ok && !gate.allowed) return Response.json({ ok: false, message: verdict.blockers.join(" | ") });
 
   const primary: any = productSnapshot && savedSelectedTier ? savedSelectedTier : tiers[tiers.length - 1];
+
+  const pricingAuthorityRecord: PricingAuthorityRecord = savedPriceAuthority.approved
+    ? {
+        approved: true, status: "APPROVED", kind: savedPriceAuthority.kind, source: savedPriceAuthority.label, missing: null,
+        // The exact price this authority produced — the Stock Bag floor exemption holds only while the quote keeps it.
+        approvedUnitPrice: typeof primary?.unitPrice === "number" ? primary.unitPrice : null,
+        approvedTotalPrice: typeof primary?.totalPrice === "number" ? primary.totalPrice : null,
+        approvedQuantity: Number(primary?.quantity) || null,
+        marginWarning: storefrontWarning,
+      }
+    : {
+        approved: false,
+        status: PROVISIONAL_PRICING_STATUS,
+        kind: savedPriceAuthority.kind,
+        source: null,
+        missing: savedPriceAuthority.missing,
+        // Decision 3: no customer price at all — never $0, never the generic fallback.
+        customerUnitPrice: null,
+        customerTotalPrice: null,
+        diagnosticReference: {
+          unitPrice: typeof primary?.unitPrice === "number" ? primary.unitPrice : null,
+          totalPrice: typeof primary?.totalPrice === "number" ? primary.totalPrice : null,
+          basis: (primary as any)?.commercial?.marginSource ?? null,
+        },
+      };
+  const customerUnitPrice: number | null = savedPriceAuthority.approved ? primary.unitPrice : null;
+  const customerTotalPrice: number | null = savedPriceAuthority.approved ? primary.totalPrice : null;
 
   const familyDefaults = ruleForSave ? curveForTierCount(ruleForSave.curve, snapshotTiers.length, ruleForSave.familyMinPct) : defaultTierMargins(snapshotTiers.length);
   const savedIsDtpSnapshot = savedEngineFamily === "dtp-bags";
@@ -2486,12 +2600,14 @@ export async function action({ request }: { request: Request }) {
       totalCost: savedSelectedTier.jobCost ?? savedSelectedTier.unitCost * savedSelectedTier.quantity,
       unitCost: savedSelectedTier.unitCost,
       pricingPolicy: (savedSelectedTier as any).commercial?.marginSource || null,
-      marginPct: savedSelectedTier.marginPct,
+      marginPct: savedPriceAuthority.approved ? savedSelectedTier.marginPct : null,
       minimumApplied: (savedSelectedTier as any).commercial?.controllingRule || null,
       marketAdvisory: (savedSelectedTier as any).commercial?.marketPosition?.applicable === false ? "Standard market comparison suppressed for specialty finish." : null,
-      recommendedUnitPrice: savedSelectedTier.unitPrice,
-      recommendedTotalPrice: savedSelectedTier.totalPrice,
+      recommendedUnitPrice: customerUnitPrice,
+      recommendedTotalPrice: customerTotalPrice,
     }) : null,
+    // 2026-10-19 owner decision E: which approved authority set the price, or PROVISIONAL.
+    pricingAuthority: pricingAuthorityRecord,
     marginRules: {
       family: ruleForSave ? ruleForSave.key : "unknown", familyLabel: ruleForSave?.label || "FAMILY MARGIN RULE NOT CONFIGURED",
       curveUsed: ruleForSave ? ruleForSave.curve : "provisional-universal", researchedDefaultsPerTier: familyDefaults,
@@ -2539,17 +2655,19 @@ export async function action({ request }: { request: Request }) {
       const quote = await db.quote.create({
         data: {
           shop, status: "draft", customerName: String(form.get("ecustomer") || "") || fRead("pcustomer") || null,
-          notes: `${productSnapshot ? (savedIsDtpSnapshot ? "15C DTP calculator draft" : "14C.2 product calculator draft") : "14B.0 emergency calculator draft"}${fRead("pnotes") ? " — " + fRead("pnotes").slice(0, 240) : ""}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}${canonicalSnapshot && canonicalSnapshot.status === "DRAFT_ONLY" ? " — CANONICAL TRUE COST DRAFT_ONLY: " + canonicalSnapshot.blockers.slice(0, 4).join("; ") : ""}`,
-          items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: primary.unitPrice, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({
-            unitPrice: primary.unitPrice, marginPct: primary.marginPct,
-            tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: tier.unitPrice, marginPct: tier.marginPct })),
+          notes: `${savedPriceAuthority.approved ? "" : `${PROVISIONAL_PRICING_STATUS}: ${savedPriceAuthority.missing} — `}${productSnapshot ? (savedIsDtpSnapshot ? "15C DTP calculator draft" : "14C.2 product calculator draft") : "14B.0 emergency calculator draft"}${fRead("pnotes") ? " — " + fRead("pnotes").slice(0, 240) : ""}${verdict.ok ? "" : " — WARNINGS: " + verdict.blockers.join("; ")}${canonicalSnapshot && canonicalSnapshot.status === "DRAFT_ONLY" ? " — CANONICAL TRUE COST DRAFT_ONLY: " + canonicalSnapshot.blockers.slice(0, 4).join("; ") : ""}`,
+          items: { create: [{ productName, quantity: primary.quantity, unitCost: primary.unitCost, unitPrice: customerUnitPrice ?? 0, notes: gate.reason || null, costSnapshot: JSON.stringify(snapshot), priceSnapshot: JSON.stringify({
+            unitPrice: customerUnitPrice, marginPct: savedPriceAuthority.approved ? primary.marginPct : null,
+            // Tier prices are customer prices only under an approved authority; otherwise they are diagnostic references.
+            tiers: snapshotTiers.map((tier: any) => ({ qty: tier.quantity, unitPrice: savedPriceAuthority.approved ? tier.unitPrice : null, marginPct: savedPriceAuthority.approved ? tier.marginPct : null })),
+            pricingAuthority: pricingAuthorityRecord,
             // 2026-10-05: enough context to explain this price later (never rewritten; new quotes only).
             pricingPolicyVersion: COMMERCIAL_PRICING_VERSION,
             priceSource: (primary as any).commercial?.controllingRule ?? null,
             pricingBasis: (primary as any).commercial?.marginSource ?? null,
             ownerLadder: (primary as any).commercial?.ownerLadder ?? null,
             envelopeCappedTo: (primary as any).envelopeCappedTo ?? null,
-            recommendedUnitPrice: primary.unitPrice, recommendedTotalPrice: primary.totalPrice,
+            recommendedUnitPrice: customerUnitPrice, recommendedTotalPrice: customerTotalPrice,
             ownerMarginOverride: gate.belowFloor ? { reason: gate.reason } : null,
           }) }] },
         },
@@ -2572,7 +2690,15 @@ export async function action({ request }: { request: Request }) {
     });
   }
   const quote = saveOutcome.created;
-  return Response.json({ ok: true, quoteId: quote.id, message: `Draft quote ${quote.id} saved with the full pricing record${verdict.ok ? "" : " (DRAFT ONLY — has warnings)"}. Open Quotes to finish it.` });
+  if (!savedPriceAuthority.approved) {
+    return Response.json({
+      ok: true,
+      quoteId: quote.id,
+      provisional: true,
+      message: `Draft quote ${quote.id} saved as ${PROVISIONAL_PRICING_STATUS}: ${savedPriceAuthority.missing} The true cost is recorded; no customer price was set, and the quote cannot be sent, approved or moved to production until an approved selling price exists.`,
+    });
+  }
+  return Response.json({ ok: true, quoteId: quote.id, message: `Draft quote ${quote.id} saved with the full pricing record${verdict.ok ? "" : " (DRAFT ONLY — has warnings)"}.${storefrontWarning ? ` ${storefrontWarning} It remains the approved storefront price.` : ""} Open Quotes to finish it.` });
 }
 
 const inputStyle: React.CSSProperties = { width: "100%", padding: 10, border: "1px solid #d1d5db", borderRadius: 8 };
@@ -2733,6 +2859,39 @@ function LineRow({
   );
 }
 
+/** Non-owner (403): a plain owner-only notice — no cost, price, margin or diagnostic data. */
+export function ErrorBoundary() {
+  const error = useRouteError();
+  if (isRouteErrorResponse(error) && error.status === 403) {
+    return (
+      <main style={{ padding: 24, maxWidth: 640 }}>
+        <h2 style={{ marginTop: 0 }}>Owner only</h2>
+        <p>{COST_PRICING_OWNER_ONLY_MESSAGE} Ask the owner if you need a price for a job.</p>
+      </main>
+    );
+  }
+  // 2026-10-28: Shopify's boundary.error RE-THROWS anything that is not a route
+  // response, which turned every calculator exception into the app-wide
+  // "Application Error" page. Route responses keep Shopify's handling; any other
+  // error is shown here as a blocked result (and still logged), never as a
+  // crash of the whole admin.
+  if (isRouteErrorResponse(error)) return boundary.error(error);
+  console.error("[cost-calculator] unexpected error", error);
+  const detail = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    <main style={{ padding: 24, maxWidth: 720 }}>
+      <section style={{ border: "2px solid #fecaca", background: "#fef2f2", borderRadius: 12, padding: 16 }}>
+        <b style={{ color: "#991b1b" }}>PRICING BLOCKED</b>
+        <p style={{ margin: "8px 0" }}>
+          The calculator could not finish this calculation, so no cost or price is shown. Nothing was saved and no data was changed.
+        </p>
+        {detail ? <p style={{ margin: "8px 0", fontSize: 12, color: "#6b7280" }}>Technical detail: {detail}</p> : null}
+        <Link to="/app/erp/cost-calculator">Start over</Link>
+      </section>
+    </main>
+  );
+}
+
 export default function ErpCostCalculatorRoute() {
   const { syncEndpoint, uploadTokenConfigured, rows, lastAutoImportAt, materials, blankItems, form, calc } = useLoaderData<typeof loader>();
   const location = useLocation();
@@ -2814,9 +2973,25 @@ function EmergencySection() {
     <section style={{ ...cardStyle, marginTop: 18, borderColor: "#b45309", borderWidth: 2 }}>
       {/* 14B.1a: Automatic Costing form (Recommended) — server computes everything */}
       <div style={{ borderTop: "2px solid #b45309", marginTop: 14, paddingTop: 12 }}>
-        <h3 style={{ margin: "0 0 4px" }}>Cost Calculator</h3>
-        <p style={smallHelp}>Choose a product family and enter the job details to begin. Press CALCULATE COST: you get the true manufacturing cost first, then the recommended customer price. Legacy diagnostics are collapsed at the bottom. Uses verified ERP costs + owner standards. The manual fields above are the FALLBACK for unsupported/special jobs. Pick a family, fill the fields, CALCULATE COST — the server resolves and computes everything; browser totals are never trusted.</p>
+        {/* 2026-10-19 owner decision: OWNER-ONLY page, plain owner copy first. Technical notes live under "How this calculator works". */}
+        <h3 style={{ margin: "0 0 4px" }}>Cost &amp; Pricing Calculator</h3>
+        <p style={{ ...smallHelp, fontSize: 13 }}>
+          Calculate the true cost of a job first, then review the recommended selling price, expected profit, and margin.
+          Costs and prices come from verified ERP data and approved pricing rules.
+        </p>
+        <p style={smallHelp}>Choose a product family and enter the job details to begin.</p>
+        <details style={{ marginTop: 4 }}>
+          <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>How this calculator works</summary>
+          <p style={smallHelp}>
+            The server resolves every record and computes every number; values typed in the browser are never used as a cost or a price.
+            True manufacturing cost comes from the canonical cost engine (verified ERP costs + owner standards). The recommended selling price comes only
+            from an existing approved pricing rule (researched margin curves with floors, the owner jar ladder, the owner DTP ladder). When no approved
+            rule exists the price shows NOT AVAILABLE. The manual fields in Advanced Overrides are the fallback for unsupported/special jobs, and legacy
+            diagnostics are collapsed at the bottom.
+          </p>
+        </details>
         <ProductDrivenForm />
+        <OwnerResultCard />
         <CanonicalTrueCost />
         <ProductTiers />
         {/* 2026-10-05: legacy per-line diagnostics are secondary — collapsed under the canonical result and the customer price. */}
@@ -3296,6 +3471,8 @@ function ProductDrivenForm() {
   const jars = isStandardJars || isPremium;
   const isDtp = canonicalFamily === "dtp-bags"; // 15C: vendor-finished pouches
   const topRequired = Boolean(pm?.topRequired);
+  // 2026-10-19: Stock Bags = the canonical stock-bags family (pfamily=sticker-bags + pstockbag=1).
+  const isStockBag = isBags && Boolean(pm?.stockBag);
   // 2026-10-05: the 14C.2 typed-dimension jar label builder was replaced by the
   // fixed-product flow below (label set + resolved standard dimensions).
 
@@ -3407,22 +3584,78 @@ function ProductDrivenForm() {
 
   const chironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "CHIRON");
   const mironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "MIRON");
+
+  /* ---- 2026-10-19 OWNER UX: family choice + pre-calculation check -------
+   * The selector shows Stock Bags as its own family; the form still posts the
+   * canonical pair (pfamily=sticker-bags + pstockbag=1) the engine reads.
+   * Calculate is held back client-side while a VISIBLE required field is
+   * empty; the server stays fail-closed on its own regardless. */
+  const familyChoice = calculatorFamilyChoice(canonicalFamily, canonParams.get("pstockbag"));
+  const familyParams = calculatorFamilyParams(familyChoice);
+  /* 2026-10-19 owner decisions A + B: the canonical bag and banner engines read
+   * their OWN field names (pbagsides; pbannerw/pbannerh/pbannersides/
+   * pbanneredge/pbannergrommets). The visible fields are mirrored into exactly
+   * those names, so what the owner picks is what the existing engines cost. */
+  const [bagSides, setBagSides] = useState<string>(() => canonParams.get("pfaces") || "");
+  const bagSidesValue = bagSides === "1" || bagSides === "2" ? bagSides : isStockBag ? "2" : "1";
+  const [bannerFaces, setBannerFaces] = useState<string>(() => (canonParams.get("pfaces") === "2" ? "2" : "1"));
+  const [bannerHem, setBannerHem] = useState<boolean>(() => canonParams.get("phem") === "1");
+  const [bannerGrommets, setBannerGrommets] = useState<boolean>(() => canonParams.get("pgrommet") === "1");
+  const [missingFields, setMissingFields] = useState<Array<{ name: string; label: string }>>([]);
+  const missingNames = new Set(missingFields.map((field) => field.name));
+  const fieldStyle = (name: string): React.CSSProperties =>
+    missingNames.has(name) ? { ...inputStyle, borderColor: "#dc2626", outline: "2px solid #fecaca" } : inputStyle;
+  const formShape = {
+    isBags, isStockBag, jars, isStickers, isBanners, isCustom, isDtp, topRequired,
+    autoBag: Boolean(pm?.autoBag), contourCut: canonCutType === "contour",
+  };
+  const clearFixedField = (event: React.FormEvent<HTMLFormElement>) => {
+    const changed = (event.target as HTMLInputElement | null)?.name;
+    if (changed && missingNames.has(changed)) setMissingFields((current) => current.filter((field) => field.name !== changed));
+  };
+  const guardCalculate = (event: React.FormEvent<HTMLFormElement>) => {
+    if (!family) return; // CONTINUE (no family yet) is never blocked
+    const data = new FormData(event.currentTarget);
+    const missing = missingRequiredCalculatorFields(formShape, (name) => String(data.get(name) ?? ""));
+    setMissingFields(missing);
+    if (missing.length) event.preventDefault();
+  };
   return (
-    <Form method="get" onChange={(event) => syncCanonLine(event.currentTarget)} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
+    <Form method="get" onChange={(event) => syncCanonLine(event.currentTarget)} onInput={clearFixedField} onSubmit={guardCalculate} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
       <label style={{ fontSize: 12, gridColumn: "1 / -1" }}><b>STEP 1 — What are you pricing?</b>
         <select
-          name="pfamily"
-          key={canonicalFamily}
-          defaultValue={canonicalFamily}
+          key={familyChoice}
+          defaultValue={familyChoice}
           style={inputStyle}
-          onChange={(event) => submit(event.currentTarget.form, { method: "get" })}
+          onChange={(event) => {
+            // Same full-form GET as before; only the family params are replaced.
+            const data = new FormData(event.currentTarget.form!);
+            const next = calculatorFamilyParams(event.currentTarget.value);
+            data.set("pfamily", next.pfamily);
+            if (next.pstockbag) data.set("pstockbag", next.pstockbag);
+            else data.delete("pstockbag");
+            submit(data, { method: "get" });
+          }}
         >
           <option value="">— choose a product —</option>
           {/* 15B: options render from the shared registry — one family list.
-              Reserved families (dtp-bags) are excluded until enabled. */}
-          {calculatorFamilies().map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+              2026-10-19: Stock Bags render right after Sticker Bags as their own
+              choice (canonical stock-bags family; same physical bag adapter). */}
+          {calculatorFamilies().map((entry) => (
+            <Fragment key={entry.key}>
+              <option value={entry.key}>{entry.label}</option>
+              {entry.key === "sticker-bags" ? <option value={STOCK_BAG_CALCULATOR_OPTION.value}>{STOCK_BAG_CALCULATOR_OPTION.label}</option> : null}
+            </Fragment>
+          ))}
         </select>
+        <input type="hidden" name="pfamily" value={familyParams.pfamily} />
+        {familyParams.pstockbag ? <input type="hidden" name="pstockbag" value={familyParams.pstockbag} /> : null}
       </label>
+      {isStockBag ? (
+        <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+          Stock Bags: premade GSO base artwork (no new customer-art charge), 50-bag minimum. Same physical bag as Sticker Bags, costed as a Stock Bag.
+        </p>
+      ) : null}
       {!family ? (
         <p style={{ ...smallHelp, gridColumn: "1 / -1" }}>
           Choose a product family to begin.{" "}
@@ -3442,7 +3675,7 @@ function ProductDrivenForm() {
       ) : null}
       {((isBags && !pm?.autoBag) || jars || isCustom || isDtp) && family ? (
         <label style={{ fontSize: 12 }}>* {isDtp ? "DTP size / product" : "Select product / blank item"}
-          <select name="pblank" onChange={(event) => submit(event.currentTarget.form, { method: "get" })} style={inputStyle}>
+          <select name="pblank" onChange={(event) => submit(event.currentTarget.form, { method: "get" })} style={fieldStyle("pblank")}>
             <option value="">— select —</option>
             {isPremium ? (<>
               {chironOptions.length ? <optgroup label="CHIRON">{chironOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
@@ -3461,7 +3694,7 @@ function ProductDrivenForm() {
       ) : null}
       {topRequired ? (
         <label style={{ fontSize: 12 }}>* Top type (required for Miron)
-          <select name="plid" style={inputStyle}>
+          <select name="plid" style={fieldStyle("plid")}>
             <option value="">— select top —</option>
             {(pm.lidOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -3472,11 +3705,19 @@ function ProductDrivenForm() {
         <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No verified compatible tops are configured for this Miron jar.</p>
       ) : null}
       {family ? (<>
-        <label style={{ fontSize: 12 }}>* Quantity{isDtp ? ` (MOQ ${(pm?.dtpSpec?.moq || 1000).toLocaleString()})` : ""}<input name="pqty" type="number" min={isDtp ? pm?.dtpSpec?.moq || 1000 : 1} style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>* Number of designs<input name="pdesigns" type="number" min={0} defaultValue={1} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>* Quantity{isDtp ? ` (MOQ ${(pm?.dtpSpec?.moq || 1000).toLocaleString()})` : ""}<input name="pqty" type="number" min={isDtp ? pm?.dtpSpec?.moq || 1000 : 1} style={fieldStyle("pqty")} /></label>
+        <label style={{ fontSize: 12 }}>* Number of designs<input name="pdesigns" type="number" min={0} defaultValue={1} style={fieldStyle("pdesigns")} /></label>
         {isBags ? (
-          <label style={{ fontSize: 12 }}>Print / application
-            <select name="pfaces" style={inputStyle}><option value="1">Front only</option><option value="2">Front and back</option></select>
+          <label style={{ fontSize: 12 }}>{isStockBag ? "Sides" : "Print / application"}
+            {/* 2026-10-19 owner decision A: the canonical bag engine reads its side
+                count from pbagsides — mirrored from this selection for Sticker AND
+                Stock Bags. Stock Bags default Double Sided (storefront standard). */}
+            <select name="pfaces" value={bagSidesValue} onChange={(event) => setBagSides(event.currentTarget.value)} style={inputStyle}>
+              {isStockBag
+                ? (<><option value="2">Double sided (standard)</option><option value="1">Single sided</option></>)
+                : (<><option value="1">Front only</option><option value="2">Front and back</option></>)}
+            </select>
+            <input type="hidden" name="pbagsides" value={bagSidesValue} />
           </label>
         ) : null}
         {jars ? (<>
@@ -3585,7 +3826,7 @@ function ProductDrivenForm() {
         </>) : null}
         {isBanners ? (
           <label style={{ fontSize: 12 }}>Print
-            <select name="pfaces" style={inputStyle}><option value="1">Single-sided</option><option value="2">Double-sided</option></select>
+            <select name="pfaces" value={bannerFaces} onChange={(event) => setBannerFaces(event.currentTarget.value)} style={inputStyle}><option value="1">Single-sided</option><option value="2">Double-sided</option></select>
           </label>
         ) : null}
         {isCustom ? <label style={{ fontSize: 12 }}>Printed faces/labels<input name="pfaces" type="number" min={1} defaultValue={1} style={inputStyle} /></label> : null}
@@ -3661,11 +3902,11 @@ function ProductDrivenForm() {
           <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>One production-ready design included; extra designs bill $25 (1,000–2,499) / $20 (2,500–4,999) / $15 (5,000+) each. Below-floor or below-$500-profit prices need the owner phrase + reason in Advanced Pricing Controls.</p>
         </>) : null}
         {!isDtp && !jars ? (<>
-          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={inputStyle} /></label>
-          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" style={inputStyle} /></label>
+          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={fieldStyle("pwidth")} /></label>
+          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" style={fieldStyle("pheight")} /></label>
         </>) : null}
         {!isDtp ? (<label style={{ fontSize: 12 }}>* Material
-          <select name="pmat" style={inputStyle}>
+          <select name="pmat" style={fieldStyle("pmat")}>
             <option value="">— select material —</option>
             {(pm.materialOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -3685,7 +3926,7 @@ function ProductDrivenForm() {
         </label>
         <label style={{ fontSize: 12 }}>White layers (0–14)<input name="pwhitelayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>White coverage % (required when white is used)
-          <input name="pwhitecoverage" type="number" min={1} max={100} step="1" placeholder="no default — must be entered" style={inputStyle} />
+          <input name="pwhitecoverage" type="number" min={1} max={100} step="1" placeholder="no default — must be entered" style={fieldStyle("pwhitecoverage")} />
           <span style={smallHelp}>
             A separate input from the layer count and never derived from it.
             White has NO default coverage: leave it blank and the job stays
@@ -3757,19 +3998,36 @@ function ProductDrivenForm() {
         {isStickers && canonCutType === "contour" ? (
           <label style={{ fontSize: 12 }}>* Contour cut-path perimeter (in, per label)
             <input name="pl0perim" type="number" step="0.01" min={0.01}
-              defaultValue={canonParams.get("pl0perim") || ""} placeholder="measured path length" style={inputStyle} />
+              defaultValue={canonParams.get("pl0perim") || ""} placeholder="measured path length" style={fieldStyle("pl0perim")} />
           </label>
         ) : null}
         {isStickers && canonLine.mat && !canonMaterialKey ? (
           <div style={{ gridColumn: "1 / -1", border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 8, padding: 8, fontSize: 12 }}>
-            <b>Canonical true cost unavailable for this material.</b> "{(pm?.materialOptions || []).find((o: any) => String(o.value) === String(canonLine.mat))?.label || "selected material"}"
-            does not map to a verified canonical roll (matte, gloss or holographic), so no canonical rate can be applied and the job stays DRAFT ONLY.
+            {(() => {
+              // 2026-10-28: the reasons come from the material's own Material Center record.
+              const picked = (pm?.materialOptions || []).find((o: any) => String(o.value) === String(canonLine.mat));
+              const reasons: string[] = Array.isArray(picked?.calculatorMissing) ? picked.calculatorMissing : [];
+              return (
+                <>
+                  <b>Needs cost setup — this material is not calculator-ready yet.</b> "{picked?.label || "selected material"}" cannot be costed, so the job stays DRAFT ONLY (no cost is guessed).
+                  {reasons.length ? <ul style={{ margin: "4px 0 0 18px" }}>{reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : null}
+                  <div style={{ marginTop: 4 }}>Fix it in <Link to="/app/erp/materials">Material Center</Link>, then calculate again.</div>
+                </>
+              );
+            })()}
           </div>
         ) : null}
         {isStickers ? <MultiLineStickerRows /> : null}
         {isBanners ? (<>
-          <label style={{ fontSize: 12 }}><input type="checkbox" name="phem" value="1" /> Hemming</label>
-          <label style={{ fontSize: 12 }}><input type="checkbox" name="pgrommet" value="1" /> Grommets</label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="phem" value="1" checked={bannerHem} onChange={(event) => setBannerHem(event.currentTarget.checked)} /> Hemming</label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="pgrommet" value="1" checked={bannerGrommets} onChange={(event) => setBannerGrommets(event.currentTarget.checked)} /> Grommets</label>
+          {/* 2026-10-19 owner decision B: canonical banner mirror — the server reads these names (normalizeCanonicalInput).
+              The form collects no grommet pattern; any grommet selection blocks on the unverified finishing rate either way. */}
+          <input type="hidden" name="pbannerw" value={canonLine.w} />
+          <input type="hidden" name="pbannerh" value={canonLine.h} />
+          <input type="hidden" name="pbannersides" value={bannerFaces === "2" ? "DOUBLE" : "SINGLE"} />
+          <input type="hidden" name="pbanneredge" value={bannerHem ? "HEMMED" : "TRIM_ONLY"} />
+          <input type="hidden" name="pbannergrommets" value={bannerGrommets ? "FOUR_CORNERS" : "NONE"} />
         </>) : null}
         <details style={{ gridColumn: "1 / -1" }}>
           <summary style={{ fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Advanced Options (custom item, waste/box overrides)</summary>
@@ -3786,6 +4044,11 @@ function ProductDrivenForm() {
         </details>
         <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#b45309", color: "white", fontWeight: 700 }}>CALCULATE COST</button>
         <a href="/app/erp/cost-calculator" style={{ ...secondaryButtonStyle, textAlign: "center", textDecoration: "none", color: "inherit" }}>RESET</a>
+        {missingFields.length ? (
+          <p role="alert" style={{ gridColumn: "1 / -1", margin: 0, color: "#991b1b", fontSize: 13, fontWeight: 700 }}>
+            {REQUIRED_FIELDS_MESSAGE} <span style={{ fontWeight: 400 }}>({missingFields.map((field) => field.label).join(", ")})</span>
+          </p>
+        ) : null}
       </>) : null}
     </Form>
   );
@@ -3967,10 +4230,117 @@ function describeGeometryMap(map: Record<string, Record<string, number>> | null 
 }
 
 
+// ---- 2026-10-19 OWNER RESULT — the decision numbers, simple and first ----
+// Reads only what the loader computed: canonical true cost, the server tier
+// row for the requested quantity (the SAME row "Save draft quote" stores), and
+// the multi-line combined quote. resolveOwnerResult decides which existing
+// approved pricing authority applies, or shows NOT AVAILABLE when none does.
+// Nothing renders until a quantity was submitted, so an empty form never
+// produces a result card.
+function OwnerResultCard() {
+  const { emergency } = useLoaderData<typeof loader>() as any;
+  const pm = emergency.productMode;
+  if (!pm?.family || !(Number(pm.requestedQty) > 0)) return null;
+  const canonical = pm.canonical as CanonicalCalculatorView | null | undefined;
+  const requestedRow = (pm.tiers || []).find((tier: any) => tier.requested) || null;
+  const result: OwnerResult | null = resolveOwnerResult({
+    family: pm.canonicalFamily,
+    stockBag: Boolean(pm.stockBag),
+    canonical: canonical ? { status: canonical.status, totalCost: canonical.totalCost, unitCost: canonical.unitCost, blockers: canonical.blockers } : null,
+    requestedRow,
+    multiLine: pm.multiLine,
+    marginRuleKey: pm.marginFamily?.key || null,
+  });
+  if (!result) return null;
+
+  const tones: Record<string, { bg: string; fg: string; border: string }> = {
+    READY: { bg: "#ecfdf5", fg: "#065f46", border: "#a7f3d0" },
+    OWNER_OVERRIDE: { bg: "#eff6ff", fg: "#1e40af", border: "#bfdbfe" },
+    OVERRIDE_REQUIRED: { bg: "#fffbeb", fg: "#92400e", border: "#fde68a" },
+    PRICE_NOT_AVAILABLE: { bg: "#fffbeb", fg: "#92400e", border: "#fde68a" },
+    NEEDS_INFORMATION: { bg: "#fffbeb", fg: "#92400e", border: "#fde68a" },
+    PRICING_BLOCKED: { bg: "#fef2f2", fg: "#991b1b", border: "#fecaca" },
+  };
+  const tone = tones[result.state] || tones.PRICING_BLOCKED;
+  const money2 = (value: number) => `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const notAvailable = <span style={{ color: "#991b1b" }}>Not available</span>;
+  const familyLabel = pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily)?.label || "";
+  const stat = (label: string, value: React.ReactNode, sub?: React.ReactNode) => (
+    <div style={{ minWidth: 150 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: "#6b7280" }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      {sub ? <div style={{ fontSize: 12, color: "#374151" }}>{sub}</div> : null}
+    </div>
+  );
+  const costBlocked = result.trueJobCost == null;
+
+  return (
+    <section style={{ ...cardStyle, marginTop: 12, borderColor: tone.border, background: tone.bg, borderWidth: 2 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <b style={{ fontSize: 15, color: tone.fg }}>COST &amp; PRICING RESULT</b>
+        <span style={{ fontSize: 12, padding: "2px 10px", borderRadius: 999, border: `1px solid ${tone.border}`, color: tone.fg, background: "white", fontWeight: 800 }}>{result.badge}</span>
+        <span style={{ fontSize: 12, color: "#374151" }}>
+          {familyLabel}{result.quantity ? ` · ${result.quantity.toLocaleString()} units` : ""}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 28, marginTop: 12, flexWrap: "wrap" }}>
+        {stat("TRUE JOB COST", result.trueJobCost == null ? notAvailable : money2(result.trueJobCost))}
+        {stat("TRUE UNIT COST", result.trueUnitCost == null ? notAvailable : `$${result.trueUnitCost.toFixed(4)}`)}
+        {stat(
+          "RECOMMENDED SELLING PRICE",
+          result.recommendedTotal == null ? notAvailable : `${money2(result.recommendedTotal)} total`,
+          result.recommendedUnit != null ? `${money2(result.recommendedUnit)} each` : result.state === "PRICE_NOT_AVAILABLE" ? "Pricing authority required" : null,
+        )}
+        {stat("EXPECTED PROFIT", result.profit == null ? notAvailable : money2(result.profit))}
+        {stat("MARGIN", result.marginPct == null ? notAvailable : `${result.marginPct.toFixed(1)}%`)}
+      </div>
+
+      {costBlocked ? (
+        <div style={{ marginTop: 10, fontSize: 12, color: "#991b1b" }}>Missing cost is never $0 — this job has no cost until the items below are resolved.</div>
+      ) : null}
+
+      {result.state === "NEEDS_INFORMATION" || result.state === "PRICING_BLOCKED" ? (
+        <div style={{ marginTop: 10, background: "white", border: `1px solid ${tone.border}`, borderRadius: 8, padding: 10, fontSize: 13 }}>
+          <b>Cost cannot be finalized yet.</b> {result.state === "NEEDS_INFORMATION" ? "Missing information:" : "Blocked by:"}
+          <ul style={{ margin: "4px 0 0 18px" }}>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>Engine codes and details are under Advanced diagnostics below.</div>
+        </div>
+      ) : null}
+
+      {result.state === "PRICE_NOT_AVAILABLE" ? (
+        <div style={{ marginTop: 10, background: "white", border: `1px solid ${tone.border}`, borderRadius: 8, padding: 10, fontSize: 13 }}>
+          <b>Pricing authority required.</b> {result.missingAuthority}
+          <div style={{ fontSize: 12, color: "#92400e", marginTop: 4 }}>
+            {PROVISIONAL_PRICING_STATUS}: this job can be saved as a provisional draft (true cost only, no customer price). It cannot be sent, approved or moved to production until the owner sets and approves a price on the quote (Quotes → Owner Set Price &amp; Approve).
+          </div>
+          {result.reasons.length ? <ul style={{ margin: "4px 0 0 18px" }}>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : null}
+        </div>
+      ) : null}
+
+      {result.priceAuthority ? (
+        <div style={{ marginTop: 10, fontSize: 12, color: "#374151" }}>
+          <b>Price set by:</b> {result.priceAuthority}
+          {result.reasons.length ? <ul style={{ margin: "4px 0 0 18px" }}>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : null}
+        </div>
+      ) : null}
+      {result.marginWarning ? (
+        <div style={{ marginTop: 8, fontSize: 12, color: "#92400e", fontWeight: 700 }}>
+          ⚠ {result.marginWarning} It remains an APPROVED price (the live storefront price) — saving is not blocked.
+        </div>
+      ) : null}
+      {result.provisionalCost ? <div style={{ fontSize: 12, color: "#92400e", marginTop: 4 }}>True cost includes owner-approved provisional standards (see Cost breakdown).</div> : null}
+      {result.freightIncluded > 0 && result.profit != null ? <div style={{ fontSize: 12, color: "#374151", marginTop: 4 }}>Profit is after the entered freight/handling ({money2(result.freightIncluded)}).</div> : null}
+
+    </section>
+  );
+}
+
 function CanonicalTrueCost() {
   const { emergency } = useLoaderData<typeof loader>() as any;
   const canonical = emergency.productMode?.canonical as CanonicalCalculatorView | null | undefined;
-  if (!canonical) return null;
+  // 2026-10-19: secondary detail only, shown after a calculation with a quantity.
+  if (!canonical || !(Number(emergency.productMode?.requestedQty) > 0)) return null;
 
   const statusTone: Record<string, { bg: string; fg: string; border: string }> = {
     VALID: { bg: "#ecfdf5", fg: "#065f46", border: "#a7f3d0" },
@@ -3978,8 +4348,10 @@ function CanonicalTrueCost() {
     DRAFT_ONLY: { bg: "#fef2f2", fg: "#991b1b", border: "#fecaca" },
   };
   const tone = statusTone[canonical.status] || statusTone.DRAFT_ONLY;
+  const blocked = canonical.status === "DRAFT_ONLY";
   const d = canonical.diagnostics;
   const cat = canonical.totals as Record<string, number>;
+  const plainBlockers = summarizeCalculatorBlockers(canonical.blockers);
 
   const dollars = (value: number | null | undefined) =>
     value == null ? "—" : `${Number(value).toFixed(4)}`;
@@ -3987,69 +4359,73 @@ function CanonicalTrueCost() {
     value == null ? "—" : Number(value).toFixed(digits);
 
   const componentRows = CANONICAL_COMPONENT_ORDER.map(({ key, label }) => [label, cat[key] ?? null] as [string, number | null]);
+  const sectionStyle: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 10, padding: "6px 10px", background: "white" };
+  const summaryStyle: React.CSSProperties = { cursor: "pointer", fontSize: 13, fontWeight: 700 };
 
   return (
-    <div style={{ ...cardStyle, marginTop: 12, borderColor: tone.border, background: tone.bg }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <b style={{ fontSize: 14, color: tone.fg }}>CANONICAL TRUE COST</b>
-        <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 999, border: `1px solid ${tone.border}`, color: tone.fg, background: "white", fontWeight: 700 }}>
-          {canonical.status}
-        </span>
-        <span style={{ fontSize: 12, color: "#374151" }}>
-          {canonical.family}
-        </span>
-        <span style={{ fontSize: 11, color: "#6b7280" }}>{canonical.version}</span>
-      </div>
-
-      <div style={{ display: "flex", gap: 24, marginTop: 10, flexWrap: "wrap" }}>
-        <div>
-          <div style={smallHelp}>TRUE JOB COST</div>
-          <div style={{ fontSize: 20, fontWeight: 700 }}>{dollars(canonical.totalCost)}</div>
+    <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+      {/* ---- Cost breakdown ---- */}
+      <details open={!blocked} style={sectionStyle}>
+        <summary style={summaryStyle}>Cost breakdown{blocked ? " — partial lines only, the job is blocked (not a cost)" : ""}</summary>
+        <div style={{ marginTop: 6 }}>
+          <b style={{ fontSize: 12 }}>COMPONENT BREAKDOWN</b>
+          <table style={{ width: "100%", fontSize: 12, marginTop: 6, borderCollapse: "collapse" }}>
+            <tbody>
+              {componentRows.map(([label, amount]) => (
+                <tr key={label}>
+                  <td style={{ padding: "2px 0", color: "#374151" }}>{label}</td>
+                  <td style={{ padding: "2px 0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div>
-          <div style={smallHelp}>TRUE UNIT COST</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: canonical.unitCost == null ? "#991b1b" : undefined }}>
-            {canonical.unitCost == null ? "NOT AVAILABLE" : dollars(canonical.unitCost)}
-          </div>
-          {canonical.unitCost == null ? (
-            <div style={{ ...smallHelp, color: "#991b1b" }}>
-              Blocked — this job has no defensible unit cost. It is NOT $0.
+        {d.finishingBreakdown ? (
+          <div style={{ marginTop: 10, fontSize: 12 }}>
+            <b>FINISHING DECOMPOSITION</b> <span style={{ color: "#6b7280" }}>(sums of the engine lines above; nothing re-estimated)</span>
+            <div style={{ marginTop: 4, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "2px 16px" }}>
+              <div>Cutting (machine): <b>{dollars(d.finishingBreakdown.cuttingMachine)}</b></div>
+              <div>Cutting (attention): <b>{dollars(d.finishingBreakdown.cuttingAttention)}</b></div>
+              <div>Weeding: <b>{dollars(d.finishingBreakdown.weeding)}</b> ({d.weedingPages ?? "—"} page(s) at ${WEEDING_STANDARD.costPerPage.toFixed(4)}; {WEEDING_STANDARD.version})</div>
+              <div>Application: <b>{dollars(d.finishingBreakdown.application)}</b></div>
+              <div>Specialty setup: <b>{dollars(d.finishingBreakdown.specialtySetup)}</b></div>
+              <div>Finishing total: <b>{dollars(d.finishingBreakdown.total)}</b></div>
             </div>
-          ) : null}
-        </div>
-      </div>
+          </div>
+        ) : null}
+        {d.applicationBreakdown && d.applicationBreakdown.pieces.length ? (
+          <div style={{ marginTop: 10, fontSize: 12 }}>
+            <b>APPLICATION BREAKDOWN</b> <span style={{ color: "#6b7280" }}>({d.applicationBreakdown.standardLabel}, ${d.applicationBreakdown.laborRatePerHour}/hr; same arithmetic as the application line)</span>
+            <table style={{ width: "100%", marginTop: 4, borderCollapse: "collapse" }}>
+              <thead><tr><th style={{ textAlign: "left", padding: "2px 0" }}>Piece</th><th style={{ textAlign: "right" }}>Seconds / label</th><th style={{ textAlign: "right" }}>$ / label</th><th style={{ textAlign: "right" }}>Labels</th><th style={{ textAlign: "right" }}>Cost</th></tr></thead>
+              <tbody>
+                {d.applicationBreakdown.pieces.map((p) => (
+                  <tr key={p.piece}>
+                    <td style={{ padding: "2px 0" }}>{p.label}</td>
+                    <td style={{ textAlign: "right" }}>{p.secondsPerLabel}s</td>
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(p.costPerLabel)}</td>
+                    <td style={{ textAlign: "right" }}>{p.labels}</td>
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(p.cost)}</td>
+                  </tr>
+                ))}
+                <tr style={{ fontWeight: 700, borderTop: "1px solid #e5e7eb" }}>
+                  <td style={{ padding: "2px 0" }}>Total application</td><td /><td />
+                  <td style={{ textAlign: "right" }}>{d.applicationBreakdown.totalLabels}</td>
+                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(d.applicationBreakdown.totalCost)}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div style={{ color: "#6b7280", marginTop: 4 }}>{d.applicationBreakdown.source}</div>
+          </div>
+        ) : null}
+        <p style={{ ...smallHelp, marginTop: 6 }}>
+          These are manufacturing costs only. The recommended selling price above comes from the approved pricing rules and never changes these costs.
+        </p>
+      </details>
 
-      {canonical.blockers.length ? (
-        <div style={{ marginTop: 10, border: "1px solid #fecaca", background: "white", borderRadius: 8, padding: 10 }}>
-          <b style={{ fontSize: 12, color: "#991b1b" }}>BLOCKERS ({canonical.blockers.length})</b>
-          <ul style={{ margin: "6px 0 0 18px", fontSize: 12, color: "#7f1d1d" }}>
-            {canonical.blockers.map((blocker: string, index: number) => <li key={index}>{blocker}</li>)}
-          </ul>
-        </div>
-      ) : null}
-
-      {canonical.reasons.length ? (
-        <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
-          <b>Reasons:</b> {canonical.reasons.join(" · ")}
-        </div>
-      ) : null}
-
-      <div style={{ marginTop: 10, background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10 }}>
-        <b style={{ fontSize: 12 }}>COMPONENT BREAKDOWN</b>
-        <table style={{ width: "100%", fontSize: 12, marginTop: 6, borderCollapse: "collapse" }}>
-          <tbody>
-            {componentRows.map(([label, amount]) => (
-              <tr key={label}>
-                <td style={{ padding: "2px 0", color: "#374151" }}>{label}</td>
-                <td style={{ padding: "2px 0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(amount)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div style={{ marginTop: 10, background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10 }}>
-        <b style={{ fontSize: 12 }}>PRODUCTION DIAGNOSTICS</b>
+      {/* ---- Production details ---- */}
+      <details style={sectionStyle}>
+        <summary style={summaryStyle}>Production details</summary>
         <div style={{ fontSize: 12, color: "#374151", marginTop: 6, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "2px 16px" }}>
           <div>Media consumed: <b>{numeric(d.mediaConsumedSqft, 3)} sqft</b></div>
           <div>RIP layout: <b>{numeric(d.ripLayoutSqft, 3)} sqft</b></div>
@@ -4070,86 +4446,73 @@ function CanonicalTrueCost() {
             <div>Personalization setups: <b>{d.personalizationSetupEvents}</b> · customer add-on <b>${Number(d.personalizationCustomerAddOn ?? 0).toFixed(2)}</b></div>
           ) : null}
         </div>
-      </div>
-
-      {d.productSpec ? (
-        <div style={{ marginTop: 10, background: "white", border: `1px solid ${d.productSpec.customSize ? "#fde68a" : "#e5e7eb"}`, borderRadius: 8, padding: 10, fontSize: 12 }}>
-          <b>PRODUCT SPEC USED</b>
-          {d.productSpec.customSize ? <span style={{ marginLeft: 8, background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11 }}>CUSTOM SIZE OVERRIDE</span> : null}
-          <span style={{ marginLeft: 8, borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11, ...(d.productSpec.authorityStatus === "OWNER_CONFIRMED" ? { background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" } : { background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" }) }}>
-            {d.productSpec.authorityStatus === "OWNER_CONFIRMED" ? "OWNER-CONFIRMED DIMENSIONS" : d.productSpec.authorityStatus == null ? "DIMENSION AUTHORITY NOT RECORDED (older snapshot)" : "COSTING GEOMETRY — OWNER CONFIRMATION PENDING"}
-          </span>
-          {d.productSpec.referenceConflict ? <div style={{ color: "#78350f", marginTop: 4 }}>Reference setup differs: {(d.productSpec.referenceConflicts || []).join("; ")}.</div> : null}
-          {d.productSpec.sharedSizeKeyNote ? <div style={{ color: "#78350f", marginTop: 4 }}>{d.productSpec.sharedSizeKeyNote}</div> : null}
-          <div style={{ marginTop: 4 }}>
-            {d.productSpec.displayName}{d.productSpec.labelSet ? ` · label set ${d.productSpec.labelSet}` : ""} · standard: {describeGeometryMap(d.productSpec.standard)}
-          </div>
-          {d.productSpec.customSize ? (
-            <div style={{ color: "#92400e" }}>
-              Override used for {d.productSpec.overriddenPieces.join(", ")}: {describeGeometryMap(d.productSpec.override)}
-              {d.productSpec.overrideReason ? ` · reason: ${d.productSpec.overrideReason}` : ""}
+        {d.productSpec ? (
+          <div style={{ marginTop: 10, border: `1px solid ${d.productSpec.customSize ? "#fde68a" : "#e5e7eb"}`, borderRadius: 8, padding: 10, fontSize: 12 }}>
+            <b>PRODUCT SPEC USED</b>
+            {d.productSpec.customSize ? <span style={{ marginLeft: 8, background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11 }}>CUSTOM SIZE OVERRIDE</span> : null}
+            <span style={{ marginLeft: 8, borderRadius: 999, padding: "1px 8px", fontWeight: 700, fontSize: 11, ...(d.productSpec.authorityStatus === "OWNER_CONFIRMED" ? { background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" } : { background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" }) }}>
+              {d.productSpec.authorityStatus === "OWNER_CONFIRMED" ? "OWNER-CONFIRMED DIMENSIONS" : d.productSpec.authorityStatus == null ? "DIMENSION AUTHORITY NOT RECORDED (older snapshot)" : "COSTING GEOMETRY — OWNER CONFIRMATION PENDING"}
+            </span>
+            {d.productSpec.referenceConflict ? <div style={{ color: "#78350f", marginTop: 4 }}>Reference setup differs: {(d.productSpec.referenceConflicts || []).join("; ")}.</div> : null}
+            {d.productSpec.sharedSizeKeyNote ? <div style={{ color: "#78350f", marginTop: 4 }}>{d.productSpec.sharedSizeKeyNote}</div> : null}
+            <div style={{ marginTop: 4 }}>
+              {d.productSpec.displayName}{d.productSpec.labelSet ? ` · label set ${d.productSpec.labelSet}` : ""} · standard: {describeGeometryMap(d.productSpec.standard)}
             </div>
-          ) : null}
-          <div style={{ color: "#6b7280" }}>{d.productSpec.source} ({d.productSpec.specVersion})</div>
-        </div>
-      ) : null}
-      {d.finishingBreakdown ? (
-        <div style={{ marginTop: 10, background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, fontSize: 12 }}>
-          <b>FINISHING DECOMPOSITION</b> <span style={{ color: "#6b7280" }}>(sums of the engine lines above; nothing re-estimated)</span>
-          <div style={{ marginTop: 4, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "2px 16px" }}>
-            <div>Cutting (machine): <b>{dollars(d.finishingBreakdown.cuttingMachine)}</b></div>
-            <div>Cutting (attention): <b>{dollars(d.finishingBreakdown.cuttingAttention)}</b></div>
-            <div>Weeding: <b>{dollars(d.finishingBreakdown.weeding)}</b> ({d.weedingPages ?? "—"} page(s) at ${WEEDING_STANDARD.costPerPage.toFixed(4)}; {WEEDING_STANDARD.version})</div>
-            <div>Application: <b>{dollars(d.finishingBreakdown.application)}</b></div>
-            <div>Specialty setup: <b>{dollars(d.finishingBreakdown.specialtySetup)}</b></div>
-            <div>Finishing total: <b>{dollars(d.finishingBreakdown.total)}</b></div>
+            {d.productSpec.customSize ? (
+              <div style={{ color: "#92400e" }}>
+                Override used for {d.productSpec.overriddenPieces.join(", ")}: {describeGeometryMap(d.productSpec.override)}
+                {d.productSpec.overrideReason ? ` · reason: ${d.productSpec.overrideReason}` : ""}
+              </div>
+            ) : null}
+            <div style={{ color: "#6b7280" }}>{d.productSpec.source} ({d.productSpec.specVersion})</div>
           </div>
-        </div>
-      ) : null}
-      {d.applicationBreakdown && d.applicationBreakdown.pieces.length ? (
-        <div style={{ marginTop: 10, background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, fontSize: 12 }}>
-          <b>APPLICATION BREAKDOWN</b> <span style={{ color: "#6b7280" }}>({d.applicationBreakdown.standardLabel}, ${d.applicationBreakdown.laborRatePerHour}/hr; same arithmetic as the application line)</span>
-          <table style={{ width: "100%", marginTop: 4, borderCollapse: "collapse" }}>
-            <thead><tr><th style={{ textAlign: "left", padding: "2px 0" }}>Piece</th><th style={{ textAlign: "right" }}>Seconds / label</th><th style={{ textAlign: "right" }}>$ / label</th><th style={{ textAlign: "right" }}>Labels</th><th style={{ textAlign: "right" }}>Cost</th></tr></thead>
-            <tbody>
-              {d.applicationBreakdown.pieces.map((p) => (
-                <tr key={p.piece}>
-                  <td style={{ padding: "2px 0" }}>{p.label}</td>
-                  <td style={{ textAlign: "right" }}>{p.secondsPerLabel}s</td>
-                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(p.costPerLabel)}</td>
-                  <td style={{ textAlign: "right" }}>{p.labels}</td>
-                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(p.cost)}</td>
-                </tr>
-              ))}
-              <tr style={{ fontWeight: 700, borderTop: "1px solid #e5e7eb" }}>
-                <td style={{ padding: "2px 0" }}>Total application</td><td /><td />
-                <td style={{ textAlign: "right" }}>{d.applicationBreakdown.totalLabels}</td>
-                <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(d.applicationBreakdown.totalCost)}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div style={{ color: "#6b7280", marginTop: 4 }}>{d.applicationBreakdown.source}</div>
-        </div>
-      ) : null}
-      {d.cutPathBasis && d.cutPathBasis.provisionalReason ? (
-        <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 10, fontSize: 12 }}>
-          <b style={{ color: "#92400e" }}>WHY CUTTING IS PROVISIONAL</b>
-          <div style={{ marginTop: 4, color: "#78350f" }}>{d.cutPathBasis.provisionalReason}</div>
-          <div style={{ color: "#6b7280", marginTop: 4 }}>
-            {d.cutPathBasis.bands.map((b) => `${b.group}: length ${b.lengthBasis}; rate ${b.rateBasis}`).join(" · ")}
+        ) : null}
+        {d.cutPathBasis && d.cutPathBasis.provisionalReason ? (
+          <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 10, fontSize: 12 }}>
+            <b style={{ color: "#92400e" }}>WHY CUTTING IS PROVISIONAL</b>
+            <div style={{ marginTop: 4, color: "#78350f" }}>{d.cutPathBasis.provisionalReason}</div>
+            <div style={{ color: "#6b7280", marginTop: 4 }}>
+              {d.cutPathBasis.bands.map((b) => `${b.group}: length ${b.lengthBasis}; rate ${b.rateBasis}`).join(" · ")}
+            </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
+      </details>
 
-      <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}>
-        <b>Calibration:</b> {canonical.calibration.resolved ? "resolved" : "NOT RESOLVED"} —{" "}
-        {Object.values(canonical.calibration.identity).join(" | ")}. {canonical.calibration.message}{" "}
-        <b>Ink $/mL:</b> {canonical.calibration.inkCostPerMl == null ? "none" : canonical.calibration.inkCostPerMl.toFixed(7)} — {canonical.calibration.inkCostSource}
-      </div>
-      <p style={{ ...smallHelp, marginTop: 6 }}>
-        TRUE MANUFACTURING COST ONLY. Selling price, margin and any market
-        comparison are a separate concern and are never computed here.
-      </p>
+      {/* ---- Advanced diagnostics: raw engine status, codes and calibration (owner/admin troubleshooting) ---- */}
+      <details style={sectionStyle}>
+        <summary style={{ ...summaryStyle, color: "#6b7280" }}>Advanced diagnostics{canonical.blockers.length ? ` — ${canonical.blockers.length} engine blocker(s)` : ""}</summary>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+          <b style={{ fontSize: 12, color: tone.fg }}>CANONICAL TRUE COST</b>
+          <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 999, border: `1px solid ${tone.border}`, color: tone.fg, background: tone.bg, fontWeight: 700 }}>
+            {canonical.status}
+          </span>
+          <span style={{ fontSize: 12, color: "#374151" }}>{canonical.family}</span>
+          <span style={{ fontSize: 11, color: "#6b7280" }}>{canonical.version}</span>
+        </div>
+        <div style={{ fontSize: 12, marginTop: 4 }}>
+          Engine true job cost: <b>{blocked ? "NOT AVAILABLE (blocked — not $0)" : dollars(canonical.totalCost)}</b> · engine true unit cost:{" "}
+          <b>{canonical.unitCost == null ? "NOT AVAILABLE (blocked — not $0)" : dollars(canonical.unitCost)}</b>
+        </div>
+        {canonical.blockers.length ? (
+          <div style={{ marginTop: 8, border: "1px solid #fecaca", background: "#fff7f7", borderRadius: 8, padding: 10 }}>
+            <b style={{ fontSize: 12, color: "#991b1b" }}>BLOCKERS ({canonical.blockers.length})</b>
+            {plainBlockers?.codes.length ? <div style={{ fontSize: 11, color: "#6b7280" }}>Codes: {plainBlockers.codes.join(", ")}</div> : null}
+            <ul style={{ margin: "6px 0 0 18px", fontSize: 12, color: "#7f1d1d" }}>
+              {canonical.blockers.map((blocker: string, index: number) => <li key={index}>{blocker}</li>)}
+            </ul>
+          </div>
+        ) : null}
+        {canonical.reasons.length ? (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
+            <b>Reasons:</b> {canonical.reasons.join(" · ")}
+          </div>
+        ) : null}
+        <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}>
+          <b>Calibration:</b> {canonical.calibration.resolved ? "resolved" : "NOT RESOLVED"} —{" "}
+          {Object.values(canonical.calibration.identity).join(" | ")}. {canonical.calibration.message}{" "}
+          <b>Ink $/mL:</b> {canonical.calibration.inkCostPerMl == null ? "none" : canonical.calibration.inkCostPerMl.toFixed(7)} — {canonical.calibration.inkCostSource}
+        </div>
+      </details>
     </div>
   );
 }
@@ -4317,7 +4680,9 @@ function ProductTiers() {
   const tiers: any[] | null = pm?.tiers || null;
   const multiLine = pm?.multiLine || null; // 15F.0-K
   if ((!tiers || !tiers.length) && !multiLine) return null;
-  const money2 = (value: number) => `$${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // 2026-10-19: a missing amount renders "—", never $0.00 (missing cost/price is never zero).
+  const money2 = (value: number | null | undefined) => (value == null || !Number.isFinite(Number(value)) ? "—" : `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+  const pct1 = (value: number | null | undefined) => (value == null || !Number.isFinite(Number(value)) ? "—" : `${Number(value).toFixed(1)}%`);
   // 15F.0-K: multi-line sticker jobs replace the quantity ladder with ONE
   // combined job quote (per-line detail + job totals + save).
   if (multiLine?.combined) {
@@ -4430,10 +4795,15 @@ function ProductTiers() {
   const requested = tiers.find((tier) => tier.requested) || tiers[tiers.length - 1];
   const selected = tiers.find((tier) => tier.quantity === selectedQty) || requested;
   const mf = pm.marginFamily;
+  /* 2026-10-19 owner decision E: the SAME authority classifier the save action
+   * uses. With no approved selling-price authority the tier prices are
+   * diagnostic references only and the save is a PROVISIONAL draft. */
+  const tierAuthority = resolveSellingPriceAuthority({ family: pm.canonicalFamily, stockBag: Boolean(pm.stockBag), marginRuleKey: mf?.key || null, row: selected });
+  const provisionalPrices = !tierAuthority.approved && tierAuthority.kind !== "cost_blocked";
   // 15D.2: never prefill with panel placeholders; real record name, else the
   // registry family label, else blank for the owner to type.
   const familyEntryForLabel = calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily);
-  const productLabel = pm.productLabel || familyEntryForLabel?.label || "";
+  const productLabel = pm.productLabel || (pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : familyEntryForLabel?.label) || "";
   return (
     <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
       <b style={{ fontSize: 15 }}>RECOMMENDED CUSTOMER PRICE</b>
@@ -4458,6 +4828,17 @@ function ProductTiers() {
           </div>
         );
       })()}
+      {provisionalPrices ? (
+        <div style={{ border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
+          <b>{PROVISIONAL_PRICING_STATUS}</b> — {tierAuthority.missing} The prices in the table below are diagnostic references only, not approved customer prices.
+        </div>
+      ) : tierAuthority.approved ? (
+        <p style={{ ...smallHelp, margin: "0 0 6px" }}><b>Price authority:</b> {tierAuthority.label}</p>
+      ) : null}
+      <details open={!provisionalPrices}>
+      <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: provisionalPrices ? "#92400e" : "#374151" }}>
+        {provisionalPrices ? "Reference tier prices — diagnostic only, NOT approved customer prices" : "Quantity tiers"}
+      </summary>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           {pm.isDtp ? (
@@ -4478,7 +4859,7 @@ function ProductTiers() {
                   <td align="center"><b>{money2(tier.unitPrice)}</b>{tier.dtp.customUnitPrice != null ? <span style={{ color: "#7c2d12" }}> (custom)</span> : null}</td>
                   <td align="center">{money2(tier.totalPrice)}</td>
                   <td align="center">{money2(tier.profit)}</td>
-                  <td align="center">{tier.actualMarginPct.toFixed(1)}%</td>
+                  <td align="center">{pct1(tier.actualMarginPct)}</td>
                   <td style={{ color: tier.status === "READY" ? "#166534" : String(tier.status).startsWith("BLOCKED") ? "#991b1b" : "#92400e", fontWeight: 700 }}>
                     {tier.status}
                     {tier.dtp.statusReasons.length ? <div style={{ fontWeight: 400, color: "#6b7280" }}>{tier.dtp.statusReasons.join("; ")}</div> : null}
@@ -4486,10 +4867,10 @@ function ProductTiers() {
                 </>) : (<>
                   <td align="center">{money2(tier.jobCost)}</td>
                   <td align="center">{money2(tier.unitCost)}</td>
-                  <td align="center">{tier.marginPct}%</td>
+                  <td align="center">{pct1(tier.marginPct)}</td>
                   <td align="center"><b>{money2(tier.unitPrice)}</b></td>
                   <td align="center">{money2(tier.totalPrice)}</td>
-                  <td align="center">{money2(tier.profit)} ({tier.actualMarginPct.toFixed(1)}%)</td>
+                  <td align="center">{money2(tier.profit)} ({pct1(tier.actualMarginPct)})</td>
                   <td style={{ color: tier.draftOnly || tier.belowFloor ? "#991b1b" : "#166534", fontWeight: 700 }}>
                     {tier.status}
                     {tier.commercial && !tier.draftOnly ? <div style={{ fontWeight: 400, color: "#6b7280", fontSize: 11 }}>{tier.commercial.controllingRule}</div> : null}
@@ -4528,6 +4909,7 @@ function ProductTiers() {
           </tbody>
         </table>
       </div>
+      </details>
       {pm.isDtp ? (
         <p style={smallHelp}>Owner ladder prices (OWNER-APPROVED 2026-10-06 / 2026-10-07 for all five current sizes; 5x4x2 legacy = manual review). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
       ) : null}
@@ -4555,7 +4937,9 @@ function ProductTiers() {
           </div>
         );
       })()}
-      <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700 }}>Selected: {selected.quantity.toLocaleString()} @ {money2(selected.unitPrice)}/unit — use the radio in the table to change the quoted tier.</div>
+      <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700 }}>
+        Selected: {selected.quantity.toLocaleString()} @ {provisionalPrices ? "— (pricing authority required)" : `${money2(selected.unitPrice)}/unit`} — use the radio in the table to change the quoted tier.
+      </div>
       <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 8 }}>
         <b>Customer price summary</b> (internal costs and profit are not shown here):
         {selected.dtp ? (
@@ -4587,7 +4971,12 @@ Total: ${money2(selected.totalPrice)}`}
         ) : (
         <>
         {/* 15F.0-M: employee-facing price result — READY TO QUOTE / BLOCKED */}
-        {selected.draftOnly ? (
+        {provisionalPrices && !selected.draftOnly ? (
+          <div style={{ marginTop: 6 }}>
+            <div style={{ fontWeight: 800, color: "#92400e", fontSize: 15 }}>{PROVISIONAL_PRICING_STATUS}</div>
+            <div style={{ fontSize: 12, color: "#92400e" }}>{tierAuthority.missing} Save keeps the true cost as a DRAFT with no customer price; it cannot be sent, approved or moved to production until the owner sets and approves a price on the quote.</div>
+          </div>
+        ) : selected.draftOnly ? (
           <div style={{ marginTop: 6 }}>
             <div style={{ fontWeight: 800, color: "#991b1b", fontSize: 15 }}>BLOCKED — not customer-ready</div>
             <ul style={{ margin: "6px 0", paddingLeft: 18, fontSize: 12, color: "#991b1b" }}>
@@ -4619,12 +5008,12 @@ Total: ${money2(selected.totalPrice)}`}
 {`Product: ${productLabel}
 Quantity: ${selected.quantity.toLocaleString()}${pm.designSplitText ? `\n${pm.designSplitText}` : ""}
 Configuration: ${pm.printConfig || "—"}
-Unit price: ${money2(selected.unitPrice)}
-Product subtotal: ${money2(selected.totalPrice)}
+Unit price: ${provisionalPrices ? "— (pricing authority required)" : money2(selected.unitPrice)}
+Product subtotal: ${provisionalPrices ? "—" : money2(selected.totalPrice)}
 Setup/design: included in unit pricing
 Includes: material, ink, machine recovery, cutting, application (where applicable), packing
 Does not include: Customer delivery/shipping — quoted separately${pm.premiumInkEstimated ? "\nPremium ink usage is estimated for quoting and reconciled against RIP actuals after production." : ""}${selected.freightTotal > 0 ? `\nFreight/handling entered: ${money2(selected.freightTotal)} (${String(selected.freightSource).toUpperCase()}) — included in unit pricing` : ""}
-Total: ${money2(selected.totalPrice)}`}
+Total: ${provisionalPrices ? "— (PROVISIONAL — PRICING AUTHORITY REQUIRED)" : money2(selected.totalPrice)}`}
         </pre>
         </>
         )}
@@ -4639,7 +5028,7 @@ Total: ${money2(selected.totalPrice)}`}
         <input type="hidden" name="pseltier" value={selected.quantity} />
         <label style={{ fontSize: 12 }}>Product name<input name="eproduct" defaultValue={productLabel} placeholder="e.g. Production Test Sticker" style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Customer (optional)<input name="ecustomer" style={inputStyle} /></label>
-        <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: "#111827", color: "white", fontWeight: 700 }}>SAVE DRAFT QUOTE</button>
+        <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: provisionalPrices ? "#92400e" : "#111827", color: "white", fontWeight: 700 }}>{provisionalPrices ? "SAVE PROVISIONAL DRAFT (no customer price)" : "SAVE DRAFT QUOTE"}</button>
       </Form>
       <p style={smallHelp}>Saving re-fetches every selected record and recomputes cost, label totals, tiers, and the customer total on the server — posted totals are never trusted. Historical quotes are never modified.</p>
     </div>

@@ -196,7 +196,7 @@ export default function AppHome() {
       primaryAction={{ content: "Open Quotes / CRM", onAction: () => navigate("/app/quotes") }}
       secondaryActions={[
         { content: "Production Board", onAction: () => navigate("/app/erp/production") },
-        { content: "Setup Wizard", onAction: () => navigate("/app/erp/setup-wizard") },
+        { content: "Launch Readiness", onAction: () => navigate("/app/erp/setup-wizard") },
       ]}
     >
       <Layout>
@@ -229,7 +229,7 @@ export default function AppHome() {
               </InlineStack>
               <Divider />
               <InlineStack gap="300" wrap>
-                <Button onClick={() => navigate("/app/erp/setup-wizard")}>1. Help · Setup Wizard</Button>
+                <Button onClick={() => navigate("/app/erp/setup-wizard")}>1. Help · Launch Readiness</Button>
                 <Button onClick={() => navigate("/app/erp/agent-review-queue")}>2. Operations · Agent Review Queue</Button>
                 <Button variant="primary" onClick={() => navigate("/app/quotes")}>3. Sales · Quotes / CRM</Button>
                 <Button onClick={() => navigate("/app/erp/production")}>4. Production · Production Board</Button>

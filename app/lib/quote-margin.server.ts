@@ -1,4 +1,6 @@
 import { tierRule } from "./customer-tiers";
+// 2026-10-19 owner decisions: provisional items carry NO customer price; the exact Stock Bag storefront price is an approved authority.
+import { LOW_MARGIN_OWNER_OVERRIDE_NOTE, STOREFRONT_BELOW_TARGET_WARNING, itemPricingAuthority, ownerApprovalCoversLine, storefrontAuthorityExempt } from "./quote-pricing-authority";
 
 // Standard/default margin floor. Per-tier floors come from the customer-tier
 // registry; today every tier's floor equals this value (behavior frozen).
@@ -15,12 +17,14 @@ type MarginItem = {
   quantity?: number | null;
   unitPrice?: number | null;
   unitCost?: number | null;
+  priceSnapshot?: unknown;
 };
 
 type MarginQuote = {
   notes?: string | null;
   items?: MarginItem[] | null;
   customerTier?: string | null;
+  customerTierLabel?: string | null;
   lowMarginApprovedAt?: Date | string | null;
   lowMarginApprovedBy?: string | null;
   lowMarginApprovalReason?: string | null;
@@ -93,8 +97,16 @@ export function quoteMarginState(quote: MarginQuote) {
   let revenue = 0;
   let cost = 0;
   let lowestMarginPct: number | null = null;
+  // 2026-10-19: approved Stock Bag storefront prices below the generic target — shown, never blocking.
+  const approvedPriceWarnings: Array<{ name: string; marginPct: number; reason: string }> = [];
+  // 2026-10-19: owner-approved line prices below the target — the owner approval IS the low-margin approval for that line.
+  const ownerApprovedLowMargin: Array<{ name: string; marginPct: number; reason: string }> = [];
 
   for (const item of items) {
+    // 2026-10-19 owner decision E: a PROVISIONAL item has no customer price —
+    // it is not a $0 sale. The pricing-authority gate (not this margin gate)
+    // holds the quote until the owner sets and approves a price.
+    if (itemPricingAuthority(item)?.approved === false) continue;
     const unitPrice = Number(item?.unitPrice) || 0;
     const unitCost = Number(item?.unitCost) || 0;
     const quantity = Math.max(1, Number(item?.quantity) || 1);
@@ -127,6 +139,16 @@ export function quoteMarginState(quote: MarginQuote) {
         kind: "unknown_cost",
         reason: `${name}: unknown cost (unit cost is 0 or less), margin cannot be verified`,
       });
+    } else if ((marginPct as number) < marginFloorPct && storefrontAuthorityExempt(item)) {
+      // 2026-10-19 owner decision 5: the EXACT server-resolved Stock Bag
+      // storefront price is an approved commercial authority — the generic
+      // floor warns but does not block. A changed price loses this exemption.
+      approvedPriceWarnings.push({ name, marginPct: marginPct as number, reason: `${name}: ${STOREFRONT_BELOW_TARGET_WARNING} Margin ${(marginPct as number).toFixed(1)}% vs ${marginFloorPct}% target.` });
+    } else if ((marginPct as number) < marginFloorPct && ownerApprovalCoversLine(item as any, quote)) {
+      // 2026-10-19 owner decision: OWNER SET PRICE & APPROVE also satisfies the
+      // low-margin approval for THIS exact line (same fingerprint — any change
+      // to quantity, product, options, configuration, price or discount voids it).
+      ownerApprovedLowMargin.push({ name, marginPct: marginPct as number, reason: `${name}: margin ${(marginPct as number).toFixed(1)}% is below ${marginFloorPct}% — ${LOW_MARGIN_OWNER_OVERRIDE_NOTE}.` });
     } else if ((marginPct as number) < marginFloorPct) {
       lowItems.push({
         name,
@@ -193,6 +215,8 @@ export function quoteMarginState(quote: MarginQuote) {
     hasUnknownCost,
     hasInvalidPrice,
     approvalLabel,
+    approvedPriceWarnings,
+    ownerApprovedLowMargin,
     blockMessage: isLowMargin
       ? `${approvalLabel.replace(" - approval required", "")} approval required: ${lowItems.map((item) => item.reason).join("; ")}`
       : "",

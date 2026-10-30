@@ -1,5 +1,7 @@
 import { useLoaderData } from "react-router";
 import db from "../db.server";
+// 2026-10-19 owner decision E: a PROVISIONAL quote has no customer price — the portal never shows one.
+import { quotePricingAuthorityState } from "../lib/quote-pricing-authority";
 
 export function headers() {
   return { "X-Robots-Tag": "noindex, nofollow" };
@@ -68,6 +70,24 @@ export async function loader({ params }: { params: { id: string } }) {
     throw new Response("Quote not found", { status: 404 });
   }
 
+  // Server-side only: the authority check reads internal snapshot fields that
+  // are NEVER returned — the response carries just the boolean below.
+  const authorityQuote = await db.quote.findUnique({
+    where: { id: params.id },
+    select: {
+      customerTier: true,
+      customerTierLabel: true,
+      items: {
+        select: {
+          productName: true, variant: true, sku: true, quantity: true, unitPrice: true, unitCost: true,
+          recipeId: true, selectedFinish: true, selectedAddOnIds: true, pricingSource: true, tierLabel: true,
+          minQuantity: true, costSnapshot: true, priceSnapshot: true,
+        },
+      },
+    },
+  });
+  const pricingPending = quotePricingAuthorityState(authorityQuote).provisional;
+
   const items = quote.items.map((item) => ({
     id: item.id,
     productName: item.productName,
@@ -80,11 +100,18 @@ export async function loader({ params }: { params: { id: string } }) {
 
   const total = items.reduce((sum, item) => sum + item.lineTotal, 0);
 
-  return Response.json({ quote: { ...quote, items }, total });
+  if (pricingPending) {
+    return Response.json({
+      quote: { ...quote, items: items.map((item) => ({ ...item, unitPrice: null, lineTotal: null })) },
+      total: null,
+      pricingPending: true,
+    });
+  }
+  return Response.json({ quote: { ...quote, items }, total, pricingPending: false });
 }
 
 export default function QuotePortal() {
-  const { quote, total } = useLoaderData<typeof loader>() as any;
+  const { quote, total, pricingPending } = useLoaderData<typeof loader>() as any;
   const isPaid = quote.status === "paid";
 
   return (
@@ -130,8 +157,8 @@ export default function QuotePortal() {
 
               <div style={styles.itemNumbers}>
                 <p>Qty: {Number(item.quantity || 0)}</p>
-                <p>Unit: ${Number(item.unitPrice || 0).toFixed(2)}</p>
-                <strong>${lineTotal.toFixed(2)}</strong>
+                <p>Unit: {pricingPending ? "Pricing in progress" : `$${Number(item.unitPrice || 0).toFixed(2)}`}</p>
+                <strong>{pricingPending ? "—" : `$${lineTotal.toFixed(2)}`}</strong>
               </div>
             </div>
           );
@@ -139,7 +166,7 @@ export default function QuotePortal() {
 
         <div style={styles.totalBox}>
           <span>Total Quote</span>
-          <strong>${total.toFixed(2)}</strong>
+          <strong>{pricingPending ? "Pricing in progress" : `$${Number(total || 0).toFixed(2)}`}</strong>
         </div>
 
         <hr style={styles.hr} />

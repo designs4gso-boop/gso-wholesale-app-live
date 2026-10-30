@@ -9,6 +9,7 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
+import { useState, type ReactNode } from "react";
 import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -18,6 +19,13 @@ import {
   blockingConversionIssues,
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
+import {
+  LAUNCH_READINESS_SUBTITLE,
+  LAUNCH_READINESS_TITLE,
+  groupReadinessSteps,
+  nextIssueStep,
+  quotePipelineSummary,
+} from "../lib/launch-readiness-view";
 
 type Status = "Ready" | "Needs setup" | "Needs review" | "Needs first test order" | "Partial";
 
@@ -30,6 +38,8 @@ type Step = {
   status: Status;
   severity: Severity;
   explanation: string;
+  /** Plain-English one-liner for the Launch Readiness default view. */
+  summary?: string;
   counts: string[];
   details?: string[];
   links: { label: string; url: string }[];
@@ -225,6 +235,7 @@ export async function loader({ request }: { request: Request }) {
       status: adminSettings > 0 ? "Ready" : "Needs setup",
       severity: adminSettings > 0 ? "ready" : "warning",
       explanation: "Shop-level ERP defaults are stored in Admin Settings.",
+      summary: adminSettings > 0 ? "Shop defaults are saved." : "Shop defaults have not been saved yet.",
       counts: [`${adminSettings} setting(s)`],
       links: [{ label: "Admin Settings", url: "/app/erp/admin-settings" }],
     },
@@ -234,6 +245,10 @@ export async function loader({ request }: { request: Request }) {
       severity:
         materials === 0 || machines === 0 ? "blocker" : vendors === 0 ? "warning" : "ready",
       explanation: "Materials, machines, and vendors provide the base cost data for quoting and production.",
+      summary:
+        materials > 0 && machines > 0 && vendors > 0
+          ? "Materials, machines and vendors are set up."
+          : `Missing: ${[materials === 0 && "materials", machines === 0 && "machines", vendors === 0 && "vendors"].filter(Boolean).join(", ")}.`,
       counts: [`${materials} active material(s)`, `${machines} active machine(s)`, `${vendors} active vendor(s)`],
       links: [
         { label: "Materials", url: "/app/erp/materials" },
@@ -246,6 +261,7 @@ export async function loader({ request }: { request: Request }) {
       status: productTypeProfiles > 0 && productRecipes > 0 ? "Ready" : "Needs review",
       severity: productTypeProfiles > 0 && productRecipes > 0 ? "ready" : "blocker",
       explanation: "Product profiles and recipes define what can be priced, quoted, and produced.",
+      summary: productTypeProfiles > 0 && productRecipes > 0 ? "Product profiles and recipes exist." : "No active product profiles or recipes yet.",
       counts: [`${productTypeProfiles} active profile(s)`, `${productRecipes} active recipe(s)`],
       links: [
         { label: "Product Builder", url: "/app/erp/products/new" },
@@ -257,6 +273,7 @@ export async function loader({ request }: { request: Request }) {
       status: pricingRules > 0 || configuratorPricingRules > 0 ? "Ready" : "Needs review",
       severity: pricingRules > 0 || configuratorPricingRules > 0 ? "ready" : "warning",
       explanation: "Pricing can come from wholesale rules, configurator rules, and margin review assumptions.",
+      summary: pricingRules > 0 || configuratorPricingRules > 0 ? "Pricing rules exist." : "No pricing rules yet.",
       counts: [
         `${pricingRules} pricing rule(s)`,
         `${configuratorPricingRules} configurator pricing rule(s)`,
@@ -279,6 +296,13 @@ export async function loader({ request }: { request: Request }) {
             : "warning",
       explanation:
         "Quote-ready recipes feed Quotes / CRM and Agent Review Queue conversion. Flag-ready is not full conversion readiness - open a recipe in Product Setup for its complete readiness checklist and test pricing.",
+      summary:
+        quotePipelineSummary(failingSamples, quoteReadyRecipes) ??
+        (totalQuotes === 0
+          ? "No quotes created yet - run a first test quote."
+          : paidQuotes === 0
+            ? "No quote has been fully paid yet - run a test payment."
+            : "Quote-ready recipes and paid quotes exist."),
       counts: [
         `${quoteReadyRecipes} quote-ready recipe(s)`,
         `${totalQuotes} quote(s)`,
@@ -298,6 +322,7 @@ export async function loader({ request }: { request: Request }) {
       severity: "ready",
       explanation:
         "Enforced in code: below-40% margin and unknown-cost quotes require staff approval with a reason; production requires fully paid quotes; deposit/balance/full payments are classified by the paid-order webhook; order creation and invoice emails are separate staff actions; the public quote portal exposes no costs, margins, or internal notes; external agents are intake-only.",
+      summary: "Margin, payment and production gates are enforced.",
       counts: [
         `${lowMarginApprovedQuotes} low-margin approval(s) recorded`,
         `${depositPaidQuotes} quote(s) currently deposit-paid`,
@@ -310,6 +335,10 @@ export async function loader({ request }: { request: Request }) {
       severity: mappedConfiguratorProducts > 0 || recipeVariantRules > 0 ? "ready" : "warning",
       explanation:
         "Shopify mappings connect storefront products and variants to ERP records. Required for full customer launch; not an internal-beta blocker.",
+      summary:
+        mappedConfiguratorProducts > 0 || recipeVariantRules > 0
+          ? "Storefront products are linked to ERP records."
+          : "No storefront products are linked to ERP records yet.",
       counts: [`${mappedConfiguratorProducts} mapped configurator product(s)`, `${recipeVariantRules} recipe variant rule(s)`],
       links: [{ label: "Shopify Links", url: "/app/erp/shopify-links" }],
     },
@@ -325,6 +354,10 @@ export async function loader({ request }: { request: Request }) {
           : "warning",
       explanation:
         "Customer-facing configurator products need active products, options, and pricing rules. Required for full customer launch; not an internal-beta blocker.",
+      summary:
+        activeConfiguratorProducts > 0 && configuratorOptions > 0 && configuratorPricingRules > 0
+          ? "Configurator products, options and pricing are set up."
+          : "Configurator products, options or pricing are missing.",
       counts: [
         `${activeConfiguratorProducts} active configurator product(s)`,
         `${configuratorOptions} configurator option(s)`,
@@ -346,6 +379,12 @@ export async function loader({ request }: { request: Request }) {
       severity:
         agentPlatformStatus(activeAgentCredentials, Boolean(latestAcceptedIntake)) === "Ready" ? "ready" : "warning",
       explanation: agentPlatformExplanation(activeAgentCredentials, lastAcceptedAt),
+      summary:
+        activeAgentCredentials > 0 && latestAcceptedIntake
+          ? "Agent intake is working."
+          : activeAgentCredentials === 0
+            ? "No active agent credential - only needed when a vendor agent is onboarded."
+            : "An agent credential exists, but no agent submission has been received yet.",
       counts: [
         `${activeAgentCredentials} active credential(s)`,
         `${queueReadyItems} queue item(s) ready to quote`,
@@ -363,6 +402,7 @@ export async function loader({ request }: { request: Request }) {
       status: productionJobs > 0 ? "Ready" : "Needs first test order",
       severity: productionJobs > 0 ? "ready" : "warning",
       explanation: "Production readiness is based on whether paid orders or quotes have created jobs.",
+      summary: productionJobs > 0 ? "Production jobs are being created." : "No production job yet - complete a first test order.",
       counts: [`${productionJobs} active production job(s)`, `${productionJobItems} production item(s)`, `${recentProductionJobs} job(s) in last 30 days`],
       links: [
         { label: "Production", url: "/app/erp/production" },
@@ -375,6 +415,10 @@ export async function loader({ request }: { request: Request }) {
       severity:
         reportingStatus(priceApprovalRecords, jobsWithActualCosts, productionJobs) === "Ready" ? "ready" : "warning",
       explanation: reportingExplanation(priceApprovalRecords, jobsWithActualCosts),
+      summary:
+        jobsWithActualCosts > 0
+          ? "Actual-cost reporting is running."
+          : "Actual-cost reporting is not mature yet - it fills in once completed jobs log their actual costs.",
       counts: [`${priceApprovalRecords} price approval record(s)`, `${jobsWithActualCosts} job(s) with actual costs`],
       links: [
         { label: "Reports Dashboard", url: "/app/erp/reports-dashboard" },
@@ -454,18 +498,149 @@ function StepCard({ step }: { step: Step }) {
   );
 }
 
+// Launch Readiness default view (2026-10-21): summary, blockers, warnings,
+// then collapsed ready sections / full checklist / launch checklist /
+// technical details. Every collapsible starts closed and renders nothing
+// until opened. Read-only: buttons only navigate.
+
+const LAUNCH_CHECKLIST_INTERNAL_BETA = [
+  "1. Product Setup: launch recipes show green readiness (dimensions, materials, preferred machine).",
+  "2. Quote-ready recipes exist for the launch families (jars, stickers, banners, custom/other).",
+  "3. Quote flow tested: draft, approve, create payment request, and email invoice as separate staff steps.",
+  "4. Payment flow tested: deposit invoice paid -> deposit_paid, balance paid -> paid via the orders webhook.",
+  "5. Production gate tested: paid quote creates a job; draft/approved/deposit-paid quotes are blocked.",
+  "6. Margin gate tested: a below-40% or unknown-cost quote blocks until approved with a reason.",
+  "7. Production job from the paid quote reviewed: proof sheet, print logs, and reporting sections.",
+];
+
+const LAUNCH_CHECKLIST_FULL_LAUNCH = [
+  "8. Shopify links / product mappings verified for everything customers can buy.",
+  "9. Storefront configurator flow tested end to end on the live theme.",
+  "10. Portal flow tested with a real customer link: customer-safe data only (no costs, margins, or notes).",
+  "11. Agent vendor onboarded if using agents: credential issued, signed intake live (201 + duplicate replay).",
+  "12. Actual-cost reporting loop running: completed jobs log actual costs and margins get reviewed.",
+];
+
+function CollapsibleSection({
+  id,
+  title,
+  open,
+  onToggle,
+  toggleLabel,
+  children,
+}: {
+  id: string;
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  toggleLabel: string;
+  children: ReactNode;
+}) {
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <InlineStack align="space-between" blockAlign="center" gap="300">
+          <Text as="h2" variant="headingMd">{title}</Text>
+          <Button variant="plain" onClick={onToggle} ariaExpanded={open} ariaControls={id}>
+            {open ? "Hide" : toggleLabel}
+          </Button>
+        </InlineStack>
+        {open ? <div id={id}>{children}</div> : null}
+      </BlockStack>
+    </Card>
+  );
+}
+
+function IssueCard({ step, kind }: { step: Step; kind: "blocker" | "warning" | "review" }) {
+  const navigate = useNavigate();
+  const [showDetails, setShowDetails] = useState(false);
+  const link = step.links[0];
+  const tone = kind === "blocker" ? "critical" : kind === "warning" ? "attention" : "info";
+  const badge = kind === "blocker" ? "Blocker" : kind === "warning" ? "Warning" : step.status;
+
+  return (
+    <Card>
+      <BlockStack gap="200">
+        <InlineStack align="space-between" blockAlign="center" gap="300">
+          <Text as="h3" variant="headingSm">{step.name}</Text>
+          <Badge tone={tone as any}>{badge}</Badge>
+        </InlineStack>
+        <Text as="p">{step.summary || step.explanation}</Text>
+        {step.details?.length && showDetails ? (
+          <BlockStack gap="050">
+            {step.details.map((detail) => (
+              <Text as="p" key={detail} variant="bodySm" tone="critical">{detail}</Text>
+            ))}
+          </BlockStack>
+        ) : null}
+        <InlineStack gap="200" blockAlign="center" wrap>
+          {link ? (
+            <Button variant={kind === "blocker" ? "primary" : undefined} onClick={() => navigate(link.url)}>
+              {kind === "blocker" ? `Fix in ${link.label}` : `Review in ${link.label}`}
+            </Button>
+          ) : null}
+          {step.details?.length ? (
+            <Button variant="plain" onClick={() => setShowDetails((open) => !open)}>
+              {showDetails ? "Hide details" : "View details"}
+            </Button>
+          ) : null}
+        </InlineStack>
+      </BlockStack>
+    </Card>
+  );
+}
+
+function ReadyRow({ step }: { step: Step }) {
+  const navigate = useNavigate();
+  const [expanded, setExpanded] = useState(false);
+  const link = step.links[0];
+
+  return (
+    <BlockStack gap="100">
+      <InlineStack align="space-between" blockAlign="center" gap="200">
+        <InlineStack gap="200" blockAlign="center">
+          <Text as="span" fontWeight="semibold">{step.name}</Text>
+          <Badge tone="success">Ready</Badge>
+        </InlineStack>
+        <InlineStack gap="200" blockAlign="center">
+          <Button variant="plain" onClick={() => setExpanded((open) => !open)}>
+            {expanded ? "Less" : "More"}
+          </Button>
+          {link ? <Button size="slim" onClick={() => navigate(link.url)}>Open</Button> : null}
+        </InlineStack>
+      </InlineStack>
+      {expanded ? (
+        <Text as="p" variant="bodySm" tone="subdued">{step.summary || step.explanation}</Text>
+      ) : null}
+    </BlockStack>
+  );
+}
+
 export default function SetupWizard() {
   // Response.json makes typeof-loader inference collapse to never; use the
   // codebase convention (loader data as any, real types on Step/StepCard).
   const data = useLoaderData<any>();
   const navigate = useNavigate();
+  const [showReady, setShowReady] = useState(false);
+  const [showFullChecklist, setShowFullChecklist] = useState(false);
+  const [showLaunchChecklist, setShowLaunchChecklist] = useState(false);
+  const [showTechnical, setShowTechnical] = useState(false);
+
+  const steps: Step[] = data.steps;
+  const groups = groupReadinessSteps(steps);
+  const issueStep = nextIssueStep<Step>(data.nextStep, steps);
+  const hasIssues = groups.blockers.length > 0 || groups.warnings.length > 0;
   const launchStatus = data.needsReviewSteps === 0 ? "Ready" : "Needs review";
 
   return (
     <Page
-      title="Setup Wizard"
-      subtitle="System Readiness & Launch Checklist"
-      primaryAction={{ content: "Go to next step", onAction: () => data.nextStep && navigate(data.nextStep.links[0].url) }}
+      title={LAUNCH_READINESS_TITLE}
+      subtitle={LAUNCH_READINESS_SUBTITLE}
+      primaryAction={
+        hasIssues && issueStep
+          ? { content: "Fix Next Issue", onAction: () => navigate(issueStep.links[0].url) }
+          : { content: "Review Full Checklist", onAction: () => setShowFullChecklist(true) }
+      }
       secondaryActions={[
         { content: "Open Walkthrough", onAction: () => navigate("/app/erp/walkthrough") },
         { content: "Back to Dashboard", onAction: () => navigate("/app") },
@@ -474,134 +649,145 @@ export default function SetupWizard() {
       <Layout>
         <Layout.Section>
           <Card>
-            <BlockStack gap="400">
+            <BlockStack gap="300">
               <InlineStack align="space-between" blockAlign="center" gap="300">
-                <BlockStack gap="100">
-                  <Text as="h2" variant="headingLg">System readiness for {data.shop}</Text>
-                  <Text as="p" tone="subdued">
-                    This page is read-only. It checks existing ERP setup records and links to the pages where staff can finish setup.
-                  </Text>
-                </BlockStack>
+                <InlineStack gap="300" blockAlign="end">
+                  <Text as="p" variant="heading2xl">{`${data.progress}%`}</Text>
+                  <Text as="p" tone="subdued">ready</Text>
+                </InlineStack>
                 <Badge tone={statusTone(launchStatus as Status) as any}>{launchStatus}</Badge>
               </InlineStack>
-              <Divider />
-              <InlineStack gap="400" wrap>
-                <BlockStack gap="100">
-                  <Text as="p" tone="subdued">Overall progress</Text>
-                  <Text as="p" variant="heading2xl">{data.progress}%</Text>
-                </BlockStack>
-                <BlockStack gap="100">
-                  <Text as="p" tone="subdued">Ready sections</Text>
-                  <Text as="p" variant="heading2xl">{data.readySteps}</Text>
-                </BlockStack>
-                <BlockStack gap="100">
-                  <Text as="p" tone="subdued">Needs review</Text>
-                  <Text as="p" variant="heading2xl">{data.needsReviewSteps}</Text>
-                </BlockStack>
-                <BlockStack gap="100">
-                  <Text as="p" tone="subdued">Partial</Text>
-                  <Text as="p" variant="heading2xl">{data.partialSteps}</Text>
-                </BlockStack>
-                <BlockStack gap="100">
-                  <Text as="p" tone="subdued">Launch blockers</Text>
-                  <Text as="p" variant="heading2xl">{data.blockerSteps.length}</Text>
-                </BlockStack>
-                <BlockStack gap="100">
-                  <Text as="p" tone="subdued">Warnings</Text>
-                  <Text as="p" variant="heading2xl">{data.warningSteps.length}</Text>
-                </BlockStack>
-              </InlineStack>
-              <div style={{ height: 10, borderRadius: 999, background: "#e5e7eb", overflow: "hidden" }}>
+              <div style={{ height: 8, borderRadius: 999, background: "#e5e7eb", overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${data.progress}%`, background: "#008060" }} />
               </div>
-              {data.blockerSteps.length ? (
-                <BlockStack gap="150">
-                  <Text as="h3" variant="headingMd" tone="critical">
-                    Launch blockers ({data.blockerSteps.length})
-                  </Text>
-                  {data.blockerSteps.map((blocker: any) => (
-                    <InlineStack key={blocker.name} gap="200" blockAlign="center">
-                      <Badge tone="critical">Blocker</Badge>
-                      <Text as="span">{blocker.name}</Text>
-                      <Button size="slim" onClick={() => navigate(blocker.link.url)}>
-                        {blocker.link.label}
-                      </Button>
-                    </InlineStack>
-                  ))}
-                </BlockStack>
+              <InlineStack gap="600" wrap>
+                {[
+                  { label: "Ready", value: groups.ready.length }, // matches the Ready sections list; the internal count is under Technical details
+                  { label: "Blockers", value: data.blockerSteps.length },
+                  { label: "Warnings", value: data.warningSteps.length },
+                  // Needs Review only when the separate Needs Review group has items (never re-counts warnings).
+                  ...(groups.needsReview.length ? [{ label: "Needs Review", value: groups.needsReview.length }] : []),
+                ].map((stat) => (
+                  <BlockStack gap="050" key={stat.label}>
+                    <Text as="p" variant="headingLg">{stat.value}</Text>
+                    <Text as="p" variant="bodySm" tone="subdued">{stat.label}</Text>
+                  </BlockStack>
+                ))}
+              </InlineStack>
+              {hasIssues && issueStep ? (
+                <Text as="p" variant="bodySm">Next: <strong>{issueStep.name}</strong></Text>
               ) : (
-                <Text as="p" tone="success">
-                  No launch blockers - warnings only. Internal beta can proceed; review warnings before full
-                  customer launch.
-                </Text>
+                <Text as="p" variant="bodySm" tone="success">No blockers or warnings. Work through the launch checklist before calling the system launched.</Text>
               )}
-              <Text as="p">
-                Suggested next action: <strong>{data.nextAction}</strong>
-              </Text>
-              <Text as="p" tone="subdued">
-                This wizard is read-only. It checks setup records and guides next steps; it does not change pricing, products, or production data.
+              <Text as="p" variant="bodySm" tone="subdued">
+                Read-only: this page only reports the current state and links to the page where each issue is fixed.
               </Text>
             </BlockStack>
           </Card>
         </Layout.Section>
+
+        {groups.blockers.length ? (
+          <Layout.Section>
+            <BlockStack gap="200">
+              <Text as="h2" variant="headingMd" tone="critical">{`Blockers (${groups.blockers.length})`}</Text>
+              {groups.blockers.map((step) => <IssueCard key={step.name} step={step} kind="blocker" />)}
+            </BlockStack>
+          </Layout.Section>
+        ) : null}
+
+        {groups.warnings.length ? (
+          <Layout.Section>
+            <BlockStack gap="200">
+              <Text as="h2" variant="headingMd">{`Warnings (${groups.warnings.length})`}</Text>
+              {groups.warnings.map((step) => <IssueCard key={step.name} step={step} kind="warning" />)}
+            </BlockStack>
+          </Layout.Section>
+        ) : null}
+
+        {groups.needsReview.length ? (
+          <Layout.Section>
+            <BlockStack gap="200">
+              <Text as="h2" variant="headingMd">{`Needs Review (${groups.needsReview.length})`}</Text>
+              {groups.needsReview.map((step) => <IssueCard key={step.name} step={step} kind="review" />)}
+            </BlockStack>
+          </Layout.Section>
+        ) : null}
 
         <Layout.Section>
           <BlockStack gap="300">
-            {data.steps.map((step: Step) => (
-              <StepCard key={step.name} step={step} />
-            ))}
-          </BlockStack>
-        </Layout.Section>
-
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <InlineStack align="space-between" blockAlign="center">
-                <Text as="h2" variant="headingMd">Launch Readiness</Text>
-                <Badge tone={statusTone(launchStatus as Status) as any}>{launchStatus}</Badge>
-              </InlineStack>
-              <Text as="p" tone="subdued">
-                A section is marked Ready when the app can find existing setup records for that area. This checklist does not create records, sync Shopify data, seed defaults, or change live production data.
-              </Text>
-              <BlockStack gap="150">
-                <Text as="p" fontWeight="semibold">
-                  Internal beta launch (staff-only quoting and production):
-                </Text>
-                {[
-                  "1. Product Setup: launch recipes show green readiness (dimensions, materials, preferred machine).",
-                  "2. Quote-ready recipes exist for the launch families (jars, stickers, banners, custom/other).",
-                  "3. Quote flow tested: draft, approve, create payment request, and email invoice as separate staff steps.",
-                  "4. Payment flow tested: deposit invoice paid -> deposit_paid, balance paid -> paid via the orders webhook.",
-                  "5. Production gate tested: paid quote creates a job; draft/approved/deposit-paid quotes are blocked.",
-                  "6. Margin gate tested: a below-40% or unknown-cost quote blocks until approved with a reason.",
-                  "7. Production job from the paid quote reviewed: proof sheet, print logs, and reporting sections.",
-                ].map((item) => (
-                  <Text as="p" key={item}>
-                    {item}
-                  </Text>
-                ))}
-                <Text as="p" fontWeight="semibold">
-                  Full customer launch adds:
-                </Text>
-                {[
-                  "8. Shopify links / product mappings verified for everything customers can buy.",
-                  "9. Storefront configurator flow tested end to end on the live theme.",
-                  "10. Portal flow tested with a real customer link: customer-safe data only (no costs, margins, or notes).",
-                  "11. Agent vendor onboarded if using agents: credential issued, signed intake live (201 + duplicate replay).",
-                  "12. Actual-cost reporting loop running: completed jobs log actual costs and margins get reviewed.",
-                ].map((item) => (
-                  <Text as="p" key={item}>
-                    {item}
-                  </Text>
+            <CollapsibleSection
+              id="ready-sections"
+              title={`Ready sections (${groups.ready.length})`}
+              open={showReady}
+              onToggle={() => setShowReady((open) => !open)}
+              toggleLabel="View ready sections"
+            >
+              <BlockStack gap="200">
+                {groups.ready.map((step, index) => (
+                  <BlockStack gap="200" key={step.name}>
+                    {index > 0 ? <Divider /> : null}
+                    <ReadyRow step={step} />
+                  </BlockStack>
                 ))}
               </BlockStack>
-              <Text as="p">
-                {data.needsReviewSteps === 0
-                  ? "All sections have setup records. Work through the checklist above before treating the system as launched."
-                  : `${data.needsReviewSteps} section(s) still need review before calling the system launch-ready.`}
-              </Text>
-            </BlockStack>
-          </Card>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              id="full-checklist"
+              title="Full checklist"
+              open={showFullChecklist}
+              onToggle={() => setShowFullChecklist((open) => !open)}
+              toggleLabel="View full checklist"
+            >
+              <BlockStack gap="300">
+                {steps.map((step) => (
+                  <StepCard key={step.name} step={step} />
+                ))}
+              </BlockStack>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              id="launch-checklist"
+              title="Launch Checklist"
+              open={showLaunchChecklist}
+              onToggle={() => setShowLaunchChecklist((open) => !open)}
+              toggleLabel="View launch checklist"
+            >
+              <BlockStack gap="150">
+                <Text as="p" tone="subdued">
+                  A section is marked Ready when the app can find existing setup records for that area. This checklist does not create records, sync Shopify data, seed defaults, or change live production data.
+                </Text>
+                <Text as="p" fontWeight="semibold">Internal beta launch (staff-only quoting and production):</Text>
+                {LAUNCH_CHECKLIST_INTERNAL_BETA.map((item) => <Text as="p" key={item}>{item}</Text>)}
+                <Text as="p" fontWeight="semibold">Full customer launch adds:</Text>
+                {LAUNCH_CHECKLIST_FULL_LAUNCH.map((item) => <Text as="p" key={item}>{item}</Text>)}
+                <Text as="p">
+                  {data.needsReviewSteps === 0
+                    ? "All sections have setup records. Work through the checklist above before treating the system as launched."
+                    : `${data.needsReviewSteps} section(s) still need review before calling the system launch-ready.`}
+                </Text>
+              </BlockStack>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              id="technical-details"
+              title="Technical details"
+              open={showTechnical}
+              onToggle={() => setShowTechnical((open) => !open)}
+              toggleLabel="View technical details"
+            >
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm">Shop: {data.shop}</Text>
+                <Text as="p" variant="bodySm">{`Internal readiness count (used for the ${data.progress}%): ${data.readySteps} of ${steps.length} sections`}</Text>
+                <Text as="p" variant="bodySm">{`Internal needs-review count (sections not yet Ready): ${data.needsReviewSteps}`}</Text>
+                <Text as="p" variant="bodySm">Partial sections: {data.partialSteps}</Text>
+                <Text as="p" variant="bodySm">Suggested next action: {data.nextAction}</Text>
+                {steps.flatMap((step) => step.counts.map((count) => (
+                  <Text as="p" variant="bodySm" tone="subdued" key={`${step.name}:${count}`}>{step.name}: {count}</Text>
+                )))}
+              </BlockStack>
+            </CollapsibleSection>
+          </BlockStack>
         </Layout.Section>
       </Layout>
     </Page>

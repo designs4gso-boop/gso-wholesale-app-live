@@ -194,7 +194,8 @@ describe("approved cost updates (13.2.2)", () => {
     const tall = APPROVED_COST_TRUTH.find((item) => item.key === "miron-100ml-tall")!;
     expect(tall.tiers!.map((tier) => tier.unitCost)).toEqual([2.78, 2.54, 2.31, 2.14, 1.99]);
     const fifty = APPROVED_COST_TRUTH.find((item) => item.key === "miron-50ml")!;
-    expect(fifty.tiers!.map((tier) => tier.unitCost)).toEqual([2.46, 2.24, 2.03, 1.89, 1.74]);
+    // 2026-10-29 owner decision: the 50ml Miron blank jar + lid ladder (supersedes 2.31/2.08/1.88/1.75/1.60 and 2.46/2.24/2.03/1.89/1.74).
+    expect(fifty.tiers!.map((tier) => tier.unitCost)).toEqual([2.47, 2.26, 2.06, 1.93, 1.77]);
     const pouch = APPROVED_COST_TRUTH.find((item) => item.key === "dtp-4x5x2-pouch")!;
     expect(pouch.tiers!.map((tier) => [tier.minQty, tier.unitCost])).toEqual([
       [1000, 0.7138], [2500, 0.4744], [5000, 0.4029], [7500, 0.3458], [10000, 0.3117],
@@ -264,8 +265,15 @@ describe("approved cost updates (13.2.2)", () => {
       { minQty: 1000, maxQty: 2499, unitCost: 1.89 },
       { minQty: 2500, maxQty: null, unitCost: 1.74 },
     ];
-    expect(tiersMatchApproved(fiftySeeded, fiftyApproved)).toBe(true);
-    expect(tierChangeSummary(fiftySeeded, fiftyApproved)).toEqual([]);
+    // The 2026-07-17 50ml rows are DRIFT against the 2026-10-29 owner ladder.
+    expect(tiersMatchApproved(fiftySeeded, fiftyApproved)).toBe(false);
+    expect(tierChangeSummary(fiftySeeded, fiftyApproved)).toHaveLength(5);
+    // ...and so are the 2026-10-28 rows.
+    const fiftyPrevious = [2.31, 2.08, 1.88, 1.75, 1.6].map((unitCost, index) => ({ ...fiftySeeded[index], unitCost }));
+    expect(tiersMatchApproved(fiftyPrevious, fiftyApproved)).toBe(false);
+    const fiftyCurrent = [2.47, 2.26, 2.06, 1.93, 1.77].map((unitCost, index) => ({ ...fiftySeeded[index], unitCost }));
+    expect(tiersMatchApproved(fiftyCurrent, fiftyApproved)).toBe(true);
+    expect(tierChangeSummary(fiftyCurrent, fiftyApproved)).toEqual([]);
   });
 });
 

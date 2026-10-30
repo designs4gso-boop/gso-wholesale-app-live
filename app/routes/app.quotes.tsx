@@ -28,6 +28,13 @@ import {
   priceRecipeAtQuantity,
 } from "../lib/recipe-pricing.server";
 import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "../lib/quote-margin.server";
+// 2026-10-19 owner decision E: PROVISIONAL quotes (no approved selling-price authority) are draft-only — server-enforced.
+import { OWNER_QUOTE_PRICE_KIND, itemPricingAuthority, provisionalQuoteStatusCheck, quotePricingAuthorityState, reconcileQuoteItemPricingAuthority } from "../lib/quote-pricing-authority";
+// 2026-10-19 owner decision 4: OWNER SET PRICE & APPROVE — owner-only, server-authorized, audited.
+import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
+import { ownerSetQuoteItemPrice } from "../lib/quote-owner-price-approval.server";
+// 2026-10-19 owner decision: line-level internal cost / margin is OWNER ONLY — redacted server-side for staff.
+import { OWNER_APPROVAL_REQUIRED, mergeStaffNotes, redactQuoteItemForStaff, redactRecipeForStaff, redactRecipeLineForStaff, staffManualItemAuthority, stripFinancialAuditLines } from "../lib/quote-staff-visibility";
 import { QUOTE_OUTCOME_STATUSES, resolveQuoteOutcomeChange } from "../lib/pricing-intelligence.server";
 import { CUSTOMER_TIERS, customerTierDisplayLabel, isCustomerTier, tierRule } from "../lib/customer-tiers";
 import { enforceQuoteItemUnitCost, quoteItemCostIsProtected } from "../lib/quote-item-cost-authority";
@@ -250,7 +257,8 @@ function normalizeQuote(quote: any): QuoteInput {
       variant: item.variant || "",
       sku: item.sku || "",
       quantity: String(item.quantity || 1),
-      unitPrice: String(item.unitPrice || 0),
+      // 2026-10-19: a PROVISIONAL item has no customer price — blank, never "0".
+      unitPrice: itemPricingAuthority(item)?.approved === false ? "" : String(item.unitPrice || 0),
       unitCost: String(item.unitCost || 0),
       notes: item.notes || "",
       productImageUrl: item.productImageUrl || "",
@@ -278,7 +286,7 @@ function normalizeQuote(quote: any): QuoteInput {
   };
 }
 
-async function getQuotes(shop: string) {
+async function getQuotes(shop: string, ownerView = false) {
   const quotes = await db.quote.findMany({
     where: { shop },
     orderBy: { updatedAt: "desc" },
@@ -289,9 +297,41 @@ async function getQuotes(shop: string) {
   // historical records are NOT mutated, only displayed cleanly)
   return quotes.map((quote) => ({
     ...quote,
-    marginState: quoteMarginState(quote),
+    // 2026-10-19 owner decision: margin / pricing-authority detail is OWNER ONLY.
+    // Staff receive workflow flags only — redacted on the SERVER, not just hidden.
+    ...(ownerView ? {} : {
+      lowMarginApprovedSnapshot: null,
+      lowMarginApprovalThresholdPct: null,
+      items: quote.items.map((item) => redactQuoteItemForStaff(item)),
+      notes: stripFinancialAuditLines(quote.notes).visible,
+    }),
+    marginState: ownerView ? quoteMarginState(quote) : staffMarginState(quoteMarginState(quote)),
+    pricingAuthorityState: ownerView ? quotePricingAuthorityState(quote) : staffPricingAuthorityState(quotePricingAuthorityState(quote)),
     displayName: resolveQuoteDisplayName({ company: quote.company, customerName: quote.customerName, productName: quote.items[0]?.productName }),
   }));
+}
+
+/** Staff view of the margin gate: workflow flags only (no percentages, reasons or warnings). */
+function staffMarginState(state: ReturnType<typeof quoteMarginState>) {
+  return {
+    isLowMargin: state.isLowMargin,
+    isApproved: state.isApproved,
+    approvalRequired: state.approvalRequired,
+    approvalStale: state.approvalStale,
+    approvalLabel: state.approvalRequired ? "Owner Approval Required" : "",
+    approvedBy: state.approvedBy,
+    approvedAt: state.approvedAt,
+  };
+}
+
+/** Staff view of the pricing-authority gate: provisional flag + item names, plain wording. */
+function staffPricingAuthorityState(state: ReturnType<typeof quotePricingAuthorityState>) {
+  return {
+    provisional: state.provisional,
+    provisionalItems: state.provisionalItems,
+    staleApprovals: state.staleApprovals,
+    blockMessage: state.provisional ? "Owner Approval Required — this quote has no approved price yet." : null,
+  };
 }
 
 async function getRecipeSummaries(shop: string) {
@@ -646,10 +686,13 @@ function quoteItemData(item: QuoteItemInput, quoteId?: string) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const { session, sessionToken } = await authenticate.admin(request);
+  const ownerAuth = resolveOwnerAuthorization({ session, sessionToken });
 
-  const quotes = await getQuotes(session.shop);
-  const recipes = await getRecipeSummaries(session.shop);
+  const quotes = await getQuotes(session.shop, ownerAuth.isOwner);
+  const recipeRows = await getRecipeSummaries(session.shop);
+  // Staff receive recipe identity / options only — no costs, margins, tiers or vendor prices.
+  const recipes = ownerAuth.isOwner ? recipeRows : recipeRows.map((recipe) => redactRecipeForStaff(recipe));
 
   // 15G.2 single price truth: the legacy ProductCost / PricingRule tables are
   // no longer loaded or consulted — supported products price ONLY through the
@@ -666,13 +709,39 @@ export async function loader({ request }: { request: Request }) {
     recipes,
     productOptions: [],
     productionJobs,
+    // Owner-only controls render only for the verified owner; the action re-checks.
+    ownerAccess: { isOwner: ownerAuth.isOwner, userId: ownerAuth.userId, reason: ownerAuth.reason },
   });
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session, admin } = await authenticate.admin(request);
+  const { session, admin, sessionToken } = await authenticate.admin(request);
   const shop = session.shop;
   const payload = await request.json();
+  // Owner-only financial detail in every quotes list this action returns (staff get the redacted view).
+  const viewerIsOwner = resolveOwnerAuthorization({ session, sessionToken }).isOwner;
+
+  /* 2026-10-19 owner decision 4: OWNER SET PRICE & APPROVE. Owner identity is
+   * the verified Shopify session token, never a posted field; a non-owner is
+   * refused before anything is read or written. Writes only this quote item
+   * and an audit line on the quote — no pricing rule or ladder is touched. */
+  if (payload.intent === "ownerSetPriceApprove") {
+    const owner = resolveOwnerAuthorization({ session, sessionToken });
+    const result = await ownerSetQuoteItemPrice(db, {
+      shop,
+      quoteId: String(payload.quoteId || ""),
+      itemId: String(payload.itemId || ""),
+      unitPrice: payload.unitPrice,
+      totalPrice: payload.totalPrice,
+      reason: payload.reason,
+      internalUnitCost: payload.internalUnitCost,
+      owner,
+    });
+    const quotes = await getQuotes(shop, viewerIsOwner);
+    return Response.json(result.ok
+      ? { intent: "ownerSetPriceApprove", ok: true, message: result.message, quotes }
+      : { intent: "ownerSetPriceApprove", ok: false, error: result.error, quotes });
+  }
 
   if (payload.intent === "searchProducts") {
     // 15G.2: the Shopify lookup identifies the product ONLY — it never
@@ -732,13 +801,13 @@ export async function action({ request }: { request: Request }) {
 
   if (payload.intent === "priceRecipe") {
     const result = await priceRecipeLine(shop, payload, admin);
-    return Response.json({ intent: "priceRecipe", itemId: payload.itemId, ...result });
+    return Response.json({ intent: "priceRecipe", itemId: payload.itemId, ...(viewerIsOwner ? result : redactRecipeLineForStaff(result)) });
   }
 
   if (payload.intent === "createProductionJobFromQuote") {
     try {
       const result = await createProductionJobFromQuoteInQuotes(shop, payload.quoteId);
-      const quotes = await getQuotes(shop);
+      const quotes = await getQuotes(shop, viewerIsOwner);
       const productionJobs = await db.productionJob.findMany({
         where: { shop, active: true },
         select: { id: true, quoteId: true, status: true, updatedAt: true },
@@ -765,12 +834,22 @@ export async function action({ request }: { request: Request }) {
 
   if (payload.intent === "delete") {
     await db.quote.deleteMany({ where: { id: payload.id, shop, status: { not: "paid" } } });
-    const quotes = await getQuotes(shop);
+    const quotes = await getQuotes(shop, viewerIsOwner);
     return Response.json({ ok: true, quotes });
   }
 
   if (payload.intent === "status") {
     const nextStatus = String(payload.status || "");
+
+    // 2026-10-19 owner decision E: a PROVISIONAL quote stays a draft (or is closed out).
+    {
+      const provisionalQuote = await db.quote.findFirst({ where: { id: payload.id, shop }, include: { items: true } });
+      const provisionalCheck = provisionalQuoteStatusCheck(provisionalQuote, nextStatus);
+      if (!provisionalCheck.ok) {
+        const quotes = await getQuotes(shop, viewerIsOwner);
+        return Response.json({ intent: "status", ok: false, error: provisionalCheck.message, quotes });
+      }
+    }
 
     // 15F.0K.4D: marking WON is a price acceptance — it respects the same
     // low-margin approval gate as sent/approved (a below-floor price cannot
@@ -784,7 +863,7 @@ export async function action({ request }: { request: Request }) {
       if (quote) {
         const marginState = quoteMarginState(quote);
         if (marginState.approvalRequired) {
-          const quotes = await getQuotes(shop);
+          const quotes = await getQuotes(shop, viewerIsOwner);
           return Response.json({ intent: "status", ok: false, error: marginState.blockMessage, quotes });
         }
       }
@@ -796,7 +875,7 @@ export async function action({ request }: { request: Request }) {
     // won NEVER creates a production job and NEVER sends email.
     const outcome = resolveQuoteOutcomeChange({ nextStatus, reason: payload.reason });
     if (!outcome.ok) {
-      const quotes = await getQuotes(shop);
+      const quotes = await getQuotes(shop, viewerIsOwner);
       return Response.json({ intent: "status", ok: false, error: outcome.message, quotes });
     }
     const outcomeData = QUOTE_OUTCOME_STATUSES.includes(nextStatus as any)
@@ -810,7 +889,7 @@ export async function action({ request }: { request: Request }) {
       data: { status: nextStatus, ...outcomeData },
     });
 
-    const quotes = await getQuotes(shop);
+    const quotes = await getQuotes(shop, viewerIsOwner);
     return Response.json({ ok: true, quotes });
   }
 
@@ -857,6 +936,11 @@ export async function action({ request }: { request: Request }) {
         const marginState = quoteMarginState(quote);
         if (marginState.approvalRequired) {
           return Response.json({ intent: "approveCreateOrder", ok: false, error: marginState.blockMessage });
+        }
+        // 2026-10-19 owner decision E: no Shopify order / invoice for a PROVISIONAL quote.
+        const pricingAuthorityState = quotePricingAuthorityState(quote);
+        if (pricingAuthorityState.provisional) {
+          return Response.json({ intent: "approveCreateOrder", ok: false, error: pricingAuthorityState.blockMessage });
         }
       }
 
@@ -933,7 +1017,7 @@ export async function action({ request }: { request: Request }) {
         },
       });
 
-      const quotes = await getQuotes(shop);
+      const quotes = await getQuotes(shop, viewerIsOwner);
 
       return Response.json({
         intent: "approveCreateOrder",
@@ -997,6 +1081,11 @@ export async function action({ request }: { request: Request }) {
         const marginState = quoteMarginState(quote);
         if (marginState.approvalRequired) {
           return Response.json({ intent: "createDepositOrder", ok: false, error: marginState.blockMessage });
+        }
+        // 2026-10-19 owner decision E: no Shopify order / invoice for a PROVISIONAL quote.
+        const pricingAuthorityState = quotePricingAuthorityState(quote);
+        if (pricingAuthorityState.provisional) {
+          return Response.json({ intent: "createDepositOrder", ok: false, error: pricingAuthorityState.blockMessage });
         }
       }
 
@@ -1084,7 +1173,7 @@ export async function action({ request }: { request: Request }) {
         },
       });
 
-      const quotes = await getQuotes(shop);
+      const quotes = await getQuotes(shop, viewerIsOwner);
 
       return Response.json({
         intent: "createDepositOrder",
@@ -1150,6 +1239,11 @@ export async function action({ request }: { request: Request }) {
         const marginState = quoteMarginState(quote);
         if (marginState.approvalRequired) {
           return Response.json({ intent: "createBalanceOrder", ok: false, error: marginState.blockMessage });
+        }
+        // 2026-10-19 owner decision E: no Shopify order / invoice for a PROVISIONAL quote.
+        const pricingAuthorityState = quotePricingAuthorityState(quote);
+        if (pricingAuthorityState.provisional) {
+          return Response.json({ intent: "createBalanceOrder", ok: false, error: pricingAuthorityState.blockMessage });
         }
       }
 
@@ -1237,7 +1331,7 @@ export async function action({ request }: { request: Request }) {
         },
       });
 
-      const quotes = await getQuotes(shop);
+      const quotes = await getQuotes(shop, viewerIsOwner);
 
       return Response.json({
         intent: "createBalanceOrder",
@@ -1275,6 +1369,11 @@ export async function action({ request }: { request: Request }) {
       if (marginState.approvalRequired) {
         return Response.json({ intent: "sendInvoiceEmail", ok: false, error: marginState.blockMessage });
       }
+      // 2026-10-19 owner decision E: a PROVISIONAL quote is never sent to the customer.
+      const pricingAuthorityState = quotePricingAuthorityState(quote);
+      if (pricingAuthorityState.provisional) {
+        return Response.json({ intent: "sendInvoiceEmail", ok: false, error: pricingAuthorityState.blockMessage });
+      }
     }
 
     const orderIdByWhich: Record<string, string | null> = {
@@ -1308,7 +1407,7 @@ export async function action({ request }: { request: Request }) {
         data: { notes: existingNotes ? `${existingNotes}\n${auditLine}` : auditLine },
       });
 
-      const quotes = await getQuotes(shop);
+      const quotes = await getQuotes(shop, viewerIsOwner);
       return Response.json({ intent: "sendInvoiceEmail", ok: true, quotes, which, message: `${label} invoice email sent.` });
     } catch (error: any) {
       return Response.json({ intent: "sendInvoiceEmail", ok: false, error: error?.message || "Invoice email failed." });
@@ -1316,6 +1415,12 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "approveLowMarginQuote") {
+    // 2026-10-19 owner decision: margin overrides are owner-only (verified session token; fails closed).
+    const lowMarginOwner = resolveOwnerAuthorization({ session, sessionToken });
+    if (!lowMarginOwner.isOwner) {
+      const quotes = await getQuotes(shop, viewerIsOwner);
+      return Response.json({ intent: "approveLowMarginQuote", ok: false, error: `Low-margin approval is owner only. ${lowMarginOwner.reason}`, quotes });
+    }
     const reason = String(payload.reason || "").trim().slice(0, 300);
     const quote = await db.quote.findFirst({
       where: { id: payload.quoteId, shop },
@@ -1367,7 +1472,7 @@ export async function action({ request }: { request: Request }) {
       },
     });
 
-    const quotes = await getQuotes(shop);
+    const quotes = await getQuotes(shop, viewerIsOwner);
     return Response.json({
       intent: "approveLowMarginQuote",
       ok: true,
@@ -1390,21 +1495,85 @@ export async function action({ request }: { request: Request }) {
      * (the engine input is not in the snapshot) so it is refused. Selling
      * price stays editable under the existing low-margin policy. Items with
      * no canonical block keep their existing behaviour. */
+    /* 2026-10-19 owner decision: staff neither see nor set internal cost.
+     * Their browser holds REDACTED lines, so every financial field is
+     * restored here from the database (unchanged lines) or recomputed by the
+     * server (recipe lines whose inputs changed). A new or re-identified
+     * Manual / Custom line has no authoritative internal cost: it is saved
+     * PROVISIONAL — Owner Approval Required — with no cost and no margin. */
+    if (!viewerIsOwner) {
+      const dbItems = quote.id ? await db.quoteItem.findMany({ where: { quoteId: quote.id, quote: { shop } } }) : [];
+      const dbQuoteRow = quote.id ? await db.quote.findFirst({ where: { id: quote.id, shop } }) : null;
+      const restored: QuoteItemInput[] = [];
+      for (const item of quote.items) {
+        const match = item.id ? dbItems.find((row) => row.id === item.id) : undefined;
+        const quantity = Math.max(1, Math.floor(safeNumber(item.quantity, 1)));
+        if (item.recipeId) {
+          const unchanged = match && String(match.recipeId || "") === String(item.recipeId) && Number(match.quantity) === quantity
+            && String(match.selectedFinish || "base") === String(item.selectedFinish || "base")
+            && serializeIdList(match.selectedAddOnIds) === serializeIdList(item.selectedAddOnIds);
+          if (match && unchanged) {
+            restored.push({ ...item, unitCost: String(match.unitCost ?? 0), marginPct: match.marginPct != null ? String(match.marginPct) : "", costSnapshot: match.costSnapshot || "", priceSnapshot: match.priceSnapshot || "" });
+            continue;
+          }
+          const priced: any = await priceRecipeLine(shop, { recipeId: item.recipeId, quantity, selectedFinish: item.selectedFinish, selectedAddOnIds: item.selectedAddOnIds }, admin);
+          if (!priced.ok) {
+            const quotes = await getQuotes(shop, viewerIsOwner);
+            return Response.json({ ok: false, error: `${item.productName || "Recipe line"}: ${priced.error || "recipe could not be priced"}`, quotes });
+          }
+          restored.push({ ...item, unitCost: priced.line.unitCost, marginPct: priced.line.marginPct, costSnapshot: priced.line.costSnapshot, priceSnapshot: priced.line.priceSnapshot, tierLabel: priced.line.tierLabel, minQuantity: priced.line.minQuantity, pricingSource: priced.line.pricingSource });
+          continue;
+        }
+        const sameLine = match && !match.recipeId
+          && String(match.productName || "") === String(item.productName || "Custom item")
+          && String(match.variant || "") === String(item.variant || "") && String(match.sku || "") === String(item.sku || "");
+        if (match && sameLine) {
+          restored.push({ ...item, unitCost: String(match.unitCost ?? 0), marginPct: match.marginPct != null ? String(match.marginPct) : "", costSnapshot: match.costSnapshot || "", priceSnapshot: match.priceSnapshot || "" });
+          continue;
+        }
+        restored.push({ ...item, id: undefined, unitCost: "0", marginPct: "", costSnapshot: "", priceSnapshot: JSON.stringify({ pricingAuthority: staffManualItemAuthority() }) });
+      }
+      quote.items = restored;
+      quote.notes = mergeStaffNotes(quote.notes, dbQuoteRow?.notes);
+    }
+
     const costDecisions = quote.items.map((item) => enforceQuoteItemUnitCost(item));
     const refused = costDecisions.find((decision) => decision.protected && !decision.ok);
     if (refused && refused.protected && !refused.ok) {
-      const quotes = await getQuotes(shop);
+      const quotes = await getQuotes(shop, viewerIsOwner);
       return Response.json({ ok: false, error: refused.reason, canonicalBlocked: true, quotes });
     }
-    const protectedItems: QuoteItemInput[] = quote.items.map((item, index) => {
+    const costProtectedItems: QuoteItemInput[] = quote.items.map((item, index) => {
       const decision = costDecisions[index];
       return decision.protected && decision.ok ? { ...item, unitCost: String(decision.unitCost) } : item;
     });
+    /* 2026-10-19 owner decision E + round 2: the recorded pricing authority
+     * comes from the DATABASE, not the browser. Provisional stays provisional;
+     * an OWNER-APPROVED price resets to PROVISIONAL when any bound commercial
+     * field changed (product, quantity, options, configuration, price, cost,
+     * customer tier / discount); the editor cannot set a provisional quote's
+     * status past draft (the same server check as the status intent). */
+    const existingItemsForAuthority = quote.id
+      ? await db.quoteItem.findMany({ where: { quoteId: quote.id, quote: { shop } } })
+      : [];
+    const authorityActor = resolveOwnerAuthorization({ session, sessionToken }).actor;
+    const authorityAt = new Date().toISOString();
+    const reconciled = reconcileQuoteItemPricingAuthority(existingItemsForAuthority, costProtectedItems, { customerTier, customerTierLabel }, authorityActor, authorityAt);
+    const protectedItems: QuoteItemInput[] = reconciled.items;
+    if (reconciled.resets.length) {
+      const resetLines = reconciled.resets.map((entry) => `[GSO] Owner-approved price RESET by ${authorityActor} at ${authorityAt}: ${entry.item} — ${entry.changed.join(", ")} changed. Quote is PROVISIONAL until the owner re-approves.`);
+      quote.notes = [String(quote.notes || ""), ...resetLines].filter(Boolean).join("\n");
+    }
+    const provisionalSaveCheck = provisionalQuoteStatusCheck({ customerTier, customerTierLabel, items: protectedItems as any }, String(quote.status || "draft"));
+    if (!provisionalSaveCheck.ok) {
+      const quotes = await getQuotes(shop, viewerIsOwner);
+      return Response.json({ ok: false, error: provisionalSaveCheck.message, quotes });
+    }
 
     if (quote.id) {
       const existingQuote = await db.quote.findFirst({ where: { id: quote.id, shop } });
       if (existingQuote?.status === "paid") {
-        const quotes = await getQuotes(shop);
+        const quotes = await getQuotes(shop, viewerIsOwner);
         return Response.json({ ok: false, error: "Paid quotes are locked and cannot be edited.", quotes });
       }
 
@@ -1446,11 +1615,13 @@ export async function action({ request }: { request: Request }) {
       });
     }
 
-    const quotes = await getQuotes(shop);
-    return Response.json({ ok: true, quotes });
+    const quotes = await getQuotes(shop, viewerIsOwner);
+    return Response.json(reconciled.resets.length
+      ? { ok: true, quotes, message: `Saved. Owner-approved price reset to PROVISIONAL (${reconciled.resets.map((entry) => entry.item).join(", ")}) — a commercial field changed; the owner must re-approve.` }
+      : { ok: true, quotes });
   }
 
-  const quotes = await getQuotes(shop);
+  const quotes = await getQuotes(shop, viewerIsOwner);
   return Response.json({ ok: false, quotes });
 }
 
@@ -1478,6 +1649,9 @@ export default function QuotesPage() {
   const [lowMarginReasons, setLowMarginReasons] = useState<Record<string, string>>({});
   // 15F.0K.4D: per-quote outcome reason drafts (required for Lost/Canceled)
   const [outcomeReasons, setOutcomeReasons] = useState<Record<string, string>>({});
+  // 2026-10-19 owner decision 4: Owner Set Price & Approve drafts, keyed by quote item id.
+  const ownerAccess = (loaderData.ownerAccess || { isOwner: false, userId: null, reason: "" }) as { isOwner: boolean; userId: string | null; reason: string };
+  const [ownerPriceDrafts, setOwnerPriceDrafts] = useState<Record<string, { unitPrice: string; totalPrice: string; reason: string; internalUnitCost?: string }>>({});
 
   useEffect(() => {
     if (fetcher.data?.quotes) setQuotes(fetcher.data.quotes);
@@ -1525,6 +1699,15 @@ export default function QuotesPage() {
 
     if (fetcher.data?.intent === "approveLowMarginQuote" && fetcher.data?.ok) {
       setLastMessage(fetcher.data.message || "Low-margin quote approved.");
+    }
+
+    if (fetcher.data?.intent === "ownerSetPriceApprove") {
+      setLastMessage(fetcher.data.ok ? fetcher.data.message : fetcher.data.error);
+      if (!fetcher.data.ok) alert(fetcher.data.error);
+    }
+
+    if (fetcher.data?.ok && fetcher.data?.message && !fetcher.data?.intent) {
+      setLastMessage(fetcher.data.message);
     }
 
     if (
@@ -1863,7 +2046,7 @@ export default function QuotesPage() {
 
   function emailQuote() {
     const body = encodeURIComponent(
-      `GSO Packaging Quote\n\nCustomer: ${customerName}\nCompany: ${company}\n\nTotal: $${totals.revenue.toFixed(2)}\nProfit: $${totals.profit.toFixed(2)}\nMargin: ${totals.margin.toFixed(1)}%\n\nNotes:\n${notes}`
+      `GSO Packaging Quote\n\nCustomer: ${customerName}\nCompany: ${company}\n\nTotal: $${totals.revenue.toFixed(2)}\n\nNotes:\n${notes}`
     );
 
     window.location.href = `mailto:${email}?subject=GSO Packaging Quote&body=${body}`;
@@ -1891,6 +2074,14 @@ export default function QuotesPage() {
     const reason = String(lowMarginReasons[quoteId] || "").trim();
     fetcher.submit(
       { intent: "approveLowMarginQuote", quoteId, reason },
+      { method: "post", encType: "application/json" }
+    );
+  }
+
+  function ownerSetPriceApprove(quoteId: string, itemId: string) {
+    const draft = ownerPriceDrafts[itemId] || { unitPrice: "", totalPrice: "", reason: "" };
+    fetcher.submit(
+      { intent: "ownerSetPriceApprove", quoteId, itemId, unitPrice: draft.unitPrice, totalPrice: draft.totalPrice, reason: draft.reason, internalUnitCost: draft.internalUnitCost || "" },
       { method: "post", encType: "application/json" }
     );
   }
@@ -1947,13 +2138,17 @@ export default function QuotesPage() {
                 <BlockStack gap="100">
                   <Text as="h2" variant="headingMd">{editingId ? "Editing an existing quote" : "Building a new quote"}</Text>
                   <Text as="p" tone="subdued">
-                    Order of work: 1 Customer → 2 Product → 3 Quantity → 4 Material / finish → 5 Cost → 6 Price → 7 Margin → 8 Notes → 9 Save.
-                    Jars, sticker/stock bags, labels and banners get their true cost from the Cost Calculator; this page prices Product Setup recipes and manual one-offs.
+                    {ownerAccess.isOwner
+                      ? "Order of work: 1 Customer → 2 Product → 3 Quantity → 4 Material / finish → 5 Cost → 6 Price → 7 Margin → 8 Notes → 9 Save. "
+                      : "Order of work: 1 Customer → 2 Product → 3 Quantity → 4 Specifications / options → 5 Customer price → 6 Notes → 7 Save. "}
+                    {ownerAccess.isOwner
+                      ? "Jars, sticker/stock bags, labels and banners get their true cost from the owner-only Cost & Pricing Calculator; this page prices Product Setup recipes and manual one-offs."
+                      : "Jars, sticker/stock bags, labels and banners: Owner Approval Required — the owner prices them; you build and send the quote here."}
                   </Text>
                 </BlockStack>
                 <InlineStack gap="200">
                   <Button variant="primary" onClick={resetQuote}>New quote</Button>
-                  <Button onClick={() => navigate("/app/erp/cost-calculator")}>Open Cost Calculator</Button>
+                  {ownerAccess.isOwner ? <Button onClick={() => navigate("/app/erp/cost-calculator")}>Open Cost & Pricing Calculator</Button> : null}
                 </InlineStack>
               </InlineStack>
               {lastMessage ? <Text as="p" tone={fetcher.data?.error ? "critical" : "subdued"}>{lastMessage}</Text> : null}
@@ -1971,7 +2166,7 @@ export default function QuotesPage() {
                     Who is this quote for. Customer tier only changes terms wording; it never changes cost.
                   </Text>
                 </BlockStack>
-                <Badge tone={tone}>{hasPricedItems ? `Margin ${totals.margin.toFixed(1)}% — ${totals.margin < 40 ? "below 40% floor" : "meets floor"}` : "No priced items yet"}</Badge>
+                {ownerAccess.isOwner ? <Badge tone={tone}>{hasPricedItems ? `Margin ${totals.margin.toFixed(1)}% — ${totals.margin < 40 ? "below 40% floor" : "meets floor"}` : "No priced items yet"}</Badge> : null}
               </InlineStack>
 
               <InlineStack gap="300">
@@ -2163,7 +2358,8 @@ export default function QuotesPage() {
                                 <TextField label="Variant / Options" value={item.variant} onChange={(value) => updateItem(item.id, "variant", value)} autoComplete="off" />
                                 <TextField label="SKU" value={item.sku} onChange={(value) => updateItem(item.id, "sku", value)} autoComplete="off" />
                               </InlineStack>
-                              <Text as="h3" variant="headingSm">5 · Cost → 6 · Price → 7 · Margin (manual — you are responsible for the numbers)</Text>
+                              <Text as="h3" variant="headingSm">{ownerAccess.isOwner ? "5 · Cost → 6 · Price → 7 · Margin (manual — you are responsible for the numbers)" : "5 · Quantity → 6 · Customer price"}</Text>
+                              {!ownerAccess.isOwner ? <Badge tone="attention">{`${OWNER_APPROVAL_REQUIRED} — the owner supplies the internal cost and approves the price before this quote can be sent.`}</Badge> : null}
                               <InlineStack gap="300">
                                 <TextField
                                   label="Quantity"
@@ -2171,11 +2367,13 @@ export default function QuotesPage() {
                                   onChange={(value) => updateItem(item.id, "quantity", value)}
                                   autoComplete="off"
                                 />
-                                <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off"
-                                  disabled={quoteItemCostIsProtected(item.costSnapshot)}
-                                  helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Re-quote in the Cost Calculator to change it." : "Unverified manual cost — the quote stays PROVISIONAL until the cost is checked."} />
-                                <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
-                                <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" />
+                                {ownerAccess.isOwner ? (
+                                  <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off"
+                                    disabled={quoteItemCostIsProtected(item.costSnapshot)}
+                                    helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Owner Approval Required to change it." : "Unverified manual cost — the quote stays PROVISIONAL until the cost is checked."} />
+                                ) : null}
+                                <TextField label={ownerAccess.isOwner ? "Unit Price" : "Customer price (per unit)"} prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
+                                {ownerAccess.isOwner ? <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" /> : null}
                               </InlineStack>
                             </BlockStack>
                           )}
@@ -2185,9 +2383,9 @@ export default function QuotesPage() {
                       <Card>
                         <BlockStack gap="300">
                           <InlineStack align="space-between" blockAlign="center">
-                            <Text as="h3" variant="headingSm">{isErpMode ? "5 · Cost → 6 · Price → 7 · Margin" : "Line result"}</Text>
+                            <Text as="h3" variant="headingSm">{isErpMode ? (ownerAccess.isOwner ? "5 · Cost → 6 · Price → 7 · Margin" : "5 · Customer price") : "Line result"}</Text>
                             {isErpMode ? (
-                              <Text as="p" tone="subdued">Values fill after Calculate. Override the price only when needed; the cost is the recipe's.</Text>
+                              <Text as="p" tone="subdued">{ownerAccess.isOwner ? "Values fill after Calculate. Override the price only when needed; the cost is the recipe's." : "The price fills after Calculate. The server keeps the recipe's internal cost."}</Text>
                             ) : (
                               <Text as="p" tone="subdued">Totals for this manual line.</Text>
                             )}
@@ -2201,17 +2399,19 @@ export default function QuotesPage() {
                           ) : null}
                           {isErpMode ? (
                             <InlineStack gap="300">
-                              <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off"
-                                disabled={quoteItemCostIsProtected(item.costSnapshot)}
-                                helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Re-quote in the Cost Calculator to change it." : undefined} />
-                              <TextField label="Unit Price" prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
-                              <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" />
+                              {ownerAccess.isOwner ? (
+                                <TextField label="Unit Cost" prefix="$" value={item.unitCost} onChange={(value) => updateItem(item.id, "unitCost", value)} autoComplete="off"
+                                  disabled={quoteItemCostIsProtected(item.costSnapshot)}
+                                  helpText={quoteItemCostIsProtected(item.costSnapshot) ? "Canonical true manufacturing cost — read-only. Owner Approval Required to change it." : undefined} />
+                              ) : null}
+                              <TextField label={ownerAccess.isOwner ? "Unit Price" : "Customer price (per unit)"} prefix="$" value={item.unitPrice} onChange={(value) => updateItem(item.id, "unitPrice", value)} autoComplete="off" />
+                              {ownerAccess.isOwner ? <TextField label="Margin %" value={item.marginPct || ""} onChange={(value) => updateItem(item.id, "marginPct", value)} autoComplete="off" /> : null}
                             </InlineStack>
                           ) : null}
                           <InlineStack gap="300">
-                            <Text as="p">Line Revenue: ${lineRevenue.toFixed(2)}</Text>
-                            <Text as="p">Line Cost: ${lineCost.toFixed(2)}</Text>
-                            <Text as="p">Line Profit: ${lineProfit.toFixed(2)}</Text>
+                            <Text as="p">{ownerAccess.isOwner ? "Line Revenue" : "Line total"}: ${lineRevenue.toFixed(2)}</Text>
+                            {ownerAccess.isOwner ? <Text as="p">Line Cost: ${lineCost.toFixed(2)}</Text> : null}
+                            {ownerAccess.isOwner ? <Text as="p">Line Profit: ${lineProfit.toFixed(2)}</Text> : null}
                           </InlineStack>
                           <details>
                             <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Advanced: product image, artwork link, pricing source</summary>
@@ -2249,14 +2449,14 @@ export default function QuotesPage() {
               <Text as="h2" variant="headingMd">8 · Notes → 9 · Save</Text>
               <Divider />
               <InlineStack gap="300" wrap>
-                <Text as="p">Total Revenue: ${totals.revenue.toFixed(2)}</Text>
-                <Text as="p">Total Cost: ${totals.cost.toFixed(2)}</Text>
-                <Text as="p">Total Profit: ${totals.profit.toFixed(2)}</Text>
-                <Text as="p">Margin: {totals.margin.toFixed(1)}%</Text>
-                <Badge tone={tone}>{!hasPricedItems ? "Add priced items to see the margin check" : totals.margin < 40 ? "OWNER CONFIRMATION PENDING — below 40% margin floor (approval required before Sent / Approved / Won)" : "Margin meets floor"}</Badge>
+                <Text as="p">{ownerAccess.isOwner ? "Total Revenue" : "Quote total"}: ${totals.revenue.toFixed(2)}</Text>
+                {ownerAccess.isOwner ? <Text as="p">Total Cost: ${totals.cost.toFixed(2)}</Text> : null}
+                {ownerAccess.isOwner ? <Text as="p">Total Profit: ${totals.profit.toFixed(2)}</Text> : null}
+                {ownerAccess.isOwner ? <Text as="p">Margin: {totals.margin.toFixed(1)}%</Text> : null}
+                {ownerAccess.isOwner ? <Badge tone={tone}>{!hasPricedItems ? "Add priced items to see the margin check" : totals.margin < 40 ? "OWNER CONFIRMATION PENDING — below 40% margin floor (approval required before Sent / Approved / Won)" : "Margin meets floor"}</Badge> : null}
               </InlineStack>
               <TextField label="Quote Notes" value={notes} onChange={setNotes} multiline={4} autoComplete="off" />
-              <Select label="Status" value={status} onChange={setStatus} options={statuses} helpText="Saved with the quote. Sent / Approved / Won are refused by the server while a low-margin approval is outstanding." />
+              <Select label="Status" value={status} onChange={setStatus} options={statuses} helpText={ownerAccess.isOwner ? "Saved with the quote. Sent / Approved / Won are refused by the server while a low-margin approval is outstanding." : "Saved with the quote. Sent / Approved / Won are refused by the server while Owner Approval is Required."} />
               <InlineStack gap="300">
                 <Button variant="primary" onClick={saveQuote}>{editingId ? "Update Quote" : "Save Quote"}</Button>
                 <Button onClick={printQuote}>Download / Print PDF</Button>
@@ -2266,6 +2466,7 @@ export default function QuotesPage() {
           </Card>
         </Layout.Section>
 
+        {ownerAccess.isOwner ? (
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
@@ -2287,6 +2488,7 @@ export default function QuotesPage() {
             </BlockStack>
           </Card>
         </Layout.Section>
+        ) : null}
 
         <Layout.Section>
           <Card>
@@ -2318,8 +2520,76 @@ export default function QuotesPage() {
                                     <Badge tone="attention">Manual terms</Badge>
                                   ) : null}
                                   {productionJob ? <Badge tone={productionJob.status === "completed" ? "success" : undefined}>{`Production: ${String(productionJob.status || "").replace(/_/g, " ")}`}</Badge> : null}
-                                  <Text as="p" tone="subdued">${quoteRevenue.toFixed(2)} | {new Date(quote.updatedAt || quote.createdAt).toLocaleString()}</Text>
-                                  {quote.marginState ? (
+                                  <Text as="p" tone="subdued">{quote.pricingAuthorityState?.provisional ? "Price not available" : `$${quoteRevenue.toFixed(2)}`} | {new Date(quote.updatedAt || quote.createdAt).toLocaleString()}</Text>
+                                  {/* 2026-10-19 owner decisions: PROVISIONAL items (no approved selling price) and
+                                      OWNER SET PRICE & APPROVE. The form renders only for the verified owner and the
+                                      server re-checks ownership; staff see the status, not cost or margin detail. */}
+                                  {quote.pricingAuthorityState?.provisional ? (
+                                    <BlockStack gap="100">
+                                      <Badge tone="critical">PROVISIONAL — PRICING AUTHORITY REQUIRED</Badge>
+                                      <Text as="p" variant="bodySm" tone="subdued">Draft only — cannot be sent, approved, invoiced or moved to production until the owner sets and approves a price.</Text>
+                                      {(quote.items || []).filter((item: any) => itemPricingAuthority(item)?.approved === false || (quote.pricingAuthorityState?.staleApprovals || []).includes(item.productName)).map((item: any) => {
+                                        const record = itemPricingAuthority(item);
+                                        const draft = ownerPriceDrafts[item.id] || { unitPrice: "", totalPrice: "", reason: "" };
+                                        const setDraft = (field: "unitPrice" | "totalPrice" | "reason" | "internalUnitCost", value: string) =>
+                                          setOwnerPriceDrafts((current) => ({ ...current, [item.id]: { ...draft, [field]: value } }));
+                                        return (
+                                          <BlockStack key={item.id} gap="100">
+                                            <Text as="p" variant="bodySm"><b>{item.productName}</b> × {Number(item.quantity || 0).toLocaleString()} — customer price: Not available</Text>
+                                            {record?.missing ? <Text as="p" variant="bodySm" tone="subdued">{record.missing}</Text> : null}
+                                            {ownerAccess.isOwner && !isPaid ? (
+                                              <BlockStack gap="100">
+                                                <Text as="p" variant="bodySm">
+                                                  Owner only — true cost ${(Number(item.unitCost || 0) * Number(item.quantity || 0)).toFixed(2)} (${Number(item.unitCost || 0).toFixed(4)}/unit).
+                                                  {record?.diagnosticReference?.unitPrice != null ? ` Diagnostic reference (not approved): $${Number(record.diagnosticReference.unitPrice).toFixed(2)}/unit.` : ""}
+                                                </Text>
+                                                {(() => {
+                                                  // Live preview (owner only): true cost, expected profit, margin vs the normal target.
+                                                  const qty = Math.max(1, Number(item.quantity || 1));
+                                                  const draftUnit = draft.unitPrice ? Number(draft.unitPrice) : draft.totalPrice ? Number(draft.totalPrice) / qty : NaN;
+                                                  if (!Number.isFinite(draftUnit) || draftUnit <= 0) return null;
+                                                  const revenue = draftUnit * qty;
+                                                  const cost = (draft.internalUnitCost ? Number(draft.internalUnitCost) : Number(item.unitCost || 0)) * qty;
+                                                  const marginPct = ((revenue - cost) / revenue) * 100;
+                                                  const target = tierRule(quote.customerTier).marginFloorPct;
+                                                  return (
+                                                    <Text as="p" variant="bodySm" tone={marginPct < target ? "critical" : "subdued"}>
+                                                      Expected profit ${(revenue - cost).toFixed(2)} · margin {marginPct.toFixed(1)}%
+                                                      {marginPct < target ? ` — BELOW the ${target}% target: approving also records the low-margin override for this line only.` : ""}
+                                                    </Text>
+                                                  );
+                                                })()}
+                                                <InlineStack gap="150" blockAlign="end" wrap>
+                                                  {!quoteItemCostIsProtected(item.costSnapshot) ? (
+                                                    <TextField label={Number(item.unitCost || 0) > 0 ? "Internal unit cost (optional)" : "Internal unit cost (required)"} prefix="$" value={draft.internalUnitCost || ""} onChange={(value) => setDraft("internalUnitCost", value)} autoComplete="off" />
+                                                  ) : null}
+                                                  <TextField label="Approved unit price" prefix="$" value={draft.unitPrice} onChange={(value) => setDraft("unitPrice", value)} autoComplete="off" />
+                                                  <TextField label="or approved total" prefix="$" value={draft.totalPrice} onChange={(value) => setDraft("totalPrice", value)} autoComplete="off" />
+                                                  <TextField label="Reason / note (required)" value={draft.reason} onChange={(value) => setDraft("reason", value)} autoComplete="off" />
+                                                  <Button variant="primary" onClick={() => ownerSetPriceApprove(quote.id, item.id)}>OWNER SET PRICE &amp; APPROVE</Button>
+                                                </InlineStack>
+                                              </BlockStack>
+                                            ) : (
+                                              <Text as="p" variant="bodySm" tone="subdued">Owner Approval Required.</Text>
+                                            )}
+                                          </BlockStack>
+                                        );
+                                      })}
+                                    </BlockStack>
+                                  ) : null}
+                                  {(quote.items || []).filter((item: any) => itemPricingAuthority(item)?.kind === OWNER_QUOTE_PRICE_KIND && itemPricingAuthority(item)?.approved).map((item: any) => {
+                                    const approval = itemPricingAuthority(item)?.ownerApproval;
+                                    return approval ? (
+                                      <Badge key={`owner-${item.id}`} tone="success">{`Owner-approved price: ${item.productName} $${Number(approval.approvedUnitPrice).toFixed(2)}/unit — ${approval.approvedBy}, ${new Date(approval.approvedAt).toLocaleDateString()}`}</Badge>
+                                    ) : null;
+                                  })}
+                                  {ownerAccess.isOwner ? (quote.marginState?.ownerApprovedLowMargin || []).map((warning: any) => (
+                                    <Text key={`owner-lm-${warning.name}`} as="p" variant="bodySm" tone="critical">{warning.reason}</Text>
+                                  )) : null}
+                                  {ownerAccess.isOwner ? (quote.marginState?.approvedPriceWarnings || []).map((warning: any) => (
+                                    <Text key={`warn-${warning.name}`} as="p" variant="bodySm" tone="caution">{warning.reason}</Text>
+                                  )) : null}
+                                  {ownerAccess.isOwner && quote.marginState?.blendedMarginPct != null ? (
                                     <Text as="p" tone="subdued">
                                       Blended margin {Number(quote.marginState.blendedMarginPct || 0).toFixed(1)}%
                                       {quote.marginState.lowestMarginPct != null ? ` | lowest item ${Number(quote.marginState.lowestMarginPct).toFixed(1)}%` : ""}
@@ -2327,7 +2597,7 @@ export default function QuotesPage() {
                                     </Text>
                                   ) : null}
                                   {quote.marginState?.approvalRequired ? (
-                                    <Badge tone="critical">{quote.marginState.approvalLabel || "Low margin - approval required"}</Badge>
+                                    <Badge tone="critical">{ownerAccess.isOwner ? quote.marginState.approvalLabel || "Low margin - approval required" : "Owner Approval Required"}</Badge>
                                   ) : null}
                                   {quote.marginState?.isLowMargin && quote.marginState?.isApproved ? (
                                     <Badge tone="warning">
@@ -2339,7 +2609,10 @@ export default function QuotesPage() {
                                   {quote.marginState?.approvalStale ? (
                                     <Text as="p" tone="critical">Items changed since approval - re-approve.</Text>
                                   ) : null}
-                                  {quote.marginState?.approvalRequired ? (
+                                  {quote.marginState?.approvalRequired && !ownerAccess.isOwner ? (
+                                    <Text as="p" variant="bodySm" tone="subdued">Owner Approval Required.</Text>
+                                  ) : null}
+                                  {quote.marginState?.approvalRequired && ownerAccess.isOwner ? (
                                     <InlineStack gap="200">
                                       <TextField
                                         label="Low-margin approval reason"

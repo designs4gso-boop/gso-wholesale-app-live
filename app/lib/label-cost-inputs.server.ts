@@ -55,8 +55,31 @@ export const LABEL_MATERIALS = {
 
 export type LabelMaterialKey = keyof typeof LABEL_MATERIALS;
 
-export function resolveLabelMaterial(key: string) {
-  return (LABEL_MATERIALS as Record<string, (typeof LABEL_MATERIALS)[LabelMaterialKey]>)[key] ?? null;
+/**
+ * 2026-10-28 — a Material Center record the server verified as calculator-ready
+ * (material-calculator-readiness.server.ts). Its rate is the record's STORED
+ * cost per sqft, resolved server-side by id; it is never typed in the browser.
+ */
+export type VerifiedLabelMaterial = {
+  key: string;
+  label: string;
+  costPerSqft: number;
+  rollWidthIn: number;
+  source: "material_center";
+  materialId: string;
+};
+
+/**
+ * The approved roll media first (unchanged), then any server-verified Material
+ * Center record the job carries. An unlisted key is still never guessed.
+ */
+export function resolveLabelMaterial(key: string, verified?: Record<string, VerifiedLabelMaterial> | null) {
+  const approved = (LABEL_MATERIALS as Record<string, (typeof LABEL_MATERIALS)[LabelMaterialKey]>)[key];
+  if (approved) return approved;
+  const record = verified?.[key];
+  return record && record.costPerSqft > 0 && record.rollWidthIn > 0
+    ? { key: record.key, label: record.label, costPerSqft: record.costPerSqft, rollWidthIn: record.rollWidthIn }
+    : null;
 }
 
 /** One sticker/label line. Lines are physically independent. */
@@ -117,6 +140,8 @@ export type LabelJobInput = {
   machineKey?: string;
   cutMode?: CutMode;
   loadedMediaWidthIn?: number;
+  /** 2026-10-28: server-verified Material Center rates, keyed "material:<id>". */
+  materials?: Record<string, VerifiedLabelMaterial>;
 };
 
 export type LabelLineResult = {
@@ -223,7 +248,7 @@ export function computeLabelJob(input: LabelJobInput): LabelJobResult {
   for (const line of input.lines) {
     const lineReasons: string[] = [];
     const lineBlockers: string[] = [];
-    const material = resolveLabelMaterial(line.materialKey);
+    const material = resolveLabelMaterial(line.materialKey, input.materials);
     if (!material) {
       lineReasons.push(LABEL_REASONS.materialCostRequired);
       lineBlockers.push(`${LABEL_REASONS.materialCostRequired}: "${line.materialKey}" has no verified $/sqft. A material cost is never invented.`);

@@ -16,7 +16,7 @@
 //   * canonical block present and the posted QUANTITY differs from the
 //     quantity the canonical cost was computed for -> REFUSED. The snapshot
 //     does not carry the engine input, so the cost cannot be recomputed here;
-//     the job must be re-quoted in the Cost Calculator.
+//     the job must be re-quoted by the owner in the owner-only Cost & Pricing Calculator.
 //   * no canonical block (recipe-priced, manual, outsourced) -> unchanged
 //     legacy behaviour; the typed value stands.
 //
@@ -129,7 +129,7 @@ export function enforceQuoteItemUnitCost(item: {
       family: block.family,
       reason:
         `${QUOTE_ITEM_COST_REASONS.blocked}: "${name}" (${block.family}) carries a BLOCKED canonical true cost (${block.status}, unit cost ${block.unitCost == null ? "null" : block.unitCost}). ` +
-        `A blocked canonical job has no defensible manufacturing cost and cannot be saved with a typed one. Re-quote it in the Cost Calculator.`,
+        `A blocked canonical job has no defensible manufacturing cost and cannot be saved with a typed one. Owner Approval Required — ask the owner to re-quote it.`,
     };
   }
 
@@ -141,7 +141,7 @@ export function enforceQuoteItemUnitCost(item: {
       family: block.family,
       reason:
         `${QUOTE_ITEM_COST_REASONS.quantityChanged}: "${name}" (${block.family}) was costed canonically for ${block.quantity} units; the edit posts ${Math.floor(postedQty)}. ` +
-        `The canonical manufacturing cost cannot be recomputed from the editor — re-quote the new quantity in the Cost Calculator.`,
+        `The canonical manufacturing cost cannot be recomputed from the editor — Owner Approval Required: ask the owner to re-quote the new quantity.`,
     };
   }
 

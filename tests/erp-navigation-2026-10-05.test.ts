@@ -95,7 +95,7 @@ describe("ERP sidebar nav (app/routes/app.tsx)", () => {
       expect(link.label.includes("Audit · Cost Health"), `label "${link.label}"`).toBe(false);
     }
     expect(links.find((l) => l.href === "/app#advanced")?.label).toBe("Admin · Advanced Tools");
-    expect(links.find((l) => l.href === "/app/erp/setup-wizard")?.label).toBe("Help · Setup Wizard");
+    expect(links.find((l) => l.href === "/app/erp/setup-wizard")?.label).toBe("Help · Launch Readiness");
   });
 });
 

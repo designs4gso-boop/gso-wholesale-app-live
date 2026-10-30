@@ -785,7 +785,7 @@ const CONVERSION_ERROR_MESSAGES: Record<string, string> = {
   no_recipe: "Draft quote was not created: the selected recipe was not found or is no longer quote-ready. Open Details on the row for the exact reasons.",
   no_pricing: "Draft quote was not created: the selected recipe is not quote-ready. Open Details on the row for the exact reasons.",
   // 2D-4E4: canonical-authority families never convert on recipe tier cost.
-  [AGENT_GATE_CONVERSION_ERROR_CODE]: "Draft quote was not created: this recipe belongs to a canonical-authority manufacturing family (labels, sticker/stock bags, jars, banners). Its true cost must come from the canonical engine, so build the quote in the Cost Calculator instead. Open Details on the row for the recorded reason.",
+  [AGENT_GATE_CONVERSION_ERROR_CODE]: "Draft quote was not created: this recipe belongs to a canonical-authority manufacturing family (labels, sticker/stock bags, jars, banners). Its true cost must come from the canonical engine — open Quotes / CRM: Owner Approval Required. Open Details on the row for the recorded reason.",
 };
 
 export async function loader({ request }: { request: Request }) {

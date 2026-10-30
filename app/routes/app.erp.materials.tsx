@@ -16,6 +16,7 @@ import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { updateOwnedRecord } from "../lib/security-guards-shared";
+import { materialCalculatorReadiness } from "../lib/material-calculator-readiness.server";
 
 const defaultMaterialTypes = [
   { label: "Ink / Coating", value: "ink_coating" },
@@ -378,7 +379,14 @@ export async function loader({ request }: { request: Request }) {
     )
   );
 
-  return Response.json({ materials, vendors, customMaterialTypes, customProductFamilies });
+  // 2026-10-28: plain-English Cost Calculator readiness per print material,
+  // decided by the same server rule the calculator uses (no cost is added here).
+  const withReadiness = materials.map((material: any) => {
+    const readiness = materialCalculatorReadiness(material);
+    return { ...material, calculatorReadiness: readiness.applies ? { label: readiness.label, source: readiness.source, missing: readiness.missing } : null };
+  });
+
+  return Response.json({ materials: withReadiness, vendors, customMaterialTypes, customProductFamilies });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -1476,8 +1484,19 @@ export default function MaterialsPage() {
                             {material.useInRecipes === false && <Badge tone="info">Hidden from recipes</Badge>}
                             {material.active === false && <Badge>Inactive</Badge>}
                             {lowStock && <Badge tone="critical">Low stock</Badge>}
+                            {material.calculatorReadiness ? (
+                              <Badge tone={material.calculatorReadiness.missing.length ? "warning" : "success"}>
+                                {`${material.calculatorReadiness.label}${material.calculatorReadiness.source === "approved_roll_rate" ? " — approved roll rate" : material.calculatorReadiness.source === "material_center" ? " — uses this record's cost" : ""}`}
+                              </Badge>
+                            ) : null}
                           </InlineStack>
                         </InlineStack>
+
+                        {material.calculatorReadiness?.missing?.length ? (
+                          <Text as="p" tone="subdued">
+                            Cost Calculator: {material.calculatorReadiness.missing.join(" ")}
+                          </Text>
+                        ) : null}
 
                         <Text as="p">
                           Cost: {moneyPer(unitCost, costUnit)}

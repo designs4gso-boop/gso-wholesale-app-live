@@ -18,6 +18,7 @@
 // Future hardening MAY add a unique index on (shop, quoteId); this service is
 // concurrency-safe without it.
 
+import { quotePricingAuthorityState } from "./quote-pricing-authority";
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
 import { buildIntakeRipName, decideMachine } from "./print-intake-routing.server";
@@ -446,6 +447,9 @@ export function quoteConversionEligibility(quote: any | null, shop: string): { o
     };
   }
   if (!quote.items?.length) return { ok: false, reason: "Quote has no quote items to send to production." };
+  // 2026-10-19 owner decision E: a PROVISIONAL quote (no approved selling-price authority) never reaches production.
+  const pricingAuthorityState = quotePricingAuthorityState(quote);
+  if (pricingAuthorityState.provisional) return { ok: false, reason: pricingAuthorityState.blockMessage! };
   const snapshotCheck = validateQuoteSnapshotForConversion(quote.items);
   if (!snapshotCheck.ok) return { ok: false, reason: `Quote cannot convert: ${snapshotCheck.reasons.join(" | ")}` };
   return { ok: true, reason: "" };
