@@ -78,7 +78,7 @@ describe("entry cost computation", () => {
     // from actual cost. The canonical ink authority (ink-rates-shared) now
     // defines Mimaki white = $176/1000ml regardless of seeded DB rows, so
     // actuals and estimates price ink identically. Mimaki gloss stays null
-    // (CMYK-only — no rate may exist).
+    // (no gloss on the Mimaki — no rate may exist).
     const noWhite = buildBrandRates([{ name: "Mimaki UCJV300", inkChannels: [{ inkType: "cmyk", inkName: "Cyan", enabled: true, costPerMl: 0.176 }] }]);
     expect(noWhite[0].whitePerMl).toBeCloseTo(176 / 1000, 9);
     expect(noWhite[0].glossPerMl).toBeNull();
@@ -89,9 +89,11 @@ describe("entry cost computation", () => {
     expect(glossCosts.inkCost).toBeCloseTo(10 * 0.176, 6);
   });
 
-  it("flags white/gloss on Mimaki per the routing business rule", () => {
-    const costs = computeEntryCosts({ machineName: "Mimaki UCJV300", cmykInkMl: 20, whiteInkMl: 8, glossInkMl: 0, inkMl: 28, printMinutes: 12 }, rates);
-    expect(costs.warnings.some((warning) => warning.includes("ROUTING") && warning.includes("Mimaki is CMYK-only"))).toBe(true);
+  it("flags GLOSS on Mimaki per the routing business rule; Mimaki white is normal (2026-11-11)", () => {
+    const white = computeEntryCosts({ machineName: "Mimaki UCJV300", cmykInkMl: 20, whiteInkMl: 8, glossInkMl: 0, inkMl: 28, printMinutes: 12 }, rates);
+    expect(white.warnings.some((warning) => warning.includes("ROUTING"))).toBe(false);
+    const costs = computeEntryCosts({ machineName: "Mimaki UCJV300", cmykInkMl: 20, whiteInkMl: 0, glossInkMl: 4, inkMl: 24, printMinutes: 12 }, rates);
+    expect(costs.warnings.some((warning) => warning.includes("ROUTING") && warning.includes("gloss is not operational on the Mimaki"))).toBe(true);
     const rolandOk = computeEntryCosts({ machineName: "Roland LG-540", cmykInkMl: 20, whiteInkMl: 8, glossInkMl: 3, inkMl: 31, printMinutes: 12 }, rates);
     expect(rolandOk.warnings.some((warning) => warning.includes("ROUTING"))).toBe(false);
   });

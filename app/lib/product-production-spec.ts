@@ -129,7 +129,7 @@ function jarSpec(profile: ActiveJarProfile): ProductProductionSpec {
     optionalTamperBand: jarTamperAllowed[profile.size as JarSizeKey] ?? null,
     materials: ["Poseidon Matte (jar label media) — canonical jar media"],
     finishes: ["matte", "gloss (base finish choice, no cost difference)"],
-    routing: "CMYK -> Mimaki UCJV300-130; white/gloss -> Roland LG-640 (canonical routing)",
+    routing: "Gloss -> Roland LG-640; CMYK / White -> either press, Auto = less busy cost-ready press (canonical routing)",
     moqNote: "Jar MOQ comes from product-family-sales-rules (jars) — not restated here.",
     pricingSource: "canonical true cost (jar adapter: verified complete-set blank, Poseidon media, calibrated ink/machine, GSO cutline, per-size application seconds, 1% planned overage, per-size packout)",
     source: { module: "jar-label-geometry.ts (via jar-cost-inputs.server.ts) + jar-active-scope.ts", version: JAR_LABEL_GEOMETRY_VERSION, authority: `${JAR_LABEL_GEOMETRY_SOURCE}; reference: ${JAR_REFERENCE_GEOMETRY_SOURCE}` },
@@ -156,7 +156,7 @@ function bagSpec(family: "sticker-bags" | "stock-bags"): ProductProductionSpec {
     optionalTamperBand: null,
     materials: ["matte", "gloss (holographic quote-only online)"],
     finishes: ["matte", "gloss"],
-    routing: "CMYK -> Mimaki; white/gloss -> Roland (canonical routing)",
+    routing: "Gloss -> Roland; CMYK / White -> either press, Auto = less busy cost-ready press (canonical routing)",
     moqNote: "MOQ 50 (owner-approved 2026-10-04; STICKER_BAG_MOQ / STOCK_BAG_MOQ)",
     pricingSource: "canonical true cost (bag adapter)",
     source: { module: "bag-artboard-geometry.ts (via bag-cost-inputs.server.ts)", version: "17D.6-bag-cost-inputs", authority: BAG_ARTBOARD_SOURCE },
@@ -179,7 +179,7 @@ function splitBagSpec(): ProductProductionSpec {
     statusNote: `Two standard 4x5 label positions per printed side; each reuses the owner 4x5 artboard (2D-2) and the owner ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn} in cutline (decision 2026-11-11).`,
     physical: { bag: "one bag, two joined 4x5 sections", blankCost: "SPLIT_BAG_BLANK_UNIT_COST ($0.25 owner blank cost, 2026-11-11; one blank, never two 4x5 bags)" },
     pieces: [{ piece: "label", shape: "rect", widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn, quantityPerProduct: 2, label: "Applied 4x5 label (2 positions per printed side)" }],
-    moqNote: "No Split Bag MOQ has been owner-approved yet — none is enforced.",
+    moqNote: "MOQ 64 (owner decision 2026-11-11; SPLIT_BAG_MOQ). Packout is not modeled yet (first production batch pending); inbound and outbound freight are never assumed.",
     pricingSource: "canonical true cost (bag adapter, split_bag); no owner-approved selling price yet — job-level owner price",
   };
 }

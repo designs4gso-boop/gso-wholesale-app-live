@@ -234,8 +234,8 @@ export default function ActualCostsRoute() {
       </section>
 
       <section style={{ marginTop: 12, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e3a8a", borderRadius: 12, padding: "10px 14px", fontSize: 13 }}>
-        <b>Machine routing rule:</b> ROLAND tag or white/gloss → Roland LG-640; all other CMYK-only → Mimaki (Mimaki is CMYK-only).
-        Rows below warn when white/gloss ink shows up on the Mimaki. Machine time is costed at the current configured rate of
+        <b>Machine routing rule:</b> gloss → Roland LG-640 only; CMYK and White run on either press (Mimaki prints CMYK + White).
+        Rows below warn when gloss ink shows up on the Mimaki. Machine time is costed at the current configured rate of
         ${data.summary.machineRatePerHour}/hr (same shared source as the Production Board and print-log writeback). Ink uses the verified
         shared channel costs: {data.summary.ratesFound.join(" · ") || "none found — ink costs cannot be calculated"}.
       </section>

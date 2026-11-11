@@ -106,14 +106,17 @@ describe("Clear Material 1x1 x 5,000 with 90% white — the live customer job", 
     expect(input.labels!.lines[0]).toMatchObject({ printWidthIn: 1, printHeightIn: 1, cutWidthIn: 0.875, cutHeightIn: 0.875, quantity: 5000 });
   }, 120_000);
 
-  it("customer-selected MIMAKI + white blocks with the routing reason — never priced on the Mimaki, white never removed", async () => {
+  it("customer-selected MIMAKI + white is a supported press but blocks on MIMAKI_WHITE_CALIBRATION_REQUIRED — never priced from Roland numbers, white never removed", async () => {
     const { result } = await costJob(raquelQs({ printer: "mimaki" }));
     expect(result.status).toBe("DRAFT_ONLY");
     expect(result.unitCost).toBeNull();
     expect(result.routing.whiteLayers).toBe(1);
-    expect(result.routing.effectivePrinter).toBe("roland");
-    expect(result.blockers.join(" ")).toContain(ROUTING_REASONS.mimakiSpecialtyUnsupported);
-    expect(result.blockers.join(" ")).toContain("Route this job to the Roland");
+    expect(result.routing.effectivePrinter).toBe("mimaki");
+    expect(result.blockers.join(" ")).toContain(ROUTING_REASONS.mimakiWhiteCalibrationRequired);
+    expect(result.blockers.join(" ")).not.toContain("UNSUPPORTED");
+    const white = result.inkChannels.find((c: any) => c.kind === "white")!;
+    expect(white.calibrationKey).toBe("mimaki-white");
+    expect(white.mlPerSqftPerPass).toBeNull(); // the Roland's 6.00 mL/sqft is never borrowed
     // the material is NOT the problem any more
     expect(result.blockers.join(" ")).not.toContain("LABEL_MATERIAL_COST_REQUIRED");
   }, 120_000);

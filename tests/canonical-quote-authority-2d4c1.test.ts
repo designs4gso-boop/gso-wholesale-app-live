@@ -100,7 +100,7 @@ const missingTableDb = () => ({
 
 const deps = () => ({ db: mockDb(), shop: SHOP });
 
-const MACHINE = "&pprinter=auto&pwhitelayers=0&pglosslayers=0";
+const MACHINE = "&pprinter=mimaki&pwhitelayers=0&pglosslayers=0";
 const CONTROL =
   "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3" +
   "&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A" + MACHINE;
@@ -131,7 +131,7 @@ describe("2D-4C1 (1) resolveCanonicalMachineInputs resolves from the full job", 
 
   it("Roland WHITE: both channels resolve at their own rates", async () => {
     const machine = await resolveCanonicalMachineInputs(
-      deps(), inputFor(CONTROL.replace("&pwhitelayers=0", "&pwhitelayers=2&pwhitecoverage=60")));
+      deps(), inputFor(CONTROL.replace("pprinter=mimaki", "pprinter=auto").replace("&pwhitelayers=0", "&pwhitelayers=2&pwhitecoverage=60")));
     expect(machine.routing!.effectivePrinter).toBe("roland");
     expect(machine.channels!.map((c) => c.kind)).toEqual(["cmyk", "white"]);
     const [cmyk, white] = machine.channels!;

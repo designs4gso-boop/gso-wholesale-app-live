@@ -9,9 +9,10 @@
 //   2. Ink-channel -> material matching is machine-aware (a Roland slot never
 //      "matches" a Mimaki ink material) and the match is only reported when
 //      it is actually used, i.e. the slot has no cost of its own.
-//   3. Routing awareness: the Mimaki is CMYK-only for ERP routing (owner
-//      decision 2026-10-07). Its stored white channels are hardware data, not
-//      routable capacity, and the page says so instead of implying otherwise.
+//   3. Routing awareness (corrected 2026-11-11): the Mimaki prints CMYK and
+//      White; only GLOSS is routed away from it (to the Roland). Its white
+//      slots are real capacity — though Mimaki White has no approved COST
+//      calibration yet — and only a gloss/clear slot there is hardware-only.
 // Nothing here changes pricing: the live engines never read this module.
 import { OWNER_STANDARDS } from "./owner-standards";
 
@@ -129,7 +130,7 @@ export type CostHealthChannelPreview = {
   costSource: "slot" | "material_estimate" | "none";
   /** Only set when the fallback is actually in use (costSource === "material_estimate"). */
   matchedMaterialName: string;
-  /** True for a white/gloss/clear channel on a machine the ERP routes those jobs AWAY from (Mimaki = CMYK only). */
+  /** True for a gloss/clear channel on a machine the ERP routes gloss jobs AWAY from (the Mimaki). */
   routedElsewhere: boolean;
   mlPerSqft1Pct: number;
   mlPerSqft100: number;
@@ -228,27 +229,27 @@ export function machineBrand(machine: Pick<CostHealthMachine, "name"> | null | u
 
 export type MachineRoutingPolicy = {
   brand: MachineBrand;
-  /** ERP routing never sends white / gloss / clear work here (Mimaki). */
-  cmykOnly: boolean;
+  /** ERP routing never sends gloss / clear work here (Mimaki). White is supported. */
+  glossUnsupported: boolean;
   /** Human copy shown next to the machine on the health page. */
   label: string;
 };
 
 /**
- * Mirrors print-intake-routing.server.ts (decideMachine): white / gloss work
- * ALWAYS routes to the Roland LG-640; the Mimaki UCJV300-130 is CMYK only
- * (owner decision 2026-07-26, re-confirmed 2026-10-07). This is a description
- * of routing authority for the health page — it never routes a job itself.
+ * Mirrors print-intake-routing.server.ts (decideMachine), corrected
+ * 2026-11-11: GLOSS work always routes to the Roland LG-640; CMYK and White
+ * run on either press (AUTO = the less busy one). This is a description of
+ * routing authority for the health page — it never routes a job itself.
  */
 export function machineRoutingPolicy(machine: Pick<CostHealthMachine, "name"> | null | undefined): MachineRoutingPolicy {
   const brand = machineBrand(machine);
   if (brand === "mimaki") {
-    return { brand, cmykOnly: true, label: "ERP routing: CMYK only — white, gloss and clear jobs route to the Roland LG-640 (owner decision 2026-10-07). Stored white channels are hardware data, not routable capacity." };
+    return { brand, glossUnsupported: true, label: "ERP routing: CMYK and White (gloss / clear jobs route to the Roland LG-640). Mimaki White has no owner-approved cost calibration yet, so White jobs cost only on the Roland until one is approved." };
   }
   if (brand === "roland") {
-    return { brand, cmykOnly: false, label: "ERP routing: home of every white / gloss / clear job; CMYK only on explicit assignment or approved overflow." };
+    return { brand, glossUnsupported: false, label: "ERP routing: CMYK, White and every gloss / clear job (gloss runs only here)." };
   }
-  return { brand, cmykOnly: false, label: "" };
+  return { brand, glossUnsupported: false, label: "" };
 }
 
 function channelIsWhite(channel: CostHealthInkChannel): boolean {
@@ -259,9 +260,9 @@ function channelIsGloss(channel: CostHealthInkChannel): boolean {
   return lower(channel.inkType).includes("gloss") || lower(channel.inkName).includes("gloss") || lower(channel.inkName).includes("clear");
 }
 
-/** True for a white / gloss channel on a machine the ERP routes that work away from. */
+/** True for a gloss / clear channel on a machine the ERP routes gloss work away from. */
 export function channelRoutedElsewhere(channel: CostHealthInkChannel, machine: Pick<CostHealthMachine, "name"> | null | undefined): boolean {
-  return machineRoutingPolicy(machine).cmykOnly && (channelIsWhite(channel) || channelIsGloss(channel));
+  return machineRoutingPolicy(machine).glossUnsupported && channelIsGloss(channel) && !channelIsWhite(channel);
 }
 
 /**
@@ -413,16 +414,16 @@ export function buildCostHealth(input: CostHealthInput): CostHealthResult {
       }
     }
 
-    // Print-layer coverage is only meaningful for a machine the ERP actually
-    // routes white / gloss work to. The Mimaki is CMYK-only by routing, so a
-    // "missing white/gloss channel" warning there would invite the wrong fix.
-    if (!policy.cmykOnly) {
+    // Print-layer coverage is only meaningful for layers the ERP actually
+    // routes to this machine: white to either press, gloss to the Roland only
+    // (a "missing gloss channel" warning on the Mimaki would invite the wrong fix).
+    {
       const hasWhite = enabledChannels.some(channelIsWhite);
       const hasGloss = enabledChannels.some(channelIsGloss);
       if (isPrinter && !hasWhite) {
         issues.push({ area: "Print layers", item: name, status: "warning", message: "No white ink channel is configured.", fix: "Add white if this machine handles clear/holographic/white-back jobs, otherwise ignore." });
       }
-      if (isPrinter && !hasGloss) {
+      if (isPrinter && !hasGloss && !policy.glossUnsupported) {
         issues.push({ area: "Print layers", item: name, status: "warning", message: "No gloss/clear ink channel is configured.", fix: "Add gloss/clear if this machine handles spot gloss/clear jobs, otherwise ignore." });
       }
     }

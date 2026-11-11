@@ -381,10 +381,10 @@ describe("Roland measured ink calibration (15F.0J.3)", () => {
     const mimaki = computeProductDrivenCost(stickerInput({}));
     expect(mimaki.lines.find((line) => line.key === "ink_cmyk")!.amount).toBeCloseTo(0.176 * 0.6 * wasteSqft, 10);
     const mimakiGloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 }));
-    expect(mimakiGloss.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(mimakiGloss.missing.join(" ")).toContain("MIMAKI_GLOSS_UNSUPPORTED");
     expect(mimakiGloss.lines.find((line) => line.key === "ink_gloss")).toBeUndefined();
     const mimakiWhite = computeProductDrivenCost(stickerInput({ whiteLayers: 2 }));
-    expect(mimakiWhite.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(mimakiWhite.missing.join(" ")).toContain("MIMAKI_WHITE_CALIBRATION_REQUIRED");
     expect(mimakiWhite.lines.find((line) => line.key === "ink_white")).toBeUndefined();
   });
 
@@ -597,7 +597,7 @@ describe("printer-specific profiles (15F.0G.2 — Mimaki RasterLink)", () => {
     expect(MIMAKI_RASTERLINK[4]).toBe(8.6);
     for (const layers of [1, 2, 3]) {
       const run = computeProductDrivenCost(stickerInput({ whiteLayers: layers }));
-      expect(run.missing.join(" "), `white x${layers}`).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+      expect(run.missing.join(" "), `white x${layers}`).toContain("MIMAKI_WHITE_CALIBRATION_REQUIRED");
       const machineLine = run.lines.find((line) => line.key === "machine")!;
       expect(machineLine.amount).toBeCloseTo(mimakiMachine(wasteSqft, 1), 10); // layers zeroed -> 1-layer CMYK profile
       expect(machineLine.label).toContain("CMYK machine time");
@@ -611,13 +611,13 @@ describe("printer-specific profiles (15F.0G.2 — Mimaki RasterLink)", () => {
 
   it("15F.0K.4B: ANY Mimaki layer request blocks CMYK-only (the old 5-layer profile gate is subsumed)", () => {
     const five = computeProductDrivenCost(stickerInput({ whiteLayers: 4 })); // was the 5-layer profile-gate case
-    expect(five.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(five.missing.join(" ")).toContain("MIMAKI_WHITE_CALIBRATION_REQUIRED");
     expect(five.lines.find((line) => line.key === "machine")!.source).not.toBe("missing"); // CMYK machine still prices; the CAPABILITY line blocks
   });
 
   it("15F.0K.4B: Mimaki gloss jobs BLOCK (the 15F.0G.3 READY decision is superseded by the owner CMYK-only standard)", () => {
     const gloss = computeProductDrivenCost(stickerInput({ glossLayers: 2 }));
-    expect(gloss.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(gloss.missing.join(" ")).toContain("MIMAKI_GLOSS_UNSUPPORTED");
     expect(gloss.lines.find((line) => line.key === "ink_gloss")).toBeUndefined(); // the provisional estimate can never price
     expect(gloss.lines.find((line) => line.key === "machine")!.amount).toBeCloseTo(mimakiMachine(6.25 / 0.9, 1), 10); // 1-layer CMYK only
   });
@@ -641,7 +641,7 @@ describe("provisional Mimaki gloss ink + live fixture (15F.0G.3)", () => {
     const one = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, glossLayers: 1 }));
     const three = computeProductDrivenCost(stickerInput({ quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, glossLayers: 3 }));
     for (const run of [one, three]) {
-      expect(run.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+      expect(run.missing.join(" ")).toContain("MIMAKI_GLOSS_UNSUPPORTED");
       expect(run.lines.find((line) => line.key === "ink_gloss")).toBeUndefined();
       expect(run.lines.find((line) => line.key === "gloss_setup")).toBeUndefined();
     }
@@ -664,7 +664,7 @@ describe("provisional Mimaki gloss ink + live fixture (15F.0G.3)", () => {
     const run = computeProductDrivenCost(stickerInput({
       quantity: 585, designs: 3, widthIn: 7.13, heightIn: 3.13, glossLayers: 3, cutType: "kiss-simple",
     }));
-    expect(run.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(run.missing.join(" ")).toContain("MIMAKI_GLOSS_UNSUPPORTED");
     expect(run.lines.find((line) => line.key === "ink_gloss")).toBeUndefined();
     // The Roland-routed equivalent of this job prices normally — pinned in
     // fixture 3/4 (N) and fixture 6 (J) above (314.47 cost / 714.71 premium).

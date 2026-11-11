@@ -60,12 +60,14 @@ describe("planner, dispatch, QC, shipping, status", () => {
   it("dispatch reuses the canonical decider: CMYK->Mimaki, white->Roland, contradiction->BLOCK, outsourced->vendor", () => {
     const plan = planDispatch([
       { id: "1", itemTicket: "T-01", productTitle: "matte labels", selectedFinish: "matte", materialSummary: "matte", machineSummary: null },
-      { id: "2", itemTicket: "T-02", productTitle: "white labels", selectedFinish: "white", materialSummary: "white", machineSummary: null },
-      { id: "3", itemTicket: "T-03", productTitle: "white labels", selectedFinish: "white", materialSummary: "white", machineSummary: "mimaki" },
+      { id: "2", itemTicket: "T-02", productTitle: "gloss labels", selectedFinish: "spot gloss", materialSummary: "spot gloss", machineSummary: null },
+      { id: "3", itemTicket: "T-03", productTitle: "gloss labels", selectedFinish: "gloss", materialSummary: "gloss", machineSummary: "mimaki" },
       { id: "4", itemTicket: "T-04", productTitle: "dtp bags", selectedFinish: null, materialSummary: null, machineSummary: null, outsourced: true },
+      { id: "5", itemTicket: "T-05", productTitle: "white labels", selectedFinish: "white", materialSummary: "white", machineSummary: "mimaki" },
     ]);
-    expect(plan.lines.map((l) => [l.decision, l.machineKey])).toEqual([["DISPATCH", "mimaki-ucjv300-130"], ["DISPATCH", "roland-lg-640"], ["BLOCK", null], ["OUTSOURCED", null]]);
-    expect(plan.blocked).toBe(1);
+    // 2026-11-11: unassigned CMYK without load data -> BLOCK (choose a press); gloss -> Roland; gloss + Mimaki -> BLOCK; white + Mimaki -> Mimaki
+    expect(plan.lines.map((l) => [l.decision, l.machineKey])).toEqual([["BLOCK", null], ["DISPATCH", "roland-lg-640"], ["BLOCK", null], ["OUTSOURCED", null], ["DISPATCH", "mimaki-ucjv300-130"]]);
+    expect(plan.blocked).toBe(2);
   });
 
   it("QC needs a recorded actor; shipping needs completed+QC+packed+tracking", () => {

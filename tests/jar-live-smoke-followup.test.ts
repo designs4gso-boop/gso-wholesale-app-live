@@ -36,7 +36,9 @@ const db = {
   },
 };
 const FIXTURE = JSON.parse(readFileSync("tests/fixtures/jar-live-smoke-100ml-tall-2026-10-05.json", "utf8"));
-const LIVE = FIXTURE.query as string;
+// The live observation ran AUTO when AUTO meant "CMYK -> Mimaki"; since 2026-11-11 AUTO has no
+// fixed press, so the same Mimaki job is replayed with the Mimaki selected explicitly.
+const LIVE = (FIXTURE.query as string).replace("pprinter=auto", "pprinter=mimaki");
 const compute = (q: string) => computeCanonicalJob({ db, shop: SHOP }, normalizeCanonicalInput(new URLSearchParams(q))!);
 // The live observation was captured at the then-provisional $8/hr machine recovery rate
 // (owner standard since 2026-10-07: $5/hr). The capture comparisons run with the historical
@@ -214,7 +216,7 @@ describe("freezes", () => {
   });
 
   it("3x3 sticker control = 79.617252 at the $5/hr owner machine rate (84.143290 at the historical $8)", async () => {
-    const q = "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=auto&pwhitelayers=0&pglosslayers=0";
+    const q = "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=mimaki&pwhitelayers=0&pglosslayers=0";
     const r = await compute(q);
     expect(r.totalCost).toBeCloseTo(79.617252, 5);
     expect((await computeAt8(q)).totalCost).toBeCloseTo(84.14329, 5);

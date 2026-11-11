@@ -92,10 +92,14 @@ describe("GSO flow: sticker bag order from lead to invoice readiness", () => {
     expect(planQueue(jobs, now).map((p) => p.id)).toEqual(["j2", "j1"]); // overdue first
     const dispatch = planDispatch([
       { id: "i1", itemTicket: "GSO-A-01", productTitle: "matte", selectedFinish: "matte", materialSummary: "matte", machineSummary: null },
-      { id: "i2", itemTicket: "GSO-A-02", productTitle: "white", selectedFinish: "white", materialSummary: "white", machineSummary: null },
+      { id: "i2", itemTicket: "GSO-A-02", productTitle: "gloss", selectedFinish: "spot gloss", materialSummary: "spot gloss", machineSummary: null },
       { id: "i3", itemTicket: "GSO-A-03", productTitle: "white on mimaki", selectedFinish: "white", materialSummary: "white", machineSummary: "mimaki" },
+      { id: "i4", itemTicket: "GSO-A-04", productTitle: "gloss on mimaki", selectedFinish: "gloss", materialSummary: "gloss", machineSummary: "mimaki" },
     ]);
-    expect(dispatch.lines.map((l) => [l.decision, l.machine])).toEqual([["DISPATCH", "mimaki"], ["DISPATCH", "roland"], ["BLOCK", null]]);
+    // 2026-11-11: no load data -> an unassigned CMYK item blocks for a press choice; white runs on the Mimaki; gloss on the Mimaki blocks
+    expect(dispatch.lines.map((l) => [l.decision, l.machine])).toEqual([["BLOCK", null], ["DISPATCH", "roland"], ["DISPATCH", "mimaki"], ["BLOCK", null]]);
+    const load = { source: "t", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 0, estimatedMinutes: 0 }, roland: { openItems: 2, estimatedMinutes: 45 } } };
+    expect(planDispatch([{ id: "i1", itemTicket: "GSO-A-01", productTitle: "matte", selectedFinish: "matte", materialSummary: "matte", machineSummary: null }], load).lines[0].machine).toBe("mimaki");
 
     const repos = createMemoryRepositories();
     const p = await proposeIntent(repos.intents, { actionType: "move_production_job", agentId: "production_planner", entityType: "job", entityId: "j1", payload: { targetStatus: "printing" }, reason: "ready", idempotencyKey: "j1:printing", now });

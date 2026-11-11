@@ -103,9 +103,11 @@ export function runArtPreflight(spec: PreflightSpec, files: ArtFileFacts[]): Pre
 
   let routing: PreflightResult["routing"] = null;
   const r = resolveCanonicalMachineRouting({ printerSelection: spec.printerSelection ?? "auto", whiteLayers: spec.whiteLayers ?? 0, glossLayers: spec.glossLayers ?? 0, whiteCoveragePct: spec.whiteCoveragePct ?? null });
-  const artBlockers = r.reasons.filter((x) => x === ROUTING_REASONS.mimakiSpecialtyUnsupported || x === ROUTING_REASONS.invalidLayers);
-  routing = { printer: r.effectivePrinter, machineKey: r.machineKey, blockers: artBlockers };
-  if (artBlockers.includes(ROUTING_REASONS.mimakiSpecialtyUnsupported)) add("fail", ROUTING_REASONS.mimakiSpecialtyUnsupported, "white/gloss requested with the Mimaki explicitly selected; the Mimaki is CMYK-only");
+  const artBlockers = r.reasons.filter((x) => x === ROUTING_REASONS.mimakiGlossUnsupported || x === ROUTING_REASONS.invalidLayers);
+  // AUTO without load data has no press yet — machine choice is dispatch's job, not an art failure.
+  const autoUnresolved = r.autoSelection.status === "unavailable";
+  routing = { printer: autoUnresolved ? "unassigned" : r.effectivePrinter, machineKey: autoUnresolved ? "" : r.machineKey, blockers: artBlockers };
+  if (artBlockers.includes(ROUTING_REASONS.mimakiGlossUnsupported)) add("fail", ROUTING_REASONS.mimakiGlossUnsupported, "gloss requested with the Mimaki explicitly selected; gloss runs only on the Roland");
   if (artBlockers.includes(ROUTING_REASONS.invalidLayers)) add("fail", ROUTING_REASONS.invalidLayers, "white/gloss layer counts must be whole numbers ≥ 0");
   if ((spec.whiteLayers ?? 0) > 0 && spec.whiteCoveragePct == null) add("warn", ROUTING_REASONS.whiteCoverageRequired, "white selected; operator must supply white coverage (never defaulted) before costing");
 

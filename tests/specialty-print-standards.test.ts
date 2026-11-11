@@ -37,7 +37,10 @@ function rolandInput(overrides: Partial<ProductDrivenInput>): ProductDrivenInput
   return stickerInput({ printer: "roland", printerHasGloss: true, machineSqftPerHour: 150, ...overrides });
 }
 
-const CAPABILITY_BLOCKER = "Mimaki UCJV300-130 is CMYK ONLY";
+// Corrected 2026-11-11: gloss is unsupported on the Mimaki; White is supported
+// but has no approved Mimaki White cost calibration yet.
+const CAPABILITY_BLOCKER = "MIMAKI_GLOSS_UNSUPPORTED";
+const WHITE_CALIBRATION_BLOCKER = "MIMAKI_WHITE_CALIBRATION_REQUIRED";
 
 describe("machine routing — Mimaki is CMYK ONLY (owner-verified 2026-07-26)", () => {
   it("Mimaki accepts CMYK-only jobs (no capability blocker; machine + ink price normally)", () => {
@@ -48,9 +51,9 @@ describe("machine routing — Mimaki is CMYK ONLY (owner-verified 2026-07-26)", 
     expect(run.lines.find((line) => line.key === "machine")!.amount).toBeGreaterThan(0);
   });
 
-  it("Mimaki BLOCKS white jobs with the exact capability message and prices no white ink", () => {
+  it("Mimaki white jobs BLOCK on the missing Mimaki White calibration (not a capability block) and price no white ink", () => {
     const run = computeProductDrivenCost(stickerInput({ whiteLayers: 1 }));
-    expect(run.missing.join(" ")).toContain(CAPABILITY_BLOCKER);
+    expect(run.missing.join(" ")).toContain(WHITE_CALIBRATION_BLOCKER);
     expect(run.lines.find((line) => line.key === "ink_white")).toBeUndefined();
     expect(run.derived.printPasses).toBe(1); // layers zeroed — no multi-layer machine time
   });

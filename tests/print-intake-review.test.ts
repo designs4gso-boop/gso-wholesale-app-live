@@ -103,8 +103,8 @@ describe("15H.3 intake review + retry", () => {
 
   it("M. the three blocked live files classify deterministically under current rules", () => {
     expect(decideMachineFromFilename("BUTTAWAY_bently_ROLAND.pdf")).toMatchObject({ machine: "roland", machineRule: "explicit_roland_tag", mode: "CMYK" });
-    expect(decideMachineFromFilename("GSO PIPELINE TEST_3X SPOT GLOSS_Roland.pdf")).toMatchObject({ machine: "roland", machineRule: "white_or_gloss", mode: "GLOSS-3X" });
-    expect(decideMachineFromFilename("GSO PIPELINE TEST 2_1X SPOT GLOSS_Roland.pdf")).toMatchObject({ machine: "roland", machineRule: "white_or_gloss", mode: "GLOSS-1X" });
+    expect(decideMachineFromFilename("GSO PIPELINE TEST_3X SPOT GLOSS_Roland.pdf")).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland", mode: "GLOSS-3X" });
+    expect(decideMachineFromFilename("GSO PIPELINE TEST 2_1X SPOT GLOSS_Roland.pdf")).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland", mode: "GLOSS-1X" });
   });
 
   it("G. agent reconciliation pins: routed skips locally; blocked hashes ask the server; fail closed offline", () => {
@@ -134,7 +134,7 @@ describe("15H.3 intake review + retry", () => {
     expect(plan).toContain('existingIntake?.status === "rejected"');
     expect(plan).toContain('"assigned_by_owner"');
     expect(plan).toContain("recordReviewRow");
-    expect(plan).toContain("decideMachine(assignedItem as any, fileName)"); // machine rules stay authoritative even for assignments
+    expect(plan).toContain("decideMachine(assignedItem as any, fileName, machineLoad)"); // machine rules stay authoritative even for assignments
     const ui = readFileSync("app/routes/app.erp.print-intake.tsx", "utf8");
     expect(ui).toContain('intent === "release"');
     expect(ui).toContain('intent === "assign"');
@@ -148,7 +148,7 @@ describe("15H.3 intake review + retry", () => {
 
   it("R. routing/ticket/RIP authorities untouched", () => {
     const routing = readFileSync("app/lib/print-intake-routing.server.ts", "utf8");
-    expect(routing).toContain('return { machine: "mimaki", machineRule: "default_cmyk", reasons: ["default_cmyk_to_mimaki"] };');
+    expect(routing).toContain('if (!choice.ok) return { machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] };');
     const source = readFileSync("app/lib/production-job-source.server.ts", "utf8");
     expect(source).toContain("allocateJobTicket");
     expect(source).toContain("GSO-${stamp}");

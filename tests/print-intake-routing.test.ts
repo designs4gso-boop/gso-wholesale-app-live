@@ -12,6 +12,7 @@ import {
   extractItemTicketFrom,
   extractJobTicketFrom,
   hasRolandFilenameTag,
+  needsGloss,
   needsWhiteOrGloss,
   normalizeFileIdentity,
   ripFileBaseName,
@@ -29,7 +30,9 @@ function makeItem(overrides: Partial<IntakeItem> = {}): IntakeItem {
     productTitle: "Jar label",
     selectedFinish: "Matte",
     materialSummary: "Matte vinyl",
-    machineSummary: null,
+    // 2026-11-11: converted quotes carry the press they were costed on; an
+    // unassigned CMYK item would review unless machine load is complete.
+    machineSummary: "Mimaki UCJV300-130",
     ...overrides,
   };
 }
@@ -142,58 +145,73 @@ describe("deterministic mapping hierarchy", () => {
   });
 });
 
-describe("machine routing (finalized owner rules)", () => {
-  it("rule 1: white and/or gloss routes to Roland with machineRule white_or_gloss", () => {
+describe("machine routing (owner rules, corrected 2026-11-11)", () => {
+  const unassigned = (o: Partial<IntakeItem> = {}) => makeItem({ machineSummary: null, ...o });
+  const load = (m: number, r: number, unattributed = 0) => ({ source: "test", capturedAt: "t", unattributedOpenItems: unattributed, byPrinter: { mimaki: { openItems: m, estimatedMinutes: null }, roland: { openItems: r, estimatedMinutes: null } } });
+
+  it("rule 1: GLOSS routes to Roland (gloss_requires_roland); White alone does not force a press", () => {
     expect(needsWhiteOrGloss(makeItem({ selectedFinish: "White + Gloss" }))).toBe(true);
-    const decision = decideMachine(makeItem({ selectedFinish: "Spot Gloss" }));
+    expect(needsGloss(makeItem({ selectedFinish: "White ink" }))).toBe(false);
+    const decision = decideMachine(unassigned({ selectedFinish: "Spot Gloss" }));
     expect(decision.machine).toBe("roland");
-    expect(decision.machineRule).toBe("white_or_gloss");
+    expect(decision.machineRule).toBe("gloss_requires_roland");
+    // white on an explicitly assigned Mimaki is a valid route now
+    const mimakiWhite = decideMachine(makeItem({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300" }));
+    expect(mimakiWhite.machine).toBe("mimaki");
+    expect(mimakiWhite.machineRule).toBe("explicit_erp_machine");
   });
 
-  it("the previously-reviewed case now routes: GSO-20260627-0002-01_TEST.pdf on a white/gloss job", () => {
-    const item = makeItem({ id: "wg1", itemTicket: "GSO-20260627-0002-01", ripJobName: "GSO-20260627-0002-01", selectedFinish: "White + Gloss" });
+  it("the previously-reviewed case routes: GSO-20260627-0002-01_TEST.pdf on a white + gloss job -> Roland", () => {
+    const item = unassigned({ id: "wg1", itemTicket: "GSO-20260627-0002-01", ripJobName: "GSO-20260627-0002-01", selectedFinish: "White + Gloss" });
     const job = makeJob({ id: "jobwg", jobTicket: "GSO-20260627-0002", items: [item] });
     const decision = decideIntakeRoute({ fileName: "GSO-20260627-0002-01_TEST.pdf", jobs: [job] });
     expect(decision.decision).toBe("route");
     expect(decision.machine).toBe("roland");
-    expect(decision.machineRule).toBe("white_or_gloss");
+    expect(decision.machineRule).toBe("gloss_requires_roland");
     expect(decision.rule).toBe("item_ticket"); // exact item-ticket matching intact
     expect(decision.ripName).toBe("GSO-20260627-0002-01");
   });
 
-  it("rule 2: CMYK-only with explicit ERP Roland assignment routes to Roland (explicit_erp_machine)", () => {
+  it("rule 2: explicit ERP assignment wins for CMYK and White (explicit_erp_machine)", () => {
     const decision = decideMachine(makeItem({ machineSummary: "Roland LG-540" }));
     expect(decision.machine).toBe("roland");
     expect(decision.machineRule).toBe("explicit_erp_machine");
   });
 
-  it("rule 3/6: a standalone ROLAND filename tag forces Roland (explicit_roland_tag), case-insensitive", () => {
+  it("rule 3: standalone ROLAND / MIMAKI filename tags are explicit selections, case-insensitive", () => {
     expect(hasRolandFilenameTag("GSO-20260718-0001-01_roland_R1.pdf")).toBe(true);
     expect(hasRolandFilenameTag("art ROLAND final.pdf")).toBe(true);
     expect(hasRolandFilenameTag("Rolando-poster.pdf")).toBe(false); // never a substring of another word
     expect(hasRolandFilenameTag("unrolandish.pdf")).toBe(false);
-    const decision = decideIntakeRoute({ fileName: "GSO-20260718-0001-01_ROLAND.pdf", jobs: [makeJob()] });
+    const decision = decideIntakeRoute({ fileName: "GSO-20260718-0001-01_ROLAND.pdf", jobs: [makeJob({ items: [unassigned()] })] });
     expect(decision.decision).toBe("route");
     expect(decision.machine).toBe("roland");
     expect(decision.machineRule).toBe("explicit_roland_tag");
+    const mimaki = decideMachine(unassigned({ selectedFinish: "White ink" }), "GSO-20260718-0001-01_MIMAKI.pdf");
+    expect(mimaki).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag" });
   });
 
-  it("rules 4/5: CMYK-only with no assignment or tag defaults to Mimaki (default_cmyk); explicit Mimaki reports explicit_erp_machine", () => {
-    const byDefault = decideMachine(makeItem());
-    expect(byDefault.machine).toBe("mimaki");
-    expect(byDefault.machineRule).toBe("default_cmyk");
-    const explicit = decideMachine(makeItem({ machineSummary: "Mimaki UCJV300" }));
-    expect(explicit.machine).toBe("mimaki");
-    expect(explicit.machineRule).toBe("explicit_erp_machine");
-    const routed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob()] });
-    expect(routed.machine).toBe("mimaki");
-    expect(routed.machineRule).toBe("default_cmyk");
+  it("rule 4: unassigned, untagged non-gloss work — no permanent Mimaki default; AUTO uses COMPLETE load only", () => {
+    const noLoad = decideMachine(unassigned());
+    expect(noLoad.machine).toBeNull();
+    expect(noLoad.reasons).toContain("auto_machine_load_unavailable_select_printer");
+    // incomplete attribution is not "less busy"
+    expect(decideMachine(unassigned(), "", load(0, 9, 1)).machine).toBeNull();
+    // a tie is not "less busy" either — never first-in-list
+    expect(decideMachine(unassigned(), "", load(3, 3)).machine).toBeNull();
+    const balanced = decideMachine(unassigned({ selectedFinish: "White ink" }), "", load(6, 2));
+    expect(balanced).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" });
+    expect(decideMachine(unassigned(), "", load(1, 4)).machine).toBe("mimaki");
+    const routed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [unassigned()] })] });
+    expect(routed.decision).toBe("review");
+    const routedWithLoad = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [unassigned()] })], machineLoad: load(0, 2) });
+    expect(routedWithLoad).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "auto_load_balanced" });
   });
 
-  it("genuinely contradictory data still reviews: white/gloss vs explicit Mimaki, ROLAND tag vs explicit Mimaki, both-printer summaries", () => {
-    const whiteGlossMimaki = decideMachine(makeItem({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300" }));
-    expect(whiteGlossMimaki.machine).toBeNull();
-    expect(whiteGlossMimaki.reasons).toContain("white_gloss_job_but_erp_assigned_mimaki_contradiction");
+  it("contradictory data still reviews: gloss vs explicit Mimaki, ROLAND tag vs explicit Mimaki, both-printer summaries", () => {
+    const glossMimaki = decideMachine(makeItem({ selectedFinish: "Spot gloss", machineSummary: "Mimaki UCJV300" }));
+    expect(glossMimaki.machine).toBeNull();
+    expect(glossMimaki.reasons).toContain("gloss_job_but_mimaki_selected_contradiction");
 
     const tagMimaki = decideMachine(makeItem({ machineSummary: "Mimaki UCJV300" }), "GSO-20260718-0001-01_ROLAND.pdf");
     expect(tagMimaki.machine).toBeNull();
@@ -203,7 +221,7 @@ describe("machine routing (finalized owner rules)", () => {
     expect(both.machine).toBeNull();
     expect(both.reasons).toContain("machine_summary_contradictory_or_unknown");
 
-    const reviewed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [makeItem({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300" })] })] });
+    const reviewed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [makeItem({ selectedFinish: "Gloss", machineSummary: "Mimaki UCJV300" })] })] });
     expect(reviewed.decision).toBe("review");
     expect(reviewed.machineRule).toBeNull();
   });

@@ -20,7 +20,7 @@ function jobWith(over: Partial<IntakeJob> = {}): IntakeJob {
   return {
     id: "job1", jobTicket: "GSO-20260726-0001", customerName: "Cust", company: null, status: "new",
     artworkUrl: null, printFileUrl: null,
-    items: [{ id: "item1", itemTicket: "GSO-20260726-0001-01", ripJobName: "GSO-20260726-0001-01", suggestedFileName: null, productTitle: "Labels", selectedFinish: null, materialSummary: null, machineSummary: null }],
+    items: [{ id: "item1", itemTicket: "GSO-20260726-0001-01", ripJobName: "GSO-20260726-0001-01", suggestedFileName: null, productTitle: "Labels", selectedFinish: null, materialSummary: null, machineSummary: "Mimaki UCJV300-130" }],
     fileNames: [],
     ...over,
   };
@@ -36,36 +36,40 @@ describe("filename print hints (15F.0J.5-D safety)", () => {
     const machine = decideMachineFromFilename(LIVE_FIXTURE);
     expect(machine.machine).toBe("roland");
     expect(machine.mode).toBe("GLOSS-3X");
-    expect(machine.machineRule).toBe("white_or_gloss");
+    expect(machine.machineRule).toBe("gloss_requires_roland");
   });
 
   it("hazard safety: bare '3x' in a product name and 'White Widow' NEVER trigger premium routing", () => {
     const strain = parseFilenamePrintHints("Blue Chip_Rainbow 3x OG_matte.pdf");
     expect(strain.glossLayers).toBe(0);
     expect(strain.mode).toBe("CMYK");
-    expect(decideMachineFromFilename("Blue Chip_Rainbow 3x OG_matte.pdf").machine).toBe("mimaki"); // ordinary CMYK default
+    // ordinary CMYK: no premium routing — and (2026-11-11) no permanent Mimaki default without load data
+    expect(decideMachineFromFilename("Blue Chip_Rainbow 3x OG_matte.pdf").reasons).toContain("auto_machine_load_unavailable_select_printer");
     const widow = parseFilenamePrintHints("Cust_White Widow_matte.pdf");
     expect(widow.whiteLayers).toBe(0); // no finish adjacency -> not white ink
     expect(parseFilenamePrintHints("Cust_holo white_labels.pdf").whiteLayers).toBe(1); // finish adjacency counts
     expect(parseFilenamePrintHints("Cust_2x white_labels.pdf").whiteLayers).toBe(2);
   });
 
-  it("tests 10/11: conflicting printer tokens and premium+Mimaki contradictions BLOCK routing", () => {
+  it("tests 10/11: conflicting printer tokens and gloss+Mimaki contradictions BLOCK routing; white+Mimaki routes Mimaki", () => {
     const conflict = decideMachineFromFilename("Cust_Product_Roland_Mimaki.pdf");
     expect(conflict.machine).toBeNull();
     expect(conflict.reasons).toContain("conflicting_printer_tokens_in_filename");
     const premiumMimaki = decideMachineFromFilename("Cust_3x spot gloss_MIMAKI.pdf");
     expect(premiumMimaki.machine).toBeNull();
-    expect(premiumMimaki.reasons).toContain("premium_mode_but_mimaki_token_contradiction");
+    expect(premiumMimaki.reasons).toContain("gloss_mode_but_mimaki_token_contradiction");
+    expect(decideMachineFromFilename("Cust_2x white_MIMAKI.pdf")).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag", mode: "WHITE-2X" });
     expect(hasMimakiFilenameTag("job_MIMAKI_run.pdf")).toBe(true);
     expect(hasMimakiFilenameTag("mimakingtons.pdf")).toBe(false); // word boundary
   });
 
-  it("test 2: ordinary untagged CMYK defaults to Mimaki deterministically", () => {
+  it("test 2 (2026-11-11): untagged CMYK picks the less busy press from complete load, otherwise reviews — never a fixed default", () => {
     const decision = decideMachineFromFilename("Customer_Product_CMYK.pdf");
-    expect(decision.machine).toBe("mimaki");
-    expect(decision.machineRule).toBe("default_cmyk");
+    expect(decision.machine).toBeNull();
+    expect(decision.reasons).toContain("auto_machine_load_unavailable_select_printer");
     expect(decision.mode).toBe("CMYK");
+    const load = { source: "t", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 4, estimatedMinutes: 120 }, roland: { openItems: 9, estimatedMinutes: 60 } } };
+    expect(decideMachineFromFilename("Customer_Product_CMYK.pdf", load)).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" }); // minutes beat item counts
   });
 
   it("test 13: routed filename is structured, ticket-parseable, safe, capped, attempt-marked", () => {
@@ -98,7 +102,7 @@ describe("route-plan + creator source pins (15F.0J.5)", () => {
 
   it("tests 1/7/8/9: unmatched deterministic files AUTO-CREATE and route — commercial gaps become warnings, never blockers", () => {
     expect(routeSrc).toContain("createOrReusePrintIntakeJob(db, {");
-    expect(routeSrc).toContain("decideMachineFromFilename(fileName)");
+    expect(routeSrc).toContain("decideMachineFromFilename(fileName, machineLoad)");
     expect(routeSrc).toContain('rule: "print_intake_auto_created"');
     expect(routeSrc).toContain("Commercial linkage pending: no quote/order/customer attached");
     expect(routeSrc).toContain("reviewWarnings: linkageWarnings");

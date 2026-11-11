@@ -172,9 +172,10 @@ export function parseCanonicalJarOrderLine(raw: string | null | undefined): Cano
 
 // Jar production summary — the machine decider reads this text, so token
 // hygiene is deliberate: a plain-CMYK config (0X + Standard label) contains
-// NO white/gloss/clear token and defaults to the Mimaki; specialty layers
-// emit "Gloss Layers: NX" and holographic emits "White Layers: 1" (technical
-// underbase) so those deterministically route Roland. The customer-facing
+// NO white/gloss/clear token (no specialty requirement); gloss layers emit
+// "Gloss Layers: NX" so those deterministically route Roland, and holographic
+// emits "White Layers: 1" (technical underbase — White runs on either press
+// since 2026-11-11; only gloss forces the Roland). The customer-facing
 // word "Gloss" for the INCLUDED base laminate finish is intentionally
 // rendered "High-Shine" here (and stated verbatim in production notes,
 // which the router never reads).
@@ -382,9 +383,9 @@ export function parseCanonicalStickerOrderLine(raw: string | null | undefined): 
 }
 
 // Sticker production summary — router-token audited like bags/jars/DTP:
-// plain matte 0X carries no white/gloss/clear token (Mimaki default);
-// specialty layers emit "Gloss Layers: NX" and holographic emits the
-// technical "White Layers: 1" so those route Roland deterministically.
+// plain matte 0X carries no white/gloss/clear token (no specialty);
+// gloss layers emit "Gloss Layers: NX" (route Roland deterministically) and
+// holographic emits the technical "White Layers: 1" (either press, 2026-11-11).
 export function canonicalStickerMaterialSummary(sticker: CanonicalStickerOrderLine): string {
   const parts = [
     `Profile: ${sticker.profile}`,

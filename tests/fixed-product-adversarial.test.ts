@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assembleCanonicalJob,
+  routingFor,
   normalizeCanonicalInput,
   type ResolvedMachineInputs,
 } from "../app/lib/canonical-calculator.server";
@@ -43,10 +44,12 @@ const blocked = (q: string, reason?: string) => {
   return r;
 };
 const GOOD = "pfamily=premium-jars&pjarmat=matte&pqty=100&pjar=miron/100ml_wide&pjarside=1&pjarlid=1&pcmykcoverage=40";
+// 2026-11-11: a CMYK job with no machine-load data needs an explicitly chosen press.
+const GOOD_MIMAKI = GOOD + "&pprinter=mimaki";
 
 describe("fixed-product adversarial cases", () => {
   it("sanity: the good job is not blocked", () => {
-    const r = run(GOOD);
+    const r = run(GOOD_MIMAKI);
     expect(r.status).not.toBe("DRAFT_ONLY");
     expect(r.unitCost).not.toBeNull();
   });
@@ -114,20 +117,35 @@ describe("fixed-product adversarial cases", () => {
     blocked("pfamily=standard-jars&pjarmat=matte&pqty=100&pjar=standard/3oz&pjarvariant=black_white&pjarside=1&pjarlid=1&pjartamper=1&pcmykcoverage=40", CANONICAL_REASONS.applicationStandardRequired);
   });
 
-  it("Mimaki + white is refused by routing (CMYK-only press)", () => {
-    const r = blocked(GOOD + "&pprinter=mimaki&pwhitelayers=1&pwhitecoverage=50");
-    expect(r.blockers.join("\n")).toMatch(/MIMAKI_SPECIALTY_UNSUPPORTED/);
+  it("Mimaki + white is ROUTABLE (the Mimaki prints White) but blocks on the missing Mimaki White COST calibration — never Roland's", () => {
+    const input = normalizeCanonicalInput(new URLSearchParams(GOOD + "&pprinter=mimaki&pwhitelayers=1&pwhitecoverage=50"))!;
+    const routing = routingFor(input);
+    expect(routing.blockers).toEqual([]);
+    const white = routing.channels.find((c) => c.kind === "white")!;
+    expect(white.calibrationKey).toBe("mimaki-white");
+    const r = assembleCanonicalJob(input, {
+      ...CAL,
+      routing,
+      channels: routing.channels.map((c) => ({ ...c, calibration: c.isBase ? CAL.calibration : null, calibrationMessage: c.isBase ? "approved" : "No approved calibration for this identity." })),
+    });
+    expect(r.status).toBe("DRAFT_ONLY");
+    expect(r.unitCost).toBeNull();
+    expect(r.blockers.join("\n")).toMatch(/MIMAKI_WHITE_CALIBRATION_REQUIRED/);
+    expect(r.blockers.join("\n")).not.toMatch(/UNSUPPORTED/);
   });
 
   it("Mimaki + gloss is refused by routing", () => {
     const r = blocked(GOOD + "&pprinter=mimaki&pglosslayers=1&pglosscoverage=50");
-    expect(r.blockers.join("\n")).toMatch(/MIMAKI_SPECIALTY_UNSUPPORTED/);
+    expect(r.blockers.join("\n")).toMatch(/MIMAKI_GLOSS_UNSUPPORTED/);
   });
 
-  it("a specialty (white) job on AUTO routes to the Roland — it does not silently stay CMYK on the Mimaki", () => {
+  it("a white job on AUTO with no load data and no calibration knowledge never prices silently", () => {
     const input = normalizeCanonicalInput(new URLSearchParams(GOOD + "&pprinter=auto&pwhitelayers=1&pwhitecoverage=50"))!;
-    const r = assembleCanonicalJob(input, CAL); // CAL is a Mimaki CMYK calibration: identity mismatch must not price
-    expect(r.routing.machineKey).not.toBe("mimaki-ucjv300-130");
+    const r = assembleCanonicalJob(input, CAL);
+    expect(r.status).toBe("DRAFT_ONLY");
+    expect(r.blockers.join("\n")).toMatch(/AUTO_MACHINE_LOAD_UNAVAILABLE/);
+    // with only the Roland cost-ready for white, AUTO resolves to it
+    expect(routingFor({ ...input, costReadyPrinters: ["roland"] }).effectivePrinter).toBe("roland");
   });
 
   it("historical snapshot shape: a stored canonical view without productSpec/finishingBreakdown is still readable", () => {

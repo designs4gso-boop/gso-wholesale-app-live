@@ -45,7 +45,7 @@ const line = (r: ReturnType<typeof run>, key: string) => r.trueCost.lines.filter
 const jarQs = (profileKey: string, qty: number, set: { side: boolean; lid: boolean; tamper: boolean }, extra = "") => {
   const profile = ACTIVE_JAR_PROFILES.find((p) => p.key === profileKey)!;
   const variant = profile.brand === "standard" ? "&pjarvariant=black_white" : "";
-  return `pfamily=${profile.uiFamily}&pjarmat=matte&pqty=${qty}&pjar=${profileKey}${variant}` +
+  return `pfamily=${profile.uiFamily}&pjarmat=matte&pprinter=mimaki&pqty=${qty}&pjar=${profileKey}${variant}` +
     (set.side ? "&pjarside=1" : "") + (set.lid ? "&pjarlid=1" : "") + (set.tamper ? "&pjartamper=1" : "") +
     "&pcmykcoverage=40" + extra;
 };
@@ -173,7 +173,7 @@ describe("17D.7 control case still pins after the spec/weeding refactor", () => 
       findMany: async ({ where }: any) => ROWS.filter((row) => Object.entries(where).every(([field, value]) => field === "shop" ? row.shop === value : (row as any)[field] === value)),
     },
   };
-  const CONTROL = "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=auto&pwhitelayers=0&pglosslayers=0";
+  const CONTROL = "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=mimaki&pwhitelayers=0&pglosslayers=0";
 
   it("1000 x 3x3 matte AUTO CMYK = 79.617252 total / 0.079617 unit, PROVISIONAL ($5/hr machine recovery, 2026-10-07)", async () => {
     const input = normalizeCanonicalInput(new URLSearchParams(CONTROL))!;

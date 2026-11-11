@@ -86,7 +86,7 @@ function liveFormParams(state: FormState = {}): URLSearchParams {
     qty: "1000", width: "3", height: "3", designs: "1",
     materialId: "cmat_poseidon_matte", materialName: "Poseidon Matte Roll Media",
     cut: "square-rect",
-    printer: "auto", white: "0", gloss: "0", additionalLines: 0, ...state,
+    printer: "mimaki", white: "0", gloss: "0", additionalLines: 0, ...state, // 2026-11-11: CMYK needs a chosen press without load data
   };
   const p = new URLSearchParams();
   // --- legacy primary fields (unchanged by 2D-4C2) ---

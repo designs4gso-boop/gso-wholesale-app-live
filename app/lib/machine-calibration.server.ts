@@ -350,6 +350,12 @@ export function computeOccupancyMinutes(input: {
   calibration: CalibrationRecord;
   areas: Partial<Record<AreaBasis, number>>;
   passCount?: number;
+  /**
+   * 2026-11-11 — fixed overhead is per PHYSICAL PRINT RUN. A specialty channel
+   * printed in the same run as its base passes false so the overhead is never
+   * charged twice. Default true (a standalone run).
+   */
+  includeFixedMinutes?: boolean;
 }): OccupancyResult {
   const cal = input.calibration;
 
@@ -382,7 +388,7 @@ export function computeOccupancyMinutes(input: {
   }
 
   const passCount = Math.max(1, Math.floor(input.passCount ?? 1));
-  const fixedMinutesApplied = cal.timeModel === "fixed_plus_variable" ? cal.fixedMinutes ?? 0 : 0;
+  const fixedMinutesApplied = cal.timeModel === "fixed_plus_variable" && input.includeFixedMinutes !== false ? cal.fixedMinutes ?? 0 : 0;
   const minutes = fixedMinutesApplied + areaSqft * cal.minutesPerSqft * passCount;
 
   return {

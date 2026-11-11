@@ -145,9 +145,12 @@ prisma schema up to date, TypeScript at the 304 baseline.
   __[R#-][P#-]A#, historical __A1 default; QC events; reopen keeps
   finalized snapshots immutable; run-aware actuals grouping).
 
-## Machine routing authority (owner-approved, do not change)
-Mimaki UCJV300-130 = CMYK only. Roland LG-640 = white/gloss/specialty.
-CMYK defaults to Mimaki unless explicit ROLAND tag/ERP assignment.
+## Machine routing authority (owner-corrected 2026-11-11)
+Mimaki UCJV300-130 = CMYK + White (no gloss). Roland LG-640 = CMYK + White + Gloss.
+GLOSS forces the Roland; White alone does not. Explicit press wins when
+compatible; Auto picks the less busy press only from complete load data,
+otherwise the operator chooses (no permanent Mimaki default). Mimaki White is
+costed only from its own owner-approved calibration (none approved yet).
 Contradictions go to review — never guessed.
 
 ## Known safe debt (classified in the 15Z audit)

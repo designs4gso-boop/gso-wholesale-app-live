@@ -32,7 +32,7 @@ const CAL: ResolvedMachineInputs = {
   inkCostSource: "canonical purchasing rate",
 };
 
-const BASE = "pfamily=premium-jars&pjarmat=matte&pqty=128&pjar=miron/100ml_wide&pjarside=1&pjarlid=1&pcmykcoverage=40";
+const BASE = "pfamily=premium-jars&pjarmat=matte&pprinter=mimaki&pqty=128&pjar=miron/100ml_wide&pjarside=1&pjarlid=1&pcmykcoverage=40";
 const run = (q: string) => {
   const input = normalizeCanonicalInput(new URLSearchParams(q));
   expect(input, q).not.toBeNull();
@@ -192,11 +192,11 @@ describe("every bad override BLOCKS (DRAFT_ONLY, unit cost null)", () => {
   });
 
   it("an override for a label that is not in the set (lid size on Side Only) blocks", () => {
-    expectBlocked("pfamily=premium-jars&pjarmat=matte&pqty=128&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40&pjarcustom=1&pjarlidd=2", CANONICAL_REASONS.customSizeIncomplete, /not in the selected label set/);
+    expectBlocked("pfamily=premium-jars&pjarmat=matte&pprinter=mimaki&pqty=128&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40&pjarcustom=1&pjarlidd=2", CANONICAL_REASONS.customSizeIncomplete, /not in the selected label set/);
   });
 
   it("a tamper override on a jar with no tamper timing still blocks on the timing (never costed from the override)", () => {
-    const r = run("pfamily=standard-jars&pjarmat=matte&pqty=100&pjar=standard/3oz&pjarvariant=black_white&pjarside=1&pjartamper=1&pcmykcoverage=40&pjarcustom=1&pjartamperw=6&pjartamperh=0.5");
+    const r = run("pfamily=standard-jars&pjarmat=matte&pprinter=mimaki&pqty=100&pjar=standard/3oz&pjarvariant=black_white&pjarside=1&pjartamper=1&pcmykcoverage=40&pjarcustom=1&pjartamperw=6&pjartamperh=0.5");
     expect(r.status).toBe("DRAFT_ONLY");
     expect(r.reasons).toContain(CANONICAL_REASONS.applicationStandardRequired);
   });

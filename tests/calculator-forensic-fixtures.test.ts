@@ -170,11 +170,11 @@ describe("15F.0-A fixture 1: 100 x 3x3 matte square-cut stickers (corrected quot
   it("missing machine speed BLOCKS instead of pricing $0 (gate L) — Roland without a record; Mimaki 5+ layers", () => {
     const blockedRoland = computeProductDrivenCost(baseInput({ printer: "roland", machineSqftPerHour: 0 }));
     expect(blockedRoland.missing.join(" ")).toContain("Machine recovery");
-    // 15F.0K.4B: ANY white/gloss on Mimaki now hits the CMYK-ONLY capability
-    // block first (owner-verified 2026-07-26) — the old 5-layer profile gate
-    // is subsumed; Roland keeps the per-layer speed model.
+    // 2026-11-11: Mimaki white is a supported press with NO approved cost
+    // calibration — it blocks as MIMAKI_WHITE_CALIBRATION_REQUIRED (the old
+    // 5-layer profile gate stays subsumed); Roland keeps the per-layer model.
     const blockedMimaki = computeProductDrivenCost(baseInput({ whiteLayers: 4 }));
-    expect(blockedMimaki.missing.join(" ")).toContain("Mimaki UCJV300-130 is CMYK ONLY");
+    expect(blockedMimaki.missing.join(" ")).toContain("MIMAKI_WHITE_CALIBRATION_REQUIRED");
   });
 
   it("die-cut/irregular production without an owner model BLOCKS with the exact configuration message (contour bands quote automatically)", () => {

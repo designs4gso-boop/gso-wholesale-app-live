@@ -68,8 +68,8 @@ const view = (qs: string) => {
   expect(input, `query did not normalise: ${qs}`).not.toBeNull();
   return canonicalViewOf(assembleCanonicalJob(input!, CAL));
 };
-const BANNER_QS = "pfamily=banners&pqty=2&pwidth=36&pheight=60&pbannerw=36&pbannerh=60&pbannersides=SINGLE&pbanneredge=TRIM_ONLY&pbannergrommets=NONE&pdesigns=1";
-const JAR_QS = (family: string, jar: string, qty = 500) => `pfamily=${family}&pjarmat=matte&pqty=${qty}&pjar=${jar}&pjarside=1&pjarlid=1&pcmykcoverage=40`;
+const BANNER_QS = "pfamily=banners&pprinter=mimaki&pqty=2&pwidth=36&pheight=60&pbannerw=36&pbannerh=60&pbannersides=SINGLE&pbanneredge=TRIM_ONLY&pbannergrommets=NONE&pdesigns=1";
+const JAR_QS = (family: string, jar: string, qty = 500) => `pfamily=${family}&pjarmat=matte&pprinter=mimaki&pqty=${qty}&pjar=${jar}&pjarside=1&pjarlid=1&pcmykcoverage=40`;
 
 /** Read-only shop data for the real Stock Bag storefront resolver. */
 function fakeShopDb() {
@@ -487,10 +487,11 @@ describe("unchanged (tests 22-29)", () => {
     expect(resolveSellingPriceAuthority({ family: "premium-jars", stockBag: false, marginRuleKey: "chiron-jars", row: costedRow() }).approved).toBe(false);
   });
 
-  it("27. machine routing unchanged", () => {
-    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 0, glossLayers: 0 }).effectivePrinter).toBe("mimaki");
-    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 1, glossLayers: 0 }).effectivePrinter).toBe("roland");
-    expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 1, glossLayers: 0 }).blockers.join(" ")).toContain("MIMAKI_SPECIALTY_UNSUPPORTED");
+  it("27. machine routing follows the corrected owner rule (2026-11-11)", () => {
+    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 0, glossLayers: 0 }).blockers.join(" ")).toContain("AUTO_MACHINE_LOAD_UNAVAILABLE");
+    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 1, glossLayers: 0, costReadyPrinters: ["roland"] }).effectivePrinter).toBe("roland");
+    expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 1, whiteCoveragePct: 50, glossLayers: 0 }).blockers).toEqual([]);
+    expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 0, glossLayers: 1 }).blockers.join(" ")).toContain("MIMAKI_GLOSS_UNSUPPORTED");
   });
 
   it("28. cost formulas unchanged", () => {

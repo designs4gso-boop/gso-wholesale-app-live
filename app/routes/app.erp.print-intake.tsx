@@ -286,11 +286,12 @@ export default function PrintIntake() {
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
         <b>Which printer gets the file (finalized rules).</b>
         <div style={{ fontSize: 13, marginTop: 6 }}>
-          <b>White and/or gloss &rarr; Roland LG-640 (the Mimaki is CMYK only).</b> CMYK-only jobs explicitly assigned to Roland in the ERP, or
-          named with the standalone <code>ROLAND</code> filename tag, also route to Roland. All other CMYK-only jobs
-          default to the <b>Mimaki UCJV300</b>. Contradictory data (for example a white/gloss job explicitly assigned to
-          the CMYK-only Mimaki) is blocked and goes to Needs review. A CMYK-only file with no printer tag is treated as a Mimaki job; white or gloss work always goes to the Roland. Roland-bound plans stay in Needs review with the blocking reason until the Roland hot folder is
-          confirmed and enabled in the agent config.
+          <b>Gloss &rarr; Roland LG-640 (gloss is not operational on the Mimaki).</b> CMYK and White jobs can run on either press: an
+          explicit ERP assignment or a standalone <code>ROLAND</code> / <code>MIMAKI</code> filename tag wins. Otherwise Auto picks the
+          <b>less busy</b> press — but only when every open print-stage item has a press assigned; if the load is incomplete the file goes to
+          Needs review so the operator chooses (there is no permanent Mimaki default). Contradictory data (for example a gloss job
+          assigned to the Mimaki, or conflicting tags) is blocked and goes to Needs review. Roland-bound plans stay in Needs review with the
+          blocking reason until the Roland hot folder is confirmed and enabled in the agent config.
         </div>
         <details style={{ ...finePrint, color: "#6b7280" }}>
           <summary style={{ cursor: "pointer" }}>Technical detail (config keys)</summary>

@@ -108,6 +108,10 @@ crossover). STILL PENDING: rounding + override-ladder work (K.4), jar
 tables (display-only research), premium/finish floors (K.5).
 
 ## 15F.0K.4B ratification (2026-07-26)
+> SUPERSEDED 2026-11-11 (machine capability only): the Mimaki prints CMYK and
+> White; only GLOSS forces the Roland. See GSO_ERP_PROJECT_STATE.md
+> "Owner-rule correction 2026-11-11". The rest of this ratification stands.
+
 Owner-verified and IMPLEMENTED: Mimaki CMYK-only (white/gloss route to the
 Roland LG-640; G.3 provisional Mimaki gloss RETIRED); $1.00 standard print
 setup + NEW $6.25 gloss-layer Illustrator setup per gloss design (never per

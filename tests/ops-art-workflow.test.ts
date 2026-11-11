@@ -13,24 +13,27 @@ describe("art preflight", () => {
     const r = runArtPreflight({ family: "sticker-bags", widthIn: 4, heightIn: 5, cutType: "rectangular" }, [clean]);
     expect(r.status).toBe("PASS");
     expect(r.expectedCutline).toBe("3.790 x 4.810 in"); // owner 4x5 cutline (2026-11-11)
-    expect(r.routing?.printer).toBe("mimaki");
+    expect(r.routing?.printer).toBe("unassigned"); // AUTO without load data: press is dispatch's decision (2026-11-11)
     expect(r.technicalPassEligible).toBe(true);
   });
 
-  it("fails on format, artboard mismatch, low dpi, no files and Mimaki+white", () => {
+  it("fails on format, artboard mismatch, low dpi, no files and Mimaki+gloss (Mimaki+white is valid art)", () => {
     expect(runArtPreflight({ family: "stickers-labels" }, []).status).toBe("FAIL");
     expect(runArtPreflight({ family: "stickers-labels", widthIn: 3, heightIn: 3 }, [{ ...clean, fileName: "a.docx" }]).findings.map((f) => f.code)).toContain("FORMAT_UNSUPPORTED");
     expect(runArtPreflight({ family: "stickers-labels", widthIn: 3, heightIn: 3 }, [clean]).findings.map((f) => f.code)).toContain("ARTBOARD_MISMATCH");
     expect(runArtPreflight({ family: "banners", widthIn: 4, heightIn: 5 }, [{ ...clean, minRasterDpi: 72 }]).status).toBe("FAIL");
-    const m = runArtPreflight({ family: "stickers-labels", widthIn: 4, heightIn: 5, whiteLayers: 1, printerSelection: "mimaki" }, [clean]);
+    const m = runArtPreflight({ family: "stickers-labels", widthIn: 4, heightIn: 5, glossLayers: 1, printerSelection: "mimaki" }, [clean]);
     expect(m.status).toBe("FAIL");
-    expect(m.findings.map((f) => f.code)).toContain("MIMAKI_SPECIALTY_UNSUPPORTED");
+    expect(m.findings.map((f) => f.code)).toContain("MIMAKI_GLOSS_UNSUPPORTED");
+    const mw = runArtPreflight({ family: "stickers-labels", widthIn: 4, heightIn: 5, whiteLayers: 1, whiteCoveragePct: 80, printerSelection: "mimaki" }, [clean]);
+    expect(mw.findings.map((f) => f.code)).not.toContain("MIMAKI_GLOSS_UNSUPPORTED");
+    expect(mw.routing?.printer).toBe("mimaki");
   });
 
   it("warns on RGB, rotation, fonts, missing cutline and white coverage; NEEDS_DESIGNER on unknowns", () => {
     const w = runArtPreflight({ family: "stickers-labels", widthIn: 5, heightIn: 4, cutType: "contour", whiteLayers: 1 }, [{ ...clean, colorSpace: "RGB", fontsOutlined: false, hasCutlineLayer: false }]);
     expect(w.status).toBe("WARN");
-    expect(w.routing?.printer).toBe("roland");
+    expect(w.routing?.printer).toBe("unassigned"); // White alone no longer forces the Roland
     expect(w.findings.map((f) => f.code)).toEqual(expect.arrayContaining(["COLOR_SPACE", "ARTBOARD_ROTATED", "FONTS_NOT_OUTLINED", "CUTLINE_MISSING", "WHITE_COVERAGE_REQUIRED"]));
     const u = runArtPreflight({ family: "stickers-labels", widthIn: 4, heightIn: 5, cutType: "contour" }, [{ fileName: "a.ai" }]);
     expect(u.status).toBe("NEEDS_DESIGNER");

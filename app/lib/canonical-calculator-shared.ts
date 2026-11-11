@@ -260,6 +260,8 @@ export type CanonicalFinishingBreakdown = {
  */
 export type CanonicalCalculatorView = {
   version: string;
+  /** 2026-11-11: owner job-level material $/sqft override used for this cost (displayed as OVERRIDE). */
+  materialOverride?: { costPerSqft: number; reason: string; ownerUserId: string; replacedMaterialKey: string; replacedMaterialLabel: string; rollWidthIn: number } | null;
   family: CanonicalFamily;
   status: TrueCostStatus;
   /** null whenever status is DRAFT_ONLY — a blocked job publishes no unit cost. */

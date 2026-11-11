@@ -177,7 +177,7 @@ export default function CostHealthRoute() {
 
       <div className="hero">
         <h1>Cost Source Health Check</h1>
-        <p>v15 (2026-10-08 cleanup): audits materials, roll-media conversion, ink/ml setup, and printer-only ink channels, plus the pricing-audit checks — purchaseCost fallback traps, seeded estimate ink costs, machine-rate conflicts, vendor tier coverage, unpriced recipe labor, and legacy cost tables. Routing-aware: the Mimaki is CMYK-only for ERP routing, so its stored white channels are reported as hardware data, never as print capacity.</p>
+        <p>v15 (2026-10-08 cleanup): audits materials, roll-media conversion, ink/ml setup, and printer-only ink channels, plus the pricing-audit checks — purchaseCost fallback traps, seeded estimate ink costs, machine-rate conflicts, vendor tier coverage, unpriced recipe labor, and legacy cost tables. Routing-aware (corrected 2026-11-11): the Mimaki prints CMYK and White; only gloss/clear routes to the Roland, so only a Mimaki gloss/clear slot is reported as hardware data.</p>
       </div>
 
       <div className="notice">
@@ -283,7 +283,7 @@ export default function CostHealthRoute() {
                 <td>
                   {m.channels.length === 0 ? "No enabled ink channels" : m.channels.map((c: any) => (
                     <div key={`${m.id}-${c.slotNumber}`}>
-                      Slot {c.slotNumber}: <strong>{c.inkName || c.inkType}</strong> ({c.inkType}) — cost/ml <span className="mono">{money(c.costPerMl, 6)}</span>{c.costSource === "slot" ? <span> (slot cost)</span> : c.matchedMaterialName ? <span> (estimated via {c.matchedMaterialName})</span> : null}, usage 1% <span className="mono">{c.mlPerSqft1Pct.toFixed(6)}</span>, usage 100% <span className="mono">{c.mlPerSqft100.toFixed(6)}</span>{c.routedElsewhere ? <span style={{ color: "#92400e" }}> — hardware channel only: the ERP routes white/gloss jobs to the Roland, so this slot never prices a job</span> : null}
+                      Slot {c.slotNumber}: <strong>{c.inkName || c.inkType}</strong> ({c.inkType}) — cost/ml <span className="mono">{money(c.costPerMl, 6)}</span>{c.costSource === "slot" ? <span> (slot cost)</span> : c.matchedMaterialName ? <span> (estimated via {c.matchedMaterialName})</span> : null}, usage 1% <span className="mono">{c.mlPerSqft1Pct.toFixed(6)}</span>, usage 100% <span className="mono">{c.mlPerSqft100.toFixed(6)}</span>{c.routedElsewhere ? <span style={{ color: "#92400e" }}> — hardware channel only: the ERP routes gloss jobs to the Roland, so this slot never prices a job</span> : null}
                     </div>
                   ))}
                 </td>

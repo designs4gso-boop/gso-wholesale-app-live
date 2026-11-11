@@ -75,7 +75,7 @@ const jarLadder = (brand: string, size: string) => (qty: number) => {
   const r = resolveJarOwnerLadder({ brand, sizeKey: size, quantity: qty });
   return r.ok ? { unitPrice: r.quote.unitPrice, source: r.quote.source, label: r.quote.label } : null;
 };
-const MIRON_100T = { base: "pfamily=premium-jars&pjarmat=matte&pqty=128&pjar=miron/100ml_tall&pjarside=1&pjarlid=1&pprinter=auto&pwhitelayers=0&pglosslayers=0", family: "premium-jars" as const, curveKey: "miron-jars", ladder: jarLadder("miron", "100ml_tall") };
+const MIRON_100T = { base: "pfamily=premium-jars&pjarmat=matte&pqty=128&pjar=miron/100ml_tall&pjarside=1&pjarlid=1&pprinter=mimaki&pwhitelayers=0&pglosslayers=0", family: "premium-jars" as const, curveKey: "miron-jars", ladder: jarLadder("miron", "100ml_tall") };
 
 const auditLines: string[] = [];
 const fmt = (n: number | null, d = 2) => (n == null ? "—" : n.toFixed(d));
@@ -229,7 +229,7 @@ describe("every supported jar x Side+Lid at the owner ladder quantities", () => 
   for (const profile of ACTIVE_JAR_PROFILES) {
     it(`${profile.key}: prices, floors hold, totals monotone across 50..2500 breaks`, () => {
       const variant = profile.brand === "standard" ? "&pjarvariant=black_white" : "";
-      const base = `pfamily=${profile.uiFamily}&pjarmat=matte&pqty=128&pjar=${profile.key}${variant}&pjarside=1&pjarlid=1&pprinter=auto&pwhitelayers=0&pglosslayers=0`;
+      const base = `pfamily=${profile.uiFamily}&pjarmat=matte&pqty=128&pjar=${profile.key}${variant}&pjarside=1&pjarlid=1&pprinter=mimaki&pwhitelayers=0&pglosslayers=0`;
       const curveKey = profile.uiFamily === "premium-jars" ? (profile.brand === "chiron" ? "chiron-jars" : "miron-jars") : null;
       const quantities = [...new Set([...LADDER, ...JAR_PRICE_BREAK_SUPPORT_QUANTITIES, 127, 129, 255, 257, 999])].sort((a, b) => a - b);
       const rows = dropSupportRows(applyQuantityBreakEnvelope(priceRows({ base, family: profile.uiFamily, curveKey, ladder: jarLadder(profile.brand, profile.size), quantities, display: new Set(quantities), requested: 128 })));
@@ -252,9 +252,9 @@ describe("every supported jar x Side+Lid at the owner ladder quantities", () => 
 
 describe("other canonical families — floors hold; cliffs are reported (not changed tonight)", () => {
   const FAMILIES: Array<{ label: string; base: string; family: "sticker-bags" | "stock-bags" | "stickers-labels" | "banners"; curveKey: string | null; quantities: number[] }> = [
-    { label: "4x5 sticker bag (1 side)", base: "pfamily=sticker-bags&pbagmat=matte&pqty=100&pbagsides=1&pprinter=auto&pwhitelayers=0&pglosslayers=0", family: "sticker-bags", curveKey: "bags-4x5", quantities: [50, 99, 100, 127, 128, 129, 255, 256, 499, 500, 639, 640, 999, 1000, 1499, 1500] },
-    { label: "3x3 matte sticker", base: "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=auto&pwhitelayers=0&pglosslayers=0", family: "stickers-labels", curveKey: "stickers-labels", quantities: [100, 127, 128, 255, 256, 639, 640, 999, 1000, 2000] },
-    { label: "3x6 banner", base: "pfamily=banners&pqty=10&pbannerw=72&pbannerh=36&pprinter=auto&pwhitelayers=0&pglosslayers=0", family: "banners", curveKey: "banners", quantities: [1, 5, 10, 63, 64, 127, 128] },
+    { label: "4x5 sticker bag (1 side)", base: "pfamily=sticker-bags&pbagmat=matte&pqty=100&pbagsides=1&pprinter=mimaki&pwhitelayers=0&pglosslayers=0", family: "sticker-bags", curveKey: "bags-4x5", quantities: [50, 99, 100, 127, 128, 129, 255, 256, 499, 500, 639, 640, 999, 1000, 1499, 1500] },
+    { label: "3x3 matte sticker", base: "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=mimaki&pwhitelayers=0&pglosslayers=0", family: "stickers-labels", curveKey: "stickers-labels", quantities: [100, 127, 128, 255, 256, 639, 640, 999, 1000, 2000] },
+    { label: "3x6 banner", base: "pfamily=banners&pqty=10&pbannerw=72&pbannerh=36&pprinter=mimaki&pwhitelayers=0&pglosslayers=0", family: "banners", curveKey: "banners", quantities: [1, 5, 10, 63, 64, 127, 128] },
   ];
   const report: string[] = ["| family | qty a -> qty b | total a | total b | cliff |", "|---|---|---|---|---|"];
   for (const f of FAMILIES) {

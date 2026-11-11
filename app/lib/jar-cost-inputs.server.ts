@@ -681,7 +681,7 @@ export function jarNestingAreas(input: JarNestingInput): { areas: JarNestingArea
  * owner times a contour job; it is not conservative by design.
  * ------------------------------------------------------------------ */
 
-/** CMYK-only jar work routes to the Mimaki; White/Gloss would route to Roland. */
+/** Jar press route — follows the canonical rule (gloss -> Roland; CMYK/White -> either press). */
 export const JAR_DEFAULT_CUT_MACHINE_KEY = "mimaki-ucjv300-130";
 export const JAR_DEFAULT_CUT_MODE: CutMode = "normal";
 

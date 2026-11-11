@@ -112,7 +112,7 @@ export type BannerCostResult = {
   blockers: string[];
 };
 
-/** CMYK-only defaults to the Mimaki; Roland is White/Gloss, explicit, or overflow. */
+/** Banner press route — the canonical owner rule (gloss -> Roland; CMYK/White -> either press) is decided upstream. */
 export function resolveBannerMachine(input: { machineKey?: string }): string {
   return input.machineKey ?? "mimaki-ucjv300-130";
 }

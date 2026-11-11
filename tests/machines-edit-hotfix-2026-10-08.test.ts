@@ -76,10 +76,10 @@ describe("Machines page — Edit machine is actionable and visible", () => {
     expect(action).toContain('if (payload.intent === "permanentDeleteMachine") {');
   });
 
-  it("7. machine routing is unchanged (white / gloss -> Roland, CMYK -> Mimaki by default)", () => {
-    expect(String(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: null } as any).machine)).toMatch(/roland/i);
+  it("7. machine routing follows the corrected owner rule (2026-11-11: gloss -> Roland; CMYK / White on either press)", () => {
+    expect(String(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any).machine)).toMatch(/mimaki/i);
     expect(String(decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any).machine)).toMatch(/roland/i);
-    expect(String(decideMachine({ selectedFinish: "CMYK", materialSummary: "standard cmyk", machineSummary: null } as any).machine)).toMatch(/mimaki/i);
+    expect(decideMachine({ selectedFinish: "CMYK", materialSummary: "standard cmyk", machineSummary: null } as any).machine).toBeNull();
     expect(src).not.toContain("decideMachine"); // the page never routes jobs; routing authority lives in print-intake-routing.server.ts
   });
 

@@ -54,7 +54,7 @@ const runAt8 = (q: string) => {
 };
 const jarQs = (key: string, set: { side: boolean; lid: boolean; tamper: boolean }, extra = "") => {
   const p = ACTIVE_JAR_PROFILES.find((x) => x.key === key)!;
-  return `pfamily=${p.uiFamily}&pjarmat=matte&pqty=200&pjar=${key}${p.brand === "standard" ? "&pjarvariant=black_white" : ""}${set.side ? "&pjarside=1" : ""}${set.lid ? "&pjarlid=1" : ""}${set.tamper ? "&pjartamper=1" : ""}&pcmykcoverage=40${extra}`;
+  return `pfamily=${p.uiFamily}&pjarmat=matte&pprinter=mimaki&pqty=200&pjar=${key}${p.brand === "standard" ? "&pjarvariant=black_white" : ""}${set.side ? "&pjarside=1" : ""}${set.lid ? "&pjarlid=1" : ""}${set.tamper ? "&pjartamper=1" : ""}&pcmykcoverage=40${extra}`;
 };
 
 /* ------------------------------------------------------------------ */
@@ -154,11 +154,11 @@ describe("quoting behaviour for pending confirmation", () => {
 
   it("unknown / 5oz / out-of-scope products still fail closed and have no spec", () => {
     for (const q of [
-      "pfamily=standard-jars&pjarmat=matte&pqty=100&pjar=standard/5oz&pjarside=1&pcmykcoverage=40",
-      "pfamily=standard-jars&pjarmat=matte&pqty=100&pjar=jar_5oz_clear&pjarside=1&pcmykcoverage=40",
-      "pfamily=premium-jars&pjarmat=matte&pqty=100&pjar=chiron/50ml&pjarside=1&pcmykcoverage=40",
-      "pfamily=premium-jars&pjarmat=matte&pqty=100&pjar=chiron/250ml&pjarside=1&pcmykcoverage=40",
-      "pfamily=premium-jars&pjarmat=matte&pqty=100&pjarside=1&pcmykcoverage=40",
+      "pfamily=standard-jars&pjarmat=matte&pprinter=mimaki&pqty=100&pjar=standard/5oz&pjarside=1&pcmykcoverage=40",
+      "pfamily=standard-jars&pjarmat=matte&pprinter=mimaki&pqty=100&pjar=jar_5oz_clear&pjarside=1&pcmykcoverage=40",
+      "pfamily=premium-jars&pjarmat=matte&pprinter=mimaki&pqty=100&pjar=chiron/50ml&pjarside=1&pcmykcoverage=40",
+      "pfamily=premium-jars&pjarmat=matte&pprinter=mimaki&pqty=100&pjar=chiron/250ml&pjarside=1&pcmykcoverage=40",
+      "pfamily=premium-jars&pjarmat=matte&pprinter=mimaki&pqty=100&pjarside=1&pcmykcoverage=40",
     ]) {
       const r = run(q);
       expect(r.status, q).toBe("DRAFT_ONLY");

@@ -16,7 +16,7 @@ import {
   ROUTING_REASONS,
   normalizePrinterSelection,
   resolveCanonicalMachineRouting,
-  type CanonicalCalibrationKey,
+  type SeededCalibrationKey as CanonicalCalibrationKey,
 } from "../app/lib/machine-routing.server";
 import {
   assembleCanonicalJob,
@@ -64,7 +64,7 @@ function resolvedFor(qs: string, seeded = true) {
   const routing = routingFor(input!);
   const channels = routing.channels.map((channel) => ({
     ...channel,
-    calibration: seeded ? SEEDED[channel.calibrationKey] : null,
+    calibration: seeded ? SEEDED[channel.calibrationKey as CanonicalCalibrationKey] : null,
     calibrationMessage: seeded ? "approved" : "No approved calibration for this identity.",
   }));
   const base = channels.find((channel) => channel.isBase)!;
@@ -79,11 +79,12 @@ function resolvedFor(qs: string, seeded = true) {
   return assembleCanonicalJob(input!, machine);
 }
 
+// AUTO (no pprinter): CMYK-only rows need an explicit press since 2026-11-11 — see LABEL_M.
 const LABEL = (extra = "") =>
   `pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A${extra}`;
-const BAG = "pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=2&pdesigns=1";
-const STOCK = "pfamily=sticker-bags&pbagmat=matte&pstockbag=1&pqty=1000&pbagsides=2";
-const BANNER = "pfamily=banners&pqty=1&pbannerw=36&pbannerh=60&pdesigns=1";
+const BAG = "pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=2&pdesigns=1&pprinter=mimaki";
+const STOCK = "pfamily=sticker-bags&pbagmat=matte&pstockbag=1&pqty=1000&pbagsides=2&pprinter=mimaki";
+const BANNER = "pfamily=banners&pqty=1&pbannerw=36&pbannerh=60&pdesigns=1&pprinter=mimaki";
 
 const channel = (r: any, kind: string) => r.inkChannels.find((c: any) => c.kind === kind);
 
@@ -129,20 +130,32 @@ describe("2D-4A calibration identities match the seed exactly", () => {
  * ================================================================== */
 
 describe("2D-4A canonical machine routing", () => {
-  it("1. AUTO + CMYK only -> Mimaki", () => {
+  // 2026-11-11 owner correction: the Mimaki prints CMYK and White; only GLOSS
+  // forces the Roland. AUTO without gloss balances by load, never a default.
+  it("1. AUTO + CMYK with no load data does not invent a press — AUTO_MACHINE_LOAD_UNAVAILABLE", () => {
     const r = resolveCanonicalMachineRouting({ printerSelection: "auto" });
-    expect(r.effectivePrinter).toBe("mimaki");
-    expect(r.machineKey).toBe(MACHINE_KEYS.mimaki);
-    expect(r.blockers).toHaveLength(0);
+    expect(r.autoSelection.status).toBe("unavailable");
+    expect(r.reasons).toContain(ROUTING_REASONS.autoMachineLoadUnavailable);
+    expect(r.blockers.join(" ")).toMatch(/AUTO_MACHINE_LOAD_UNAVAILABLE/);
     expect(r.channels.map((c) => c.kind)).toEqual(["cmyk"]);
-    expect(r.routingBasis).toMatch(/AUTO/);
   });
 
-  it("2. AUTO + white -> Roland", () => {
-    const r = resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 1, whiteCoveragePct: 60 });
+  it("1b. AUTO + CMYK with complete load picks the LESS BUSY press", () => {
+    const load = (m: number, rl: number) => ({ source: "test", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: m, estimatedMinutes: null }, roland: { openItems: rl, estimatedMinutes: null } } });
+    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", machineLoad: load(5, 2) }).effectivePrinter).toBe("roland");
+    const m = resolveCanonicalMachineRouting({ printerSelection: "auto", machineLoad: load(1, 4) });
+    expect(m.effectivePrinter).toBe("mimaki");
+    expect(m.blockers).toHaveLength(0);
+    expect(m.autoSelection.status).toBe("load_balanced");
+    expect(m.routingBasis).toMatch(/AUTO/);
+  });
+
+  it("2. AUTO + white: both presses are compatible; with only the Roland cost-ready it routes Roland", () => {
+    const r = resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 1, whiteCoveragePct: 60, costReadyPrinters: ["roland"] });
     expect(r.effectivePrinter).toBe("roland");
     expect(r.machineKey).toBe(MACHINE_KEYS.roland);
     expect(r.blockers).toHaveLength(0);
+    expect(r.autoSelection.status).toBe("single_eligible");
     expect(r.channels.map((c) => c.kind)).toEqual(["cmyk", "white"]);
   });
 
@@ -160,7 +173,7 @@ describe("2D-4A canonical machine routing", () => {
     expect(r.blockers).toHaveLength(0);
   });
 
-  it("4. explicit Roland on a CMYK-only job is allowed (overflow work)", () => {
+  it("4. explicit Roland on a CMYK-only job is allowed", () => {
     const r = resolveCanonicalMachineRouting({ printerSelection: "roland" });
     expect(r.effectivePrinter).toBe("roland");
     expect(r.overrideApplied).toBe(true);
@@ -175,22 +188,27 @@ describe("2D-4A canonical machine routing", () => {
     expect(r.blockers).toHaveLength(0);
   });
 
-  it("5. explicit Mimaki + white BLOCKS", () => {
+  it("5. explicit Mimaki + white is ALLOWED by routing and uses the Mimaki's OWN white calibration identity", () => {
     const r = resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 1, whiteCoveragePct: 60 });
-    expect(r.reasons).toContain(ROUTING_REASONS.mimakiSpecialtyUnsupported);
-    expect(r.blockers.join(" ")).toMatch(/CMYK-only press and cannot print white/);
+    expect(r.effectivePrinter).toBe("mimaki");
+    expect(r.blockers).toHaveLength(0);
+    const white = r.channels.find((c) => c.kind === "white")!;
+    expect(white.calibrationKey).toBe("mimaki-white");
+    expect(white.identity.machineKey).toBe(MACHINE_KEYS.mimaki);
+    expect(white.identity).not.toEqual(CANONICAL_CALIBRATION_IDENTITIES["roland-white"]);
   });
 
-  it("6. explicit Mimaki + gloss BLOCKS", () => {
-    const r = resolveCanonicalMachineRouting({ printerSelection: "mimaki", glossLayers: 1 });
-    expect(r.reasons).toContain(ROUTING_REASONS.mimakiSpecialtyUnsupported);
-    expect(r.blockers.join(" ")).toMatch(/cannot print gloss/);
+  it("6. explicit Mimaki + gloss BLOCKS (and Mimaki + white + gloss)", () => {
+    for (const layers of [{ glossLayers: 1 }, { whiteLayers: 1, whiteCoveragePct: 60, glossLayers: 1 }]) {
+      const r = resolveCanonicalMachineRouting({ printerSelection: "mimaki", ...layers });
+      expect(r.reasons).toContain(ROUTING_REASONS.mimakiGlossUnsupported);
+      expect(r.blockers.join(" ")).toMatch(/gloss is not operational on the Mimaki/);
+    }
   });
 
-  it("6b. the capability table says why — the Mimaki has no specialty channels", () => {
-    expect(MACHINE_CAPABILITIES.mimaki).toEqual({ cmyk: true, white: false, gloss: false });
+  it("6b. the capability table: Mimaki CMYK + White, Roland everything; no Mimaki gloss rate", () => {
+    expect(MACHINE_CAPABILITIES.mimaki).toEqual({ cmyk: true, white: true, gloss: false });
     expect(MACHINE_CAPABILITIES.roland).toEqual({ cmyk: true, white: true, gloss: true });
-    // and no Mimaki gloss $/mL exists either, so it could never price
     expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeNull();
   });
 
@@ -215,7 +233,7 @@ describe("2D-4A canonical machine routing", () => {
     expect(channelIdentity(r, "cmyk")).toEqual(CANONICAL_CALIBRATION_IDENTITIES["roland-cmyk"]);
     expect(channelIdentity(r, "white")).toEqual(CANONICAL_CALIBRATION_IDENTITIES["roland-white"]);
     expect(channelIdentity(r, "gloss")).toEqual(CANONICAL_CALIBRATION_IDENTITIES["roland-gloss"]);
-    expect(resolveCanonicalMachineRouting({ printerSelection: "auto" }).channels[0].identity)
+    expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki" }).channels[0].identity)
       .toEqual(CANONICAL_CALIBRATION_IDENTITIES["mimaki-cmyk"]);
     // every identity is complete — all six parts, none blank
     for (const identity of r.requiredIdentities) {
@@ -384,12 +402,12 @@ describe("2D-4A fails closed and preserves the committed invariants", () => {
   });
 
   it("16b. a specialty channel with no row blocks even when the base resolves", () => {
-    const input = normalizeCanonicalInput(new URLSearchParams(LABEL("&pwhitelayers=1&pwhitecoverage=60")))!;
+    const input = normalizeCanonicalInput(new URLSearchParams(LABEL("&pprinter=roland&pwhitelayers=1&pwhitecoverage=60")))!;
     const routing = routingFor(input);
     const channels = routing.channels.map((c) => ({
       ...c,
       // base resolves, white does NOT
-      calibration: c.isBase ? SEEDED[c.calibrationKey] : null,
+      calibration: c.isBase ? SEEDED[c.calibrationKey as CanonicalCalibrationKey] : null,
       calibrationMessage: c.isBase ? "approved" : "No approved calibration for this identity.",
     }));
     const base = channels.find((c) => c.isBase)!;
@@ -406,7 +424,7 @@ describe("2D-4A fails closed and preserves the committed invariants", () => {
     const src = readFileSync("app/lib/machine-calibration.server.ts", "utf8");
     expect(src).toContain("It never widens the search, never");
     // the resolver names exact identities only
-    const routing = resolveCanonicalMachineRouting({ printerSelection: "auto" });
+    const routing = resolveCanonicalMachineRouting({ printerSelection: "mimaki" });
     expect(routing.requiredIdentities).toEqual([CANONICAL_CALIBRATION_IDENTITIES["mimaki-cmyk"]]);
   });
 
@@ -419,7 +437,7 @@ describe("2D-4A fails closed and preserves the committed invariants", () => {
     }
     // 2D-4C2A: a label's cutline is DERIVED from its artboard, so supplying
     // artwork is now enough — the blocker moved to missing/invalid artwork.
-    const derived = resolvedFor("pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0mat=matte&pl0art=A");
+    const derived = resolvedFor("pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0mat=matte&pl0art=A&pprinter=mimaki");
     expect(derived.status).not.toBe("DRAFT_ONLY");
     expect(derived.blockers).toHaveLength(0);
 

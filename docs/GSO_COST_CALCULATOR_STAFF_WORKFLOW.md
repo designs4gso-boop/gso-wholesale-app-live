@@ -37,7 +37,9 @@ Blocked cases (the quote shows a BLOCKER instead of a price): half-entered piece
 
 - BLOCKERS in the canonical panel mean there is NO unit cost. The job is not $0.
 - PROVISIONAL with `CUT_PATH_ESTIMATE_REQUIRED` is normal for jars today (derived cutlines).
-- `MIMAKI_SPECIALTY_UNSUPPORTED`: white or gloss was forced onto the Mimaki. Use Auto or Roland.
+- `MIMAKI_GLOSS_UNSUPPORTED`: gloss was forced onto the Mimaki (gloss runs only on the Roland). Use Auto or Roland.
+- `MIMAKI_WHITE_CALIBRATION_REQUIRED`: the Mimaki prints White, but no owner-approved Mimaki White cost calibration exists yet. Choose the Roland, or wait for the owner to approve a Mimaki White calibration. Roland numbers are never borrowed.
+- `AUTO_MACHINE_LOAD_UNAVAILABLE`: Auto (no gloss) picks the less busy press only from complete machine-load data. When load is incomplete, choose Mimaki or Roland.
 - `MISSING_APPLICATION_STANDARD`: a tamper band on 3oz/4oz has no owner timing.
 
 ## Bags (4x5 sticker / stock)

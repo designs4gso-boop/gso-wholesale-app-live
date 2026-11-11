@@ -257,9 +257,10 @@ idempotency check is removed (every source checks now). VALIDATION
 fails closed (name/title/qty>0/family/finish/printer/requestId; shop
 only from the session). MACHINE AUTHORITY unchanged: the requested
 printer becomes a machineSummary and the ONE canonical decideMachine
-resolves it — Auto follows white/gloss->Roland else CMYK->Mimaki;
-white/gloss on the CMYK-only Mimaki REJECTS; explicit Roland allows
-CMYK or specialty. Items store family (canonical FAMILY_CHECKLISTS
+resolves it — (corrected 2026-11-11) gloss->Roland; CMYK/White run on
+either press: explicit Mimaki or Roland wins, Auto picks the less busy
+press only from complete load data, otherwise the operator must choose;
+gloss on the Mimaki REJECTS; explicit Roland allows CMYK or specialty. Items store family (canonical FAMILY_CHECKLISTS
 vocabulary; family checklist applied), finish, resolved machine, and a
 manual_admin selectedAddOns block; prices/costs default 0 (never
 fabricated). Status "new". After creation the UI shows job ticket, item

@@ -33,10 +33,11 @@ import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, canonicalFamilyFromMargi
 import { resolveMultiLineLabelQuote, type MultiLineCanonicalQuote } from "../lib/multi-line-label-authority.server";
 import { assembleCanonicalJob, canonicalInputForQuantity, canonicalSupportsTierLadder, canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput, resolveCanonicalMachineInputs } from "../lib/canonical-calculator.server";
 import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
+import { loadMachineWorkload } from "../lib/machine-load.server";
 import { isCostedAuthority, persistQuoteIfCanonicalAllows, resolveCostAuthority } from "../lib/canonical-quote-authority.server";
 import { canonicalLabelCutType, canonicalCutTypeIsWireable } from "../lib/canonical-calculator-shared";
 import { attachVerifiedLabelMaterials, materialCalculatorReadiness } from "../lib/material-calculator-readiness.server";
-import { SPLIT_BAG_BLANK_UNIT_COST } from "../lib/canonical-calculator.server";
+import { SPLIT_BAG_BLANK_UNIT_COST, applyOwnerMaterialOverride } from "../lib/canonical-calculator.server";
 import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
 import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
 import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE } from "../lib/jar-cost-inputs.server";
@@ -488,7 +489,13 @@ export async function loader({ request }: { request: Request }) {
   let canonicalResult: Awaited<ReturnType<typeof computeCanonicalJob>> | null = null;
   // 2026-10-28: Material Center rates are verified and attached SERVER side by id.
   const canonicalInputRaw = normalizeCanonicalInput(url.searchParams);
-  const canonicalInput = canonicalInputRaw ? await attachVerifiedLabelMaterials({ db, shop }, canonicalInputRaw) : null;
+  // 2026-11-11: AUTO (no gloss) picks the less busy cost-ready press from
+  // server-read Production load — never a form value, never a fixed default.
+  const canonicalInput = canonicalInputRaw
+    // 2026-11-11: an owner job-level material $/sqft override is applied LAST,
+    // on the server, against the verified owner identity — never a posted total.
+    ? await applyOwnerMaterialOverride({ db, shop }, { ...(await attachVerifiedLabelMaterials({ db, shop }, canonicalInputRaw)), machineLoad: await loadMachineWorkload(db, shop) }, auth)
+    : null;
   // 2D-4C1: the calibration lookup is resolved ONCE and reused, so a tier
   // ladder costs one DB round trip rather than one per rung. assembleCanonicalJob
   // is pure, so every rung is byte-identical to what the save side recomputes.
@@ -1004,7 +1011,8 @@ export async function loader({ request }: { request: Request }) {
     if (eparams.get("pblank") === "custom" && !blankComponent) {
       // custom without name/cost/reason stays null -> MISSING line via engine when family expects a blank
     }
-    const printer = resolveCanonicalMachineRouting({
+    // The press the canonical cost resolved (incl. AUTO load balancing) wins.
+    const printer = canonicalMachine?.routing?.effectivePrinter ?? resolveCanonicalMachineRouting({
       printerSelection: eparams.get("pprinter") ?? undefined,
       whiteLayers: Number(eparams.get("pwhitelayers") || 0),
       glossLayers: Number(eparams.get("pglosslayers") || 0),
@@ -1765,7 +1773,9 @@ export async function action({ request }: { request: Request }) {
    * and NOT from the posted form fields, so the saved canonical cost is the
    * one that was displayed. Same normaliser, same assembler, same bytes. */
   const canonicalInputSaveRaw = normalizeCanonicalInput(psearchParams);
-  const canonicalInputSave = canonicalInputSaveRaw ? await attachVerifiedLabelMaterials({ db, shop }, canonicalInputSaveRaw) : null;
+  const canonicalInputSave = canonicalInputSaveRaw
+    ? await applyOwnerMaterialOverride({ db, shop }, { ...(await attachVerifiedLabelMaterials({ db, shop }, canonicalInputSaveRaw)), machineLoad: await loadMachineWorkload(db, shop) }, auth)
+    : null;
   const canonicalMachineSave = canonicalInputSave
     ? await resolveCanonicalMachineInputs({ db, shop }, canonicalInputSave)
     : null;
@@ -1900,7 +1910,7 @@ export async function action({ request }: { request: Request }) {
     const materialId = String(fRead("pmat") || "");
     const materialRecord = materialId ? await db.material.findFirst({ where: { shop, id: materialId } }) : null;
     const materialResolved = materialRecord ? resolvePrintMaterialCostPerSqft(materialRecord) : null;
-    const printerSave = resolveCanonicalMachineRouting({
+    const printerSave = canonicalMachineSave?.routing?.effectivePrinter ?? resolveCanonicalMachineRouting({
       printerSelection: fRead("pprinter"),
       whiteLayers: Number(fRead("pwhitelayers") || 0),
       glossLayers: Number(fRead("pglosslayers") || 0),
@@ -2455,6 +2465,12 @@ export async function action({ request }: { request: Request }) {
           diagnostics: canonicalSnapshot.diagnostics,
           calibration: canonicalSnapshot.calibration,
           setupBasis: canonicalSnapshot.setupBasis,
+          // 2026-11-11: owner job-level material override AUDIT — value, reason,
+          // owner user ID and time, frozen with this quote. It is never written
+          // to Material Center / VendorProduct / standards and never re-applied.
+          materialOverride: canonicalSnapshot.materialOverride
+            ? { ...canonicalSnapshot.materialOverride, label: "OVERRIDE", appliedAt: new Date().toISOString(), scope: "this quote/job only" }
+            : null,
           // 2026-11-11: the press and the specialty coverage this cost used (structured, not only in line text).
           routing: canonicalSnapshot.routing
             ? { printerSelection: canonicalSnapshot.routing.printerSelection, effectivePrinter: canonicalSnapshot.routing.effectivePrinter, whiteLayers: canonicalSnapshot.routing.whiteLayers, glossLayers: canonicalSnapshot.routing.glossLayers }
@@ -3956,6 +3972,18 @@ function ProductDrivenForm() {
             {(pm.materialOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>) : null}
+        {/* 2026-11-11: OWNER-ONLY emergency override (this whole page is owner-gated;
+            the server re-verifies the owner and refuses the value otherwise). */}
+        {!isDtp && !isBanners ? (<details style={{ gridColumn: "1 / -1", fontSize: 12 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700 }}>Owner material $/sqft override (this quote/job only)</summary>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+            <label style={{ fontSize: 12 }}>Override $/sqft<input name="pmatovr" type="number" min={0} step="0.0001" style={inputStyle} /></label>
+            <label style={{ fontSize: 12, flex: 1 }}>Reason (required)<input name="pmatovrreason" style={{ ...inputStyle, width: "100%" }} placeholder="Why the material has no verified cost, and where this value came from" /></label>
+          </div>
+          <span style={smallHelp}>
+            Emergency use only. Replaces the selected material&apos;s cost for THIS quote/job; never changes Material Center, vendor costs or standards, and is recorded (value, reason, owner, time) in the saved quote. Roll width still comes from the material record.
+          </span>
+        </details>) : null}
         {!isDtp ? (<>
         <label style={{ fontSize: 12 }}>Printer
           <select name="pprinter" style={inputStyle}>
@@ -3964,9 +3992,11 @@ function ProductDrivenForm() {
             <option value="roland">Roland</option>
           </select>
           <span style={smallHelp}>
-            Auto follows the canonical rule: CMYK-only runs on the Mimaki; white
-            or gloss requires the Roland. Choosing Mimaki for a white/gloss job
-            is blocked — that press is CMYK-only.
+            Gloss requires the Roland (Mimaki + gloss is blocked). CMYK and White
+            run on either press: Auto picks the less busy press that has an
+            approved cost calibration; when machine load is unavailable, choose
+            Mimaki or Roland. Mimaki White stays blocked until its own cost
+            calibration is owner-approved.
           </span>
         </label>
         <label style={{ fontSize: 12 }}>White layers (0–14)<input name="pwhitelayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
@@ -4319,9 +4349,15 @@ function OwnerResultCard() {
     </div>
   );
   const costBlocked = result.trueJobCost == null;
+  const materialOverride = canonical?.materialOverride ?? null;
 
   return (
     <section style={{ ...cardStyle, marginTop: 12, borderColor: tone.border, background: tone.bg, borderWidth: 2 }}>
+      {materialOverride ? (
+        <div style={{ marginBottom: 8, padding: "6px 10px", borderRadius: 6, background: "#fef3c7", border: "1px solid #f59e0b", color: "#92400e", fontSize: 13, fontWeight: 700 }}>
+          OVERRIDE — owner material cost ${materialOverride.costPerSqft.toFixed(4)}/sqft replaces {materialOverride.replacedMaterialLabel} for this quote/job only. Reason: {materialOverride.reason}
+        </div>
+      ) : null}
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
         <b style={{ fontSize: 15, color: tone.fg }}>COST &amp; PRICING RESULT</b>
         <span style={{ fontSize: 12, padding: "2px 10px", borderRadius: 999, border: `1px solid ${tone.border}`, color: tone.fg, background: "white", fontWeight: 800 }}>{result.badge}</span>
@@ -4677,7 +4713,7 @@ function ProductBreakdown() {
           return <div><b>Legacy 4x5 bag application (legacy 14C.2 path only):</b> 256 labels/hr @ $20/hr ($0.078125/label)</div>;
         })()}
         <div><b>Cost sources:</b> {result.missing.length ? `${result.missing.length} UNVERIFIED — draft only` : "Verified / owner standards"}</div>
-        <div><b>Mimaki:</b> CMYK only · <b>Roland LG-640:</b> white + gloss</div>
+        <div><b>Mimaki:</b> CMYK + White (no gloss) · <b>Roland LG-640:</b> CMYK + White + Gloss</div>
         <div><b>Pricing policy:</b> owner Pricing Settings (margin bands, floors, market targets)</div>
       </div>
 

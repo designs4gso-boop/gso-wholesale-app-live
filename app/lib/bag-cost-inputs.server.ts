@@ -123,6 +123,12 @@ export const STOCK_BAG_MOQ = 50;
  * 49 bags still nest, cut and apply as 49; the job is simply not quotable.
  */
 export const STICKER_BAG_MOQ = 50;
+/**
+ * OWNER DECISION 2026-11-11: the Split Bag is a permanent product with a
+ * 64-unit minimum. Eligibility only, like the other bag MOQs — material, cut
+ * and application math are untouched.
+ */
+export const SPLIT_BAG_MOQ = 64;
 export const BAG_DEFAULT_MEDIA_WIDTH_IN = 54;
 export const BAG_DEFAULT_MACHINE_KEY = "mimaki-ucjv300-130";
 export const BAG_DEFAULT_CUT_MODE: CutMode = "normal";
@@ -131,6 +137,8 @@ export const BAG_REASONS = {
   stockBagBelowMoq: "STOCK_BAG_BELOW_MOQ",
   /** 2D-4E2: custom 4x5 sticker bags below the owner-verified 50-unit MOQ. */
   stickerBagBelowMoq: "STICKER_BAG_BELOW_MOQ",
+  /** 2026-11-11: Split Bags below the owner-approved 64-unit MOQ. */
+  splitBagBelowMoq: "SPLIT_BAG_BELOW_MOQ",
   bagBlankCostRequired: "BAG_BLANK_COST_REQUIRED",
   /**
    * personalizedDesignCount must be a positive integer when supplied.
@@ -479,6 +487,10 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
   if (input.product === "sticker_bag_4x5" && bagQuantity > 0 && bagQuantity < STICKER_BAG_MOQ) {
     reasons.push(BAG_REASONS.stickerBagBelowMoq);
     blockers.push(`${BAG_REASONS.stickerBagBelowMoq}: 4x5 Sticker Bags have a ${STICKER_BAG_MOQ}-unit minimum (owner-verified); ${bagQuantity} requested.`);
+  }
+  if (input.product === "split_bag" && bagQuantity > 0 && bagQuantity < SPLIT_BAG_MOQ) {
+    reasons.push(BAG_REASONS.splitBagBelowMoq);
+    blockers.push(`${BAG_REASONS.splitBagBelowMoq}: Split Bags have a ${SPLIT_BAG_MOQ}-unit minimum (owner decision 2026-11-11); ${bagQuantity} requested.`);
   }
 
   // One blank per finished bag, whatever its label count — a Split Bag is ONE blank.

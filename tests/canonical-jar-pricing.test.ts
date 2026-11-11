@@ -219,25 +219,26 @@ describe("machine routing from jar summaries (canonical authority reuse)", () =>
     return { summary: canonicalJarMaterialSummary(jar), finishLabel: jar.finishLabel };
   }
 
-  it("plain CMYK (0X + Standard label) defaults to the Mimaki — even with the Gloss base finish", () => {
+  // 2026-11-11: no permanent Mimaki default — an unassigned plain item needs complete load or a chosen press.
+  it("plain CMYK (0X + Standard label) is never treated as gloss — even with the Gloss base finish — and has no fixed press", () => {
     for (const baseFinish of ["Matte", "Gloss"]) {
       const { summary, finishLabel } = summaryFor({ baseFinish });
       const decision = decideMachine({ selectedFinish: finishLabel, materialSummary: summary, machineSummary: null } as any);
-      expect(decision).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
+      expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
     }
   });
 
   it("specialty layers route Roland", () => {
     const { summary, finishLabel } = summaryFor({ specialty: "Ultra Layered — 5X" });
     const decision = decideMachine({ selectedFinish: finishLabel, materialSummary: summary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: "roland", machineRule: "white_or_gloss" });
+    expect(decision).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
   });
 
-  it("holographic (technical white underbase) routes Roland", () => {
+  it("holographic (technical white underbase) no longer forces the Roland — White runs on either press", () => {
     const { summary, finishLabel } = summaryFor({ labelMaterial: "Holographic" });
     expect(summary).toContain("White Layers: 1");
     const decision = decideMachine({ selectedFinish: finishLabel, materialSummary: summary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: "roland", machineRule: "white_or_gloss" });
+    expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
   });
 });
 
@@ -314,7 +315,7 @@ describe("16D.1 — remaining jar family owner launch pricing (authority)", () =
     expect(summary.toLowerCase().includes("clear")).toBe(false);
     expect(/jar color/i.test(summary)).toBe(false);
     const decision = decideMachine({ selectedFinish: jar.finishLabel, materialSummary: summary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
+    expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
     // invalid colors fail closed
     expect(parseCanonicalJarOrderLine(meta.replace('"White"', '"Chartreuse"'))).toBeNull();
   });
@@ -348,7 +349,7 @@ describe("16D.1 — remaining jar family owner launch pricing (authority)", () =
     expect(item.productionNotes).toContain("Jar Color (customer): Clear");
     expect(/clear/i.test(item.materialSummary)).toBe(false);
     const decision = decideMachine({ selectedFinish: item.selectedFinish, materialSummary: item.materialSummary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
+    expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
   });
 });
 

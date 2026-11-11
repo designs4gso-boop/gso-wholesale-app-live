@@ -91,7 +91,7 @@ afterEach(() => { delete process.env[OWNER_USER_IDS_ENV]; });
 
 const SPLIT_QS = (sides: 1 | 2, qty = 1000) =>
   `pfamily=sticker-bags&pbagmat=matte&psplitbag=1&pblank=preset%3Asplit-bag&pqty=${qty}&pfaces=${sides}&pbagsides=${sides}&pdesigns=1&pwidth=4&pheight=5` +
-  `&pmat=m_matte&pcut=square-rect&pprinter=auto&pwhitelayers=0&pglosslayers=0`;
+  `&pmat=m_matte&pcut=square-rect&pprinter=mimaki&pwhitelayers=0&pglosslayers=0`;
 
 async function costJob(qs: string) {
   const input = normalizeCanonicalInput(new URLSearchParams(qs))!;
@@ -137,8 +137,11 @@ describe("Split Bag physical model (bag adapter)", () => {
     expect(bagApplicationCost(1000, 2)).toBeCloseTo(2000 * 10 / 3600 * 20, 10);
   });
 
-  it("no invented Split Bag MOQ: small quantities still cost (4x5 MOQ blockers do not apply)", () => {
-    expect(computeBagPhysical({ product: "split_bag", bagQuantity: 10, sides: 1 }).blockers).toEqual([]);
+  it("owner Split Bag MOQ is 64 (2026-11-11); the 4x5 MOQ blockers never apply to it", () => {
+    const small = computeBagPhysical({ product: "split_bag", bagQuantity: 10, sides: 1 });
+    expect(small.blockers.join(" ")).toContain("SPLIT_BAG_BELOW_MOQ");
+    expect(small.blockers.join(" ")).not.toMatch(/STICKER_BAG_BELOW_MOQ|STOCK_BAG_BELOW_MOQ/);
+    expect(computeBagPhysical({ product: "split_bag", bagQuantity: 64, sides: 1 }).blockers).toEqual([]);
   });
 });
 
@@ -184,7 +187,8 @@ describe("Split Bag in the canonical calculator", () => {
   }, 120_000);
 
   it("white on a Split Bag routes to the Roland through canonical routing", async () => {
-    const { result } = await costJob(SPLIT_QS(1).replace("pwhitelayers=0", "pwhitelayers=1&pwhitecoverage=80"));
+    // AUTO: the Roland is the only press with an approved White calibration (2026-11-11)
+    const { result } = await costJob(SPLIT_QS(1).replace("pprinter=mimaki", "pprinter=auto").replace("pwhitelayers=0", "pwhitelayers=1&pwhitecoverage=80"));
     expect(result.routing.effectivePrinter).toBe("roland");
     expect(amount(result, "ink_white")).toBeGreaterThan(0);
   }, 120_000);
@@ -192,7 +196,7 @@ describe("Split Bag in the canonical calculator", () => {
   it("a posted pblankcost can no longer change any bag's blank cost", async () => {
     const forged = (await costJob(`${SPLIT_QS(1)}&pblankcost=0`)).result;
     expect(amount(forged, "blank_sets")).toBeCloseTo(250, 6);
-    const forged4x5 = (await costJob("pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=1&pdesigns=1&pprinter=auto&pblankcost=0")).result;
+    const forged4x5 = (await costJob("pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=1&pdesigns=1&pprinter=mimaki&pblankcost=0")).result;
     expect(amount(forged4x5, "blank_sets")).toBeCloseTo(1000 * 0.11, 6);
   }, 120_000);
 });

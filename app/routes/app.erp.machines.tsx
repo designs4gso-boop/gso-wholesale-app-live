@@ -85,7 +85,7 @@ const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
     setupWastePct: 10,
     allowOverflow: true,
     notes:
-      "GSO default for white/gloss/emboss label work (Mimaki is CMYK ONLY — owner-verified 2026-07-26). Official usable width is about 52.9 in. Uses 750 ml ECO-UV pouches. Defaults should be tuned with VersaWorks / DG Connect actual job logs.",
+      "GSO default for gloss/emboss label work and CMYK/White work (gloss runs only on the Roland; the Mimaki prints CMYK + White — owner, corrected 2026-11-11). Official usable width is about 52.9 in. Uses 750 ml ECO-UV pouches. Defaults should be tuned with VersaWorks / DG Connect actual job logs.",
     inkSlots: [
       { slotNumber: 1, inkName: "Cyan", inkType: "cmyk", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
       { slotNumber: 2, inkName: "Magenta", inkType: "cmyk", cartridgeCost: ROLAND_POUCH_COST, cartridgeMl: ROLAND_POUCH_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
@@ -106,15 +106,17 @@ const gsoDefaultMachinePresets: DefaultMachinePreset[] = [
     setupWastePct: 10,
     allowOverflow: false,
     notes:
-      "GSO default for standard CMYK work ONLY — the Mimaki never runs white, clear/gloss, spot-gloss, layered-gloss, or raised-gloss pricing (owner-verified 2026-07-26; that work routes to the Roland LG-640). Official max print/cut width is about 53.6 in. Mimaki LUS-170 bottles are 1 liter; cost defaults are estimates and should be replaced with invoice costs.",
+      "GSO default for CMYK and White work — the Mimaki never runs clear/gloss, spot-gloss, layered-gloss, or raised-gloss (that work routes to the Roland LG-640). Mimaki White is supported but has no owner-approved cost calibration yet (owner, corrected 2026-11-11). Official max print/cut width is about 53.6 in. Mimaki LUS-170 bottles are 1 liter; cost defaults are estimates and should be replaced with invoice costs.",
     inkSlots: [
       { slotNumber: 1, inkName: "Cyan", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
       { slotNumber: 2, inkName: "Magenta", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
       { slotNumber: 3, inkName: "Yellow", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
       { slotNumber: 4, inkName: "Black", inkType: "cmyk", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE, cartridgeMl: MIMAKI_BOTTLE_ML, mlPerSqft1Pct: DEFAULT_CMYK_ML_PER_SQFT_1PCT_PER_CHANNEL },
-      // OWNER DECISION 2026-10-07: the Mimaki is CMYK-only for ERP routing — white (and gloss) run on the Roland only. No Mimaki white channel is exposed.
-      { slotNumber: 5, inkName: "Unused - white routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
-      { slotNumber: 6, inkName: "Unused - white routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
+      // Corrected 2026-11-11: the Mimaki DOES print White. The default slots stay
+      // disabled (no usage/cost data is invented) until an owner-approved Mimaki
+      // White calibration exists; pricing never reads these slots anyway.
+      { slotNumber: 5, inkName: "White (Mimaki calibration pending)", inkType: "white", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
+      { slotNumber: 6, inkName: "White (Mimaki calibration pending)", inkType: "white", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
       { slotNumber: 7, inkName: "Unused - gloss routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
       { slotNumber: 8, inkName: "Unused - gloss routed to Roland", inkType: "other", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false },
     ],
@@ -545,7 +547,7 @@ function permanentDeleteMachine(id: string) {
                 <BlockStack gap="100">
                   <Text as="h2" variant="headingMd">GSO default printer profiles</Text>
                   <Text as="p" tone="subdued">
-                    Install the Roland LG-640 and Mimaki UCJV300-130 with starting widths, speeds, ink slots, cartridge sizes, and coverage defaults ($5 per hour owner recovery rate, approved 2026-10-07; Mimaki is CMYK only). Default numbers are estimates: replace them with your real invoices and print logs.
+                    Install the Roland LG-640 and Mimaki UCJV300-130 with starting widths, speeds, ink slots, cartridge sizes, and coverage defaults ($5 per hour owner recovery rate, approved 2026-10-07; Mimaki prints CMYK + White, no gloss). Default numbers are estimates: replace them with your real invoices and print logs.
                   </Text>
                 </BlockStack>
                 <InlineStack gap="200">
@@ -554,7 +556,7 @@ function permanentDeleteMachine(id: string) {
                 </InlineStack>
               </InlineStack>
               <Text as="p" tone="subdued">
-                Roland is set up for CMYK + white + gloss/emboss. The Mimaki runs CMYK only — white, clear/gloss and spot-gloss work is routed to the Roland. "Install missing defaults" never touches a printer that already exists.
+                Roland is set up for CMYK + white + gloss/emboss. The Mimaki runs CMYK + White — clear/gloss and spot-gloss work is routed to the Roland. "Install missing defaults" never touches a printer that already exists.
               </Text>
             </BlockStack>
           </Card>

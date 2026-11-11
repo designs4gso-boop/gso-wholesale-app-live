@@ -5,6 +5,7 @@
 // enablement is a one-line registration, not a new code path.
 
 import { decideMachine } from "../print-intake-routing.server";
+import { loadMachineWorkload } from "../machine-load.server";
 import type { ActionIntent, Actor } from "./action-intents";
 import type { ProductionStatus } from "./production-transitions";
 import type { JobSnapshot, TransitionDeps } from "./production-transition-executor";
@@ -64,8 +65,9 @@ export function prismaTransitionDeps(db: DbLike, shop: string): TransitionDeps {
     async checkRouting(job) {
       const items = await db.productionJobItem.findMany({ where: { jobId: job.id }, select: { id: true, itemTicket: true, productTitle: true, selectedFinish: true, materialSummary: true, machineSummary: true } });
       const reasons: string[] = [];
+      const machineLoad = await loadMachineWorkload(db, job.shop);
       for (const item of items) {
-        const d = decideMachine({ ...item, ripJobName: null, suggestedFileName: null }, "");
+        const d = decideMachine({ ...item, ripJobName: null, suggestedFileName: null }, "", machineLoad);
         if (!d.machine) reasons.push(`${item.itemTicket ?? item.id}: ${d.reasons.join(", ")}`);
       }
       return { blocked: reasons.length > 0, reasons };

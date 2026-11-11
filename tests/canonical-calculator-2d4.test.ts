@@ -55,7 +55,7 @@ const NO_CAL: ResolvedMachineInputs = {
   inkCostSource: "canonical purchasing rate",
 };
 
-const MACHINE_QS = "pmachinekey=mimaki-ucjv300-130&pinkmode=cmyk&pripprofile=p&pqualitymode=q&presolution=r&ppassconfig=1x";
+const MACHINE_QS = "pmachinekey=mimaki-ucjv300-130&pinkmode=cmyk&pripprofile=p&pqualitymode=q&presolution=r&ppassconfig=1x&pprinter=mimaki";
 
 const run = (qs: string, machine: ResolvedMachineInputs = CAL) => {
   const input = normalizeCanonicalInput(new URLSearchParams(qs));

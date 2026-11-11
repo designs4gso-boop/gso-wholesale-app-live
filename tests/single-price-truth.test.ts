@@ -92,7 +92,7 @@ describe("ink rate authority", () => {
     expect(inkBrandFromMachineName("Roland TrueVIS LG-640")).toBe("roland");
     expect(inkBrandFromMachineName("Mimaki UCJV300-130")).toBe("mimaki");
     const mimakiGlossJob = computeProductDrivenCost(baseBagInput({ quantity: 100, faces: 1, printer: "mimaki", glossLayers: 3 }));
-    expect(mimakiGlossJob.missing.some((label) => label.includes("CMYK ONLY"))).toBe(true);
+    expect(mimakiGlossJob.missing.some((label) => label.includes("MIMAKI_GLOSS_UNSUPPORTED"))).toBe(true);
   });
 
   it("machine seed presets carry the canonical rates", () => {

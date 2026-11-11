@@ -85,10 +85,10 @@ describe("production guards added overnight (source pins)", () => {
     expect(print).toContain('startsWith("cut:")');
     expect(print).not.toContain("Job ID: {job.id}");
   });
-  it("machines copy matches the routing authority (Mimaki = CMYK only)", () => {
+  it("machines copy matches the routing authority (corrected 2026-11-11: Mimaki = CMYK + White, no gloss)", () => {
     const s = src("app/routes/app.erp.machines.tsx");
-    expect(s).not.toContain("Mimaki is set up for CMYK + white");
-    expect(s).toContain("The Mimaki runs CMYK only");
+    expect(s).not.toContain("The Mimaki runs CMYK only");
+    expect(s).toContain("The Mimaki runs CMYK + White — clear/gloss and spot-gloss work is routed to the Roland.");
   });
 });
 

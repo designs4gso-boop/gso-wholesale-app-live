@@ -99,10 +99,23 @@ import { JAR_LABEL_GEOMETRY_SOURCE, validateJarGeometryOverride } from "./jar-la
 import { BAG_4X5_ARTBOARD_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
 import { PRODUCT_SPEC_VERSION, getProductProductionSpec } from "./product-production-spec";
 import { CANONICAL_INK_RATES } from "./ink-rates-shared";
+import type { MachineLoadSnapshot } from "./machine-load-balancing";
 import {
-  CANONICAL_CALIBRATION_IDENTITIES,
+  MATERIAL_OVERRIDE_KEY_PREFIX,
+  MATERIAL_OVERRIDE_REASONS,
+  readMaterialOverrideRequest,
+  type AppliedMaterialOverride,
+  type MaterialOverrideRequest,
+} from "./material-override.server";
+import {
+  ALL_CALIBRATION_IDENTITIES,
+  CALIBRATION_PROVENANCE,
+  ROUTING_REASONS,
+  compatiblePrinters,
+  normalizePrinterSelection,
   resolveCanonicalMachineRouting,
   type CanonicalCalibrationKey,
+  type PrinterBrand,
   type MachineRoutingResult,
   type PrinterSelection,
   type RoutedChannel,
@@ -257,6 +270,21 @@ export type CanonicalCalculatorInput = {
   glossLayers?: number;
   glossCoveragePct?: number | null;
   cmykCoveragePct?: number | null;
+  /**
+   * 2026-11-11 — server-supplied only (never a form param): per-press load for
+   * AUTO, and the presses whose calibrations are approved for this job.
+   */
+  machineLoad?: MachineLoadSnapshot | null;
+  costReadyPrinters?: PrinterBrand[] | null;
+  /**
+   * 2026-11-11 — owner job-level material $/sqft override. The REQUEST is read
+   * from the query string (untrusted); only applyOwnerMaterialOverride (server,
+   * verified owner identity) turns it into `materialOverride`, or into
+   * `materialOverrideBlocker` when it is refused or invalid.
+   */
+  materialOverrideRequest?: MaterialOverrideRequest | null;
+  materialOverride?: AppliedMaterialOverride | null;
+  materialOverrideBlocker?: string | null;
 
   equipmentRatePerHour?: number;
   cutMode?: CutMode;
@@ -277,7 +305,39 @@ export function routingFor(input: CanonicalCalculatorInput): MachineRoutingResul
     glossLayers: input.glossLayers,
     glossCoveragePct: input.glossCoveragePct,
     cmykCoveragePct: input.cmykCoveragePct,
+    machineLoad: input.machineLoad,
+    costReadyPrinters: input.costReadyPrinters,
   });
+}
+
+/** 2026-11-11: an approved row used on a profile it was not measured on says so. */
+function withProvenance(key: CanonicalCalibrationKey, calibration: CalibrationRecord | null, message: string): string {
+  const provenance = CALIBRATION_PROVENANCE[key];
+  return calibration && provenance && provenance.status !== "MEASURED_PROFILE_MATCHES" ? `${message} PROVENANCE: ${provenance.note}` : message;
+}
+
+/** The calibration keys a press needs for this job's layers (gloss never on the Mimaki). */
+function calibrationKeysFor(printer: PrinterBrand, input: CanonicalCalculatorInput): CanonicalCalibrationKey[] {
+  const keys: CanonicalCalibrationKey[] = [printer === "mimaki" ? "mimaki-cmyk" : "roland-cmyk"];
+  if (Number(input.whiteLayers ?? 0) > 0) keys.push(printer === "mimaki" ? "mimaki-white" : "roland-white");
+  if (Number(input.glossLayers ?? 0) > 0) keys.push("roland-gloss");
+  return keys;
+}
+
+/**
+ * 2026-11-11 — AUTO balances only among presses that are compatible AND
+ * cost-calibrated for this job, so a press with no approved calibration (e.g.
+ * Mimaki White today) is never auto-picked and then priced from another
+ * press's numbers. Explicit selections and gloss jobs skip this.
+ */
+function withCostReadyPrinters(
+  input: CanonicalCalculatorInput,
+  isApproved: (key: CanonicalCalibrationKey) => boolean,
+): CanonicalCalculatorInput {
+  if (normalizePrinterSelection(input.printerSelection) !== "auto" || input.costReadyPrinters) return input;
+  const costReadyPrinters = compatiblePrinters({ whiteLayers: input.whiteLayers, glossLayers: input.glossLayers })
+    .filter((printer) => calibrationKeysFor(printer, input).every(isApproved));
+  return { ...input, costReadyPrinters };
 }
 
 /** The BASE colour channel's identity — what the engine itself prices. */
@@ -341,6 +401,8 @@ export type CanonicalCalculatorResult = {
   adapter: { label: LabelJobResult | null; bag: BagPhysicalResult | null; banner: BannerCostResult | null; application: LabelApplicationResult | null };
   reasons: string[];
   blockers: string[];
+  /** 2026-11-11: the owner job-level material override this cost used, if any (always labelled OVERRIDE). */
+  materialOverride: AppliedMaterialOverride | null;
 };
 
 /* ------------------------------------------------------------------ *
@@ -403,12 +465,20 @@ export async function resolveCanonicalMachineInputs(
     return { calibration: one.calibration, calibrationMessage: one.message, inkCostPerMl: null, inkCostSource: "" };
   }
 
-  const job = input as CanonicalCalculatorInput;
+  const loadedByKey: Partial<Record<CanonicalCalibrationKey, { calibration: CalibrationRecord | null; message: string }>> = {};
+  const load = async (key: CanonicalCalibrationKey) => (loadedByKey[key] ??= await loadOne(deps, ALL_CALIBRATION_IDENTITIES[key]));
+  let job = input as CanonicalCalculatorInput;
+  if (normalizePrinterSelection(job.printerSelection) === "auto") {
+    for (const printer of compatiblePrinters({ whiteLayers: job.whiteLayers, glossLayers: job.glossLayers })) {
+      for (const key of calibrationKeysFor(printer, job)) await load(key);
+    }
+    job = withCostReadyPrinters(job, (key) => loadedByKey[key]?.calibration != null);
+  }
   const routing = routingFor(job);
   const channels: ResolvedChannel[] = [];
   for (const channel of routing.channels) {
-    const loaded = await loadOne(deps, channel.identity);
-    channels.push({ ...channel, calibration: loaded.calibration, calibrationMessage: loaded.message });
+    const loaded = await load(channel.calibrationKey);
+    channels.push({ ...channel, calibration: loaded.calibration, calibrationMessage: withProvenance(channel.calibrationKey, loaded.calibration, loaded.message) });
   }
   const base = channels.find((channel) => channel.isBase)!;
   return {
@@ -439,8 +509,8 @@ export type CalibrationCache = Partial<Record<CanonicalCalibrationKey, { calibra
 /** Load every canonical calibration identity once. */
 export async function preloadCanonicalCalibrations(deps: { db: any; shop: string; at?: Date }): Promise<CalibrationCache> {
   const cache: CalibrationCache = {};
-  for (const key of Object.keys(CANONICAL_CALIBRATION_IDENTITIES) as CanonicalCalibrationKey[]) {
-    cache[key] = await loadOne(deps, CANONICAL_CALIBRATION_IDENTITIES[key]);
+  for (const key of Object.keys(ALL_CALIBRATION_IDENTITIES) as CanonicalCalibrationKey[]) {
+    cache[key] = await loadOne(deps, ALL_CALIBRATION_IDENTITIES[key]);
   }
   return cache;
 }
@@ -450,14 +520,14 @@ export function resolveCanonicalMachineInputsFromCache(
   input: CanonicalCalculatorInput,
   cache: CalibrationCache | null | undefined,
 ): ResolvedMachineInputs {
-  const routing = routingFor(input);
+  const routing = routingFor(withCostReadyPrinters(input, (key) => cache?.[key]?.calibration != null));
   const channels: ResolvedChannel[] = routing.channels.map((channel) => {
     const hit = cache?.[channel.calibrationKey];
     return {
       ...channel,
       calibration: hit?.calibration ?? null,
       calibrationMessage: hit
-        ? hit.message
+        ? withProvenance(channel.calibrationKey, hit.calibration, hit.message)
         : `No preloaded calibration for ${channel.calibrationKey}. Treated as MISSING_CALIBRATION.`,
     };
   });
@@ -502,6 +572,14 @@ const EMPTY_DIAGNOSTICS = (): CanonicalDiagnostics => ({
   cutPathBasis: null,
 });
 
+/** The disclosure every overridden material line carries. */
+function overrideSource(input: CanonicalCalculatorInput): string {
+  const o = input.materialOverride;
+  return o
+    ? `OVERRIDE — owner job-level material cost $${o.costPerSqft.toFixed(4)}/sqft replacing ${o.replacedMaterialLabel} (${o.replacedMaterialKey}); reason: ${o.reason}. Applies to this quote/job only; Material Center and global standards are unchanged.`
+    : "";
+}
+
 export function assembleCanonicalJob(
   input: CanonicalCalculatorInput,
   machine: ResolvedMachineInputs,
@@ -521,6 +599,17 @@ export function assembleCanonicalJob(
   const routing = machine.routing ?? routingFor(input);
   reasons.push(...routing.reasons);
   blockers.push(...routing.blockers);
+
+  // Owner job-level material override: refused/invalid requests block (never a
+  // silent normal cost); an applied override is disclosed on every result.
+  if (input.materialOverrideBlocker) {
+    reasons.push(input.materialOverrideBlocker.split(":")[0]);
+    blockers.push(input.materialOverrideBlocker);
+  } else if (input.materialOverrideRequest && !input.materialOverride) {
+    reasons.push(MATERIAL_OVERRIDE_REASONS.ownerOnly);
+    blockers.push(`${MATERIAL_OVERRIDE_REASONS.ownerOnly}: the material override was not verified on the server for an owner.`);
+  }
+  if (input.materialOverride) reasons.push(MATERIAL_OVERRIDE_REASONS.applied);
 
   if (finished <= 0) {
     reasons.push(CANONICAL_REASONS.quantityRequired);
@@ -583,7 +672,9 @@ export function assembleCanonicalJob(
       materialName = label.lines.length === 1 && label.lines[0].material
         ? label.lines[0].material.label
         : `${label.lines.length} label line(s), blended media`;
-      materialSource = `Blended from the per-line verified roll costs so the job total equals the sum of the lines exactly ($${label.materialCost.toFixed(6)}).`;
+      materialSource = input.materialOverride
+        ? overrideSource(input)
+        : `Blended from the per-line verified roll costs so the job total equals the sum of the lines exactly ($${label.materialCost.toFixed(6)}).`;
       if (label.areas.inkableAreaEstimated) reasons.push(CANONICAL_REASONS.inkableAreaEstimated);
     }
 
@@ -668,7 +759,7 @@ export function assembleCanonicalJob(
     materialName = bagMedia ? `${bagMedia.label} (bag label media)` : "Bag label media — not selected / not calculator-ready";
     materialCostPerSqft = bagMedia ? bagMedia.costPerSqft : null;
     materialSource = bagMedia
-      ? (cfg.materials?.[cfg.materialKey!] ? "Material Center verified $/sqft (re-read by id on the server)." : "Approved roll cost (APPROVED_ROLL_COSTS).")
+      ? (String(cfg.materialKey || "").startsWith(MATERIAL_OVERRIDE_KEY_PREFIX) ? overrideSource(input) : cfg.materials?.[cfg.materialKey!] ? "Material Center verified $/sqft (re-read by id on the server)." : "Approved roll cost (APPROVED_ROLL_COSTS).")
       : "No calculator-ready bag label media selected.";
 
     // The blank is priced at PRODUCTION quantity by the engine, so hand it the
@@ -939,7 +1030,7 @@ export function assembleCanonicalJob(
       materialName = jarMedia ? `${jarMedia.label} (jar label media)` : "Jar label media — not selected / not calculator-ready";
       materialCostPerSqft = jarMedia ? jarMedia.costPerSqft : null;
       materialSource = jarMedia
-        ? (cfg.materials?.[cfg.materialKey!] ? "Material Center verified $/sqft (re-read by id on the server)." : "Approved roll cost (APPROVED_ROLL_COSTS).")
+        ? (String(cfg.materialKey || "").startsWith(MATERIAL_OVERRIDE_KEY_PREFIX) ? overrideSource(input) : cfg.materials?.[cfg.materialKey!] ? "Material Center verified $/sqft (re-read by id on the server)." : "Approved roll cost (APPROVED_ROLL_COSTS).")
         : "No calculator-ready jar label media selected.";
 
       // ---- cutting + weeding on the DERIVED cutlines ----
@@ -1104,7 +1195,10 @@ export function assembleCanonicalJob(
     };
 
     if (!channel.calibration) {
-      entry.blocker = `${CANONICAL_REASONS.calibrationRequired}: ${channel.kind.toUpperCase()} channel — ${channel.calibrationMessage}`;
+      entry.blocker = channel.calibrationKey === "mimaki-white"
+        // Supported press, missing COST evidence — never borrowed from the Roland.
+        ? `${ROUTING_REASONS.mimakiWhiteCalibrationRequired}: the Mimaki prints White, but no owner-approved Mimaki White cost calibration exists (Roland White usage and time are never substituted). Select the Roland, or approve a Mimaki White calibration. ${channel.calibrationMessage}`
+        : `${CANONICAL_REASONS.calibrationRequired}: ${channel.kind.toUpperCase()} channel — ${channel.calibrationMessage}`;
       if (!channel.isBase) blockers.push(entry.blocker);
       inkChannels.push(entry);
       continue;
@@ -1127,10 +1221,14 @@ export function assembleCanonicalJob(
       blockers.push(entry.blocker);
     }
 
+    // Fixed machine overhead is PER PHYSICAL PRINT RUN (owner, 2026-11-11):
+    // the base channel's run carries it once; a white/gloss channel printed in
+    // the SAME run adds only its variable time, never a second overhead.
     const occ = computeOccupancyMinutes({
       calibration: channel.calibration,
       areas: areaMap,
       passCount: channel.passCount,
+      includeFixedMinutes: channel.isBase,
     });
     if (occ.ok) {
       entry.occupancyAreaSqft = occ.areaSqft;
@@ -1246,7 +1344,7 @@ export function assembleCanonicalJob(
     inkChannels,
     calibration: {
       resolved: machine.calibration != null,
-      identity: calibrationIdentityOf(input),
+      identity: routing.channels.find((channel) => channel.isBase)!.identity,
       message: machine.calibrationMessage,
       inkCostPerMl: machine.inkCostPerMl,
       inkCostSource: machine.inkCostSource,
@@ -1258,6 +1356,7 @@ export function assembleCanonicalJob(
     },
     adapter: { label, bag, banner, application },
     reasons: Array.from(new Set(reasons)),
+    materialOverride: input.materialOverride ?? null,
     blockers: allBlockers,
   };
 }
@@ -1341,6 +1440,7 @@ export function canonicalViewOf(result: CanonicalCalculatorResult): CanonicalCal
     setupBasis: result.setupBasis,
     reasons: result.reasons,
     blockers: result.blockers,
+    materialOverride: result.materialOverride,
   };
 }
 
@@ -1483,6 +1583,8 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
     cmykCoveragePct: String(params.get("pcmykcoverage") ?? "").trim() !== "" ? num(params, "pcmykcoverage") : null,
     cutMode: (str(params, "pcutmode") || "normal") as CutMode,
     loadedMediaWidthIn: params.get("pmediawidth") ? num(params, "pmediawidth") : undefined,
+    // Untrusted request only — applied (or refused) by the server owner check.
+    materialOverrideRequest: readMaterialOverrideRequest(params),
   } satisfies Partial<CanonicalCalculatorInput> as CanonicalCalculatorInput;
 
   if (family === "stickers-labels") {
@@ -1684,3 +1786,4 @@ export { CANONICAL_INK_RATES };
 
 /** Re-exported so the calculator route names the Split Bag blank without importing the bag adapter. */
 export { SPLIT_BAG_BLANK_UNIT_COST } from "./bag-cost-inputs.server";
+export { applyOwnerMaterialOverride, MATERIAL_OVERRIDE_PARAM, MATERIAL_OVERRIDE_REASON_PARAM } from "./material-override.server";

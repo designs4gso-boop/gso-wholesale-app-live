@@ -39,7 +39,7 @@ export type RoutedException = {
 const TABLE: Record<ExceptionCode, { severity: Severity; destination: SlackDestination; ownerAgent: AgentId; nextAction: string }> = {
   MISSING_CANONICAL_DATA: { severity: "high", destination: "sales_quotes", ownerAgent: "quote_prep", nextAction: "Owner/staff: supply the missing canonical input (calibration, blank cost, white coverage); never estimate" },
   ART_FAILURE: { severity: "warning", destination: "art_approval", ownerAgent: "art_preflight", nextAction: "Designer: fix artwork or request a new customer file" },
-  MACHINE_MISMATCH: { severity: "high", destination: "production_exceptions", ownerAgent: "production_dispatcher", nextAction: "Production: resolve the contradiction (white/gloss cannot run on the Mimaki)" },
+  MACHINE_MISMATCH: { severity: "high", destination: "production_exceptions", ownerAgent: "production_dispatcher", nextAction: "Production: resolve the contradiction (gloss cannot run on the Mimaki)" },
   MATERIAL_SHORTAGE: { severity: "high", destination: "purchasing", ownerAgent: "purchasing_agent", nextAction: "Purchasing: review the prepared request; approve or source" },
   VENDOR_COST_MISSING: { severity: "warning", destination: "purchasing", ownerAgent: "purchasing_agent", nextAction: "Purchasing: obtain the vendor cost; the agent will not estimate" },
   APPROVAL_MISSING: { severity: "warning", destination: "agent_approvals", ownerAgent: "operations_supervisor", nextAction: "Approver: decide the pending intent" },

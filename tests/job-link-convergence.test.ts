@@ -214,7 +214,7 @@ describe("15H.4C link convergence", () => {
     expect(source).toContain("parseCanonicalOrderLine"); // order convergence intact
     expect(source).toContain("sourceKey = `manual_${requestId}`"); // manual creation intact
     expect(readFileSync("app/lib/rip-identity-match.server.ts", "utf8")).toContain("exact_item_ticket");
-    expect(readFileSync("app/lib/print-intake-routing.server.ts", "utf8")).toContain('reasons: ["default_cmyk_to_mimaki"]');
+    expect(readFileSync("app/lib/print-intake-routing.server.ts", "utf8")).toContain('reasons: ["auto_machine_load_unavailable_select_printer"]');
     expect(readFileSync("app/lib/commercial-pricing-policy.server.ts", "utf8")).toContain("BAGS_4X5_FRONT_LADDER");
   });
 });

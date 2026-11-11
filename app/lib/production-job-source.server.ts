@@ -22,6 +22,8 @@ import { quotePricingAuthorityState } from "./quote-pricing-authority";
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
 import { buildIntakeRipName, decideMachine } from "./print-intake-routing.server";
+import { loadMachineWorkload } from "./machine-load.server";
+import type { MachineLoadSnapshot } from "./machine-load-balancing";
 import { ZAKEKE_ASSET_SOURCE, readZakekeDesignFromLine, zakekeSnapshot } from "./zakeke-design.server";
 import {
   buildPersonalizationJobFiles,
@@ -154,6 +156,13 @@ function parseJson(value: any) {
     return null;
   }
 }
+/** The press a saved canonical quote was costed on, as a machineSummary (null when none was resolved). */
+export function costedMachineSummary(costSnapshot: unknown): string | null {
+  const routing = parseJson(costSnapshot as any)?.canonical?.routing;
+  if (!routing || parseJson(costSnapshot as any)?.canonical?.status === "DRAFT_ONLY") return null;
+  return routing.effectivePrinter === "roland" ? "Roland LG-640" : routing.effectivePrinter === "mimaki" ? "Mimaki UCJV300-130" : null;
+}
+
 function snapshotValue(item: any, key: string) {
   return item?.[key] || parseJson(item.costSnapshot)?.[key] || parseJson(item.priceSnapshot)?.[key] || "";
 }
@@ -335,8 +344,8 @@ export function checklistForFamily(family: string) {
 // Owner-facing manual/walk-in/internal jobs. Validation is FAIL-CLOSED and
 // machine resolution delegates to the ONE canonical decider (decideMachine)
 // — no duplicated routing logic: the requested printer is expressed as a
-// machineSummary and the same contradiction rules apply (white/gloss on the
-// CMYK-only Mimaki rejects; Auto follows white/gloss->Roland else Mimaki).
+// machineSummary and the same contradiction rules apply (gloss on the Mimaki
+// rejects; Auto follows gloss->Roland, else the less busy press — 2026-11-11).
 export const MANUAL_JOB_FAMILIES: Array<{ value: string; label: string }> = [
   { value: "sticker-bags", label: "Stock Bags" },
   { value: "standard-jars", label: "Jars" },
@@ -363,6 +372,8 @@ export function validateManualJobInput(input: {
   requestId: string;
   customerName: string;
   items: ManualJobItemInput[];
+  /** 2026-11-11: per-press load for AUTO (no gloss). Absent/incomplete -> choose a press. */
+  machineLoad?: MachineLoadSnapshot | null;
 }): ManualJobValidation {
   if (!clean(input.requestId) || clean(input.requestId).length < 8) return { ok: false, reason: "Manual jobs require a stable requestId (retry-safe idempotency key)." };
   if (!clean(input.customerName)) return { ok: false, reason: "Job / customer name is required." };
@@ -391,11 +402,14 @@ export function validateManualJobInput(input: {
         machineSummary: printer === "mimaki" ? "Mimaki UCJV300-130" : printer === "roland" ? "Roland LG-640" : null,
       },
       "",
+      input.machineLoad,
     );
     if (!decision.machine) {
       return {
         ok: false,
-        reason: `Machine selection conflicts with the finish: ${decision.reasons.join("; ")} (the Mimaki is CMYK-only — white/gloss/specialty work runs on the Roland).`,
+        reason: decision.reasons.includes("auto_machine_load_unavailable_select_printer")
+          ? "Automatic press selection is unavailable (machine load is incomplete) — choose Mimaki or Roland for this item."
+          : `Machine selection conflicts with the finish: ${decision.reasons.join("; ")} (gloss runs only on the Roland; the Mimaki prints CMYK and White).`,
       };
     }
     resolved.push({ ...item, quantity: Math.floor(quantity), family, finish, printer: printer as any, resolvedMachine: decision.machine, machineRule: String(decision.machineRule || "default_cmyk") });
@@ -560,6 +574,44 @@ export function configuratorLinesOf(order: any): any[] {
  */
 export function unverifiedConfiguratorLinesOf(order: any): any[] {
   return configuratorLinesOf(order).filter((line: any) => line?.variant_id != null && clean(line.variant_id) !== "");
+}
+
+/**
+ * 2026-11-11 owner decision: configurator-managed products (Stock Bags and
+ * every other ConfiguratorProduct) must never be bought as a RAW Shopify
+ * variant through native add-to-cart — that path skips MOQ, design choice,
+ * server pricing and canonical order metadata (e.g. the live $1.00 Stock Bag
+ * variant). A raw line is one that is NOT a configurator line but whose
+ * product or variant is managed by an active ConfiguratorProduct. Matching is
+ * by Shopify ID only (numeric tail of the GID) — never by title.
+ */
+export type ConfiguratorManagedIds = { productIds: Set<string>; variantIds: Set<string> };
+
+const shopifyIdTail = (value: unknown): string => {
+  const match = String(value ?? "").match(/(\d+)\s*$/);
+  return match ? match[1] : "";
+};
+
+export function configuratorManagedIdsOf(products: Array<{ shopifyProductGid?: string | null; shopifyVariantGid?: string | null }>): ConfiguratorManagedIds {
+  const productIds = new Set<string>();
+  const variantIds = new Set<string>();
+  for (const product of products) {
+    const productId = shopifyIdTail(product.shopifyProductGid);
+    const variantId = shopifyIdTail(product.shopifyVariantGid);
+    if (productId) productIds.add(productId);
+    if (variantId) variantIds.add(variantId);
+  }
+  return { productIds, variantIds };
+}
+
+export function configuratorBypassLinesOf(order: any, managed: ConfiguratorManagedIds): any[] {
+  const allLines = Array.isArray(order?.line_items) ? order.line_items : [];
+  return allLines.filter((line: any) => {
+    if (isConfiguratorLine(line)) return false;
+    const productId = shopifyIdTail(line?.product_id);
+    const variantId = shopifyIdTail(line?.variant_id);
+    return Boolean((productId && managed.productIds.has(productId)) || (variantId && managed.variantIds.has(variantId)));
+  });
 }
 
 /**
@@ -1082,6 +1134,9 @@ export async function createProductionJobFromSource(
               recipeName: item.recipeName || snapshotValue(item, "recipeName") || null,
               selectedFinish: item.selectedFinish || snapshotValue(item, "selectedFinish") || null,
               selectedAddOns: item.selectedAddOnIds || snapshotValue(item, "selectedAddOns") || null,
+              // 2026-11-11: the press this quote was COSTED on becomes the item's
+              // explicit assignment, so Production routes where the quote costed.
+              machineSummary: costedMachineSummary(item.costSnapshot),
               costSnapshot: item.costSnapshot || null, // complete commercial snapshot preserved (incl. dtp/dtpPricing)
               priceSnapshot: item.priceSnapshot || null,
               productionNotes: item.notes || null,
@@ -1213,6 +1268,7 @@ export async function createProductionJobFromSource(
       requestId: clean((source as any).requestId),
       customerName: source.payload.customerName,
       items: source.payload.items,
+      machineLoad: await loadMachineWorkload(dbClient, input.shop),
     });
     if (!verdict.ok) throw new Error(verdict.reason);
     const manualItems = verdict.items;

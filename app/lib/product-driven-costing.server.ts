@@ -458,22 +458,32 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   const isDtp = input.family === "dtp-bags";
 
   // ---- layers (validated; capability-gated) ----
-  // 15F.0K.4B (owner-verified 2026-07-26): the Mimaki UCJV300-130 is CMYK
-  // ONLY. White, clear/gloss, spot-gloss, layered-gloss, and raised-gloss
-  // work must run on the Roland TrueVIS LG-640. Requested white/gloss on
-  // Mimaki BLOCKS with an exact printer-capability message and the layers
-  // are zeroed, so no specialty ink line or multi-layer machine time can
-  // ever price on Mimaki (this also quarantines the old 15F.0G.3
-  // provisional Mimaki gloss estimate below — that branch is unreachable).
-  // Standard Mimaki CMYK costing is untouched.
-  const mimakiSpecialtyRequested = input.printer === "mimaki" && (Math.floor(input.whiteLayers) > 0 || Math.floor(input.glossLayers) > 0);
-  if (mimakiSpecialtyRequested) {
+  // Corrected 2026-11-11 (owner): the Mimaki UCJV300-130 prints CMYK and
+  // WHITE; gloss is not operational on it. Mimaki gloss is therefore an
+  // unsupported-press block, while Mimaki white is a supported press with no
+  // owner-approved Mimaki White COST calibration yet — it blocks as
+  // MIMAKI_WHITE_CALIBRATION_REQUIRED (never priced from the Roland's numbers).
+  // Either way the layers are zeroed, so no specialty ink line or multi-layer
+  // machine time is invented. Standard Mimaki CMYK costing is untouched.
+  const mimakiGlossRequested = input.printer === "mimaki" && Math.floor(input.glossLayers) > 0;
+  const mimakiWhiteUncalibrated = input.printer === "mimaki" && Math.floor(input.whiteLayers) > 0;
+  const mimakiSpecialtyRequested = mimakiGlossRequested || mimakiWhiteUncalibrated;
+  if (mimakiGlossRequested) {
     lines.push({
       key: "printer_capability",
-      label: "Printer capability — Mimaki UCJV300-130 is CMYK ONLY",
+      label: "MIMAKI_GLOSS_UNSUPPORTED — gloss is not operational on the Mimaki UCJV300-130",
       amount: 0,
       source: "missing",
-      note: "White, clear/gloss, spot-gloss, layered-gloss, and raised-gloss work must run on the Roland TrueVIS LG-640. Switch the printer to Roland to quote this job (owner-verified 2026-07-26).",
+      note: "Gloss, clear/spot-gloss, layered-gloss and raised-gloss work runs only on the Roland TrueVIS LG-640. Switch the printer to Roland to quote this job.",
+    });
+  }
+  if (mimakiWhiteUncalibrated) {
+    lines.push({
+      key: "printer_white_calibration",
+      label: "MIMAKI_WHITE_CALIBRATION_REQUIRED — no owner-approved Mimaki White cost calibration",
+      amount: 0,
+      source: "missing",
+      note: "The Mimaki prints White, but its White ink usage and press time are not owner-approved yet; Roland values are never substituted. Choose the Roland, or approve a Mimaki White calibration.",
     });
   }
   const requestedWhite = mimakiSpecialtyRequested ? 0 : input.whiteLayers;

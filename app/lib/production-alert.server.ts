@@ -65,6 +65,28 @@ export function unrecognizedPaidOrderQueueItem(shop: string, order: any) {
 }
 
 /**
+ * 2026-11-11: a paid order with a RAW variant of a configurator-managed
+ * product (e.g. the $1.00 Stock Bag variant through native add-to-cart). The
+ * whole order is held for the OWNER — it never becomes a production job at the
+ * raw variant price, and staff are told not to create one by hand either.
+ */
+export function configuratorBypassPaidOrderQueueItem(shop: string, order: any, bypassLines: any[]) {
+  const base = unrecognizedPaidOrderQueueItem(shop, order);
+  const orderName = String(order?.name || order?.order_number || order?.id || "order");
+  const titles = bypassLines
+    .map((line: any) => `${line?.title || "line"} x${Number(line?.quantity || 0)} @ $${String(line?.price ?? "?")}`)
+    .slice(0, 10);
+  return {
+    ...base,
+    source: "shopify_order_configurator_bypass",
+    reviewLevel: "owner_review",
+    productFamily: "configurator_bypass",
+    internalNotes: `PAID SHOPIFY ORDER ${orderName} created NO production job: it contains raw Shopify variant line(s) of a configurator-only product, bought through native add-to-cart instead of the GSO configurator (no MOQ, design selection, server price or production data). Lines: ${titles.join("; ")}.`,
+    recommendedStaffAction: "Owner review: do NOT produce at the raw variant price. Contact the customer to complete the order through the configurator (collect the correct price) or refund.",
+  };
+}
+
+/**
  * Basic-plan checkout authority (2026-10-17): a paid order carrying configured
  * lines that bypassed the server-priced draft-order checkout (native
  * /cart/add). Held for staff price review instead of auto-creating a job.

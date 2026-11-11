@@ -5,8 +5,9 @@
 //   Mimaki LUS-170 bottle  $176 / 1000 ml  (CMYK and white share the rate)
 //   Roland ECO-UV pouch    $149 / 750 ml   (uniform across CMYK/white/gloss —
 //                                           owner-approved provisional)
-//   Mimaki gloss           NO RATE — the Mimaki is CMYK-only (owner-verified
-//                          2026-07-26); no Mimaki gloss pricing path may exist.
+//   Mimaki gloss           NO RATE — gloss is not operational on the Mimaki
+//                          (owner, corrected 2026-11-11: it DOES print White);
+//                          no Mimaki gloss pricing path may exist.
 //
 // Every estimate AND actual-cost surface must price ink through these values
 // (or channelInkRatePerMl below) so estimate-vs-actual variance reflects
@@ -17,7 +18,7 @@
 export const CANONICAL_INK_RATES = {
   mimakiCmykPerMl: 176 / 1000,
   mimakiWhitePerMl: 176 / 1000,
-  mimakiGlossPerMl: null as number | null, // Mimaki is CMYK-only — never priced
+  mimakiGlossPerMl: null as number | null, // no gloss on the Mimaki — never priced
   rolandPerMl: 149 / 750,
 } as const;
 
@@ -42,7 +43,7 @@ export function channelInkRatePerMl(brand: InkBrand, kind: InkChannelKind): numb
   }
   if (kind === "cmyk") return CANONICAL_INK_RATES.mimakiCmykPerMl;
   if (kind === "white") return CANONICAL_INK_RATES.mimakiWhitePerMl;
-  return CANONICAL_INK_RATES.mimakiGlossPerMl; // null — CMYK-only machine
+  return CANONICAL_INK_RATES.mimakiGlossPerMl; // null — no gloss on the Mimaki
 }
 
 export function inkBrandFromMachineName(name: unknown): InkBrand | null {

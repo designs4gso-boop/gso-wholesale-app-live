@@ -24,7 +24,7 @@ Readiness: READY / IN_PROGRESS / BLOCKED / WAITING_CUSTOMER / ON_HOLD / DONE / C
 
 ## Dispatch
 
-`planDispatch(items)` → DISPATCH (`mimaki-ucjv300-130` | `roland-lg-640`) / BLOCK / OUTSOURCED using the existing `decideMachine`: white/gloss → Roland; explicit Mimaki + white/gloss → contradiction → BLOCK; default CMYK → Mimaki. The PowerShell print-intake agent remains the only executor; `dispatch_to_machine` is DISABLED.
+`planDispatch(items)` → DISPATCH (`mimaki-ucjv300-130` | `roland-lg-640`) / BLOCK / OUTSOURCED using the existing `decideMachine` (corrected 2026-11-11): gloss → Roland; explicit press wins for CMYK/White; otherwise the less busy press from complete load data, else BLOCK (choose a press); explicit Mimaki + gloss → contradiction → BLOCK; default CMYK → Mimaki. The PowerShell print-intake agent remains the only executor; `dispatch_to_machine` is DISABLED.
 
 ## QC
 

@@ -266,13 +266,13 @@ describe("canonical sticker snapshot + routing", () => {
     for (const token of ["white", "gloss", "clear", "varnish", "primer", "spot uv"]) {
       expect(plainSummary.toLowerCase().includes(token), token).toBe(false);
     }
-    expect(decideMachine({ selectedFinish: plain.finishLabel, materialSummary: plainSummary, machineSummary: null } as any)).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
+    expect(decideMachine({ selectedFinish: plain.finishLabel, materialSummary: plainSummary, machineSummary: null } as any)).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
     const gloss = parseCanonicalStickerOrderLine(metaFor({ specialty: "Ultra Layered — 5X" }))!;
-    expect(decideMachine({ selectedFinish: gloss.finishLabel, materialSummary: canonicalStickerMaterialSummary(gloss), machineSummary: null } as any)).toMatchObject({ machine: "roland", machineRule: "white_or_gloss" });
+    expect(decideMachine({ selectedFinish: gloss.finishLabel, materialSummary: canonicalStickerMaterialSummary(gloss), machineSummary: null } as any)).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
     const holo = parseCanonicalStickerOrderLine(metaFor({ material: "Holographic" }))!;
     const holoSummary = canonicalStickerMaterialSummary(holo);
     expect(holoSummary).toContain("White Layers: 1");
-    expect(decideMachine({ selectedFinish: holo.finishLabel, materialSummary: holoSummary, machineSummary: null } as any)).toMatchObject({ machine: "roland", machineRule: "white_or_gloss" });
+    expect(decideMachine({ selectedFinish: holo.finishLabel, materialSummary: holoSummary, machineSummary: null } as any)).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] }); // White alone never forces the Roland
   });
 });
 

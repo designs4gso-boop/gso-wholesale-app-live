@@ -111,7 +111,7 @@ afterEach(() => { delete process.env[OWNER_USER_IDS_ENV]; });
 
 /** The exact GET a single-line sticker job submits (legacy fields + canonical pl0* mirror). */
 const stickerQs = (pl0mat: string, extra = "", pmat = "m_clear") =>
-  `pfamily=stickers-labels&pqty=500&pwidth=3&pheight=3&pmat=${pmat}&pcut=square-rect&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0` +
+  `pfamily=stickers-labels&pqty=500&pwidth=3&pheight=3&pmat=${pmat}&pcut=square-rect&pdesigns=1&pprinter=mimaki&pwhitelayers=0&pglosslayers=0` +
   `&pllines=1&pl0qty=500&pl0w=3&pl0h=3&pl0mat=${encodeURIComponent(pl0mat)}&pl0cuttype=rectangular&pl0art=ART-1&pl0printsetups=1${extra}`;
 
 /** Server path: normalise -> attach verified materials -> resolve machine -> assemble. */
@@ -174,25 +174,27 @@ describe("1-3. Material Center records become calculator materials from structur
 });
 
 describe("4-6, 11. printer routing is unchanged for a Material Center material", () => {
-  it("CMYK-only defaults to the Mimaki; explicit Roland CMYK is allowed", async () => {
-    const auto = (await costLabelJob(stickerQs("material:m_clear"))).result;
-    expect(auto.routing.effectivePrinter).toBe("mimaki");
-    expect(auto.routing.whiteLayers).toBe(0); // clear substrate alone never invents white
-    const roland = (await costLabelJob(stickerQs("material:m_clear").replace("pprinter=auto", "pprinter=roland"))).result;
+  it("explicit Mimaki CMYK and explicit Roland CMYK are both allowed (2026-11-11: no permanent Mimaki default)", async () => {
+    const mimaki = (await costLabelJob(stickerQs("material:m_clear"))).result;
+    expect(mimaki.routing.effectivePrinter).toBe("mimaki");
+    expect(mimaki.routing.whiteLayers).toBe(0); // clear substrate alone never invents white
+    const roland = (await costLabelJob(stickerQs("material:m_clear").replace("pprinter=mimaki", "pprinter=roland"))).result;
     expect(roland.routing.effectivePrinter).toBe("roland");
   }, 120_000);
 
-  it("Clear + white and Clear + gloss route to the Roland; Mimaki is blocked for white/gloss", async () => {
-    const white = (await costLabelJob(stickerQs("material:m_clear").replace("pwhitelayers=0", "pwhitelayers=1&pwhitecoverage=60"))).result;
+  it("AUTO Clear + white costs on the Roland (the only White-calibrated press); gloss routes Roland; explicit Mimaki White needs its own calibration", async () => {
+    const autoQs = (pl0mat: string, pmat?: string) => stickerQs(pl0mat, "", pmat).replace("pprinter=mimaki", "pprinter=auto");
+    const white = (await costLabelJob(autoQs("material:m_clear").replace("pwhitelayers=0", "pwhitelayers=1&pwhitecoverage=60"))).result;
     expect(white.routing.effectivePrinter).toBe("roland");
     expect(white.routing.whiteLayers).toBe(1);
-    const gloss = (await costLabelJob(stickerQs("material:m_clear").replace("pglosslayers=0", "pglosslayers=1&pglosscoverage=40"))).result;
+    const gloss = (await costLabelJob(autoQs("material:m_clear").replace("pglosslayers=0", "pglosslayers=1&pglosscoverage=40"))).result;
     expect(gloss.routing.effectivePrinter).toBe("roland");
-    const mimakiWhite = (await costLabelJob(stickerQs("material:m_clear").replace("pprinter=auto", "pprinter=mimaki").replace("pwhitelayers=0", "pwhitelayers=1&pwhitecoverage=60"))).result;
+    const mimakiWhite = (await costLabelJob(stickerQs("material:m_clear").replace("pwhitelayers=0", "pwhitelayers=1&pwhitecoverage=60"))).result;
     expect(mimakiWhite.status).toBe("DRAFT_ONLY");
-    expect(mimakiWhite.blockers.length).toBeGreaterThan(0);
+    expect(mimakiWhite.routing.effectivePrinter).toBe("mimaki");
+    expect(mimakiWhite.blockers.join(" ")).toContain("MIMAKI_WHITE_CALIBRATION_REQUIRED");
     // routing is identical to the same job on matte (material never changes the press)
-    const matteWhite = (await costLabelJob(stickerQs("matte", "", "m_matte").replace("pwhitelayers=0", "pwhitelayers=1&pwhitecoverage=60"))).result;
+    const matteWhite = (await costLabelJob(autoQs("matte", "m_matte").replace("pwhitelayers=0", "pwhitelayers=1&pwhitecoverage=60"))).result;
     expect(white.routing).toEqual(matteWhite.routing);
   }, 120_000);
 });

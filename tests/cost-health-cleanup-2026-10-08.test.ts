@@ -89,24 +89,24 @@ describe("ISSUE 2 — 4x5 blank bag live-data authority (resolved by owner decis
   });
 });
 
-describe("ISSUE 3 — Mimaki stays CMYK-only for routing even though white slots are stored", () => {
-  it("routing authority sends every white / gloss job to the Roland; an explicit Mimaki assignment on white is a contradiction, not a route", () => {
-    expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: null } as any).machine).toBe("roland");
+describe("ISSUE 3 (corrected 2026-11-11) — the Mimaki prints CMYK + White; only gloss routes away", () => {
+  it("routing authority sends gloss to the Roland; an explicit Mimaki assignment on white is a valid route; on gloss it is a contradiction", () => {
     expect(decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any).machine).toBe("roland");
-    expect(decideMachine({ selectedFinish: "CMYK", materialSummary: "standard cmyk", machineSummary: null } as any).machine).toBe("mimaki");
-    expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBeNull();
+    expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBe("mimaki");
+    expect(decideMachine({ selectedFinish: "Spot Gloss", materialSummary: "spot gloss", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBeNull();
     expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeNull();
   });
 
-  it("Cost Health reports the Mimaki white slots as hardware data that never prices a job, and no longer warns that the Mimaki lacks a gloss channel", () => {
-    expect(machineRoutingPolicy(mimaki).cmykOnly).toBe(true);
-    expect(machineRoutingPolicy(mimaki).label).toMatch(/CMYK only/);
-    expect(machineRoutingPolicy(roland).cmykOnly).toBe(false);
-    expect(channelRoutedElsewhere(slot(5, "White", "white", 176, 1000), mimaki)).toBe(true);
+  it("Cost Health treats Mimaki white slots as real capacity (not hardware-only) and still never warns that the Mimaki lacks a gloss channel", () => {
+    expect(machineRoutingPolicy(mimaki).glossUnsupported).toBe(true);
+    expect(machineRoutingPolicy(mimaki).label).toMatch(/CMYK and White/);
+    expect(machineRoutingPolicy(roland).glossUnsupported).toBe(false);
+    expect(channelRoutedElsewhere(slot(5, "White", "white", 176, 1000), mimaki)).toBe(false);
+    expect(channelRoutedElsewhere(slot(7, "Gloss", "gloss", 176, 1000), mimaki)).toBe(true);
     expect(channelRoutedElsewhere(slot(5, "White", "white", 149, 750), roland)).toBe(false);
     const r = run();
     const mk = r.machinePreview.find((m) => m.name === mimaki.name)!;
-    expect(mk.channels.filter((c) => c.routedElsewhere).map((c) => c.slotNumber)).toEqual([5, 6]);
+    expect(mk.channels.filter((c) => c.routedElsewhere).map((c) => c.slotNumber)).toEqual([]);
     expect(mk.channels.length).toBe(6); // the two disabled slots stay disabled; nothing deleted
     expect(r.issues.filter((i) => i.area === "Print layers" && i.item === mimaki.name)).toEqual([]);
     // the Roland is the white/gloss home, so a Roland missing gloss still warns

@@ -171,7 +171,7 @@ describe("canonical DTP snapshot", () => {
       expect(summary.toLowerCase().includes(token), token).toBe(false);
     }
     const decision = decideMachine({ selectedFinish: dtp.finishLabel, materialSummary: summary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
+    expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
   });
 });
 

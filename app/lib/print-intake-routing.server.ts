@@ -10,10 +10,13 @@
 //   customer-name matching; two+ candidates at any tier route NOTHING;
 // - the server returns a machine KEY only — hot-folder paths live exclusively
 //   in the local agent config (no local paths cross the wire or reach the UI);
-// - machine routing follows the FINALIZED owner rules (see decideMachine):
-//   white/gloss -> Roland LG-640 (normalized 13A.7B); explicit ERP Roland or a standalone ROLAND
-//   filename tag -> Roland; all other CMYK-only -> Mimaki UCJV300 default.
-//   Genuinely contradictory machine data still reviews, never guesses.
+// - machine routing follows the owner rules (corrected 2026-11-11, see
+//   decideMachine): GLOSS -> Roland LG-640; White alone does NOT force a
+//   press (the Mimaki prints White). Explicit ERP assignment or a standalone
+//   ROLAND / MIMAKI filename tag wins when compatible. Otherwise AUTO picks
+//   the less busy press from complete load data, or reviews — never a
+//   permanent Mimaki default. Contradictory machine data reviews, never guesses.
+import { selectLessBusyPrinter, type MachineLoadSnapshot } from "./machine-load-balancing";
 
 export const INTAKE_OUTCOMES_MARKER = "gso-print-intake-outcomes-v1";
 export const MAX_INTAKE_OUTCOMES = 50;
@@ -57,7 +60,8 @@ export type IntakeDecision = {
   itemTicket: string | null;
   ripName: string | null; // WITHOUT extension — the agent appends the original extension
   machine: "mimaki" | "roland" | null;
-  machineRule: "white_or_gloss" | "explicit_roland_tag" | "explicit_erp_machine" | "default_cmyk" | null;
+  // "white_or_gloss" / "default_cmyk" remain only so historical PrintIntake rows keep a valid label.
+  machineRule: "gloss_requires_roland" | "white_or_gloss" | "explicit_roland_tag" | "explicit_mimaki_tag" | "explicit_erp_machine" | "auto_load_balanced" | "default_cmyk" | null;
   reasons: string[];
   candidates: IntakeCandidate[];
 };
@@ -96,12 +100,27 @@ export function extractJobTicketFrom(text: string): string {
 // ---------- machine decision (conservative v1) ----------
 
 const WHITE_GLOSS_TOKENS = ["white", "gloss", "clear", "varnish", "primer", "spot uv", "w+g"];
+// 2026-11-11: only GLOSS-class finishes force the Roland. "primer" stays here
+// (Roland-only ink on GSO's presses — unchanged pending owner confirmation).
+const GLOSS_TOKENS = ["gloss", "varnish", "primer", "spot uv", "w+g"];
+
+// Canonical summaries state zero counts explicitly ("Gloss Layers: 0X") —
+// a stated ZERO is not a requirement, so it is removed before token checks.
+const finishHaystack = (item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">) =>
+  [item.selectedFinish, item.materialSummary, item.machineSummary]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ")
+    .replace(/\b(gloss|white) layers:\s*0\s*x?\b/g, " ");
 
 export function needsWhiteOrGloss(item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">): boolean {
-  const haystack = [item.selectedFinish, item.materialSummary, item.machineSummary]
-    .map((value) => String(value || "").toLowerCase())
-    .join(" ");
+  const haystack = finishHaystack(item);
   return WHITE_GLOSS_TOKENS.some((token) => haystack.includes(token));
+}
+
+/** True when the finish needs a gloss-class layer — the only thing that forces the Roland. */
+export function needsGloss(item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">): boolean {
+  const haystack = finishHaystack(item);
+  return GLOSS_TOKENS.some((token) => haystack.includes(token));
 }
 
 export function assignedMachineOf(item: Pick<IntakeItem, "machineSummary">): "mimaki" | "roland" | null {
@@ -127,43 +146,46 @@ export type MachineDecision = {
   reasons: string[];
 };
 
-// Finalized business routing rules (owner-approved, 13A.6G continuation):
-//   1. white and/or gloss required        -> Roland LG-640 (normalized 13A.7B) (white_or_gloss)
-//   2. CMYK-only + explicit ERP Roland    -> Roland (explicit_erp_machine)
-//   3. CMYK-only + standalone ROLAND tag  -> Roland (explicit_roland_tag)
-//   4. all other CMYK-only jobs           -> Mimaki UCJV300 (default_cmyk;
-//      explicit ERP Mimaki also reports explicit_erp_machine)
-// Genuinely contradictory data still reviews: an explicit Mimaki assignment
-// on a job that needs white/gloss or carries the ROLAND tag, or a
-// machineSummary naming both printers, never auto-routes.
-export function decideMachine(item: IntakeItem, fileName = ""): MachineDecision {
-  const whiteGloss = needsWhiteOrGloss(item);
+// Owner routing rules (corrected 2026-11-11 — the Mimaki prints White):
+//   1. gloss required                     -> Roland LG-640 (gloss_requires_roland);
+//                                            explicit Mimaki / MIMAKI tag -> review
+//   2. explicit ERP Roland / Mimaki       -> that press (explicit_erp_machine)
+//   3. standalone ROLAND / MIMAKI tag     -> that press (explicit_*_tag)
+//   4. otherwise (CMYK and/or White)      -> AUTO: the less busy press from
+//      COMPLETE load data (auto_load_balanced), else review — the operator
+//      chooses. Never a permanent Mimaki default, never first-in-list.
+// Contradictory data reviews: a machineSummary naming both printers, a tag
+// that contradicts the ERP assignment, or conflicting tags.
+export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: MachineLoadSnapshot | null): MachineDecision {
+  const gloss = needsGloss(item);
   const assigned = assignedMachineOf(item);
   const rolandTag = hasRolandFilenameTag(fileName);
+  const mimakiTag = hasMimakiFilenameTag(fileName);
   if (String(item.machineSummary || "").trim() && assigned === null) {
     return { machine: null, machineRule: null, reasons: ["machine_summary_contradictory_or_unknown"] };
   }
-  if (whiteGloss) {
-    if (assigned === "mimaki") {
-      // Mimaki is CMYK-only — an explicit Mimaki assignment on white/gloss
-      // work is contradictory data, not a routable instruction.
-      return { machine: null, machineRule: null, reasons: ["white_gloss_job_but_erp_assigned_mimaki_contradiction"] };
+  if (rolandTag && mimakiTag) {
+    return { machine: null, machineRule: null, reasons: ["conflicting_printer_tokens_in_filename"] };
+  }
+  if ((rolandTag && assigned === "mimaki") || (mimakiTag && assigned === "roland")) {
+    return { machine: null, machineRule: null, reasons: [`${rolandTag ? "roland" : "mimaki"}_filename_tag_but_erp_assigned_${assigned}_contradiction`] };
+  }
+  if (gloss) {
+    if (assigned === "mimaki" || mimakiTag) {
+      // Gloss is not operational on the Mimaki — an explicit Mimaki choice on
+      // gloss work is contradictory data, not a routable instruction.
+      return { machine: null, machineRule: null, reasons: ["gloss_job_but_mimaki_selected_contradiction"] };
     }
-    return { machine: "roland", machineRule: "white_or_gloss", reasons: ["white_or_gloss_requires_roland"] };
+    return { machine: "roland", machineRule: "gloss_requires_roland", reasons: ["gloss_requires_roland"] };
   }
-  if (rolandTag) {
-    if (assigned === "mimaki") {
-      return { machine: null, machineRule: null, reasons: ["roland_filename_tag_but_erp_assigned_mimaki_contradiction"] };
-    }
-    return { machine: "roland", machineRule: "explicit_roland_tag", reasons: ["standalone_roland_tag_in_filename"] };
+  if (assigned) {
+    return { machine: assigned, machineRule: "explicit_erp_machine", reasons: [`explicit_erp_${assigned}_assignment`] };
   }
-  if (assigned === "roland") {
-    return { machine: "roland", machineRule: "explicit_erp_machine", reasons: ["explicit_erp_roland_assignment"] };
-  }
-  if (assigned === "mimaki") {
-    return { machine: "mimaki", machineRule: "explicit_erp_machine", reasons: ["explicit_erp_mimaki_assignment"] };
-  }
-  return { machine: "mimaki", machineRule: "default_cmyk", reasons: ["default_cmyk_to_mimaki"] };
+  if (rolandTag) return { machine: "roland", machineRule: "explicit_roland_tag", reasons: ["standalone_roland_tag_in_filename"] };
+  if (mimakiTag) return { machine: "mimaki", machineRule: "explicit_mimaki_tag", reasons: ["standalone_mimaki_tag_in_filename"] };
+  const choice = selectLessBusyPrinter(["mimaki", "roland"], machineLoad);
+  if (!choice.ok) return { machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] };
+  return { machine: choice.printer, machineRule: "auto_load_balanced", reasons: [`auto_less_busy_${choice.printer}_by_${choice.metric}`] };
 }
 
 // ---------- RIP name ----------
@@ -188,8 +210,8 @@ function review(reasons: string[], candidates: IntakeCandidate[] = []): IntakeDe
   return { decision: "review", rule: null, jobId: null, itemId: null, jobTicket: null, itemTicket: null, ripName: null, machine: null, machineRule: null, reasons, candidates: candidates.slice(0, 5) };
 }
 
-function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDecision["rule"]>, fileName: string): IntakeDecision {
-  const machineDecision = decideMachine(item, fileName);
+function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDecision["rule"]>, fileName: string, machineLoad?: MachineLoadSnapshot | null): IntakeDecision {
+  const machineDecision = decideMachine(item, fileName, machineLoad);
   if (!machineDecision.machine) {
     return review([`matched_by_${rule}_but_machine_unresolved`, ...machineDecision.reasons], [candidateOf(job, item, rule)]);
   }
@@ -212,7 +234,7 @@ function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDec
   };
 }
 
-export function decideIntakeRoute(params: { fileName: string; subfolder?: string | null; jobs: IntakeJob[] }): IntakeDecision {
+export function decideIntakeRoute(params: { fileName: string; subfolder?: string | null; jobs: IntakeJob[]; machineLoad?: MachineLoadSnapshot | null }): IntakeDecision {
   const fileName = basenameOf(params.fileName);
   if (!isArtworkFileName(fileName)) return review(["not_an_artwork_file_type"]);
   const fileIdentity = normalizeFileIdentity(fileName);
@@ -227,7 +249,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
         if (String(item.itemTicket || "").toUpperCase() === itemTicket) hits.push({ job, item });
       }
     }
-    if (hits.length === 1) return routeItem(hits[0].job, hits[0].item, "item_ticket", fileName);
+    if (hits.length === 1) return routeItem(hits[0].job, hits[0].item, "item_ticket", fileName, params.machineLoad);
     if (hits.length > 1) return review(["item_ticket_matches_multiple_items"], hits.map((hit) => candidateOf(hit.job, hit.item, "item_ticket")));
     return review([`item_ticket_${itemTicket}_not_found_in_eligible_jobs`]);
   }
@@ -239,7 +261,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
     if (jobs.length > 1) return review(["job_ticket_matches_multiple_jobs"], jobs.map((job) => candidateOf(job, null, "job_ticket")));
     if (jobs.length === 1) {
       const job = jobs[0];
-      if (job.items.length === 1) return routeItem(job, job.items[0], "job_ticket_single_item", fileName);
+      if (job.items.length === 1) return routeItem(job, job.items[0], "job_ticket_single_item", fileName, params.machineLoad);
       return review(
         ["job_ticket_matches_job_with_multiple_items_pick_item_in_review"],
         job.items.map((item) => candidateOf(job, item, "job_ticket_multiple_items")),
@@ -262,7 +284,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
       }
     }
     const uniqueNameHits = nameHits.filter((hit, index) => nameHits.findIndex((other) => other.item.id === hit.item.id) === index);
-    if (uniqueNameHits.length === 1) return routeItem(uniqueNameHits[0].job, uniqueNameHits[0].item, "stored_filename", fileName);
+    if (uniqueNameHits.length === 1) return routeItem(uniqueNameHits[0].job, uniqueNameHits[0].item, "stored_filename", fileName, params.machineLoad);
     if (uniqueNameHits.length > 1) return review(["stored_filename_matches_multiple_items"], uniqueNameHits.map((hit) => candidateOf(hit.job, hit.item, "stored_filename")));
 
     // (d) exact match vs stored ProductionJobFile names — job-level identity,
@@ -270,7 +292,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
     const fileJobHits = params.jobs.filter((job) => job.fileNames.some((name) => normalizeFileIdentity(name) === fileIdentity));
     if (fileJobHits.length === 1) {
       const job = fileJobHits[0];
-      if (job.items.length === 1) return routeItem(job, job.items[0], "job_file_name", fileName);
+      if (job.items.length === 1) return routeItem(job, job.items[0], "job_file_name", fileName, params.machineLoad);
       return review(["job_file_matches_job_with_multiple_items"], job.items.map((item) => candidateOf(job, item, "job_file_name")));
     }
     if (fileJobHits.length > 1) return review(["job_file_matches_multiple_jobs"], fileJobHits.map((job) => candidateOf(job, null, "job_file_name")));
@@ -283,7 +305,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
       const jobs = params.jobs.filter((job) => String(job.jobTicket || "").toUpperCase() === subTicket);
       if (jobs.length === 1) {
         const job = jobs[0];
-        if (job.items.length === 1) return routeItem(job, job.items[0], "job_subfolder", fileName);
+        if (job.items.length === 1) return routeItem(job, job.items[0], "job_subfolder", fileName, params.machineLoad);
         return review(["subfolder_job_has_multiple_items_pick_item_in_review"], job.items.map((item) => candidateOf(job, item, "job_subfolder")));
       }
       if (jobs.length > 1) return review(["subfolder_ticket_matches_multiple_jobs"], jobs.map((job) => candidateOf(job, null, "job_subfolder")));
@@ -397,9 +419,10 @@ export function parseFilenamePrintHints(fileName: string): FilenamePrintHints {
     : whiteLayers > 0 ? `WHITE-${whiteLayers}X`
     : "CMYK";
   const premium = glossLayers > 0 || whiteLayers > 0;
-  // premium + explicit Mimaki = contradiction (Mimaki premium unsupported here)
-  const premiumConflict = premium && printerToken === "mimaki";
-  if (premiumConflict) reasons.push("premium_mode_but_mimaki_token_contradiction");
+  // gloss + explicit Mimaki = contradiction (no operational gloss on the Mimaki;
+  // Mimaki White is supported — 2026-11-11)
+  const premiumConflict = glossLayers > 0 && printerToken === "mimaki";
+  if (premiumConflict) reasons.push("gloss_mode_but_mimaki_token_contradiction");
   return {
     printerToken,
     printerConflict,
@@ -412,17 +435,19 @@ export function parseFilenamePrintHints(fileName: string): FilenamePrintHints {
 }
 
 // Filename-only machine decision for UNMATCHED files (no quote/job required —
-// spec 15F.0J.5-D). Same precedence family as decideMachine: premium ->
-// Roland; explicit token; default CMYK -> Mimaki; conflicts review.
-export function decideMachineFromFilename(fileName: string): { machine: "mimaki" | "roland" | null; machineRule: IntakeDecision["machineRule"]; mode: string; reasons: string[] } {
+// spec 15F.0J.5-D). Same precedence family as decideMachine: gloss ->
+// Roland; explicit token; otherwise AUTO by complete load data, else review.
+export function decideMachineFromFilename(fileName: string, machineLoad?: MachineLoadSnapshot | null): { machine: "mimaki" | "roland" | null; machineRule: IntakeDecision["machineRule"]; mode: string; reasons: string[] } {
   const hints = parseFilenamePrintHints(fileName);
   if (!hints.deterministic) return { machine: null, machineRule: null, mode: hints.mode, reasons: hints.reasons };
-  if (hints.glossLayers > 0 || hints.whiteLayers > 0) {
-    return { machine: "roland", machineRule: "white_or_gloss", mode: hints.mode, reasons: ["white_or_gloss_requires_roland"] };
+  if (hints.glossLayers > 0) {
+    return { machine: "roland", machineRule: "gloss_requires_roland", mode: hints.mode, reasons: ["gloss_requires_roland"] };
   }
-  if (hints.printerToken === "roland") return { machine: "roland", machineRule: "explicit_roland_tag", mode: "CMYK", reasons: ["standalone_roland_tag_in_filename"] };
-  if (hints.printerToken === "mimaki") return { machine: "mimaki", machineRule: "explicit_erp_machine", mode: "CMYK", reasons: ["standalone_mimaki_tag_in_filename"] };
-  return { machine: "mimaki", machineRule: "default_cmyk", mode: "CMYK", reasons: ["default_cmyk_to_mimaki"] };
+  if (hints.printerToken === "roland") return { machine: "roland", machineRule: "explicit_roland_tag", mode: hints.mode, reasons: ["standalone_roland_tag_in_filename"] };
+  if (hints.printerToken === "mimaki") return { machine: "mimaki", machineRule: "explicit_mimaki_tag", mode: hints.mode, reasons: ["standalone_mimaki_tag_in_filename"] };
+  const choice = selectLessBusyPrinter(["mimaki", "roland"], machineLoad);
+  if (!choice.ok) return { machine: null, machineRule: null, mode: hints.mode, reasons: ["auto_machine_load_unavailable_select_printer"] };
+  return { machine: choice.printer, machineRule: "auto_load_balanced", mode: hints.mode, reasons: [`auto_less_busy_${choice.printer}_by_${choice.metric}`] };
 }
 
 // ---------- 15H.5: run identity (attempt / revision / reprint) ----------

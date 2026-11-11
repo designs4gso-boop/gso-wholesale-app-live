@@ -2388,7 +2388,7 @@ export default function ProductionBoard() {
                     <label>Printer
                       <select name="printer" defaultValue="auto" style={manualInput}>
                         <option value="auto">Auto (routing rules)</option>
-                        <option value="mimaki">Mimaki UCJV300 (CMYK only)</option>
+                        <option value="mimaki">Mimaki UCJV300 (CMYK + White)</option>
                         <option value="roland">Roland LG-640</option>
                       </select>
                     </label>
@@ -2405,7 +2405,7 @@ export default function ProductionBoard() {
                   <div style={{ marginTop: 10 }}>
                     <Button submit variant="primary" loading={busy}>Create Manual Job</Button>
                   </div>
-                  <Text as="p" tone="subdued">White/gloss/specialty on the CMYK-only Mimaki is rejected; Auto follows the owner routing rules (white/gloss → Roland, CMYK → Mimaki). No price or cost is fabricated.</Text>
+                  <Text as="p" tone="subdued">Gloss on the Mimaki is rejected (gloss → Roland). CMYK and White run on either press; Auto picks the less busy press only when machine load is complete — otherwise choose Mimaki or Roland. No price or cost is fabricated.</Text>
                 </Form>
               </details>
             </BlockStack>

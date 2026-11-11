@@ -1,11 +1,17 @@
 import { authenticate, unauthenticated } from "../shopify.server";
 import {
+  configuratorBypassPaidOrderQueueItem,
   sendProductionAlertSafe,
   unrecognizedPaidOrderQueueItem,
   unverifiedPricePaidOrderQueueItem,
 } from "../lib/production-alert.server";
 import db from "../db.server";
-import { createProductionJobFromSource, unverifiedConfiguratorLinesOf } from "../lib/production-job-source.server";
+import {
+  configuratorBypassLinesOf,
+  configuratorManagedIdsOf,
+  createProductionJobFromSource,
+  unverifiedConfiguratorLinesOf,
+} from "../lib/production-job-source.server";
 import { createAdminGraphql } from "../lib/personalization-assets.server";
 import { adminDraftOrderLookup, unverifiedQuotePaymentQueueItem, verifyQuotePaymentOrder, type DraftOrderLookup } from "../lib/quote-payment-verification.server";
 import { resolveWithBoundedRetry } from "../lib/personalization-checkout.server";
@@ -159,6 +165,26 @@ export const action = async ({ request }: { request: Request }) => {
       console.error("orders_paid unverified-price hold trail failed", error);
     }
     return new Response("OK held for price review: configured line(s) bypassed the GSO checkout", { status: 200 });
+  }
+
+  // 2026-11-11: a RAW variant of a configurator-only product (the $1.00 Stock
+  // Bag path) holds the whole order for the owner — never a production job.
+  let bypassLines: any[] = [];
+  try {
+    const managed = configuratorManagedIdsOf(
+      await db.configuratorProduct.findMany({ where: { shop, active: true }, select: { shopifyProductGid: true, shopifyVariantGid: true } }),
+    );
+    bypassLines = configuratorBypassLinesOf(order, managed);
+  } catch (error) {
+    console.error("orders_paid configurator-bypass check failed", error);
+  }
+  if (bypassLines.length) {
+    try {
+      await db.agentReviewQueueItem.create({ data: configuratorBypassPaidOrderQueueItem(shop, order, bypassLines) as any });
+    } catch (error) {
+      console.error("orders_paid configurator-bypass hold trail failed", error);
+    }
+    return new Response("OK held for owner review: raw variant(s) of a configurator-only product bypassed the configurator", { status: 200 });
   }
 
   // Configurator orders: same pseudo-quoteId idempotency, same ticket naming,

@@ -250,7 +250,7 @@ describe("15H.4A order convergence foundation", () => {
     expect(bySuggested.decision).toBe("route");
   });
 
-  it("holo canonical orders route Roland via the explicit white token in the summary", () => {
+  it("holo canonical orders carry the explicit white token; White no longer forces a press (2026-11-11) — an unassigned holo item needs load or a press", () => {
     const payload = buildShopifyOrderJobPayload(
       paidOrder([canonicalLine({}, { material: "Holographic", holo: true, whiteRequired: true, glossX: 0, finishLabel: "No Specialty — 0X" })]),
       "GSO-20260812-0007",
@@ -260,9 +260,11 @@ describe("15H.4A order convergence foundation", () => {
       items: [{ id: "i", itemTicket: payload.items[0].itemTicket, ripJobName: payload.items[0].ripJobName, suggestedFileName: payload.items[0].suggestedFileName, productTitle: "x", selectedFinish: payload.items[0].selectedFinish, materialSummary: payload.items[0].materialSummary, machineSummary: null }],
       fileNames: [],
     };
+    expect(payload.items[0].materialSummary).toMatch(/White Layers: 1/);
     const route = decideIntakeRoute({ fileName: `${payload.items[0].itemTicket}.pdf`, jobs: [intakeJob] });
-    expect(route.machine).toBe("roland");
-    expect(route.machineRule).toBe("white_or_gloss");
+    // "Gloss Layers: 0X" is a stated zero, never a gloss requirement
+    expect(route.decision).toBe("review");
+    expect(route.reasons.join(" ")).toContain("auto_machine_load_unavailable_select_printer");
   });
 
   it("20-23. checkout emitter, RIP matcher, routing rules, and pricing files untouched", () => {
@@ -274,7 +276,7 @@ describe("15H.4A order convergence foundation", () => {
     const matcher = readFileSync("app/lib/rip-identity-match.server.ts", "utf8");
     expect(matcher).toContain("exact_item_ticket");
     const routing = readFileSync("app/lib/print-intake-routing.server.ts", "utf8");
-    expect(routing).toContain('reasons: ["default_cmyk_to_mimaki"]');
+    expect(routing).toContain('reasons: ["auto_machine_load_unavailable_select_printer"]');
   });
 
   it("capability probe caches and resets cleanly", async () => {

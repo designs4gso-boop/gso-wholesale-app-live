@@ -39,12 +39,12 @@ const db = { machineProfileCalibration: { findMany: async ({ where }: any) => RO
 const canon = (q: string) => computeCanonicalJob({ db, shop: SHOP }, normalizeCanonicalInput(new URLSearchParams(q))!);
 
 const CONTROLS = {
-  "3x3 sticker control (1,000 matte, AUTO CMYK)": "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=auto&pwhitelayers=0&pglosslayers=0",
-  "4x5 Sticker Bag (100, 1 face, 40% coverage)": "pfamily=sticker-bags&pbagmat=matte&pqty=100&pbagsides=1&pcmykcoverage=40",
+  "3x3 sticker control (1,000 matte, AUTO CMYK)": "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=mimaki&pwhitelayers=0&pglosslayers=0",
+  "4x5 Sticker Bag (100, 1 face, 40% coverage)": "pfamily=sticker-bags&pbagmat=matte&pqty=100&pbagsides=1&pcmykcoverage=40&pprinter=mimaki",
   "Roland CMYK job (1,000 x 3x3 matte, explicit Roland)": "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=roland&pwhitelayers=0&pglosslayers=0",
   "Roland WHITE job (1,000 x 3x3, 1 white layer, 100% coverage)": "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=auto&pwhitelayers=1&pwhitecoverage=100&pglosslayers=0",
   "Roland GLOSS job (1,000 x 3x3, 1 gloss layer)": "pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A&pprinter=auto&pwhitelayers=0&pglosslayers=1",
-  "Miron jar control (100ml Tall, 128, Side + Lid, AUTO CMYK)": "pfamily=premium-jars&pjarmat=matte&pqty=128&pjar=miron/100ml_tall&pjarside=1&pjarlid=1&pjarset=side_lid&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0",
+  "Miron jar control (100ml Tall, 128, Side + Lid, AUTO CMYK)": "pfamily=premium-jars&pjarmat=matte&pqty=128&pjar=miron/100ml_tall&pjarside=1&pjarlid=1&pjarset=side_lid&pdesigns=1&pprinter=mimaki&pwhitelayers=0&pglosslayers=0",
 } as const;
 
 const POSEIDON_PER_SQFT = 0.3155555555555555;

@@ -62,7 +62,7 @@ export function buildBrandRates(machines: Array<{ name?: string | null; inkChann
   // estimates and actual-cost reporting price ink identically — variance
   // reflects USAGE, not the old seeded-channel price mismatch ($156.99/750,
   // $190/1000). DB channel rates are only a fallback for a channel kind the
-  // canonical table does not define. Mimaki gloss stays null (CMYK-only).
+  // canonical table does not define. Mimaki gloss stays null (no gloss on the Mimaki).
   const out: BrandInkRates[] = [];
   for (const machine of machines) {
     const name = String(machine.name || "");
@@ -166,9 +166,10 @@ export function computeEntryCosts(entry: EntryInput, rates: BrandInkRates[]): En
   if (totalMl <= 0) warnings.push("Missing ink ml.");
   if (safeNumber(entry.printMinutes) <= 0) warnings.push("Missing print minutes.");
 
-  // Routing business rule (13A.4, warn-only in 13A.5): Mimaki is CMYK-only.
-  if (brand === "mimaki" && white + gloss > 0) {
-    warnings.push("ROUTING: white/gloss ink on Mimaki — business rule says Mimaki is CMYK-only; this job should carry the ROLAND tag.");
+  // Routing business rule (warn-only), corrected 2026-11-11: the Mimaki
+  // prints CMYK and White; only gloss is routed away from it.
+  if (brand === "mimaki" && gloss > 0) {
+    warnings.push("ROUTING: gloss ink on Mimaki — gloss is not operational on the Mimaki; gloss jobs should carry the ROLAND tag.");
   }
 
   return {

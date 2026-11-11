@@ -54,7 +54,7 @@ const NO_CAL: ResolvedMachineInputs = {
 /** What the form emits for Line 1 (pl0) + one additional line (pl1). */
 function params(opts: { line2Art: "ART-1" | "ART-2"; line2Mat?: "matte" | "holographic"; pqty?: string }) {
   return new URLSearchParams({
-    pfamily: "stickers-labels", pprinter: "auto", pwhitelayers: "0", pglosslayers: "0",
+    pfamily: "stickers-labels", pprinter: "mimaki", pwhitelayers: "0", pglosslayers: "0",
     ...(opts.pqty ? { pqty: opts.pqty } : {}),
     pllines: "2",
     pl0qty: "500", pl0w: "3", pl0h: "3", pl0mat: "matte", pl0art: "ART-1", pl0cuttype: "rectangular", pl0printsetups: "1",

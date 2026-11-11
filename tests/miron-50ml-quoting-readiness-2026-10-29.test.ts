@@ -108,7 +108,7 @@ afterEach(() => { delete process.env[OWNER_USER_IDS_ENV]; });
 
 /** The exact GET a single-line sticker job submits (legacy fields + canonical pl0* mirror). */
 const stickerQs = (pl0mat: string, extra = "", pmat = "m_clear") =>
-  `pfamily=stickers-labels&pqty=500&pwidth=3&pheight=3&pmat=${pmat}&pcut=square-rect&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0` +
+  `pfamily=stickers-labels&pqty=500&pwidth=3&pheight=3&pmat=${pmat}&pcut=square-rect&pdesigns=1&pprinter=mimaki&pwhitelayers=0&pglosslayers=0` +
   `&pllines=1&pl0qty=500&pl0w=3&pl0h=3&pl0mat=${encodeURIComponent(pl0mat)}&pl0cuttype=rectangular&pl0art=ART-1&pl0printsetups=1${extra}`;
 
 /** Server path: normalise -> attach verified materials -> resolve machine -> assemble. */
@@ -150,7 +150,7 @@ const jarQs = (qty: number) => [
   "pfamily=premium-jars&pjarmat=matte", `pqty=${qty}`, "pblank=vendor:vp_50", "plid=type:standard-top", "pjar=miron/50ml", "pjarvariant=",
   "pjarset=side_lid", "pjartamperopt=1", "pjarside=1", "pjarlid=1", "pjartamper=1",
   "plabelcount=3", "psame=no", "plabeltype=side", "plabelw=5.6", "plabelh=1.5", "plabeltype=lid", "plabelw=1.6", "plabelh=1.6", "plabeltype=tamper", "plabelw=5.6", "plabelh=0.5",
-  "pdesigns=1", "pmat=m_matte", "pprinter=auto", "pcut=square-rect", "pwhitelayers=0", "pglosslayers=0", "pcmykcoverage=40",
+  "pdesigns=1", "pmat=m_matte", "pprinter=mimaki", "pcut=square-rect", "pwhitelayers=0", "pglosslayers=0", "pcmykcoverage=40",
 ].join("&");
 
 async function jarJob(qty: number) {

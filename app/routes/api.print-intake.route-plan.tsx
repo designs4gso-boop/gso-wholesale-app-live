@@ -11,6 +11,7 @@ import {
   type IntakeJob,
 } from "../lib/print-intake-routing.server";
 import { createOrReusePrintIntakeJob } from "../lib/production-job-source.server";
+import { loadMachineWorkload } from "../lib/machine-load.server";
 import { appendIntakeAudit, canonicalReviewReason, readIntakeMeta } from "../lib/print-intake-review.server";
 
 // Print Intake plan endpoint. 13A.6G behavior preserved for MATCHED files
@@ -44,6 +45,9 @@ export async function action({ request }: { request: Request }) {
   const subfolder = basenameOf(String(body.subfolder || "").trim());
   const fileHashEarly = String(body.fileHash || "").trim().toLowerCase();
   const hasFullHashEarly = /^[0-9a-f]{64}$/.test(fileHashEarly);
+  // 2026-11-11: AUTO (no gloss, no explicit press) picks the less busy press
+  // only from complete per-press load; otherwise the file reviews.
+  const machineLoad = await loadMachineWorkload(db, setting.shop);
 
   // 15H.3: server-authoritative disposition FIRST. A rejected hash never
   // re-plans; an owner-assigned hash routes deterministically to the exact
@@ -79,7 +83,7 @@ export async function action({ request }: { request: Request }) {
       });
       return json({ ok: true, fileName, plan: { decision: "review", rule: null, reasons: [assignedJob ? "assigned_item_unresolved" : "assigned_job_missing_or_inactive"], candidates: [], autoCreated: false } });
     }
-    const machineDecision = decideMachine(assignedItem as any, fileName);
+    const machineDecision = decideMachine(assignedItem as any, fileName, machineLoad);
     if (!machineDecision.machine) {
       return json({ ok: true, fileName, plan: { decision: "review", rule: null, reasons: ["assigned_but_machine_unresolved", ...machineDecision.reasons], candidates: [], autoCreated: false } });
     }
@@ -149,7 +153,7 @@ export async function action({ request }: { request: Request }) {
     fileNames: job.files.flatMap((file) => [file.fileName, file.originalFileName || ""]).filter(Boolean),
   }));
 
-  const plan = decideIntakeRoute({ fileName, subfolder, jobs: intakeJobs });
+  const plan = decideIntakeRoute({ fileName, subfolder, jobs: intakeJobs, machineLoad });
   const fileHash = fileHashEarly;
   const fileSize = Math.max(0, Math.floor(Number(body.fileSize || 0)));
   const hasFullHash = hasFullHashEarly;
@@ -247,7 +251,7 @@ export async function action({ request }: { request: Request }) {
   const isUnmatched = plan.decision === "review" && plan.reasons.some((reason) => unmatchedReasons.includes(reason) || reason.includes("_not_found_in_eligible_jobs"));
   const isAmbiguousCandidates = plan.decision === "review" && plan.candidates.length > 1;
   if ((isUnmatched || isAmbiguousCandidates) && hasFullHash) {
-    const machineDecision = decideMachineFromFilename(fileName);
+    const machineDecision = decideMachineFromFilename(fileName, machineLoad);
     if (!machineDecision.machine) {
       const reviewReasons = [...plan.reasons, ...machineDecision.reasons];
       await recordReviewRow(reviewReasons);

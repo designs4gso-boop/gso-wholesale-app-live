@@ -276,7 +276,7 @@ export const AGENT_REGISTRY: AgentDefinition[] = [
   {
     id: "production_dispatcher",
     name: "Production Dispatcher",
-    purpose: "Plans machine dispatch with the canonical routing authority (CMYK->Mimaki, white/gloss->Roland, explicit Mimaki+specialty BLOCK). Integrates with the existing print-intake agent; does not duplicate it.",
+    purpose: "Plans machine dispatch with the canonical routing authority (gloss->Roland; CMYK/White->explicit press or the less busy press; explicit Mimaki+gloss BLOCK). Integrates with the existing print-intake agent; does not duplicate it.",
     status: "ACTIVE",
     statusReason: "Plan-only; the PowerShell print-intake agent remains the executor.",
     inputs: ["job item specs", "routing"],

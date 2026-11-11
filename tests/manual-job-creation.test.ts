@@ -44,7 +44,7 @@ const manualSource = (over: Record<string, any> = {}, itemOver: Record<string, a
   requestId: "11111111-2222-3333-4444-555555555555",
   payload: {
     customerName: "Walk-in — Jane D.",
-    items: [{ productTitle: "Manual CMYK Test", quantity: 10, family: "default", finish: "CMYK", printer: "auto" as const, ...itemOver }],
+    items: [{ productTitle: "Manual CMYK Test", quantity: 10, family: "default", finish: "CMYK", printer: "mimaki" as const, ...itemOver }],
     ...over,
   },
 });
@@ -75,7 +75,7 @@ describe("15H.4B manual job creation", () => {
     // family checklist applied (sticker-bags has the Labels applied step)
     expect(data.checklistItems.create.some((check: any) => /applied to bags/i.test(check.label))).toBe(true);
     expect(data.events.create[0].eventType).toBe("created_manual_admin");
-    expect(data.events.create[0].message).toContain("requested auto");
+    expect(data.events.create[0].message).toContain("requested mimaki"); // 2026-11-11: CMYK needs a chosen press without load data
   });
 
   it("5+6. same requestId retried / double-clicked -> same job, no duplicate", async () => {
@@ -102,19 +102,23 @@ describe("15H.4B manual job creation", () => {
   });
 
   it("12-17+E. machine resolution delegates to the canonical decider", () => {
-    const resolve = (finish: string, printer: any) => {
-      const verdict = validateManualJobInput({ requestId: "12345678", customerName: "c", items: [{ productTitle: "t", quantity: 1, finish, printer }] });
+    const resolve = (finish: string, printer: any, machineLoad: any = null) => {
+      const verdict = validateManualJobInput({ requestId: "12345678", customerName: "c", items: [{ productTitle: "t", quantity: 1, finish, printer }], machineLoad });
       return verdict.ok ? `${verdict.items[0].resolvedMachine}:${verdict.items[0].machineRule}` : `REJECT:${(verdict as any).reason}`;
     };
-    expect(resolve("CMYK", "auto")).toBe("mimaki:default_cmyk");
+    // 2026-11-11: no permanent Mimaki default — AUTO without complete load asks for a press
+    expect(resolve("CMYK", "auto")).toMatch(/^REJECT:Automatic press selection is unavailable/);
+    const load = { source: "t", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 7, estimatedMinutes: null }, roland: { openItems: 1, estimatedMinutes: null } } };
+    expect(resolve("CMYK", "auto", load)).toBe("roland:auto_load_balanced");
+    expect(resolve("White", "auto", load)).toBe("roland:auto_load_balanced");
     expect(resolve("CMYK", "roland")).toBe("roland:explicit_erp_machine");
     expect(resolve("CMYK", "mimaki")).toBe("mimaki:explicit_erp_machine");
-    expect(resolve("White", "auto")).toBe("roland:white_or_gloss");
-    expect(resolve("Gloss", "auto")).toBe("roland:white_or_gloss");
-    expect(resolve("White + Gloss", "auto")).toBe("roland:white_or_gloss");
-    expect(resolve("White", "roland")).toBe("roland:white_or_gloss");
-    expect(resolve("White", "mimaki")).toContain("REJECT");
+    expect(resolve("White", "mimaki")).toBe("mimaki:explicit_erp_machine"); // the Mimaki prints White
+    expect(resolve("Gloss", "auto")).toBe("roland:gloss_requires_roland");
+    expect(resolve("White + Gloss", "auto")).toBe("roland:gloss_requires_roland");
+    expect(resolve("White", "roland")).toBe("roland:explicit_erp_machine");
     expect(resolve("Gloss", "mimaki")).toContain("REJECT");
+    expect(resolve("White + Gloss", "mimaki")).toContain("REJECT");
   });
 
   it("18-20+K. Print Intake resolves the manual job by item ticket, job ticket, and suggested filename", async () => {

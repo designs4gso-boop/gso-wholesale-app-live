@@ -75,9 +75,9 @@ const view = (qs: string) => {
   return canonicalViewOf(assembleCanonicalJob(input!, CAL));
 };
 
-const STICKER_BAG_QS = (sides: 1 | 2) => `pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=${sides}&pdesigns=1&pprinter=auto`;
-const STOCK_BAG_QS = (qty: number) => `pfamily=sticker-bags&pbagmat=matte&pstockbag=1&pqty=${qty}&pbagsides=2&pdesigns=1&pprinter=auto`;
-const JAR_QS = (family: string, jar: string, extra = "") => `pfamily=${family}&pjarmat=matte&pqty=500&pjar=${jar}&pjarside=1&pjarlid=1&pcmykcoverage=40${extra}`;
+const STICKER_BAG_QS = (sides: 1 | 2) => `pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=${sides}&pdesigns=1&pprinter=mimaki`;
+const STOCK_BAG_QS = (qty: number) => `pfamily=sticker-bags&pbagmat=matte&pstockbag=1&pqty=${qty}&pbagsides=2&pdesigns=1&pprinter=mimaki`;
+const JAR_QS = (family: string, jar: string, extra = "") => `pfamily=${family}&pjarmat=matte&pprinter=mimaki&pqty=500&pjar=${jar}&pjarside=1&pjarlid=1&pcmykcoverage=40${extra}`;
 
 /** A read-only fake shop DB: one Poseidon matte roll, one holographic roll, the 4x5 blank bag, a Roland. */
 function fakeShopDb() {
@@ -160,9 +160,9 @@ describe("B. Banner fields reach the canonical banner engine (4-5)", () => {
   });
 
   it("5. a valid banner now returns canonical true cost; the old field names alone still report missing size", () => {
-    const old = view("pfamily=banners&pqty=2&pwidth=36&pheight=60&pdesigns=1");
+    const old = view("pfamily=banners&pprinter=mimaki&pqty=2&pwidth=36&pheight=60&pdesigns=1");
     expect(old.blockers.join(" ")).toContain("BANNER_SIZE_REQUIRED");
-    const mapped = view("pfamily=banners&pqty=2&pwidth=36&pheight=60&pbannerw=36&pbannerh=60&pbannersides=SINGLE&pbanneredge=TRIM_ONLY&pbannergrommets=NONE&pdesigns=1");
+    const mapped = view("pfamily=banners&pprinter=mimaki&pqty=2&pwidth=36&pheight=60&pbannerw=36&pbannerh=60&pbannersides=SINGLE&pbanneredge=TRIM_ONLY&pbannergrommets=NONE&pdesigns=1");
     expect(mapped.blockers.join(" ")).not.toContain("BANNER_SIZE_REQUIRED");
     expect(mapped.status).not.toBe("DRAFT_ONLY");
     expect(mapped.unitCost).not.toBeNull();
@@ -170,7 +170,7 @@ describe("B. Banner fields reach the canonical banner engine (4-5)", () => {
   });
 
   it("unverified banner finishing still fails closed (formula unchanged)", () => {
-    const hemmed = view("pfamily=banners&pqty=2&pbannerw=36&pbannerh=60&pbanneredge=HEMMED&pdesigns=1");
+    const hemmed = view("pfamily=banners&pprinter=mimaki&pqty=2&pbannerw=36&pbannerh=60&pbanneredge=HEMMED&pdesigns=1");
     expect(hemmed.status).toBe("DRAFT_ONLY");
     expect(hemmed.blockers.join(" ")).toContain("BANNER_FINISHING_RATE_REQUIRED");
   });
@@ -367,15 +367,16 @@ describe("18-20. unchanged: DTP ladders, printer routing, canonical cost formula
     expect(approved.priceAuthority).toBe("Owner DTP price ladder (OWNER_APPROVED_DTP_4X5_2026_10_06)");
   });
 
-  it("19. printer routing: CMYK auto -> Mimaki, white/gloss -> Roland, Mimaki + white/gloss blocked, explicit Roland CMYK allowed", () => {
-    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 0, glossLayers: 0 }).effectivePrinter).toBe("mimaki");
-    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 1, glossLayers: 0 }).effectivePrinter).toBe("roland");
+  it("19. printer routing (2026-11-11): gloss -> Roland, Mimaki + gloss blocked, Mimaki + white allowed, CMYK auto needs load", () => {
+    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 0, glossLayers: 0 }).autoSelection.status).toBe("unavailable");
+    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 1, glossLayers: 0, costReadyPrinters: ["roland"] }).effectivePrinter).toBe("roland");
     expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 0, glossLayers: 2 }).effectivePrinter).toBe("roland");
     expect(resolveCanonicalMachineRouting({ printerSelection: "roland", whiteLayers: 0, glossLayers: 0 }).blockers).toEqual([]);
-    for (const layers of [{ whiteLayers: 1, glossLayers: 0 }, { whiteLayers: 0, glossLayers: 1 }]) {
+    expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 1, whiteCoveragePct: 40, glossLayers: 0 }).blockers).toEqual([]);
+    for (const layers of [{ whiteLayers: 0, glossLayers: 1 }, { whiteLayers: 1, whiteCoveragePct: 40, glossLayers: 1 }]) {
       const routed = resolveCanonicalMachineRouting({ printerSelection: "mimaki", ...layers });
-      expect(routed.blockers.join(" ")).toContain("MIMAKI_SPECIALTY_UNSUPPORTED");
-      expect(summarizeCalculatorBlockers(routed.blockers)!.items[0]).toBe("White/gloss cannot print on the Mimaki — choose Auto or Roland");
+      expect(routed.blockers.join(" ")).toContain("MIMAKI_GLOSS_UNSUPPORTED");
+      expect(summarizeCalculatorBlockers(routed.blockers)!.items[0]).toBe("Gloss cannot print on the Mimaki — choose Auto or Roland");
     }
   });
 

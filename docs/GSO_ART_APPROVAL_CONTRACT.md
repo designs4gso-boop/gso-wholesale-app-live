@@ -16,7 +16,7 @@ Input: job spec (family, width/height in, sides, design count, white/gloss layer
 | fonts not outlined | WARN |
 | labels/sticker bags: cutline layer missing | WARN; unknown | NEEDS_DESIGNER |
 | GSO cutline (−0.0625 in per side) underivable | FAIL |
-| white/gloss with Mimaki explicitly selected (`MIMAKI_SPECIALTY_UNSUPPORTED`) | FAIL |
+| gloss with Mimaki explicitly selected (`MIMAKI_GLOSS_UNSUPPORTED`; corrected 2026-11-11 — Mimaki + White is valid art) | FAIL |
 | white selected without coverage | WARN (coverage is operator-supplied, never defaulted) |
 | fewer files/pages than designs; sides vs files | WARN |
 

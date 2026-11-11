@@ -51,7 +51,7 @@ const deps = () => ({
 const codeOf = (file: string) => readFileSync(file, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 const bagJob = (family: "sticker-bags" | "stock-bags", blankUnitCost: number | null = null) => {
   // the UI family is always "sticker-bags"; pstockbag=1 selects the stock bag (canonicalFamilyFromUi)
-  const input = normalizeCanonicalInput(new URLSearchParams(`pfamily=sticker-bags&pbagmat=matte${family === "stock-bags" ? "&pstockbag=1" : ""}&pqty=1000&pbagsides=1&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0`))!;
+  const input = normalizeCanonicalInput(new URLSearchParams(`pfamily=sticker-bags&pbagmat=matte${family === "stock-bags" ? "&pstockbag=1" : ""}&pqty=1000&pbagsides=1&pdesigns=1&pprinter=mimaki&pwhitelayers=0&pglosslayers=0`))!;
   expect(input.family).toBe(family);
   return computeCanonicalJob(deps(), blankUnitCost == null ? input : { ...input, bags: { ...(input.bags ?? { sides: 1 as any }), blankUnitCost } });
 };
@@ -225,10 +225,10 @@ describe("4x5 blank bag authority (5) everything else is unchanged", () => {
     expect(STICKER_BAG_MOQ).toBe(50);
   });
 
-  it("routing unchanged: white / gloss -> Roland, CMYK -> Mimaki", () => {
-    expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: null } as any).machine).toBe("roland");
+  it("routing (corrected 2026-11-11): gloss -> Roland; CMYK / White need an assigned press or complete load", () => {
+    expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBe("mimaki");
     expect(decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any).machine).toBe("roland");
-    expect(decideMachine({ selectedFinish: "CMYK", materialSummary: "standard cmyk", machineSummary: null } as any).machine).toBe("mimaki");
+    expect(decideMachine({ selectedFinish: "CMYK", materialSummary: "standard cmyk", machineSummary: null } as any).machine).toBeNull();
   });
 
   it("machine recovery stays $5/hour (owner_verified)", () => {
