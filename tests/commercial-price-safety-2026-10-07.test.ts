@@ -76,7 +76,7 @@ async function sweep(rate: number): Promise<Row[]> {
   }
   // 4. Cost Calculator — Miron jars (owner 16D ladder + margin floor + envelope)
   for (const qty of [50, 128, 250, 500, 1000]) {
-    const q = `pfamily=premium-jars&pqty=${qty}&pjar=miron/100ml_tall&pjarside=1&pjarlid=1&pjarset=side_lid&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0`;
+    const q = `pfamily=premium-jars&pjarmat=matte&pqty=${qty}&pjar=miron/100ml_tall&pjarside=1&pjarlid=1&pjarset=side_lid&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0`;
     const r = await computeCanonicalJob({ db, shop: SHOP }, normalizeCanonicalInput(new URLSearchParams(q))!);
     const ladder = resolveJarOwnerLadder({ brand: "miron", sizeKey: "100ml_tall", quantity: qty, holographic: false, specialtyX: 0 });
     if (r.totalCost == null) { rows.push({ surface: "Cost Calculator", family: "premium-jars", config: `Miron 100ml Tall side+lid x ${qty}`, rate, cost: null, total: null, unit: null, rule: `no cost: ${r.status}` }); continue; }

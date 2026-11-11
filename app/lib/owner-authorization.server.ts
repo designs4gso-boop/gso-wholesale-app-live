@@ -8,6 +8,15 @@
 // Owner = that user ID is listed in GSO_OWNER_SHOPIFY_USER_IDS (comma list),
 // or an ONLINE session marks the user as the store's account owner.
 // Fail closed: with no configuration nobody is the owner. Never a posted field.
+//
+// 2026-11-11 TEMPORARY OWNER ACCESS (explicit, never implied). Until James's
+// and Raquel's staff user IDs are verified, the owner can set
+//   GSO_OWNER_ENFORCEMENT=temporary_all_staff
+// on Render: every Shopify-AUTHENTICATED admin of the shop is then treated as
+// owner, and every reason says so. Shopify authentication still runs first in
+// every caller; this never makes the ERP public. Unset (or any other value) =
+// ENFORCED, exactly as before. Every reason shows the viewer's own staff user
+// ID so the real IDs can be collected for GSO_OWNER_SHOPIFY_USER_IDS.
 
 import { COST_PRICING_OWNER_ONLY_MESSAGE } from "./calculator-owner-view";
 
@@ -19,9 +28,19 @@ export type OwnerAuthorization = {
   actor: string;
   /** Why the user is / is not the owner (owner-visible wording). */
   reason: string;
+  /** "enforced" = configured IDs decide; "temporary_all_staff" = the explicit temporary switch is on. */
+  enforcement?: OwnerEnforcementMode;
 };
 
 export const OWNER_USER_IDS_ENV = "GSO_OWNER_SHOPIFY_USER_IDS";
+export const OWNER_ENFORCEMENT_ENV = "GSO_OWNER_ENFORCEMENT";
+export const OWNER_ENFORCEMENT_TEMPORARY = "temporary_all_staff";
+export type OwnerEnforcementMode = "enforced" | typeof OWNER_ENFORCEMENT_TEMPORARY;
+
+/** Only the exact value "temporary_all_staff" relaxes enforcement; anything else is enforced. */
+export function ownerEnforcementMode(env: Record<string, string | undefined> = process.env): OwnerEnforcementMode {
+  return String(env[OWNER_ENFORCEMENT_ENV] || "").trim().toLowerCase() === OWNER_ENFORCEMENT_TEMPORARY ? OWNER_ENFORCEMENT_TEMPORARY : "enforced";
+}
 
 export function configuredOwnerUserIds(env: Record<string, string | undefined> = process.env): string[] {
   return String(env[OWNER_USER_IDS_ENV] || "")
@@ -41,21 +60,47 @@ export function resolveOwnerAuthorization(
   const shop = String(session?.shop || "");
   const named = String(session?.email || [session?.firstName, session?.lastName].filter(Boolean).join(" ") || "").trim();
   const actor = named || (userId ? `shopify-user:${userId}` : `shop-admin:${shop} (unidentified)`);
+  const yourId = userId ? ` Your Shopify staff user ID is ${userId}.` : "";
+  const enforcement = ownerEnforcementMode(env);
+  const result = (isOwner: boolean, reason: string): OwnerAuthorization => ({ isOwner, userId, actor, reason, enforcement });
 
   if (session?.isOnline && session?.accountOwner === true) {
-    return { isOwner: true, userId, actor, reason: "Shopify account owner (online session)." };
+    return result(true, "Shopify account owner (online session).");
   }
   const ownerIds = configuredOwnerUserIds(env);
+  if (userId && ownerIds.includes(userId)) {
+    return result(true, `Configured owner (verified Shopify staff user ID).${yourId}`);
+  }
+  if (enforcement === OWNER_ENFORCEMENT_TEMPORARY) {
+    // Explicit temporary switch: any Shopify-authenticated admin of this shop.
+    return result(true, `TEMPORARY OWNER ACCESS: ${OWNER_ENFORCEMENT_ENV}=${OWNER_ENFORCEMENT_TEMPORARY} gives every authenticated staff member owner access until ${OWNER_USER_IDS_ENV} is verified.${yourId}`);
+  }
   if (!ownerIds.length) {
-    return { isOwner: false, userId, actor, reason: `Owner-only action: no owner is configured (${OWNER_USER_IDS_ENV} is empty) — denied by default.` };
+    return result(false, `Owner-only action: no owner is configured (${OWNER_USER_IDS_ENV} is empty) — denied by default.${yourId}`);
   }
   if (!userId) {
-    return { isOwner: false, userId, actor, reason: "Owner-only action: this request carries no verified Shopify staff identity." };
+    return result(false, "Owner-only action: this request carries no verified Shopify staff identity.");
   }
-  if (ownerIds.includes(userId)) {
-    return { isOwner: true, userId, actor, reason: "Configured owner (verified Shopify staff user ID)." };
+  return result(false, `Owner-only action: you are not the configured owner.${yourId}`);
+}
+
+/**
+ * 2026-11-11 owner decision: regular PRODUCTION staff do not see revenue, true
+ * cost, profit, margin or owner cost controls. Hidden ONLY when owner identity
+ * is actually configured (GSO_OWNER_SHOPIFY_USER_IDS) and the viewer is not an
+ * owner — with no IDs configured the owners cannot be told apart from staff,
+ * so nothing is hidden (owner data is never hidden by accident).
+ */
+export function productionFinancialVisibility(
+  auth: { session?: any; sessionToken?: any } | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): { show: boolean; reason: string; owner: OwnerAuthorization } {
+  const owner = resolveOwnerAuthorization(auth, env);
+  if (owner.isOwner) return { show: true, reason: owner.reason, owner };
+  if (!configuredOwnerUserIds(env).length) {
+    return { show: true, reason: `Financials visible to all staff: ${OWNER_USER_IDS_ENV} is not configured yet, so owners cannot be identified.`, owner };
   }
-  return { isOwner: false, userId, actor, reason: "Owner-only action: you are not the configured owner." };
+  return { show: false, reason: "Financial figures are owner-only.", owner };
 }
 
 /* 2026-10-19 owner decision: the ENTIRE Cost & Pricing Calculator is owner

@@ -1,5 +1,20 @@
 import { db } from "../db.server";
 
+/**
+ * 2026-11-11: Shopify customer-search query for ONE exact email. The value is
+ * quoted (quotes/backslashes stripped) so a caller-supplied string cannot add
+ * search syntax such as `x OR tag:wholesale_approved`.
+ */
+export function exactEmailCustomerQuery(email: string): string {
+  return `email:"${String(email).replace(/["\\]/g, "").trim()}"`;
+}
+
+/** True only when the customer Shopify returned is the email that was asked for. */
+export function isSameEmail(found: unknown, requested: unknown): boolean {
+  const a = String(found ?? "").trim().toLowerCase();
+  return a !== "" && a === String(requested ?? "").trim().toLowerCase();
+}
+
 export type RuleLike = {
   id: number;
   title: string;

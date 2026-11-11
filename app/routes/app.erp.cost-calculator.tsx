@@ -25,7 +25,7 @@ import {
   type FamilyMarginRule,
 } from "../lib/calculator-emergency.server";
 import { computeAutoCost, type AutoFamily } from "../lib/auto-costing.server";
-import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, SPEKTRA_FREIGHT_PER_PO, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, ROLAND_INK_CALIBRATION, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
+import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TIER_QUANTITIES, dtpMarginPctForQuantity, MAX_LABELS_PER_UNIT, MULTILABEL_ENGINE_VERSION, PRODUCTION_READY_ENGINE_VERSION, REQUIRED_STICKER_BAG_SIZES, TOP_ENGINE_VERSION, bagSizeToken, blankClassAllowedFor, buildLabelRows, buildMimakiPremiumInkEstimate, canonicalUiFamily, classifyCalculatorProduct, computeProductDrivenCost, enforceFlatChironCost, formatComponentLabel, marginFamilyKeyFor, mironTopCompatible, normalizeCutType, ROLAND_INK_CALIBRATION, uiFamilyToEngine, type CalculatorProductClass, type LabelRow, type ProductDrivenInput, type ProductFamilyKey, type ResolvedComponent } from "../lib/product-driven-costing.server";
 import { COMMERCIAL_PRICING_VERSION, buildStickerLines, computeCommercialPrice, designSplit, marginCurveConfigFor, marginCurveKeyFor, normalizeAdditionalLineCount, resolveMarginPctForQuantity, specialtyFinishReasons, validateStickerLine } from "../lib/commercial-pricing-policy.server";
 import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
 import { SPECIALTY_FILE_PREP_FEE, SPECIALTY_FILE_PREP_LABEL, specialtyFilePrepFee } from "../lib/calculator-fee-standards";
@@ -36,6 +36,7 @@ import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
 import { isCostedAuthority, persistQuoteIfCanonicalAllows, resolveCostAuthority } from "../lib/canonical-quote-authority.server";
 import { canonicalLabelCutType, canonicalCutTypeIsWireable } from "../lib/canonical-calculator-shared";
 import { attachVerifiedLabelMaterials, materialCalculatorReadiness } from "../lib/material-calculator-readiness.server";
+import { SPLIT_BAG_BLANK_UNIT_COST } from "../lib/canonical-calculator.server";
 import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
 import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
 import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE } from "../lib/jar-cost-inputs.server";
@@ -44,7 +45,7 @@ import { JAR_LABEL_GEOMETRY, formatJarGeometry, type JarSizeKey } from "../lib/j
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
-import { REQUIRED_FIELDS_MESSAGE, STOCK_BAG_CALCULATOR_OPTION, calculatorFamilyChoice, calculatorFamilyParams, missingRequiredCalculatorFields, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
+import { REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, STOCK_BAG_CALCULATOR_OPTION, calculatorFamilyChoice, calculatorFamilyParams, missingRequiredCalculatorFields, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
 // 2026-10-19 owner decision C: Stock Bag quotes price through the SAME storefront authority the online checkout uses.
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 import { priceStockBagTierRow, stockBagStorefrontSelection } from "../lib/stock-bag-quote-pricing.server";
@@ -83,6 +84,19 @@ import {
   suggestedPriceFromMargin,
   wiredApplicationRate,
 } from "../lib/cost-calculator.server";
+
+/**
+ * 2026-11-11 OWNER POLICY: no invented freight. The historical $85 per Spektra
+ * PO is an UNVERIFIED assumption (dtp-catalog.ts SPEKTRA_FREIGHT_ASSUMPTION),
+ * so it never enters DTP true cost, margins, floors or a pass-through charge.
+ * Freight counts only when entered for the job (actual = verified, allowance
+ * = estimated); otherwise the freight line is $0, EXCLUDED and disclosed.
+ */
+const DTP_FREIGHT_NOT_VERIFIED = { freightPerOrder: 0, freightSource: "excluded" as const, freightNote: "FREIGHT_NOT_VERIFIED: no verified Spektra freight — inbound freight is not included in this true cost. Enter the vendor freight quote (actual) or an allowance to include it." };
+
+/** 2026-11-11: the Split Bag blank — ONE owner-priced bag ($0.25), never a Vendor Cost Book pick. */
+const SPLIT_BAG_BLANK = { id: "preset:split-bag", name: "Split Bag", unitCost: SPLIT_BAG_BLANK_UNIT_COST } as const;
+const splitBagComponent = (): ResolvedComponent => ({ name: SPLIT_BAG_BLANK.name, unitCost: SPLIT_BAG_BLANK.unitCost, tiers: [], status: "verified" as const, note: "Owner decision 2026-11-11: one Split Bag blank, $0.25 each." });
 
 /**
  * 2026-10-29: a Miron size with a dated owner cost record (MIRON_SET_COST_PROVENANCE)
@@ -902,6 +916,8 @@ export async function loader({ request }: { request: Request }) {
   const pFamily = String(eparams.get("pfamily") || "");
   // 2026-10-19: Stock Bags = pfamily=sticker-bags + pstockbag=1 (the canonical stock-bags family).
   const stockBagP = pFamily === "sticker-bags" && eparams.get("pstockbag") === "1";
+  // 2026-11-11: Split Bag = pfamily=sticker-bags + psplitbag=1 (canonical split-bags family).
+  const splitBagP = pFamily === "sticker-bags" && eparams.get("psplitbag") === "1" && !stockBagP;
   // 15B: accepted values come from the shared registry (canonical + legacy
   // aliases of calculator-ENABLED families — reserved dtp-bags stays out).
   if (pFamily && calculatorFamilyValues().includes(pFamily)) {
@@ -931,6 +947,9 @@ export async function loader({ request }: { request: Request }) {
       ? REQUIRED_STICKER_BAG_SIZES.filter((size) => !presentBagSizes.has(size)).map((size) => ({ value: `type:bag-${size}`, label: `${size} Sticker Bag — NO PRICE — not verified` }))
       : [];
     autoBag = isBagFamily && bagRecords.length === 1 ? (bagRecords[0] as any).item : null;
+    // Split Bag: its blank is the owner $0.25 Split Bag, shown auto-selected —
+    // never a 4x5 bag record from the picker.
+    if (splitBagP) autoBag = SPLIT_BAG_BLANK;
     const requestedBlankId = String(eparams.get("pblank") || "") || (autoBag ? autoBag.id : "");
     let pickedBlank = blankItemById.get(requestedBlankId) || null;
     let pickedEntry = pickedBlank ? classified.find((entry) => entry.item.id === pickedBlank!.id) : null;
@@ -973,8 +992,8 @@ export async function loader({ request }: { request: Request }) {
     const canonicalBagComponent: ResolvedComponent | null = canonicalBagSize && REQUIRED_STICKER_BAG_SIZES.includes(canonicalBagSize)
       ? { name: `${canonicalBagSize} Sticker Bag`, unitCost: null, tiers: [], status: "estimated", note: "Owner cost not provided yet — Draft Only." }
       : null;
-    if (canonicalBagComponent) selectedClass = "bag_sticker";
-    const blankComponent = enforceFlatChironCost(
+    if (canonicalBagComponent || splitBagP) selectedClass = "bag_sticker";
+    const blankComponent = splitBagP ? splitBagComponent() : enforceFlatChironCost(
       eparams.get("pblank") === "custom"
         ? (customName && customCost > 0 && customNote
             ? { name: customName, unitCost: customCost, tiers: [], status: "estimated" as const, note: `Custom item — ${customNote}` }
@@ -1005,10 +1024,10 @@ export async function loader({ request }: { request: Request }) {
       includedFeatures: dtpAddOns.filter((addOn: any) => addOn.enabled && addOn.amount <= 0 && /includ/i.test(addOn.pricingType)).map((addOn: any) => addOn.name),
       optionalFeatures: dtpAddOns.filter((addOn: any) => addOn.enabled && /option/i.test(addOn.pricingType)).map((addOn: any) => ({ name: addOn.name, amount: addOn.amount })),
       ...(dtpUserActual > 0
-        ? { freightPerOrder: dtpUserActual, freightSource: "verified" as const, freightNote: "Actual entered freight/handling/fees (replaces the $85 Spektra default)." }
+        ? { freightPerOrder: dtpUserActual, freightSource: "verified" as const, freightNote: "Actual entered freight/handling/fees (vendor freight)." }
         : dtpAllowance > 0
-          ? { freightPerOrder: dtpAllowance, freightSource: "estimated" as const, freightNote: "ESTIMATED allowance (replaces the $85 Spektra default)." }
-          : { freightPerOrder: SPEKTRA_FREIGHT_PER_PO, freightSource: "verified" as const, freightNote: "One $85 charge per Spektra purchase order — never per design, size, or line item; allocated across units in tier pricing." }),
+          ? { freightPerOrder: dtpAllowance, freightSource: "estimated" as const, freightNote: "ESTIMATED freight allowance entered for this job." }
+          : DTP_FREIGHT_NOT_VERIFIED),
     } : null;
     const productInput: ProductDrivenInput = {
       family: engineFamilyP,
@@ -1145,7 +1164,7 @@ export async function loader({ request }: { request: Request }) {
             quantity: qty, designs: Number(eparams.get("pdesigns") || 1),
             selection: { material: eparams.get("pdtpmaterial"), finish: eparams.get("pdtpfinish"), spot: eparams.get("pdtpspot"), zipper: eparams.get("pdtpzipper"), topFeature: eparams.get("pdtptop"), clearGusset: eparams.get("pdtpgusset") === "1" },
             legacy: { totalCost: run.totalCost, missing: run.missing.length > 0, vendorSubtotal: run.lines.find((line) => line.key === "blank")?.amount ?? null },
-            freightPerOrder: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+            freightPerOrder: dtpInputP ? dtpInputP.freightPerOrder : 0,
           });
           const dtpRow = priceDtpQuote({
             ladderSku: String((pickedBlank as any)?.sku || ""),
@@ -1156,7 +1175,7 @@ export async function loader({ request }: { request: Request }) {
             customUnitPrice: qty === requestedQtyP && Number(eparams.get("pdtpcustomprice") || 0) > 0 ? Number(eparams.get("pdtpcustomprice")) : null,
             repeatOrder: eparams.get("pdtprepeat") === "1",
             passThroughFreight: eparams.get("pdtpfreightpass") === "1",
-            freightAmount: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+            freightAmount: dtpInputP ? dtpInputP.freightPerOrder : 0,
             override: { phrase: String(eparams.get("eophrase") || ""), reason: String(eparams.get("eoreason") || "") },
           });
           // 2026-10-06 owner shaped-pouch policy: +10 % on the standard customer
@@ -1179,7 +1198,7 @@ export async function loader({ request }: { request: Request }) {
               quantity: qty, skuCount: Math.max(1, Number(eparams.get("pdesigns") || 1)),
             });
             const artLive = OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(eparams.get("pdesigns") || 1));
-            return { status: look.status, basis: look.basis, config: look.config, wholesaleUnit: look.wholesaleUnit, wholesaleTotal: look.wholesaleTotal, extraSkuCost: look.wholesaleExtraSkuCost, landedLive: look.wholesaleTotal != null ? look.wholesaleTotal + artLive + SPEKTRA_FREIGHT_PER_PO : null, statusLabel: SPEKTRA_COST_STATUS_LABEL[look.status], version: look.version, sourceDate: look.sourceDate };
+            return { status: look.status, basis: look.basis, config: look.config, wholesaleUnit: look.wholesaleUnit, wholesaleTotal: look.wholesaleTotal, extraSkuCost: look.wholesaleExtraSkuCost, landedLive: look.wholesaleTotal != null ? look.wholesaleTotal + artLive : null, statusLabel: SPEKTRA_COST_STATUS_LABEL[look.status], version: look.version, sourceDate: look.sourceDate };
           })();
           const shapedP = applyShapedPolicyToDtpRow({
             quantity: qty, shape: eparams.get("pdtpshape") === "custom" ? "custom" : "standard", die: dieP,
@@ -1195,8 +1214,8 @@ export async function loader({ request }: { request: Request }) {
             profit: shapedP.profit, actualMarginPct: shapedP.marginPct,
             belowFloor: shapedP.marginPct < dtpRow.hardFloorPct,
             draftOnly: costP.missing || shapedP.blocked,
-            freightTotal: dtpInputP ? dtpInputP.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
-            freightSource: dtpInputP ? dtpInputP.freightSource : "verified",
+            freightTotal: dtpInputP ? dtpInputP.freightPerOrder : 0,
+            freightSource: dtpInputP ? dtpInputP.freightSource : "excluded",
             setupTotal: run.setupTotal,
             status: shapedP.blocked ? "BLOCKED" : dtpRow.status,
             blockers: [...shapedP.reasons, ...(costP.missingReason ? [costP.missingReason] : [])],
@@ -1493,6 +1512,7 @@ export async function loader({ request }: { request: Request }) {
       canonicalDispatch: CANONICAL_DISPATCH,
       canonicalFamily: pFamily ? canonicalUiFamily(pFamily) : null,
       stockBag: stockBagP,
+      splitBag: splitBagP,
       selectedClass,
       topRequired,
       autoBag: autoBag ? { value: autoBag.id, label: `${autoBag.name} — $${Number(autoBag.unitCost).toFixed(2)} — Verified (auto-selected)` } : null,
@@ -1537,7 +1557,7 @@ export async function loader({ request }: { request: Request }) {
           included: addOns.filter((addOn: any) => addOn.enabled && addOn.amount <= 0 && /includ/i.test(addOn.pricingType)).map((addOn: any) => addOn.name),
           optional: addOns.filter((addOn: any) => addOn.enabled && /option/i.test(addOn.pricingType)).map((addOn: any) => ({ name: addOn.name, amount: addOn.amount })),
           moq: officialMoqForFamily("dtp-pouches") || 1000,
-          freightDefault: SPEKTRA_FREIGHT_PER_PO,
+          freightDefault: 0, // 2026-11-11: no verified freight — nothing is assumed
           // 2026-10-06: the $85 is an UNVERIFIED assumption; the catalog entry flags legacy sizes.
           freightAssumption: SPEKTRA_FREIGHT_ASSUMPTION,
           catalog: dtpSizeForVendorSku((pickedBlankRef as any)?.sku || (pickedBlankRef as any)?.vendorSku || null),
@@ -1573,7 +1593,7 @@ export async function loader({ request }: { request: Request }) {
         // adapter never reads it.
         if (pFamily === "standard-jars") return entry.klass === "jar_standard" && resolveActiveJarProfile(entry.item.name)?.uiFamily === "standard-jars";
         if (pFamily === "premium-jars") return (entry.klass === "jar_chiron" || entry.klass === "jar_miron") && resolveActiveJarProfile(entry.item.name)?.uiFamily === "premium-jars";
-        if (pFamily === "custom" || pFamily === "custom-item") return true;
+        if (pFamily === "custom" || pFamily === "custom-item") return blankClassAllowedFor("custom-item", entry.klass);
         return false;
       }).slice(0, 40).map((entry: any) => ({
         value: entry.item.id,
@@ -1819,6 +1839,7 @@ export async function action({ request }: { request: Request }) {
   const pFamilySave = String(fRead("pfamily") || "");
   // 2026-10-19 loader parity: Stock Bags = pfamily=sticker-bags + pstockbag=1.
   const savedStockBag = pFamilySave === "sticker-bags" && fRead("pstockbag") === "1";
+  const savedSplitBag = pFamilySave === "sticker-bags" && fRead("psplitbag") === "1" && !savedStockBag;
   if (pFamilySave && calculatorFamilyValues().includes(pFamilySave)) {
     type FetchedComponent = { component: ResolvedComponent; meta: { name: string; productType?: string; vendor?: string; vendorSku?: string; addOns?: Array<{ name: string; pricingType: string; amount: number; enabled: boolean }> } | null };
     const fetchComponent = async (rawId: string): Promise<FetchedComponent | null> => {
@@ -1902,6 +1923,11 @@ export async function action({ request }: { request: Request }) {
     }
     // 14C.2A: Chiron blank cost is flat — quantity tiers ignored at save too
     savedBlank = enforceFlatChironCost(savedBlank, savedClassification ? savedClassification.klass : null);
+    // Loader parity: a Split Bag's blank is always the owner $0.25 Split Bag.
+    if (savedSplitBag) {
+      savedBlank = splitBagComponent();
+      savedClassification = { klass: "bag_sticker", includesTop: false };
+    }
     savedBlankNameForNaming = savedBlank?.name || null;
     const savedTopRaw = String(fRead("plid") || "");
     const savedTopFetched = savedTopRaw.startsWith("type:")
@@ -1937,10 +1963,10 @@ export async function action({ request }: { request: Request }) {
       includedFeatures: savedDtpAddOns.filter((addOn) => addOn.enabled && addOn.amount <= 0 && /includ/i.test(addOn.pricingType)).map((addOn) => addOn.name),
       optionalFeatures: savedDtpAddOns.filter((addOn) => addOn.enabled && /option/i.test(addOn.pricingType)).map((addOn) => ({ name: addOn.name, amount: addOn.amount })),
       ...(savedDtpUserActual > 0
-        ? { freightPerOrder: savedDtpUserActual, freightSource: "verified" as const, freightNote: "Actual entered freight/handling/fees (replaces the $85 Spektra default)." }
+        ? { freightPerOrder: savedDtpUserActual, freightSource: "verified" as const, freightNote: "Actual entered freight/handling/fees (vendor freight)." }
         : savedDtpAllowance > 0
-          ? { freightPerOrder: savedDtpAllowance, freightSource: "estimated" as const, freightNote: "ESTIMATED allowance (replaces the $85 Spektra default)." }
-          : { freightPerOrder: SPEKTRA_FREIGHT_PER_PO, freightSource: "verified" as const, freightNote: "One $85 charge per Spektra purchase order — never per design, size, or line item; allocated across units in tier pricing." }),
+          ? { freightPerOrder: savedDtpAllowance, freightSource: "estimated" as const, freightNote: "ESTIMATED freight allowance entered for this job." }
+          : DTP_FREIGHT_NOT_VERIFIED),
     } : null;
     const productInputSave: ProductDrivenInput = {
       family: savedEngineFamily,
@@ -2041,7 +2067,7 @@ export async function action({ request }: { request: Request }) {
           quantity: qty, designs: Number(fRead("pdesigns") || 1),
           selection: { material: fRead("pdtpmaterial"), finish: fRead("pdtpfinish"), spot: fRead("pdtpspot"), zipper: fRead("pdtpzipper"), topFeature: fRead("pdtptop"), clearGusset: fRead("pdtpgusset") === "1" },
           legacy: { totalCost: run.totalCost, missing: run.missing.length > 0, vendorSubtotal: run.lines.find((line) => line.key === "blank")?.amount ?? null },
-          freightPerOrder: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+          freightPerOrder: savedDtpInput ? savedDtpInput.freightPerOrder : 0,
         });
         // 15C.2: recompute the owner-ladder price server-side — posted totals ignored
         const dtpRow = priceDtpQuote({
@@ -2053,7 +2079,7 @@ export async function action({ request }: { request: Request }) {
           customUnitPrice: qty === savedRequestedQty && Number(fRead("pdtpcustomprice") || 0) > 0 ? Number(fRead("pdtpcustomprice")) : null,
           repeatOrder: fRead("pdtprepeat") === "1",
           passThroughFreight: fRead("pdtpfreightpass") === "1",
-          freightAmount: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+          freightAmount: savedDtpInput ? savedDtpInput.freightPerOrder : 0,
           override: { phrase: fRead("eophrase"), reason: fRead("eoreason") },
         });
         // 2026-10-06 owner shaped-pouch policy — loader parity.
@@ -2075,7 +2101,7 @@ export async function action({ request }: { request: Request }) {
             quantity: qty, skuCount: Math.max(1, Number(fRead("pdesigns") || 1)),
           });
           const artLive = OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(fRead("pdesigns") || 1));
-          return { status: look.status, basis: look.basis, config: look.config, wholesaleUnit: look.wholesaleUnit, wholesaleTotal: look.wholesaleTotal, extraSkuCost: look.wholesaleExtraSkuCost, landedLive: look.wholesaleTotal != null ? look.wholesaleTotal + artLive + SPEKTRA_FREIGHT_PER_PO : null, statusLabel: SPEKTRA_COST_STATUS_LABEL[look.status], version: look.version, sourceDate: look.sourceDate };
+          return { status: look.status, basis: look.basis, config: look.config, wholesaleUnit: look.wholesaleUnit, wholesaleTotal: look.wholesaleTotal, extraSkuCost: look.wholesaleExtraSkuCost, landedLive: look.wholesaleTotal != null ? look.wholesaleTotal + artLive : null, statusLabel: SPEKTRA_COST_STATUS_LABEL[look.status], version: look.version, sourceDate: look.sourceDate };
         })();
         const shapedSave = applyShapedPolicyToDtpRow({
           quantity: qty, shape: fRead("pdtpshape") === "custom" ? "custom" : "standard", die: dieSave,
@@ -2091,7 +2117,7 @@ export async function action({ request }: { request: Request }) {
           profit: shapedSave.profit, actualMarginPct: shapedSave.marginPct,
           belowFloor: shapedSave.marginPct < dtpRow.hardFloorPct,
           draftOnly: costSave.missing || shapedSave.blocked,
-          freightTotal: savedDtpInput ? savedDtpInput.freightPerOrder : SPEKTRA_FREIGHT_PER_PO,
+          freightTotal: savedDtpInput ? savedDtpInput.freightPerOrder : 0,
           freightSource: savedDtpInput ? savedDtpInput.freightSource : "verified",
           setupTotal: run.setupTotal,
           status: shapedSave.blocked ? "BLOCKED" : dtpRow.status,
@@ -2344,6 +2370,7 @@ export async function action({ request }: { request: Request }) {
     ? resolveSellingPriceAuthority({
         family: canonicalUiFamily(pFamilySave),
         stockBag: savedStockBag,
+        splitBag: savedSplitBag,
         marginRuleKey: savedMarginKey,
         row: savedSelectedTier,
         multiLine: savedMultiLine ? { combined: savedMultiLine } : null,
@@ -2428,6 +2455,11 @@ export async function action({ request }: { request: Request }) {
           diagnostics: canonicalSnapshot.diagnostics,
           calibration: canonicalSnapshot.calibration,
           setupBasis: canonicalSnapshot.setupBasis,
+          // 2026-11-11: the press and the specialty coverage this cost used (structured, not only in line text).
+          routing: canonicalSnapshot.routing
+            ? { printerSelection: canonicalSnapshot.routing.printerSelection, effectivePrinter: canonicalSnapshot.routing.effectivePrinter, whiteLayers: canonicalSnapshot.routing.whiteLayers, glossLayers: canonicalSnapshot.routing.glossLayers }
+            : null,
+          inkChannels: (canonicalSnapshot.inkChannels || []).map((channel) => ({ kind: channel.kind, passes: channel.passes, coveragePct: channel.coveragePct, coverageSource: channel.coverageSource, mlPerSqftPerPass: channel.mlPerSqftPerPass, totalMl: channel.totalMl, inkCost: channel.inkCost })),
           reasons: canonicalSnapshot.reasons,
           blockers: canonicalSnapshot.blockers,
         }
@@ -2572,7 +2604,7 @@ export async function action({ request }: { request: Request }) {
           includedFeatures: productSnapshot.lines.find((line) => line.key === "features")?.label || null,
           hangHole: fRead("phanghole") === "yes",
           moq: officialMoqForFamily("dtp-pouches") || 1000,
-          freightRule: "One $85 flat charge per Spektra purchase order; multi-line orders allocate the single charge across combined units (future phase).",
+          freightRule: "FREIGHT_NOT_VERIFIED: no inbound freight is assumed (the historical $85/PO is unverified). Only freight entered for the job (actual or allowance) is costed.",
         };
       })() : null,
       lines: productSnapshot.lines, derived: productSnapshot.derived, missing: productSnapshot.missing, warnings: productSnapshot.warnings,
@@ -3473,6 +3505,8 @@ function ProductDrivenForm() {
   const topRequired = Boolean(pm?.topRequired);
   // 2026-10-19: Stock Bags = the canonical stock-bags family (pfamily=sticker-bags + pstockbag=1).
   const isStockBag = isBags && Boolean(pm?.stockBag);
+  // 2026-11-11: Split Bag = the canonical split-bags family (pfamily=sticker-bags + psplitbag=1).
+  const isSplitBag = isBags && Boolean(pm?.splitBag);
   // 2026-10-05: the 14C.2 typed-dimension jar label builder was replaced by the
   // fixed-product flow below (label set + resolved standard dimensions).
 
@@ -3590,7 +3624,7 @@ function ProductDrivenForm() {
    * canonical pair (pfamily=sticker-bags + pstockbag=1) the engine reads.
    * Calculate is held back client-side while a VISIBLE required field is
    * empty; the server stays fail-closed on its own regardless. */
-  const familyChoice = calculatorFamilyChoice(canonicalFamily, canonParams.get("pstockbag"));
+  const familyChoice = calculatorFamilyChoice(canonicalFamily, canonParams.get("pstockbag"), canonParams.get("psplitbag"));
   const familyParams = calculatorFamilyParams(familyChoice);
   /* 2026-10-19 owner decisions A + B: the canonical bag and banner engines read
    * their OWN field names (pbagsides; pbannerw/pbannerh/pbannersides/
@@ -3634,6 +3668,8 @@ function ProductDrivenForm() {
             data.set("pfamily", next.pfamily);
             if (next.pstockbag) data.set("pstockbag", next.pstockbag);
             else data.delete("pstockbag");
+            if (next.psplitbag) data.set("psplitbag", next.psplitbag);
+            else data.delete("psplitbag");
             submit(data, { method: "get" });
           }}
         >
@@ -3645,12 +3681,19 @@ function ProductDrivenForm() {
             <Fragment key={entry.key}>
               <option value={entry.key}>{entry.label}</option>
               {entry.key === "sticker-bags" ? <option value={STOCK_BAG_CALCULATOR_OPTION.value}>{STOCK_BAG_CALCULATOR_OPTION.label}</option> : null}
+              {entry.key === "sticker-bags" ? <option value={SPLIT_BAG_CALCULATOR_OPTION.value}>{SPLIT_BAG_CALCULATOR_OPTION.label}</option> : null}
             </Fragment>
           ))}
         </select>
         <input type="hidden" name="pfamily" value={familyParams.pfamily} />
         {familyParams.pstockbag ? <input type="hidden" name="pstockbag" value={familyParams.pstockbag} /> : null}
+        {familyParams.psplitbag ? <input type="hidden" name="psplitbag" value={familyParams.psplitbag} /> : null}
       </label>
+      {isSplitBag ? (
+        <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+          Split Bag: one $0.25 blank made of two joined 4x5 sections, with two standard 4x5 labels on each printed side (single sided = 2 labels, double sided = 4 labels per bag). No Split Bag selling price is approved yet — the owner sets the price on the quote.
+        </p>
+      ) : null}
       {isStockBag ? (
         <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
           Stock Bags: premade GSO base artwork (no new customer-art charge), 50-bag minimum. Same physical bag as Sticker Bags, costed as a Stock Bag.
@@ -3708,14 +3751,16 @@ function ProductDrivenForm() {
         <label style={{ fontSize: 12 }}>* Quantity{isDtp ? ` (MOQ ${(pm?.dtpSpec?.moq || 1000).toLocaleString()})` : ""}<input name="pqty" type="number" min={isDtp ? pm?.dtpSpec?.moq || 1000 : 1} style={fieldStyle("pqty")} /></label>
         <label style={{ fontSize: 12 }}>* Number of designs<input name="pdesigns" type="number" min={0} defaultValue={1} style={fieldStyle("pdesigns")} /></label>
         {isBags ? (
-          <label style={{ fontSize: 12 }}>{isStockBag ? "Sides" : "Print / application"}
+          <label style={{ fontSize: 12 }}>{isStockBag || isSplitBag ? "Sides" : "Print / application"}
             {/* 2026-10-19 owner decision A: the canonical bag engine reads its side
                 count from pbagsides — mirrored from this selection for Sticker AND
                 Stock Bags. Stock Bags default Double Sided (storefront standard). */}
             <select name="pfaces" value={bagSidesValue} onChange={(event) => setBagSides(event.currentTarget.value)} style={inputStyle}>
               {isStockBag
                 ? (<><option value="2">Double sided (standard)</option><option value="1">Single sided</option></>)
-                : (<><option value="1">Front only</option><option value="2">Front and back</option></>)}
+                : isSplitBag
+                  ? (<><option value="1">Single sided (2 labels per bag)</option><option value="2">Double sided (4 labels per bag)</option></>)
+                  : (<><option value="1">Front only</option><option value="2">Front and back</option></>)}
             </select>
             <input type="hidden" name="pbagsides" value={bagSidesValue} />
           </label>
@@ -3840,7 +3885,7 @@ function ProductDrivenForm() {
             <b>Included product specification (Spektra — inside the unit cost, never charged again):</b>{" "}
             {(pm?.dtpSpec?.included || []).length ? (pm.dtpSpec.included as string[]).join(" · ") : "Select a DTP size to load its feature records."}
             {(pm?.dtpSpec?.optional || []).length ? <span> · Optional: {(pm.dtpSpec.optional as any[]).map((option: any) => `${option.name} ($${Number(option.amount).toFixed(2)})`).join(", ")}</span> : null}
-            <div style={{ color: "#166534" }}>Vendor-finished pouches — no in-house print inputs (dimensions/material/printer/layers do not apply). Freight: ${(pm?.dtpSpec?.freightDefault ?? 85).toFixed ? (pm?.dtpSpec?.freightDefault ?? 85).toFixed(2) : pm?.dtpSpec?.freightDefault} flat per Spektra PO.</div>
+            <div style={{ color: "#166534" }}>Vendor-finished pouches — no in-house print inputs (dimensions/material/printer/layers do not apply). Freight: NOT VERIFIED — not included in true cost; enter the vendor freight (actual or allowance) to include it.</div>
           </div>
           {/* 15C.2: owner pricing controls — ladder is the default; custom price
               is owner-authorized and recomputed server-side with floor rules */}
@@ -3898,7 +3943,7 @@ function ProductDrivenForm() {
           <div style={{ gridColumn: "1 / -1", border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", borderRadius: 8, padding: 8, fontSize: 12 }}>
             <b>{SPEKTRA_FREIGHT_ASSUMPTION.label}</b> — {SPEKTRA_FREIGHT_ASSUMPTION.note}
           </div>
-          <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtpfreightpass" value="1" /> Pass freight through to customer (backs the $85 out of the ladder subtotal — never recovered twice)</label>
+          <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtpfreightpass" value="1" /> Pass entered freight through to customer (backs it out of the ladder subtotal — never recovered twice; nothing is charged when no freight is entered)</label>
           <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>One production-ready design included; extra designs bill $25 (1,000–2,499) / $20 (2,500–4,999) / $15 (5,000+) each. Below-floor or below-$500-profit prices need the owner phrase + reason in Advanced Pricing Controls.</p>
         </>) : null}
         {!isDtp && !jars ? (<>
@@ -4246,6 +4291,7 @@ function OwnerResultCard() {
   const result: OwnerResult | null = resolveOwnerResult({
     family: pm.canonicalFamily,
     stockBag: Boolean(pm.stockBag),
+    splitBag: Boolean(pm.splitBag),
     canonical: canonical ? { status: canonical.status, totalCost: canonical.totalCost, unitCost: canonical.unitCost, blockers: canonical.blockers } : null,
     requestedRow,
     multiLine: pm.multiLine,
@@ -4264,7 +4310,7 @@ function OwnerResultCard() {
   const tone = tones[result.state] || tones.PRICING_BLOCKED;
   const money2 = (value: number) => `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const notAvailable = <span style={{ color: "#991b1b" }}>Not available</span>;
-  const familyLabel = pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily)?.label || "";
+  const familyLabel = pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : pm.splitBag ? SPLIT_BAG_CALCULATOR_OPTION.label : calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily)?.label || "";
   const stat = (label: string, value: React.ReactNode, sub?: React.ReactNode) => (
     <div style={{ minWidth: 150 }}>
       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: "#6b7280" }}>{label}</div>
@@ -4798,12 +4844,12 @@ function ProductTiers() {
   /* 2026-10-19 owner decision E: the SAME authority classifier the save action
    * uses. With no approved selling-price authority the tier prices are
    * diagnostic references only and the save is a PROVISIONAL draft. */
-  const tierAuthority = resolveSellingPriceAuthority({ family: pm.canonicalFamily, stockBag: Boolean(pm.stockBag), marginRuleKey: mf?.key || null, row: selected });
+  const tierAuthority = resolveSellingPriceAuthority({ family: pm.canonicalFamily, stockBag: Boolean(pm.stockBag), splitBag: Boolean(pm.splitBag), marginRuleKey: mf?.key || null, row: selected });
   const provisionalPrices = !tierAuthority.approved && tierAuthority.kind !== "cost_blocked";
   // 15D.2: never prefill with panel placeholders; real record name, else the
   // registry family label, else blank for the owner to type.
   const familyEntryForLabel = calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily);
-  const productLabel = pm.productLabel || (pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : familyEntryForLabel?.label) || "";
+  const productLabel = pm.productLabel || (pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : pm.splitBag ? SPLIT_BAG_CALCULATOR_OPTION.label : familyEntryForLabel?.label) || "";
   return (
     <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
       <b style={{ fontSize: 15 }}>RECOMMENDED CUSTOMER PRICE</b>
@@ -4911,7 +4957,7 @@ function ProductTiers() {
       </div>
       </details>
       {pm.isDtp ? (
-        <p style={smallHelp}>Owner ladder prices (OWNER-APPROVED 2026-10-06 / 2026-10-07 for all five current sizes; 5x4x2 legacy = manual review). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Freight is embedded in prices by default ($85 stays an internal cost line).</p>
+        <p style={smallHelp}>Owner ladder prices (OWNER-APPROVED 2026-10-06 / 2026-10-07 for all five current sizes; 5x4x2 legacy = manual review). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Inbound freight is NOT verified and is not in true cost unless entered for the job (FREIGHT_NOT_VERIFIED).</p>
       ) : null}
       {/* 15F.0K.3: direct-print crossover advisory (requested-quantity row) —
           advisory + live DTP comparison only; the owner chooses the product. */}

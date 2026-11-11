@@ -81,8 +81,8 @@ function resolvedFor(qs: string, seeded = true) {
 
 const LABEL = (extra = "") =>
   `pfamily=stickers-labels&pllines=1&pl0qty=1000&pl0w=3&pl0h=3&pl0cutw=2.875&pl0cuth=2.875&pl0mat=matte&pl0art=A${extra}`;
-const BAG = "pfamily=sticker-bags&pqty=1000&pbagsides=2&pdesigns=1";
-const STOCK = "pfamily=sticker-bags&pstockbag=1&pqty=1000&pbagsides=2";
+const BAG = "pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=2&pdesigns=1";
+const STOCK = "pfamily=sticker-bags&pbagmat=matte&pstockbag=1&pqty=1000&pbagsides=2";
 const BANNER = "pfamily=banners&pqty=1&pbannerw=36&pbannerh=60&pdesigns=1";
 
 const channel = (r: any, kind: string) => r.inkChannels.find((c: any) => c.kind === kind);
@@ -354,7 +354,7 @@ describe("2D-4A standard jobs route correctly by family", () => {
     const r = resolvedFor(BAG);
     expect(r.trueCost.lines.find((l: any) => l.key === "blank_sets")!.amount).toBeCloseTo(1000 * 0.11, 8); // owner $0.11 (2026-10-08)
     expect(r.trueCost.lines.find((l: any) => l.key === "application")!.amount).toBeCloseTo((1000 * 2 * 10 / 3600) * 20, 6);
-    expect(r.diagnostics.cutPathIn).toBeCloseTo(2000 * 2 * (3.875 + 4.875), 6);
+    expect(r.diagnostics.cutPathIn).toBeCloseTo(2000 * 2 * (3.79 + 4.81), 6); // owner 4x5 cutline (2026-11-11)
     expect(r.diagnostics.weedingPages).toBeGreaterThan(0);
   });
 

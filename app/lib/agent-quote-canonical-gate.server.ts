@@ -62,7 +62,9 @@ export function canonicalFamilyKeyForRecipe(recipe: {
     if (byLabel) return byLabel.key;
   }
   for (const text of candidates) {
-    if (/sticker\s*bag|stock\s*bag|bag_sticker/.test(text)) return "sticker-bags";
+    // 2026-11-11: underscore/hyphen forms (stock_bag_4x5) and the Split Bag.
+    if (/split[\s_-]*bag/.test(text)) return "split-bags";
+    if (/sticker[\s_-]*bag|stock[\s_-]*bag|bag_sticker/.test(text)) return "sticker-bags";
     if (/dtp|pouch|dtp_bag/.test(text)) return "dtp-bags";
     if (/\bbox(es)?\b/.test(text)) return "boxes";
     if (/banner/.test(text)) return "banners";

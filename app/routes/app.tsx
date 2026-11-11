@@ -4,20 +4,28 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { authenticate } from "../shopify.server";
-import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
+import { OWNER_ENFORCEMENT_ENV, OWNER_USER_IDS_ENV, configuredOwnerUserIds, resolveOwnerAuthorization } from "../lib/owner-authorization.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const auth = await authenticate.admin(request);
+  const owner = resolveOwnerAuthorization(auth);
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
     // 2026-10-19: owner-only nav entries are hidden for staff (the routes themselves refuse non-owners server-side).
-    isOwner: resolveOwnerAuthorization(auth).isOwner,
+    isOwner: owner.isOwner,
+    // 2026-11-11 OWNER ACCESS DIAGNOSTIC: shown only while owner access is not
+    // yet permanent — the temporary switch is on, or no owner IDs are set. It
+    // names the mode and the viewer's OWN verified Shopify staff user ID (the
+    // value GSO_OWNER_SHOPIFY_USER_IDS needs). Gone once enforcement is final.
+    ownerAccessNotice: owner.enforcement === "temporary_all_staff" || !configuredOwnerUserIds().length
+      ? { temporary: owner.enforcement === "temporary_all_staff", userId: owner.userId, idsEnv: OWNER_USER_IDS_ENV, switchEnv: OWNER_ENFORCEMENT_ENV }
+      : null,
   };
 };
 
 export default function App() {
-  const { apiKey, isOwner } = useLoaderData<typeof loader>();
+  const { apiKey, isOwner, ownerAccessNotice } = useLoaderData<typeof loader>();
 
   return (
     <AppProvider embedded apiKey={apiKey}>
@@ -58,6 +66,15 @@ export default function App() {
         <s-link href="/app/erp/walkthrough">Help · ERP Walkthrough</s-link>
       </s-app-nav>
 
+      {ownerAccessNotice ? (
+        <div style={{ margin: "8px 16px 0", padding: "6px 10px", borderRadius: 6, fontSize: 12, background: ownerAccessNotice.temporary ? "#fffbeb" : "#f3f4f6", border: `1px solid ${ownerAccessNotice.temporary ? "#fde68a" : "#e5e7eb"}`, color: "#374151" }}>
+          <b>{ownerAccessNotice.temporary ? "TEMPORARY OWNER ACCESS" : "Owner access not configured"}</b>
+          {ownerAccessNotice.temporary
+            ? ` — every signed-in staff member has owner access (${ownerAccessNotice.switchEnv}=temporary_all_staff).`
+            : ` — owner-only pages are closed until ${ownerAccessNotice.idsEnv} is set.`}
+          {" "}Your Shopify staff user ID: <code>{ownerAccessNotice.userId || "not available in this session"}</code>
+        </div>
+      ) : null}
       <Outlet />
     </AppProvider>
   );

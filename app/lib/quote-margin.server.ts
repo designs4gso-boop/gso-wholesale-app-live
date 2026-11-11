@@ -167,7 +167,11 @@ export function quoteMarginState(quote: MarginQuote) {
   // Approval resolution order: schema fields (with value-matched snapshot) win;
   // stale schema approval blocks again; legacy notes markers are honored only
   // when no schema approval exists (transition support).
-  const legacyMarkerApproved = String(quote?.notes || "").includes(LOW_MARGIN_APPROVAL_MARKER);
+  // 2026-11-11: the marker counts only at the START of a line, which is how the
+  // approval action writes it. Staff notes lines that start with it are already
+  // stripped (quote-staff-visibility mergeStaffNotes), so a marker typed mid-line
+  // by staff can no longer approve a quote.
+  const legacyMarkerApproved = String(quote?.notes || "").split(/\r?\n/).some((line) => line.startsWith(LOW_MARGIN_APPROVAL_MARKER));
   const hasSchemaApproval = Boolean(quote?.lowMarginApprovedAt);
   const schemaSnapshotMatches = hasSchemaApproval && snapshotMatchesItems(quote?.lowMarginApprovedSnapshot, items);
 

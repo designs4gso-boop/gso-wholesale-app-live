@@ -1,6 +1,7 @@
 import type React from "react";
-import { Form, Link, useLoaderData, useNavigation } from "react-router";
+import { Form, Link, isRouteErrorResponse, useLoaderData, useNavigation, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
+import { ownerOnlyForbiddenResponse, productionFinancialVisibility } from "../lib/owner-authorization.server";
 import db from "../db.server";
 import { materialKind } from "../lib/material-classify";
 import {
@@ -29,8 +30,13 @@ import { ERP_CARD_STYLE, ERP_SMALL_HELP, ERP_TD_STYLE, ERP_TH_STYLE } from "../l
 // no writes, no Shopify, no calculator/engine/production changes.
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
   const shop = session.shop;
+  // 2026-11-11: this page is ALL money (ink $/mL, material cost, job profit and
+  // margin) — owner/financial users only, refused before any query runs.
+  const financials = productionFinancialVisibility(auth);
+  if (!financials.show) throw ownerOnlyForbiddenResponse(financials.owner, "Actual costs are owner-only.");
 
   const [entries, machines, materials] = await Promise.all([
     db.printLogEntry.findMany({
@@ -496,4 +502,17 @@ function VarianceSection({ data }: { data: ReturnType<typeof useLoaderData<typeo
       ))}
     </section>
   );
+}
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+  if (isRouteErrorResponse(error) && error.status === 403) {
+    return (
+      <main style={{ padding: 24, maxWidth: 640 }}>
+        <h2 style={{ marginTop: 0 }}>Owner only</h2>
+        <p>Actual costs, profit and margin are owner-only. Production quantities and print logs are on the Production board.</p>
+      </main>
+    );
+  }
+  throw error;
 }

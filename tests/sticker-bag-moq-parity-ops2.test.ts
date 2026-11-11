@@ -26,7 +26,7 @@ const CAL: ResolvedMachineInputs = {
   inkCostSource: "canonical purchasing rate",
 };
 
-const canonical = (qty: number) => assembleCanonicalJob(normalizeCanonicalInput(new URLSearchParams(`pfamily=sticker-bags&pqty=${qty}&pbagsides=2&pdesigns=1&pprinter=auto`))!, CAL);
+const canonical = (qty: number) => assembleCanonicalJob(normalizeCanonicalInput(new URLSearchParams(`pfamily=sticker-bags&pbagmat=matte&pqty=${qty}&pbagsides=2&pdesigns=1&pprinter=auto`))!, CAL);
 
 const lead = (qty: number) => ({ source: "web", customerName: "Dana", email: "d@example.com", productFamily: "sticker-bags", quantity: qty, dimensions: "4x5", material: "matte", finish: "matte", artworkReady: true, deadline: "2026-11-01", shippingCityState: "Portland, OR" });
 

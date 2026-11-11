@@ -12,20 +12,20 @@
 import { ACTIVE_JAR_PROFILES, type ActiveJarProfile } from "./jar-active-scope";
 import { JAR_LABEL_GEOMETRY, JAR_LABEL_GEOMETRY_AUTHORITY, JAR_LABEL_GEOMETRY_SOURCE, JAR_LABEL_GEOMETRY_VERSION, formatJarGeometry, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey, type SpecAuthorityStatus } from "./jar-label-geometry";
 import { JAR_REFERENCE_GEOMETRY_SOURCE, jarReferenceConflicts, type ReferenceConflict } from "./jar-reference-geometry";
-import { BAG_4X5_ARTBOARD_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
+import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
 
 export const PRODUCT_SPEC_VERSION = "product-production-spec/1.1.0-2026-10-05";
 
 /**
  * Bag artboard evidence (the only fixed product with an explicit record):
  * 2D-4C2A benchmarked the ACTUAL 4x5 bag artboard (4.00 x 5.00) against its
- * cutline (3.875 x 4.875) and the sticker-bag product has shipped on it since
+ * cutline and the sticker-bag product has shipped on it since
  * 15G. Recorded here so the status is traceable, not asserted.
  */
 export const BAG_ARTBOARD_AUTHORITY = {
   authorityStatus: "OWNER_CONFIRMED" as SpecAuthorityStatus,
   ownerConfirmationRequired: false,
-  evidence: "2D-4C2A benchmark on the actual 4x5 bag artboard (artboard 4.00 x 5.00 vs cutline 3.875 x 4.875); live sticker-bag production since 15G",
+  evidence: `Owner 4x5 artboard 4.00 x 5.00 (2D-2) with the documented owner cutline ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn} (owner decision 2026-11-11); live sticker-bag production since 15G`,
 } as const;
 
 export const AUTHORITY_LABEL: Record<SpecAuthorityStatus, string> = {
@@ -50,7 +50,7 @@ export const LABEL_SETS: Array<{ key: LabelSetKey; label: string; selection: Jar
 export type SpecStatus = "COST_AUTHORITY" | "OWNER_CONFIRMATION_REQUIRED";
 
 export type ProductProductionSpec = {
-  family: "standard-jars" | "premium-jars" | "sticker-bags" | "stock-bags";
+  family: "standard-jars" | "premium-jars" | "sticker-bags" | "stock-bags" | "split-bags";
   productKey: string;
   displayName: string;
   status: SpecStatus;
@@ -149,7 +149,7 @@ function bagSpec(family: "sticker-bags" | "stock-bags"): ProductProductionSpec {
     referenceConflicts: [],
     conflictSummary: null,
     sharedSizeKeyNote: null,
-    statusNote: "Owner 4x5 artboard (2D-2); cutline 3.875 x 4.875 in derived by the GSO -0.0625 in rule.",
+    statusNote: `Owner 4x5 artboard (2D-2); owner cutline ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn} in (decision 2026-11-11).`,
     physical: { bag: "4x5 in", blankCost: "BAG_4X5_BLANK_UNIT_COST ($0.11 owner true base cost, 2026-10-08; no freight uplift)" },
     pieces: [{ piece: "label", shape: "rect", widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied label (per printed side)" }],
     labelSets: null,
@@ -164,8 +164,28 @@ function bagSpec(family: "sticker-bags" | "stock-bags"): ProductProductionSpec {
   };
 }
 
+/**
+ * 2026-11-11 owner decision: the Split Bag — ONE physical blank of two joined
+ * 4x5 sections ($0.25), carrying two standard 4x5 label positions per printed
+ * side. It reuses the owner 4x5 artboard and derived cutline per position.
+ */
+function splitBagSpec(): ProductProductionSpec {
+  const base = bagSpec("sticker-bags");
+  return {
+    ...base,
+    family: "split-bags",
+    productKey: "split-bag",
+    displayName: "Split Bag (two joined 4x5 sections, custom applied labels)",
+    statusNote: `Two standard 4x5 label positions per printed side; each reuses the owner 4x5 artboard (2D-2) and the owner ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn} in cutline (decision 2026-11-11).`,
+    physical: { bag: "one bag, two joined 4x5 sections", blankCost: "SPLIT_BAG_BLANK_UNIT_COST ($0.25 owner blank cost, 2026-11-11; one blank, never two 4x5 bags)" },
+    pieces: [{ piece: "label", shape: "rect", widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn, quantityPerProduct: 2, label: "Applied 4x5 label (2 positions per printed side)" }],
+    moqNote: "No Split Bag MOQ has been owner-approved yet — none is enforced.",
+    pricingSource: "canonical true cost (bag adapter, split_bag); no owner-approved selling price yet — job-level owner price",
+  };
+}
+
 export function listProductSpecs(): ProductProductionSpec[] {
-  return [...ACTIVE_JAR_PROFILES.map(jarSpec), bagSpec("sticker-bags"), bagSpec("stock-bags")];
+  return [...ACTIVE_JAR_PROFILES.map(jarSpec), bagSpec("sticker-bags"), bagSpec("stock-bags"), splitBagSpec()];
 }
 
 export function getProductProductionSpec(family: string | null | undefined, productKey: string | null | undefined): ProductProductionSpec | null {

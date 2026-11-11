@@ -90,7 +90,8 @@ describe("A. final current DTP ladders (OWNER APPROVED 2026-10-07)", () => {
     };
     for (const sku of Object.keys(APPROVED)) {
       expect(DTP_ACQUISITION_TIER_EXCEPTIONS[sku]).toMatchObject({ tier: 1000, minJobProfit: 350 });
-      const cost = resolveDtpQuoteCost({ vendorSku: sku, quantity: 1000, designs: 1, selection: SOFT_TOUCH, legacy });
+      // 2026-11-11: freight is no longer assumed; $85 is passed as ENTERED freight to keep this conservative check.
+      const cost = resolveDtpQuoteCost({ vendorSku: sku, quantity: 1000, designs: 1, selection: SOFT_TOUCH, legacy, freightPerOrder: 85 });
       expect(cost.status, sku).toBe("OBSERVED_VENDOR_PRICE");
       const q = priceDtpQuote({ ladderSku: sku, quantity: 1000, landedCost: cost.landedCost, missingCost: cost.missing, designs: 1, customUnitPrice: null, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
       expect(q.status, sku).toBe("READY");
@@ -99,7 +100,7 @@ describe("A. final current DTP ladders (OWNER APPROVED 2026-10-07)", () => {
       expect(q.grossMarginPct).toBeCloseTo(expected[sku].gm, 0);
       expect(q.grossMarginPct).toBeGreaterThanOrEqual(30);
       for (const qty of [2500, 5000, 10000, 25000]) {
-        const c = resolveDtpQuoteCost({ vendorSku: sku, quantity: qty, designs: 1, selection: SOFT_TOUCH, legacy });
+        const c = resolveDtpQuoteCost({ vendorSku: sku, quantity: qty, designs: 1, selection: SOFT_TOUCH, legacy, freightPerOrder: 85 });
         const qq = priceDtpQuote({ ladderSku: sku, quantity: qty, landedCost: c.landedCost, missingCost: c.missing, designs: 1, customUnitPrice: null, repeatOrder: false, passThroughFreight: false, freightAmount: 85, override: { phrase: "", reason: "" } });
         expect(qq.minJobProfit, `${sku}@${qty}`).toBe(DTP_MIN_JOB_PROFIT);
         expect(qq.status, `${sku}@${qty}`).toBe("READY");

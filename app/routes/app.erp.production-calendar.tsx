@@ -3,6 +3,8 @@ import { completionGuardApplies, evaluateQcForCompletion } from "../lib/producti
 import { isStaffProductionStatus } from "../lib/production-status-vocabulary";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
+import { productionFinancialVisibility } from "../lib/owner-authorization.server";
+import { redactJobFinancials } from "../lib/production-financial-redaction";
 import db from "../db.server";
 
 const statuses = [
@@ -116,7 +118,10 @@ async function createEvent(shop: string, jobId: string, eventType: string, messa
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // 2026-11-11: production staff receive no revenue / cost / profit / margin.
+  const financials = productionFinancialVisibility(auth);
   const shop = session.shop;
   const url = new URL(request.url);
   const q = (url.searchParams.get("q") || "").trim().toLowerCase();
@@ -131,7 +136,8 @@ export async function loader({ request }: { request: Request }) {
     },
   });
 
-  const filteredJobs = q ? jobs.filter((job) => jobSearchText(job).includes(q)) : jobs;
+  const searchedJobs = q ? jobs.filter((job) => jobSearchText(job).includes(q)) : jobs;
+  const filteredJobs = financials.show ? searchedJobs : searchedJobs.map(redactJobFinancials);
   const groups = groupJobs(filteredJobs);
 
   const statusCounts = statuses.map((status) => ({

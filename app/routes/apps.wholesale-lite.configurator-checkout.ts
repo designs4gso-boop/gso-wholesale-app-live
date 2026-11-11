@@ -36,6 +36,9 @@ import {
   type CanonicalStickerInputs,
 } from "../lib/canonical-sticker-pricing.server";
 
+/** 2026-11-11: the only bag product types the storefront bag engine prices (4x5 geometry and blank). */
+const STOREFRONT_PRICED_BAG_TYPES = new Set(["stock_bag_4x5", "sticker_bag_4x5"]);
+
 const SHOPIFY_API_VERSION = "2025-10";
 
 // 15G.1: served only through the signed Shopify app proxy (same-origin from
@@ -304,7 +307,12 @@ export async function action({ request }: ActionFunctionArgs) {
       // Basic-plan checkout authority (2026-10-17): a dtp_/sticker_ type with no
       // launch pricer has no canonical price. It must fail closed here, never
       // fall through to the 4x5 bag engine below and be charged as a bag.
-      if ((productFamily === "DTP Pouches" && !dtpLaunch) || (productFamily === "Stickers" && !stickerLaunch)) {
+      // 2026-11-11: the same for (a) a jar type with no launch size — it would
+      // otherwise be charged a legacy ConfiguratorPricingRule.priceEach row
+      // (jar_5oz_clear is cost-only) — and (b) a bag type other than the 4x5
+      // the bag engine actually models (a 6x9 would be priced as a 4x5).
+      const unmodeledBag = !isJar && !dtpLaunch && !stickerLaunch && !STOREFRONT_PRICED_BAG_TYPES.has(String(productType || "").toLowerCase());
+      if ((productFamily === "DTP Pouches" && !dtpLaunch) || (productFamily === "Stickers" && !stickerLaunch) || (isJar && !jarLaunchSize) || unmodeledBag) {
         return jsonResponse(
           {
             ok: false,

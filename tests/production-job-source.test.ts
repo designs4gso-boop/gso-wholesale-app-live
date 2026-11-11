@@ -338,7 +338,7 @@ describe("route consolidation pins (15D.1-E/F/H)", () => {
     expect(webhookSrc).not.toContain("createProductionJobFromConfiguratorOrder");
     expect(webhookSrc).not.toContain("buildNextJobTicket"); // creator helpers moved to the service
     // payment branch preserved verbatim
-    for (const marker of ["[GSO] Deposit invoice paid", "[GSO] Balance invoice paid", "[GSO] Full payment invoice paid", "classifyQuotePaymentOrder", "status ${quote.status} preserved"]) {
+    for (const marker of ["[GSO] Deposit invoice paid", "[GSO] Balance invoice paid", "[GSO] Full payment invoice paid", "verifyQuotePaymentOrder", "status ${quote.status} preserved"]) {
       expect(webhookSrc).toContain(marker);
     }
   });

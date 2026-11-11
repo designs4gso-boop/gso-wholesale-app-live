@@ -13,7 +13,6 @@
 //
 // Pure: no db, no network, no clock.
 
-import { deriveGsoLabelCutlineFromArtboard } from "./gso-cutline";
 import { computeNesting, resolveNestingPolicy, type NestingResult, type NestingRun } from "./nesting-engine.server";
 import { computeFinishing, type CutGeometryMap, type CutMode, type FinishingResult } from "./finishing-cost.server";
 import { computeLabelApplication, type LabelApplicationResult } from "./label-application.server";
@@ -50,6 +49,28 @@ export const BAG_4X5_BLANK_UNIT_COST = 0.11;
 export const BAG_4X5_BLANK_SOURCE = "Owner decision 2026-10-08: 4x5 blank bag true base cost $0.11 each, regardless of colour (supersedes the 2026-08-24 $0.09-before-freight rule). No generic freight uplift is added; inbound freight stays a separate, not-yet-modelled component.";
 export const BAG_4X5_BLANK_EFFECTIVE_DATE = "2026-10-08";
 
+/* ------------------------------------------------------------------ *
+ * OWNER DECISION 2026-11-11 — SPLIT BAG (permanent stocked product)
+ *
+ * ONE physical blank made of two joined 4x5 sections: $0.25 EACH. It is a
+ * single blank — never costed as two $0.11 4x5 bags or two $0.25 bags.
+ *
+ * Each physical side carries TWO standard 4x5 label positions, so the same
+ * owner 4x5 artboard / derived cutline / 10 s-per-applied-label standard is
+ * reused per position:
+ *   single-sided  1 blank, 2 labels, 2 cut/weed, 2 application events
+ *   double-sided  1 blank, 4 labels, 4 cut/weed, 4 application events
+ *
+ * No MOQ, freight or box count has been owner-approved for the Split Bag, so
+ * none is invented here (see the Split Bag entries in CANONICAL_PACKOUT and
+ * docs/GSO_ERP_PROJECT_STATE.md).
+ * ------------------------------------------------------------------ */
+export const SPLIT_BAG_BLANK_UNIT_COST = 0.25;
+export const SPLIT_BAG_BLANK_SOURCE = "Owner decision 2026-11-11: Split Bag blank (one physical bag of two joined 4x5 sections) $0.25 each — one blank, never two 4x5 bags. No freight uplift; inbound freight not modelled.";
+export const SPLIT_BAG_BLANK_EFFECTIVE_DATE = "2026-11-11";
+/** Standard 4x5 label positions on EACH physical side of a Split Bag. */
+export const SPLIT_BAG_LABEL_POSITIONS_PER_SIDE = 2;
+
 /**
  * SUPERSEDED 2026-10-08. The 2026-08-24 "$0.09 supplier base before inbound
  * freight" figure. Kept only so a test can prove it is never charged again.
@@ -84,17 +105,14 @@ export const BAG_APPLICATION_RETIRED_LABELS_PER_HOUR = 256;
  * ------------------------------------------------------------------ */
 // 2026-10-05: value moved verbatim to the client-safe bag-artboard-geometry.ts
 // so the product-spec layer can read it; re-exported here unchanged.
-import { BAG_4X5_ARTBOARD_IN } from "./bag-artboard-geometry";
-export { BAG_4X5_ARTBOARD_IN };
-/**
- * 2D-4C2A: DERIVED, not hand-recorded. The GSO standard builds every label's
- * cutline from its artboard with a -0.0625in inward offset, so a 4.00 x 5.00in
- * bag label cuts at 3.875 x 4.875in. The previous literal 3.79 x 4.81 predated
- * that rule and is gone — a second cutline authority is exactly what the rule
- * exists to prevent.
+import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_DECISION, BAG_4X5_CUTLINE_IN } from "./bag-artboard-geometry";
+export { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN };
+/*
+ * OWNER DECISION 2026-11-11: the 4x5 cutline is the documented owner standard
+ * 3.79 x 4.81 in (bag-artboard-geometry.ts), not the 3.875 x 4.875 value the
+ * generic -0.0625 in rule derives. Saved quote snapshots keep whatever cutline
+ * they were costed at; only new costing uses this value.
  */
-const BAG_4X5_CUT = deriveGsoLabelCutlineFromArtboard(BAG_4X5_ARTBOARD_IN.widthIn, BAG_4X5_ARTBOARD_IN.heightIn)!;
-export const BAG_4X5_CUTLINE_IN = { widthIn: BAG_4X5_CUT.cutWidthIn, heightIn: BAG_4X5_CUT.cutHeightIn } as const;
 
 export const STOCK_BAG_MOQ = 50;
 /**
@@ -175,8 +193,18 @@ export const BAG_PERSONALIZATION_ART_SETUP_PER_DESIGN = OWNER_STANDARDS.artSetup
 export const BAG_PERSONALIZATION_BASIS_NOTE =
   "One normal art setup event per personalized design at OWNER_STANDARDS.artSetupPerDesign ($25/hr at 3 designs/hr = $8.3333333333). Bag quantity, label quantity, printed sides, application events and production quantity are ALL excluded - none of them multiplies this cost. Customer-facing add-on is $0; this is internal true cost only.";
 
-export type BagProduct = "sticker_bag_4x5" | "stock_bag";
+export type BagProduct = "sticker_bag_4x5" | "stock_bag" | "split_bag";
 export type BagSides = 1 | 2;
+
+/** 4x5 label positions per physical side: 2 on a Split Bag, 1 on a 4x5 bag. */
+export function bagLabelPositionsPerSide(product: BagProduct): number {
+  return product === "split_bag" ? SPLIT_BAG_LABEL_POSITIONS_PER_SIDE : 1;
+}
+
+/** The owner blank cost for each bag product. */
+export function bagBlankUnitCostFor(product: BagProduct): number {
+  return product === "split_bag" ? SPLIT_BAG_BLANK_UNIT_COST : BAG_4X5_BLANK_UNIT_COST;
+}
 
 export type BagPersonalization = {
   logo?: boolean;
@@ -289,7 +317,7 @@ export type BagJobInput = {
   machineKey?: string;
   cutMode?: CutMode;
   loadedMediaWidthIn?: number;
-  /** Overrides the canonical $0.11 owner base cost only when a verified alternative exists. */
+  /** Overrides the product's owner base cost (bagBlankUnitCostFor) only when a verified alternative exists. */
   blankUnitCost?: number | null;
   /**
    * Optional logo/QR personalization of the premade Stock Bag design.
@@ -304,7 +332,9 @@ export type BagPhysicalResult = {
   product: BagProduct;
   bagQuantity: number;
   sides: BagSides;
-  /** Printed labels = bags x labelled sides. */
+  /** 4x5 label positions per side (2 on a Split Bag). */
+  positionsPerSide: number;
+  /** Printed labels = bags x labelled sides x positions per side. */
   labelQuantity: number;
   blankCost: number;
   nesting: NestingResult;
@@ -327,7 +357,7 @@ export function bagCutGeometry(): CutGeometryMap {
       model: "separated_rectangle",
       cutWidthIn: BAG_4X5_CUTLINE_IN.widthIn,
       cutHeightIn: BAG_4X5_CUTLINE_IN.heightIn,
-      note: `Cutline ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn}in, derived from the 4.00 x 5.00in artboard by the GSO -0.0625in offset rule. The artboard drives nesting/material/ink and is NEVER used for the cutter path.`,
+      note: `Cutline ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn}in — ${BAG_4X5_CUTLINE_DECISION} The 4.00 x 5.00in artboard drives nesting/material/ink and is NEVER used for the cutter path.`,
     },
   };
 }
@@ -421,7 +451,7 @@ export function bagSetupCost(
     personalizedDesignEvents: personalized,
     artBasis: SETUP_BASIS,
     printBasis: SETUP_BASIS,
-    basisNote: `Custom 4x5 Sticker Bag: customer artwork. ${artDesignEvents} design event(s) x $${artRate.toFixed(10)} art + ${printDesignEvents} print-design setup(s) x $${printRate.toFixed(2)} (owner standards). Both charged per DESIGN - bag quantity does not appear in this calculation.`,
+    basisNote: `${product === "split_bag" ? "Split Bag" : "Custom 4x5 Sticker Bag"}: customer artwork. ${artDesignEvents} design event(s) x $${artRate.toFixed(10)} art + ${printDesignEvents} print-design setup(s) x $${printRate.toFixed(2)} (owner standards). Both charged per DESIGN - bag quantity does not appear in this calculation.`,
   };
 }
 
@@ -430,7 +460,8 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
   const blockers: string[] = [];
   const bagQuantity = Math.max(0, Math.floor(input.bagQuantity));
   const sides: BagSides = input.sides === 2 ? 2 : 1;
-  const labelQuantity = bagQuantity * sides;
+  const positionsPerSide = bagLabelPositionsPerSide(input.product);
+  const labelQuantity = bagQuantity * sides * positionsPerSide;
 
   // Personalization is ART/SETUP work on a strict PER_DESIGN basis. It is
   // resolved from the design count ONLY — bagQuantity is never a factor.
@@ -450,7 +481,8 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
     blockers.push(`${BAG_REASONS.stickerBagBelowMoq}: 4x5 Sticker Bags have a ${STICKER_BAG_MOQ}-unit minimum (owner-verified); ${bagQuantity} requested.`);
   }
 
-  const blankUnit = input.blankUnitCost == null ? BAG_4X5_BLANK_UNIT_COST : Number(input.blankUnitCost);
+  // One blank per finished bag, whatever its label count — a Split Bag is ONE blank.
+  const blankUnit = input.blankUnitCost == null ? bagBlankUnitCostFor(input.product) : Number(input.blankUnitCost);
   if (!Number.isFinite(blankUnit) || blankUnit < 0) {
     reasons.push(BAG_REASONS.bagBlankCostRequired);
     blockers.push(`${BAG_REASONS.bagBlankCostRequired}: no verified blank bag cost.`);
@@ -480,12 +512,13 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
   });
 
   // Application: the bag IS the item and GSO already owns it via the blank, so
-  // the item line must NOT charge again. applicationsPerItem = labelled sides.
+  // the item line must NOT charge again. applicationsPerItem = labelled
+  // sides x positions per side (one event per applied 4x5 label).
   const application = computeLabelApplication({
     mode: "customer_provided_item",
-    itemDescription: "4x5 bag",
+    itemDescription: input.product === "split_bag" ? "Split Bag" : "4x5 bag",
     itemQuantity: bagQuantity,
-    applicationsPerItem: sides,
+    applicationsPerItem: sides * positionsPerSide,
     applicationSecondsPerEvent: BAG_APPLICATION_SECONDS_PER_SIDE,
     printedLabels: labelQuantity,
   });
@@ -495,6 +528,7 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
     product: input.product,
     bagQuantity,
     sides,
+    positionsPerSide,
     labelQuantity,
     blankCost,
     nesting,
@@ -507,7 +541,7 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
   };
 }
 
-/** Application labor for a bag job, from the canonical 10s/side standard. */
-export function bagApplicationCost(bagQuantity: number, sides: BagSides): number {
-  return (bagQuantity * sides * BAG_APPLICATION_SECONDS_PER_SIDE / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
+/** Application labor for a bag job, from the canonical 10s-per-applied-label standard. */
+export function bagApplicationCost(bagQuantity: number, sides: BagSides, product: BagProduct = "sticker_bag_4x5"): number {
+  return (bagQuantity * sides * bagLabelPositionsPerSide(product) * BAG_APPLICATION_SECONDS_PER_SIDE / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
 }

@@ -320,7 +320,7 @@ describe("2D-4C1 (4) canonical is the cost authority", () => {
     // 2D-4D1 added the two jar families once the owner approved their active
     // scope and every offered jar costed with zero blockers.
     expect(CANONICAL_SUPPORTED_FAMILIES).toEqual([
-      "stickers-labels", "sticker-bags", "stock-bags", "banners", "standard-jars", "premium-jars",
+      "stickers-labels", "sticker-bags", "stock-bags", "split-bags", "banners", "standard-jars", "premium-jars",
     ]);
   });
 
@@ -479,7 +479,7 @@ describe("2D-4C1 per-tier quantity actually scales the job", () => {
 
   it("BAG and BANNER ladders scale too", async () => {
     for (const [qs, ladder] of [
-      ["pfamily=sticker-bags&pqty=1000&pbagsides=2&pdesigns=1" + MACHINE, [100, 500, 1000]],
+      ["pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=2&pdesigns=1" + MACHINE, [100, 500, 1000]],
       ["pfamily=banners&pqty=1&pbannerw=36&pbannerh=60&pdesigns=1" + MACHINE, [1, 5, 10]],
     ] as const) {
       const input = inputFor(qs);
@@ -503,7 +503,7 @@ describe("2D-4C1 per-tier quantity actually scales the job", () => {
   });
 
   it("non-label families are unaffected by the label-specific branch", () => {
-    const bag = inputFor("pfamily=sticker-bags&pqty=1000&pbagsides=2" + MACHINE);
+    const bag = inputFor("pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=2" + MACHINE);
     const scaled = canonicalInputForQuantity(bag, 250)!;
     expect(scaled.quantity).toBe(250);
     expect(scaled.labels).toBeUndefined();
@@ -548,7 +548,7 @@ describe("2D-4C1A (FIX 2) multi-line label jobs are never re-allocated", () => {
   it("alternate ladder rungs are SUPPRESSED for a multi-line job", () => {
     expect(canonicalSupportsTierLadder(inputFor(MULTI))).toBe(false);
     expect(canonicalSupportsTierLadder(inputFor(CONTROL))).toBe(true);
-    expect(canonicalSupportsTierLadder(inputFor("pfamily=sticker-bags&pqty=1000&pbagsides=2" + MACHINE))).toBe(true);
+    expect(canonicalSupportsTierLadder(inputFor("pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=2" + MACHINE))).toBe(true);
     expect(canonicalSupportsTierLadder(inputFor("pfamily=banners&pqty=1&pbannerw=36&pbannerh=60" + MACHINE))).toBe(true);
     expect(canonicalSupportsTierLadder(null)).toBe(true); // unsupported families keep their ladder
 
@@ -588,7 +588,7 @@ describe("2D-4C1A (FIX 2) multi-line label jobs are never re-allocated", () => {
  * ================================================================== */
 
 describe("2D-4C1 selected-tier gate", () => {
-  const STOCK = "pfamily=sticker-bags&pstockbag=1&pqty=1000&pbagsides=2" + MACHINE;
+  const STOCK = "pfamily=sticker-bags&pbagmat=matte&pstockbag=1&pqty=1000&pbagsides=2" + MACHINE;
 
   it("a Stock Bag ladder that crosses below MOQ 50 blocks the LOW rung, not the base", async () => {
     const input = inputFor(STOCK);

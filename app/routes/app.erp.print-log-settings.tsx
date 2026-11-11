@@ -8,9 +8,9 @@ import {
   InlineStack,
   Badge,
   Divider,
-  TextField,
   Checkbox,
 } from "@shopify/polaris";
+import { FormTextField } from "../components/FormTextField";
 import { randomBytes } from "crypto";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -227,13 +227,13 @@ Get-ChildItem -Path $IncomingFolder -File -Include *.csv,*.txt,*.xml -Recurse | 
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">Watch-folder settings</Text>
                 <Checkbox label="Enable automatic print log uploads" name="enabled" defaultChecked={setting.enabled} />
-                <TextField label="Incoming folder" name="incomingFolder" defaultValue={setting.incomingFolder || ""} autoComplete="off" />
-                <TextField label="VersaWorks folder" name="versaworksFolder" defaultValue={setting.versaworksFolder || ""} autoComplete="off" />
-                <TextField label="RasterLink folder" name="rasterlinkFolder" defaultValue={setting.rasterlinkFolder || ""} autoComplete="off" />
-                <TextField label="Processed folder" name="processedFolder" defaultValue={setting.processedFolder || ""} autoComplete="off" />
-                <TextField label="Error folder" name="errorFolder" defaultValue={setting.errorFolder || ""} autoComplete="off" />
-                <TextField label="Expected job ticket pattern (documentation only)" name="expectedTicketPattern" defaultValue={setting.expectedTicketPattern || "GSO-YYYYMMDD-NNNN (job) / GSO-YYYYMMDD-NNNN-NN (item)"} autoComplete="off" helpText="Canonical tickets: GSO-YYYYMMDD-NNNN (job), GSO-YYYYMMDD-NNNN-NN (item). Routed names may append run decorations __R#-P#-A#. This field is a display note - the parsers and allocator never read it." />
-                <TextField label="Notes" name="notes" defaultValue={setting.notes || ""} multiline={3} autoComplete="off" />
+                <FormTextField label="Incoming folder" name="incomingFolder" defaultValue={setting.incomingFolder || ""} autoComplete="off" />
+                <FormTextField label="VersaWorks folder" name="versaworksFolder" defaultValue={setting.versaworksFolder || ""} autoComplete="off" />
+                <FormTextField label="RasterLink folder" name="rasterlinkFolder" defaultValue={setting.rasterlinkFolder || ""} autoComplete="off" />
+                <FormTextField label="Processed folder" name="processedFolder" defaultValue={setting.processedFolder || ""} autoComplete="off" />
+                <FormTextField label="Error folder" name="errorFolder" defaultValue={setting.errorFolder || ""} autoComplete="off" />
+                <FormTextField label="Expected job ticket pattern (documentation only)" name="expectedTicketPattern" defaultValue={setting.expectedTicketPattern || "GSO-YYYYMMDD-NNNN (job) / GSO-YYYYMMDD-NNNN-NN (item)"} autoComplete="off" helpText="Canonical tickets: GSO-YYYYMMDD-NNNN (job), GSO-YYYYMMDD-NNNN-NN (item). Routed names may append run decorations __R#-P#-A#. This field is a display note - the parsers and allocator never read it." />
+                <FormTextField label="Notes" name="notes" defaultValue={setting.notes || ""} multiline={3} autoComplete="off" />
                 <Button submit variant="primary" loading={busy}>Save settings</Button>
               </BlockStack>
             </Form>

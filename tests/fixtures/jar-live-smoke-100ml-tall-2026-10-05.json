@@ -12,7 +12,7 @@
   "weedingPages": 2,
   "pricing": "128 @ $8.00/jar = $1,024.01 (pricing comes from owner pricing config in the DB; not reproducible offline)"
  },
- "query": "pfamily=premium-jars&pqty=128&pjar=miron/100ml_tall&pjarside=1&pjarlid=1&pjarset=side_lid&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0",
+ "query": "pfamily=premium-jars&pjarmat=matte&pqty=128&pjar=miron/100ml_tall&pjarside=1&pjarlid=1&pjarset=side_lid&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0",
  "status": "PROVISIONAL",
  "totalCost": 430.0861464893229,
  "unitCost": 3.3600480194478353,

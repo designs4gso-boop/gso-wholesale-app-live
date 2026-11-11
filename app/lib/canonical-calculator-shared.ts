@@ -17,7 +17,7 @@ export const CANONICAL_CALCULATOR_VERSION = "17D.7-canonical-calculator";
  * Families
  * ------------------------------------------------------------------ */
 
-export const CANONICAL_FAMILIES = ["stickers-labels", "sticker-bags", "stock-bags", "banners", "standard-jars", "premium-jars"] as const;
+export const CANONICAL_FAMILIES = ["stickers-labels", "sticker-bags", "stock-bags", "split-bags", "banners", "standard-jars", "premium-jars"] as const;
 export type CanonicalFamily = (typeof CANONICAL_FAMILIES)[number];
 
 /**
@@ -50,6 +50,11 @@ export const CANONICAL_DISPATCH: Record<CanonicalFamily, { adapter: string; entr
     adapter: "bag-cost-inputs.server.ts",
     entry: "computeBagPhysical(product: stock_bag)",
     note: "SAME physical adapter as sticker-bags. Premade base art, MOQ 50, optional logo/QR personalization.",
+  },
+  "split-bags": {
+    adapter: "bag-cost-inputs.server.ts",
+    entry: "computeBagPhysical(product: split_bag)",
+    note: "SAME physical adapter. One $0.25 blank of two joined 4x5 sections; two standard 4x5 labels per printed side. Customer artwork.",
   },
   "standard-jars": {
     adapter: "jar-cost-inputs.server.ts",
@@ -109,6 +114,10 @@ export const CANONICAL_PACKOUT: Record<CanonicalFamily, { unitsPerBox: number | 
   "stickers-labels": { unitsPerBox: 5000, source: "Legacy packing rule: 5,000 labels per box at the owner packout standard." },
   "sticker-bags": { unitsPerBox: 5000, source: "Legacy packing rule: 5,000 bags per box at the owner packout standard." },
   "stock-bags": { unitsPerBox: 5000, source: "Legacy packing rule: 5,000 bags per box at the owner packout standard." },
+  // 2026-11-11: no owner box count exists for the Split Bag (twice the 4x5
+  // footprint), so the 4x5 5,000/box rule is NOT borrowed — disclosed as
+  // PACKOUT_NOT_MODELED until the owner records one.
+  "split-bags": { unitsPerBox: null, source: "Split Bag box count has NO owner standard yet — packout is disclosed as not modelled, never borrowed from the 4x5 rule." },
   banners: { unitsPerBox: null, source: "Banner tube packout has NO verified standard (BANNER_FINISHING_SUPPORT.TUBE_PACKOUT.verified = false)." },
   // Jars carry their OWN verified per-size box counts (JAR_UNITS_PER_BOX) plus
   // a consumables rate, so the adapter supplies packout directly and this

@@ -33,19 +33,41 @@ export const STOCK_BAG_CALCULATOR_OPTION = {
   pstockbag: "1",
 } as const;
 
+/**
+ * 2026-11-11 owner decision: Split Bag — a permanent stocked product on the
+ * SAME canonical bag adapter (computeBagPhysical product: split_bag). Posted
+ * exactly like Stock Bags: pfamily=sticker-bags + psplitbag=1.
+ */
+export const SPLIT_BAG_CALCULATOR_OPTION = {
+  value: "split-bags",
+  label: "Split Bag",
+  pfamily: "sticker-bags",
+  psplitbag: "1",
+} as const;
+
+/** No Split Bag selling ladder exists yet — the owner prices each job. */
+export const SPLIT_BAG_PRICE_AUTHORITY_TEXT =
+  "Split Bag has no owner-approved selling price yet. The true cost is recorded; the owner sets and approves a job-level price (the 4x5 Sticker Bag price curve is never applied to it).";
+
 /** Map a family-selector choice onto the form params the loader reads. */
-export function calculatorFamilyParams(choice: string): { pfamily: string; pstockbag: string | null } {
+export function calculatorFamilyParams(choice: string): { pfamily: string; pstockbag: string | null; psplitbag: string | null } {
   if (choice === STOCK_BAG_CALCULATOR_OPTION.value) {
-    return { pfamily: STOCK_BAG_CALCULATOR_OPTION.pfamily, pstockbag: STOCK_BAG_CALCULATOR_OPTION.pstockbag };
+    return { pfamily: STOCK_BAG_CALCULATOR_OPTION.pfamily, pstockbag: STOCK_BAG_CALCULATOR_OPTION.pstockbag, psplitbag: null };
   }
-  return { pfamily: choice, pstockbag: null };
+  if (choice === SPLIT_BAG_CALCULATOR_OPTION.value) {
+    return { pfamily: SPLIT_BAG_CALCULATOR_OPTION.pfamily, pstockbag: null, psplitbag: SPLIT_BAG_CALCULATOR_OPTION.psplitbag };
+  }
+  return { pfamily: choice, pstockbag: null, psplitbag: null };
 }
 
 /** The selector value that represents the current URL state. */
-export function calculatorFamilyChoice(pfamily: string | null | undefined, pstockbag: string | null | undefined): string {
+export function calculatorFamilyChoice(pfamily: string | null | undefined, pstockbag: string | null | undefined, psplitbag?: string | null): string {
   const family = String(pfamily || "");
   if (family === STOCK_BAG_CALCULATOR_OPTION.pfamily && pstockbag === STOCK_BAG_CALCULATOR_OPTION.pstockbag) {
     return STOCK_BAG_CALCULATOR_OPTION.value;
+  }
+  if (family === SPLIT_BAG_CALCULATOR_OPTION.pfamily && psplitbag === SPLIT_BAG_CALCULATOR_OPTION.psplitbag) {
+    return SPLIT_BAG_CALCULATOR_OPTION.value;
   }
   return family;
 }
@@ -265,6 +287,8 @@ export function resolveSellingPriceAuthority(input: {
   /** canonicalUiFamily(pfamily). */
   family: string | null;
   stockBag: boolean;
+  /** pfamily=sticker-bags + psplitbag=1. */
+  splitBag?: boolean;
   /** marginFamilyKeyFor(...) — the researched curve key, or null. */
   marginRuleKey: string | null;
   row: any | null;
@@ -295,6 +319,12 @@ export function resolveSellingPriceAuthority(input: {
 
   if (input.family === "custom-item" || input.family === "custom") {
     return { ...base, approved: false, kind: "none", label: null, missing: CUSTOM_ITEM_AUTHORITY_TEXT };
+  }
+
+  // Split Bag: no approved selling price yet (owner decision 2026-11-11) —
+  // PROVISIONAL, owner job-level price. Never the 4x5 Sticker Bag curve.
+  if (input.splitBag && !input.stockBag) {
+    return { ...base, approved: false, kind: "none", label: null, missing: SPLIT_BAG_PRICE_AUTHORITY_TEXT };
   }
 
   // Stock Bags: the live storefront price authority (owner decision C).
@@ -362,6 +392,8 @@ export type OwnerResultInput = {
   family: string | null;
   /** pfamily=sticker-bags + pstockbag=1. */
   stockBag?: boolean;
+  /** pfamily=sticker-bags + psplitbag=1. */
+  splitBag?: boolean;
   canonical: { status: string; totalCost: number; unitCost: number | null; blockers: string[] } | null;
   /** The server tier row for the requested quantity (loader productMode.tiers). */
   requestedRow: any | null;
@@ -425,7 +457,7 @@ export function resolveOwnerResult(input: OwnerResultInput): OwnerResult | null 
     };
   }
 
-  const authority = resolveSellingPriceAuthority({ family: input.family, stockBag: Boolean(input.stockBag), marginRuleKey: input.marginRuleKey, row, multiLine: input.multiLine });
+  const authority = resolveSellingPriceAuthority({ family: input.family, stockBag: Boolean(input.stockBag), splitBag: Boolean(input.splitBag), marginRuleKey: input.marginRuleKey, row, multiLine: input.multiLine });
 
   // 2. True cost exists but no approved price authority -> NOT AVAILABLE.
   //    The generic/unsourced price the tier table may still carry is never shown here.

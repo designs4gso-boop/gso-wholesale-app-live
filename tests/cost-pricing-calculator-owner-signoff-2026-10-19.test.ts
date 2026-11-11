@@ -69,7 +69,7 @@ const view = (qs: string) => {
   return canonicalViewOf(assembleCanonicalJob(input!, CAL));
 };
 const BANNER_QS = "pfamily=banners&pqty=2&pwidth=36&pheight=60&pbannerw=36&pbannerh=60&pbannersides=SINGLE&pbanneredge=TRIM_ONLY&pbannergrommets=NONE&pdesigns=1";
-const JAR_QS = (family: string, jar: string, qty = 500) => `pfamily=${family}&pqty=${qty}&pjar=${jar}&pjarside=1&pjarlid=1&pcmykcoverage=40`;
+const JAR_QS = (family: string, jar: string, qty = 500) => `pfamily=${family}&pjarmat=matte&pqty=${qty}&pjar=${jar}&pjarside=1&pjarlid=1&pcmykcoverage=40`;
 
 /** Read-only shop data for the real Stock Bag storefront resolver. */
 function fakeShopDb() {
@@ -460,7 +460,7 @@ describe("5. Stock Bag storefront price vs the generic margin floor (tests 17-21
 
 describe("unchanged (tests 22-29)", () => {
   it("22. Sticker Bag double-side mapping remains correct", () => {
-    expect(normalizeCanonicalInput(new URLSearchParams("pfamily=sticker-bags&pqty=1000&pbagsides=2&pdesigns=1&pprinter=auto"))!.bags!.sides).toBe(2);
+    expect(normalizeCanonicalInput(new URLSearchParams("pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=2&pdesigns=1&pprinter=auto"))!.bags!.sides).toBe(2);
     expect(src()).toContain('<input type="hidden" name="pbagsides" value={bagSidesValue} />');
   });
 

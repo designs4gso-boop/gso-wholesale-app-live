@@ -12,7 +12,7 @@ describe("art preflight", () => {
   it("passes clean 4x5 art and derives the GSO cutline", () => {
     const r = runArtPreflight({ family: "sticker-bags", widthIn: 4, heightIn: 5, cutType: "rectangular" }, [clean]);
     expect(r.status).toBe("PASS");
-    expect(r.expectedCutline).toBe("3.875 x 4.875 in");
+    expect(r.expectedCutline).toBe("3.790 x 4.810 in"); // owner 4x5 cutline (2026-11-11)
     expect(r.routing?.printer).toBe("mimaki");
     expect(r.technicalPassEligible).toBe(true);
   });

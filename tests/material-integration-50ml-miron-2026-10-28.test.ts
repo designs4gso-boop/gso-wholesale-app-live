@@ -346,7 +346,7 @@ describe("12-22. 50ml Miron jar + top acquisition cost", () => {
       } as any,
       calibrationMessage: "approved", inkCostPerMl: CANONICAL_INK_RATES.mimakiCmykPerMl, inkCostSource: "canonical purchasing rate",
     };
-    const input = normalizeCanonicalInput(new URLSearchParams("pfamily=premium-jars&pqty=200&pjar=miron/50ml&pjarside=1&pjarlid=1&pcmykcoverage=40"))!;
+    const input = normalizeCanonicalInput(new URLSearchParams("pfamily=premium-jars&pjarmat=matte&pqty=200&pjar=miron/50ml&pjarside=1&pjarlid=1&pcmykcoverage=40"))!;
     const r = assembleCanonicalJob({ ...input, equipmentRatePerHour: 8 }, CAL);
     const amount = (key: string) => r.trueCost.lines.find((l: any) => l.key === key)?.amount;
     expect(amount("blank_sets")).toBeCloseTo(202 * 2.47, 9); // 200 + 1% overage = 202 sets at the 1+ tier
@@ -488,7 +488,7 @@ describe("C3-C4. Miron cost tier = PRODUCTION quantity (owner decision, intentio
     expect(productionQtyFor(248)).toBe(251);
     const tier = resolveJarBlankCost({ brand: "miron", size: "50ml", quantity: productionQtyFor(248) });
     expect(tier.ok && tier.unitCost).toBe(2.26);
-    const input = normalizeCanonicalInput(new URLSearchParams("pfamily=premium-jars&pqty=248&pjar=miron/50ml&pjarside=1&pjarlid=1&pcmykcoverage=40"))!;
+    const input = normalizeCanonicalInput(new URLSearchParams("pfamily=premium-jars&pjarmat=matte&pqty=248&pjar=miron/50ml&pjarside=1&pjarlid=1&pcmykcoverage=40"))!;
     const CAL: ResolvedMachineInputs = {
       calibration: {
         id: "cal_test", shop: "test", machineKey: "mimaki-ucjv300-130", inkMode: "cmyk", ripProfile: "p", qualityMode: "q", resolution: "r", passConfig: "1x",

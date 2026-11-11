@@ -6,7 +6,8 @@ import db from "../db.server";
 import { materialKind } from "../lib/material-classify";
 import { resolveMaterialUnitCost, resolvePrintMaterialCostPerSqft } from "../lib/cost-calculator.server";
 import { buildCsv } from "../lib/shopify-cost-audit-shared";
-import { applyApprovedCostUpdates, previewApprovedCostUpdates } from "../lib/approved-cost-updates.server";
+import { APPROVED_COST_TRUTH, applyApprovedCostUpdates, previewApprovedCostUpdates } from "../lib/approved-cost-updates.server";
+import { requireOwner } from "../lib/owner-authorization.server";
 // 2026-10-05 read-only production standards (weeding + fixed-product specs + jar application timings)
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 import { ERP_CARD_STYLE, ERP_SMALL_HELP, ERP_TD_STYLE, ERP_TH_STYLE } from "../lib/erp-ui-tokens";
@@ -65,7 +66,10 @@ function pushIssue(issues: WorkbookIssue[], issue: WorkbookIssue) {
 // unambiguously matched VendorProduct/VendorProductTier rows. No Shopify, no
 // quotes, no production, no recipes, no schema.
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // 2026-11-11: applying approved costs writes live cost data — owner only.
+  requireOwner(auth, process.env, "Applying approved cost updates is owner only.");
   const formData = await request.formData();
 
   if (String(formData.get("intent")) !== "applyApprovedCosts") {
@@ -75,7 +79,12 @@ export async function action({ request }: { request: Request }) {
     return { ok: false as const, error: `Confirmation phrase does not match. Type exactly: ${APPLY_CONFIRM_PHRASE}` };
   }
 
-  const result = await applyApprovedCostUpdates(db, session.shop);
+  // Optional: apply ONE registry entry (e.g. onlyKey=miron-50ml) instead of the whole registry.
+  const onlyKey = String(formData.get("onlyKey") ?? "").trim();
+  if (onlyKey && !APPROVED_COST_TRUTH.some((item) => item.key === onlyKey)) {
+    return { ok: false as const, error: `Unknown approved-cost key "${onlyKey}".` };
+  }
+  const result = await applyApprovedCostUpdates(db, session.shop, onlyKey ? { onlyKeys: [onlyKey] } : {});
   return { ok: true as const, applied: result.applied, skippedCount: result.skipped.length };
 }
 

@@ -424,9 +424,13 @@ export async function previewApprovedCostUpdates(dbClient: any, shop: string): P
 
 // Applies ONLY rows the server itself re-evaluates as will_update/will_create.
 // One transaction; scoped strictly to the matched records.
-export async function applyApprovedCostUpdates(dbClient: any, shop: string) {
+// 2026-11-11: `onlyKeys` limits the apply to named registry entries (e.g.
+// ["miron-50ml"]) so one owner-approved change can ship without applying every
+// other pending registry change with it. Omitted = the whole registry (as before).
+export async function applyApprovedCostUpdates(dbClient: any, shop: string, options: { onlyKeys?: string[] } = {}) {
   const context = await loadContext(dbClient, shop);
-  const evaluated = APPROVED_COST_TRUTH.map((item) => ({ item, ...evaluateApprovedItem(item, context) }));
+  const only = options.onlyKeys?.length ? new Set(options.onlyKeys) : null;
+  const evaluated = APPROVED_COST_TRUTH.filter((item) => !only || only.has(item.key)).map((item) => ({ item, ...evaluateApprovedItem(item, context) }));
   const actionable = evaluated.filter((entry) => entry.row.status === "will_update" || entry.row.status === "will_create");
 
   await dbClient.$transaction(async (tx: any) => {

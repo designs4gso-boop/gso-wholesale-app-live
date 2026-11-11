@@ -92,7 +92,51 @@ function areaCostUnit(material: any): boolean {
   return unit === "sqft" || unit === "sqin";
 }
 
-export function materialCalculatorReadiness(material: any): MaterialCalculatorReadiness {
+/** Purchase units whose price IS an area price. */
+const AREA_PURCHASE_UNITS = new Set(["sqft", "sqin"]);
+/** Stored roll $/sqft may differ from purchase price ÷ roll area by rounding only. */
+const ROLL_DERIVATION_TOLERANCE = 0.01;
+
+/**
+ * 2026-11-11 UNIT SAFETY. A purchase price ($250 per roll, $50 per pack, $20
+ * each) must never become a $/sqft. The stored area cost is defensible only
+ * when it is:
+ *   - an explicit area cost (purchased per sqft/sq in, or entered directly with
+ *     no purchase price on record), or
+ *   - derived from a ROLL purchase: purchase price ÷ (width x length), and the
+ *     stored rate matches that derivation.
+ * Any other purchase unit carrying a price (each, case, pack, box, sheet ...)
+ * cannot express a $/sqft, so the material is not calculator-ready.
+ * Returns plain-English reasons; nothing is converted or guessed here.
+ */
+export function areaCostUnitBasisIssues(material: any, costPerSqft: number): string[] {
+  const purchaseUnit = String(material?.purchaseUnit || "").toLowerCase().trim();
+  const purchaseCost = Number(material?.purchaseCost) || 0;
+  if (!(purchaseCost > 0) || AREA_PURCHASE_UNITS.has(purchaseUnit)) return [];
+  if (purchaseUnit === "roll") {
+    const widthIn = Number(material?.rollWidthIn) || 0;
+    const lengthFt = Number(material?.rollLengthFt) || 0;
+    if (!(widthIn > 0) || !(lengthFt > 0)) {
+      return ["Roll length/width missing — the $/sqft cannot be verified from the roll price (UNIT_BASIS_REQUIRED)."];
+    }
+    const derived = purchaseCost / ((widthIn * lengthFt * 12) / 144);
+    if (Math.abs(costPerSqft - derived) > derived * ROLL_DERIVATION_TOLERANCE) {
+      return [`Stored $/sqft (${costPerSqft.toFixed(4)}) does not match roll price ÷ roll area (${derived.toFixed(4)}) — re-save the material (UNIT_BASIS_REQUIRED).`];
+    }
+    return [];
+  }
+  return [`Cost is a purchase price per ${purchaseUnit || "unit"}, not a per-sq-ft cost — enter the roll size or an explicit $/sqft (UNIT_BASIS_REQUIRED).`];
+}
+
+/** Material Center product families a print medium may serve. */
+export type MaterialUse = "labels" | "bag_labels";
+const FAMILIES_FOR_USE: Record<MaterialUse, string[]> = {
+  labels: [LABELS_PRODUCT_FAMILY],
+  // 4x5 / Stock / Split bag labels are sticker-label media.
+  bag_labels: [LABELS_PRODUCT_FAMILY, "sticker_bags"],
+};
+
+export function materialCalculatorReadiness(material: any, use: MaterialUse = "labels"): MaterialCalculatorReadiness {
   const blocked = (missing: string[]): MaterialCalculatorReadiness => ({
     applies: true, ready: false, label: NEEDS_COST_SETUP, canonicalKey: null, source: null, costPerSqft: null, rollWidthIn: null, missing,
   });
@@ -117,10 +161,14 @@ export function materialCalculatorReadiness(material: any): MaterialCalculatorRe
 
   // 2. Material Center record — structured fields only.
   const missing = [...availability];
-  if (!families(material?.productFamilies).includes(LABELS_PRODUCT_FAMILY)) missing.push("Not assigned to the Labels product family.");
+  const allowedFamilies = FAMILIES_FOR_USE[use];
+  if (!families(material?.productFamilies).some((family) => allowedFamilies.includes(family))) {
+    missing.push(use === "labels" ? "Not assigned to the Labels product family." : "Not assigned to the Labels or Sticker Bags product family.");
+  }
   const cost = resolvePrintMaterialCostPerSqft(material);
   if (!(cost.unitCost > 0)) missing.push("No stored cost per sqft.");
   else if (!areaCostUnit(material)) missing.push("Cost is not per sqft (or per sq in).");
+  else missing.push(...areaCostUnitBasisIssues(material, cost.unitCost));
   if (material?.costReviewNeeded) missing.push("Cost is marked \"needs review\" — confirm it first.");
   if (!material?.primaryVendorId && !String(material?.vendor || "").trim()) missing.push("No vendor set.");
   const rollWidthIn = Number(material?.rollWidthIn);
@@ -134,8 +182,8 @@ export function materialCalculatorReadiness(material: any): MaterialCalculatorRe
 }
 
 /** The verified rate a ready Material Center record contributes to a label job. */
-export function verifiedLabelMaterialOf(material: any): VerifiedLabelMaterial | null {
-  const readiness = materialCalculatorReadiness(material);
+export function verifiedLabelMaterialOf(material: any, use: MaterialUse = "labels"): VerifiedLabelMaterial | null {
+  const readiness = materialCalculatorReadiness(material, use);
   if (!readiness.ready || readiness.source !== "material_center" || !readiness.canonicalKey) return null;
   return {
     key: readiness.canonicalKey,
@@ -154,10 +202,17 @@ export function verifiedLabelMaterialOf(material: any): VerifiedLabelMaterial | 
  * blocks. The resolved rate travels inside the canonical input, so a saved
  * snapshot keeps the rate it was costed at; later edits never rewrite it.
  */
-export async function attachVerifiedLabelMaterials<T extends { family: string; labels?: { lines: Array<{ materialKey: string }>; materials?: Record<string, VerifiedLabelMaterial> } }>(
+export async function attachVerifiedLabelMaterials<T extends {
+  family: string;
+  labels?: { lines: Array<{ materialKey: string }>; materials?: Record<string, VerifiedLabelMaterial> };
+  bags?: MediaSelection;
+  jar?: MediaSelection;
+}>(
   deps: { db: any; shop: string },
   input: T,
 ): Promise<T> {
+  if (input.bags && BAG_FAMILIES.has(input.family)) return { ...input, bags: await attachVerifiedMediaSelection(deps, input.bags, "bag_labels") };
+  if (input.jar && JAR_FAMILIES.has(input.family)) return { ...input, jar: await attachVerifiedMediaSelection(deps, input.jar, "labels") };
   if (input.family !== "stickers-labels" || !input.labels) return input;
   const ids = Array.from(new Set(
     input.labels.lines
@@ -174,4 +229,30 @@ export async function attachVerifiedLabelMaterials<T extends { family: string; l
     if (verified) materials[verified.key] = verified;
   }
   return { ...input, labels: { ...input.labels, materials } };
+}
+
+const BAG_FAMILIES = new Set(["sticker-bags", "stock-bags", "split-bags"]);
+const JAR_FAMILIES = new Set(["standard-jars", "premium-jars"]);
+type MediaSelection = { materialKey?: string | null; materialId?: string | null; materials?: Record<string, VerifiedLabelMaterial>; materialMissing?: string[] };
+
+/**
+ * 2026-11-11 — server side: the bag / jar label media the form selected (pmat,
+ * a Material Center id) becomes the job's canonical media key. The record is
+ * re-read shop-scoped: an approved roll keeps its approved rate; any other
+ * record must be calculator-ready for that use and contributes its OWN stored
+ * $/sqft; anything else blocks with its readiness reasons. A selected id always
+ * wins over a posted media key, so the browser cannot pick the rate.
+ */
+async function attachVerifiedMediaSelection<S extends MediaSelection>(deps: { db: any; shop: string }, selection: S, use: MaterialUse): Promise<S> {
+  const posted = String(selection.materialKey || "");
+  const id = String(selection.materialId || "") || (posted.startsWith(MATERIAL_CANONICAL_KEY_PREFIX) ? posted.slice(MATERIAL_CANONICAL_KEY_PREFIX.length) : "");
+  if (!id) return selection; // approved keys resolve in code; nothing selected stays blocked
+  const record = await deps.db.material.findFirst({ where: { shop: deps.shop, id } });
+  if (!record) return { ...selection, materialKey: `${MATERIAL_CANONICAL_KEY_PREFIX}${id}`, materials: {}, materialMissing: ["Selected material was not found."] };
+  const readiness = materialCalculatorReadiness(record, use);
+  if (!readiness.ready || !readiness.canonicalKey) {
+    return { ...selection, materialKey: `${MATERIAL_CANONICAL_KEY_PREFIX}${id}`, materials: {}, materialMissing: readiness.missing };
+  }
+  const verified = verifiedLabelMaterialOf(record, use);
+  return { ...selection, materialKey: readiness.canonicalKey, materials: verified ? { [verified.key]: verified } : {}, materialMissing: [] };
 }

@@ -83,7 +83,7 @@ const CAL: ResolvedMachineInputs = {
 
 const qs = (extra: Record<string, string | number> = {}) => {
   const params = new URLSearchParams({
-    pfamily: "premium-jars", pqty: "500", pjar: "miron/100ml_wide",
+    pfamily: "premium-jars", pjarmat: "matte", pqty: "500", pjar: "miron/100ml_wide",
     pjarside: "1", pjarlid: "1", pcmykcoverage: "40",
   });
   for (const [key, value] of Object.entries(extra)) {

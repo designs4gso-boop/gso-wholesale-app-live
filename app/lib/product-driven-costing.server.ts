@@ -306,6 +306,9 @@ export function bagApplicationRateFor(bagName: string): { rate: number | null; s
   const text = String(bagName || "");
   if (/14\s?x\s?16|pound/i.test(text)) return { rate: OWNER_STANDARDS.bagApplicationPerLabel14x16.value, source: "owner_standard", basis: "14x16 bag $1.00/label (owner standard)" };
   if (/4\s?x\s?5\b/i.test(text)) return { rate: OWNER_LABOR.bagLabelApplicationPer, source: "owner_standard", basis: "4x5 bag $0.0781/label (owner standard)" };
+  // 2026-11-11: every Split Bag label position IS a standard 4x5 label. (Legacy
+  // diagnostic only — the canonical split_bag adapter is the cost authority.)
+  if (/split\s?bag/i.test(text)) return { rate: OWNER_LABOR.bagLabelApplicationPer, source: "owner_standard", basis: "Split Bag 4x5 label positions $0.0781/label (4x5 owner standard)" };
   return { rate: null, source: "missing", basis: "No owner application-labor standard for this bag size" };
 }
 
@@ -1068,6 +1071,9 @@ export function canonicalUiFamily(uiFamily: string): CanonicalUiFamily {
 // loader and the save action so a stale selection from a previous family can
 // never survive a family switch (a Miron jar posted under Standard Jars is
 // treated as no selection, not silently re-priced).
+/** Blank classes owned by a canonical (or vendor-authority) family — never offered as a Custom Item. */
+export const CANONICAL_FAMILY_BLANK_CLASSES: CalculatorProductClass[] = ["bag_sticker", "bag_dtp", "jar_standard", "jar_chiron", "jar_miron", "miron_top"];
+
 export function blankClassAllowedFor(uiFamily: string, klass: CalculatorProductClass): boolean {
   if (uiFamily === "chiron-jars") return klass === "jar_chiron"; // legacy narrow value
   if (uiFamily === "miron-jars") return klass === "jar_miron"; // legacy narrow value
@@ -1076,7 +1082,10 @@ export function blankClassAllowedFor(uiFamily: string, klass: CalculatorProductC
   if (canonical === "standard-jars") return klass === "jar_standard";
   if (canonical === "premium-jars") return klass === "jar_chiron" || klass === "jar_miron";
   if (canonical === "dtp-bags") return klass === "bag_dtp"; // 15C: ONLY Spektra DTP records
-  if (canonical === "custom-item") return true;
+  // 2026-11-11: Custom Item is for products with NO canonical model. A 4x5 bag,
+  // a jar or a DTP pouch has its own family and true-cost authority; picking
+  // it here would quote it on the legacy engine instead.
+  if (canonical === "custom-item") return !CANONICAL_FAMILY_BLANK_CLASSES.includes(klass);
   return false; // stickers/banners have no blank picker
 }
 

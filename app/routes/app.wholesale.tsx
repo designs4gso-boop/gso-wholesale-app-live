@@ -2,8 +2,9 @@ import { data } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import {
-  Page, Layout, Card, Text, BlockStack, TextField, Button, Banner,
+  Page, Layout, Card, Text, BlockStack, Button, Banner,
 } from "@shopify/polaris";
+import { FormTextField } from "../components/FormTextField";
 import { authenticate } from "../shopify.server";
 import { getWholesaleConfig, saveWholesaleConfig } from "../lib/wholesale.server";
 
@@ -49,12 +50,12 @@ export default function WholesaleSettingsPage() {
               <Text as="h2" variant="headingMd">Wholesale app settings</Text>
               <Form method="post">
                 <BlockStack gap="300">
-                  <TextField label="Approved wholesale tag" name="wholesaleTag" autoComplete="off" defaultValue={config.wholesaleTag} />
-                  <TextField label="Pending application tag" name="pendingTag" autoComplete="off" defaultValue={config.pendingTag} />
-                  <TextField label="VIP wholesale tag" name="vipTag" autoComplete="off" defaultValue={config.vipTag} />
-                  <TextField label="Global fallback discount %" name="storewidePercentOff" type="number" autoComplete="off" defaultValue={String(config.storewidePercentOff)} />
-                  <TextField label="Minimum wholesale subtotal" name="minimumSubtotal" type="number" autoComplete="off" defaultValue={String(config.minimumSubtotal)} />
-                  <TextField label="Minimum total cart quantity" name="minCartQuantity" type="number" autoComplete="off" defaultValue={String(config.minCartQuantity || 1)} />
+                  <FormTextField label="Approved wholesale tag" name="wholesaleTag" autoComplete="off" defaultValue={config.wholesaleTag} />
+                  <FormTextField label="Pending application tag" name="pendingTag" autoComplete="off" defaultValue={config.pendingTag} />
+                  <FormTextField label="VIP wholesale tag" name="vipTag" autoComplete="off" defaultValue={config.vipTag} />
+                  <FormTextField label="Global fallback discount %" name="storewidePercentOff" type="number" autoComplete="off" defaultValue={String(config.storewidePercentOff)} />
+                  <FormTextField label="Minimum wholesale subtotal" name="minimumSubtotal" type="number" autoComplete="off" defaultValue={String(config.minimumSubtotal)} />
+                  <FormTextField label="Minimum total cart quantity" name="minCartQuantity" type="number" autoComplete="off" defaultValue={String(config.minCartQuantity || 1)} />
                   <label><input type="checkbox" name="enforceMinCartQty" defaultChecked={config.enforceMinCartQty} /> Enforce minimum total cart quantity</label>
                   <label><input type="checkbox" name="lockWholesaleAccess" defaultChecked={config.lockWholesaleAccess} /> Restrict future wholesale-only behavior to approved tag</label>
                   <Button submit variant="primary" loading={saving}>Save settings</Button>

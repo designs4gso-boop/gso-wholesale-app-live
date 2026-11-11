@@ -29,7 +29,7 @@ import {
 } from "../lib/recipe-pricing.server";
 import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "../lib/quote-margin.server";
 // 2026-10-19 owner decision E: PROVISIONAL quotes (no approved selling-price authority) are draft-only — server-enforced.
-import { OWNER_QUOTE_PRICE_KIND, itemPricingAuthority, provisionalQuoteStatusCheck, quotePricingAuthorityState, reconcileQuoteItemPricingAuthority } from "../lib/quote-pricing-authority";
+import { OWNER_QUOTE_PRICE_KIND, itemPricingAuthority, provisionalQuoteStatusCheck, quotePricingAuthorityState, quoteStatusChangeCheck, reconcileQuoteItemPricingAuthority } from "../lib/quote-pricing-authority";
 // 2026-10-19 owner decision 4: OWNER SET PRICE & APPROVE — owner-only, server-authorized, audited.
 import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
 import { ownerSetQuoteItemPrice } from "../lib/quote-owner-price-approval.server";
@@ -844,6 +844,12 @@ export async function action({ request }: { request: Request }) {
     // 2026-10-19 owner decision E: a PROVISIONAL quote stays a draft (or is closed out).
     {
       const provisionalQuote = await db.quote.findFirst({ where: { id: payload.id, shop }, include: { items: true } });
+      // 2026-11-11: known statuses only; payment/production states are owner-only by hand.
+      const statusCheck = quoteStatusChangeCheck({ currentStatus: provisionalQuote?.status, nextStatus, isOwner: viewerIsOwner });
+      if (!statusCheck.ok) {
+        const quotes = await getQuotes(shop, viewerIsOwner);
+        return Response.json({ intent: "status", ok: false, error: statusCheck.message, quotes });
+      }
       const provisionalCheck = provisionalQuoteStatusCheck(provisionalQuote, nextStatus);
       if (!provisionalCheck.ok) {
         const quotes = await getQuotes(shop, viewerIsOwner);
@@ -1445,6 +1451,12 @@ export async function action({ request }: { request: Request }) {
       return Response.json({ intent: "approveLowMarginQuote", ok: false, error: "An approval reason is required." });
     }
 
+    // 2026-11-11: a $0 / missing selling price is not a low margin — it is not
+    // a price. Approving it would let a $0 line reach a draft order.
+    if (marginState.hasInvalidPrice) {
+      return Response.json({ intent: "approveLowMarginQuote", ok: false, error: "A line has no selling price ($0 or blank). Set a real price before approving." });
+    }
+
     const actor = String(
       (session as any).email ||
         [(session as any).firstName, (session as any).lastName].filter(Boolean).join(" ") ||
@@ -1568,6 +1580,23 @@ export async function action({ request }: { request: Request }) {
     if (!provisionalSaveCheck.ok) {
       const quotes = await getQuotes(shop, viewerIsOwner);
       return Response.json({ ok: false, error: provisionalSaveCheck.message, quotes });
+    }
+    /* 2026-11-11: the editor's save obeys the SAME status rules as the status
+     * intent — a known status, payment/production states owner-only by hand,
+     * and the low-margin approval gate for sent / approved / won. */
+    const savedStatus = String(quote.status || "draft");
+    const quoteBeforeSave = quote.id ? await db.quote.findFirst({ where: { id: quote.id, shop } }) : null;
+    const saveStatusCheck = quoteStatusChangeCheck({ currentStatus: quoteBeforeSave ? quoteBeforeSave.status : "draft", nextStatus: savedStatus, isOwner: viewerIsOwner });
+    if (!saveStatusCheck.ok) {
+      const quotes = await getQuotes(shop, viewerIsOwner);
+      return Response.json({ ok: false, error: saveStatusCheck.message, quotes });
+    }
+    if (savedStatus === "sent" || savedStatus === "approved" || savedStatus === "won") {
+      const saveMarginState = quoteMarginState({ ...(quoteBeforeSave || {}), customerTier, notes: quote.notes, items: protectedItems } as any);
+      if (saveMarginState.approvalRequired) {
+        const quotes = await getQuotes(shop, viewerIsOwner);
+        return Response.json({ ok: false, error: saveMarginState.blockMessage, quotes });
+      }
     }
 
     if (quote.id) {

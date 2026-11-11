@@ -189,7 +189,7 @@ export async function runCompanyFlowSimulation(now = new Date("2026-10-04T06:00:
   }
 
   // ---- 5. Art approval contract --------------------------------------------
-  check("clean 4x5 art passes with 3.875 x 4.875 cutline", pre.status === "PASS" && pre.expectedCutline === "3.875 x 4.875 in", JSON.stringify(pre.findings));
+  check("clean 4x5 art passes with the owner 3.79 x 4.81 cutline", pre.status === "PASS" && pre.expectedCutline === "3.790 x 4.810 in", JSON.stringify(pre.findings));
   const tech = recordApproval(records, { version: v1, state: "TECHNICAL_PREFLIGHT_PASSED", approverType: "agent", approverId: "art_preflight", source: "agent", now }); if (tech.ok) records = tech.records;
   check("agent cannot record FINAL_ART_APPROVED", !recordApproval(records, { version: v1, state: "FINAL_ART_APPROVED", approverType: "agent", approverId: "x", source: "agent", now }).ok, "");
   const portal = approvalFromProofPortal({ proofStatus: "approved", proofApprovedAt: now, proofCustomerEmail: "dana@example.com" }, v1); if (portal) { const r = recordApproval(records, portal); if (r.ok) records = r.records; }

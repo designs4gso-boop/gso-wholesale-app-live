@@ -9,11 +9,13 @@ import {
   InlineStack,
   Badge,
   Divider,
-  TextField,
   Checkbox,
 } from "@shopify/polaris";
+import { FormTextField } from "../components/FormTextField";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
+import { productionFinancialVisibility } from "../lib/owner-authorization.server";
+import { redactJobFinancials } from "../lib/production-financial-redaction";
 import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, assessLinkSource, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, jobSourceType, linkIntakeJobToTarget, runWithTicketRetry } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
@@ -516,9 +518,12 @@ async function createProductionJobFromQuote(shop: string, quoteId: string) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
   const shop = session.shop;
   const baseUrl = publicBaseUrl(request);
+  // 2026-11-11: production staff do not receive revenue / cost / profit / margin.
+  const financials = productionFinancialVisibility(auth);
 
   const [jobs, quotes] = await Promise.all([
     db.productionJob.findMany({
@@ -536,7 +541,8 @@ export async function loader({ request }: { request: Request }) {
     db.quote.findMany({
       where: { shop, status: { in: ["approved", "paid", "production"] } },
       orderBy: { updatedAt: "desc" },
-      include: { items: true },
+      // The board shows only who / status / item count — never quote prices or costs.
+      select: { id: true, company: true, customerName: true, email: true, status: true, items: { select: { id: true } } },
     }),
   ]);
 
@@ -675,9 +681,11 @@ export async function loader({ request }: { request: Request }) {
   });
 
   return Response.json({
-    jobs: jobsWithActuals,
+    jobs: financials.show ? jobsWithActuals : jobsWithActuals.map(redactJobFinancials),
     quotes,
-    materials,
+    materials: financials.show ? materials : materials.map((material: any) => ({ ...material, costPerUnit: null, calculatedUnitCost: null, purchaseCost: null })),
+    showFinancials: financials.show,
+    financialVisibilityNote: financials.reason,
     // 15H.4B: one requestId per rendered form — double-clicks and network
     // retries of the same form resolve to the SAME manual job (server key:
     // shop + requestId). A successful creation revalidates the loader and
@@ -690,10 +698,18 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
+
+  // 2026-11-11: cost finalization, cost reopen, print-log cost writeback and
+  // stock-value adjustment are owner cost controls (same rule as the loader).
+  if (["saveFinalCosts", "reopenJobCost", "pullPrintLogActuals", "adjustInventory"].includes(intent)) {
+    const financials = productionFinancialVisibility(auth);
+    if (!financials.show) return Response.json({ ok: false, message: `Owner only. ${financials.owner.reason}` }, { status: 403 });
+  }
 
   // 15H.4C: link an UNLINKED intake shell job onto the real commercial job.
   // Exact owner selection + confirmation; the service validates both sides,
@@ -987,9 +1003,11 @@ Source ref: ${sourceRef}` : ""}`,
     const wasteQty = Number(formData.get("wasteQty") || 0);
     const reprintQty = Number(formData.get("reprintQty") || 0);
     const estimatedQty = Number(formData.get("estimatedQty") || 0);
-    const costPerUnit = Number(formData.get("costPerUnit") || material?.calculatedUnitCost || material?.costPerUnit || 0);
+    // 2026-11-11: only an owner may type a cost; staff usage is costed from the material record.
+    const ownerCosts = productionFinancialVisibility(auth).show;
+    const costPerUnit = Number((ownerCosts && formData.get("costPerUnit")) || material?.calculatedUnitCost || material?.costPerUnit || 0);
     const billableQty = usedQty || pulledQty || estimatedQty || 0;
-    const totalCost = Number(formData.get("totalCost") || 0) || (billableQty + wasteQty + reprintQty) * costPerUnit;
+    const totalCost = Number((ownerCosts && formData.get("totalCost")) || 0) || (billableQty + wasteQty + reprintQty) * costPerUnit;
 
     const usage = await db.productionMaterialUsage.create({
       data: {
@@ -1401,6 +1419,9 @@ Source ref: ${sourceRef}` : ""}`,
       instruction = "No routed artwork on record yet — when artwork is dropped it will run normally; use this reprint note for the record.";
     }
     await createEvent(shop, jobId, "production_reprint_requested", `Reprint requested for ${item.itemTicket || item.productTitle} (run ${runLabel}) by ${actor}. Reason: ${reason}.${String(formData.get("reprintNote") || "") ? ` Note: ${String(formData.get("reprintNote")).slice(0, 200)}` : ""}`, { createdBy: actor });
+    // 2026-11-11 QC guard: a reprint invalidates this item's earlier QC PASS
+    // (production-qc-guard reads the latest qc_result per item).
+    await createEvent(shop, jobId, "qc_result", `QC reset by reprint request for ${item.itemTicket || item.productTitle} (run ${runLabel}).`, { oldValue: String(item.itemTicket || item.productTitle || ""), newValue: "reprint_required", createdBy: actor });
     return Response.json({ ok: true, message: `Reprint recorded for ${item.itemTicket || item.productTitle} (run ${runLabel}). ${instruction}` });
   }
 
@@ -1470,13 +1491,19 @@ Source ref: ${sourceRef}` : ""}`,
       `Reopened for reprint by ${actor}. Reason: ${reason}. Original state preserved: status=${job.status}, completedAt=${job.completedAt ? new Date(job.completedAt).toISOString() : "—"}, actualCostFinalized=${job.actualCostFinalized}. The finalized cost snapshot is immutable — reprint machine costs appear as run previews and additional reprint cost is entered via the manual reprint-cost field.`,
       { oldValue: String(job.status), newValue: "reprint_needed", createdBy: actor },
     );
+    // 2026-11-11 QC guard: reopening invalidates every earlier QC PASS, so the
+    // job cannot be completed again until QC passes after the reprint.
+    const reopenedItems = await db.productionJobItem.findMany({ where: { shop, jobId: job.id }, select: { itemTicket: true, productTitle: true } });
+    for (const reopened of reopenedItems.length ? reopenedItems : [{ itemTicket: null, productTitle: null }]) {
+      await createEvent(shop, job.id, "qc_result", `QC reset to HOLD by reopen for reprint${reopened.itemTicket || reopened.productTitle ? ` (${reopened.itemTicket || reopened.productTitle})` : ""}.`, { oldValue: String(reopened.itemTicket || reopened.productTitle || ""), newValue: "hold", createdBy: actor });
+    }
     return Response.json({ ok: true, message: `${job.jobTicket} reopened for reprint (was ${job.status}${job.actualCostFinalized ? ", cost finalized — snapshot preserved" : ""}).` });
   }
 
   return Response.json({ ok: false, message: "Unknown production action." }, { status: 400 });
 }
 
-function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; linkTargets?: any[] }) {
+function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: any; materials: any[]; linkTargets?: any[]; showFinancials?: boolean }) {
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
   const navigate = useNavigate();
@@ -1575,12 +1602,15 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
         </InlineStack>
 
         <InlineStack gap="300" wrap>
-          <Text as="p">Revenue: ${money(totalRevenue)}</Text>
-          <Text as="p">Cost: ${money(totalCost)}</Text>
-          <Text as="p">Profit: ${money(totalRevenue - totalCost)}</Text>
+          {showFinancials ? (<>
+            <Text as="p">Revenue: ${money(totalRevenue)}</Text>
+            <Text as="p">Cost: ${money(totalCost)}</Text>
+            <Text as="p">Profit: ${money(totalRevenue - totalCost)}</Text>
+          </>) : null}
           <Text as="p">Assigned: {job.assignedTo || "Unassigned"}</Text>
         </InlineStack>
 
+        {showFinancials ? (<>
         <Card>
           <BlockStack gap="200">
             <InlineStack align="space-between" blockAlign="center">
@@ -1738,6 +1768,8 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
           </BlockStack>
         </Card>
 
+        </>) : null}
+
         <Card>
           <BlockStack gap="250">
             <InlineStack align="space-between" blockAlign="center">
@@ -1745,7 +1777,7 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
               {(job.materialUsages || []).length ? <Badge>{`${job.materialUsages.length} material row(s)`}</Badge> : <Badge tone="warning">No material logged</Badge>}
             </InlineStack>
             <InlineStack gap="300" wrap>
-              <Text as="p">Material cost: ${money(materialSummary.materialCost)}</Text>
+              {showFinancials ? <Text as="p">Material cost: ${money(materialSummary.materialCost)}</Text> : null}
               <Text as="p">Pulled: {Number(materialSummary.pulledQty || 0).toFixed(2)}</Text>
               <Text as="p">Used: {Number(materialSummary.usedQty || 0).toFixed(2)}</Text>
               <Text as="p">Waste: {Number(materialSummary.wasteQty || 0).toFixed(2)}</Text>
@@ -1791,7 +1823,7 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                       {materialOptions(materials).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
                   </div>
-                  <TextField label="Manual material name" name="materialName" autoComplete="off" placeholder="Only needed if not choosing database material" />
+                  <FormTextField label="Manual material name" name="materialName" autoComplete="off" placeholder="Only needed if not choosing database material" />
                   <div style={{ minWidth: 160 }}>
                     <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Type</label>
                     <select name="materialType" defaultValue="roll_media" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
@@ -1804,16 +1836,16 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                       <option value="other">Other</option>
                     </select>
                   </div>
-                  <TextField label="Unit" name="unit" defaultValue="sqft" autoComplete="off" />
+                  <FormTextField label="Unit" name="unit" defaultValue="sqft" autoComplete="off" />
                 </InlineStack>
                 <InlineStack gap="200" wrap>
-                  <TextField label="Estimated qty" name="estimatedQty" type="number" autoComplete="off" />
-                  <TextField label="Pulled qty" name="pulledQty" type="number" autoComplete="off" />
-                  <TextField label="Used qty" name="usedQty" type="number" autoComplete="off" />
-                  <TextField label="Waste qty" name="wasteQty" type="number" autoComplete="off" />
-                  <TextField label="Reprint qty" name="reprintQty" type="number" autoComplete="off" />
-                  <TextField label="Cost / unit" name="costPerUnit" type="number" autoComplete="off" />
-                  <TextField label="Override total cost" name="totalCost" type="number" autoComplete="off" />
+                  <FormTextField label="Estimated qty" name="estimatedQty" type="number" autoComplete="off" />
+                  <FormTextField label="Pulled qty" name="pulledQty" type="number" autoComplete="off" />
+                  <FormTextField label="Used qty" name="usedQty" type="number" autoComplete="off" />
+                  <FormTextField label="Waste qty" name="wasteQty" type="number" autoComplete="off" />
+                  <FormTextField label="Reprint qty" name="reprintQty" type="number" autoComplete="off" />
+                  {showFinancials ? <FormTextField label="Cost / unit" name="costPerUnit" type="number" autoComplete="off" /> : null}
+                  {showFinancials ? <FormTextField label="Override total cost" name="totalCost" type="number" autoComplete="off" /> : null}
                 </InlineStack>
                 <InlineStack gap="200" wrap>
                   <div style={{ minWidth: 180 }}>
@@ -1826,12 +1858,12 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                       <option value="vendor_invoice">Vendor invoice</option>
                     </select>
                   </div>
-                  <TextField label="Deduct qty override" name="deductQty" type="number" autoComplete="off" placeholder="Optional" />
+                  <FormTextField label="Deduct qty override" name="deductQty" type="number" autoComplete="off" placeholder="Optional" />
                   <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 22 }}>
                     <input type="checkbox" name="deductInventory" />
                     Deduct from material stock
                   </label>
-                  <TextField label="Notes" name="materialNotes" autoComplete="off" />
+                  <FormTextField label="Notes" name="materialNotes" autoComplete="off" />
                 </InlineStack>
                 <Text as="p" tone="subdued">Inventory deduction only works when a database material is selected. Deducted qty uses pulled qty first, then used + waste + reprint.</Text>
                 <Button submit>Add material usage</Button>
@@ -1862,8 +1894,8 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                     {materialOptions(materials).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                 </div>
-                <TextField label="Adjustment qty" name="adjustQty" type="number" autoComplete="off" placeholder="ex: 100 or -10" />
-                <TextField label="Adjustment notes" name="adjustNotes" autoComplete="off" />
+                <FormTextField label="Adjustment qty" name="adjustQty" type="number" autoComplete="off" placeholder="ex: 100 or -10" />
+                <FormTextField label="Adjustment notes" name="adjustNotes" autoComplete="off" />
                 <Button submit>Adjust stock</Button>
               </InlineStack>
             </Form>
@@ -1887,7 +1919,7 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                     const config = configFromItem(item);
                     return (
                       <BlockStack gap="050">
-                        <Text as="p">Qty: {item.quantity} | Unit: ${money(item.unitPrice)} | Total: ${money(lineTotalForItem(item))}</Text>
+                        <Text as="p">Qty: {item.quantity}{showFinancials ? ` | Unit: $${money(item.unitPrice)} | Total: $${money(lineTotalForItem(item))}` : ""}</Text>
                         {config.isJar ? (
                           <>
                             <Text as="p">Material: {config.material || "N/A"} | Finish: {config.finish || "N/A"} | Label Set: {config.labelSet || "N/A"}</Text>
@@ -2060,18 +2092,18 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                       {priorityOptions.map((priority) => <option key={priority.value} value={priority.value}>{priority.label}</option>)}
                     </select>
                   </div>
-                  <TextField label="Due date" name="dueDate" type="date" defaultValue={safeDateInput(job.dueDate)} autoComplete="off" />
-                  <TextField label="Assigned to" name="assignedTo" defaultValue={job.assignedTo || ""} autoComplete="off" />
+                  <FormTextField label="Due date" name="dueDate" type="date" defaultValue={safeDateInput(job.dueDate)} autoComplete="off" />
+                  <FormTextField label="Assigned to" name="assignedTo" defaultValue={job.assignedTo || ""} autoComplete="off" />
                 </InlineStack>
-                <TextField label="Job ticket" name="assetInboxKey" defaultValue={job.assetInboxKey || job.jobTicket || ""} autoComplete="off" helpText="Use this exact ticket in Google Drive folders, VersaWorks, RasterLink, and print file names." />
-                <TextField label="Drive / asset folder URL" name="assetFolderUrl" defaultValue={job.assetFolderUrl || ""} autoComplete="off" />
-                <TextField label="Source folder URL / customer upload folder" name="sourceFolderUrl" defaultValue={job.sourceFolderUrl || ""} autoComplete="off" />
-                <TextField label="Product image URL" name="productImageUrl" defaultValue={job.productImageUrl || ""} autoComplete="off" />
-                <TextField label="Artwork URL" name="artworkUrl" defaultValue={job.artworkUrl || ""} autoComplete="off" />
-                <TextField label="Proof URL" name="proofUrl" defaultValue={job.proofUrl || ""} autoComplete="off" />
-                <TextField label="Print file URL" name="printFileUrl" defaultValue={job.printFileUrl || ""} autoComplete="off" />
-                <TextField label="Internal notes" name="internalNotes" defaultValue={job.internalNotes || ""} multiline={3} autoComplete="off" />
-                <TextField label="Customer notes" name="customerNotes" defaultValue={job.customerNotes || ""} multiline={2} autoComplete="off" />
+                <FormTextField label="Job ticket" name="assetInboxKey" defaultValue={job.assetInboxKey || job.jobTicket || ""} autoComplete="off" helpText="Use this exact ticket in Google Drive folders, VersaWorks, RasterLink, and print file names." />
+                <FormTextField label="Drive / asset folder URL" name="assetFolderUrl" defaultValue={job.assetFolderUrl || ""} autoComplete="off" />
+                <FormTextField label="Source folder URL / customer upload folder" name="sourceFolderUrl" defaultValue={job.sourceFolderUrl || ""} autoComplete="off" />
+                <FormTextField label="Product image URL" name="productImageUrl" defaultValue={job.productImageUrl || ""} autoComplete="off" />
+                <FormTextField label="Artwork URL" name="artworkUrl" defaultValue={job.artworkUrl || ""} autoComplete="off" />
+                <FormTextField label="Proof URL" name="proofUrl" defaultValue={job.proofUrl || ""} autoComplete="off" />
+                <FormTextField label="Print file URL" name="printFileUrl" defaultValue={job.printFileUrl || ""} autoComplete="off" />
+                <FormTextField label="Internal notes" name="internalNotes" defaultValue={job.internalNotes || ""} multiline={3} autoComplete="off" />
+                <FormTextField label="Customer notes" name="customerNotes" defaultValue={job.customerNotes || ""} multiline={2} autoComplete="off" />
                 <Button submit>Save job details</Button>
               </BlockStack>
             </Form>
@@ -2200,7 +2232,7 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                   <input type="hidden" name="intent" value="addFile" />
                   <input type="hidden" name="jobId" value={job.id} />
                   <BlockStack gap="150">
-                    <TextField label="File name" name="fileName" autoComplete="off" />
+                    <FormTextField label="File name" name="fileName" autoComplete="off" />
                     <InlineStack gap="200">
                       <div style={{ flex: 1 }}>
                         <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>File type</label>
@@ -2225,9 +2257,9 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                         </select>
                       </div>
                     </InlineStack>
-                    <TextField label="File URL / PDF / artwork link" name="fileUrl" autoComplete="off" helpText="Paste a Shopify Files, Google Drive, Dropbox, Cloudinary, S3, or public artwork link." />
-                    <TextField label="Source reference optional" name="sourceRef" autoComplete="off" helpText="Example: email subject, Zakeke design ID, Google Drive file ID, VersaWorks job name, RasterLink job name." />
-                    <TextField label="Notes" name="fileNotes" autoComplete="off" />
+                    <FormTextField label="File URL / PDF / artwork link" name="fileUrl" autoComplete="off" helpText="Paste a Shopify Files, Google Drive, Dropbox, Cloudinary, S3, or public artwork link." />
+                    <FormTextField label="Source reference optional" name="sourceRef" autoComplete="off" helpText="Example: email subject, Zakeke design ID, Google Drive file ID, VersaWorks job name, RasterLink job name." />
+                    <FormTextField label="Notes" name="fileNotes" autoComplete="off" />
                     <Button submit variant="primary">Add asset link</Button>
                   </BlockStack>
                 </Form>
@@ -2242,7 +2274,7 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
                 <Form method="post">
                   <input type="hidden" name="intent" value="addNote" />
                   <input type="hidden" name="jobId" value={job.id} />
-                  <TextField label="Add production note" name="note" autoComplete="off" />
+                  <FormTextField label="Add production note" name="note" autoComplete="off" />
                   <Button submit>Add note</Button>
                 </Form>
                 {(job.events || []).slice(0, 3).map((event: any) => (
@@ -2266,7 +2298,7 @@ function JobCard({ job, materials, linkTargets }: { job: any; materials: any[]; 
 }
 
 export default function ProductionBoard() {
-  const { jobs, quotes, materials, manualRequestId, manualFamilies, manualFinishes, linkTargets } = useLoaderData<any>();
+  const { jobs, quotes, materials, manualRequestId, manualFamilies, manualFinishes, linkTargets, showFinancials = true } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -2387,7 +2419,7 @@ export default function ProductionBoard() {
                 <Text as="h2" variant="headingMd">{group.label}</Text>
                 <Badge>{group.jobs.length}</Badge>
               </InlineStack>
-              {group.jobs.length ? group.jobs.map((job: any) => <JobCard key={job.id} job={job} materials={materials || []} linkTargets={linkTargets || []} />) : <Card><Text as="p" tone="subdued">No jobs in this stage.</Text></Card>}
+              {group.jobs.length ? group.jobs.map((job: any) => <JobCard key={job.id} job={job} materials={materials || []} linkTargets={linkTargets || []} showFinancials={showFinancials} />) : <Card><Text as="p" tone="subdued">No jobs in this stage.</Text></Card>}
             </BlockStack>
           </Layout.Section>
         ))}

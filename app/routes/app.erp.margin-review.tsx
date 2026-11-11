@@ -7,6 +7,8 @@ import {
   phraseGateOk,
 } from "../lib/security-guards-shared";
 import { blockingConversionIssues, priceRecipeAtQuantity } from "../lib/recipe-pricing.server";
+import { requireOwner } from "../lib/owner-authorization.server";
+import { agentConversionCanonicalGate } from "../lib/agent-quote-canonical-gate.server";
 
 const DEFAULT_SHOP_LABOR_RATE_PER_HOUR = 25;
 const DEFAULT_APPLICATION_LABOR_COST_PER_SIDE = 0.15;
@@ -471,6 +473,54 @@ function cleanApprovalRows(value: any) {
 }
 
 
+const MARGIN_REVIEW_RECIPE_INCLUDE = {
+  materials: { include: { material: true } },
+  labelZones: { include: { material: true, mediaOption: { include: { material: true } } }, orderBy: { createdAt: "asc" } },
+  mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
+  tiers: { orderBy: { minQty: "asc" } },
+  // 15G.2: relations the recipe tier engine needs to price a row.
+  addOns: { where: { enabled: true }, orderBy: { name: "asc" } },
+  machineRules: { include: { preferredMachine: { include: { inkChannels: true } } } },
+  vendorProduct: { include: { tiers: { orderBy: { minQty: "asc" } }, addOns: { where: { enabled: true }, orderBy: { name: "asc" } } } },
+} as const;
+
+/**
+ * 2026-11-11 — an approval row rebuilt ENTIRELY on the server from the
+ * variant rule id. Cost, suggested price, margin target and the Shopify
+ * product/variant ids come from the database and the same recipe engine the
+ * loader uses — never from the posted JSON. Returns a refusal reason when the
+ * rule/recipe is missing or the recipe belongs to a canonical-cost family
+ * (its true cost lives in the Cost Calculator, not the recipe tiers).
+ */
+async function serverApprovalRow(prisma: any, shop: string, variantRuleId: string, assumptions: any): Promise<{ ok: true; row: any } | { ok: false; reason: string }> {
+  const rule = await prisma.recipeVariantRule.findFirst({ where: { shop, id: variantRuleId, active: true } });
+  if (!rule) return { ok: false, reason: "variant rule not found" };
+  const recipe = await prisma.productRecipe.findFirst({ where: { shop, id: rule.recipeId, active: true }, include: MARGIN_REVIEW_RECIPE_INCLUDE });
+  if (!recipe) return { ok: false, reason: "recipe not found" };
+  const gate = agentConversionCanonicalGate(recipe);
+  if (!gate.allowed) return { ok: false, reason: `canonical-cost family (${gate.familyKey}) — price it in the Cost Calculator` };
+  const cost = estimateRecipeVariantUnitCost(recipe, rule, undefined, assumptions);
+  const targetMargin = numberOr(cost.canonicalMarginPct, numberOr(recipe.targetMarginPct, 40));
+  const suggestedPrice = numberOr(cost.canonicalUnitPrice, 0) || priceForMargin(cost.total, targetMargin);
+  return {
+    ok: true,
+    row: {
+      variantRuleId: rule.id,
+      recipeId: recipe.id,
+      recipeName: recipe.name || null,
+      shopifyProductGid: rule.shopifyProductGid || null,
+      shopifyVariantGid: rule.shopifyVariantGid || null,
+      suggestedPrice,
+      estimatedCost: cost.total,
+      targetMarginPct: targetMargin,
+      costReviewNeeded: Boolean(cost.costReviewNeeded),
+      costReviewWarnings: cost.costReviewWarnings || [],
+      costReviewWarningText: cost.costReviewWarningText || "",
+      costReviewSeverity: cost.costReviewSeverity || (cost.costReviewNeeded ? "hard_hold" : "clean"),
+    },
+  };
+}
+
 function formIds(formData: FormData, field = "recordIds") {
   return Array.from(new Set(formData.getAll(field).map((id) => String(id || "").trim()).filter(Boolean)));
 }
@@ -516,12 +566,19 @@ async function updateShopifyVariantPrice(admin: any, variantId: string, price: n
 }
 
 export async function action({ request }: { request: Request }) {
-  const { admin, session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { admin, session } = auth;
   const shop = session.shop;
   const formData = await request.formData();
   const prisma: any = db;
   const nextUrl = new URL(request.url);
   const intent = String(formData.get("intent") || "saveAssumptions");
+
+  // 2026-11-11: approving prices, creating price records and pushing prices to
+  // live Shopify are OWNER pricing controls (the typed phrase stays as well).
+  if (intent === "reviewApprovalRecords" || intent === "safeShopifyPriceUpdate" || intent === "createPriceApprovalRecords") {
+    requireOwner(auth, process.env, "Margin Review price approvals and Shopify price pushes are owner only.");
+  }
 
   if (intent === "reviewApprovalRecords") {
     const ids = formIds(formData).slice(0, 100);
@@ -583,7 +640,24 @@ export async function action({ request }: { request: Request }) {
 
     let updated = 0;
     let failed = 0;
+    const pushAssumptions = assumptionsFromSettings(await getMarginReviewSettings(prisma, shop), nextUrl);
     for (const record of approvedRecords) {
+      // 2026-11-11: re-derive before pushing. Records approved before the
+      // server recompute existed may carry a browser-posted price or variant;
+      // only a non-canonical recipe whose stored price and variant match the
+      // server's own recomputation is ever sent to Shopify.
+      const server = await serverApprovalRow(prisma, shop, record.variantRuleId, pushAssumptions);
+      const verified = server.ok
+        && server.row.shopifyVariantGid === record.shopifyVariantGid
+        && Math.abs(server.row.suggestedPrice - Number(record.suggestedPrice)) <= 0.01;
+      if (!verified) {
+        await prisma.priceApprovalRecord.update({
+          where: { id: record.id },
+          data: { status: "cost_review_hold", reason: [record.reason, `Push refused: ${server.ok ? "stored price/variant no longer matches the server recomputation" : server.reason}. Re-create the approval.`].filter(Boolean).join("\n") },
+        });
+        failed += 1;
+        continue;
+      }
       const result = await updateShopifyVariantPrice(admin, record.shopifyVariantGid, record.suggestedPrice);
       if (result.ok) {
         await prisma.priceApprovalRecord.update({
@@ -615,12 +689,25 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (intent === "createPriceApprovalRecords") {
-    const approvalRows = cleanApprovalRows(formData.get("approvalRowsJson")).slice(0, 100);
+    const postedRows = cleanApprovalRows(formData.get("approvalRowsJson")).slice(0, 100);
     const createdAt = new Date();
     let written = 0;
     let held = 0;
+    let refused = 0;
+    const assumptions = assumptionsFromSettings(await getMarginReviewSettings(prisma, shop), nextUrl);
 
-    for (const row of approvalRows) {
+    for (const posted of postedRows) {
+      // Only the variant rule id and display text come from the browser; every
+      // money field and Shopify id is recomputed / re-read on the server.
+      const server = await serverApprovalRow(prisma, shop, posted.variantRuleId, assumptions);
+      if (!server.ok) { refused += 1; continue; }
+      const row = {
+        ...posted,
+        ...server.row,
+        currentMarginPct: posted.currentPrice != null && posted.currentPrice > 0 ? safeMargin(posted.currentPrice, server.row.estimatedCost) : null,
+        delta: server.row.suggestedPrice - numberOr(posted.currentPrice, 0),
+      };
+      if (!(row.suggestedPrice > 0)) { refused += 1; continue; }
       const desiredStatus = approvalStatusForRow(row);
       if (desiredStatus === "cost_review_hold") held += 1;
       const existing = await prisma.priceApprovalRecord.findUnique({
@@ -656,7 +743,11 @@ export async function action({ request }: { request: Request }) {
           tierIssues: row.tierIssues,
           createdAt,
         },
-        update: {
+        update: existing && (existing.status === "approved" || existing.status === "updated_in_shopify") ? {
+          // An approved / pushed record keeps the price and variant it was approved with.
+          currentPrice: row.currentPrice,
+          currentMarginPct: row.currentMarginPct,
+        } : {
           source: "margin_review_v9",
           recipeId: row.recipeId,
           recipeName: row.recipeName,
@@ -683,6 +774,7 @@ export async function action({ request }: { request: Request }) {
     nextUrl.searchParams.set("approvalsCreated", "1");
     nextUrl.searchParams.set("approvalCount", String(written));
     nextUrl.searchParams.set("approvalHeld", String(held));
+    nextUrl.searchParams.set("approvalRefused", String(refused));
     return redirect(`${nextUrl.pathname}${nextUrl.search}`);
   }
 
@@ -787,16 +879,7 @@ export async function loader({ request }: { request: Request }) {
 
   const recipes = await prisma.productRecipe.findMany({
     where: { shop, active: true, ...(recipeId ? { id: recipeId } : {}) },
-    include: {
-      materials: { include: { material: true } },
-      labelZones: { include: { material: true, mediaOption: { include: { material: true } } }, orderBy: { createdAt: "asc" } },
-      mediaOptions: { include: { material: true }, orderBy: [{ active: "desc" }, { name: "asc" }] },
-      tiers: { orderBy: { minQty: "asc" } },
-      // 15G.2: relations the canonical recipe engine needs to price a row.
-      addOns: { where: { enabled: true }, orderBy: { name: "asc" } },
-      machineRules: { include: { preferredMachine: { include: { inkChannels: true } } } },
-      vendorProduct: { include: { tiers: { orderBy: { minQty: "asc" } }, addOns: { where: { enabled: true }, orderBy: { name: "asc" } } } },
-    },
+    include: MARGIN_REVIEW_RECIPE_INCLUDE,
     orderBy: [{ name: "asc" }],
     take: 50,
   });

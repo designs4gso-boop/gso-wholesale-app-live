@@ -1,7 +1,7 @@
 import { data } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import { getProductWholesalePricing } from "../lib/wholesale.server";
+import { exactEmailCustomerQuery, getProductWholesalePricing, isSameEmail } from "../lib/wholesale.server";
 
 async function customerTagsForEmail(admin: any, email: string | null) {
   if (!email) return [];
@@ -12,10 +12,11 @@ async function customerTagsForEmail(admin: any, email: string | null) {
         nodes { tags email }
       }
     }`,
-    { variables: { query: `email:${email}` } },
+    { variables: { query: exactEmailCustomerQuery(email) } },
   );
   const payload = await res.json();
-  return payload?.data?.customers?.nodes?.[0]?.tags || [];
+  const node = payload?.data?.customers?.nodes?.[0];
+  return node && isSameEmail(node.email, email) ? node.tags || [] : [];
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {

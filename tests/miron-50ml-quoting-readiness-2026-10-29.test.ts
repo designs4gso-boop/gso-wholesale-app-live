@@ -50,6 +50,9 @@ vi.mock("../app/db.server", async () => {
       if (name === "material" && method === "findMany") {
         return dbState.materials.filter((m) => (!where.shop || m.shop === where.shop) && (!where.id?.in || where.id.in.includes(m.id)));
       }
+      if (name === "material" && method === "findFirst") {
+        return dbState.materials.find((m) => m.shop === where.shop && m.id === where.id) ?? null;
+      }
       if (name === "vendorProduct" && method === "findMany") return (globalThis as any).VENDOR_ROWS || [];
       if (method === "findMany") return [];
       if (method === "count") return 0;
@@ -144,7 +147,7 @@ const STALE_ROW = {
 
 /** Exactly what the calculator form submits for a 50ml Miron job with side + lid + tamper labels. */
 const jarQs = (qty: number) => [
-  "pfamily=premium-jars", `pqty=${qty}`, "pblank=vendor:vp_50", "plid=type:standard-top", "pjar=miron/50ml", "pjarvariant=",
+  "pfamily=premium-jars&pjarmat=matte", `pqty=${qty}`, "pblank=vendor:vp_50", "plid=type:standard-top", "pjar=miron/50ml", "pjarvariant=",
   "pjarset=side_lid", "pjartamperopt=1", "pjarside=1", "pjarlid=1", "pjartamper=1",
   "plabelcount=3", "psame=no", "plabeltype=side", "plabelw=5.6", "plabelh=1.5", "plabeltype=lid", "plabelw=1.6", "plabelh=1.6", "plabeltype=tamper", "plabelw=5.6", "plabelh=0.5",
   "pdesigns=1", "pmat=m_matte", "pprinter=auto", "pcut=square-rect", "pwhitelayers=0", "pglosslayers=0", "pcmykcoverage=40",

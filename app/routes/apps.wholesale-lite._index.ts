@@ -1,7 +1,7 @@
 import { data } from "react-router";
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import { createWholesaleApplication, getWholesaleConfig } from "../lib/wholesale.server";
+import { createWholesaleApplication, exactEmailCustomerQuery, getWholesaleConfig, isSameEmail } from "../lib/wholesale.server";
 
 async function tagsAdd(admin: any, id: string, tags: string[]) {
   const res = await admin.graphql(
@@ -45,10 +45,12 @@ export async function action({ request }: ActionFunctionArgs) {
         nodes { id email }
       }
     }`,
-    { variables: { query: `email:${email}` } },
+    { variables: { query: exactEmailCustomerQuery(email) } },
   );
   const searchData = await searchRes.json();
-  let customerId = searchData?.data?.customers?.nodes?.[0]?.id || null;
+  const foundCustomer = searchData?.data?.customers?.nodes?.[0];
+  // Only tag the customer whose email IS the one submitted.
+  let customerId = foundCustomer && isSameEmail(foundCustomer.email, email) ? foundCustomer.id : null;
 
   if (!customerId) {
     const createRes = await admin.graphql(

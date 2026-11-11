@@ -63,8 +63,8 @@ const run = (qs: string, machine: ResolvedMachineInputs = CAL) => {
   return assembleCanonicalJob(input!, machine);
 };
 
-const BAG_QS = `pfamily=sticker-bags&pqty=1000&pbagsides=2&pdesigns=1&${MACHINE_QS}`;
-const STOCK_QS = `pfamily=sticker-bags&pstockbag=1&pqty=1000&pbagsides=2&${MACHINE_QS}`;
+const BAG_QS = `pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=2&pdesigns=1&${MACHINE_QS}`;
+const STOCK_QS = `pfamily=sticker-bags&pbagmat=matte&pstockbag=1&pqty=1000&pbagsides=2&${MACHINE_QS}`;
 const BANNER_QS = `pfamily=banners&pqty=1&pbannerw=36&pbannerh=60&pdesigns=1&${MACHINE_QS}`;
 const LABEL_QS =
   `pfamily=stickers-labels&pllines=2` +
@@ -80,7 +80,7 @@ describe("2D-4 canonical dispatch", () => {
     // 2D-4D1: the two jar families joined the original four once their active
     // scope was pinned down and every offered jar came out fully costed.
     expect([...CANONICAL_FAMILIES]).toEqual([
-      "stickers-labels", "sticker-bags", "stock-bags", "banners", "standard-jars", "premium-jars",
+      "stickers-labels", "sticker-bags", "stock-bags", "split-bags", "banners", "standard-jars", "premium-jars",
     ]);
     expect(CANONICAL_DISPATCH["standard-jars"].adapter).toBe("jar-cost-inputs.server.ts");
     expect(CANONICAL_DISPATCH["premium-jars"].adapter).toBe("jar-cost-inputs.server.ts");
@@ -316,8 +316,9 @@ describe("2D-4 bag integration", () => {
     expect(r.trueCost.lines.find((l) => l.key === "application")!.amount)
       .toBeCloseTo((1000 * 2 * 10 / 3600) * 20, 6);
     // the ACTUAL 4x5 cutline drove the cutter
-    expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.875, heightIn: 4.875 });
-    expect(r.diagnostics.cutPathIn).toBeCloseTo(2000 * 2 * (3.875 + 4.875), 6);
+    // 2026-11-11 OWNER DECISION: the 4x5 bag cutline is the documented 3.79 x 4.81 in.
+    expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 });
+    expect(r.diagnostics.cutPathIn).toBeCloseTo(2000 * 2 * (3.79 + 4.81), 6);
     // weeding is required
     expect(r.diagnostics.weedingPages).toBeGreaterThan(0);
   });
@@ -672,7 +673,9 @@ describe("2D-4 legacy path cutover", () => {
   it("DTP and Boxes keep their existing branch untouched", () => {
     const src = routeSrc();
     expect(src).toContain("priceDtpQuote");
-    expect(src).toContain("SPEKTRA_FREIGHT_PER_PO");
+    // 2026-11-11: the unverified $85 no longer enters DTP cost; freight is FREIGHT_NOT_VERIFIED unless entered.
+    expect(src).toContain("DTP_FREIGHT_NOT_VERIFIED");
+    expect(src).not.toContain("SPEKTRA_FREIGHT_PER_PO");
     // and neither reaches the canonical dispatch
     expect(normalizeCanonicalInput(new URLSearchParams("pfamily=dtp-bags&pqty=5000"))).toBeNull();
   });
@@ -680,7 +683,7 @@ describe("2D-4 legacy path cutover", () => {
   it("jars still refuse to force a number — 2D-4D1 promoted the SCOPE, not a fallback", () => {
     // Promotion did not add an artboard fallback or any other stand-in. A jar
     // the owner does not offer still has no cost and still cannot be quoted.
-    const params = new URLSearchParams(`pfamily=premium-jars&pqty=1000&pjar=miron/4oz&pjarside=1&${MACHINE_QS}`);
+    const params = new URLSearchParams(`pfamily=premium-jars&pjarmat=matte&pqty=1000&pjar=miron/4oz&pjarside=1&${MACHINE_QS}`);
     const result = assembleCanonicalJob(normalizeCanonicalInput(params)!, CAL);
     expect(result.status).toBe("DRAFT_ONLY");
     expect(result.unitCost).toBeNull();

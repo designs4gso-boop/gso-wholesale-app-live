@@ -96,10 +96,9 @@ export const FINISHING_REASONS = {
  * A measured historical fact and a current production rule are allowed to
  * disagree; forcing them to agree destroys the measurement.
  *
- * CONSEQUENCE, STATED PLAINLY: today's 4x5 bag labels are cut at
- * 3.875 x 4.875in — a slightly LONGER path than the 3.79 x 4.81 job this rate
- * was timed on — so their cut time is priced marginally higher than the
- * benchmark job's was. That is correct: it reflects the geometry actually cut.
+ * 2026-11-11 OWNER DECISION: 3.79 x 4.81in IS the current 4x5 bag cutline
+ * again (bag-artboard-geometry.ts BAG_4X5_CUTLINE_IN), so live 4x5 bag labels
+ * are cut on exactly the geometry this rate was timed on.
  *
  * SUPERSESSION. A fresh owner-timed cut of a known-geometry job replaces this
  * record outright. The Roland entries below would benefit most: their piece
@@ -392,7 +391,7 @@ export function computeFinishing(input: FinishingInput): FinishingResult {
       blockers.push(
         `${FINISHING_REASONS.cutlineGeometryRequired}: ${cutlineMissingBands.map((b) => b.groupKey).join(", ")} ` +
         `${cutlineMissingBands.length === 1 ? "has" : "have"} no ACTUAL cutline geometry. An artboard is not a substitute in either direction ` +
-        `(a 4.00x5.00in artboard is cut at 3.875x4.875in under the -0.0625in offset rule), so this job is not quote-ready. ` +
+        `(e.g. a 4.00x5.00in bag artboard is cut at the owner 3.79x4.81in cutline), so this job is not quote-ready. ` +
         `The ${cutPathIn.toFixed(1)}in path shown is an ARTBOARD DIAGNOSTIC ESTIMATE ONLY and is not canonical measured geometry.`,
       );
       reasons.push(FINISHING_REASONS.cutlineGeometryRequired);

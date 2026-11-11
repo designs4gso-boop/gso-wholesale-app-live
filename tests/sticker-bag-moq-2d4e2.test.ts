@@ -36,7 +36,7 @@ const CAL: ResolvedMachineInputs = {
 
 const bagJob = (qty: number, stock = false) => {
   const input = normalizeCanonicalInput(new URLSearchParams(
-    `pfamily=sticker-bags${stock ? "&pstockbag=1" : ""}&pqty=${qty}&pbagsides=2&pdesigns=1&pprinter=auto`,
+    `pfamily=sticker-bags&pbagmat=matte${stock ? "&pstockbag=1" : ""}&pqty=${qty}&pbagsides=2&pdesigns=1&pprinter=auto`,
   ))!;
   return assembleCanonicalJob(input, CAL);
 };

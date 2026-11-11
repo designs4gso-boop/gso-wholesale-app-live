@@ -260,6 +260,27 @@ export function quotePricingAuthorityState(quote: GateQuote): QuotePricingAuthor
   };
 }
 
+/** Every status the Quotes page may write. */
+export const QUOTE_STATUS_VALUES = ["draft", "sent", "approved", "deposit_paid", "paid", "production", "completed", "won", "lost", "canceled", "expired"] as const;
+/**
+ * Payment / production states. Shopify payment (webhooks.orders_paid) and the
+ * production-job flow set these; by hand only the owner may, because `paid`
+ * is what makes a quote eligible for production. ("completed" stays a normal
+ * staff move — nothing automated sets it and it unlocks nothing.)
+ */
+export const OWNER_ONLY_QUOTE_STATUSES = ["deposit_paid", "paid", "production"] as const;
+
+/** 2026-11-11: server check that a manual status change is a known status and, for payment/production states, made by the owner. */
+export function quoteStatusChangeCheck(input: { currentStatus: string | null | undefined; nextStatus: string; isOwner: boolean }): { ok: true } | { ok: false; message: string } {
+  const next = String(input.nextStatus || "");
+  if (!(QUOTE_STATUS_VALUES as readonly string[]).includes(next)) return { ok: false, message: `Unknown quote status "${next}".` };
+  if (next === String(input.currentStatus || "")) return { ok: true };
+  if ((OWNER_ONLY_QUOTE_STATUSES as readonly string[]).includes(next) && !input.isOwner) {
+    return { ok: false, message: `Only the owner can set a quote to "${next}" by hand. Payment statuses come from the Shopify payment; production starts from a paid quote.` };
+  }
+  return { ok: true };
+}
+
 /** Server check for any status change (status intent AND the editor's save intent). */
 export function provisionalQuoteStatusCheck(quote: GateQuote, nextStatus: string): { ok: true } | { ok: false; message: string } {
   const state = quotePricingAuthorityState(quote);

@@ -8,8 +8,8 @@ import {
   InlineStack,
   Badge,
   Divider,
-  TextField,
 } from "@shopify/polaris";
+import { FormTextField } from "../components/FormTextField";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -240,9 +240,9 @@ function MaterialCard({ material, lowStockOnly = false }: { material: any; lowSt
           <input type="hidden" name="intent" value="updateMaterialInventory" />
           <input type="hidden" name="materialId" value={material.id} />
           <InlineStack gap="200" blockAlign="end" wrap>
-            <TextField label="Stock on hand" name="stockOnHand" defaultValue={String(material.stockOnHand || 0)} autoComplete="off" />
-            <TextField label="Reorder point" name="reorderPoint" defaultValue={String(material.reorderPoint || 0)} autoComplete="off" />
-            <TextField label="Lead time days" name="leadTimeDays" defaultValue={String(material.leadTimeDays || preferredVendor?.leadTimeDays || "")} autoComplete="off" />
+            <FormTextField label="Stock on hand" name="stockOnHand" defaultValue={String(material.stockOnHand || 0)} autoComplete="off" />
+            <FormTextField label="Reorder point" name="reorderPoint" defaultValue={String(material.reorderPoint || 0)} autoComplete="off" />
+            <FormTextField label="Lead time days" name="leadTimeDays" defaultValue={String(material.leadTimeDays || preferredVendor?.leadTimeDays || "")} autoComplete="off" />
             <Button submit>Save inventory settings</Button>
           </InlineStack>
         </Form>
@@ -251,8 +251,8 @@ function MaterialCard({ material, lowStockOnly = false }: { material: any; lowSt
           <input type="hidden" name="intent" value="quickPurchase" />
           <input type="hidden" name="materialId" value={material.id} />
           <InlineStack gap="200" blockAlign="end" wrap>
-            <TextField label="Receive qty" name="purchaseQty" defaultValue={suggestion.suggestedQty > 0 ? qty(suggestion.suggestedQty) : ""} autoComplete="off" />
-            <TextField label="Notes" name="notes" defaultValue="Received from reorder report." autoComplete="off" />
+            <FormTextField label="Receive qty" name="purchaseQty" defaultValue={suggestion.suggestedQty > 0 ? qty(suggestion.suggestedQty) : ""} autoComplete="off" />
+            <FormTextField label="Notes" name="notes" defaultValue="Received from reorder report." autoComplete="off" />
             <Button submit variant={lowStockOnly ? "primary" : "secondary"}>Add received stock</Button>
           </InlineStack>
         </Form>

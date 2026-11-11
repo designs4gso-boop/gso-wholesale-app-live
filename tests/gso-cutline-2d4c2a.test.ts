@@ -92,14 +92,17 @@ describe("2D-4C2A the rule", () => {
 });
 
 describe("2D-4C2A there is exactly ONE cutline authority", () => {
-  it("7. the bag adapter derives its cutline — no 3.79 x 4.81 literal survives", () => {
+  it("7. the 4x5 bag uses the OWNER cutline 3.79 x 4.81 (decision 2026-11-11), not the generic rule", () => {
+    // 2026-11-11 OWNER DECISION: the 4x5 bag cutline is the documented 3.79 x 4.81 in.
+    // The generic rule would give 3.875 x 4.875 for a 4x5 artboard; that value
+    // had no owner decision for the 4x5 and is superseded for this product only.
     expect(BAG_4X5_ARTBOARD_IN).toEqual({ widthIn: 4.0, heightIn: 5.0 });
-    expect(BAG_4X5_CUTLINE_IN.widthIn).toBeCloseTo(3.875, 10);
-    expect(BAG_4X5_CUTLINE_IN.heightIn).toBeCloseTo(4.875, 10);
-    // and it equals what the rule says for that artboard
+    expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 });
     const ruled = deriveGsoLabelCutlineFromArtboard(BAG_4X5_ARTBOARD_IN.widthIn, BAG_4X5_ARTBOARD_IN.heightIn)!;
-    expect(BAG_4X5_CUTLINE_IN.widthIn).toBe(ruled.cutWidthIn);
-    expect(BAG_4X5_CUTLINE_IN.heightIn).toBe(ruled.cutHeightIn);
+    expect(ruled.cutWidthIn).toBeCloseTo(3.875, 10); // the generic rule itself is unchanged
+    // exactly ONE 4x5 cutline authority: the client-safe geometry module
+    const geometry = readFileSync("app/lib/bag-artboard-geometry.ts", "utf8");
+    expect(geometry.match(/BAG_4X5_CUTLINE_IN = /g)).toHaveLength(1);
   });
 
   it("3. the HISTORICAL benchmark keeps its measured geometry — 3.79 x 4.81 / 2236in / 11min", () => {
@@ -169,8 +172,9 @@ describe("2D-4C2A there is exactly ONE cutline authority", () => {
   it("no module re-implements the offset arithmetic — they all import the rule", () => {
     for (const file of ["app/lib/bag-cost-inputs.server.ts", "app/lib/canonical-calculator.server.ts"]) {
       const src = readFileSync(file, "utf8");
-      // every CURRENT-geometry consumer imports the single authority
-      expect(src, file).toContain("gso-cutline");
+      // every CURRENT-geometry consumer imports a single authority (the generic
+      // rule, or for the 4x5 bag the owner cutline in bag-artboard-geometry.ts)
+      expect(src, file).toMatch(/gso-cutline|bag-artboard-geometry/);
       // and none of them COMPUTES with the offset: the remaining mentions are
       // prose in comments and human-readable note/source strings only.
       expect(src, file).not.toMatch(/[-+*/=]\s*0\.0625\s*[*+;)]/);

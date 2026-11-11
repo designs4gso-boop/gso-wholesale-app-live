@@ -66,14 +66,16 @@ describe("geometry extraction is behaviour-preserving", () => {
 });
 
 describe("listProductSpecs / getProductProductionSpec", () => {
-  it("covers every ACTIVE jar profile exactly once plus the two 4x5 bag products", () => {
+  it("covers every ACTIVE jar profile exactly once plus the two 4x5 bag products and the Split Bag", () => {
     const specs = listProductSpecs();
     const jarKeys = specs.filter((s) => s.family.endsWith("-jars")).map((s) => s.productKey);
     expect(jarKeys.sort()).toEqual(ACTIVE_JAR_PROFILES.map((p) => p.key).sort());
     expect(new Set(jarKeys).size).toBe(jarKeys.length);
     expect(specs.filter((s) => s.family === "sticker-bags").map((s) => s.productKey)).toEqual(["bag-4x5/sticker"]);
     expect(specs.filter((s) => s.family === "stock-bags").map((s) => s.productKey)).toEqual(["bag-4x5/stock"]);
-    expect(specs.length).toBe(ACTIVE_JAR_PROFILES.length + 2);
+    // 2026-11-11: the Split Bag (owner decision) on the same 4x5 artboard authority.
+    expect(specs.filter((s) => s.family === "split-bags").map((s) => s.productKey)).toEqual(["split-bag"]);
+    expect(specs.length).toBe(ACTIVE_JAR_PROFILES.length + 3);
   });
 
   it("the exact supported jar list: miron 50/100T/100W/150/250, chiron 100T/100W/150, standard 3oz/4oz", () => {

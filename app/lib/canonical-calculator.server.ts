@@ -6,6 +6,7 @@
 //   stickers-labels -> label-cost-inputs   (multi-line, per-line media)
 //   sticker-bags    -> bag-cost-inputs     (sticker_bag_4x5)
 //   stock-bags      -> bag-cost-inputs     (stock_bag)
+//   split-bags      -> bag-cost-inputs     (split_bag)
 //   banners         -> banner-cost-inputs
 //
 // DTP and Boxes are deliberately NOT here. They are outsourced/vendor families
@@ -34,6 +35,7 @@
 import {
   BAG_APPLICATION_LABOR_RATE_PER_HOUR,
   BAG_APPLICATION_SECONDS_PER_SIDE,
+  SPLIT_BAG_BLANK_SOURCE,
   computeBagPhysical,
   type BagJobInput,
   type BagPersonalization,
@@ -51,6 +53,7 @@ import {
 } from "./banner-cost-inputs.server";
 import {
   computeLabelJob,
+  resolveLabelMaterial,
   type LabelJobResult,
   type LabelLine,
   type VerifiedLabelMaterial,
@@ -166,14 +169,41 @@ export type CanonicalLabelInput = {
   materials?: Record<string, VerifiedLabelMaterial>;
 };
 
-export type CanonicalBagInput = {
+/**
+ * 2026-11-11 — the label MEDIA that sets a bag or jar job's media cost. A
+ * canonical key: "matte" | "gloss" | "holographic" (approved roll rates) or
+ * "material:<id>" (a server-verified Material Center record, resolved into
+ * `materials`). Never defaulted: no key, or an unverified one, blocks the job.
+ */
+export type LabelMediaSelection = {
+  materialKey?: string | null;
+  /** The Material Center record id the form selected (pmat); resolved server-side. */
+  materialId?: string | null;
+  materials?: Record<string, VerifiedLabelMaterial>;
+  /** Plain-English readiness reasons for a selected material that is not calculator-ready. */
+  materialMissing?: string[];
+};
+
+/** Resolve a job's selected label media, or the blocker that explains why it cannot be costed. */
+function resolveSelectedLabelMedia(cfg: LabelMediaSelection, product: string): { media: ReturnType<typeof resolveLabelMaterial>; blocker: string | null } {
+  const media = cfg.materialKey ? resolveLabelMaterial(cfg.materialKey, cfg.materials) : null;
+  if (media) return { media, blocker: null };
+  return {
+    media: null,
+    blocker: `${CANONICAL_REASONS.materialCostRequired}: ${!cfg.materialKey
+      ? `no ${product} label material is selected — choose the label media.`
+      : `the selected ${product} label material is not calculator-ready${cfg.materialMissing?.length ? ` (${cfg.materialMissing.join(" ")})` : ""}. A material cost is never substituted.`}`,
+  };
+}
+
+export type CanonicalBagInput = LabelMediaSelection & {
   sides: BagSides;
   designs?: number;
   personalization?: BagPersonalization;
   blankUnitCost?: number | null;
 };
 
-export type CanonicalJarInput = {
+export type CanonicalJarInput = LabelMediaSelection & {
   brand: JarBrand;
   size: JarSizeKey;
   variant?: StandardJarVariant;
@@ -607,10 +637,14 @@ export function assembleCanonicalJob(
   }
 
   /* ---------------- 4x5 STICKER BAGS + STOCK BAGS ---------------- */
-  if (input.family === "sticker-bags" || input.family === "stock-bags") {
-    const cfg = input.bags ?? { sides: 1 as BagSides };
+  if (input.family === "sticker-bags" || input.family === "stock-bags" || input.family === "split-bags") {
+    const cfg: CanonicalBagInput = input.bags ?? { sides: 1 as BagSides };
+    const splitBag = input.family === "split-bags";
+    // 2026-11-11: the SELECTED label media sets the media cost — never a silent Poseidon Matte.
+    const { media: bagMedia, blocker: bagMediaBlocker } = resolveSelectedLabelMedia(cfg, "bag");
+    if (bagMediaBlocker) blockers.push(bagMediaBlocker);
     const bagInput: BagJobInput = {
-      product: input.family === "stock-bags" ? "stock_bag" : "sticker_bag_4x5",
+      product: input.family === "stock-bags" ? "stock_bag" : splitBag ? "split_bag" : "sticker_bag_4x5",
       bagQuantity: production,
       sides: cfg.sides,
       designs: cfg.designs,
@@ -618,7 +652,8 @@ export function assembleCanonicalJob(
       blankUnitCost: cfg.blankUnitCost,
       machineKey: routing.machineKey,
       cutMode: input.cutMode,
-      loadedMediaWidthIn: input.loadedMediaWidthIn,
+      // The selected media's roll width drives nesting (holographic runs on 50in).
+      loadedMediaWidthIn: input.loadedMediaWidthIn ?? bagMedia?.rollWidthIn,
     };
     bag = computeBagPhysical(bagInput);
     reasons.push(...bag.reasons);
@@ -630,17 +665,21 @@ export function assembleCanonicalJob(
       materialFootprintSqft: bag.nesting.materialFootprintSqft,
       ripLayoutBasis: bag.nesting.ripLayoutBasis,
     };
-    materialName = "Poseidon Matte (bag label media)";
-    materialCostPerSqft = LABEL_MEDIA_PER_SQFT;
-    materialSource = "Verified roll cost (APPROVED_ROLL_COSTS.poseidonMattePerSqft).";
+    materialName = bagMedia ? `${bagMedia.label} (bag label media)` : "Bag label media — not selected / not calculator-ready";
+    materialCostPerSqft = bagMedia ? bagMedia.costPerSqft : null;
+    materialSource = bagMedia
+      ? (cfg.materials?.[cfg.materialKey!] ? "Material Center verified $/sqft (re-read by id on the server)." : "Approved roll cost (APPROVED_ROLL_COSTS).")
+      : "No calculator-ready bag label media selected.";
 
     // The blank is priced at PRODUCTION quantity by the engine, so hand it the
     // unit cost rather than the adapter's already-multiplied total.
     blank = {
       ok: true,
       unitCost: production > 0 ? bag.blankCost / production : 0,
-      label: "4x5 blank bag",
-      source: "Owner decision 2026-10-08: $0.11 each, true base cost regardless of colour (supersedes the 2026-08-24 $0.09-before-freight rule); no generic freight uplift, inbound freight not modelled.",
+      label: splitBag ? "Split Bag blank (one bag, two joined 4x5 sections)" : "4x5 blank bag",
+      source: splitBag
+        ? SPLIT_BAG_BLANK_SOURCE
+        : "Owner decision 2026-10-08: $0.11 each, true base cost regardless of colour (supersedes the 2026-08-24 $0.09-before-freight rule); no generic freight uplift, inbound freight not modelled.",
     };
 
     setup = {
@@ -658,10 +697,13 @@ export function assembleCanonicalJob(
     diagnostics.weedingPages = bag.finishing.weedingPages;
 
     application = bag.application;
+    // One application event per applied 4x5 label: sides x positions per side
+    // (a Split Bag carries two positions on each printed side).
+    const labelsPerBag = cfg.sides * bag.positionsPerSide;
     applicationCost = {
-      secondsPerFinishedUnit: cfg.sides * BAG_APPLICATION_SECONDS_PER_SIDE,
+      secondsPerFinishedUnit: labelsPerBag * BAG_APPLICATION_SECONDS_PER_SIDE,
       laborRatePerHour: BAG_APPLICATION_LABOR_RATE_PER_HOUR,
-      note: `${cfg.sides} labelled side(s) x ${BAG_APPLICATION_SECONDS_PER_SIDE}s at $${BAG_APPLICATION_LABOR_RATE_PER_HOUR}/hr.`,
+      note: `${cfg.sides} labelled side(s)${bag.positionsPerSide > 1 ? ` x ${bag.positionsPerSide} label positions` : ""} x ${BAG_APPLICATION_SECONDS_PER_SIDE}s at $${BAG_APPLICATION_LABOR_RATE_PER_HOUR}/hr.`,
     };
     diagnostics.applicationEvents = bag.application.applicationEvents;
     diagnostics.physicalItems = bag.application.physicalItems;
@@ -669,12 +711,12 @@ export function assembleCanonicalJob(
     diagnostics.printedLabelsAvailable = bag.application.printedLabels;
     {
       const costPerLabel = (BAG_APPLICATION_SECONDS_PER_SIDE / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
-      const labels = finished * cfg.sides;
+      const labels = finished * labelsPerBag;
       diagnostics.applicationBreakdown = {
         standardLabel: "4x5 bag application (owner decision: seconds per applied side)",
         laborRatePerHour: BAG_APPLICATION_LABOR_RATE_PER_HOUR,
         finishedUnits: finished,
-        pieces: [{ piece: "side", label: `Applied label (${cfg.sides} side(s) per bag)`, secondsPerLabel: BAG_APPLICATION_SECONDS_PER_SIDE, costPerLabel, labels, cost: costPerLabel * labels }],
+        pieces: [{ piece: "side", label: splitBag ? `Applied 4x5 label (${labelsPerBag} per Split Bag: ${cfg.sides} side(s) x ${bag.positionsPerSide})` : `Applied label (${cfg.sides} side(s) per bag)`, secondsPerLabel: BAG_APPLICATION_SECONDS_PER_SIDE, costPerLabel, labels, cost: costPerLabel * labels }],
         totalLabels: labels,
         totalCost: costPerLabel * labels,
         source: "bag-cost-inputs.server.ts OWNER DECISION 2 — 10 s per applied side at $20/hr",
@@ -812,6 +854,10 @@ export function assembleCanonicalJob(
         tamper: Boolean(cfg.selection?.tamper),
       };
       const active = activeJarProfile(cfg.brand, cfg.size);
+      // 2026-11-11: the SELECTED label media sets the jar media cost — side, lid
+      // and tamper labels all print on it. Never a silent Poseidon Matte.
+      const { media: jarMedia, blocker: jarMediaBlocker } = resolveSelectedLabelMedia(cfg, "jar");
+      if (jarMediaBlocker) blockers.push(jarMediaBlocker);
 
       /* ---- 2026-10-05 CUSTOM SIZE OVERRIDE (fail closed) ----
        * Standard dimensions come from the one geometry authority. Staff may
@@ -884,14 +930,17 @@ export function assembleCanonicalJob(
         selection,
         productionQty: production,
         machineKey: routing.machineKey,
-        loadedMediaWidthIn: input.loadedMediaWidthIn,
+        // The selected media's roll width drives nesting (holographic runs on 50in).
+        loadedMediaWidthIn: input.loadedMediaWidthIn ?? jarMedia?.rollWidthIn,
         geometry: geometryForCost,
       });
       areas = jarAreas.areas;
       blockers.push(...jarAreas.blockers);
-      materialName = "Poseidon Matte (jar label media)";
-      materialCostPerSqft = LABEL_MEDIA_PER_SQFT;
-      materialSource = "Verified roll cost (APPROVED_ROLL_COSTS.poseidonMattePerSqft).";
+      materialName = jarMedia ? `${jarMedia.label} (jar label media)` : "Jar label media — not selected / not calculator-ready";
+      materialCostPerSqft = jarMedia ? jarMedia.costPerSqft : null;
+      materialSource = jarMedia
+        ? (cfg.materials?.[cfg.materialKey!] ? "Material Center verified $/sqft (re-read by id on the server)." : "Approved roll cost (APPROVED_ROLL_COSTS).")
+        : "No calculator-ready jar label media selected.";
 
       // ---- cutting + weeding on the DERIVED cutlines ----
       if (jarAreas.nesting) {
@@ -1158,12 +1207,13 @@ export function assembleCanonicalJob(
   diagnostics.machineMinutes = machineMinutesFrom(trueCost);
   diagnostics.finishingBreakdown = finishingBreakdownFrom(trueCost);
   diagnostics.cutPathBasis = cutPathBasisFrom(trueCost);
-  if (input.family === "sticker-bags" || input.family === "stock-bags") {
+  if (input.family === "sticker-bags" || input.family === "stock-bags" || input.family === "split-bags") {
+    const bagProductKey = input.family === "sticker-bags" ? "bag-4x5/sticker" : input.family === "split-bags" ? "split-bag" : "bag-4x5/stock";
     diagnostics.productSpec = {
       specVersion: PRODUCT_SPEC_VERSION,
       family: input.family,
-      productKey: input.family === "sticker-bags" ? "bag-4x5/sticker" : "bag-4x5/stock",
-      displayName: input.family === "sticker-bags" ? "4x5 Sticker Bag" : "4x5 Stock Bag",
+      productKey: bagProductKey,
+      displayName: input.family === "sticker-bags" ? "4x5 Sticker Bag" : input.family === "split-bags" ? "Split Bag" : "4x5 Stock Bag",
       source: BAG_ARTBOARD_SOURCE,
       labelSet: null,
       standard: { label: { widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn } },
@@ -1171,8 +1221,8 @@ export function assembleCanonicalJob(
       override: {},
       overriddenPieces: [],
       overrideReason: null,
-      authorityStatus: getProductProductionSpec(input.family, input.family === "sticker-bags" ? "bag-4x5/sticker" : "bag-4x5/stock")?.authorityStatus ?? "CANONICAL_COSTING_PENDING_CONFIRMATION",
-      ownerConfirmationRequired: getProductProductionSpec(input.family, input.family === "sticker-bags" ? "bag-4x5/sticker" : "bag-4x5/stock")?.ownerConfirmationRequired ?? true,
+      authorityStatus: getProductProductionSpec(input.family, bagProductKey)?.authorityStatus ?? "CANONICAL_COSTING_PENDING_CONFIRMATION",
+      ownerConfirmationRequired: getProductProductionSpec(input.family, bagProductKey)?.ownerConfirmationRequired ?? true,
       referenceConflict: false,
       referenceConflicts: [],
       sharedSizeKeyNote: null,
@@ -1211,10 +1261,6 @@ export function assembleCanonicalJob(
     blockers: allBlockers,
   };
 }
-
-/** Verified roll cost for bag-label media. */
-// 2026-10-05: read the approved roll cost instead of re-typing its arithmetic (value identical: 0.3155555556).
-const LABEL_MEDIA_PER_SQFT = APPROVED_ROLL_COSTS.poseidonMattePerSqft;
 
 /**
  * Map a FinishingResult onto engine stages, preserving category AND basis.
@@ -1325,10 +1371,11 @@ const str = (params: URLSearchParams, key: string, fallback = "") => (params.get
 const flag = (params: URLSearchParams, key: string) => params.get(key) === "1";
 
 /** Map the UI family value onto a canonical family, or null when unsupported. */
-export function canonicalFamilyFromUi(uiFamily: string, stockBag: boolean): CanonicalFamily | null {
+export function canonicalFamilyFromUi(uiFamily: string, stockBag: boolean, splitBag = false): CanonicalFamily | null {
   if (uiFamily === "stickers-labels") return "stickers-labels";
   if (uiFamily === "banners") return "banners";
-  if (uiFamily === "sticker-bags") return stockBag ? "stock-bags" : "sticker-bags";
+  // 2026-11-11: Split Bag = pfamily=sticker-bags + psplitbag=1 (Stock Bags win if both are posted).
+  if (uiFamily === "sticker-bags") return stockBag ? "stock-bags" : splitBag ? "split-bags" : "sticker-bags";
   // 2D-4D1: jars route canonically for their ACTIVE scope.
   if (uiFamily === "standard-jars" || uiFamily === "premium-jars") return uiFamily;
   return null;
@@ -1415,7 +1462,7 @@ function finishingBreakdownFrom(trueCost: TrueCostResult): CanonicalFinishingBre
 }
 
 export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalculatorInput | null {
-  const family = canonicalFamilyFromUi(str(params, "pfamily"), flag(params, "pstockbag"));
+  const family = canonicalFamilyFromUi(str(params, "pfamily"), flag(params, "pstockbag"), flag(params, "psplitbag"));
   if (!family) return null;
 
   const base = {
@@ -1500,7 +1547,7 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
     };
   }
 
-  if (family === "sticker-bags" || family === "stock-bags") {
+  if (family === "sticker-bags" || family === "stock-bags" || family === "split-bags") {
     return {
       ...base,
       bags: {
@@ -1515,7 +1562,14 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
                 : undefined,
             }
           : undefined,
-        blankUnitCost: params.get("pblankcost") ? num(params, "pblankcost") : null,
+        // 2026-11-11: never read from the query string. The blank cost is the
+        // owner authority in bag-cost-inputs.server.ts; a URL parameter (which
+        // the save action replays) must not be able to lower a true cost.
+        blankUnitCost: null,
+        // Canonical media key (tests / internal callers) and the form's
+        // Material Center selection, which the server resolves and which wins.
+        materialKey: str(params, "pbagmat") || null,
+        materialId: str(params, "pmat") || null,
       },
     };
   }
@@ -1552,6 +1606,10 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
         // 2026-10-05 CUSTOM SIZE OVERRIDE — raw values pass through untouched;
         // the assembler validates and fails closed. Nothing is defaulted here.
         labelSet: str(params, "pjarset") || null,
+        // Canonical media key (tests / internal callers) and the form's Material
+        // Center selection, which the server resolves and which wins.
+        materialKey: str(params, "pjarmat") || null,
+        materialId: str(params, "pmat") || null,
         customSize: flag(params, "pjarcustom"),
         geometryOverride: jarOverrideFromParams(params),
         overrideReason: str(params, "pjaroverridereason") || null,
@@ -1623,3 +1681,6 @@ export function canonicalSupportsTierLadder(input: CanonicalCalculatorInput | nu
 
 /** Re-exported so a caller never has to reach into ink-rates-shared itself. */
 export { CANONICAL_INK_RATES };
+
+/** Re-exported so the calculator route names the Split Bag blank without importing the bag adapter. */
+export { SPLIT_BAG_BLANK_UNIT_COST } from "./bag-cost-inputs.server";

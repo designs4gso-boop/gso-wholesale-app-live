@@ -9,6 +9,7 @@
 
 import { ARTWORK_EXTENSIONS } from "../print-intake-routing.server";
 import { deriveGsoLabelCutlineFromArtboard, formatGsoCutline, GSO_CUTLINE_OFFSET_IN } from "../gso-cutline";
+import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN } from "../bag-artboard-geometry";
 import { resolveCanonicalMachineRouting, ROUTING_REASONS } from "../machine-routing.server";
 
 export const ART_PREFLIGHT_VERSION = "art-preflight/1.0.0-2026-10-03";
@@ -91,8 +92,12 @@ export function runArtPreflight(spec: PreflightSpec, files: ArtFileFacts[]): Pre
 
   let expectedCutline: string | null = null;
   if ((spec.family === "stickers-labels" || spec.family === "sticker-bags") && spec.cutType !== "none") {
-    const cut = deriveGsoLabelCutlineFromArtboard(spec.widthIn, spec.heightIn);
-    expectedCutline = cut ? formatGsoCutline(cut) : null;
+    // 2026-11-11 owner decision: a 4x5 bag label cuts at the owner 3.79 x 4.81 cutline.
+    const is4x5Bag = spec.family === "sticker-bags" && spec.widthIn === BAG_4X5_ARTBOARD_IN.widthIn && spec.heightIn === BAG_4X5_ARTBOARD_IN.heightIn;
+    const cut = is4x5Bag
+      ? { cutWidthIn: BAG_4X5_CUTLINE_IN.widthIn, cutHeightIn: BAG_4X5_CUTLINE_IN.heightIn }
+      : deriveGsoLabelCutlineFromArtboard(spec.widthIn, spec.heightIn);
+    expectedCutline = cut ? formatGsoCutline(cut as any) : null;
     if (!cut && spec.widthIn != null) add("fail", "CUTLINE_UNDERIVABLE", "artboard too small for the GSO cutline inset");
   }
 

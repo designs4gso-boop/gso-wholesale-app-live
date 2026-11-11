@@ -71,7 +71,7 @@ describe("GSO flow: sticker bag order from lead to invoice readiness", () => {
     const v1: ArtVersion = { versionId: "v1", fileHash: "h1", fileName: "northwind.pdf", createdAt: now.toISOString() };
     const pre = runArtPreflight({ family: "sticker-bags", widthIn: 4, heightIn: 5, cutType: "rectangular" }, [{ fileName: v1.fileName, artboardWidthIn: 4, artboardHeightIn: 5, colorSpace: "CMYK", minRasterDpi: 300, hasCutlineLayer: true, fontsOutlined: true }]);
     expect(pre.status).toBe("PASS");
-    expect(pre.expectedCutline).toBe("3.875 x 4.875 in"); // -0.0625 in per side
+    expect(pre.expectedCutline).toBe("3.790 x 4.810 in"); // owner 4x5 cutline (2026-11-11)
     let records: ApprovalRecord[] = [];
     const t = recordApproval(records, { version: v1, state: "TECHNICAL_PREFLIGHT_PASSED", approverType: "agent", approverId: "art_preflight", source: "agent", now }); if (t.ok) records = t.records;
     const c = recordApproval(records, approvalFromProofPortal({ proofStatus: "approved", proofApprovedAt: now, proofCustomerEmail: "dana@example.com" }, v1)!); if (c.ok) records = c.records;

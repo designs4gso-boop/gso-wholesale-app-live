@@ -1,6 +1,8 @@
 import { Form, useActionData, useLoaderData } from "react-router";
 import { staffStatusLabel } from "../lib/production-status-vocabulary";
 import { authenticate } from "../shopify.server";
+import { productionFinancialVisibility } from "../lib/owner-authorization.server";
+import { redactJobFinancials } from "../lib/production-financial-redaction";
 import db from "../db.server";
 
 function safeDate(value: any) {
@@ -89,7 +91,8 @@ async function createEvent(shop: string, jobId: string, eventType: string, messa
 }
 
 export async function loader({ request, params }: { request: Request; params: any }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
   const shop = session.shop;
   const id = params.id;
 
@@ -104,7 +107,8 @@ export async function loader({ request, params }: { request: Request; params: an
 
   if (!job) throw new Response("Production job not found", { status: 404 });
 
-  return Response.json({ job });
+  // 2026-11-11: production staff receive no revenue / cost / profit / margin.
+  return Response.json({ job: productionFinancialVisibility(auth).show ? job : redactJobFinancials(job) });
 }
 
 export async function action({ request, params }: { request: Request; params: any }) {

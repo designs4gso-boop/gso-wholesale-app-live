@@ -93,16 +93,17 @@ describe("2D-2 4x5 sticker bag + stock bag", () => {
     expect(r.blankCost).not.toBeCloseTo(1000 * 0.09, 2);
   });
 
-  it("cutline is 3.875 x 4.875 with a 17.20in perimeter — never the 4x5 artboard", () => {
-    expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.875, heightIn: 4.875 });
+  it("cutline is the owner 3.79 x 4.81 (17.20in perimeter) — never the 4x5 artboard", () => {
+    // 2026-11-11 OWNER DECISION: the 4x5 bag cutline is the documented 3.79 x 4.81 in.
+    expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 });
     expect(BAG_4X5_ARTBOARD_IN).toEqual({ widthIn: 4.0, heightIn: 5.0 });
-    expect(2 * (3.875 + 4.875)).toBeCloseTo(17.5, 10);
+    expect(2 * (3.79 + 4.81)).toBeCloseTo(17.2, 10);
     const r = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 130, sides: 1 });
-    expect(r.finishing.cutPathIn).toBeCloseTo(130 * 17.5, 6); // 2275in at the DERIVED 3.875x4.875 cutline
+    expect(r.finishing.cutPathIn).toBeCloseTo(130 * 17.2, 6); // 2236in at the owner 3.79x4.81 cutline
     expect(r.finishing.cutPathIn).not.toBeCloseTo(130 * 2 * (4 + 5), 3); // artboard would be 2340
   });
 
-  it("Mimaki NORMAL uses the HISTORICAL 203.2727 in/min, on today's DERIVED geometry", () => {
+  it("Mimaki NORMAL uses the 203.2727 in/min benchmark, on the SAME owner 3.79 x 4.81 geometry it was timed on", () => {
     const cal = resolveCutCalibration("mimaki-ucjv300-130", "normal")!;
     expect(cal.inchesPerMinute).toBeCloseTo(203.2727, 4);
 
@@ -113,10 +114,11 @@ describe("2D-2 4x5 sticker bag + stock bag", () => {
     // the rate is historical, the geometry is current, and neither is bent to
     // match the other.
     const r = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 130, sides: 1 });
-    expect(r.finishing.cutPathIn).toBeCloseTo(2275.0, 6);
-    expect(r.finishing.cutMinutes!).toBeCloseTo(2275.0 / 203.2727272, 4); // ~11.19 min
-    expect(r.finishing.cutMinutes!).toBeGreaterThan(11.0);
-    expect(r.finishing.cutMinutes!).toBeLessThan(11.3);
+    // 2026-11-11: the owner cutline is the benchmark geometry again, so the
+    // 130-piece benchmark job reproduces its measured 2236in / 11.0 min.
+    expect(r.finishing.cutPathIn).toBeCloseTo(2236.0, 6);
+    expect(r.finishing.cutMinutes!).toBeCloseTo(2236.0 / 203.2727272, 4);
+    expect(r.finishing.cutMinutes!).toBeCloseTo(11.0, 3);
   });
 
   it("application is 10s per applied SIDE at $20/hr", () => {

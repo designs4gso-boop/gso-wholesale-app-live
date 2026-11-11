@@ -163,13 +163,19 @@ describe("quote cost authority: 4x5x2 = live book by EXACT configuration (never 
   const legacy = { totalCost: 0.9897 * 1000 + ART + 85, missing: false, vendorSubtotal: 989.7 };
 
   it("comparable configuration resolves the observed row; landed ~$860.70 at 1,000", () => {
-    const cost = resolveDtpQuoteCost({ vendorSku: SKU, quantity: 1000, designs: 1, selection: SOFT_TOUCH, legacy });
+    // 2026-11-11 OWNER POLICY: the unverified $85 is no longer assumed — it is
+    // included only when freight is ENTERED for the job.
+    const cost = resolveDtpQuoteCost({ vendorSku: SKU, quantity: 1000, designs: 1, selection: SOFT_TOUCH, legacy, freightPerOrder: 85 });
     expect(cost.authority).toBe("LIVE_COST_BOOK_BY_CONFIGURATION");
     expect(cost.status).toBe("OBSERVED_VENDOR_PRICE");
     expect(cost.vendorSubtotal).toBeCloseTo(767.3625, 4);
     expect(cost.landedCost).toBeCloseTo(860.696, 2);
     expect(cost.missing).toBe(false);
-    expect(cost.freightStatus).toBe("UNVERIFIED");
+    expect(cost.freightStatus).toBe("ENTERED");
+    const noFreight = resolveDtpQuoteCost({ vendorSku: SKU, quantity: 1000, designs: 1, selection: SOFT_TOUCH, legacy });
+    expect(noFreight.freight).toBe(0);
+    expect(noFreight.landedCost).toBeCloseTo(860.696 - 85, 2);
+    expect(noFreight.freightStatus).toBe("FREIGHT_NOT_VERIFIED");
     expect(cost.config).toMatchObject({ size: "4x5x2", material: "White PET", finish: "Soft Touch", zipper: "Child Resistant" });
   });
 
@@ -189,7 +195,7 @@ describe("quote cost authority: 4x5x2 = live book by EXACT configuration (never 
     const two = resolveDtpQuoteCost({ vendorSku: SKU, quantity: 2500, designs: 2, selection: SOFT_TOUCH, legacy });
     expect(two.status).toBe("ESTIMATED_FROM_VALIDATED_VENDOR_RULE");
     expect(two.extraSkuCost).toBe(138.75);
-    expect(two.landedCost).toBeCloseTo(958.2 + 138.75 + 2 * ART + 85, 4);
+    expect(two.landedCost).toBeCloseTo(958.2 + 138.75 + 2 * ART, 4); // 2026-11-11: no assumed freight
     const step = resolveDtpQuoteCost({ vendorSku: SKU, quantity: 1500, designs: 1, selection: SOFT_TOUCH, legacy });
     expect(step.status).toBe("ESTIMATED_CONSERVATIVE_STEP");
     expect(step.vendorUnit).toBeCloseTo(0.7673625, 6); // the 1,000-unit observed unit, applied to 1,500

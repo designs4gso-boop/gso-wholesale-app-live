@@ -76,7 +76,23 @@ export async function loader({ params }: { params: any }) {
     await createEvent(job.shop, job.id, "proof_viewed", "Customer proof link opened.");
   }
 
-  return Response.json({ job });
+  // 2026-11-11: PUBLIC page — return only what the customer view renders.
+  // Internal notes, actual costs/margins, item cost/price snapshots, the shop
+  // and internal file rows never leave the server.
+  const customerJob = {
+    id: job.id, jobTicket: job.jobTicket, status: job.status, proofStatus: job.proofStatus,
+    customerName: job.customerName, company: job.company, email: job.email, phone: job.phone,
+    proofApprovedAt: job.proofApprovedAt, proofCustomerName: job.proofCustomerName, proofCustomerEmail: job.proofCustomerEmail, proofCustomerComment: job.proofCustomerComment,
+    productImageUrl: job.productImageUrl, artworkUrl: job.artworkUrl,
+    items: job.items.map((item) => ({
+      id: item.id, itemTicket: item.itemTicket, productTitle: item.productTitle, variantTitle: item.variantTitle, sku: item.sku, quantity: item.quantity,
+      selectedFinish: item.selectedFinish, selectedAddOns: item.selectedAddOns, ripJobName: item.ripJobName, productImageUrl: item.productImageUrl,
+    })),
+    files: job.files
+      .filter((file) => file.assetRole === "artwork" || file.fileType === "artwork")
+      .map((file) => ({ assetRole: file.assetRole, fileType: file.fileType, fileUrl: file.fileUrl })),
+  };
+  return Response.json({ job: customerJob });
 }
 
 export async function action({ request, params }: { request: Request; params: any }) {

@@ -1,5 +1,7 @@
 ﻿import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
+import { productionFinancialVisibility } from "../lib/owner-authorization.server";
+import { redactJobFinancials } from "../lib/production-financial-redaction";
 import db from "../db.server";
 import {
   buildBrandRates,
@@ -156,7 +158,10 @@ function labelForStatus(status: string) {
 }
 
 export async function loader({ request, params }: { request: Request; params: any }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // 2026-11-11: production staff receive no revenue / cost / profit / margin.
+  const financials = productionFinancialVisibility(auth);
   const shop = session.shop;
   const id = params.id;
 
@@ -188,11 +193,12 @@ export async function loader({ request, params }: { request: Request; params: an
   const brandRates = buildBrandRates(machines);
   const ratePerHour = machineRatePerHour();
 
-  return Response.json({ job: { ...job, actuals: summarizeActualPrintLogs(job, printLogEntries, brandRates, ratePerHour) } });
+  const full = { ...job, actuals: summarizeActualPrintLogs(job, printLogEntries, brandRates, ratePerHour) };
+  return Response.json({ job: financials.show ? full : redactJobFinancials(full), showFinancials: financials.show });
 }
 
 export default function PrintProductionJob() {
-  const { job } = useLoaderData<any>();
+  const { job, showFinancials = true } = useLoaderData<any>();
   const productImage = validImageUrl(job.productImageUrl) || validImageUrl(job.items?.find((item: any) => validImageUrl(item.productImageUrl))?.productImageUrl);
   const totalRevenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const totalCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
@@ -297,8 +303,10 @@ export default function PrintProductionJob() {
                               <strong>Sides:</strong> {config.sides || "N/A"}<br />
                             </>
                           )}
-                          <strong>Unit:</strong> ${money(item.unitPrice)}<br />
-                          <strong>Total:</strong> ${money(lineTotalForItem(item))}
+                          {showFinancials ? (<>
+                            <strong>Unit:</strong> ${money(item.unitPrice)}<br />
+                            <strong>Total:</strong> ${money(lineTotalForItem(item))}
+                          </>) : null}
                         </div>
                       );
                     })()}
@@ -324,16 +332,19 @@ export default function PrintProductionJob() {
             ))}
           </div>
           <div className="card">
-            <h2>Totals</h2>
-            <div><strong>Revenue:</strong> ${money(totalRevenue)}</div>
-            <div><strong>Estimated cost:</strong> ${money(totalCost)}</div>
-            <div><strong>Estimated profit:</strong> ${money(totalRevenue - totalCost)}</div>
-            <hr />
+            <h2>{showFinancials ? "Totals" : "Print Log"}</h2>
+            {showFinancials ? (<>
+              <div><strong>Revenue:</strong> ${money(totalRevenue)}</div>
+              <div><strong>Estimated cost:</strong> ${money(totalCost)}</div>
+              <div><strong>Estimated profit:</strong> ${money(totalRevenue - totalCost)}</div>
+              <hr />
+            </>) : null}
             <h3>Actual Print Log Summary</h3>
             <div><strong>Matched print logs:</strong> {job.actuals?.entryCount || 0}</div>
             <div><strong>Actual sqft:</strong> {Number(job.actuals?.actualSqft || 0).toFixed(2)}</div>
             <div><strong>Actual ink:</strong> {Number(job.actuals?.actualInkMl || 0).toFixed(2)} ml</div>
             <div><strong>Actual print time:</strong> {Number(job.actuals?.actualPrintMinutes || 0).toFixed(2)} min</div>
+            {showFinancials ? (<>
             <div><strong>Machine rate:</strong> ${money(job.actuals?.machineRatePerHourUsed)}/hr (owner standard)</div>
             <div><strong>Rough print cost:</strong> ${money(job.actuals?.roughActualPrintCost)}</div>
             <div><strong>Conservative profit after logged print cost:</strong> ${money(job.actuals?.conservativeProfitAfterLoggedPrintCost)}</div>
@@ -351,6 +362,7 @@ export default function PrintProductionJob() {
             <div><strong>Final margin:</strong> {Number(finalCosts.finalMargin || 0).toFixed(1)}%</div>
             {job.actualCostFinalizedAt ? <div><strong>Finalized:</strong> {new Date(job.actualCostFinalizedAt).toLocaleString()}</div> : null}
             {job.actualCostNotes ? <div><strong>Cost notes:</strong> {job.actualCostNotes}</div> : null}
+            </>) : null}
           </div>
         </div>
 

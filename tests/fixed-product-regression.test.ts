@@ -45,7 +45,7 @@ const line = (r: ReturnType<typeof run>, key: string) => r.trueCost.lines.filter
 const jarQs = (profileKey: string, qty: number, set: { side: boolean; lid: boolean; tamper: boolean }, extra = "") => {
   const profile = ACTIVE_JAR_PROFILES.find((p) => p.key === profileKey)!;
   const variant = profile.brand === "standard" ? "&pjarvariant=black_white" : "";
-  return `pfamily=${profile.uiFamily}&pqty=${qty}&pjar=${profileKey}${variant}` +
+  return `pfamily=${profile.uiFamily}&pjarmat=matte&pqty=${qty}&pjar=${profileKey}${variant}` +
     (set.side ? "&pjarside=1" : "") + (set.lid ? "&pjarlid=1" : "") + (set.tamper ? "&pjartamper=1" : "") +
     "&pcmykcoverage=40" + extra;
 };
@@ -189,7 +189,7 @@ describe("17D.7 control case still pins after the spec/weeding refactor", () => 
 
 describe("bag families record their fixed spec too", () => {
   it("sticker bag diagnostics carry the owner 4x5 artboard with no override", () => {
-    const r = run("pfamily=sticker-bags&pqty=100&pbagsides=1&pcmykcoverage=40");
+    const r = run("pfamily=sticker-bags&pbagmat=matte&pqty=100&pbagsides=1&pcmykcoverage=40");
     expect(r.diagnostics.productSpec).toMatchObject({
       family: "sticker-bags", productKey: "bag-4x5/sticker", customSize: false,
       standard: { label: { widthIn: 4, heightIn: 5 } },

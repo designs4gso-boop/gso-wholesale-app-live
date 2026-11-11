@@ -471,6 +471,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       pricingMessage = priced.reason;
     }
   } else {
+    // 2026-11-11: no pricing authority for this type (e.g. a non-launch jar).
+    // The legacy rule rows are shown for reference only; checkout refuses it
+    // with NO_PRICING_AUTHORITY, so the preview never offers a buyable price.
+    matched = false;
+    pricingMessage = "This product is not available for online pricing yet.";
     priceBreaks = rules
       .filter((priceRule) => {
         const materialOk = String(priceRule.material || "").toLowerCase() === selectedMaterial.toLowerCase();
@@ -484,7 +489,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         maxQty: priceRule.maxQty == null ? null : Number(priceRule.maxQty),
         priceEach: money(priceRule.priceEach),
       }));
-    priceEach = money(rule?.priceEach ?? 0);
+    priceEach = 0;
   }
 
   const orderTotal = money(priceEach * quantity);

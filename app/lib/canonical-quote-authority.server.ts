@@ -61,6 +61,8 @@ export const CANONICAL_SUPPORTED_FAMILIES: CanonicalFamily[] = [
   "stickers-labels",
   "sticker-bags",
   "stock-bags",
+  // 2026-11-11: Split Bag — same canonical bag adapter (owner $0.25 blank).
+  "split-bags",
   "banners",
   // 2D-4D1 PROMOTED. Every ACTIVE jar profile is now fully costed: verified
   // blank price, artboard geometry, a cutline derived by the GSO -0.0625in

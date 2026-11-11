@@ -7,14 +7,16 @@ import {
 import db from "../db.server";
 import { createProductionJobFromSource, unverifiedConfiguratorLinesOf } from "../lib/production-job-source.server";
 import { createAdminGraphql } from "../lib/personalization-assets.server";
+import { adminDraftOrderLookup, unverifiedQuotePaymentQueueItem, verifyQuotePaymentOrder, type DraftOrderLookup } from "../lib/quote-payment-verification.server";
 import { resolveWithBoundedRetry } from "../lib/personalization-checkout.server";
 import type { PersonalizationProductionResolver } from "../lib/personalization-production.server";
 
 // 15D.1: configurator-order job creation moved VERBATIM into the central
 // service (app/lib/production-job-source.server.ts) — field-for-field parity
-// is pinned by tests/production-job-source.test.ts. The quote-payment branch
-// below is UNCHANGED (deposit/balance/full classification, note-marker
-// idempotency, forward-only status moves).
+// is pinned by tests/production-job-source.test.ts. Quote payments: note-marker
+// idempotency and forward-only status moves are unchanged; since 2026-11-11 the
+// deposit/balance/full type comes from the VERIFIED draft-order link
+// (quote-payment-verification.server.ts), never from note text or tags.
 
 function clean(value: any) {
   return String(value ?? "").trim();
@@ -24,59 +26,9 @@ function orderName(order: any) {
   return clean(order.name) || clean(order.order_number) || clean(order.id) || "Shopify Order";
 }
 
-function getLineProperty(line: any, name: string) {
-  const wanted = name.toLowerCase();
-
-  const properties = Array.isArray(line.properties) ? line.properties : [];
-  for (const prop of properties) {
-    const key = clean(prop.name || prop.key).toLowerCase();
-    if (key === wanted) return clean(prop.value);
-  }
-
-  const customAttributes = Array.isArray(line.customAttributes) ? line.customAttributes : [];
-  for (const attr of customAttributes) {
-    const key = clean(attr.name || attr.key).toLowerCase();
-    if (key === wanted) return clean(attr.value);
-  }
-
-  return "";
-}
-
 const DEPOSIT_PAID_MARKER = "[GSO] Deposit invoice paid";
 const BALANCE_PAID_MARKER = "[GSO] Balance invoice paid";
 const FULL_PAID_MARKER = "[GSO] Full payment invoice paid";
-
-function orderTags(order: any) {
-  const raw = order?.tags;
-  const parts = Array.isArray(raw) ? raw.map((tag: any) => clean(tag)) : clean(raw).split(",");
-  return parts.map((tag: string) => tag.trim().toLowerCase()).filter(Boolean);
-}
-
-function classifyQuotePaymentOrder(order: any, note: string) {
-  const tags = orderTags(order);
-  const noteText = note.toLowerCase();
-  const lines = Array.isArray(order?.line_items) ? order.line_items : [];
-
-  const isDeposit =
-    tags.includes("deposit") ||
-    noteText.includes("deposit created from gso quote builder") ||
-    lines.some((line: any) => getLineProperty(line, "Deposit Percent") || clean(line.title).startsWith("Deposit Payment"));
-
-  const isBalance =
-    tags.includes("remaining balance") ||
-    noteText.includes("remaining balance created from gso quote builder") ||
-    lines.some((line: any) => getLineProperty(line, "Deposit Paid") || clean(line.title).startsWith("Remaining Balance"));
-
-  if (isDeposit && isBalance) return "unknown";
-  if (isDeposit) return "deposit";
-  if (isBalance) return "balance";
-
-  // "created from gso quote builder" also appears inside the deposit/balance notes,
-  // so the full-payment check must run after both of them.
-  if (tags.includes("full payment") || noteText.includes("created from gso quote builder")) return "full";
-
-  return "unknown";
-}
 
 function appendQuoteNote(notes: string | null | undefined, line: string) {
   const existing = String(notes || "");
@@ -84,11 +36,29 @@ function appendQuoteNote(notes: string | null | undefined, line: string) {
   return existing ? `${existing}\n${line}` : line;
 }
 
-async function applyQuotePaymentFromOrder(shop: string, quoteId: string, order: any, note: string) {
+async function applyQuotePaymentFromOrder(
+  deps: { db: any; lookupDraftOrder: DraftOrderLookup | null },
+  shop: string,
+  quoteId: string,
+  order: any,
+) {
+  const db = deps.db;
   const quote = await db.quote.findFirst({ where: { id: quoteId, shop } });
   if (!quote) return "OK no matching quote for Quote ID";
 
-  const paymentType = classifyQuotePaymentOrder(order, note);
+  // 2026-11-11: the note only NAMES the quote. The payment type comes from the
+  // quote's own stored draft order that Shopify confirms produced this order,
+  // with a matching subtotal. Unverifiable = no status change + review queue.
+  const verification = await verifyQuotePaymentOrder({ quote, order, lookupDraftOrder: deps.lookupDraftOrder });
+  if (!verification.ok) {
+    try {
+      await db.agentReviewQueueItem.create({ data: unverifiedQuotePaymentQueueItem(shop, order, quote.id, verification.reason) as any });
+    } catch (error) {
+      console.error("orders_paid unverified quote-payment trail failed", error);
+    }
+    return `OK quote payment NOT verified (${verification.reason}); status unchanged, held for review`;
+  }
+  const paymentType = verification.paymentType;
   const orderLabel = orderName(order);
   const existingNotes = String(quote.notes || "");
   const depositAlreadyPaid =
@@ -165,7 +135,7 @@ async function buildPersonalizationResolver(shop: string): Promise<Personalizati
 }
 
 export const action = async ({ request }: { request: Request }) => {
-  const { payload, shop } = await authenticate.webhook(request);
+  const { payload, shop, admin } = await authenticate.webhook(request);
 
   const order = payload as any;
   const note = String(order.note || "");
@@ -174,7 +144,7 @@ export const action = async ({ request }: { request: Request }) => {
   const quoteId = quoteIdMatch?.[1];
 
   if (quoteId) {
-    const message = await applyQuotePaymentFromOrder(shop, quoteId, order, note);
+    const message = await applyQuotePaymentFromOrder({ db, lookupDraftOrder: adminDraftOrderLookup(admin) }, shop, quoteId, order);
     return new Response(message, { status: 200 });
   }
 

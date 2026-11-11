@@ -128,7 +128,9 @@ describe("owner route lock (tests 1-5)", () => {
     // and the nav hides the link for staff
     const nav = src("app/routes/app.tsx");
     expect(nav).toContain('{isOwner ? <s-link href="/app/erp/cost-calculator">Sales · Cost Calculator</s-link> : null}');
-    expect(nav).toContain("isOwner: resolveOwnerAuthorization(auth).isOwner,");
+    // 2026-11-11: resolved once, then used for the nav AND the owner-access diagnostic.
+    expect(nav).toContain("const owner = resolveOwnerAuthorization(auth);");
+    expect(nav).toContain("isOwner: owner.isOwner,");
   }, 60_000); // first import of the large route module is slow
 
   it("3. no owner configured -> fails closed, even for a verified staff identity", async () => {

@@ -13,9 +13,8 @@
 // (VendorProduct tiers) until the owner reviews them. Historical snapshots
 // are never recomputed. Freight stays the $85 UNVERIFIED assumption.
 
-import { DTP_COMPARABLE_CONFIG, SPEKTRA_FREIGHT_ASSUMPTION, dtpSizeForVendorSku } from "./dtp-catalog";
+import { DTP_COMPARABLE_CONFIG, dtpSizeForVendorSku } from "./dtp-catalog";
 import { OWNER_STANDARDS } from "./owner-standards";
-import { SPEKTRA_FREIGHT_PER_PO } from "./product-driven-costing.server";
 import {
   SPEKTRA_COST_BOOK_VERSION,
   SPEKTRA_OBSERVED_ROWS,
@@ -51,7 +50,7 @@ export type DtpQuoteCost = {
   extraSkuCost: number;
   artCost: number;
   freight: number;
-  freightStatus: "UNVERIFIED";
+  freightStatus: "ENTERED" | "FREIGHT_NOT_VERIFIED";
   landedCost: number;
   /** True when the quote must be BLOCKED (no usable vendor cost). */
   missing: boolean;
@@ -102,9 +101,10 @@ export function resolveDtpQuoteCost(input: {
   const quantity = Math.max(0, Math.floor(Number(input.quantity) || 0));
   const skuCount = Math.max(1, Math.floor(Number(input.designs) || 1));
   const artCost = OWNER_STANDARDS.artSetupPerDesign.value * skuCount;
-  const freight = input.freightPerOrder ?? SPEKTRA_FREIGHT_PER_PO;
+  // 2026-11-11: never the unverified $85 — only freight the caller actually entered.
+  const freight = Math.max(0, Number(input.freightPerOrder) || 0);
   const catalog = dtpSizeForVendorSku(input.vendorSku);
-  const base = { version: DTP_QUOTE_COST_AUTHORITY_VERSION, skuCount, quantity, artCost, freight, freightStatus: SPEKTRA_FREIGHT_ASSUMPTION.status };
+  const base = { version: DTP_QUOTE_COST_AUTHORITY_VERSION, skuCount, quantity, artCost, freight, freightStatus: freight > 0 ? ("ENTERED" as const) : ("FREIGHT_NOT_VERIFIED" as const) };
 
   // 2026-10-07: a LEGACY size with no current catalog match (5x4x2) is not
   // quoted automatically any more — MANUAL / VENDOR REVIEW REQUIRED. The

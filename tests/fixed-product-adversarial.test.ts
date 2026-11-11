@@ -42,7 +42,7 @@ const blocked = (q: string, reason?: string) => {
   if (reason) expect(r.reasons, q).toContain(reason);
   return r;
 };
-const GOOD = "pfamily=premium-jars&pqty=100&pjar=miron/100ml_wide&pjarside=1&pjarlid=1&pcmykcoverage=40";
+const GOOD = "pfamily=premium-jars&pjarmat=matte&pqty=100&pjar=miron/100ml_wide&pjarside=1&pjarlid=1&pcmykcoverage=40";
 
 describe("fixed-product adversarial cases", () => {
   it("sanity: the good job is not blocked", () => {
@@ -52,29 +52,29 @@ describe("fixed-product adversarial cases", () => {
   });
 
   it("missing product key", () => {
-    blocked("pfamily=premium-jars&pqty=100&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
+    blocked("pfamily=premium-jars&pjarmat=matte&pqty=100&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
   });
 
   it("unknown jar size", () => {
-    blocked("pfamily=premium-jars&pqty=100&pjar=miron/500ml&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
+    blocked("pfamily=premium-jars&pjarmat=matte&pqty=100&pjar=miron/500ml&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
   });
 
   it("placeholder 5oz jar is not costable and not in the spec list", () => {
-    blocked("pfamily=standard-jars&pqty=100&pjar=standard/5oz&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
+    blocked("pfamily=standard-jars&pjarmat=matte&pqty=100&pjar=standard/5oz&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
     expect(listProductSpecs().some((s) => /5oz/.test(s.productKey))).toBe(false);
     expect(getProductProductionSpec("standard-jars", "standard/5oz")).toBeNull();
   });
 
   it("a Chiron size GSO does not offer (50ml) is refused — no vendor work was added", () => {
-    blocked("pfamily=premium-jars&pqty=100&pjar=chiron/50ml&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
+    blocked("pfamily=premium-jars&pjarmat=matte&pqty=100&pjar=chiron/50ml&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
   });
 
   it("jar quoted under the wrong family", () => {
-    blocked("pfamily=standard-jars&pqty=100&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
+    blocked("pfamily=standard-jars&pjarmat=matte&pqty=100&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.familyUnsupported);
   });
 
   it("no label selected (missing dims = nothing to print)", () => {
-    blocked("pfamily=premium-jars&pqty=100&pjar=miron/100ml_wide&pcmykcoverage=40", CANONICAL_REASONS.noPrintedComponent);
+    blocked("pfamily=premium-jars&pjarmat=matte&pqty=100&pjar=miron/100ml_wide&pcmykcoverage=40", CANONICAL_REASONS.noPrintedComponent);
   });
 
   it("legacy unsupported label rows (neck/bottom) block rather than drop", () => {
@@ -82,9 +82,9 @@ describe("fixed-product adversarial cases", () => {
   });
 
   it("zero and negative quantity", () => {
-    blocked("pfamily=premium-jars&pqty=0&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.quantityRequired);
-    blocked("pfamily=premium-jars&pqty=-5&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.quantityRequired);
-    blocked("pfamily=premium-jars&pqty=abc&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.quantityRequired);
+    blocked("pfamily=premium-jars&pjarmat=matte&pqty=0&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.quantityRequired);
+    blocked("pfamily=premium-jars&pjarmat=matte&pqty=-5&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.quantityRequired);
+    blocked("pfamily=premium-jars&pjarmat=matte&pqty=abc&pjar=miron/100ml_wide&pjarside=1&pcmykcoverage=40", CANONICAL_REASONS.quantityRequired);
   });
 
   it("partial override", () => {
@@ -107,11 +107,11 @@ describe("fixed-product adversarial cases", () => {
   });
 
   it("override for a piece not in the label set", () => {
-    blocked("pfamily=premium-jars&pqty=100&pjar=miron/100ml_wide&pjarlid=1&pcmykcoverage=40&pjarcustom=1&pjarsidew=7&pjarsideh=3", CANONICAL_REASONS.customSizeIncomplete);
+    blocked("pfamily=premium-jars&pjarmat=matte&pqty=100&pjar=miron/100ml_wide&pjarlid=1&pcmykcoverage=40&pjarcustom=1&pjarsidew=7&pjarsideh=3", CANONICAL_REASONS.customSizeIncomplete);
   });
 
   it("multi-piece job missing a piece's timing (3oz tamper) blocks on the application standard", () => {
-    blocked("pfamily=standard-jars&pqty=100&pjar=standard/3oz&pjarvariant=black_white&pjarside=1&pjarlid=1&pjartamper=1&pcmykcoverage=40", CANONICAL_REASONS.applicationStandardRequired);
+    blocked("pfamily=standard-jars&pjarmat=matte&pqty=100&pjar=standard/3oz&pjarvariant=black_white&pjarside=1&pjarlid=1&pjartamper=1&pcmykcoverage=40", CANONICAL_REASONS.applicationStandardRequired);
   });
 
   it("Mimaki + white is refused by routing (CMYK-only press)", () => {

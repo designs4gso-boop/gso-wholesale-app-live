@@ -51,7 +51,7 @@ const deps = () => ({
 const codeOf = (file: string) => readFileSync(file, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 const bagJob = (family: "sticker-bags" | "stock-bags", blankUnitCost: number | null = null) => {
   // the UI family is always "sticker-bags"; pstockbag=1 selects the stock bag (canonicalFamilyFromUi)
-  const input = normalizeCanonicalInput(new URLSearchParams(`pfamily=sticker-bags${family === "stock-bags" ? "&pstockbag=1" : ""}&pqty=1000&pbagsides=1&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0`))!;
+  const input = normalizeCanonicalInput(new URLSearchParams(`pfamily=sticker-bags&pbagmat=matte${family === "stock-bags" ? "&pstockbag=1" : ""}&pqty=1000&pbagsides=1&pdesigns=1&pprinter=auto&pwhitelayers=0&pglosslayers=0`))!;
   expect(input.family).toBe(family);
   return computeCanonicalJob(deps(), blankUnitCost == null ? input : { ...input, bags: { ...(input.bags ?? { sides: 1 as any }), blankUnitCost } });
 };
@@ -205,8 +205,9 @@ describe("4x5 blank bag authority (4) Approved Cost Updates carries $0.11 and ca
 
 describe("4x5 blank bag authority (5) everything else is unchanged", () => {
   it("cutline, application and setup behaviour are unchanged", () => {
-    expect(BAG_4X5_CUTLINE_IN.widthIn).toBeCloseTo(3.875, 10);
-    expect(BAG_4X5_CUTLINE_IN.heightIn).toBeCloseTo(4.875, 10);
+    // 2026-11-11 OWNER DECISION: the 4x5 bag cutline is the documented 3.79 x 4.81 in.
+    expect(BAG_4X5_CUTLINE_IN.widthIn).toBeCloseTo(3.79, 10);
+    expect(BAG_4X5_CUTLINE_IN.heightIn).toBeCloseTo(4.81, 10);
     expect(BAG_APPLICATION_SECONDS_PER_SIDE).toBe(10);
     expect(BAG_APPLICATION_LABOR_RATE_PER_HOUR).toBe(20);
     const r = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 2 });

@@ -75,9 +75,9 @@ const view = (qs: string) => {
   return canonicalViewOf(assembleCanonicalJob(input!, CAL));
 };
 
-const STICKER_BAG_QS = (sides: 1 | 2) => `pfamily=sticker-bags&pqty=1000&pbagsides=${sides}&pdesigns=1&pprinter=auto`;
-const STOCK_BAG_QS = (qty: number) => `pfamily=sticker-bags&pstockbag=1&pqty=${qty}&pbagsides=2&pdesigns=1&pprinter=auto`;
-const JAR_QS = (family: string, jar: string, extra = "") => `pfamily=${family}&pqty=500&pjar=${jar}&pjarside=1&pjarlid=1&pcmykcoverage=40${extra}`;
+const STICKER_BAG_QS = (sides: 1 | 2) => `pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=${sides}&pdesigns=1&pprinter=auto`;
+const STOCK_BAG_QS = (qty: number) => `pfamily=sticker-bags&pbagmat=matte&pstockbag=1&pqty=${qty}&pbagsides=2&pdesigns=1&pprinter=auto`;
+const JAR_QS = (family: string, jar: string, extra = "") => `pfamily=${family}&pjarmat=matte&pqty=500&pjar=${jar}&pjarside=1&pjarlid=1&pcmykcoverage=40${extra}`;
 
 /** A read-only fake shop DB: one Poseidon matte roll, one holographic roll, the 4x5 blank bag, a Roland. */
 function fakeShopDb() {
@@ -232,7 +232,7 @@ describe("C. Stock Bag quotes use the storefront price authority (6-8)", () => {
   });
 
   it("Stock Bags remain their own canonical family with the 50-bag MOQ; the selector shows them after Sticker Bags", () => {
-    expect(calculatorFamilyParams(STOCK_BAG_CALCULATOR_OPTION.value)).toEqual({ pfamily: "sticker-bags", pstockbag: "1" });
+    expect(calculatorFamilyParams(STOCK_BAG_CALCULATOR_OPTION.value)).toEqual({ pfamily: "sticker-bags", pstockbag: "1", psplitbag: null });
     expect(calculatorFamilyChoice("sticker-bags", "1")).toBe("stock-bags");
     expect(calculatorFamilyChoice("sticker-bags", null)).toBe("sticker-bags");
     expect(view(STOCK_BAG_QS(49)).blockers.join(" ")).toContain("STOCK_BAG_BELOW_MOQ");
@@ -409,7 +409,7 @@ describe("owner UX (earlier review, kept)", () => {
   });
 
   it("the server still rejects incomplete input, and missing cost is never $0", () => {
-    const blocked = view("pfamily=sticker-bags&pbagsides=1&pdesigns=1");
+    const blocked = view("pfamily=sticker-bags&pbagmat=matte&pbagsides=1&pdesigns=1");
     expect(blocked.status).toBe("DRAFT_ONLY");
     expect(blocked.unitCost).toBeNull();
     const result = resolveOwnerResult({
