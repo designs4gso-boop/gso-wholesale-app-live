@@ -2,6 +2,33 @@
 
 Updated: 2026-10-08 (October 2026 release LIVE on Render; hotfixes PR #2 / #3 / #4 merged; 4x5 blank bag = $0.11 owner authority)
 
+## Final operational readiness closeout (2026-11-11, branch `hotfix/mimaki-white-owner-rules-2026-11-11`, from live `387f8d8`)
+
+Commits: `ac6a4fa` jar production geometry · `bef793d` staff roles + financial gates · `3af002f` production fulfillment / accountability · `f50c4fd` atomic inventory + purchasing approval · `fb62d85` storefront hold / deposits / quote snapshots. No schema change in any of them; nothing deployed.
+
+**Built (no migration):**
+- **Roles** (`staff-roles.server.ts`): identity = verified Shopify staff user ID; `GSO_STAFF_ROLES="<id>:manager|sales|print_operator|bagger,..."`; `GSO_MANAGER_AUTHORIZED_USER_IDS` = managers the owner authorizes for financials / purchasing approval / exception pricing. Owner (77055393857 via `GSO_OWNER_SHOPIFY_USER_IDS`) keeps everything; unassigned staff get nothing.
+- **Financial gates**: 19 cost/pricing pages (loader + action) and production financials are owner / authorized-manager only, fail closed. Wholesale-discount creation and cart-transform activation are owner only.
+- **Production**: Completed only after Shipped / Picked Up; Shipped / Picked Up only via a shipment record (carrier, tracking, packages, ship date, entered actual cost) or pickup record (time, who), both QC-PASS gated; owner reprint categories validated server-side; QC / reprint / shipment need the role permission; manual printer choice needs selectPrinter.
+- **Inventory / purchasing**: atomic, never-negative, replay-safe stock movements (deduction, reversal, adjustment, receipt); staff create PRs, owner / authorized manager orders, re-prices or cancels; nothing auto-orders.
+- **Storefront / quotes**: raw-variant hold fails closed (503 + Shopify retry, never a job); deposit 50% standard, other % owner only (1-99%); quote snapshots locked from deposit_paid onward; DTP quoting never uses $85.
+
+**Employee rollout — exact setup steps (owner):**
+1. Create a separate Shopify staff account for each employee (Settings → Users), with access to the GSO app.
+2. Have each employee open the ERP once; any owner-only page they hit shows "Your Shopify staff user ID is …". Collect the IDs.
+3. On Render set `GSO_STAFF_ROLES` (e.g. `123:print_operator,456:bagger,789:sales,321:manager`) and, only for managers who should see financials / approve purchasing, `GSO_MANAGER_AUTHORIZED_USER_IDS`.
+4. Keep `GSO_OWNER_SHOPIFY_USER_IDS` = owner IDs; make sure `GSO_OWNER_ENFORCEMENT` is NOT `temporary_all_staff` before employees log in (that switch makes everyone owner).
+5. Remaining redaction before Sales uses Quotes/Purchase Requests broadly: the Purchase Requests page still shows material unit costs to any assigned role; Quotes already redact cost for non-owners.
+
+**Owner decisions recorded / not built (TBD or needs a migration):**
+- 3oz / 4oz tamper band: band size recorded, but the owner jar standard ($20/hr, min 100 jars/hr) is a per-jar figure and the canonical engine uses per-size per-label seconds from the owner's label list, which has no 3oz/4oz lid-side zone → the BAND stays blocked (`MISSING_APPLICATION_STANDARD`); Side / Lid on 3oz / 4oz quote normally. Needed: owner-measured seconds per band application on 3oz and 4oz.
+- 50ml geometry: pending owner samples (warning stays).
+- Banner finishing quote-only: needs hem seconds/ft + hem tape $/ft; seconds per grommet + grommet $ each; pole pocket seconds/ft + material; tube cost + banners per tube; confirmation double-sided is supported + its second-pass cost.
+- Mimaki White calibration pending (no additional safe history: C:\MijCtrl logs ~1 day, no job/coverage data; Profile.db encrypted). Mimaki CMYK profile identity: Option C unchanged.
+- Needs a schema migration (stage via prisma/migrations-pending): inventory reservations (reserve at scheduling / consume at completion), piece-level good / waste quantities, structured QC / reprint tables, shipment columns, purchasing approver fields, quote rush flag / requested due date, stored cost variance, notification preferences, promised-date / machine assignment.
+- Rush pricing rate/rules not approved (job priority "rush" exists; no fee). Calibration variance: calibration page recommendations use the 10% tolerance; no automatic owner alert or sample-size rule yet. Dashboard: now owner-gated, not configurable. Notifications / email / SMS: no provider; outbox forbids customer sends. QuickBooks: not connected; CSV exports only (purchase, actual-cost, cost-verification, shopify-cost-audit).
+- Manual Shopify: deactivate the automatic "Wholesale Pricing" discount (Discounts → Wholesale Pricing → Deactivate); remove / hide raw Stock Bag variants and native Add to Cart / Quick Add on configurator-only templates; never activate the cart transform.
+
 ## 2026-10-08 — RELEASE LIVE + 4X5 BLANK BAG AUTHORITY RESOLVED
 Production `main` = October 2026 release (PR #1 `a17efc3`) + Machines edit hotfix (PR #2 `a5f6798`) + Cost Health cleanup (PR #3 `29755df`) + 4x5 blank authority (PR #4). OWNER DECISION 2026-10-08: the 4x5 blank bag true base cost is **$0.11 each regardless of colour**; the 2026-08-24 "$0.09 before inbound freight" rule is SUPERSEDED. Code constant, calculator preset, Approved Cost Updates (`bag-4x5`), Cost Health / Cost Verification copy and the production Material + VendorProduct rows all carry $0.11; no generic freight uplift. Machine recovery stays $5/hr (both printer records aligned by the owner). Cost Health: 0 critical. Still pending owner: `shopify app deploy`, "Save settings & sync functions", Render `GSO_OPS_REPOSITORY=prisma`, live paid-order smoke. The 2026-10-07 section below is historical.
 
