@@ -13,6 +13,21 @@ import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { groupPurchaseRequests, isPastDate } from "../lib/purchase-request-groups";
+import { applyStockMovement } from "../lib/inventory-stock.server";
+import { permissionDeniedResponse, resolveStaffAccess, type StaffPermission } from "../lib/staff-roles.server";
+
+/** 2026-11-11 owner rule: staff create purchase requests; only the owner / authorized managers approve purchasing. */
+const PURCHASE_INTENT_PERMISSION: Record<string, StaffPermission> = {
+  createFromMaterial: "createPurchaseRequest",
+  createManual: "createPurchaseRequest",
+  markFollowedUp: "createPurchaseRequest",
+  receiveRequest: "createPurchaseRequest",
+  updateRequest: "createPurchaseRequest", // + approvePurchasing when it orders or changes cost (checked below)
+  applyBestCost: "approvePurchasing",
+  markOrdered: "approvePurchasing",
+  markSent: "approvePurchasing",
+  cancelRequest: "approvePurchasing",
+};
 
 const statusOptions = [
   { label: "Draft", value: "draft" },
@@ -192,36 +207,17 @@ async function getVendor(shop: string, vendorId: string | null | undefined) {
   });
 }
 
-async function createInventoryMovementForReceipt(shop: string, purchaseRequest: any, receiveQty: number, notes: string) {
+async function createInventoryMovementForReceipt(tx: any, shop: string, purchaseRequest: any, receiveQty: number, notes: string) {
   if (!purchaseRequest.materialId || receiveQty <= 0) return;
 
-  const material = await db.material.findFirst({ where: { shop, id: purchaseRequest.materialId } });
+  const material = await tx.material.findFirst({ where: { shop, id: purchaseRequest.materialId } });
   if (!material) return;
 
-  const beforeQty = num(material.stockOnHand);
-  const afterQty = beforeQty + receiveQty;
   const costPerUnit = num(purchaseRequest.unitCost) || material.calculatedUnitCost || material.costPerUnit || 0;
-
-  await db.material.update({
-    where: { id: material.id },
-    data: { stockOnHand: afterQty },
-  });
-
-  await db.materialInventoryMovement.create({
-    data: {
-      shop,
-      materialId: material.id,
-      movementType: "purchase",
-      quantity: receiveQty,
-      unit: purchaseRequest.unit || material.unit || material.baseUnit || "each",
-      beforeQty,
-      afterQty,
-      costPerUnit,
-      costImpact: receiveQty * costPerUnit,
-      source: "purchase_request",
-      reference: purchaseRequest.requestNumber,
-      notes: notes || `Received from purchase request ${purchaseRequest.requestNumber}.`,
-    },
+  // 2026-11-11: atomic increment + movement (inventory-stock.server.ts).
+  await applyStockMovement(tx, {
+    shop, materialId: material.id, delta: receiveQty, movementType: "purchase", unit: purchaseRequest.unit || material.unit || material.baseUnit || "each", costPerUnit,
+    source: "purchase_request", reference: purchaseRequest.requestNumber, notes: notes || `Received from purchase request ${purchaseRequest.requestNumber}.`,
   });
 }
 
@@ -272,10 +268,14 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
+  const staffAccess = resolveStaffAccess(auth);
+  const needed = PURCHASE_INTENT_PERMISSION[intent];
+  if (needed && !staffAccess.can(needed)) return permissionDeniedResponse(staffAccess, needed);
 
   if (intent === "createFromMaterial") {
     const materialId = String(formData.get("materialId") || "");
@@ -387,6 +387,9 @@ export async function action({ request }: { request: Request }) {
     const orderedQty = num(formData.get("orderedQty"));
     const unitCost = num(formData.get("unitCost"));
     const status = String(formData.get("status") || purchaseRequest.status);
+    // Ordering, re-pricing or cancelling is a purchasing APPROVAL (owner / authorized manager).
+    const approvalNeeded = (status !== purchaseRequest.status && ["ordered", "cancelled"].includes(status)) || (formData.has("unitCost") && unitCost !== num(purchaseRequest.unitCost));
+    if (approvalNeeded && !staffAccess.can("approvePurchasing")) return permissionDeniedResponse(staffAccess, "approvePurchasing");
     const neededByRaw = String(formData.get("neededBy") || "");
     const selectedCostBook = await getCostBookItem(shop, String(formData.get("costBookItemId") || ""));
     const selectedVendor = selectedCostBook?.vendorId ? await getVendor(shop, selectedCostBook.vendorId) : await getVendor(shop, String(formData.get("vendorId") || ""));
@@ -499,16 +502,26 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
     if (!purchaseRequest) return Response.json({ ok: false, message: "Purchase request not found." }, { status: 404 });
     if (receiveQty <= 0) return Response.json({ ok: false, message: "Receive quantity must be greater than zero." }, { status: 400 });
 
+    if (!["ordered", "partially_received"].includes(String(purchaseRequest.status))) {
+      return Response.json({ ok: false, message: `Only ordered requests can be received (this one is ${purchaseRequest.status}).` }, { status: 400 });
+    }
+
     const receivedQty = num(purchaseRequest.receivedQty) + receiveQty;
     const orderedQty = num(purchaseRequest.orderedQty) || num(purchaseRequest.requestedQty);
     const status = receivedQty >= orderedQty ? "received" : "partially_received";
 
-    await db.purchaseRequest.update({
-      where: { id: purchaseRequest.id },
-      data: { receivedQty, status, receivedAt: status === "received" ? new Date() : purchaseRequest.receivedAt },
+    // 2026-11-11: receipt + stock in ONE transaction; the conditional update on the
+    // previously read receivedQty makes a replayed / double submit a no-op.
+    const applied = await db.$transaction(async (tx: any) => {
+      const updated = await tx.purchaseRequest.updateMany({
+        where: { shop, id: purchaseRequest.id, receivedQty: purchaseRequest.receivedQty, status: purchaseRequest.status },
+        data: { receivedQty, status, receivedAt: status === "received" ? new Date() : purchaseRequest.receivedAt },
+      });
+      if (!updated.count) return false;
+      await createInventoryMovementForReceipt(tx, shop, purchaseRequest, receiveQty, String(formData.get("notes") || ""));
+      return true;
     });
-
-    await createInventoryMovementForReceipt(shop, purchaseRequest, receiveQty, String(formData.get("notes") || ""));
+    if (!applied) return Response.json({ ok: false, message: "This receipt was already recorded (or the request changed) — refresh and try again." }, { status: 409 });
 
     return Response.json({ ok: true, message: `${qty(receiveQty)} ${purchaseRequest.unit} received.` });
   }

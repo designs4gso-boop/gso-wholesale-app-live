@@ -36,6 +36,7 @@ import crypto from "node:crypto";
 import { PRODUCTION_STATUS_OPTIONS, isStaffProductionStatus } from "../lib/production-status-vocabulary";
 import { REPRINT_REASONS, fulfillmentQcGuardApplies, isReprintReason, parsePickupInput, parseShipmentInput, reprintReasonLabel, shipmentSummary, statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
 import { permissionDeniedResponse, resolveStaffAccess, type StaffPermission } from "../lib/staff-roles.server";
+import { applyStockMovement } from "../lib/inventory-stock.server";
 
 // Hardening (2026-10-04): the staff vocabulary lives in a client-safe module so
 // the change-status action can validate against the SAME list the UI offers.
@@ -1084,40 +1085,28 @@ Source ref: ${sourceRef}` : ""}`,
     const shouldDeductInventory = String(formData.get("deductInventory") || "") === "on";
     const deductionQty = Number(formData.get("deductQty") || 0) || pulledQty || (usedQty + wasteQty + reprintQty) || usedQty || 0;
 
+    let deductionMessage = "";
     if (material && shouldDeductInventory && deductionQty > 0) {
-      const beforeQty = Number(material.stockOnHand || 0);
-      const afterQty = beforeQty - deductionQty;
-      await db.material.update({
-        where: { id: material.id },
-        data: { stockOnHand: afterQty },
+      // 2026-11-11: one atomic, never-negative deduction + movement + usage stamp.
+      const deducted = await db.$transaction(async (tx: any) => {
+        const moved = await applyStockMovement(tx, {
+          shop, materialId: material.id, delta: -deductionQty, movementType: "production_deduction", unit, costPerUnit,
+          source: "production", reference: `Job ${jobId}`, notes: `Deducted from stock when material usage was logged for ${materialName}.`,
+          jobId, materialUsageId: usage.id,
+        });
+        if (moved.ok) await tx.productionMaterialUsage.update({ where: { id: usage.id }, data: { stockDeductedQty: deductionQty, stockDeductedAt: new Date() } });
+        return moved;
       });
-      await db.materialInventoryMovement.create({
-        data: {
-          shop,
-          materialId: material.id,
-          jobId,
-          materialUsageId: usage.id,
-          movementType: "production_deduction",
-          quantity: -deductionQty,
-          unit,
-          beforeQty,
-          afterQty,
-          costPerUnit,
-          costImpact: deductionQty * costPerUnit,
-          source: "production",
-          reference: `Job ${jobId}`,
-          notes: `Deducted from stock when material usage was logged for ${materialName}.`,
-        },
-      });
-      await db.productionMaterialUsage.update({
-        where: { id: usage.id },
-        data: { stockDeductedQty: deductionQty, stockDeductedAt: new Date() },
-      });
-      await createEvent(shop, jobId, "inventory_deducted", `${deductionQty} ${unit} deducted from ${materialName}. Stock ${beforeQty.toFixed(2)} → ${afterQty.toFixed(2)}.`);
+      if (deducted.ok) {
+        await createEvent(shop, jobId, "inventory_deducted", `${deductionQty} ${unit} deducted from ${materialName}. Stock ${deducted.beforeQty.toFixed(2)} → ${deducted.afterQty.toFixed(2)}.`);
+        deductionMessage = " and inventory deducted";
+      } else {
+        deductionMessage = `; inventory NOT deducted — ${deducted.message}`;
+      }
     }
 
     await createEvent(shop, jobId, "material_usage_added", `${materialName} added. Used ${usedQty || pulledQty || estimatedQty} ${unit}. Cost $${money(totalCost)}.`);
-    return Response.json({ ok: true, message: shouldDeductInventory ? "Material usage added and inventory deducted." : "Material usage added." });
+    return Response.json({ ok: true, message: `Material usage added${deductionMessage}.` });
   }
 
   if (intent === "deleteMaterialUsage") {
@@ -1125,36 +1114,26 @@ Source ref: ${sourceRef}` : ""}`,
     const usageId = String(formData.get("usageId") || "");
     const usage = await db.productionMaterialUsage.findFirst({ where: { shop, id: usageId, jobId } });
     if (usage) {
-      const movements = await db.materialInventoryMovement.findMany({ where: { shop, materialUsageId: usage.id } });
-      for (const movement of movements) {
-        const material = await db.material.findFirst({ where: { shop, id: movement.materialId } });
-        if (material && Number(movement.quantity || 0) < 0) {
-          const beforeQty = Number(material.stockOnHand || 0);
+      // 2026-11-11: reversals + usage delete in ONE transaction. The delete is
+      // conditional, so a replayed request restores nothing a second time.
+      const restored = await db.$transaction(async (tx: any) => {
+        const removed = await tx.productionMaterialUsage.deleteMany({ where: { shop, id: usage.id, jobId } });
+        if (!removed.count) return [] as string[];
+        const notes: string[] = [];
+        const movements = await tx.materialInventoryMovement.findMany({ where: { shop, materialUsageId: usage.id } });
+        const alreadyReversed = new Set(movements.filter((m: any) => m.movementType === "reversal").map((m: any) => String(m.reference || "")));
+        for (const movement of movements) {
+          if (Number(movement.quantity || 0) >= 0 || alreadyReversed.has(`Reversal for ${movement.id}`)) continue;
           const restoreQty = Math.abs(Number(movement.quantity || 0));
-          const afterQty = beforeQty + restoreQty;
-          await db.material.update({ where: { id: material.id }, data: { stockOnHand: afterQty } });
-          await db.materialInventoryMovement.create({
-            data: {
-              shop,
-              materialId: material.id,
-              jobId,
-              materialUsageId: usage.id,
-              movementType: "reversal",
-              quantity: restoreQty,
-              unit: movement.unit,
-              beforeQty,
-              afterQty,
-              costPerUnit: movement.costPerUnit,
-              costImpact: -Number(movement.costImpact || 0),
-              source: "production",
-              reference: `Reversal for ${movement.id}`,
-              notes: `Restored stock because material usage was removed.`,
-            },
+          const moved = await applyStockMovement(tx, {
+            shop, materialId: movement.materialId, delta: restoreQty, movementType: "reversal", unit: movement.unit || "each", costPerUnit: Number(movement.costPerUnit || 0),
+            source: "production", reference: `Reversal for ${movement.id}`, notes: "Restored stock because material usage was removed.", jobId, materialUsageId: null,
           });
-          await createEvent(shop, jobId, "inventory_restored", `${restoreQty} ${movement.unit} restored to ${usage.materialName}. Stock ${beforeQty.toFixed(2)} → ${afterQty.toFixed(2)}.`);
+          if (moved.ok) notes.push(`${restoreQty} ${movement.unit} restored to ${usage.materialName}. Stock ${moved.beforeQty.toFixed(2)} → ${moved.afterQty.toFixed(2)}.`);
         }
-      }
-      await db.productionMaterialUsage.delete({ where: { id: usage.id } });
+        return notes;
+      });
+      for (const note of restored) await createEvent(shop, jobId, "inventory_restored", note);
       await createEvent(shop, jobId, "material_usage_deleted", `${usage.materialName} material usage removed.`);
     }
     return Response.json({ ok: true, message: "Material usage removed." });
@@ -1167,29 +1146,14 @@ Source ref: ${sourceRef}` : ""}`,
     const notes = String(formData.get("adjustNotes") || "") || null;
     const material = await db.material.findFirst({ where: { shop, id: materialId } });
     if (!material || !quantity) return Response.json({ ok: false, message: "Choose a material and enter adjustment qty." }, { status: 400 });
-    const beforeQty = Number(material.stockOnHand || 0);
-    const afterQty = beforeQty + quantity;
     const unit = material.baseUnit || material.unit || "each";
     const costPerUnit = Number(material.calculatedUnitCost || material.costPerUnit || 0);
-    await db.material.update({ where: { id: material.id }, data: { stockOnHand: afterQty } });
-    await db.materialInventoryMovement.create({
-      data: {
-        shop,
-        materialId: material.id,
-        jobId: jobId || null,
-        movementType: "adjustment",
-        quantity,
-        unit,
-        beforeQty,
-        afterQty,
-        costPerUnit,
-        costImpact: Math.abs(quantity) * costPerUnit,
-        source: "manual",
-        reference: jobId || null,
-        notes,
-      },
-    });
-    if (jobId) await createEvent(shop, jobId, "inventory_adjusted", `${material.name} adjusted by ${quantity} ${unit}. Stock ${beforeQty.toFixed(2)} → ${afterQty.toFixed(2)}.`);
+    // 2026-11-11: atomic adjustment; a downward adjustment never takes stock below zero.
+    const moved = await db.$transaction((tx: any) => applyStockMovement(tx, {
+      shop, materialId: material.id, delta: quantity, movementType: "adjustment", unit, costPerUnit, source: "manual", reference: jobId || null, notes, jobId: jobId || null,
+    }));
+    if (!moved.ok) return Response.json({ ok: false, message: moved.message }, { status: 400 });
+    if (jobId) await createEvent(shop, jobId, "inventory_adjusted", `${material.name} adjusted by ${quantity} ${unit}. Stock ${moved.beforeQty.toFixed(2)} → ${moved.afterQty.toFixed(2)}.`);
     return Response.json({ ok: true, message: "Inventory adjusted." });
   }
 
