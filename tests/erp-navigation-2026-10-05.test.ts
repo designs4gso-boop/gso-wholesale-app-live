@@ -34,6 +34,7 @@ const EXPECTED_NAV_HREFS = [
   "/app/erp/vendors",
   "/app/erp/vendor-cost-book",
   "/app#advanced",
+  "/app/erp/owner-readiness", // 2026-11-12: owner-only Staff Access & Readiness
   "/app/erp/setup-wizard",
   "/app/erp/walkthrough",
 ];
@@ -77,9 +78,9 @@ function navLinks(source: string): { href: string; label: string }[] {
 describe("ERP sidebar nav (app/routes/app.tsx)", () => {
   const links = navLinks(navSource);
 
-  it("contains exactly the 25 grouped hrefs in order", () => {
+  it("contains exactly the 26 grouped hrefs in order", () => {
     expect(links.map((l) => l.href)).toEqual(EXPECTED_NAV_HREFS);
-    expect(links).toHaveLength(25);
+    expect(links).toHaveLength(26);
   });
 
   it("does not contain any removed href", () => {
