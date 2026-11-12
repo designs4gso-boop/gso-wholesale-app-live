@@ -869,6 +869,9 @@ export async function action({ request }: { request: Request }) {
     if (!isStaffProductionStatus(status)) return Response.json({ ok: false, message: `Invalid production status "${status}".` }, { status: 400 });
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
     if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
+    // 2026-11-12: a replayed / double-submitted move to the CURRENT status is a no-op
+    // (no second event, no completedAt rewrite).
+    if (status === job.status) return Response.json({ ok: true, message: `Job is already ${labelForStatus(status)}.` });
     // OWNER DECISION 2026-11-11: Completed only after Shipped / Picked Up; those
     // two are set only through the shipment / pickup record.
     const fulfillment = statusChangeFulfillmentVerdict(job.status, status);

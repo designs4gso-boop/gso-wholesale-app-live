@@ -23,6 +23,8 @@ export type ReadinessInputs = {
   bannerFinishingUnverified: string[];
   splitBagPackoutModeled: boolean;
   operationalMigrationActivated: boolean;
+  /** Owner-approved minimum job count for calibration-variance review (null = not set). */
+  calibrationMinSamples: number | null;
 };
 
 export function buildReadinessChecks(i: ReadinessInputs): ReadinessCheck[] {
@@ -55,6 +57,9 @@ export function buildReadinessChecks(i: ReadinessInputs): ReadinessCheck[] {
   if (i.bandSecondsMissingSizes.length) add({ key: "jar-band-labor", kind: "costing", tone: "amber", label: "Jar band application labor", detail: `No owner application time for the band on ${i.bandSecondsMissingSizes.join(", ")} — that option blocks; Side / Lid quote normally.`, ownerAction: `Time the application of ONE band on ${i.bandSecondsMissingSizes.join(" and ")} (seconds).` });
   if (i.bannerFinishingUnverified.length) add({ key: "banner-finishing", kind: "costing", tone: "amber", label: "Banner finishing", detail: `Quote-only until standards exist: ${i.bannerFinishingUnverified.join(", ")}.`, ownerAction: "Provide hem sec/ft + tape $/ft, sec + $ per grommet (and spacing), pole pocket sec/ft + material $/ft, double-sided construction, tube cost + banners/tube." });
   if (!i.splitBagPackoutModeled) add({ key: "split-bag-packout", kind: "costing", tone: "amber", label: "Split Bag packout / freight", detail: "Carton packout and inbound freight are not modelled (never invented).", ownerAction: "Provide the first real Split Bag shipment (cartons, units per carton, freight invoice)." });
+  add(i.calibrationMinSamples != null
+    ? { key: "calibration-review", kind: "costing", tone: "green", label: "Calibration variance review", detail: `Owner review when the mean variance over the last ${i.calibrationMinSamples} jobs reaches 10% (never auto-changed).`, ownerAction: null }
+    : { key: "calibration-review", kind: "costing", tone: "amber", label: "Calibration variance review", detail: "The 10% sustained-variance rule needs an owner-approved minimum job count; until then no automatic review alert is raised (calibrations are never auto-changed).", ownerAction: "Choose the minimum number of jobs and set GSO_CALIBRATION_REVIEW_MIN_SAMPLES on Render." });
   add({ key: "rush", kind: "costing", tone: "amber", label: "Rush pricing", detail: "No rush surcharge or rules are approved; nothing adds a rush fee.", ownerAction: "Approve rush surcharge, turnaround and qualification rules." });
 
   add(i.operationalMigrationActivated

@@ -19,14 +19,14 @@ const READY: ReadinessInputs = {
   ownerIdsConfigured: 1, temporaryAllStaff: false, staffRoleAssignments: 3, authorizedManagers: 1,
   activeConfiguratorProducts: 4, configuratorProductsMissingShopifyIds: 0, mimakiWhiteCalibrationApproved: false,
   jar50mlConfirmed: false, bandSecondsMissingSizes: ["3oz", "4oz"], bannerFinishingUnverified: ["hemmed"], splitBagPackoutModeled: false,
-  operationalMigrationActivated: false,
+  operationalMigrationActivated: false, calibrationMinSamples: null,
 };
 const tone = (inputs: ReadinessInputs, key: string) => buildReadinessChecks(inputs).find((c) => c.key === key)?.tone;
 
 describe("readiness checks", () => {
   it("external / manual items are AMBER, never RED (not code failures)", () => {
     const checks = buildReadinessChecks(READY);
-    for (const key of ["mimaki-white", "jar-50ml", "jar-band-labor", "banner-finishing", "split-bag-packout", "rush", "wholesale-discount", "stock-bag-storefront", "quickbooks", "messaging", "operational-migration"]) {
+    for (const key of ["mimaki-white", "jar-50ml", "jar-band-labor", "banner-finishing", "split-bag-packout", "rush", "wholesale-discount", "stock-bag-storefront", "quickbooks", "messaging", "operational-migration", "calibration-review"]) {
       expect(checks.find((c) => c.key === key)?.tone, key).toBe("amber");
     }
     expect(readinessSummary(checks).red).toBe(0);

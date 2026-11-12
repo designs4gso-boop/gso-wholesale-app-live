@@ -18,6 +18,7 @@ import { jarGeometryAuthorityFor } from "../lib/jar-label-geometry";
 import { JAR_APPLICATION_SECONDS_BY_SIZE } from "../lib/jar-cost-inputs.server";
 import { BANNER_FINISHING_SUPPORT } from "../lib/banner-cost-inputs.server";
 import { CANONICAL_PACKOUT } from "../lib/canonical-calculator-shared";
+import { configuredMinSamples } from "../lib/calibration-monitoring";
 
 export async function loader({ request }: { request: Request }) {
   const auth = await authenticate.admin(request);
@@ -46,6 +47,7 @@ export async function loader({ request }: { request: Request }) {
     bannerFinishingUnverified: Object.entries(BANNER_FINISHING_SUPPORT).filter(([, v]) => !v.verified).map(([k]) => k.toLowerCase().replace(/_/g, " ")),
     splitBagPackoutModeled: CANONICAL_PACKOUT["split-bags"].unitsPerBox != null,
     operationalMigrationActivated: Prisma.dmmf.datamodel.models.some((m) => m.name === "InventoryReservation"),
+    calibrationMinSamples: configuredMinSamples(),
   });
 
   return {
