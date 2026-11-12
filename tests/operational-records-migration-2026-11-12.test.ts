@@ -4,7 +4,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { availableStock, planConsumption, planRelease, planReservation, reservationKey, type ReservationRecord } from "../app/lib/inventory-reservation";
-// @ts-expect-error — plain .mjs activation script (no type declarations)
+// plain .mjs activation script (allowJs resolves it)
 import { MODEL_FIELDS, applyOperationalSchema } from "../prisma/migrations-pending/apply-20261112-operational-schema.mjs";
 
 const SQL = readFileSync("prisma/migrations-pending/20261112090000_add_operational_records/migration.sql", "utf8");

@@ -108,13 +108,14 @@ for (const file of ["app.erp.purchase-requests", "app.erp.reorder-report"]) {
 
 describe("forged purchase-request mutations", () => {
   it("non-approvers cannot order, re-price, apply a cost book, or create a request already 'ordered'", async () => {
-    for (const fields of [
+    const forged: Array<Record<string, string>> = [
       { intent: "markOrdered", id: "pr1" },
       { intent: "applyBestCost", id: "pr1", costBookItemId: "cb1" },
       { intent: "updateRequest", id: "pr1", status: "ordered" },
       { intent: "updateRequest", id: "pr1", unitCost: "0.01" },
       { intent: "updateRequest", id: "pr1", costBookItemId: "cb1" },
-    ]) {
+    ];
+    for (const fields of forged) {
       const r = await act("app.erp.purchase-requests", "1002", fields);
       expect(r.status, JSON.stringify(fields)).toBe(403);
     }
