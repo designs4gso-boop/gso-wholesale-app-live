@@ -51,12 +51,13 @@ describe("PHASE 5/12 — cost and price are visually separate; legacy diagnostic
     expect(calc).toContain("<b style={{ fontSize: 15 }}>RECOMMENDED CUSTOMER PRICE</b>");
     expect(calc).toContain("Customer price is commercial policy; it never changes the true manufacturing cost above.");
   });
-  it("the owner-ladder vs floor conflict is shown as OWNER CONFIRMATION PENDING (amber), never green", () => {
+  it("the owner-approved jar ladder controls; a low realized margin is an amber owner-only note (2026-11-11)", () => {
     expect(calc).toContain("Owner storefront price for this jar at");
-    expect(calc).toContain("OWNER CONFIRMATION PENDING:");
-    expect(calc).toContain("ol.raisedByFloor ? \"#fde68a\" : \"#bbf7d0\"");
+    expect(calc).toContain("PRICE AUTHORITY: Owner-approved jar ladder.");
+    expect(calc).toContain("{JAR_LADDER_LOW_MARGIN_WARNING}");
+    expect(calc).toContain("ol.raisedByFloor || lowMargin ? \"#fde68a\" : \"#bbf7d0\"");
     expect(calc).toContain("pricingBasis");
-    expect(calc).toContain("Owner jar price ladder (16D, approved 2026-08-12) with minimum margin protection");
+    expect(calc).toContain("Owner-approved jar ladder (16D, approved 2026-08-12) controls the customer price");
   });
   it("jar pricing wiring exists in BOTH the loader and the save path (parity)", () => {
     expect(calc.split("ownerLadder: jarLadderFor(qty)").length - 1).toBe(1);

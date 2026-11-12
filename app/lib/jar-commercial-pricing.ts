@@ -20,12 +20,19 @@
 // A quantity-break ENVELOPE then guarantees a customer never pays more in
 // total than they would by ordering the next price break.
 //
-// WHAT THIS DOES NOT DO. It does not lower any margin floor: where the owner
-// ladder sits below the floor (today: every Miron tier — e.g. 100ml x128
-// ladder $4.50 = 25 % margin vs the 45 % Miron family minimum = $6.11), the
-// floor controls and the gap is surfaced for the owner to decide. Chiron has
-// no owner ladder and keeps its curve (with the envelope). See
-// docs/GSO_JAR_PRICING_AUTHORITY_AUDIT.md.
+// OWNER DECISION 2026-11-11 (previously approved): the owner ladder price is
+// AUTHORITATIVE. The generic family margin floor (Miron 45% / Chiron 40%) no
+// longer raises a ladder price — realized margin below the generic target is
+// an owner-only informational warning. The floor still protects prices that
+// have NO approved ladder (below 50, 5,000+, unapproved sizes / products).
+//
+// OWNER DECISION 2026-11-11 — CHIRON SELLS ON THE EQUIVALENT MIRON LADDER.
+// Chiron 100ml tall / 100ml wide / 150ml use the SAME customer selling-price
+// ladder (and the same holographic / specialty adders) as the equivalent
+// Miron size. SELLING PRICE ONLY: Chiron true cost stays on its own flat
+// blank authority (CHIRON_SET_COST $1.80 / $1.80 / $1.90), margin is Chiron
+// true cost vs that price, and the same raising-only minimum margin
+// protection applies. Any other Chiron size has no price authority.
 //
 // Client-safe: pure data + pure functions.
 
@@ -60,6 +67,18 @@ export function jarLaunchSizeForSizeKey(sizeKey: string | null | undefined): Jar
   }
 }
 
+/**
+ * OWNER DECISION 2026-11-11: Chiron size -> the Miron size whose approved
+ * selling ladder it uses. Selling price only — never a cost substitution.
+ * A Chiron size missing here has NO price authority and keeps blocking.
+ */
+export const CHIRON_EQUIVALENT_MIRON_SIZE: Readonly<Record<string, string>> = {
+  "100ml_tall": "100ml_tall",
+  "100ml_wide": "100ml_wide",
+  "150ml": "150ml",
+};
+export const CHIRON_LADDER_INHERITANCE_SOURCE = "Owner decision 2026-11-11: Chiron uses the equivalent Miron customer selling-price ladder (selling price only; Chiron true cost unchanged)";
+
 export type JarOwnerLadderQuote = {
   unitPrice: number;
   basePrice: number;
@@ -70,6 +89,8 @@ export type JarOwnerLadderQuote = {
   launchSize: JarLaunchSize;
   source: string;
   label: string;
+  /** Set when a Chiron price comes from the equivalent Miron ladder. */
+  inheritedFrom: { brand: "miron"; sizeKey: string } | null;
 };
 
 export type JarOwnerLadderResolution =
@@ -80,8 +101,9 @@ const money = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * The owner ladder unit price for one jar configuration, or an explicit
- * reason why none applies. Brand matters: only Miron (and the standard
- * 3oz/4oz applied-label jars) have a 16D ladder; Chiron has none.
+ * reason why none applies. Miron and the standard 3oz/4oz applied-label jars
+ * have a 16D ladder; Chiron inherits the equivalent Miron ladder for its
+ * approved sizes only (CHIRON_EQUIVALENT_MIRON_SIZE).
  */
 export function resolveJarOwnerLadder(input: {
   brand: string | null | undefined;
@@ -91,8 +113,15 @@ export function resolveJarOwnerLadder(input: {
   specialtyX?: number;
 }): JarOwnerLadderResolution {
   const brand = String(input.brand || "");
-  if (brand === "chiron") return { ok: false, reason: "NO_OWNER_LADDER", message: "Chiron jars have no owner price ladder (16D covers Miron and standard applied-label jars only)." };
-  const launchSize = jarLaunchSizeForSizeKey(input.sizeKey);
+  let inheritedFrom: JarOwnerLadderQuote["inheritedFrom"] = null;
+  let sizeKey = input.sizeKey;
+  if (brand === "chiron") {
+    const mironSize = CHIRON_EQUIVALENT_MIRON_SIZE[String(input.sizeKey || "")];
+    if (!mironSize) return { ok: false, reason: "NO_OWNER_LADDER", message: `Chiron ${String(input.sizeKey || "")} has no approved selling-price authority (only Chiron 100ml tall, 100ml wide and 150ml inherit the equivalent Miron ladder).` };
+    inheritedFrom = { brand: "miron", sizeKey: mironSize };
+    sizeKey = mironSize;
+  }
+  const launchSize = jarLaunchSizeForSizeKey(sizeKey);
   if (!launchSize) return { ok: false, reason: "NO_OWNER_LADDER", message: `No owner price ladder exists for jar size "${String(input.sizeKey || "")}".` };
   const quantity = Math.floor(Number(input.quantity) || 0);
   if (quantity < JAR_STOREFRONT_MIN_QTY) return { ok: false, reason: "BELOW_LADDER_MINIMUM", message: `The owner ladder starts at ${JAR_STOREFRONT_MIN_QTY} jars.` };
@@ -114,8 +143,9 @@ export function resolveJarOwnerLadder(input: {
       specialtyX: x,
       specialtyAdd: specialty.premium,
       launchSize,
-      source: JAR_OWNER_LADDER_SOURCE,
-      label: `${JAR_OWNER_LADDER_RULE}: ${launchSize} @ ${tier.minQty}+ = $${tier.priceEach.toFixed(2)}${holoAdd ? ` + holographic $${holoAdd.toFixed(2)}` : ""}${specialty.premium ? ` + ${specialty.label} $${specialty.premium.toFixed(2)}` : ""}`,
+      source: inheritedFrom ? `${JAR_OWNER_LADDER_SOURCE}; ${CHIRON_LADDER_INHERITANCE_SOURCE}` : JAR_OWNER_LADDER_SOURCE,
+      label: `${JAR_OWNER_LADDER_RULE}${inheritedFrom ? ` — Chiron on the equivalent Miron ${inheritedFrom.sizeKey} ladder` : ""}: ${launchSize} @ ${tier.minQty}+ = $${tier.priceEach.toFixed(2)}${holoAdd ? ` + holographic $${holoAdd.toFixed(2)}` : ""}${specialty.premium ? ` + ${specialty.label} $${specialty.premium.toFixed(2)}` : ""}`,
+      inheritedFrom,
     },
   };
 }
@@ -129,7 +159,7 @@ export function resolveJarOwnerLadder(input: {
  */
 export const JAR_PRICE_BREAK_SUPPORT_QUANTITIES: number[] = Array.from(new Set([
   ...JAR_QUANTITY_OPTIONS, // 50 100 250 500 1000 2500 (owner ladder)
-  128, 256, 640, // legacy margin-band starts (Chiron curve)
+  128, 256, 640, // legacy margin-band starts (off-ladder curve quantities)
   250, 500, 1000, 2500, // Miron blank set cost tiers (MIRON_TIER_MIN_QTYS)
 ])).sort((a, b) => a - b);
 
@@ -179,7 +209,9 @@ export function applyQuantityBreakEnvelope<T extends EnvelopeRow>(rows: T[]): Ar
       if (other.totalPrice < row.totalPrice - 1e-9 && (!cap || other.totalPrice < cap.totalPrice)) cap = { quantity: other.quantity, totalPrice: other.totalPrice };
     }
     if (!cap) return { ...row, ...none };
-    const floorPct = Math.max(0, Math.min(99, Number(row.floorPct ?? 0)));
+    // An approved ladder row is never held up by the generic floor (owner decision 2026-11-11).
+    const ladderRow = Boolean((row as any).commercial?.ownerLadder);
+    const floorPct = ladderRow ? 0 : Math.max(0, Math.min(99, Number(row.floorPct ?? 0)));
     const floorTotal = floorPct > 0 ? row.jobCost / (1 - floorPct / 100) : 0;
     const totalPrice = Math.max(cap.totalPrice, floorTotal);
     const floorBound = totalPrice > cap.totalPrice + 1e-9;

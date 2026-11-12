@@ -481,9 +481,10 @@ describe("unchanged (tests 22-29)", () => {
     expect((resolveJarOwnerLadder({ brand: "miron", sizeKey: "100ml_tall", quantity: 250 }) as any).quote.unitPrice).toBe(4);
   });
 
-  it("26. Chiron remains provisional (no explicit approved authority exists)", () => {
-    expect(resolveJarOwnerLadder({ brand: "chiron", sizeKey: "150ml", quantity: 500 }).ok).toBe(false);
+  it("26. Chiron sells on the equivalent Miron ladder (owner decision 2026-11-11); the Chiron curve is still not an authority", () => {
+    expect(resolveJarOwnerLadder({ brand: "chiron", sizeKey: "150ml", quantity: 500 })).toMatchObject({ ok: true, quote: { unitPrice: 5.5, inheritedFrom: { brand: "miron", sizeKey: "150ml" } } });
     expect(APPROVED_MARGIN_CURVE_AUTHORITIES["chiron-jars"]).toBeUndefined();
+    // off-ladder (no ownerLadder on the row) Chiron stays provisional
     expect(resolveSellingPriceAuthority({ family: "premium-jars", stockBag: false, marginRuleKey: "chiron-jars", row: costedRow() }).approved).toBe(false);
   });
 

@@ -86,7 +86,9 @@ describe("owner jar ladder resolution", () => {
     expect(resolveJarOwnerLadder({ brand: "miron", sizeKey: "100ml_wide", quantity: 50 })).toMatchObject({ ok: true, quote: { unitPrice: 4.95 } });
     expect(resolveJarOwnerLadder({ brand: "miron", sizeKey: "150ml", quantity: 500 })).toMatchObject({ ok: true, quote: { unitPrice: 5.5 } });
     expect(resolveJarOwnerLadder({ brand: "standard", sizeKey: "3oz", quantity: 1000 })).toMatchObject({ ok: true, quote: { unitPrice: 1.45 } });
-    expect(resolveJarOwnerLadder({ brand: "chiron", sizeKey: "150ml", quantity: 500 })).toMatchObject({ ok: false, reason: "NO_OWNER_LADDER" });
+    // 2026-11-11 owner decision: Chiron sells on the equivalent Miron ladder
+    expect(resolveJarOwnerLadder({ brand: "chiron", sizeKey: "150ml", quantity: 500 })).toMatchObject({ ok: true, quote: { unitPrice: 5.5 } });
+    expect(resolveJarOwnerLadder({ brand: "chiron", sizeKey: "50ml", quantity: 500 })).toMatchObject({ ok: false, reason: "NO_OWNER_LADDER" });
     expect(resolveJarOwnerLadder({ brand: "miron", sizeKey: "100ml_tall", quantity: 49 })).toMatchObject({ ok: false, reason: "BELOW_LADDER_MINIMUM" });
     expect(resolveJarOwnerLadder({ brand: "miron", sizeKey: "100ml_tall", quantity: 5000 })).toMatchObject({ ok: false, reason: "VOLUME_QUOTE" });
     expect(resolveJarOwnerLadder({ brand: "miron", sizeKey: "100ml_tall", quantity: 128, specialtyX: 9 })).toMatchObject({ ok: false, reason: "DEEP_BUILD" });
@@ -101,16 +103,18 @@ describe("owner jar ladder resolution", () => {
 });
 
 describe("computeCommercialPrice in owner-ladder mode", () => {
-  it("ladder price controls when above the floor; floor controls when the ladder is below it; curve is never consulted", () => {
+  it("the approved ladder price controls even below the generic floor (owner decision 2026-11-11); the curve is never consulted", () => {
     const high = computeCommercialPrice({ familyKey: "premium-jars", quantity: 100, completeCost: 100, marginRule: resolveMarginFamily("miron-jars"), premiumEligible: false, policyValues: POLICY, marginCurveKey: "miron-jars", ownerLadder: { unitPrice: 4.5, source: "s", label: "Owner ladder" } });
     expect(high.finalTotalPrice).toBe(450);
     expect(high.controllingRule).toBe("Owner ladder");
     expect(high.ownerLadder).toMatchObject({ controls: true, raisedByFloor: false, floorPct: 45 });
     const low = computeCommercialPrice({ familyKey: "premium-jars", quantity: 100, completeCost: 400, marginRule: resolveMarginFamily("miron-jars"), premiumEligible: false, policyValues: POLICY, marginCurveKey: "miron-jars", ownerLadder: { unitPrice: 4.5, source: "s", label: "Owner ladder" } });
-    expect(low.finalTotalPrice).toBeCloseTo(400 / 0.55, 6);
-    expect(low.controllingRule).toMatch(/Minimum margin protection — 45%/);
-    expect(low.marginPctApplied).toBe(45); // not 65 — the curve is not used
-    expect(low.ownerLadder).toMatchObject({ controls: false, raisedByFloor: true, unitPrice: 4.5, totalPrice: 450 });
+    expect(low.finalTotalPrice).toBe(450); // NOT lifted to 400 / 0.55
+    expect(low.controllingRule).toBe("Owner ladder");
+    expect(low.marginPctApplied).toBe(45); // informational target only — the curve is not used
+    expect(low.achievedMarginPct).toBeCloseTo(((450 - 400) / 450) * 100, 6);
+    expect(low.ownerLadder).toMatchObject({ controls: true, raisedByFloor: false, belowGenericTarget: true, unitPrice: 4.5, totalPrice: 450 });
+    expect(high.ownerLadder!.belowGenericTarget).toBe(false);
     expect(low.ownerLadder!.ladderMarginPct).toBeCloseTo(((450 - 400) / 450) * 100, 6);
   });
 
@@ -160,27 +164,23 @@ describe("Miron 100ml Tall — every integer quantity 50..1000 (Side + Lid)", ()
     expect(priced.length).toBe(rows.length);
   });
 
-  it("price >= true cost, profit > 0, realized margin >= the 45% Miron family minimum, status READY TO QUOTE", () => {
+  it("price = the owner ladder (never lifted by the 45% floor), price >= true cost, profit > 0, status READY TO QUOTE", () => {
     for (const r of priced) {
       expect(r.totalPrice!, `qty ${r.quantity}`).toBeGreaterThanOrEqual(r.jobCost! - 1e-9);
       expect(r.profit!, `qty ${r.quantity}`).toBeGreaterThan(0);
-      expect(r.actualMarginPct!, `qty ${r.quantity}`).toBeGreaterThanOrEqual(45 - 1e-9);
+      expect(r.commercial.ownerLadder.raisedByFloor, `qty ${r.quantity}`).toBe(false);
+      expect(r.totalPrice!, `qty ${r.quantity}`).toBeLessThanOrEqual(r.commercial.ownerLadder.totalPrice + 1e-6); // envelope may cap, never lift
       expect(r.status, `qty ${r.quantity}`).toBe("READY TO QUOTE");
     }
   });
 
-  it("TOTAL price never decreases when quantity increases by one, except where the margin floor binds at a vendor cost tier (reported, never below floor)", () => {
-    const residual: string[] = [];
+  it("TOTAL price never decreases when quantity increases by one (ladder + envelope; no floor hold on ladder rows)", () => {
     for (let i = 1; i < priced.length; i += 1) {
       const a = priced[i - 1], b = priced[i];
-      if (b.totalPrice! < a.totalPrice! - 1e-6) {
-        // allowed ONLY when the lower-quantity row is pinned to its margin floor and flagged
-        expect((a as any).envelopeFloorBound, `qty ${a.quantity} -> ${b.quantity}: total fell without a floor-bound flag`).toBe(true);
-        expect(a.actualMarginPct!, `qty ${a.quantity}`).toBeCloseTo(45, 6);
-        residual.push(`${a.quantity}->${b.quantity}: ${fmt(a.totalPrice)} -> ${fmt(b.totalPrice)} (cheaper to order ${(a as any).cheaperQuantity})`);
-      }
+      expect(b.totalPrice!, `qty ${a.quantity} -> ${b.quantity}`).toBeGreaterThanOrEqual(a.totalPrice! - 1e-6);
+      expect((a as any).envelopeFloorBound, `qty ${a.quantity}`).toBe(false);
     }
-    auditLines.push("", "Residual steps where the 45% floor binds at a Miron blank cost tier (staff are told the larger order is cheaper): " + (residual.length ? residual.join("; ") : "none"));
+    auditLines.push("", "Ladder rows are never held at the generic 45% floor (owner decision 2026-11-11); the envelope only caps.");
   });
 
   it("no cliff: the 127 -> 128 margin-band edge no longer changes the price, and no step changes the unit price by more than 15%", () => {
@@ -205,7 +205,7 @@ describe("Miron 100ml Tall — every integer quantity 50..1000 (Side + Lid)", ()
     const r128 = priced.find((r) => r.quantity === 128)!;
     expect(r127.totalPrice!).toBeLessThanOrEqual(r128.totalPrice! + 1e-6);
     expect(Math.abs(r127.unitPrice! - r128.unitPrice!)).toBeLessThan(0.05);
-    expect(r127.actualMarginPct!).toBeGreaterThanOrEqual(45 - 1e-9);
+    expect(r127.commercial.ownerLadder.raisedByFloor).toBe(false); // the owner ladder controls (owner decision 2026-11-11)
     // the old curve numbers are gone
     expect(r128.unitPrice!).toBeLessThan(8.0 - 0.5);
     expect(r127.unitPrice!).toBeLessThan(9.0);
@@ -221,7 +221,7 @@ describe("Miron 100ml Tall — every integer quantity 50..1000 (Side + Lid)", ()
       auditLines.push(`| ${qty} | ${fmt(r.unitCost, 4)} | ${fmt(r.jobCost)} | ${ol ? fmt(ol.unitPrice) : "—"} | ${fmt(r.unitPrice)} | ${fmt(r.totalPrice)} | ${fmt(r.profit)} | ${fmt(r.actualMarginPct, 1)}% | ${r.commercial.controllingRule} |`);
     }
     mkdirSync("docs/generated", { recursive: true });
-    writeFileSync("docs/generated/jar-pricing-sanity-100ml-tall-miron-2026-10-05.md", `# Miron 100ml Tall, Side + Lid — pricing sanity table (generated by tests/pricing-policy-sanity-2026-10-05.test.ts)\n\nTrue cost = canonical engine with the production-shaped Mimaki CMYK calibration. Prices = owner 16D ladder with 45% minimum margin protection and the quantity-break envelope. Generated ${new Date().toISOString().slice(0, 10)}.\n\n${auditLines.join("\n")}\n`);
+    writeFileSync("docs/generated/jar-pricing-sanity-100ml-tall-miron-2026-10-05.md", `# Miron 100ml Tall, Side + Lid — pricing sanity table (generated by tests/pricing-policy-sanity-2026-10-05.test.ts)\n\nTrue cost = canonical engine with the production-shaped Mimaki CMYK calibration. Prices = owner 16D ladder (authoritative; the generic 45% floor never lifts it — owner decision 2026-11-11) and the quantity-break envelope. Generated ${new Date().toISOString().slice(0, 10)}.\n\n${auditLines.join("\n")}\n`);
   });
 });
 
@@ -235,17 +235,15 @@ describe("every supported jar x Side+Lid at the owner ladder quantities", () => 
       const rows = dropSupportRows(applyQuantityBreakEnvelope(priceRows({ base, family: profile.uiFamily, curveKey, ladder: jarLadder(profile.brand, profile.size), quantities, display: new Set(quantities), requested: 128 })));
       const priced = rows.filter((r) => !r.draftOnly);
       expect(priced.length, profile.key).toBe(rows.length);
-      const floor = curveKey === "miron-jars" ? 45 : 40;
       for (const r of priced) {
         expect(r.totalPrice!).toBeGreaterThan(r.jobCost!);
-        expect(r.actualMarginPct!).toBeGreaterThanOrEqual(floor - 1e-9);
+        // inside the ladder the owner ladder controls (never lifted by the generic floor)
+        if (r.commercial.ownerLadder) expect(r.commercial.ownerLadder.raisedByFloor).toBe(false);
       }
       for (let i = 1; i < priced.length; i += 1) expect(priced[i].totalPrice!, `${profile.key} ${priced[i].quantity}`).toBeGreaterThanOrEqual(priced[i - 1].totalPrice! - 1e-6);
-      if (profile.brand === "chiron") {
-        expect(priced.every((r) => r.commercial.ownerLadder == null)).toBe(true); // no owner ladder for Chiron
-      } else {
-        expect(priced.filter((r) => r.quantity >= 50 && r.quantity < 5000).every((r) => r.commercial.ownerLadder != null)).toBe(true);
-      }
+      // 2026-11-11: Chiron inherits the equivalent Miron ladder, so every
+      // active jar prices from an owner ladder inside 50..4999.
+      expect(priced.filter((r) => r.quantity >= 50 && r.quantity < 5000).every((r) => r.commercial.ownerLadder != null)).toBe(true);
     });
   }
 });

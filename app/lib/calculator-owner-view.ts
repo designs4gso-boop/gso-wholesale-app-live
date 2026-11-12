@@ -240,12 +240,15 @@ export function summarizeCalculatorBlockers(blockers: Array<string | null | unde
  *   - Stock Bags ............... live storefront price authority (owner decision C)
  *   - Miron / 3oz / 4oz jars ... owner 16D ladder (+ owner floor)  -> approved
  *   - DTP ...................... owner DTP ladders                 -> approved
- *   - Chiron curve ............. "unsourced family default"        -> NOT approved (owner decision D)
+ *   - Chiron jars .............. equivalent Miron 16D ladder (owner 2026-11-11) -> approved
+ *   - Chiron curve (off-ladder)  "unsourced family default"        -> NOT approved
  *   - Miron curve (off-ladder) . unsourced (jar audit section 3)   -> NOT approved
  *   - Banners curve ............ "unsourced family default"        -> NOT approved
  *   - provisional universal curve, custom items                    -> NOT approved
  * ------------------------------------------------------------------ */
 export const PROVISIONAL_PRICING_STATUS = "PROVISIONAL — PRICING AUTHORITY REQUIRED";
+/** Owner-only, informational: an approved jar ladder priced below the generic margin target (never blocks, never raises). */
+export const JAR_LADDER_LOW_MARGIN_WARNING = "Realized margin is below the generic target, but the owner-approved fixed jar ladder controls the customer price.";
 
 /** Researched margin curves the owner has ratified as a customer-price authority. */
 /** 2026-10-19: the whole calculator is owner only (server-enforced in owner-authorization.server.ts). */
@@ -258,7 +261,7 @@ export const APPROVED_MARGIN_CURVE_AUTHORITIES: Readonly<Record<string, string>>
 
 /** Curves present in code that are NOT an approved customer-price authority, with the documented reason. */
 export const UNAPPROVED_MARGIN_CURVES: Readonly<Record<string, string>> = {
-  "chiron-jars": "Chiron jars have no owner-approved price ladder. The Chiron margin curve is an unsourced family default (docs/GSO_PRICING_AUTHORITY_MATRIX.md), not an owner-approved price.",
+  "chiron-jars": "This Chiron configuration is outside the equivalent Miron price ladder (owner decision 2026-11-11: Chiron 100ml tall / 100ml wide / 150ml sell on the Miron ladder). The Chiron margin curve is an unsourced family default (docs/GSO_PRICING_AUTHORITY_MATRIX.md), not an owner-approved price.",
   "miron-jars": "This Miron configuration is outside the owner 16D price ladder. The Miron margin curve is an unsourced family default (docs/GSO_JAR_PRICING_AUTHORITY_AUDIT.md section 3), not an owner-approved price.",
   banners: "The Banners margin curve is an unsourced family default (docs/GSO_PRICING_AUTHORITY_MATRIX.md), not an owner-approved price.",
 };
@@ -344,9 +347,7 @@ export function resolveSellingPriceAuthority(input: {
   if (row.commercial?.ownerLadder) {
     return {
       approved: true, ownerMarginEdit, kind: "owner_jar_ladder", missing: null,
-      label: row.commercial.ownerLadder.raisedByFloor
-        ? "Owner jar price ladder (16D) — held at the owner minimum margin floor (ladder price is below it)"
-        : "Owner jar price ladder (16D, approved 2026-08-12)",
+      label: `Owner-approved jar ladder (16D, approved 2026-08-12)${/Chiron on the equivalent Miron/.test(String(row.commercial.ownerLadder.label || "")) ? " — Chiron selling price inherited from the equivalent Miron ladder (owner decision 2026-11-11; Chiron true cost unchanged)" : ""}`,
     };
   }
   const key = String(input.marginRuleKey || "");
@@ -522,6 +523,10 @@ export function resolveOwnerResult(input: OwnerResultInput): OwnerResult | null 
     missingAuthority: null,
     reasons: row.dtp ? (row.dtp.statusReasons || []).slice(0, 4) : [],
     authority,
-    marginWarning: storefrontPrice && row.belowMarginTarget ? String(row.marginWarning || "Approved storefront price is below the standard margin target.") : null,
+    marginWarning: storefrontPrice && row.belowMarginTarget
+      ? String(row.marginWarning || "Approved storefront price is below the standard margin target.")
+      : authority.kind === "owner_jar_ladder" && !authority.ownerMarginEdit && priced.marginPct != null && row.floorPct != null && priced.marginPct < Number(row.floorPct) - 1e-9
+        ? JAR_LADDER_LOW_MARGIN_WARNING
+        : null,
   };
 }

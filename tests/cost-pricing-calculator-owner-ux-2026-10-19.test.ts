@@ -242,8 +242,8 @@ describe("C. Stock Bag quotes use the storefront price authority (6-8)", () => {
   });
 });
 
-describe("D. Chiron has no owner-approved selling-price authority (9-11)", () => {
-  it("9. Chiron with a valid true cost shows Recommended Selling Price: Not available", () => {
+describe("D. Chiron OFF the inherited Miron ladder has no selling-price authority (9-11; owner decision 2026-11-11)", () => {
+  it("9. Chiron with a valid true cost but no ladder price shows Recommended Selling Price: Not available", () => {
     const chiron = view(JAR_QS("premium-jars", "chiron/150ml"));
     expect(chiron.unitCost).not.toBeNull(); // the true cost still calculates
     const result = resolveOwnerResult({
@@ -257,15 +257,15 @@ describe("D. Chiron has no owner-approved selling-price authority (9-11)", () =>
     expect(result.profit).toBeNull();
     expect(result.marginPct).toBeNull();
     expect(result.trueJobCost).toBe(chiron.totalCost);
-    expect(result.missingAuthority).toContain("Chiron jars have no owner-approved price ladder");
+    expect(result.missingAuthority).toContain("outside the equivalent Miron price ladder");
   });
 
-  it("10. the Chiron curve existing in code does not make it an authority; there is no Chiron owner ladder", () => {
+  it("10. the Chiron curve existing in code does not make it an authority; Chiron prices only from the inherited Miron ladder", () => {
     expect(marginFamilyKeyFor("premium-jars", "jar_chiron", "Chiron 150ml")).toBe("chiron-jars");
     expect(APPROVED_MARGIN_CURVE_AUTHORITIES["chiron-jars"]).toBeUndefined();
     expect(UNAPPROVED_MARGIN_CURVES["chiron-jars"]).toContain("unsourced family default");
-    const ladder = resolveJarOwnerLadder({ brand: "chiron", sizeKey: "150ml", quantity: 500 });
-    expect(ladder.ok).toBe(false);
+    expect(resolveJarOwnerLadder({ brand: "chiron", sizeKey: "150ml", quantity: 500 }).ok).toBe(true); // inherited Miron ladder
+    expect(resolveJarOwnerLadder({ brand: "chiron", sizeKey: "50ml", quantity: 500 }).ok).toBe(false); // unapproved size
     expect(resolveSellingPriceAuthority({ family: "premium-jars", stockBag: false, marginRuleKey: "chiron-jars", row: costedRow() }).approved).toBe(false);
   });
 

@@ -251,7 +251,7 @@ describe("Q2. a real 50ml quote through the calculator loader (side + lid + tamp
     }
   }, 300_000);
 
-  it("selling price: the 16D owner ladder is unchanged and still the price authority, with the existing 45% margin protection", async () => {
+  it("selling price: the 16D owner ladder is unchanged and is the authoritative price (never lifted by the 45% floor)", async () => {
     expect(JAR_BASE_PRICES["50ml"]).toEqual([
       { minQty: 50, priceEach: 4.25 }, { minQty: 100, priceEach: 4.0 }, { minQty: 250, priceEach: 3.75 },
       { minQty: 500, priceEach: 3.5 }, { minQty: 1000, priceEach: 3.25 }, { minQty: 2500, priceEach: 3.0 },
@@ -259,10 +259,12 @@ describe("Q2. a real 50ml quote through the calculator loader (side + lid + tamp
     const { pm, requested } = await jarJob(500);
     expect(pm.pricingBasis.kind).toBe("owner_ladder");
     expect(requested.commercial.ownerLadder.label).toBe("Owner jar price ladder (16D, owner-approved 2026-08-12): 50ml @ 500+ = $3.50");
-    // the ladder price is below the existing 45% minimum margin, so the existing floor raises the price
-    expect(requested.commercial.ownerLadder.raisedByFloor).toBe(true);
-    expect(requested.totalPrice).toBeCloseTo(requested.jobCost / (1 - 0.45), 6);
-    expect(requested.actualMarginPct).toBeCloseTo(45, 6);
+    // owner decision 2026-11-11: the ladder controls even though it is below the 45% generic target
+    expect(requested.commercial.ownerLadder.raisedByFloor).toBe(false);
+    expect(requested.commercial.ownerLadder.belowGenericTarget).toBe(true);
+    expect(requested.totalPrice).toBeCloseTo(500 * 3.5, 6);
+    expect(requested.actualMarginPct).toBeLessThan(45);
+    expect(requested.actualMarginPct).toBeCloseTo(((500 * 3.5 - requested.jobCost) / (500 * 3.5)) * 100, 6);
   }, 120_000);
 
   it("the jar picker shows the owner-approved ladder, never the stale live row price", async () => {

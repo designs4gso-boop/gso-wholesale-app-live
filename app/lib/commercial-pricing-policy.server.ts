@@ -511,6 +511,8 @@ export type CommercialPriceResult = {
     floorPct: number;
     finalVsLadderPct: number | null;
     ladderMarginPct: number | null;
+    /** Realized margin at the ladder price is below the generic family target (informational; never raises the price). */
+    belowGenericTarget: boolean;
   } | null;
   // 15G.4C: specialty commercial context (bags): tier %, holo %, small-run
   // minimum, floor, deep-build flag — null on standard jobs.
@@ -603,12 +605,16 @@ export function computeCommercialPrice(input: {
   const baseMarginPct = staffOverride
     ? input.marginPctOverride!
     : ownerLadder
-      ? floorPct // ladder mode: the margin curve is not consulted; the floor is the only margin figure in play
+      ? floorPct // ladder mode: the margin curve is not consulted (the floor is only an informational target here)
       : resolveMarginPctForQuantity(values, curveKey, rule, quantity);
+  // OWNER DECISION (2026-11-11, previously approved): an explicit owner-approved
+  // fixed jar ladder price is AUTHORITATIVE — the generic family margin floor
+  // (Miron 45% / Chiron 40%) and the provisional job minimums never raise it.
+  // Realized margin is still computed from the brand's own true cost.
   const marginSource = staffOverride
     ? "owner per-tier margin edit (Advanced Pricing Controls)"
     : ownerLadder
-      ? `${ownerLadder.source} + ${floorPct}% minimum margin protection`
+      ? `${ownerLadder.source} — owner-approved ladder controls the price (generic ${floorPct}% margin target is informational only)`
       : rule
         ? `${rule.label} researched curve at quantity band (${COMMERCIAL_PRICING_SOURCE})`
         : `provisional universal curve — FAMILY MARGIN RULE NOT CONFIGURED (${MARGIN_FLOOR_PCT}% floor)`;
@@ -687,12 +693,8 @@ export function computeCommercialPrice(input: {
   }
 
   const contenders: Array<{ rule: string; price: number | null }> = ownerLadder && !staffOverride
-    ? [
-        { rule: ownerLadder.label, price: ownerLadderPrice },
-        { rule: `Minimum margin protection — ${floorPct}% family minimum (cost / (1 - ${floorPct}%))`, price: marginFloorPrice },
-        { rule: "Minimum gross-profit floor (owner, provisional)", price: minimumGrossProfitPrice },
-        { rule: "Minimum order total (owner, provisional)", price: minimumOrderTotalPrice },
-      ]
+    ? [{ rule: ownerLadder.label, price: ownerLadderPrice }] // the approved ladder is the only price authority
+
     : specialtyActive
     ? [
         // owner rule: the old full-margin cost-plus path is NOT the primary
@@ -755,10 +757,11 @@ export function computeCommercialPrice(input: {
           source: ownerLadder.source,
           label: ownerLadder.label,
           controls: controllingRule === ownerLadder.label,
-          raisedByFloor: !staffOverride && finalTotalPrice > ownerLadderPrice! + 1e-9,
+          raisedByFloor: !staffOverride && finalTotalPrice > ownerLadderPrice! + 1e-9, // always false since 2026-11-11 (ladder authority)
           floorPct,
           finalVsLadderPct: ownerLadderPrice! > 0 ? ((finalTotalPrice / ownerLadderPrice!) - 1) * 100 : null,
           ladderMarginPct: ownerLadderPrice! > 0 ? ((ownerLadderPrice! - completeCost) / ownerLadderPrice!) * 100 : null,
+          belowGenericTarget: ownerLadderPrice! > 0 && ((ownerLadderPrice! - completeCost) / ownerLadderPrice!) * 100 < floorPct - 1e-9,
         }
       : null,
     // 15F.0K.3: computed AFTER price selection — display/snapshot info only.

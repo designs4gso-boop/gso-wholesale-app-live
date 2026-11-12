@@ -46,7 +46,7 @@ import { JAR_LABEL_GEOMETRY, formatJarGeometry, type JarSizeKey } from "../lib/j
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
-import { REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, STOCK_BAG_CALCULATOR_OPTION, calculatorFamilyChoice, calculatorFamilyParams, missingRequiredCalculatorFields, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
+import { JAR_LADDER_LOW_MARGIN_WARNING, REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, STOCK_BAG_CALCULATOR_OPTION, calculatorFamilyChoice, calculatorFamilyParams, missingRequiredCalculatorFields, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
 // 2026-10-19 owner decision C: Stock Bag quotes price through the SAME storefront authority the online checkout uses.
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 import { priceStockBagTierRow, stockBagStorefrontSelection } from "../lib/stock-bag-quote-pricing.server";
@@ -1306,7 +1306,7 @@ export async function loader({ request }: { request: Request }) {
         const completeCost = authority.completeCost;
         const commercial = computeCommercialPrice({
           familyKey: canonicalUiFamily(pFamily), quantity: qty, completeCost,
-          ownerLadder: jarLadderFor(qty), // 2026-10-05 owner jar ladder (null for non-jar / Chiron)
+          ownerLadder: jarLadderFor(qty), // 2026-10-05 owner jar ladder (Chiron: equivalent Miron ladder, 2026-11-11; null for non-jar)
           marginRule: marginRuleForPricingP, premiumEligible: premiumEligibleP,
           marginPctOverride: overrideMargin,
           finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
@@ -1540,9 +1540,9 @@ export async function loader({ request }: { request: Request }) {
         : null,
       // 2026-10-05: one staff sentence describing the commercial basis for jars.
       pricingBasis: productTiers && productTiers.some((tier: any) => tier.commercial?.ownerLadder)
-        ? { kind: "owner_ladder", text: "Owner jar price ladder (16D, approved 2026-08-12) with minimum margin protection — the margin curve is not used for this product." }
+        ? { kind: "owner_ladder", text: "Owner-approved jar ladder (16D, approved 2026-08-12) controls the customer price — the generic margin floor never raises it and the margin curve is not used (Chiron uses the equivalent Miron ladder)." }
         : productTiers && (canonicalUiFamily(pFamily) === "premium-jars" || canonicalUiFamily(pFamily) === "standard-jars")
-          ? { kind: "curve_with_envelope", text: "No owner price ladder for this jar (Chiron / out of ladder range): quantity-band margin curve with the quantity-break envelope (totals never fall when quantity rises)." }
+          ? { kind: "curve_with_envelope", text: "No owner price ladder for this jar (out of ladder range / unapproved size): quantity-band margin curve with the quantity-break envelope (totals never fall when quantity rises)." }
           : null,
       marginFamily: productMarginRule
         ? { key: productMarginRule.key, label: productMarginRule.label, curve: productMarginRule.curve, minPct: productMarginRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
@@ -4429,7 +4429,7 @@ function OwnerResultCard() {
       ) : null}
       {result.marginWarning ? (
         <div style={{ marginTop: 8, fontSize: 12, color: "#92400e", fontWeight: 700 }}>
-          ⚠ {result.marginWarning} It remains an APPROVED price (the live storefront price) — saving is not blocked.
+          ⚠ {result.marginWarning} {result.authority?.kind === "owner_jar_ladder" ? "Owner-only note — the price is not raised and saving is not blocked." : "It remains an APPROVED price (the live storefront price) — saving is not blocked."}
         </div>
       ) : null}
       {result.provisionalCost ? <div style={{ fontSize: 12, color: "#92400e", marginTop: 4 }}>True cost includes owner-approved provisional standards (see Cost breakdown).</div> : null}
@@ -4919,15 +4919,19 @@ function ProductTiers() {
           : <><b style={{ color: "#92400e" }}>FAMILY MARGIN RULE NOT CONFIGURED</b> — provisional universal curve with the {emergency.floor}% global floor. Margins are editable in Advanced Pricing Controls.</>}
       </p>
       {(() => {
-        // 2026-10-05: owner-ladder vs floor conflict, stated once for the requested row.
+        // 2026-11-11: the owner-approved jar ladder controls the price; a realized
+        // margin below the generic target is an owner-only note (never raises/blocks).
         const ol = requested?.commercial?.ownerLadder;
         if (!ol) return null;
+        const lowMargin = Boolean(ol.belowGenericTarget);
         return (
-          <div style={{ border: `1px solid ${ol.raisedByFloor ? "#fde68a" : "#bbf7d0"}`, background: ol.raisedByFloor ? "#fffbeb" : "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
+          <div style={{ border: `1px solid ${ol.raisedByFloor || lowMargin ? "#fde68a" : "#bbf7d0"}`, background: ol.raisedByFloor || lowMargin ? "#fffbeb" : "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
             <b>Owner storefront price for this jar at {requested.quantity.toLocaleString()}:</b> {money2(ol.unitPrice)}/jar ({money2(ol.totalPrice)} total; {ol.ladderMarginPct != null ? `${ol.ladderMarginPct.toFixed(1)}% margin on true cost` : ""}).
             {ol.raisedByFloor
               ? <> <b style={{ color: "#92400e" }}>OWNER CONFIRMATION PENDING:</b> that price is below the {ol.floorPct}% minimum margin, so the quote is held at the margin floor ({money2(requested.unitPrice)}/jar, {ol.finalVsLadderPct != null ? `+${ol.finalVsLadderPct.toFixed(0)}%` : ""} above the ladder). Only the owner can lower the jar margin floor or revise the jar ladder.</>
-              : <> The owner ladder controls this price (above the margin floor).</>}
+              : lowMargin
+                ? <> <b>PRICE AUTHORITY: Owner-approved jar ladder.</b> {JAR_LADDER_LOW_MARGIN_WARNING} (generic target {ol.floorPct}%)</>
+                : <> <b>PRICE AUTHORITY: Owner-approved jar ladder.</b> The owner ladder controls this price.</>}
           </div>
         );
       })()}
