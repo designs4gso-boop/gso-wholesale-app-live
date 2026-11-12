@@ -13,6 +13,7 @@ import { useState, type ReactNode } from "react";
 import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { readinessIssuesForRecipe } from "../lib/jar-recipe-geometry";
 import {
   QUOTE_READY_RECIPE_WHERE,
   QUOTE_RECIPE_PRICING_INCLUDE,
@@ -210,19 +211,20 @@ export async function loader({ request }: { request: Request }) {
   let sampledReadyCount = 0;
   const failingSamples: { name: string; firstIssue: string }[] = [];
 
+  // 2026-11-12: jar recipes are dimension-ready when the canonical jar geometry
+  // is owner-confirmed (no duplicate Product Setup width / height); a pending
+  // or unsupported jar is NAMED. Every failing sampled recipe is listed.
   for (const recipe of sampleRecipes) {
     try {
       const priced = priceRecipeAtQuantity(recipe, Math.max(1, Number(recipe.minQuantity) || 1), {});
-      const issues = blockingConversionIssues(recipe, priced);
+      const issues = readinessIssuesForRecipe(recipe, blockingConversionIssues(recipe, priced));
       if (issues.length === 0) {
         sampledReadyCount += 1;
-      } else if (failingSamples.length < 3) {
+      } else {
         failingSamples.push({ name: recipe.name, firstIssue: issues[0] });
       }
     } catch (_error) {
-      if (failingSamples.length < 3) {
-        failingSamples.push({ name: recipe.name, firstIssue: "readiness check failed unexpectedly" });
-      }
+      failingSamples.push({ name: recipe.name, firstIssue: "readiness check failed unexpectedly" });
     }
   }
 

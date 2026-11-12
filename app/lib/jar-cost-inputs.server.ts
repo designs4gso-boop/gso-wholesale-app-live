@@ -222,7 +222,7 @@ export function resolveJarApplication(size: JarSizeKey, selection: JarLabelSelec
       return {
         ok: false,
         reason: "MISSING_APPLICATION_STANDARD",
-        message: `The owner recorded no lid-side/tamper band timing for a ${size} jar, so its application labor cannot be costed. Another size's timing is not a substitute.`,
+        message: `NEEDS REVIEW — missing application timing: no owner side lid / tamper band application time is recorded for a ${size} jar. The band's print, media, ink and cutting are costed; its application labor is not, so this quote stays Needs Review (quote-only). Another size's timing is not a substitute.`,
       };
     }
     seconds += owner.tamper;

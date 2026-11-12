@@ -391,7 +391,7 @@ describe("2D-4C2 (8) calculate and save normalise identically", () => {
   it("the canonical params ride the GET form, so psearch carries them automatically", () => {
     const src = routeSrc();
     // the mirror lives INSIDE the product <Form method="get">
-    const formStart = src.indexOf(`<Form method="get" onChange={(event) => syncCanonLine(event.currentTarget)}`);
+    const formStart = src.indexOf(`<Form method="get" autoComplete="off" onChange={(event) => syncCanonLine(event.currentTarget)}`);
     expect(formStart).toBeGreaterThan(0);
     expect(src.indexOf('name="pl0qty"')).toBeGreaterThan(formStart);
     expect(src.indexOf('name="pl0mat"')).toBeGreaterThan(formStart);

@@ -188,7 +188,7 @@ describe("Split Bag geometry (owner correction 2026-11-12)", () => {
 
   it("UI: Split Bag shows its fixed geometry and never asks for 4 x 5 dimensions; the standard 4x5 is labelled distinctly", () => {
     const route = readFileSync("app/routes/app.erp.cost-calculator.tsx", "utf8");
-    expect(route).toContain('"SPLIT BAG" : "STANDARD 4X5 STICKER BAG"');
+    expect(route).toContain('"SPLIT BAG production spec" : "STANDARD 4X5 STICKER BAG production spec"');
     expect(route).toContain('<input type="hidden" name="pwidth" value={SPLIT_BAG_ARTBOARD_IN.widthIn} />');
     expect(route).toContain('<input type="hidden" name="pheight" value={SPLIT_BAG_ARTBOARD_IN.heightIn} />');
     expect(route).toContain("{!isDtp && !jars && !isSplitBag ? (<>");

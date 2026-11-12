@@ -47,7 +47,7 @@ import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_B
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
-import { JAR_LADDER_LOW_MARGIN_WARNING, REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, STOCK_BAG_CALCULATOR_OPTION, calculatorFamilyChoice, calculatorFamilyParams, missingRequiredCalculatorFields, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
+import { JAR_LADDER_LOW_MARGIN_WARNING, REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, STOCK_BAG_CALCULATOR_OPTION, calculatorDesignCount, calculatorFamilyChoice, calculatorFamilyParams, calculatorTransitionParams, missingRequiredCalculatorFields, withCanonicalSplitBagGeometry, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
 // 2026-10-19 owner decision C: Stock Bag quotes price through the SAME storefront authority the online checkout uses.
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 import { priceStockBagTierRow, stockBagStorefrontSelection } from "../lib/stock-bag-quote-pricing.server";
@@ -477,6 +477,9 @@ export async function loader({ request }: { request: Request }) {
   const { session } = auth;
   const shop = session.shop;
   const url = new URL(request.url);
+  // 2026-11-12 live QA: Split Bag geometry is canonical — a stale / posted
+  // pwidth / pheight in the query can never override it (no-op otherwise).
+  url.search = withCanonicalSplitBagGeometry(url.searchParams).toString();
   const appOrigin = new URL(request.url).origin;
   // 15F.0K.1: ownerConfig pricing policy (min profits / order totals / area
   // floor bands). Missing or invalid config resolves to the code constants,
@@ -832,7 +835,7 @@ export async function loader({ request }: { request: Request }) {
   const grossProfit = suggestedTotal - totalCost;
 
   // ---- 14B.0 emergency panel (server-computed from GET params; ONE path) ----
-  const eparams = new URL(request.url).searchParams;
+  const eparams = url.searchParams; // canonical Split Bag geometry applied above
   const eQuantities = String(eparams.get("eqty") || SUGGESTED_QUANTITIES.slice(0, 5).join(",")).split(",").map((value) => Number(value.trim())).filter((value) => value > 0);
   const eMarginsRaw = String(eparams.get("emargin") || "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isFinite(value) && value > 0);
   const eFamilyRule = resolveMarginFamily(eparams.get("efamily"));
@@ -1763,8 +1766,11 @@ export async function action({ request }: { request: Request }) {
   // server and client). Reads fall back to it; multi-value label-row params
   // come from it authoritatively. Everything is still re-fetched/re-computed —
   // posted params carry IDs and business inputs only, never trusted totals.
-  const psearchParams = new URLSearchParams(String(form.get("psearch") || "").replace(/^\?/, ""));
+  // 2026-11-12: Split Bag geometry is canonical on save too (same rule as the loader).
+  const psearchParams = withCanonicalSplitBagGeometry(new URLSearchParams(String(form.get("psearch") || "").replace(/^\?/, "")));
+  const savedSplitGeometry = withCanonicalSplitBagGeometry(new URLSearchParams({ pfamily: String(form.get("pfamily") || psearchParams.get("pfamily") || ""), psplitbag: String(form.get("psplitbag") || psearchParams.get("psplitbag") || ""), pstockbag: String(form.get("pstockbag") || psearchParams.get("pstockbag") || "") }));
   const fRead = (key: string) => {
+    if ((key === "pwidth" || key === "pheight") && savedSplitGeometry.has(key)) return String(savedSplitGeometry.get(key));
     const direct = form.get(key);
     if (direct != null && String(direct) !== "") return String(direct);
     return String(psearchParams.get(key) ?? "");
@@ -3591,7 +3597,10 @@ function ProductDrivenForm() {
     lidd: canonParams.get("pjarlidd") || "",
     tamperw: canonParams.get("pjartamperw") || "", tamperh: canonParams.get("pjartamperh") || "",
   }));
-  const jarTamperAllowed = jarSpec?.optionalTamperBand === true;
+  // 2026-11-12 live QA: the side lid / tamper band is a PHYSICAL option on every
+  // jar with band geometry — a missing APPLICATION timing never hides it (the
+  // quote stays Needs Review instead; see tamperApplicationLaborPending).
+  const jarTamperAllowed = Boolean(jarStandard?.tamper) && jarSpec?.optionalTamperBand !== false;
   const jarSelection = labelSetSelection(jarSetSel, jarTamperAllowed && jarTamperOpt) ?? { side: false, lid: false, tamper: false };
   const ov = (key: string): number | null => {
     const n = Number(jarOverride[key]);
@@ -3658,8 +3667,14 @@ function ProductDrivenForm() {
     missingNames.has(name) ? { ...inputStyle, borderColor: "#dc2626", outline: "2px solid #fecaca" } : inputStyle;
   const formShape = {
     isBags, isStockBag, jars, isStickers, isBanners, isCustom, isDtp, topRequired,
-    autoBag: Boolean(pm?.autoBag), contourCut: canonCutType === "contour",
+    autoBag: Boolean(pm?.autoBag), contourCut: canonCutType === "contour", isSplitBag,
   };
+  /* 2026-11-12 live QA: every visible field is seeded from the URL (the state
+   * the server costed), and the browser's own form restoration is OFF - it can
+   * restore values by field POSITION, and the field list changes by product
+   * (Split Bag has no product picker), which moved Quantity into Number of
+   * designs. Quantity and designs are seeded only from their own params. */
+  const urlValue = (name: string, fallback = "") => canonParams.get(name) ?? fallback;
   const clearFixedField = (event: React.FormEvent<HTMLFormElement>) => {
     const changed = (event.target as HTMLInputElement | null)?.name;
     if (changed && missingNames.has(changed)) setMissingFields((current) => current.filter((field) => field.name !== changed));
@@ -3672,22 +3687,17 @@ function ProductDrivenForm() {
     if (missing.length) event.preventDefault();
   };
   return (
-    <Form method="get" onChange={(event) => syncCanonLine(event.currentTarget)} onInput={clearFixedField} onSubmit={guardCalculate} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
+    <Form method="get" autoComplete="off" onChange={(event) => syncCanonLine(event.currentTarget)} onInput={clearFixedField} onSubmit={guardCalculate} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
       <label style={{ fontSize: 12, gridColumn: "1 / -1" }}><b>STEP 1 — What are you pricing?</b>
         <select
           key={familyChoice}
           defaultValue={familyChoice === SPLIT_BAG_CALCULATOR_OPTION.value ? SPLIT_BAG_CALCULATOR_OPTION.pfamily : familyChoice}
           style={inputStyle}
           onChange={(event) => {
-            // Same full-form GET as before; only the family params are replaced.
+            // Same full-form GET; only the family params are replaced.
+            // Quantity and designs are carried as themselves (designs default 1).
             const data = new FormData(event.currentTarget.form!);
-            const next = calculatorFamilyParams(event.currentTarget.value);
-            data.set("pfamily", next.pfamily);
-            if (next.pstockbag) data.set("pstockbag", next.pstockbag);
-            else data.delete("pstockbag");
-            if (next.psplitbag) data.set("psplitbag", next.psplitbag);
-            else data.delete("psplitbag");
-            submit(data, { method: "get" });
+            submit(calculatorTransitionParams(data, calculatorFamilyParams(event.currentTarget.value)), { method: "get" });
           }}
         >
           <option value="">— choose a product —</option>
@@ -3715,11 +3725,10 @@ function ProductDrivenForm() {
             defaultValue={familyParams.psplitbag || ""}
             style={inputStyle}
             onChange={(event) => {
+              // Bag type never touches Quantity or Number of designs.
               const data = new FormData(event.currentTarget.form!);
-              if (event.currentTarget.value === SPLIT_BAG_CALCULATOR_OPTION.psplitbag) data.set("psplitbag", SPLIT_BAG_CALCULATOR_OPTION.psplitbag);
-              else data.delete("psplitbag");
-              data.delete("pblank");
-              submit(data, { method: "get" });
+              const split = event.currentTarget.value === SPLIT_BAG_CALCULATOR_OPTION.psplitbag;
+              submit(calculatorTransitionParams(data, { pfamily: "sticker-bags", pstockbag: null, psplitbag: split ? SPLIT_BAG_CALCULATOR_OPTION.psplitbag : null }), { method: "get" });
             }}
           >
             <option value="">Standard 4x5 Sticker Bag</option>
@@ -3735,10 +3744,10 @@ function ProductDrivenForm() {
       {/* 2026-11-12 owner correction: each bag type shows its OWN fixed label geometry. */}
       {isBags && !isStockBag ? (
         <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 8, padding: 8, fontSize: 12 }}>
-          <b>{isSplitBag ? "SPLIT BAG" : "STANDARD 4X5 STICKER BAG"}</b> — art / print size{" "}
-          <b>{(isSplitBag ? SPLIT_BAG_ARTBOARD_IN : BAG_4X5_ARTBOARD_IN).widthIn.toFixed(2)} × {(isSplitBag ? SPLIT_BAG_ARTBOARD_IN : BAG_4X5_ARTBOARD_IN).heightIn.toFixed(2)} in</b>
-          {" · "}cutline <b>{(isSplitBag ? SPLIT_BAG_CUTLINE_IN : BAG_4X5_CUTLINE_IN).widthIn.toFixed(2)} × {(isSplitBag ? SPLIT_BAG_CUTLINE_IN : BAG_4X5_CUTLINE_IN).heightIn.toFixed(2)} in</b>
-          {isSplitBag ? " (owner-confirmed Split Bag geometry; fixed — not the 4x5 label)." : "."}
+          <b>{isSplitBag ? "SPLIT BAG production spec" : "STANDARD 4X5 STICKER BAG production spec"}</b>
+          <div>Art / print size: <b>{(isSplitBag ? SPLIT_BAG_ARTBOARD_IN : BAG_4X5_ARTBOARD_IN).widthIn.toFixed(2)} × {(isSplitBag ? SPLIT_BAG_ARTBOARD_IN : BAG_4X5_ARTBOARD_IN).heightIn.toFixed(2)} in</b></div>
+          <div>Cutline: <b>{(isSplitBag ? SPLIT_BAG_CUTLINE_IN : BAG_4X5_CUTLINE_IN).widthIn.toFixed(2)} × {(isSplitBag ? SPLIT_BAG_CUTLINE_IN : BAG_4X5_CUTLINE_IN).heightIn.toFixed(2)} in</b></div>
+          {isSplitBag ? <div style={smallHelp}>Owner-confirmed and fixed — no width / height entry; the server always costs this geometry.</div> : null}
         </div>
       ) : null}
       {isStockBag ? (
@@ -3765,7 +3774,7 @@ function ProductDrivenForm() {
       ) : null}
       {((isBags && !pm?.autoBag) || jars || isCustom || isDtp) && family ? (
         <label style={{ fontSize: 12 }}>* {isDtp ? "DTP size / product" : "Select product / blank item"}
-          <select name="pblank" onChange={(event) => submit(event.currentTarget.form, { method: "get" })} style={fieldStyle("pblank")}>
+          <select name="pblank" defaultValue={urlValue("pblank")} onChange={(event) => submit(event.currentTarget.form, { method: "get" })} style={fieldStyle("pblank")}>
             <option value="">— select —</option>
             {isPremium ? (<>
               {chironOptions.length ? <optgroup label="CHIRON">{chironOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
@@ -3784,7 +3793,7 @@ function ProductDrivenForm() {
       ) : null}
       {topRequired ? (
         <label style={{ fontSize: 12 }}>* Top type (required for Miron)
-          <select name="plid" style={fieldStyle("plid")}>
+          <select name="plid" defaultValue={urlValue("plid")} style={fieldStyle("plid")}>
             <option value="">— select top —</option>
             {(pm.lidOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -3795,8 +3804,8 @@ function ProductDrivenForm() {
         <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No verified compatible tops are configured for this Miron jar.</p>
       ) : null}
       {family ? (<>
-        <label style={{ fontSize: 12 }}>* Quantity{isDtp ? ` (MOQ ${(pm?.dtpSpec?.moq || 1000).toLocaleString()})` : ""}<input name="pqty" type="number" min={isDtp ? pm?.dtpSpec?.moq || 1000 : 1} style={fieldStyle("pqty")} /></label>
-        <label style={{ fontSize: 12 }}>* Number of designs<input name="pdesigns" type="number" min={0} defaultValue={1} style={fieldStyle("pdesigns")} /></label>
+        <label style={{ fontSize: 12 }}>* Quantity{isDtp ? ` (MOQ ${(pm?.dtpSpec?.moq || 1000).toLocaleString()})` : ""}<input key="pqty" name="pqty" type="number" min={isDtp ? pm?.dtpSpec?.moq || 1000 : 1} defaultValue={urlValue("pqty")} autoComplete="off" style={fieldStyle("pqty")} /></label>
+        <label style={{ fontSize: 12 }}>* Number of designs<input key="pdesigns" name="pdesigns" type="number" min={0} step={1} defaultValue={calculatorDesignCount(canonParams.get("pdesigns"))} autoComplete="off" style={fieldStyle("pdesigns")} /><span style={smallHelp}>Unique artworks — not the quantity and not the printed sides.</span></label>
         {isBags ? (
           <label style={{ fontSize: 12 }}>{isStockBag || isSplitBag ? "Sides" : "Print / application"}
             {/* 2026-10-19 owner decision A: the canonical bag engine reads its side
@@ -3823,12 +3832,13 @@ function ProductDrivenForm() {
             <label style={{ fontSize: 12 }}>
               <input type="checkbox" name="pjartamperopt" value="1" checked={jarTamperOpt} onChange={(event) => setJarTamperOpt(event.currentTarget.checked)} />{" "}
               Add side lid / tamper band (optional, +1 label per jar)
+              {jarStandard?.tamper ? (
+                <div style={smallHelp}>Band art {jarStandard.tamper.widthIn.toFixed(3)} × {jarStandard.tamper.heightIn.toFixed(3)} in · cutline {(jarStandard.tamper.widthIn - 0.125).toFixed(3)} × {(jarStandard.tamper.heightIn - 0.125).toFixed(3)} in</div>
+              ) : null}
               {jarSpec?.tamperApplicationLaborPending ? (
-                <div style={{ ...smallHelp, color: "#92400e" }}>No owner application time for this band yet — print, media, ink and cutting are costed, but the quote stays NEEDS REVIEW (quote-only) until the band application seconds are recorded.</div>
+                <div style={{ ...smallHelp, color: "#92400e" }}>NEEDS REVIEW: no owner application time for this band yet — print, media, ink and cutting are costed, but the quote stays Needs Review (quote-only) until the band application seconds are recorded.</div>
               ) : null}
             </label>
-          ) : jarSpec ? (
-            <p style={{ ...smallHelp, margin: 0 }}>Tamper band: not available for {jarSpec.displayName} (no owner application timing recorded).</p>
           ) : null}
           {/* 2D-4D1 canonical jar mirror: the server reads these fields, never the UI copy. */}
           <input type="hidden" name="pjar" value={jarBlankOption?.jarProfile || ""} />
@@ -4003,11 +4013,11 @@ function ProductDrivenForm() {
           <input type="hidden" name="pheight" value={SPLIT_BAG_ARTBOARD_IN.heightIn} />
         </>) : null}
         {!isDtp && !jars && !isSplitBag ? (<>
-          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={fieldStyle("pwidth")} /></label>
-          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" style={fieldStyle("pheight")} /></label>
+          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" defaultValue={urlValue("pwidth")} style={fieldStyle("pwidth")} /></label>
+          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" defaultValue={urlValue("pheight")} style={fieldStyle("pheight")} /></label>
         </>) : null}
         {!isDtp ? (<label style={{ fontSize: 12 }}>* Material
-          <select name="pmat" style={fieldStyle("pmat")}>
+          <select name="pmat" defaultValue={urlValue("pmat")} style={fieldStyle("pmat")}>
             <option value="">— select material —</option>
             {(pm.materialOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -4026,7 +4036,7 @@ function ProductDrivenForm() {
         </details>) : null}
         {!isDtp ? (<>
         <label style={{ fontSize: 12 }}>Printer
-          <select name="pprinter" style={inputStyle}>
+          <select name="pprinter" defaultValue={urlValue("pprinter", "auto")} style={inputStyle}>
             <option value="auto">Auto (canonical routing)</option>
             <option value="mimaki">Mimaki</option>
             <option value="roland">Roland</option>
@@ -4039,19 +4049,19 @@ function ProductDrivenForm() {
             calibration is owner-approved.
           </span>
         </label>
-        <label style={{ fontSize: 12 }}>White layers (0–14)<input name="pwhitelayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>White layers (0–14)<input name="pwhitelayers" type="number" min={0} max={14} defaultValue={urlValue("pwhitelayers", "0")} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>White coverage % (required when white is used)
-          <input name="pwhitecoverage" type="number" min={1} max={100} step="1" placeholder="no default — must be entered" style={fieldStyle("pwhitecoverage")} />
+          <input name="pwhitecoverage" type="number" min={1} max={100} step="1" placeholder="no default — must be entered" defaultValue={urlValue("pwhitecoverage")} style={fieldStyle("pwhitecoverage")} />
           <span style={smallHelp}>
             A separate input from the layer count and never derived from it.
             White has NO default coverage: leave it blank and the job stays
             DRAFT ONLY.
           </span>
         </label>
-        <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={0} style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Gloss coverage % (blank = 90% pre-art estimate)<input name="pglosscoverage" type="number" min={0} max={100} step="1" placeholder="90% estimated" style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={urlValue("pglosslayers", "0")} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Gloss coverage % (blank = 90% pre-art estimate)<input name="pglosscoverage" type="number" min={0} max={100} step="1" placeholder="90% estimated" defaultValue={urlValue("pglosscoverage")} style={inputStyle} /></label>
         <label style={{ fontSize: 12 }}>Specialty file prep
-          <select name="pfileprep" style={inputStyle}>
+          <select name="pfileprep" defaultValue={urlValue("pfileprep")} style={inputStyle}>
             <option value="">Customer supplied production-ready mask — $0</option>
             <option value="1">{SPECIALTY_FILE_PREP_LABEL}</option>
           </select>

@@ -15,6 +15,8 @@
 // Missing cost is never $0: every money field here is `number | null`, and a
 // blocked job carries null — never a zero that could read as "free".
 
+import { SPLIT_BAG_ARTBOARD_IN } from "./bag-artboard-geometry";
+
 /* ------------------------------------------------------------------ *
  * Stock Bags — an explicit family in the selector.
  *
@@ -74,6 +76,70 @@ export function calculatorFamilyChoice(pfamily: string | null | undefined, pstoc
 }
 
 /* ------------------------------------------------------------------ *
+ * 2026-11-12 live QA — calculator STATE rules (pure, client + server).
+ *
+ * Quantity (physical units) and Number of designs (unique artworks) are
+ * independent: nothing here ever derives one from the other. Split Bag
+ * geometry is canonical (owner-confirmed): a posted / stale pwidth / pheight
+ * can never override it.
+ * ------------------------------------------------------------------ */
+type ParamSource = URLSearchParams | { get(name: string): unknown; forEach(cb: (value: any, key: string) => void): void };
+
+/** Exact owner Split Bag art / print size, as the query-string values the legacy path reads. */
+export const SPLIT_BAG_PARAM_WIDTH = String(SPLIT_BAG_ARTBOARD_IN.widthIn); // "7.2" (= 7.20)
+export const SPLIT_BAG_PARAM_HEIGHT = String(SPLIT_BAG_ARTBOARD_IN.heightIn); // "4.38" — never rounded to 4.4
+
+/** pfamily=sticker-bags + psplitbag=1 (and not a Stock Bag). */
+export function isSplitBagParams(params: { get(name: string): unknown }): boolean {
+  return String(params.get("pfamily") ?? "") === SPLIT_BAG_CALCULATOR_OPTION.pfamily
+    && String(params.get("psplitbag") ?? "") === SPLIT_BAG_CALCULATOR_OPTION.psplitbag
+    && String(params.get("pstockbag") ?? "") !== STOCK_BAG_CALCULATOR_OPTION.pstockbag;
+}
+
+/**
+ * The Number of designs to show / post: a whole number >= 0 as entered, else
+ * the default 1. Reads ONLY the designs value — never the quantity.
+ */
+export function calculatorDesignCount(raw: unknown): string {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/.test(text)) return "1";
+  return String(Number(text));
+}
+
+/** A copy of the params with the canonical Split Bag geometry forced (no-op for every other product). */
+export function withCanonicalSplitBagGeometry(params: URLSearchParams): URLSearchParams {
+  const out = new URLSearchParams(params);
+  if (isSplitBagParams(out)) {
+    out.set("pwidth", SPLIT_BAG_PARAM_WIDTH);
+    out.set("pheight", SPLIT_BAG_PARAM_HEIGHT);
+  }
+  return out;
+}
+
+/**
+ * The GET params for a product / bag-type switch: the current form values with
+ * the new family params. Quantity and designs are carried as THEMSELVES (designs
+ * defaults to 1); the product pick is cleared; Split Bag gets its canonical
+ * geometry and leaving Split Bag drops its fixed size so the next product's
+ * own dimension fields start empty.
+ */
+export function calculatorTransitionParams(
+  current: ParamSource,
+  next: { pfamily: string; pstockbag: string | null; psplitbag: string | null },
+): URLSearchParams {
+  const out = new URLSearchParams();
+  current.forEach((value, key) => { if (typeof value === "string") out.append(key, value); });
+  const wasSplit = isSplitBagParams(out);
+  out.set("pfamily", next.pfamily);
+  if (next.pstockbag) out.set("pstockbag", next.pstockbag); else out.delete("pstockbag");
+  if (next.psplitbag) out.set("psplitbag", next.psplitbag); else out.delete("psplitbag");
+  out.set("pdesigns", calculatorDesignCount(out.get("pdesigns")));
+  out.delete("pblank");
+  if (wasSplit && !isSplitBagParams(out)) { out.delete("pwidth"); out.delete("pheight"); }
+  return withCanonicalSplitBagGeometry(out);
+}
+
+/* ------------------------------------------------------------------ *
  * Pre-calculation validation (client UX only — the server still fails
  * closed on its own; this only stops an obviously incomplete submit).
  * ------------------------------------------------------------------ */
@@ -92,6 +158,8 @@ export type CalculatorFormShape = {
   autoBag: boolean;
   /** Stickers with a contour cut need a measured perimeter. */
   contourCut: boolean;
+  /** Split Bag geometry is canonical — width / height are never required inputs. */
+  isSplitBag?: boolean;
 };
 
 export type MissingField = { name: string; label: string };
@@ -113,7 +181,7 @@ export function missingRequiredCalculatorFields(shape: CalculatorFormShape, read
   if (shape.topRequired && !filled(read("plid"))) missing.push({ name: "plid", label: "Top type" });
   if (!positive(read("pqty"))) missing.push({ name: "pqty", label: "Quantity" });
   if (!filled(read("pdesigns"))) missing.push({ name: "pdesigns", label: "Number of designs" });
-  if (!shape.isDtp && !shape.jars) {
+  if (!shape.isDtp && !shape.jars && !shape.isSplitBag) {
     if (!positive(read("pwidth"))) missing.push({ name: "pwidth", label: shape.isBanners ? "Banner width" : "Print width" });
     if (!positive(read("pheight"))) missing.push({ name: "pheight", label: shape.isBanners ? "Banner height" : "Print height" });
   }
@@ -161,7 +229,7 @@ const BLOCKER_PLAIN: Record<string, { kind: BlockerKind; text: string }> = {
   SPLIT_BAG_BELOW_MOQ: { kind: "blocked", text: "Quantity is below the Split Bag minimum (64)" },
   STANDARD_PRODUCTION_DIMENSIONS_NOT_CONFIRMED: { kind: "blocked", text: "Confirmed product dimensions" },
   LABEL_GEOMETRY_UNSUPPORTED: { kind: "blocked", text: "Confirmed label dimensions for this product" },
-  MISSING_APPLICATION_STANDARD: { kind: "blocked", text: "Owner label-application time standard" },
+  MISSING_APPLICATION_STANDARD: { kind: "blocked", text: "Needs Review — missing owner application timing (e.g. 3oz / 4oz side lid band)" },
   APPLICATION_RATE_REQUIRED: { kind: "blocked", text: "Owner label-application time standard" },
   BANNER_FINISHING_RATE_REQUIRED: { kind: "blocked", text: "Banner finishing standard" },
   BANNER_TRIM_RATE_REQUIRED: { kind: "blocked", text: "Banner trimming standard" },

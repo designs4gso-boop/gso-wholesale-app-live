@@ -32,20 +32,17 @@ export function groupReadinessSteps<T extends ReadinessStep>(steps: T[]) {
 }
 
 /**
- * One plain-English sentence for the Quote Pipeline card (the exact items stay
- * in its details). The loader deep-checks a sample of recipes and keeps at most
- * 3 failures, so the count is a floor ("At least N"), never a total.
+ * One plain-English sentence for the Quote Pipeline card that NAMES what is
+ * unresolved (2026-11-12: never a generic "at least N" count). The loader
+ * deep-checks a bounded sample of recipes and lists every failure in it; jar
+ * geometry issues arrive already resolved to their canonical answer
+ * (jar-recipe-geometry.ts), e.g. "Miron 50ml — label geometry pending owner sample".
  */
 export function quotePipelineSummary(failingSamples: { name: string; firstIssue: string }[], quoteReadyRecipes: number) {
   if (quoteReadyRecipes === 0) return "No recipes are quote-ready yet.";
   if (failingSamples.length === 0) return null;
-  const n = failingSamples.length;
-  const allDimensions = failingSamples.every((sample) => /width or height/i.test(sample.firstIssue));
-  const allJars = failingSamples.every((sample) => /\bjar\b/i.test(sample.name));
-  const noun = `${allJars ? "jar " : ""}recipe${n === 1 ? "" : "s"}`;
-  return allDimensions
-    ? `At least ${n} ${noun} need${n === 1 ? "s" : ""} dimensions before ${n === 1 ? "it is" : "they are"} quote-ready.`
-    : `At least ${n} ${noun} ${n === 1 ? "is" : "are"} not fully quote-ready yet.`;
+  const items = failingSamples.map((sample) => (sample.firstIssue.includes(" — ") ? sample.firstIssue : `${sample.name}: ${sample.firstIssue}`));
+  return `Not quote-ready yet: ${items.join("; ")}.`;
 }
 
 /** The step "Fix Next Issue" opens: the loader's existing nextStep, else the first warning. */

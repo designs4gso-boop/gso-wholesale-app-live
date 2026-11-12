@@ -19,6 +19,13 @@ Branch `overnight/final-operational-readiness-2026-11-11` from live `cfb9a36`. N
 - Qty 500 true cost (test fixture, Mimaki matte): Front only $233.73 -> $272.00; Front + Back $332.22 -> $409.66. Standard 4x5 unchanged ($165.73).
 - **Jar Side Lid / tamper band** is now selectable on 3oz (art 7.06 x 0.5, cutline 6.935 x 0.375) and 4oz (art 7.125 x 0.5, cutline 7.0 x 0.375). Print / media / ink / cut are costed; there is still NO owner band application time for 3oz/4oz, so a job with the band stays DRAFT_ONLY (needs review / quote-only). Side / Lid jobs quote normally.
 
+## Live QA regressions 2026-11-12 (after 03c0eed went live)
+
+- Split Bag width / height are never manual inputs: the loader and the save action force the canonical 7.2 x 4.38 (cutline 7.07 x 4.26) whatever the query string says; the form shows a read-only production spec.
+- Quantity and Number of designs are independent. The product form now seeds every field from the URL and has `autoComplete="off"` (browser form restoration can restore values by field position, and the field list changes by product). Product / bag-type switches carry pqty and pdesigns as themselves (designs default 1). Qty 500 / 1 design: Front only $272.00, Front + Back $409.66 (test fixture); the live ~$4,929 was designs = 500.
+- The 3oz / 4oz side lid band is offered whenever band geometry exists; missing band application time keeps the quote Needs Review with an explicit message. A tab opened before a deploy keeps the old browser code: hard-refresh the embedded admin after each deploy.
+- Launch Readiness: jar recipes are dimension-ready when canonical jar geometry is owner-confirmed (the seeded jar recipes never had Product Setup width / height). Unresolved items are named (e.g. "Miron 50ml — label geometry pending owner sample"; "5oz Clear Jar with Applied Label — not an active jar product"). The agent-queue conversion gate is unchanged.
+
 ## Mimaki White — controlled calibration procedure (DO NOT RUN without owner approval)
 
 No new defensible evidence exists (RasterLink/MijCtrl logs cover ~1 day, no job folder, no coverage data; Profile.db is encrypted). When the owner approves ONE controlled print during normal production:
