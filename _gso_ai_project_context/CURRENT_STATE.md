@@ -2,6 +2,10 @@
 
 Updated: 2026-10-08 (October 2026 release LIVE on Render; hotfixes PR #2 / #3 / #4 merged; 4x5 blank bag = $0.11 owner authority)
 
+## Overnight finalization (2026-11-12, branch `overnight/final-operational-readiness-2026-11-11`)
+
+See docs/GSO_ERP_OVERNIGHT_READINESS_2026-11-12.md. Server-side financial redaction for Purchase Requests / Reorder Report; PO export, Vendors, Machines, Shopify Links, Configurator Jar Mapping and Admin Settings gated to owner / authorized manager; manual printer selection = owner + authorized print operator only (managers not by default); Print Intake review needs manageIntake; owner-only Staff Access & Launch Readiness page; calibration review needs an owner-set minimum job count (GSO_CALIBRATION_REVIEW_MIN_SAMPLES) and never auto-changes; customer-notification foundation never sends; STAGED (not applied) additive migration 20261112090000_add_operational_records (reservations, structured QC / reprint / shipment / waste, purchasing approver, rush, promised date, variance, notification preferences).
+
 ## Final operational readiness closeout (2026-11-11, branch `hotfix/mimaki-white-owner-rules-2026-11-11`, from live `387f8d8`)
 
 Commits: `ac6a4fa` jar production geometry · `bef793d` staff roles + financial gates · `3af002f` production fulfillment / accountability · `f50c4fd` atomic inventory + purchasing approval · `fb62d85` storefront hold / deposits / quote snapshots. No schema change in any of them; nothing deployed.
