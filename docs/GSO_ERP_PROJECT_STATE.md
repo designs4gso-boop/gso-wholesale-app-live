@@ -8,13 +8,58 @@
 - **Fixed machine overhead** is per PHYSICAL PRINT RUN: `computeOccupancyMinutes({ includeFixedMinutes })` — specialty channels printed in the same run never add a second fixed overhead. All four active calibrations are still `variable_only`, so no cost changed.
 - **Mimaki White — calibration EVIDENCE only (owner signoff 2026-11-11: do NOT activate or seed any rate from it):** read-only RasterLink log audit (C:\ProgramData\Mimaki\unitLogServer RL_Log_DB, 30-day retention, 2026-10-12 → 11-10; NAS rasterlink CSVs; MDC job XML). 14 completed CMYK+White composite runs; 4 usable for ink (31.83 layout sqft, one label family, Generic PVC Matte v3.5 600x1200 32-pass). Raw White = 1.356 mL/layout sqft weighted (median 1.317, P25 0.874, P75 1.856, min 0.739, max 2.276). This is White mL / TOTAL layout sqft with no coverage or layer data, so it is NOT a normalized 100%-coverage calibration. Timing ≈ 3.24 min/layout sqft (5 runs, narrow band) vs ≈ 1.26 CMYK-only. Mimaki + White stays operationally supported; costing blocks `MIMAKI_WHITE_CALIBRATION_REQUIRED` until an owner-approved calibration exists; Roland White is never a fallback; explicit Roland quotes White on Roland's own calibration.
 - **Future Mimaki White evidence (no schema change):** `mimaki-white-evidence.server.ts` joins a PrintLogEntry (sqft, whiteInkMl, printMinutes, mediaName, job identity, rawRow._gso resolution/pass/quality/output W×L/white1+2 mL when the RasterLink converter supplies them) with the linked ERP item's quote snapshot (operator White coverage % and layers) and lists every missing field; only complete records are calibration-usable. Still missing from RasterLink today: layout dimensions, resolution, pass config (converter columns), and any measured coverage — coverage/layers exist only as the quote's operator estimate.
-- **Mimaki CMYK identity/provenance:** the seeded row stays exactly as measured (PVC Gloss / Mimaki Vision Vinyl, 2026-08-18). Production now runs Generic PVC Matte v3.5; recent usage is at/below the 1.89 / 1.444 reference, so numbers are unchanged. `CALIBRATION_PROVENANCE` discloses the unmeasured-profile application on every Mimaki CMYK quote (status APPLIED_TO_UNMEASURED_PROFILE_PENDING_OWNER_CONFIRMATION). `OWNER_CONFIRMED_PROFILE_ALIASES` is empty; `calibrationKeyForObservedProfile` fails closed on any other profile. Recommendation: owner either confirms "Generic PVC Matte v3.5" as an alias (one-line change) or approves a new measured identity for it (row stays pending until measured).
+- **Mimaki CMYK identity/provenance:** the seeded row stays exactly as measured (PVC Gloss / Mimaki Vision Vinyl, 2026-08-18). Production now runs Generic PVC Matte v3.5; recent usage is at/below the 1.89 / 1.444 reference, so numbers are unchanged. `CALIBRATION_PROVENANCE` discloses the unmeasured-profile application on every Mimaki CMYK quote (status APPLIED_TO_UNMEASURED_PROFILE_PENDING_OWNER_CONFIRMATION). `OWNER_CONFIRMED_PROFILE_ALIASES` is empty; `calibrationKeyForObservedProfile` fails closed on any other profile. OWNER DECISION 2026-11-11 = OPTION C: NO alias yet — the row is not renamed, its numbers are not changed, and the provenance warning / pending status stays on every Mimaki CMYK quote. The owner expects substantial real Mimaki production data to exist; reviewing it (and recalibrating if warranted) is a future evidence task. No alias until the owner approves one.
 - **Owner job-level material $/sqft override:** `material-override.server.ts` — owner-only (verified session identity), explicit value (0 < x ≤ 50) and ≥ 8-char reason, one canonical material per job (labels, bags, jar label media; banners refused), roll width from the approved roll or the Material Center record (never invented). Applied server-side after material verification in BOTH loader and save; the result and UI say OVERRIDE; the saved snapshot stores value, reason, owner user ID, time and scope. Nothing is written to Material Center, VendorProduct or standards; it never becomes a default.
-- **Primer:** unchanged — a "primer" finish still forces the Roland and an explicit Mimaki on primer work reviews. Filename hints do not detect primer (unchanged).
+- **Primer (OWNER DECISION 2026-11-11, supersedes the earlier "primer forces Roland" rule):** GSO does not run Primer on the Mimaki OR the Roland. A requested Primer is never routed to either press, never priced and never silently dropped — Print Intake reviews it with `PRIMER_NOT_CONFIGURED` (`print-intake-routing.server.ts`, checked before every other routing rule, so an explicit press, filename tag or load data cannot route it). Primer is no longer a gloss token; Gloss alone forces the Roland. Historical RIP/VersaWorks log parsing that buckets primer mL with gloss/clear and the Machines ink-slot "Primer" label are left as historical/config data.
 - **Roland ink calibration unchanged.** Calibration monitoring target (future): flag owner review at ~10% sustained variance; never auto-overwrite.
 - **Split Bag:** MOQ 64 enforced (`SPLIT_BAG_BELOW_MOQ`); one $0.25 blank; 2/4 label positions; selling price provisional; packout unmodeled; freight never assumed.
 - **Storefront raw-variant bypass:** a paid order with a RAW variant of an active ConfiguratorProduct (matched by Shopify product/variant ID) is held for owner review (`shopify_order_configurator_bypass`) and never becomes a production job. Full prevention still needs Shopify-side action (see closeout).
 - **Target permission contract (not built):** Owners = everything. Sales = customer selling price and quote/order customer totals only (no true cost, profit, margin, internal floors) unless promoted. Production = no revenue / cost / profit / margin / floors / owner pricing controls (server-redacted today). Requires separate Shopify staff logins per person before employees use the ERP.
+
+## Predeploy owner decisions (2026-11-11, follow-up to `b8a3711`)
+
+- **Auto routing (accepted as built):** non-Gloss work may Auto-select a compatible, calibrated press only when reliable load evidence clearly shows one less busy (preferred metric: estimated machine minutes remaining). Missing / incomplete / tied load = `AUTO_MACHINE_LOAD_UNAVAILABLE`, operator chooses. No Mimaki default. Gloss = Roland. Primer = `PRIMER_NOT_CONFIGURED`.
+- **Who may select a machine (requirement, NOT built):** manual compatible machine selection should eventually be limited to Owners and Authorized Print Operators, not every employee. The app has no staff-role table (Shopify sessions are offline; the only verified identity is the session-token staff user ID used by `owner-authorization.server.ts`), so no Print Operator role was invented in the hotfix. Current behavior preserved: the owner-gated cost calculator, and the Production / Print Intake printer choices available to Shopify-authenticated admins of the shop. Build in the employee-role phase.
+- **White / Gloss coverage (workflow, NOT automated):** until automated coverage is reliable, White coverage % and Gloss coverage % are entered/confirmed by Art/Prepress. No speculative automated coverage. Without a role system this is a documented workflow, not a permission.
+- **Mimaki White:** operationally supported; no approved calibration = `MIMAKI_WHITE_CALIBRATION_REQUIRED`. Do not seed one; 1.36 / 1.86 are raw layout-basis evidence, never normalized 100%-coverage values; Roland values never substitute. The owner expects more historical evidence; controlled calibration printing is approved LATER only if that evidence remains insufficient. No destructive or production-changing inspection.
+- **Material override:** owner-only job-level material $/sqft override stays as built; both owners may use it through the authenticated owner account; reason is free text only (no standardized dropdown).
+
+### Confirmed future requirements (recorded, NOT built in this hotfix)
+
+- A. Banner finishing — eventually auto-price hemming, grommets, pole pockets, double-sided from verified material/labor standards.
+- B. Reprint reasons — machine error; operator error; artwork/prepress error; customer change/error; material defect; color/quality issue; shipping damage; other.
+- C. Waste — record actual waste/spoilage on EVERY job.
+- D. QC — authorized: print operators and baggers.
+- E. Completion — a production job becomes Completed only AFTER shipment or customer pickup.
+- F. Shipping data — carrier, actual shipping cost, tracking number, package count, ship date.
+- G. Inventory priority — 1 blank bags, 2 printing media rolls, 3 jars/lids, 4 inks, 5 Split Bags, 6 shipping boxes, 7 banner material.
+- H. Inventory accounting — reserve expected inventory at production scheduling; consume actual inventory at production completion.
+- I. Low stock — initially manual minimum safety levels; later usage + vendor lead time reorder points.
+- J. Purchasing — staff may create purchase requests; owner/authorized management approves purchasing.
+- K. Sales permissions — may see customer price and quote/order totals; may NOT see true cost, profit, margin or internal floor.
+- L. Production permissions — operational job information only; no internal financials.
+- M. Manager role — approved for the future.
+- N. Quote authority — Sales may send ordinary quotes fully within approved rules; below-floor / override / exception pricing needs authorized approval.
+- O. Sales discounts — no discretionary Sales discount authority for now.
+- P. Credit terms — no Net terms currently.
+- Q. Deposits — standard allowed deposit 50%.
+- R. Scheduling — future ERP calculates promised completion dates from workload/capacity.
+- S. Rush jobs — rush pricing/workflow required, but RATE/RULES NOT APPROVED; no surcharge may be invented.
+- T. Actual vs estimated — completed jobs eventually show quoted true cost, actual true cost, dollar variance and percentage variance.
+- U. Calibration monitoring — 10% sustained variance creates an owner review alert; calibration is never modified automatically.
+- V. Dashboard — all major operating metrics, with user-configurable selection/layout.
+- W. Notifications — configurable alert preferences, not hardcoded mandatory alerts.
+- X. Accounting — future QuickBooks integration.
+- Y. Customer communication — future status notifications by BOTH email and SMS (proof ready, payment required, in production, ready for pickup, shipped).
+- Z. AI Sales Agents — ERP/Shopify-connected Sales/Marketing agents remain an approved major priority after operational core stabilization.
+
+### Intentionally TBD (do NOT invent)
+
+- Split Bag carton packout and inbound freight (owner will provide real shipment information).
+- Rush surcharge, lead-time rules and qualification criteria.
+- Banner finishing labor/material rates.
+- Mimaki White active calibration.
+- Mimaki CMYK profile alias.
 
 ## Recovery & Completion Audit (UPDATED 2026-11-11 — supersedes the blocks below where they disagree)
 

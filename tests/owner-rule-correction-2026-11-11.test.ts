@@ -23,7 +23,7 @@ import {
 } from "../app/lib/machine-routing.server";
 import { selectLessBusyPrinter, type MachineLoadSnapshot } from "../app/lib/machine-load-balancing";
 import { machineLoadFromItems } from "../app/lib/machine-load.server";
-import { decideMachine, decideMachineFromFilename } from "../app/lib/print-intake-routing.server";
+import { PRIMER_NOT_CONFIGURED, decideMachine, decideMachineFromFilename, needsGloss, needsPrimer } from "../app/lib/print-intake-routing.server";
 import { computeOccupancyMinutes } from "../app/lib/machine-calibration.server";
 import {
   assembleCanonicalJob,
@@ -390,11 +390,26 @@ describe("Mimaki White calibration stays NOT activated; future evidence is captu
   });
 });
 
-describe("Primer routing is unchanged (no new owner capability decision)", () => {
+describe("Primer is not configured on either press (owner decision 2026-11-11)", () => {
   const item = (o: Record<string, unknown>) => ({ id: "i", itemTicket: null, ripJobName: null, suggestedFileName: null, productTitle: "x", selectedFinish: null, materialSummary: null, machineSummary: null, ...o }) as any;
-  it("primer still forces the Roland, and an explicit Mimaki on primer work still reviews", () => {
-    expect(decideMachine(item({ selectedFinish: "Primer + CMYK" }))).toMatchObject({ machine: "roland" });
+  const MIMAKI_IDLE = { source: "test", capturedAt: "2026-11-11T00:00:00Z", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 0, estimatedMinutes: 0 }, roland: { openItems: 3, estimatedMinutes: 90 } } };
+  it("a requested Primer reviews with PRIMER_NOT_CONFIGURED — never Roland, never Mimaki", () => {
+    expect(PRIMER_NOT_CONFIGURED).toBe("PRIMER_NOT_CONFIGURED");
+    expect(decideMachine(item({ selectedFinish: "Primer + CMYK" }))).toEqual({ machine: null, machineRule: null, reasons: [PRIMER_NOT_CONFIGURED] });
+    expect(decideMachine(item({ selectedFinish: "Primer + Gloss" })).reasons).toEqual([PRIMER_NOT_CONFIGURED]);
+  });
+  it("an explicit press, a filename tag or load data cannot route Primer work", () => {
+    expect(decideMachine(item({ selectedFinish: "Primer", machineSummary: "Roland LG-640" })).machine).toBeNull();
     expect(decideMachine(item({ selectedFinish: "Primer", machineSummary: "Mimaki UCJV300-130" })).machine).toBeNull();
+    expect(decideMachine(item({ materialSummary: "Finish: primer" }), "GSO-1_ROLAND.pdf").reasons).toEqual([PRIMER_NOT_CONFIGURED]);
+    expect(decideMachine(item({ selectedFinish: "Primer" }), "GSO-1_MIMAKI.pdf", MIMAKI_IDLE).machine).toBeNull();
+    expect(decideMachine(item({ selectedFinish: "Primer" }), "", MIMAKI_IDLE).machine).toBeNull();
+    expect(decideMachine(item({ selectedFinish: "CMYK" }), "", MIMAKI_IDLE).machine).toBe("mimaki"); // same load routes non-Primer work
+  });
+  it("Primer is detected but no longer counted as gloss; Gloss alone still forces the Roland", () => {
+    expect(needsPrimer(item({ selectedFinish: "Primer" }))).toBe(true);
+    expect(needsGloss(item({ selectedFinish: "Primer" }))).toBe(false);
+    expect(decideMachine(item({ selectedFinish: "Gloss" }))).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
   });
 });
 

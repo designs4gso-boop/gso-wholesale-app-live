@@ -152,6 +152,14 @@ compatible; Auto picks the less busy press only from complete load data,
 otherwise the operator chooses (no permanent Mimaki default). Mimaki White is
 costed only from its own owner-approved calibration (none approved yet).
 Contradictions go to review — never guessed.
+PRIMER (owner decision 2026-11-11): not configured on either press — never
+routed, priced or dropped; Print Intake reviews PRIMER_NOT_CONFIGURED.
+Mimaki CMYK profile: Option C — no Generic PVC Matte v3.5 alias yet; row and
+numbers unchanged; provenance warning stays. Machine selection for Owners +
+Authorized Print Operators and Art/Prepress-confirmed White/Gloss coverage are
+documented requirements for the employee-role phase (no role system yet).
+Full next-phase owner decisions: docs/GSO_ERP_PROJECT_STATE.md
+"Predeploy owner decisions (2026-11-11)".
 
 ## Known safe debt (classified in the 15Z audit)
 Unlink/relink workflow; automatic reprint-cost integration; theme JS >10KB

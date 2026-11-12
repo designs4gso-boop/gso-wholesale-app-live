@@ -99,10 +99,14 @@ export function extractJobTicketFrom(text: string): string {
 
 // ---------- machine decision (conservative v1) ----------
 
-const WHITE_GLOSS_TOKENS = ["white", "gloss", "clear", "varnish", "primer", "spot uv", "w+g"];
-// 2026-11-11: only GLOSS-class finishes force the Roland. "primer" stays here
-// (Roland-only ink on GSO's presses — unchanged pending owner confirmation).
-const GLOSS_TOKENS = ["gloss", "varnish", "primer", "spot uv", "w+g"];
+const WHITE_GLOSS_TOKENS = ["white", "gloss", "clear", "varnish", "spot uv", "w+g"];
+// 2026-11-11: only GLOSS-class finishes force the Roland.
+const GLOSS_TOKENS = ["gloss", "varnish", "spot uv", "w+g"];
+// 2026-11-11 owner decision: GSO does not run Primer on either press. A
+// requested Primer is never routed (Mimaki or Roland), never priced and never
+// silently dropped — the item reviews with PRIMER_NOT_CONFIGURED.
+export const PRIMER_NOT_CONFIGURED = "PRIMER_NOT_CONFIGURED";
+const PRIMER_TOKENS = ["primer"];
 
 // Canonical summaries state zero counts explicitly ("Gloss Layers: 0X") —
 // a stated ZERO is not a requirement, so it is removed before token checks.
@@ -115,6 +119,12 @@ const finishHaystack = (item: Pick<IntakeItem, "selectedFinish" | "materialSumma
 export function needsWhiteOrGloss(item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">): boolean {
   const haystack = finishHaystack(item);
   return WHITE_GLOSS_TOKENS.some((token) => haystack.includes(token));
+}
+
+/** True when Primer was requested — not configured on any GSO press. */
+export function needsPrimer(item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">): boolean {
+  const haystack = finishHaystack(item);
+  return PRIMER_TOKENS.some((token) => haystack.includes(token));
 }
 
 /** True when the finish needs a gloss-class layer — the only thing that forces the Roland. */
@@ -147,7 +157,8 @@ export type MachineDecision = {
 };
 
 // Owner routing rules (corrected 2026-11-11 — the Mimaki prints White):
-//   1. gloss required                     -> Roland LG-640 (gloss_requires_roland);
+//   0. Primer requested                   -> review PRIMER_NOT_CONFIGURED (no press)
+//   1. gloss required                    -> Roland LG-640 (gloss_requires_roland);
 //                                            explicit Mimaki / MIMAKI tag -> review
 //   2. explicit ERP Roland / Mimaki       -> that press (explicit_erp_machine)
 //   3. standalone ROLAND / MIMAKI tag     -> that press (explicit_*_tag)
@@ -157,6 +168,7 @@ export type MachineDecision = {
 // Contradictory data reviews: a machineSummary naming both printers, a tag
 // that contradicts the ERP assignment, or conflicting tags.
 export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: MachineLoadSnapshot | null): MachineDecision {
+  if (needsPrimer(item)) return { machine: null, machineRule: null, reasons: [PRIMER_NOT_CONFIGURED] };
   const gloss = needsGloss(item);
   const assigned = assignedMachineOf(item);
   const rolandTag = hasRolandFilenameTag(fileName);

@@ -10,7 +10,7 @@ with reason / MISS missing / DUP duplicated / BLK blocked.
 | Media consumed | EST (finished area + 10% PROV — NOT RIP layout; see O) | EXC |
 | CMYK / white ink | EST-OWN (0.6 ml/sqft basis; sample A says ~1.5 ml/sqft CMYK — calibration pending) | EXC |
 | Gloss ink | EST (Roland linear; Mimaki provisional G.3) | EXC |
-| Primer/optimizer | MISS (not modeled; confirm if used) | EXC |
+| Primer/optimizer | EXC (owner 2026-11-11: not used on Mimaki or Roland; a requested Primer reviews `PRIMER_NOT_CONFIGURED`, never priced or routed) | EXC |
 | Cleaning/purge allowance | MISS | EXC |
 | Leading/trailing media | MISS (partially hidden inside 10% waste PROV) | EXC |
 | Layout/nesting loss | MISS (same 10% proxy; real utilization unmeasured) | EXC |
