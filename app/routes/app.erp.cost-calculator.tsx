@@ -42,7 +42,7 @@ import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutl
 import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
 import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE } from "../lib/jar-cost-inputs.server";
 // 2026-10-05 fixed-product spec layer (client-safe): standard jar dimensions are RESOLVED, never typed.
-import { JAR_LABEL_GEOMETRY, formatJarGeometry, type JarSizeKey } from "../lib/jar-label-geometry";
+import { JAR_LABEL_GEOMETRY, formatJarCutline, formatJarGeometry, type JarSizeKey } from "../lib/jar-label-geometry";
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
@@ -3849,9 +3849,10 @@ function ProductDrivenForm() {
               <b style={{ color: confirmed ? undefined : "#92400e" }}>{AUTHORITY_LABEL[jarSpec.authorityStatus]}: {jarSpec.displayName}</b>{jarOverrideActive ? overrideBadge : null}
               {!confirmed ? <div style={{ color: "#92400e", fontWeight: 700 }}>{PENDING_CONFIRMATION_WARNING}</div> : null}
               <div style={{ marginTop: 4 }}>
-                {formatJarGeometry(jarStandard, jarSelection)}{" "}
+                <b>Label / art size:</b> {formatJarGeometry(jarStandard, jarSelection)}{" "}
                 <span style={{ color: "#6b7280" }}>(read-only, resolved from {jarSpec.source.module}, {jarSpec.source.version})</span>
               </div>
+              <div><b>Cutline (label - 0.125 in):</b> {formatJarCutline(jarStandard, jarSelection)}</div>
               {!confirmed ? (
                 <div style={{ color: "#78350f" }}>
                   These are the dimensions the cost engine prices with today; they are not owner-confirmed physical dimensions. Pricing is unchanged. Use Advanced / Custom Size Override if the job needs a different size.

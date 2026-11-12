@@ -34,15 +34,15 @@ describe("geometry extraction is behaviour-preserving", () => {
     expect(ENGINE_BAG_ARTBOARD).toBe(BAG_4X5_ARTBOARD_IN);
   });
 
-  it("the table holds exactly the Patch 2A owner presets (pinned, never inferred)", () => {
+  it("the table holds the LABEL / ART sizes: Patch 2A presets + the 2026-11-11 owner-confirmed 250ml / 3oz / 4oz (pinned, never inferred)", () => {
     expect(JAR_LABEL_GEOMETRY).toEqual({
       "50ml": { side: { widthIn: 5.6, heightIn: 1.5 }, lid: { diameterIn: 1.6 }, tamper: { widthIn: 5.6, heightIn: 0.5 } },
       "100ml_tall": { side: { widthIn: 6.3, heightIn: 3.15 }, lid: { diameterIn: 1.75 }, tamper: { widthIn: 6.3, heightIn: 0.5 } },
       "100ml_wide": { side: { widthIn: 6.6, heightIn: 2.6 }, lid: { diameterIn: 1.9 }, tamper: { widthIn: 6.6, heightIn: 0.5 } },
       "150ml": { side: { widthIn: 7.125, heightIn: 3.125 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.125, heightIn: 0.6 } },
-      "250ml": { side: { widthIn: 9.4, heightIn: 2.9 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 9.4, heightIn: 0.6 } },
-      "3oz": { side: { widthIn: 6.9, heightIn: 1.4 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 6.9, heightIn: 0.5 } },
-      "4oz": { side: { widthIn: 7.125, heightIn: 1.4 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 7.125, heightIn: 0.5 } },
+      "250ml": { side: { widthIn: 9.375, heightIn: 2.875 }, lid: { diameterIn: 2.02 }, tamper: { widthIn: 9.375, heightIn: 0.5 } },
+      "3oz": { side: { widthIn: 7.06, heightIn: 1.7 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.06, heightIn: 0.5 } },
+      "4oz": { side: { widthIn: 7.125, heightIn: 2.125 }, lid: { diameterIn: 2.16 }, tamper: { widthIn: 7.125, heightIn: 0.5 } },
     });
     expect(BAG_4X5_ARTBOARD_IN).toEqual({ widthIn: 4.0, heightIn: 5.0 });
   });
@@ -104,15 +104,16 @@ describe("listProductSpecs / getProductProductionSpec", () => {
       expect(spec.status).toBe("COST_AUTHORITY");
       expect(spec.missing).toEqual([]);
       const g = JAR_LABEL_GEOMETRY[profile.size as keyof typeof JAR_LABEL_GEOMETRY];
+      // label / art size AND the separately derived cutline (label - 0.125 in)
       expect(spec.pieces).toEqual([
-        { piece: "side", shape: "rect", widthIn: g.side.widthIn, heightIn: g.side.heightIn, quantityPerProduct: 1, label: "Side label" },
-        { piece: "lid", shape: "circle", diameterIn: g.lid.diameterIn, quantityPerProduct: 1, label: "Lid label" },
-        { piece: "tamper", shape: "rect", widthIn: g.tamper.widthIn, heightIn: g.tamper.heightIn, quantityPerProduct: 1, label: "Tamper / lid-side band" },
+        { piece: "side", shape: "rect", widthIn: g.side.widthIn, heightIn: g.side.heightIn, quantityPerProduct: 1, label: "Side label", cutWidthIn: g.side.widthIn - 0.125, cutHeightIn: g.side.heightIn - 0.125 },
+        { piece: "lid", shape: "circle", diameterIn: g.lid.diameterIn, quantityPerProduct: 1, label: "Lid label", cutDiameterIn: g.lid.diameterIn - 0.125 },
+        { piece: "tamper", shape: "rect", widthIn: g.tamper.widthIn, heightIn: g.tamper.heightIn, quantityPerProduct: 1, label: "Tamper / lid-side band", cutWidthIn: g.tamper.widthIn - 0.125, cutHeightIn: g.tamper.heightIn - 0.125 },
       ]);
       expect(spec.labelSets).toEqual(["side_only", "lid_only", "side_lid"]);
       expect(spec.source.module).toMatch(/jar-label-geometry/);
       expect(spec.source.authority).toMatch(/Patch 2A/);
-      expect(spec.statusNote).toMatch(/RecipeLabelZone/); // the known conflicting seed is disclosed, not merged
+      expect(spec.statusNote).toMatch(/RecipeLabelZone/); // the seed is disclosed (pending) or declared superseded (confirmed), never merged
     }
   });
 

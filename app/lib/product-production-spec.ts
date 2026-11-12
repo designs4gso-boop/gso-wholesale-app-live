@@ -10,7 +10,7 @@
 // never inferred. Client-safe: pure data + pure functions.
 
 import { ACTIVE_JAR_PROFILES, type ActiveJarProfile } from "./jar-active-scope";
-import { JAR_LABEL_GEOMETRY, JAR_LABEL_GEOMETRY_SOURCE, jarGeometryAuthorityFor, JAR_LABEL_GEOMETRY_VERSION, formatJarGeometry, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey, type SpecAuthorityStatus } from "./jar-label-geometry";
+import { JAR_LABEL_GEOMETRY, JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, jarGeometryAuthorityFor, JAR_LABEL_GEOMETRY_VERSION, formatJarGeometry, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey, type SpecAuthorityStatus } from "./jar-label-geometry";
 import { JAR_REFERENCE_GEOMETRY_SOURCE, jarReferenceConflicts, type ReferenceConflict } from "./jar-reference-geometry";
 import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
 
@@ -35,9 +35,10 @@ export const AUTHORITY_LABEL: Record<SpecAuthorityStatus, string> = {
 };
 export const PENDING_CONFIRMATION_WARNING = "PHYSICAL DIMENSIONS NEED OWNER CONFIRMATION";
 
+/** widthIn / heightIn / diameterIn are the LABEL / ART size; cut* is the derived CUTLINE (jar pieces). */
 export type SpecPiece =
-  | { piece: "side" | "tamper" | "label"; shape: "rect"; widthIn: number; heightIn: number; quantityPerProduct: number; label: string }
-  | { piece: "lid"; shape: "circle"; diameterIn: number; quantityPerProduct: number; label: string };
+  | { piece: "side" | "tamper" | "label"; shape: "rect"; widthIn: number; heightIn: number; quantityPerProduct: number; label: string; cutWidthIn?: number | null; cutHeightIn?: number | null }
+  | { piece: "lid"; shape: "circle"; diameterIn: number; quantityPerProduct: number; label: string; cutDiameterIn?: number | null };
 
 export type LabelSetKey = "side_only" | "lid_only" | "side_lid";
 
@@ -88,10 +89,11 @@ const jarTamperAllowed: Record<JarSizeKey, boolean> = {
 };
 
 export function jarPiecesFor(geometry: JarLabelGeometry, selection?: JarLabelSelection): SpecPiece[] {
+  const cut = jarCutlineFor(geometry);
   const pieces: SpecPiece[] = [];
-  if (!selection || selection.side) pieces.push({ piece: "side", shape: "rect", widthIn: geometry.side.widthIn, heightIn: geometry.side.heightIn, quantityPerProduct: 1, label: "Side label" });
-  if (!selection || selection.lid) pieces.push({ piece: "lid", shape: "circle", diameterIn: geometry.lid.diameterIn, quantityPerProduct: 1, label: "Lid label" });
-  if (!selection || selection.tamper) pieces.push({ piece: "tamper", shape: "rect", widthIn: geometry.tamper.widthIn, heightIn: geometry.tamper.heightIn, quantityPerProduct: 1, label: "Tamper / lid-side band" });
+  if (!selection || selection.side) pieces.push({ piece: "side", shape: "rect", widthIn: geometry.side.widthIn, heightIn: geometry.side.heightIn, quantityPerProduct: 1, label: "Side label", cutWidthIn: cut.side?.cutWidthIn ?? null, cutHeightIn: cut.side?.cutHeightIn ?? null });
+  if (!selection || selection.lid) pieces.push({ piece: "lid", shape: "circle", diameterIn: geometry.lid.diameterIn, quantityPerProduct: 1, label: "Lid label", cutDiameterIn: cut.lid?.cutDiameterIn ?? null });
+  if (!selection || selection.tamper) pieces.push({ piece: "tamper", shape: "rect", widthIn: geometry.tamper.widthIn, heightIn: geometry.tamper.heightIn, quantityPerProduct: 1, label: "Tamper / lid-side band", cutWidthIn: cut.tamper?.cutWidthIn ?? null, cutHeightIn: cut.tamper?.cutHeightIn ?? null });
   return pieces;
 }
 

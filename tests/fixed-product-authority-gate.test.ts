@@ -67,7 +67,7 @@ describe("authority statuses", () => {
   });
 
   it("owner-confirmed jar sizes (2026-11-11) are OWNER_CONFIRMED; every other jar stays PENDING; bags stay OWNER_CONFIRMED", () => {
-    const CONFIRMED_SIZES = new Set(["100ml_tall", "100ml_wide", "150ml"]);
+    const CONFIRMED_SIZES = new Set(["100ml_tall", "100ml_wide", "150ml", "250ml", "3oz", "4oz"]);
     for (const spec of listProductSpecs()) {
       if (spec.family.endsWith("-jars") && CONFIRMED_SIZES.has(String(spec.physical.size))) {
         expect(spec.authorityStatus, spec.productKey).toBe("OWNER_CONFIRMED");
@@ -84,7 +84,7 @@ describe("authority statuses", () => {
       }
     }
     expect(listProductSpecs().filter((s) => s.authorityStatus === "OWNER_CONFIRMED").map((s) => s.productKey).sort()).toEqual([
-      "bag-4x5/sticker", "bag-4x5/stock", "chiron/100ml_tall", "chiron/100ml_wide", "chiron/150ml", "miron/100ml_tall", "miron/100ml_wide", "miron/150ml", "split-bag",
+      "bag-4x5/sticker", "bag-4x5/stock", "chiron/100ml_tall", "chiron/100ml_wide", "chiron/150ml", "miron/100ml_tall", "miron/100ml_wide", "miron/150ml", "miron/250ml", "split-bag", "standard/3oz", "standard/4oz",
     ]);
   });
 
@@ -108,23 +108,26 @@ describe("reference conflicts (RecipeLabelZone) are disclosed, never merged", ()
 
   it("per-size conflicts match the audit; owner-confirmed sizes report none (reference superseded)", () => {
     const c = (size: JarSizeKey) => jarReferenceConflicts(size, JAR_LABEL_GEOMETRY[size]).map((x) => `${x.piece}.${x.field}:${x.canonical}->${x.reference}`);
-    expect(c("4oz")).toEqual(["side.heightIn:1.4->2.125"]);
-    expect(c("3oz")).toEqual(["side.widthIn:6.9->7.1", "side.heightIn:1.4->1.7", "lid.diameterIn:2.1->2"]);
+    expect(c("4oz")).toEqual([]); // owner-confirmed 2026-11-11 — reference superseded
+    expect(c("3oz")).toEqual([]);
+    expect(c("250ml")).toEqual([]);
     expect(c("150ml")).toEqual([]);
     expect(c("100ml_wide")).toEqual([]); // 6.43 / 1.875 reference values superseded
     expect(c("100ml_tall")).toEqual([]); // 6.125 / 3.125 reference values superseded
     expect(c("50ml")).toEqual(["side.widthIn:5.6->5.75", "side.heightIn:1.5->1.625", "lid.diameterIn:1.6->1.75", "tamper.widthIn:5.6->5.75"]);
   });
 
-  it("the spec carries a staff-readable conflict sentence", () => {
-    const spec = getProductProductionSpec("standard-jars", "standard/4oz")!;
-    expect(spec.referenceConflicts.length).toBe(1);
-    expect(spec.conflictSummary).toBe("Reference setup lists a different side label height 2.125 in (current quote uses 1.4 in). Current quote uses the existing canonical cost-engine geometry.");
+  it("a pending size still carries a staff-readable conflict sentence (Miron 50ml)", () => {
+    const spec = getProductProductionSpec("premium-jars", "miron/50ml")!;
+    expect(spec.referenceConflicts.length).toBe(4);
+    expect(spec.conflictSummary).toMatch(/^Reference setup lists a different side label width 5\.75 in \(current quote uses 5\.6 in\)/);
+    expect(getProductProductionSpec("standard-jars", "standard/4oz")!.conflictSummary).toBeNull(); // confirmed size
   });
 
-  it("neither table was changed to reconcile the other", () => {
-    expect(JAR_LABEL_GEOMETRY["4oz"].side).toEqual({ widthIn: 7.125, heightIn: 1.4 });
+  it("the reference table is never edited; confirmed sizes take the owner's label / art size", () => {
+    expect(JAR_LABEL_GEOMETRY["4oz"].side).toEqual({ widthIn: 7.125, heightIn: 2.125 }); // owner-confirmed 2026-11-11
     expect(JAR_REFERENCE_GEOMETRY["4oz"]!.side.heightIn).toBe(2.125);
+    expect(JAR_REFERENCE_GEOMETRY["3oz"]!.side.widthIn).toBe(7.1); // seed unchanged (owner label size is 7.06)
   });
 });
 
@@ -149,12 +152,12 @@ describe("quoting behaviour for confirmed and pending geometry", () => {
     expect(r.diagnostics.productSpec).toMatchObject({ authorityStatus: "CANONICAL_COSTING_PENDING_CONFIRMATION", ownerConfirmationRequired: true, referenceConflict: true });
   });
 
-  it("conflict indicator is scoped to the SELECTED pieces (4oz Lid Only has no lid conflict)", () => {
-    const lidOnly = run(jarQs("standard/4oz", { side: false, lid: true, tamper: false }));
-    expect(lidOnly.diagnostics.productSpec!.referenceConflict).toBe(false);
-    expect(lidOnly.diagnostics.productSpec!.referenceConflicts).toEqual([]);
-    const sideOnly = run(jarQs("standard/4oz", { side: true, lid: false, tamper: false }));
-    expect(sideOnly.diagnostics.productSpec!.referenceConflict).toBe(true);
+  it("conflict indicator is scoped to the SELECTED pieces (pending Miron 50ml)", () => {
+    const lidOnly = run(jarQs("miron/50ml", { side: false, lid: true, tamper: false }));
+    expect(lidOnly.diagnostics.productSpec!.referenceConflicts).toEqual(["lid label diameter 1.75 in (current quote uses 1.6 in)"]);
+    const sideOnly = run(jarQs("miron/50ml", { side: true, lid: false, tamper: false }));
+    expect((sideOnly.diagnostics.productSpec!.referenceConflicts ?? []).every((t) => !/lid/.test(t))).toBe(true);
+    expect(run(jarQs("standard/4oz", { side: true, lid: true, tamper: false })).diagnostics.productSpec!.referenceConflict).toBe(false); // confirmed
   });
 
   it("custom override still works and is recorded alongside the authority status", () => {
@@ -217,13 +220,18 @@ describe("snapshot / historical safety", () => {
     const view = canonicalViewOf(run(jarQs("standard/3oz", { side: true, lid: true, tamper: false }, "&pjarset=side_lid")));
     const stored = JSON.parse(JSON.stringify(view)).diagnostics.productSpec;
     expect(Object.keys(stored).sort()).toEqual([
-      "authorityStatus", "customSize", "displayName", "family", "labelSet", "overriddenPieces", "override", "overrideReason",
+      "authorityStatus", "customSize", "cutline", "displayName", "family", "labelSet", "overriddenPieces", "override", "overrideReason",
       "ownerConfirmationRequired", "productKey", "referenceConflict", "referenceConflicts", "sharedSizeKeyNote", "source", "specVersion", "standard",
     ]);
     expect(stored.labelSet).toBe("side_lid");
     expect(stored.productKey).toBe("standard/3oz");
-    expect(stored.authorityStatus).toBe("CANONICAL_COSTING_PENDING_CONFIRMATION");
-    expect(stored.referenceConflict).toBe(true);
+    expect(stored.authorityStatus).toBe("OWNER_CONFIRMED"); // 3oz owner-confirmed 2026-11-11
+    expect(stored.referenceConflict).toBe(false);
+    // label / art size and cutline are stored SEPARATELY
+    expect(stored.standard.side).toEqual({ widthIn: 7.06, heightIn: 1.7 });
+    expect(stored.cutline.side.cutWidthIn).toBeCloseTo(6.935, 9);
+    expect(stored.cutline.side.cutHeightIn).toBeCloseTo(1.575, 9);
+    expect(stored.cutline.lid.cutDiameterIn).toBeCloseTo(1.875, 9);
   });
 
   it("an older snapshot without the authority fields is treated as unknown authority, never as confirmed", () => {
@@ -266,13 +274,22 @@ describe("UI copy never outruns the evidence", () => {
 
 /* ------------------------------------------------------------------ */
 describe("ZERO cost change: 30 jar fixtures, control case, weeding and application numbers", () => {
-  it("every supported jar x label set totals and lines equal the pre-gate capture", () => {
+  it("every supported jar x label set totals and lines equal the pre-gate capture (except the 2026-11-11 re-sized jars)", () => {
     const before = JSON.parse(readFileSync("tests/fixtures/jar-fixtures-2026-10-05.json", "utf8"));
+    // 250ml / 3oz / 4oz took new owner-confirmed LABEL / ART sizes on 2026-11-11:
+    // only geometry-driven lines may move; blank, setup and application stay.
+    const RESIZED = new Set(["250ml", "3oz", "4oz"]);
+    const GEOMETRY_FREE = ["blank_sets", "art_setup", "print_setup", "application"];
     for (const p of ACTIVE_JAR_PROFILES) for (const s of LABEL_SETS) {
       const r = runAt8(jarQs(p.key, s.selection));
       const key = `${p.key}/${s.key}`;
       expect(before[key], key).toBeDefined();
       expect(r.status, key).toBe(before[key].status);
+      if (RESIZED.has(p.size)) {
+        const was = new Map<string, number>(before[key].lines);
+        for (const line of r.trueCost.lines) if (GEOMETRY_FREE.includes(line.key)) expect(line.amount, `${key} ${line.key}`).toBeCloseTo(was.get(line.key)!, 9);
+        continue;
+      }
       expect(r.totalCost, key).toBeCloseTo(before[key].total, 9);
       expect(r.unitCost, key).toBeCloseTo(before[key].unit, 9);
       expect(r.trueCost.lines.map((l) => [l.key, l.amount]), key).toEqual(before[key].lines);

@@ -219,8 +219,13 @@ export type CanonicalProductSpecDiagnostics = {
   /** Where the standard dimensions came from. */
   source: string;
   labelSet: string | null;
-  /** The standard (authority) geometry for the selected pieces. */
+  /** The standard (authority) LABEL / ART geometry for the selected pieces. */
   standard: Record<string, Record<string, number>>;
+  /**
+   * 2026-11-11: the CUTLINE (label - 0.125 in per dimension; lid diameter - 0.125)
+   * derived from the label / art size actually costed. Optional: older snapshots lack it.
+   */
+  cutline?: Record<string, Record<string, number> | null>;
   /** true when ANY piece used a staff CUSTOM SIZE OVERRIDE. */
   customSize: boolean;
   /** The override geometry actually used, per overridden piece; {} when none. */

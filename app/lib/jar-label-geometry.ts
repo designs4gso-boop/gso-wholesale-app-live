@@ -10,7 +10,17 @@
 // only by admin screens, never by a cost path — see
 // docs/GSO_FIXED_PRODUCT_SPEC_AUDIT.md for the size-by-size comparison.
 //
-// Pure data, no imports.
+// LABEL / ART SIZE vs CUTLINE (owner clarification 2026-11-11): every value in
+// JAR_LABEL_GEOMETRY is the LABEL / ARTBOARD size — it drives artwork setup,
+// nesting / media usage, ink area and the application spec. The CUTLINE is a
+// SEPARATE value derived from it by the GSO rule (gso-cutline.ts): rectangle
+// width - 0.125 x height - 0.125; circle diameter - 0.125. Cut-path length
+// uses the cutline (jarCutGeometry). The art size is never overwritten with
+// the cutline.
+//
+// Pure data + the dependency-free GSO cutline rule.
+
+import { deriveGsoLabelCutDiameter, deriveGsoLabelCutlineFromArtboard } from "./gso-cutline";
 
 export const JAR_LABEL_GEOMETRY_VERSION = "17D.2-jar-label-geometry";
 
@@ -30,10 +40,31 @@ export const JAR_LABEL_GEOMETRY: Record<JarSizeKey, JarLabelGeometry> = {
   "100ml_tall": { side: { widthIn: 6.3, heightIn: 3.15 }, lid: { diameterIn: 1.75 }, tamper: { widthIn: 6.3, heightIn: 0.5 } },
   "100ml_wide": { side: { widthIn: 6.6, heightIn: 2.6 }, lid: { diameterIn: 1.9 }, tamper: { widthIn: 6.6, heightIn: 0.5 } },
   "150ml": { side: { widthIn: 7.125, heightIn: 3.125 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.125, heightIn: 0.6 } },
-  "250ml": { side: { widthIn: 9.4, heightIn: 2.9 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 9.4, heightIn: 0.6 } },
-  "3oz": { side: { widthIn: 6.9, heightIn: 1.4 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 6.9, heightIn: 0.5 } },
-  "4oz": { side: { widthIn: 7.125, heightIn: 1.4 }, lid: { diameterIn: 2.1 }, tamper: { widthIn: 7.125, heightIn: 0.5 } },
+  // 2026-11-11 owner-confirmed LABEL / ART sizes (supersede the Patch 2A presets
+  // 250ml 9.4 x 2.9 / 2.1 / 9.4 x 0.6, 3oz 6.9 x 1.4 / 2.1, 4oz 7.125 x 1.4 / 2.1).
+  "250ml": { side: { widthIn: 9.375, heightIn: 2.875 }, lid: { diameterIn: 2.02 }, tamper: { widthIn: 9.375, heightIn: 0.5 } },
+  "3oz": { side: { widthIn: 7.06, heightIn: 1.7 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.06, heightIn: 0.5 } },
+  "4oz": { side: { widthIn: 7.125, heightIn: 2.125 }, lid: { diameterIn: 2.16 }, tamper: { widthIn: 7.125, heightIn: 0.5 } },
 };
+
+/** CUTLINE geometry — derived from the label / art size, never stored over it. */
+export type JarCutlineGeometry = {
+  side: { cutWidthIn: number; cutHeightIn: number } | null;
+  lid: { cutDiameterIn: number } | null;
+  tamper: { cutWidthIn: number; cutHeightIn: number } | null;
+};
+
+/** The GSO cutline for each piece of a label / art geometry (null when too small to offset). */
+export function jarCutlineFor(g: JarLabelGeometry): JarCutlineGeometry {
+  const side = deriveGsoLabelCutlineFromArtboard(g.side.widthIn, g.side.heightIn);
+  const tamper = deriveGsoLabelCutlineFromArtboard(g.tamper.widthIn, g.tamper.heightIn);
+  const lid = deriveGsoLabelCutDiameter(g.lid.diameterIn);
+  return {
+    side: side ? { cutWidthIn: side.cutWidthIn, cutHeightIn: side.cutHeightIn } : null,
+    lid: lid != null ? { cutDiameterIn: lid } : null,
+    tamper: tamper ? { cutWidthIn: tamper.cutWidthIn, cutHeightIn: tamper.cutHeightIn } : null,
+  };
+}
 
 export const JAR_LABEL_GEOMETRY_SOURCE = "jar-cost-inputs.server.ts JAR_LABEL_GEOMETRY — Patch 2A (17D.2) presets; the only geometry any cost path reads";
 
@@ -72,21 +103,27 @@ export const JAR_LABEL_GEOMETRY_AUTHORITY = {
 } as const;
 
 /**
- * OWNER CONFIRMATION 2026-11-11 — the physical label dimensions for these
- * sizes are OWNER-CONFIRMED (Miron AND Chiron: Chiron uses the same geometry
- * as the equivalent Miron size). They equal the JAR_LABEL_GEOMETRY rows
- * above exactly, so no cost changes:
- *   100ml tall  side 6.3 x 3.15    lid 1.75 dia  tamper 6.3 x 0.5
- *   100ml wide  side 6.6 x 2.6     lid 1.9 dia   tamper 6.6 x 0.5
- *   150ml       side 7.125 x 3.125 lid 2.0 dia   tamper 7.125 x 0.6
- * Every other size keeps JAR_LABEL_GEOMETRY_AUTHORITY (pending confirmation).
+ * OWNER CONFIRMATION 2026-11-11 — LABEL / ART sizes (not cutlines) that are
+ * OWNER-CONFIRMED. Miron AND Chiron share them (Chiron uses the same geometry
+ * as the equivalent Miron size). Cutline = label - 0.125 per dimension
+ * (diameter - 0.125 for lids), derived by jarCutlineFor:
+ *   100ml tall  side 6.3 x 3.15    lid 1.75   band 6.3 x 0.5
+ *   100ml wide  side 6.6 x 2.6     lid 1.9    band 6.6 x 0.5
+ *   150ml       side 7.125 x 3.125 lid 2.0    band 7.125 x 0.6
+ *   250ml       side 9.375 x 2.875 lid 2.02   band 9.375 x 0.5
+ *   3oz         side 7.06 x 1.7    lid 2.0    band 7.06 x 0.5
+ *   4oz         side 7.125 x 2.125 lid 2.16   band 7.125 x 0.5
+ * 50ml keeps JAR_LABEL_GEOMETRY_AUTHORITY (pending confirmation).
  */
 export const JAR_OWNER_CONFIRMED_GEOMETRY: Partial<Record<JarSizeKey, JarLabelGeometry>> = {
   "100ml_tall": { side: { widthIn: 6.3, heightIn: 3.15 }, lid: { diameterIn: 1.75 }, tamper: { widthIn: 6.3, heightIn: 0.5 } },
   "100ml_wide": { side: { widthIn: 6.6, heightIn: 2.6 }, lid: { diameterIn: 1.9 }, tamper: { widthIn: 6.6, heightIn: 0.5 } },
   "150ml": { side: { widthIn: 7.125, heightIn: 3.125 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.125, heightIn: 0.6 } },
+  "250ml": { side: { widthIn: 9.375, heightIn: 2.875 }, lid: { diameterIn: 2.02 }, tamper: { widthIn: 9.375, heightIn: 0.5 } },
+  "3oz": { side: { widthIn: 7.06, heightIn: 1.7 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.06, heightIn: 0.5 } },
+  "4oz": { side: { widthIn: 7.125, heightIn: 2.125 }, lid: { diameterIn: 2.16 }, tamper: { widthIn: 7.125, heightIn: 0.5 } },
 };
-export const JAR_GEOMETRY_OWNER_RECORD = "Owner confirmation 2026-11-11: physical label dimensions for 100ml tall, 100ml wide and 150ml (Miron and Chiron share the same geometry)";
+export const JAR_GEOMETRY_OWNER_RECORD = "Owner confirmation 2026-11-11: label / art sizes for 100ml tall, 100ml wide, 150ml, 250ml, 3oz and 4oz (Miron and Chiron share the same geometry; cutline = label - 0.125 in per dimension)";
 
 /** Authority for ONE size: owner-confirmed sizes are OWNER_CONFIRMED; the rest stay pending. */
 export function jarGeometryAuthorityFor(size: string | null | undefined): { authorityStatus: SpecAuthorityStatus; ownerConfirmationRequired: boolean; ownerRecord: string | null } {
@@ -154,6 +191,18 @@ export function validateJarGeometryOverride(size: JarSizeKey, selection: JarLabe
   return { ok: true, geometry, overridden };
 }
 
+/** Read-only CUTLINE line (derived from the label / art size). */
+export function formatJarCutline(g: JarLabelGeometry, selection?: JarLabelSelection): string {
+  const c = jarCutlineFor(g);
+  const f = (n: number) => n.toFixed(3);
+  const parts: string[] = [];
+  if (!selection || selection.side) parts.push(c.side ? `Side ${f(c.side.cutWidthIn)} x ${f(c.side.cutHeightIn)} in` : "Side —");
+  if (!selection || selection.lid) parts.push(c.lid ? `Lid Ø ${f(c.lid.cutDiameterIn)} in` : "Lid —");
+  if (!selection || selection.tamper) parts.push(c.tamper ? `Tamper band ${f(c.tamper.cutWidthIn)} x ${f(c.tamper.cutHeightIn)} in` : "Tamper band —");
+  return parts.join(" · ");
+}
+
+/** Read-only LABEL / ART size line. */
 export function formatJarGeometry(g: JarLabelGeometry, selection?: JarLabelSelection): string {
   const parts: string[] = [];
   if (!selection || selection.side) parts.push(`Side ${g.side.widthIn} x ${g.side.heightIn} in`);

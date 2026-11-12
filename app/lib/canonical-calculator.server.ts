@@ -95,7 +95,7 @@ import {
   JAR_APPLICATION_SOURCE,
 } from "./jar-cost-inputs.server";
 import { activeJarProfile } from "./jar-active-scope";
-import { JAR_LABEL_GEOMETRY_SOURCE, validateJarGeometryOverride } from "./jar-label-geometry";
+import { JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, validateJarGeometryOverride } from "./jar-label-geometry";
 import { BAG_4X5_ARTBOARD_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
 import { PRODUCT_SPEC_VERSION, getProductProductionSpec } from "./product-production-spec";
 import { CANONICAL_INK_RATES } from "./ink-rates-shared";
@@ -996,6 +996,8 @@ export function assembleCanonicalJob(
         source: JAR_LABEL_GEOMETRY_SOURCE,
         labelSet: cfg.labelSet ?? null,
         standard: pick(standardGeometry),
+        // 2026-11-11: the CUTLINE is a separate value derived from the label / art size actually costed.
+        cutline: (() => { const c = jarCutlineFor(geometryForCost); return { ...(selection.side ? { side: c.side } : {}), ...(selection.lid ? { lid: c.lid } : {}), ...(selection.tamper ? { tamper: c.tamper } : {}) }; })(),
         customSize: Boolean(cfg.customSize) && overriddenPieces.length > 0,
         override: overriddenPieces.length ? pick(geometryForCost, overriddenPieces) : {},
         overriddenPieces,

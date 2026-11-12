@@ -707,6 +707,7 @@ export const JAR_DEFAULT_CUT_MODE: CutMode = "normal";
  * cutline for that component, and computeFinishing blocks rather than guessing.
  */
 export function jarCutGeometry(size: JarSizeKey, geometry?: JarLabelGeometry | null): CutGeometryMap {
+  // g is the LABEL / ART size; the cutline is derived from it (never stored over it).
   const g = effectiveJarGeometry(size, geometry);
   const side = deriveGsoLabelCutlineFromArtboard(g.side.widthIn, g.side.heightIn);
   const tamper = deriveGsoLabelCutlineFromArtboard(g.tamper.widthIn, g.tamper.heightIn);
