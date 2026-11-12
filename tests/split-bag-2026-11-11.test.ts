@@ -1,7 +1,8 @@
 // 2026-11-11 — SPLIT BAG (OWNER CORRECTION): a Sticker Bag blank / bag type.
 //
 // Owner authority: ONE physical bag, $0.25 each, MOQ 64. Labels follow the
-// normal Sticker Bag rule — ONE standard 4x5 label per printed side:
+// normal Sticker Bag rule — ONE label per printed side (2026-11-12: the Split
+// Bag label is its own 7.20 x 4.38 art / 7.07 x 4.26 cutline, not the 4x5):
 //   front only / back only  1 blank, 1 label, 1 cut/weed, 1 application event
 //   front + back            1 blank, 2 labels, 2 cuts/weeds, 2 application events
 // Never 4 labels on one Split Bag (the earlier 2-per-side model was wrong).
@@ -130,15 +131,14 @@ describe("Split Bag physical model (bag adapter)", () => {
     }
   });
 
-  it("labels, cutting, weeding and media are IDENTICAL to a 4x5 Sticker Bag of the same sides — only the blank differs", () => {
+  it("label COUNT and application events match a 4x5 Sticker Bag of the same sides; geometry is the larger Split Bag label (2026-11-12)", () => {
     expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 }); // owner 4x5 cutline (2026-11-11)
     for (const sides of [1, 2] as const) {
       const split = computeBagPhysical({ product: "split_bag", bagQuantity: 1000, sides });
       const fourX5 = computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides });
       expect(split.labelQuantity).toBe(fourX5.labelQuantity);
-      expect(split.finishing.cutPathIn).toBeCloseTo(fourX5.finishing.cutPathIn, 6);
-      expect(split.nesting.materialFootprintSqft).toBeCloseTo(fourX5.nesting.materialFootprintSqft, 6);
-      expect(split.finishing.weedingPages).toBe(fourX5.finishing.weedingPages);
+      expect(split.finishing.cutPathIn).toBeCloseTo(1000 * sides * 2 * (7.07 + 4.26), 6);
+      expect(split.nesting.materialFootprintSqft).toBeGreaterThan(fourX5.nesting.materialFootprintSqft);
       expect(split.application.applicationEvents).toBe(fourX5.application.applicationEvents);
       expect(split.blankCost).toBeCloseTo(1000 * 0.25, 10);
       expect(fourX5.blankCost).toBeCloseTo(1000 * 0.11, 10);
@@ -222,13 +222,16 @@ describe("Split Bag in the canonical calculator", () => {
     expect(mimakiGloss.reasons).toContain("MIMAKI_GLOSS_UNSUPPORTED");
   }, 120_000);
 
-  it("Split Bag costs exactly a 4x5 Sticker Bag job except the blank line ($0.25 vs $0.11)", async () => {
+  it("Split Bag shares the Sticker Bag setup / application costing; its larger label raises media, ink, machine and cutting; blank $0.25 vs $0.11", async () => {
     for (const sides of [1, 2] as const) {
       const split = (await costJob(SPLIT_QS(sides))).result;
       const sticker = (await costJob(SPLIT_QS(sides).replace("&psplitbag=1", "").replace("pblank=preset%3Asplit-bag", "pblank=v_bag"))).result;
       expect(sticker.family).toBe("sticker-bags");
-      for (const key of ["print_media", "ink", "machine", "cutting_machine", "weeding", "application", "art_setup", "print_setup"]) {
+      for (const key of ["application", "art_setup", "print_setup"]) {
         expect(amount(split, key), key).toBeCloseTo(amount(sticker, key), 6);
+      }
+      for (const key of ["print_media", "ink", "machine", "cutting_machine"]) {
+        expect(amount(split, key), key).toBeGreaterThan(amount(sticker, key));
       }
       expect(amount(split, "blank_sets")).toBeCloseTo(1000 * 0.25, 6);
       expect(amount(sticker, "blank_sets")).toBeCloseTo(1000 * 0.11, 6);
@@ -324,11 +327,12 @@ describe("Split Bag through the real calculator loader and save action", () => {
 import { enforceQuoteItemUnitCost } from "../app/lib/quote-item-cost-authority";
 
 describe("4x5 cutline owner decision (3.79 x 4.81)", () => {
-  it("a normal 4x5 bag and every Split Bag label cut on 3.79 x 4.81 (one label per printed side)", () => {
+  it("a normal 4x5 bag cuts on 3.79 x 4.81; the Split Bag cuts on its own 7.07 x 4.26 (owner correction 2026-11-12)", () => {
     const perLabel = 2 * (3.79 + 4.81);
+    const perSplitLabel = 2 * (7.07 + 4.26);
     expect(computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 100, sides: 1 }).finishing.cutPathIn).toBeCloseTo(100 * perLabel, 6);
-    expect(computeBagPhysical({ product: "split_bag", bagQuantity: 100, sides: 1 }).finishing.cutPathIn).toBeCloseTo(100 * perLabel, 6);
-    expect(computeBagPhysical({ product: "split_bag", bagQuantity: 100, sides: 2 }).finishing.cutPathIn).toBeCloseTo(200 * perLabel, 6);
+    expect(computeBagPhysical({ product: "split_bag", bagQuantity: 100, sides: 1 }).finishing.cutPathIn).toBeCloseTo(100 * perSplitLabel, 6);
+    expect(computeBagPhysical({ product: "split_bag", bagQuantity: 100, sides: 2 }).finishing.cutPathIn).toBeCloseTo(200 * perSplitLabel, 6);
   });
 
   it("10. a historical Split Bag quote saved under the old 2/4-label model keeps its saved cost", () => {

@@ -414,7 +414,7 @@ describe("Primer is not configured on either press (owner decision 2026-11-11)",
 });
 
 describe("Split Bag owner rules unchanged", () => {
-  it("MOQ 64, $0.25 blank, 1 label per printed side, 3.79 x 4.81 cutline, packout unmodeled, freight separate, price provisional", () => {
+  it("MOQ 64, $0.25 blank, 1 label per printed side, 4x5 cutline untouched, packout unmodeled, freight separate, price provisional", () => {
     expect(SPLIT_BAG_MOQ).toBe(64);
     expect(bagBlankUnitCostFor("split_bag")).toBe(0.25);
     expect(bagLabelPositionsPerSide("split_bag")).toBe(1); // front + back = 2 labels, never 4

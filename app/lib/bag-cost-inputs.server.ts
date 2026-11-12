@@ -54,12 +54,14 @@ export const BAG_4X5_BLANK_EFFECTIVE_DATE = "2026-10-08";
  *
  * The Split Bag is simply another Sticker Bag blank: ONE physical bag at
  * $0.25 EACH, MOQ 64. Its labels follow the normal Sticker Bag rule — ONE
- * standard 4x5 label per printed side (owner 4x5 artboard, 3.79 x 4.81 in
- * cutline, 10 s per applied label):
+ * label per printed side, 10 s per applied label. 2026-11-12 owner
+ * correction: the Split Bag label is LARGER than the 4x5 — art / print
+ * 7.20 x 4.38 in, cutline 7.07 x 4.26 in (bag-artboard-geometry.ts):
  *   front only / back only  1 blank, 1 label, 1 cut/weed, 1 application event
  *   front + back            1 blank, 2 labels, 2 cut/weed, 2 application events
  * The earlier "2 labels per side / 4 double-sided" model was WRONG and is
- * removed. Only the blank identity/cost and the MOQ are Split-Bag-specific.
+ * removed. The blank identity/cost, the MOQ and the label geometry are
+ * Split-Bag-specific.
  *
  * No freight or box count has been owner-approved for the Split Bag, so none
  * is invented here (see the Split Bag entries in CANONICAL_PACKOUT and
@@ -103,8 +105,8 @@ export const BAG_APPLICATION_RETIRED_LABELS_PER_HOUR = 256;
  * ------------------------------------------------------------------ */
 // 2026-10-05: value moved verbatim to the client-safe bag-artboard-geometry.ts
 // so the product-spec layer can read it; re-exported here unchanged.
-import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_DECISION, BAG_4X5_CUTLINE_IN } from "./bag-artboard-geometry";
-export { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN };
+import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN, bagLabelGeometryFor } from "./bag-artboard-geometry";
+export { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN };
 /*
  * OWNER DECISION 2026-11-11: the 4x5 cutline is the documented owner standard
  * 3.79 x 4.81 in (bag-artboard-geometry.ts), not the 3.875 x 4.875 value the
@@ -359,29 +361,34 @@ export type BagPhysicalResult = {
   blockers: string[];
 };
 
-/** Cut geometry for a bag label: separated rectangles on the REAL cutline. */
-export function bagCutGeometry(): CutGeometryMap {
+/**
+ * Cut geometry for a bag label: separated rectangles on the REAL cutline —
+ * the owner 4x5 cutline, or the owner Split Bag cutline (2026-11-12).
+ */
+export function bagCutGeometry(product: BagProduct = "sticker_bag_4x5"): CutGeometryMap {
+  const g = bagLabelGeometryFor(product);
   return {
     "bag-label": {
       model: "separated_rectangle",
-      cutWidthIn: BAG_4X5_CUTLINE_IN.widthIn,
-      cutHeightIn: BAG_4X5_CUTLINE_IN.heightIn,
-      note: `Cutline ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn}in — ${BAG_4X5_CUTLINE_DECISION} The 4.00 x 5.00in artboard drives nesting/material/ink and is NEVER used for the cutter path.`,
+      cutWidthIn: g.cutline.widthIn,
+      cutHeightIn: g.cutline.heightIn,
+      note: `Cutline ${g.cutline.widthIn} x ${g.cutline.heightIn}in — ${g.decision} The ${g.artboard.widthIn.toFixed(2)} x ${g.artboard.heightIn.toFixed(2)}in artboard drives nesting/material/ink and is NEVER used for the cutter path.`,
     },
   };
 }
 
-/** One physical print run: every bag label, whichever product it belongs to. */
-export function bagNestingRuns(labelQuantity: number): NestingRun[] {
+/** One physical print run: every bag label at its product's art / print size. */
+export function bagNestingRuns(labelQuantity: number, product: BagProduct = "sticker_bag_4x5"): NestingRun[] {
+  const g = bagLabelGeometryFor(product);
   return [{
     key: "bag-label-run",
     label: "Bag label print run",
     items: [{
-      key: "4x5-bag-label",
+      key: product === "split_bag" ? "split-bag-label" : "4x5-bag-label",
       groupKey: "bag-label",
       shapeType: "rect",
-      widthIn: BAG_4X5_ARTBOARD_IN.widthIn,
-      heightIn: BAG_4X5_ARTBOARD_IN.heightIn,
+      widthIn: g.artboard.widthIn,
+      heightIn: g.artboard.heightIn,
       quantity: labelQuantity,
       allowRotate: true,
     }],
@@ -510,8 +517,8 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
     blockers.push(`${policy.blocker}: ${policy.message}`);
   }
   const nesting = policy.ok
-    ? computeNesting(bagNestingRuns(labelQuantity), policy.policy)
-    : computeNesting(bagNestingRuns(labelQuantity), {
+    ? computeNesting(bagNestingRuns(labelQuantity, input.product), policy.policy)
+    : computeNesting(bagNestingRuns(labelQuantity, input.product), {
         mediaWidthIn: 0, printableWidthIn: 0, ripBoxConvention: "nest_bbox",
         source: "unresolved", classification: "BLOCKED",
       });
@@ -520,7 +527,7 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
     nesting,
     machineKey: input.machineKey ?? BAG_DEFAULT_MACHINE_KEY,
     cutMode: input.cutMode ?? BAG_DEFAULT_CUT_MODE,
-    cutGeometry: bagCutGeometry(),
+    cutGeometry: bagCutGeometry(input.product),
     requiresWeeding: true, // every printed run off either printer is weeded
   });
 

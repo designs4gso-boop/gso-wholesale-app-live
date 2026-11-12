@@ -155,19 +155,20 @@ describe("2D-4D B bags", () => {
     expect(code).not.toMatch(/0\.02/);
   });
 
-  it("B3: the ACTUAL artboard drives the cutline, and it is the only bag artboard we have", () => {
+  it("B3: the ACTUAL artboard drives the cutline; the only bag artboards are the 4x5 and the owner Split Bag", () => {
     expect(BAG_4X5_ARTBOARD_IN).toEqual({ widthIn: 4.0, heightIn: 5.0 });
     // 2026-11-11 OWNER DECISION: the 4x5 cutline is the owner 3.79 x 4.81, not the rule's 3.875 x 4.875.
     expect(deriveGsoLabelCutlineFromArtboard(4, 5)!.cutWidthIn).toBeCloseTo(3.875, 10);
     expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 });
-    // there is exactly ONE bag artboard constant — no other size has one.
-    // 2026-10-05: it lives in the client-safe bag-artboard-geometry.ts and the
-    // server module re-exports it rather than defining its own.
+    // exactly TWO bag artboard constants: the 4x5 and (owner correction
+    // 2026-11-12) the Split Bag 7.20 x 4.38. They live in the client-safe
+    // bag-artboard-geometry.ts and the server module re-exports them.
     const geometrySrc = readFileSync("app/lib/bag-artboard-geometry.ts", "utf8");
-    expect(geometrySrc.match(/_ARTBOARD_IN = /g)).toHaveLength(1);
+    expect(geometrySrc.match(/_ARTBOARD_IN = /g)).toHaveLength(2);
+    expect(geometrySrc).toContain("export const SPLIT_BAG_ARTBOARD_IN = { widthIn: 7.2, heightIn: 4.38 } as const;");
     const src = readFileSync("app/lib/bag-cost-inputs.server.ts", "utf8");
     expect(src.match(/_ARTBOARD_IN = /g)).toBeNull();
-    expect(src).toContain('import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_DECISION, BAG_4X5_CUTLINE_IN } from "./bag-artboard-geometry"');
+    expect(src).toContain('import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN, bagLabelGeometryFor } from "./bag-artboard-geometry"');
   });
 
   it("MOQ, application and setup are unchanged", () => {

@@ -123,9 +123,12 @@ describe("listProductSpecs / getProductProductionSpec", () => {
     expect(getProductProductionSpec(null, "standard/3oz")).not.toBeNull();
   });
 
-  it("tamper band availability mirrors the owner application timings (3oz/4oz have none)", () => {
-    expect(getProductProductionSpec("standard-jars", "standard/3oz")!.optionalTamperBand).toBe(false);
-    expect(getProductProductionSpec("standard-jars", "standard/4oz")!.optionalTamperBand).toBe(false);
+  it("tamper band is selectable on every jar; 3oz/4oz flag the missing application timing (2026-11-12)", () => {
+    expect(getProductProductionSpec("standard-jars", "standard/3oz")!.optionalTamperBand).toBe(true);
+    expect(getProductProductionSpec("standard-jars", "standard/4oz")!.optionalTamperBand).toBe(true);
+    expect(getProductProductionSpec("standard-jars", "standard/3oz")!.tamperApplicationLaborPending).toBe(true);
+    expect(getProductProductionSpec("standard-jars", "standard/4oz")!.tamperApplicationLaborPending).toBe(true);
+    expect(getProductProductionSpec("premium-jars", "miron/50ml")!.tamperApplicationLaborPending).toBe(false);
     expect(getProductProductionSpec("premium-jars", "miron/50ml")!.optionalTamperBand).toBe(true);
     expect(getProductProductionSpec("premium-jars", "chiron/150ml")!.optionalTamperBand).toBe(true);
   });

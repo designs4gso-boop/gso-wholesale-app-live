@@ -12,7 +12,7 @@
 import { ACTIVE_JAR_PROFILES, type ActiveJarProfile } from "./jar-active-scope";
 import { JAR_LABEL_GEOMETRY, JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, jarGeometryAuthorityFor, JAR_LABEL_GEOMETRY_VERSION, formatJarGeometry, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey, type SpecAuthorityStatus } from "./jar-label-geometry";
 import { JAR_REFERENCE_GEOMETRY_SOURCE, jarReferenceConflicts, type ReferenceConflict } from "./jar-reference-geometry";
-import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
+import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, BAG_ARTBOARD_SOURCE, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN, SPLIT_BAG_GEOMETRY_DECISION } from "./bag-artboard-geometry";
 
 export const PRODUCT_SPEC_VERSION = "product-production-spec/1.1.0-2026-10-05";
 
@@ -62,6 +62,8 @@ export type ProductProductionSpec = {
   labelSets: LabelSetKey[] | null;
   /** Optional extra band staff may add on jars; null where the owner recorded no timing. */
   optionalTamperBand: boolean | null;
+  /** True when the band is selectable but has no owner application timing (job stays needs-review). */
+  tamperApplicationLaborPending: boolean | null;
   materials: string[];
   finishes: string[];
   routing: string;
@@ -82,10 +84,18 @@ export type ProductProductionSpec = {
   sharedSizeKeyNote: string | null;
 };
 
+// 2026-11-12 owner correction: EVERY active jar size uses a Side Lid / tamper
+// band — 3oz (art 7.06 x 0.5, cutline 6.935 x 0.375) and 4oz (art 7.125 x 0.5,
+// cutline 7.0 x 0.375) included, so the option is selectable on all of them.
 const jarTamperAllowed: Record<JarSizeKey, boolean> = {
-  // Mirrors JAR_APPLICATION_SECONDS_BY_SIZE (jar-cost-inputs.server.ts): 3oz/4oz
-  // have no owner lid-side/tamper timing, so the band blocks on those sizes.
-  "50ml": true, "100ml_tall": true, "100ml_wide": true, "150ml": true, "250ml": true, "3oz": false, "4oz": false,
+  "50ml": true, "100ml_tall": true, "100ml_wide": true, "150ml": true, "250ml": true, "3oz": true, "4oz": true,
+};
+// Mirrors JAR_APPLICATION_SECONDS_BY_SIZE (jar-cost-inputs.server.ts): 3oz/4oz
+// have NO owner band APPLICATION timing. The band's print / media / ink / cut
+// still cost; the job stays DRAFT_ONLY (needs review / quote-only) on
+// MISSING_APPLICATION_STANDARD until the owner times it. Never borrowed.
+const jarTamperApplicationPending: Record<JarSizeKey, boolean> = {
+  "50ml": false, "100ml_tall": false, "100ml_wide": false, "150ml": false, "250ml": false, "3oz": true, "4oz": true,
 };
 
 export function jarPiecesFor(geometry: JarLabelGeometry, selection?: JarLabelSelection): SpecPiece[] {
@@ -137,6 +147,7 @@ function jarSpec(profile: ActiveJarProfile): ProductProductionSpec {
     pieces: geometry ? jarPiecesFor(geometry) : [],
     labelSets: ["side_only", "lid_only", "side_lid"],
     optionalTamperBand: jarTamperAllowed[profile.size as JarSizeKey] ?? null,
+    tamperApplicationLaborPending: jarTamperApplicationPending[profile.size as JarSizeKey] ?? null,
     materials: ["Poseidon Matte (jar label media) — canonical jar media"],
     finishes: ["matte", "gloss (base finish choice, no cost difference)"],
     routing: "Gloss -> Roland LG-640; CMYK / White -> either press, Auto = less busy cost-ready press (canonical routing)",
@@ -164,6 +175,7 @@ function bagSpec(family: "sticker-bags" | "stock-bags"): ProductProductionSpec {
     pieces: [{ piece: "label", shape: "rect", widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied label (per printed side)" }],
     labelSets: null,
     optionalTamperBand: null,
+    tamperApplicationLaborPending: null,
     materials: ["matte", "gloss (holographic quote-only online)"],
     finishes: ["matte", "gloss"],
     routing: "Gloss -> Roland; CMYK / White -> either press, Auto = less busy cost-ready press (canonical routing)",
@@ -176,8 +188,9 @@ function bagSpec(family: "sticker-bags" | "stock-bags"): ProductProductionSpec {
 
 /**
  * 2026-11-11 owner decision (corrected): the Split Bag is a Sticker Bag blank
- * variant — ONE $0.25 bag, MOQ 64, ONE standard 4x5 label per printed side on
- * the owner 4x5 artboard and cutline, exactly like the 4x5 Sticker Bag.
+ * variant — ONE $0.25 bag, MOQ 64, ONE label per printed side.
+ * 2026-11-12 owner correction: the Split Bag label is NOT the 4x5 — its own
+ * owner-measured art / print size 7.20 x 4.38 in and cutline 7.07 x 4.26 in.
  */
 function splitBagSpec(): ProductProductionSpec {
   const base = bagSpec("sticker-bags");
@@ -186,9 +199,10 @@ function splitBagSpec(): ProductProductionSpec {
     family: "split-bags",
     productKey: "split-bag",
     displayName: "Split Bag (Sticker Bag blank, custom applied labels)",
-    statusNote: `One standard 4x5 label per printed side (front only / back only = 1 label, front + back = 2), on the owner 4x5 artboard (2D-2) and the owner ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn} in cutline (decision 2026-11-11).`,
+    authorityNote: `${AUTHORITY_LABEL.OWNER_CONFIRMED} — ${SPLIT_BAG_GEOMETRY_DECISION}`,
+    statusNote: `One Split Bag label per printed side (front only / back only = 1 label, front + back = 2): art / print ${SPLIT_BAG_ARTBOARD_IN.widthIn.toFixed(2)} x ${SPLIT_BAG_ARTBOARD_IN.heightIn.toFixed(2)} in, cutline ${SPLIT_BAG_CUTLINE_IN.widthIn.toFixed(2)} x ${SPLIT_BAG_CUTLINE_IN.heightIn.toFixed(2)} in (owner correction 2026-11-12).`,
     physical: { bag: "one Split Bag blank", blankCost: "SPLIT_BAG_BLANK_UNIT_COST ($0.25 owner blank cost, 2026-11-11)" },
-    pieces: [{ piece: "label", shape: "rect", widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied 4x5 label (one per printed side)" }],
+    pieces: [{ piece: "label", shape: "rect", widthIn: SPLIT_BAG_ARTBOARD_IN.widthIn, heightIn: SPLIT_BAG_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied Split Bag label (one per printed side)", cutWidthIn: SPLIT_BAG_CUTLINE_IN.widthIn, cutHeightIn: SPLIT_BAG_CUTLINE_IN.heightIn }],
     moqNote: "MOQ 64 (owner decision 2026-11-11; SPLIT_BAG_MOQ). Packout is not modeled yet (first production batch pending); inbound and outbound freight are never assumed.",
     pricingSource: "canonical true cost (bag adapter, split_bag); no owner-approved selling price yet — job-level owner price",
   };

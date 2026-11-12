@@ -13,6 +13,12 @@ Branch `overnight/final-operational-readiness-2026-11-11` from live `cfb9a36`. N
 | `472a6a9` | Owner-only Staff Access & Launch Readiness page (`/app/erp/owner-readiness`) |
 | `19f33ef` | Calibration review rule (owner-configured sample count, never auto-change), customer-notification foundation (never sends), status replay no-op |
 
+## Owner correction 2026-11-12 (live QA) — Split Bag geometry and jar band options
+
+- **Split Bag** has its own owner-measured label: art / print **7.20 x 4.38 in** (artwork area, nesting, media, ink) and cutline **7.07 x 4.26 in** (cut path), used exactly — never the 4x5 artboard or the 4x5 3.79 x 4.81 cutline (`bag-artboard-geometry.ts` SPLIT_BAG_*). $0.25 blank, MOQ 64, 1 label per printed side (front + back = 2, never 4), packout / freight TBD and the provisional price authority are unchanged. The Cost Calculator shows the fixed Split Bag geometry and no longer asks for 4 x 5 dimensions; the Standard 4x5 Sticker Bag shows its own 4.00 x 5.00 / 3.79 x 4.81.
+- Qty 500 true cost (test fixture, Mimaki matte): Front only $233.73 -> $272.00; Front + Back $332.22 -> $409.66. Standard 4x5 unchanged ($165.73).
+- **Jar Side Lid / tamper band** is now selectable on 3oz (art 7.06 x 0.5, cutline 6.935 x 0.375) and 4oz (art 7.125 x 0.5, cutline 7.0 x 0.375). Print / media / ink / cut are costed; there is still NO owner band application time for 3oz/4oz, so a job with the band stays DRAFT_ONLY (needs review / quote-only). Side / Lid jobs quote normally.
+
 ## Mimaki White — controlled calibration procedure (DO NOT RUN without owner approval)
 
 No new defensible evidence exists (RasterLink/MijCtrl logs cover ~1 day, no job folder, no coverage data; Profile.db is encrypted). When the owner approves ONE controlled print during normal production:

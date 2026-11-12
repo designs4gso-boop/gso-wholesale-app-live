@@ -184,7 +184,7 @@ describe("DTP route pins (15C)", () => {
     expect(pdf).toContain("Included product specification");
     expect(pdf).toContain("MOQ ");
     // 2026-10-05: jars no longer type dimensions at all (resolved from the product spec)
-    expect(pdf).toContain("{!isDtp && !jars ? (<>"); // dimensions hidden
+    expect(pdf).toContain("{!isDtp && !jars && !isSplitBag ? (<>"); // dimensions hidden (Split Bag geometry is fixed, 2026-11-12)
     expect(pdf).toContain('{!isDtp ? (<label style={{ fontSize: 12 }}>* Material'); // material hidden
   });
 

@@ -96,7 +96,7 @@ import {
 } from "./jar-cost-inputs.server";
 import { activeJarProfile } from "./jar-active-scope";
 import { JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, validateJarGeometryOverride } from "./jar-label-geometry";
-import { BAG_4X5_ARTBOARD_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
+import { BAG_ARTBOARD_SOURCE, bagLabelGeometryFor } from "./bag-artboard-geometry";
 import { PRODUCT_SPEC_VERSION, getProductProductionSpec } from "./product-production-spec";
 import { CANONICAL_INK_RATES } from "./ink-rates-shared";
 import type { MachineLoadSnapshot } from "./machine-load-balancing";
@@ -1067,7 +1067,10 @@ export function assembleCanonicalJob(
       /* ---- application: per LABEL applied, on finished jars ----
        * 2D-4D2: the per-size OWNER timings, not a flat rate. A label the
        * owner recorded no timing for — a tamper/lid-side band on a 3oz or
-       * 4oz jar — BLOCKS rather than borrowing another size's number. */
+       * 4oz jar — BLOCKS rather than borrowing another size's number.
+       * 2026-11-12: the band is selectable on 3oz/4oz and its print / media /
+       * ink / cut still cost (totalCost); only the unit cost is withheld
+       * (DRAFT_ONLY = needs review / quote-only) until the owner times it. */
       const jarApplication = resolveJarApplication(cfg.size, selection);
       if (jarApplication.ok) {
         applicationCost = {
@@ -1316,7 +1319,11 @@ export function assembleCanonicalJob(
       displayName: input.family === "sticker-bags" ? "4x5 Sticker Bag" : input.family === "split-bags" ? "Split Bag" : "4x5 Stock Bag",
       source: BAG_ARTBOARD_SOURCE,
       labelSet: null,
-      standard: { label: { widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn } },
+      standard: (() => {
+        // 2026-11-12: the Split Bag carries its own owner art size + cutline.
+        const g = bagLabelGeometryFor(input.family === "split-bags" ? "split_bag" : "sticker_bag_4x5");
+        return { label: { widthIn: g.artboard.widthIn, heightIn: g.artboard.heightIn, cutWidthIn: g.cutline.widthIn, cutHeightIn: g.cutline.heightIn } };
+      })(),
       customSize: false,
       override: {},
       overriddenPieces: [],

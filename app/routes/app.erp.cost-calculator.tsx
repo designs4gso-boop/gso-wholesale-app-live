@@ -43,6 +43,7 @@ import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-act
 import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE } from "../lib/jar-cost-inputs.server";
 // 2026-10-05 fixed-product spec layer (client-safe): standard jar dimensions are RESOLVED, never typed.
 import { JAR_LABEL_GEOMETRY, formatJarCutline, formatJarGeometry, type JarSizeKey } from "../lib/jar-label-geometry";
+import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN } from "../lib/bag-artboard-geometry";
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
@@ -3731,6 +3732,15 @@ function ProductDrivenForm() {
           Split Bag: a Sticker Bag blank at $0.25 each, MOQ 64. One label per printed side — front only or back only = 1 label, front + back = 2 labels per bag. No Split Bag selling price is approved yet — the owner sets the price on the quote.
         </p>
       ) : null}
+      {/* 2026-11-12 owner correction: each bag type shows its OWN fixed label geometry. */}
+      {isBags && !isStockBag ? (
+        <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 8, padding: 8, fontSize: 12 }}>
+          <b>{isSplitBag ? "SPLIT BAG" : "STANDARD 4X5 STICKER BAG"}</b> — art / print size{" "}
+          <b>{(isSplitBag ? SPLIT_BAG_ARTBOARD_IN : BAG_4X5_ARTBOARD_IN).widthIn.toFixed(2)} × {(isSplitBag ? SPLIT_BAG_ARTBOARD_IN : BAG_4X5_ARTBOARD_IN).heightIn.toFixed(2)} in</b>
+          {" · "}cutline <b>{(isSplitBag ? SPLIT_BAG_CUTLINE_IN : BAG_4X5_CUTLINE_IN).widthIn.toFixed(2)} × {(isSplitBag ? SPLIT_BAG_CUTLINE_IN : BAG_4X5_CUTLINE_IN).heightIn.toFixed(2)} in</b>
+          {isSplitBag ? " (owner-confirmed Split Bag geometry; fixed — not the 4x5 label)." : "."}
+        </div>
+      ) : null}
       {isStockBag ? (
         <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
           Stock Bags: premade GSO base artwork (no new customer-art charge), 50-bag minimum. Same physical bag as Sticker Bags, costed as a Stock Bag.
@@ -3812,7 +3822,10 @@ function ProductDrivenForm() {
           {jarTamperAllowed ? (
             <label style={{ fontSize: 12 }}>
               <input type="checkbox" name="pjartamperopt" value="1" checked={jarTamperOpt} onChange={(event) => setJarTamperOpt(event.currentTarget.checked)} />{" "}
-              Add tamper / lid-side band (optional, +1 label per jar)
+              Add side lid / tamper band (optional, +1 label per jar)
+              {jarSpec?.tamperApplicationLaborPending ? (
+                <div style={{ ...smallHelp, color: "#92400e" }}>No owner application time for this band yet — print, media, ink and cutting are costed, but the quote stays NEEDS REVIEW (quote-only) until the band application seconds are recorded.</div>
+              ) : null}
             </label>
           ) : jarSpec ? (
             <p style={{ ...smallHelp, margin: 0 }}>Tamper band: not available for {jarSpec.displayName} (no owner application timing recorded).</p>
@@ -3984,7 +3997,12 @@ function ProductDrivenForm() {
           <label style={{ fontSize: 12 }}><input type="checkbox" name="pdtpfreightpass" value="1" /> Pass entered freight through to customer (backs it out of the ladder subtotal — never recovered twice; nothing is charged when no freight is entered)</label>
           <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>One production-ready design included; extra designs bill $25 (1,000–2,499) / $20 (2,500–4,999) / $15 (5,000+) each. Below-floor or below-$500-profit prices need the owner phrase + reason in Advanced Pricing Controls.</p>
         </>) : null}
-        {!isDtp && !jars ? (<>
+        {isSplitBag ? (<>
+          {/* Canonical, non-customizable Split Bag art size — never re-entered, never 4 x 5. */}
+          <input type="hidden" name="pwidth" value={SPLIT_BAG_ARTBOARD_IN.widthIn} />
+          <input type="hidden" name="pheight" value={SPLIT_BAG_ARTBOARD_IN.heightIn} />
+        </>) : null}
+        {!isDtp && !jars && !isSplitBag ? (<>
           <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" style={fieldStyle("pwidth")} /></label>
           <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" style={fieldStyle("pheight")} /></label>
         </>) : null}
@@ -4321,7 +4339,7 @@ function describeGeometryMap(map: Record<string, Record<string, number>> | null 
   if (!map) return "—";
   const parts = Object.entries(map).map(([piece, dims]) => {
     if (dims.diameterIn != null) return `${piece} Ø ${dims.diameterIn} in`;
-    return `${piece} ${dims.widthIn} x ${dims.heightIn} in`;
+    return `${piece} ${dims.widthIn} x ${dims.heightIn} in${dims.cutWidthIn != null ? ` (cutline ${dims.cutWidthIn} x ${dims.cutHeightIn} in)` : ""}`;
   });
   return parts.length ? parts.join(" · ") : "—";
 }
