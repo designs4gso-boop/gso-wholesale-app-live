@@ -66,9 +66,14 @@ describe("authority statuses", () => {
     expect(JAR_LABEL_GEOMETRY_AUTHORITY.introducedIn).toMatch(/5246607/);
   });
 
-  it("every supported jar is PENDING, never OWNER_CONFIRMED; bags are the only OWNER_CONFIRMED specs", () => {
+  it("owner-confirmed jar sizes (2026-11-11) are OWNER_CONFIRMED; every other jar stays PENDING; bags stay OWNER_CONFIRMED", () => {
+    const CONFIRMED_SIZES = new Set(["100ml_tall", "100ml_wide", "150ml"]);
     for (const spec of listProductSpecs()) {
-      if (spec.family.endsWith("-jars")) {
+      if (spec.family.endsWith("-jars") && CONFIRMED_SIZES.has(String(spec.physical.size))) {
+        expect(spec.authorityStatus, spec.productKey).toBe("OWNER_CONFIRMED");
+        expect(spec.ownerConfirmationRequired, spec.productKey).toBe(false);
+        expect(spec.authorityNote, spec.productKey).not.toContain(PENDING_CONFIRMATION_WARNING);
+      } else if (spec.family.endsWith("-jars")) {
         expect(spec.authorityStatus, spec.productKey).toBe("CANONICAL_COSTING_PENDING_CONFIRMATION");
         expect(spec.ownerConfirmationRequired, spec.productKey).toBe(true);
         expect(spec.authorityNote, spec.productKey).toContain(PENDING_CONFIRMATION_WARNING);
@@ -78,7 +83,9 @@ describe("authority statuses", () => {
         expect(spec.ownerConfirmationRequired).toBe(false);
       }
     }
-    expect(listProductSpecs().filter((s) => s.authorityStatus === "OWNER_CONFIRMED").map((s) => s.productKey).sort()).toEqual(["bag-4x5/sticker", "bag-4x5/stock", "split-bag"]);
+    expect(listProductSpecs().filter((s) => s.authorityStatus === "OWNER_CONFIRMED").map((s) => s.productKey).sort()).toEqual([
+      "bag-4x5/sticker", "bag-4x5/stock", "chiron/100ml_tall", "chiron/100ml_wide", "chiron/150ml", "miron/100ml_tall", "miron/100ml_wide", "miron/150ml", "split-bag",
+    ]);
   });
 
   it("labels: OWNER_CONFIRMED = STANDARD PRODUCTION SPEC; pending = CURRENT CANONICAL COSTING GEOMETRY; unsupported = NOT CONFIRMED", () => {
@@ -99,11 +106,13 @@ describe("reference conflicts (RecipeLabelZone) are disclosed, never merged", ()
     }
   });
 
-  it("per-size conflicts match the audit; 150ml side/lid agree", () => {
+  it("per-size conflicts match the audit; owner-confirmed sizes report none (reference superseded)", () => {
     const c = (size: JarSizeKey) => jarReferenceConflicts(size, JAR_LABEL_GEOMETRY[size]).map((x) => `${x.piece}.${x.field}:${x.canonical}->${x.reference}`);
     expect(c("4oz")).toEqual(["side.heightIn:1.4->2.125"]);
     expect(c("3oz")).toEqual(["side.widthIn:6.9->7.1", "side.heightIn:1.4->1.7", "lid.diameterIn:2.1->2"]);
-    expect(c("150ml")).toEqual(["tamper.heightIn:0.6->0.5"]);
+    expect(c("150ml")).toEqual([]);
+    expect(c("100ml_wide")).toEqual([]); // 6.43 / 1.875 reference values superseded
+    expect(c("100ml_tall")).toEqual([]); // 6.125 / 3.125 reference values superseded
     expect(c("50ml")).toEqual(["side.widthIn:5.6->5.75", "side.heightIn:1.5->1.625", "lid.diameterIn:1.6->1.75", "tamper.widthIn:5.6->5.75"]);
   });
 
@@ -120,22 +129,24 @@ describe("reference conflicts (RecipeLabelZone) are disclosed, never merged", ()
 });
 
 /* ------------------------------------------------------------------ */
-describe("quoting behaviour for pending confirmation", () => {
-  it("Miron pending geometry auto-resolves and prices (not blocked), with the warning in the snapshot", () => {
+describe("quoting behaviour for confirmed and pending geometry", () => {
+  it("Miron 100ml wide is owner-confirmed: prices on 6.6 x 2.6 / 1.9, no warning, no stale 6.43 / 1.875 conflict", () => {
     const r = run(jarQs("miron/100ml_wide", { side: true, lid: true, tamper: false }));
-    expect(r.status).toBe("PROVISIONAL");
     expect(r.unitCost).not.toBeNull();
     expect(r.reasons).not.toContain("STANDARD_PRODUCTION_DIMENSIONS_NOT_CONFIRMED");
     expect(r.diagnostics.productSpec).toMatchObject({
-      authorityStatus: "CANONICAL_COSTING_PENDING_CONFIRMATION",
-      ownerConfirmationRequired: true,
-      referenceConflict: true,
+      authorityStatus: "OWNER_CONFIRMED",
+      ownerConfirmationRequired: false,
+      referenceConflict: false,
       standard: { side: { widthIn: 6.6, heightIn: 2.6 }, lid: { diameterIn: 1.9 } },
     });
-    expect(r.diagnostics.productSpec!.referenceConflicts).toEqual([
-      "side label width 6.43 in (current quote uses 6.6 in)",
-      "lid label diameter 1.875 in (current quote uses 1.9 in)",
-    ]);
+    expect(r.diagnostics.productSpec!.referenceConflicts).toEqual([]);
+  });
+
+  it("a still-pending size (Miron 50ml) auto-resolves and prices with the warning in the snapshot", () => {
+    const r = run(jarQs("miron/50ml", { side: true, lid: true, tamper: false }));
+    expect(r.unitCost).not.toBeNull();
+    expect(r.diagnostics.productSpec).toMatchObject({ authorityStatus: "CANONICAL_COSTING_PENDING_CONFIRMATION", ownerConfirmationRequired: true, referenceConflict: true });
   });
 
   it("conflict indicator is scoped to the SELECTED pieces (4oz Lid Only has no lid conflict)", () => {
@@ -146,10 +157,12 @@ describe("quoting behaviour for pending confirmation", () => {
     expect(sideOnly.diagnostics.productSpec!.referenceConflict).toBe(true);
   });
 
-  it("custom override still works on pending geometry and is recorded alongside the authority status", () => {
+  it("custom override still works and is recorded alongside the authority status", () => {
     const r = run(jarQs("miron/100ml_wide", { side: true, lid: true, tamper: false }, "&pjarcustom=1&pjarsidew=6.43&pjarsideh=2.6&pjaroverridereason=reference"));
     expect(r.blockers).toEqual([]);
-    expect(r.diagnostics.productSpec).toMatchObject({ customSize: true, overriddenPieces: ["side"], authorityStatus: "CANONICAL_COSTING_PENDING_CONFIRMATION", overrideReason: "reference" });
+    expect(r.diagnostics.productSpec).toMatchObject({ customSize: true, overriddenPieces: ["side"], authorityStatus: "OWNER_CONFIRMED", overrideReason: "reference" });
+    const pending = run(jarQs("miron/50ml", { side: true, lid: false, tamper: false }, "&pjarcustom=1&pjarsidew=5.75&pjarsideh=1.5&pjaroverridereason=reference"));
+    expect(pending.diagnostics.productSpec).toMatchObject({ customSize: true, authorityStatus: "CANONICAL_COSTING_PENDING_CONFIRMATION" });
   });
 
   it("unknown / 5oz / out-of-scope products still fail closed and have no spec", () => {
@@ -179,18 +192,18 @@ describe("Chiron hardening", () => {
     expect(chiron.map((p) => p.key).sort()).toEqual(["chiron/100ml_tall", "chiron/100ml_wide", "chiron/150ml"]);
   });
 
-  it("every Chiron spec is pending, requires confirmation, and names the shared size key", () => {
+  it("every Chiron spec is owner-confirmed with the SAME geometry as the equivalent Miron size (2026-11-11)", () => {
     for (const p of chiron) {
       const spec = getProductProductionSpec("premium-jars", p.key)!;
-      expect(spec.authorityStatus, p.key).toBe("CANONICAL_COSTING_PENDING_CONFIRMATION");
-      expect(spec.ownerConfirmationRequired, p.key).toBe(true);
-      expect(spec.sharedSizeKeyNote, p.key).toMatch(/shared "\w+" size key/);
-      expect(spec.sharedSizeKeyNote, p.key).toMatch(/no Chiron-specific label geometry/);
-      expect(spec.authorityNote).toContain("Not owner-confirmed");
-      expect(spec.authorityNote).not.toMatch(/STANDARD PRODUCTION SPEC|^OWNER_CONFIRMED/);
+      const miron = getProductProductionSpec("premium-jars", p.key.replace("chiron/", "miron/"))!;
+      expect(spec.authorityStatus, p.key).toBe("OWNER_CONFIRMED");
+      expect(spec.ownerConfirmationRequired, p.key).toBe(false);
+      expect(spec.pieces, p.key).toEqual(miron.pieces);
+      expect(spec.sharedSizeKeyNote, p.key).toMatch(/same owner-confirmed label geometry as the equivalent Miron size/);
       const r = run(jarQs(p.key, { side: true, lid: true, tamper: false }));
-      expect(r.diagnostics.productSpec!.authorityStatus).toBe("CANONICAL_COSTING_PENDING_CONFIRMATION");
-      expect(r.diagnostics.productSpec!.sharedSizeKeyNote).toMatch(/shared/);
+      const m = run(jarQs(p.key.replace("chiron/", "miron/"), { side: true, lid: true, tamper: false }));
+      expect(r.diagnostics.productSpec!.authorityStatus).toBe("OWNER_CONFIRMED");
+      expect(r.diagnostics.productSpec!.standard).toEqual(m.diagnostics.productSpec!.standard);
       expect(r.diagnostics.productSpec!.override).toEqual({});
     }
     // Miron specs carry no shared-key note

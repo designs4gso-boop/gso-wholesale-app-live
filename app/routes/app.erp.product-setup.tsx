@@ -2042,7 +2042,7 @@ export default function ProductSetupRecipeBuilder() {
             {spec.sharedSizeKeyNote ? <p className="muted">{spec.sharedSizeKeyNote}</p> : null}
             <p className="muted">{spec.note}</p>
             <p className="muted">Label zones below are older admin estimates kept for reference; they never price a job. Change the standard only through the owner-decision process (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md).</p>
-            <p className="muted"><strong>Cost authority:</strong> canonical true cost (jar adapter). <strong>Pricing authority:</strong> owner 16D jar price ladder with minimum-margin protection (Chiron: margin curve + quantity-break envelope). <strong>MOQ:</strong> official 128 (sales rules); storefront ladder starts at 50. <strong>Missing owner decisions:</strong> physical dimension confirmation; jar margin floor vs owner ladder (docs/GSO_ERP_FINAL_OWNER_CHECKLIST.md).</p>
+            <p className="muted"><strong>Cost authority:</strong> canonical true cost (jar adapter). <strong>Pricing authority:</strong> owner-approved 16D jar price ladder — authoritative, never raised by the generic margin floor (Chiron 100ml tall / 100ml wide / 150ml use the equivalent Miron ladder). <strong>MOQ:</strong> official 128 (sales rules); storefront ladder starts at 50.{confirmed ? null : <> <strong>Missing owner decision:</strong> physical dimension confirmation for this size (docs/GSO_ERP_FINAL_OWNER_CHECKLIST.md).</>}</p>
           </div>;
         })()}
         <p className="muted">Sections 4 (Features: recipe add-ons + vendor product add-ons above), 5 (Shopify: GID link fields below), and 6 (Production Recipe) all edit THIS selected recipe — the existing forms are reused, not duplicated.</p>

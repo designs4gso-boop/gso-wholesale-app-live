@@ -10,7 +10,7 @@
 // never inferred. Client-safe: pure data + pure functions.
 
 import { ACTIVE_JAR_PROFILES, type ActiveJarProfile } from "./jar-active-scope";
-import { JAR_LABEL_GEOMETRY, JAR_LABEL_GEOMETRY_AUTHORITY, JAR_LABEL_GEOMETRY_SOURCE, JAR_LABEL_GEOMETRY_VERSION, formatJarGeometry, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey, type SpecAuthorityStatus } from "./jar-label-geometry";
+import { JAR_LABEL_GEOMETRY, JAR_LABEL_GEOMETRY_SOURCE, jarGeometryAuthorityFor, JAR_LABEL_GEOMETRY_VERSION, formatJarGeometry, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey, type SpecAuthorityStatus } from "./jar-label-geometry";
 import { JAR_REFERENCE_GEOMETRY_SOURCE, jarReferenceConflicts, type ReferenceConflict } from "./jar-reference-geometry";
 import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, BAG_ARTBOARD_SOURCE } from "./bag-artboard-geometry";
 
@@ -103,16 +103,22 @@ function jarSpec(profile: ActiveJarProfile): ProductProductionSpec {
   const conflictSummary = referenceConflicts.length
     ? `Reference setup lists a different ${referenceConflicts.map((c) => c.text).join("; ")}. Current quote uses the existing canonical cost-engine geometry.`
     : null;
+  const sizeAuthority = jarGeometryAuthorityFor(profile.size);
+  const confirmed = Boolean(geometry) && sizeAuthority.authorityStatus === "OWNER_CONFIRMED";
   const sharedSizeKeyNote = profile.brand === "chiron"
-    ? `Chiron ${profile.size.replace("_", " ")} is costed with the shared "${profile.size}" size key; no Chiron-specific label geometry exists in the system. Owner confirmation required.`
+    ? confirmed
+      ? `Chiron ${profile.size.replace("_", " ")} uses the same owner-confirmed label geometry as the equivalent Miron size (owner confirmation 2026-11-11).`
+      : `Chiron ${profile.size.replace("_", " ")} is costed with the shared "${profile.size}" size key; no Chiron-specific label geometry exists in the system. Owner confirmation required.`
     : null;
-  const authorityStatus: SpecAuthorityStatus = geometry ? JAR_LABEL_GEOMETRY_AUTHORITY.authorityStatus : "UNSUPPORTED";
+  const authorityStatus: SpecAuthorityStatus = geometry ? sizeAuthority.authorityStatus : "UNSUPPORTED";
   return {
     authorityStatus,
-    ownerConfirmationRequired: true,
-    authorityNote: geometry
-      ? `${AUTHORITY_LABEL[authorityStatus]} — ${PENDING_CONFIRMATION_WARNING}. Not owner-confirmed; the quote uses what the cost engine prices with today.`
-      : AUTHORITY_LABEL.UNSUPPORTED,
+    ownerConfirmationRequired: !confirmed,
+    authorityNote: !geometry
+      ? AUTHORITY_LABEL.UNSUPPORTED
+      : confirmed
+        ? `${AUTHORITY_LABEL.OWNER_CONFIRMED} — owner-confirmed physical label dimensions (${sizeAuthority.ownerRecord}).`
+        : `${AUTHORITY_LABEL[authorityStatus]} — ${PENDING_CONFIRMATION_WARNING}. Not owner-confirmed; the quote uses what the cost engine prices with today.`,
     referenceConflicts,
     conflictSummary,
     sharedSizeKeyNote,
@@ -120,7 +126,9 @@ function jarSpec(profile: ActiveJarProfile): ProductProductionSpec {
     productKey: profile.key,
     displayName: profile.label,
     status: geometry ? "COST_AUTHORITY" : "OWNER_CONFIRMATION_REQUIRED",
-    statusNote: geometry
+    statusNote: confirmed
+      ? "Owner-confirmed physical label dimensions (2026-11-11) — the canonical geometry for label media, ink, cutting, weeding and application. Older RecipeLabelZone reference values for this size are superseded and never used."
+      : geometry
       ? "Dimensions are the Patch 2A presets the canonical cost engine prices with today; they are NOT physically owner-confirmed. The RecipeLabelZone database rows (seed-jar-label-zone-dimensions.mjs) carry older ESTIMATED values that differ for most sizes and are never used for cost. Owner confirmation of the physical dimensions is required (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md)."
       : "No costing geometry exists for this jar; it cannot be quoted. Owner must supply confirmed dimensions before use.",
     physical: { brand: profile.brand, size: profile.size, completeSet: "jar + lid (+ printed labels)" },

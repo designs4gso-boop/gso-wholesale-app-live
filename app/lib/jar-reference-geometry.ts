@@ -9,9 +9,14 @@
 // value exists for a dimension. Do not reconcile either table to the other
 // until the owner physically confirms the jars (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md).
 //
+// 2026-11-11: for the OWNER-CONFIRMED sizes (100ml tall, 100ml wide, 150ml —
+// JAR_OWNER_CONFIRMED_GEOMETRY) these reference rows are SUPERSEDED (e.g. the
+// 6.125 / 6.43 side widths and 1.875 lid). They are no longer reported as a
+// conflict and are never an authority.
+//
 // Pure data, no imports.
 
-import type { JarLabelGeometry, JarSizeKey } from "./jar-label-geometry";
+import { JAR_OWNER_CONFIRMED_GEOMETRY, type JarLabelGeometry, type JarSizeKey } from "./jar-label-geometry";
 
 export const JAR_REFERENCE_GEOMETRY_SOURCE = "RecipeLabelZone rows seeded by tools/seed-jar-label-zone-dimensions.mjs (admin reference, self-described estimates; NOT a cost authority)";
 
@@ -45,6 +50,7 @@ const FIELD_LABEL = { widthIn: "width", heightIn: "height", diameterIn: "diamete
  * not conflicts. Equal values are not conflicts.
  */
 export function jarReferenceConflicts(size: JarSizeKey, canonical: JarLabelGeometry): ReferenceConflict[] {
+  if (JAR_OWNER_CONFIRMED_GEOMETRY[size]) return []; // reference superseded by the owner confirmation (2026-11-11)
   const ref = JAR_REFERENCE_GEOMETRY[size];
   if (!ref) return [];
   const out: ReferenceConflict[] = [];

@@ -79,15 +79,15 @@ describe("live smoke fixture — 100ml Tall Miron, 128, Side + Lid, AUTO, CMYK",
     }
   });
 
-  it("owner-confirmation geometry warning remains intact on the live product", async () => {
+  it("the live product's geometry is owner-confirmed (2026-11-11) with no stale reference conflict", async () => {
     const d = (await computeAt8(LIVE)).diagnostics;
     expect(d.productSpec).toMatchObject({
       productKey: "miron/100ml_tall",
-      authorityStatus: "CANONICAL_COSTING_PENDING_CONFIRMATION",
-      ownerConfirmationRequired: true,
+      authorityStatus: "OWNER_CONFIRMED",
+      ownerConfirmationRequired: false,
       standard: { side: { widthIn: 6.3, heightIn: 3.15 }, lid: { diameterIn: 1.75 } },
     });
-    expect(d.productSpec!.referenceConflicts).toEqual(["side label width 6.125 in (current quote uses 6.3 in)", "side label height 3.125 in (current quote uses 3.15 in)"]);
+    expect(d.productSpec!.referenceConflicts).toEqual([]);
   });
 });
 

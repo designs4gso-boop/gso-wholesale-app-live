@@ -16,6 +16,12 @@
 - **Storefront raw-variant bypass:** a paid order with a RAW variant of an active ConfiguratorProduct (matched by Shopify product/variant ID) is held for owner review (`shopify_order_configurator_bypass`) and never becomes a production job. Full prevention still needs Shopify-side action (see closeout).
 - **Target permission contract (not built):** Owners = everything. Sales = customer selling price and quote/order customer totals only (no true cost, profit, margin, internal floors) unless promoted. Production = no revenue / cost / profit / margin / floors / owner pricing controls (server-redacted today). Requires separate Shopify staff logins per person before employees use the ERP.
 
+## Jar label geometry (OWNER CONFIRMATION 2026-11-11)
+
+- OWNER_CONFIRMED for Miron AND Chiron (Chiron = same geometry as the equivalent Miron size): 100ml Tall side 6.3 x 3.15 / lid 1.75 / tamper 6.3 x 0.5; 100ml Wide side 6.6 x 2.6 / lid 1.9 / tamper 6.6 x 0.5; 150ml side 7.125 x 3.125 / lid 2.0 / tamper 7.125 x 0.6 (`JAR_OWNER_CONFIRMED_GEOMETRY`, `jarGeometryAuthorityFor`). The calculator and Product Setup show STANDARD PRODUCTION SPEC (green) with no "PHYSICAL DIMENSIONS NEED OWNER CONFIRMATION" warning for these sizes.
+- The confirmed values already were the JAR_LABEL_GEOMETRY cost table, so label media, ink, cutting, weeding and application costs are unchanged. The RecipeLabelZone reference values for these sizes (6.125 / 6.43 side, 1.875 lid, 0.5 tamper on 150ml) are superseded and no longer reported as conflicts; they never priced anything.
+- Still pending owner confirmation: Miron 50ml, Miron 250ml, standard 3oz, standard 4oz. Historical quote snapshots keep their stored authority text and cost.
+
 ## Chiron selling-price authority (OWNER DECISION 2026-11-11)
 
 - Chiron jars use the SAME customer selling-price ladder as the equivalent Miron jar: Chiron 100ml Tall -> Miron 100ml Tall, Chiron 100ml Wide -> Miron 100ml Wide, Chiron 150ml -> Miron 150ml (the 16D table shares one 100ml ladder for both body styles). Holographic +20% and 0X-8X specialty adders carry over identically. Implemented in `resolveJarOwnerLadder` (`CHIRON_EQUIVALENT_MIRON_SIZE`, jar-commercial-pricing.ts); the calculator loader and save path both use it, and the pricing authority reports `owner_jar_ladder` with "Chiron selling price inherited from the equivalent Miron ladder".

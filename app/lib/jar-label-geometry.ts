@@ -58,6 +58,8 @@ export type SpecAuthorityStatus = "OWNER_CONFIRMED" | "CANONICAL_COSTING_PENDING
  * the same pattern 2D-4D2 audited for the 1% overage before the owner
  * confirmed it. Until a physical confirmation is recorded, the table is the
  * current canonical COSTING geometry, not a confirmed PRODUCTION dimension.
+ * 2026-11-11: 100ml tall / 100ml wide / 150ml are now owner-confirmed — see
+ * JAR_OWNER_CONFIRMED_GEOMETRY and jarGeometryAuthorityFor (per size).
  */
 export const JAR_LABEL_GEOMETRY_AUTHORITY = {
   authorityStatus: "CANONICAL_COSTING_PENDING_CONFIRMATION" as SpecAuthorityStatus,
@@ -68,6 +70,31 @@ export const JAR_LABEL_GEOMETRY_AUTHORITY = {
   ownerRecord: null as string | null,
   note: "Current canonical costing geometry. Physical dimensions need owner confirmation (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md). No cost changes until the owner confirms.",
 } as const;
+
+/**
+ * OWNER CONFIRMATION 2026-11-11 — the physical label dimensions for these
+ * sizes are OWNER-CONFIRMED (Miron AND Chiron: Chiron uses the same geometry
+ * as the equivalent Miron size). They equal the JAR_LABEL_GEOMETRY rows
+ * above exactly, so no cost changes:
+ *   100ml tall  side 6.3 x 3.15    lid 1.75 dia  tamper 6.3 x 0.5
+ *   100ml wide  side 6.6 x 2.6     lid 1.9 dia   tamper 6.6 x 0.5
+ *   150ml       side 7.125 x 3.125 lid 2.0 dia   tamper 7.125 x 0.6
+ * Every other size keeps JAR_LABEL_GEOMETRY_AUTHORITY (pending confirmation).
+ */
+export const JAR_OWNER_CONFIRMED_GEOMETRY: Partial<Record<JarSizeKey, JarLabelGeometry>> = {
+  "100ml_tall": { side: { widthIn: 6.3, heightIn: 3.15 }, lid: { diameterIn: 1.75 }, tamper: { widthIn: 6.3, heightIn: 0.5 } },
+  "100ml_wide": { side: { widthIn: 6.6, heightIn: 2.6 }, lid: { diameterIn: 1.9 }, tamper: { widthIn: 6.6, heightIn: 0.5 } },
+  "150ml": { side: { widthIn: 7.125, heightIn: 3.125 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.125, heightIn: 0.6 } },
+};
+export const JAR_GEOMETRY_OWNER_RECORD = "Owner confirmation 2026-11-11: physical label dimensions for 100ml tall, 100ml wide and 150ml (Miron and Chiron share the same geometry)";
+
+/** Authority for ONE size: owner-confirmed sizes are OWNER_CONFIRMED; the rest stay pending. */
+export function jarGeometryAuthorityFor(size: string | null | undefined): { authorityStatus: SpecAuthorityStatus; ownerConfirmationRequired: boolean; ownerRecord: string | null } {
+  const confirmed = Boolean(size && JAR_OWNER_CONFIRMED_GEOMETRY[size as JarSizeKey]);
+  return confirmed
+    ? { authorityStatus: "OWNER_CONFIRMED", ownerConfirmationRequired: false, ownerRecord: JAR_GEOMETRY_OWNER_RECORD }
+    : { authorityStatus: JAR_LABEL_GEOMETRY_AUTHORITY.authorityStatus, ownerConfirmationRequired: true, ownerRecord: null };
+}
 
 export type JarLabelSelection = { side: boolean; lid: boolean; tamper: boolean };
 
