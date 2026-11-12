@@ -19,18 +19,19 @@ vi.mock("../app/shopify.server", () => ({
 }));
 
 // 2026-11-12: jar recipes with OWNER-CONFIRMED canonical geometry (e.g. 4oz)
-// are no longer reported as missing dimensions (jar-recipe-geometry.ts). The
-// blocker scenario keeps jar recipes that genuinely are not ready: the 5oz
-// cost-only placeholder (no active jar product / geometry) and 50ml (pending).
+// are quote-ready without Product Setup dimensions / preferred machine
+// (jar-quote-readiness.server.ts). The blocker scenario keeps the active jar
+// that genuinely is not ready — 50ml (geometry pending) — plus the 5oz
+// cost-only placeholder, which is informational (inactive, not counted).
 const JAR_RECIPES = [
   "5oz Clear Jar with Applied Label",
   "50ml Miron Jar with Applied Label",
 ].map((name, index) => ({ id: `r_${index}`, name, productType: name.startsWith("5oz") ? "jar_5oz_clear" : "jar_50ml", minQuantity: 1 }));
-const JAR_ISSUES = [
-  "5oz Clear Jar with Applied Label — not an active jar product; no confirmed label geometry",
-  "Miron 50ml — label geometry pending owner sample",
+const JAR_DETAILS = [
+  "50ml Miron Jar with Applied Label: Miron 50ml — label geometry pending owner sample",
+  "5oz Clear Jar with Applied Label — not an active jar product; no confirmed label geometry (inactive — not launch-blocking)",
 ];
-const PIPELINE_SUMMARY = `Not quote-ready yet: ${JAR_ISSUES.join("; ")}.`;
+const PIPELINE_SUMMARY = "Not quote-ready yet: Miron 50ml — label geometry pending owner sample.";
 
 const dbCalls: string[] = [];
 vi.mock("../app/db.server", () => {
@@ -136,7 +137,7 @@ describe("3-7. readiness values come from the existing loader logic", () => {
   it("the Quote Pipeline blocker stays, summarized in plain English with the exact items behind View details", () => {
     const pipeline = data.steps.find((s: any) => s.name === "Quote Pipeline");
     expect(pipeline.severity).toBe("blocker");
-    expect(pipeline.details).toEqual(JAR_RECIPES.map((r, i) => `${r.name}: ${JAR_ISSUES[i]}`));
+    expect(pipeline.details).toEqual(JAR_DETAILS);
     expect(pipeline.summary).toBe(PIPELINE_SUMMARY);
     const text = textOf(html);
     expect(text).toContain("Blockers (1)");

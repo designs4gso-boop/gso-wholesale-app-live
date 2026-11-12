@@ -26,6 +26,10 @@ Branch `overnight/final-operational-readiness-2026-11-11` from live `cfb9a36`. N
 - The 3oz / 4oz side lid band is offered whenever band geometry exists; missing band application time keeps the quote Needs Review with an explicit message. A tab opened before a deploy keeps the old browser code: hard-refresh the embedded admin after each deploy.
 - Launch Readiness: jar recipes are dimension-ready when canonical jar geometry is owner-confirmed (the seeded jar recipes never had Product Setup width / height). Unresolved items are named (e.g. "Miron 50ml — label geometry pending owner sample"; "5oz Clear Jar with Applied Label — not an active jar product"). The agent-queue conversion gate is unchanged.
 
+## Launch Readiness routing semantics 2026-11-12
+
+Quote Pipeline readiness for an ACTIVE jar recipe = owner-confirmed label geometry + verified canonical blank cost + at least one compatible press under the canonical routing rules (Mimaki CMYK/White, Roland CMYK/White/Gloss; Primer never). Product Setup preferred machine / width / height are only read by the legacy recipe engine used for automatic agent-queue conversion, so those gaps are listed under Agent Platform (warning) and `blockingConversionIssues` is unchanged. Inactive jar placeholders (5oz) are informational. Miron 50ml (active, geometry pending owner sample) remains the one Quote Pipeline blocker.
+
 ## Mimaki White — controlled calibration procedure (DO NOT RUN without owner approval)
 
 No new defensible evidence exists (RasterLink/MijCtrl logs cover ~1 day, no job folder, no coverage data; Profile.db is encrypted). When the owner approves ONE controlled print during normal production:

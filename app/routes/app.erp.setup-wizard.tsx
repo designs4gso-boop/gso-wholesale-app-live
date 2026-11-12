@@ -13,7 +13,7 @@ import { useState, type ReactNode } from "react";
 import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { readinessIssuesForRecipe } from "../lib/jar-recipe-geometry";
+import { classifyRecipeReadiness } from "../lib/jar-quote-readiness.server";
 import {
   QUOTE_READY_RECIPE_WHERE,
   QUOTE_RECIPE_PRICING_INCLUDE,
@@ -209,26 +209,39 @@ export async function loader({ request }: { request: Request }) {
   });
 
   let sampledReadyCount = 0;
+  let sampledRecipeCount = 0;
   const failingSamples: { name: string; firstIssue: string }[] = [];
-
-  // 2026-11-12: jar recipes are dimension-ready when the canonical jar geometry
-  // is owner-confirmed (no duplicate Product Setup width / height); a pending
-  // or unsupported jar is NAMED. Every failing sampled recipe is listed.
+  // 2026-11-12: QUOTE readiness follows the canonical authorities (active jar:
+  // confirmed geometry + verified blank cost + a compatible press under the
+  // canonical routing rules) — never a duplicate Product Setup preferred
+  // machine / width / height. Legacy-engine gaps only block AUTOMATIC agent
+  // conversion and are reported under Agent Platform. Inactive jar
+  // placeholders are informational and are not counted.
+  let activeJarRed = false;
+  const agentConversionSetup: { name: string; firstIssue: string }[] = [];
+  const informationalRecipes: string[] = [];
   for (const recipe of sampleRecipes) {
     try {
       const priced = priceRecipeAtQuantity(recipe, Math.max(1, Number(recipe.minQuantity) || 1), {});
-      const issues = readinessIssuesForRecipe(recipe, blockingConversionIssues(recipe, priced));
-      if (issues.length === 0) {
+      const readiness = classifyRecipeReadiness(recipe, blockingConversionIssues(recipe, priced));
+      if (readiness.scope === "jar_inactive") {
+        informationalRecipes.push(...readiness.informational);
+        continue;
+      }
+      sampledRecipeCount += 1;
+      if (readiness.agentConversionIssues.length) agentConversionSetup.push({ name: recipe.name, firstIssue: readiness.agentConversionIssues[0] });
+      if (readiness.quoteIssues.length === 0) {
         sampledReadyCount += 1;
       } else {
-        failingSamples.push({ name: recipe.name, firstIssue: issues[0] });
+        failingSamples.push({ name: recipe.name, firstIssue: readiness.quoteIssues[0] });
+        if (readiness.scope === "jar_active") activeJarRed = true;
       }
     } catch (_error) {
+      sampledRecipeCount += 1;
       failingSamples.push({ name: recipe.name, firstIssue: "readiness check failed unexpectedly" });
     }
   }
 
-  const sampledRecipeCount = sampleRecipes.length;
   const lastAcceptedAt = latestAcceptedIntake ? latestAcceptedIntake.createdAt : null;
 
   const steps: Step[] = [
@@ -291,13 +304,13 @@ export async function loader({ request }: { request: Request }) {
       name: "Quote Pipeline",
       status: quotePipelineStatus(quoteReadyRecipes, totalQuotes, paidQuotes),
       severity:
-        quoteReadyRecipes === 0 || (sampledRecipeCount > 0 && sampledReadyCount === 0)
+        quoteReadyRecipes === 0 || (sampledRecipeCount > 0 && sampledReadyCount === 0) || activeJarRed
           ? "blocker"
           : quotePipelineStatus(quoteReadyRecipes, totalQuotes, paidQuotes) === "Ready"
             ? "ready"
             : "warning",
       explanation:
-        "Quote-ready recipes feed Quotes / CRM and Agent Review Queue conversion. Flag-ready is not full conversion readiness - open a recipe in Product Setup for its complete readiness checklist and test pricing.",
+        "Quote readiness follows the canonical calculator: an active jar needs confirmed label geometry, a verified blank cost and a compatible press under the canonical routing rules (no Product Setup preferred machine). Automatic agent-queue conversion still uses the Product Setup recipe engine; its setup gaps are listed under Agent Platform. Inactive placeholders are informational.",
       summary:
         quotePipelineSummary(failingSamples, quoteReadyRecipes) ??
         (totalQuotes === 0
@@ -310,9 +323,12 @@ export async function loader({ request }: { request: Request }) {
         `${totalQuotes} quote(s)`,
         `${depositPaidQuotes} deposit-paid quote(s)`,
         `${paidQuotes} paid quote(s)`,
-        `Deep check: ${sampledReadyCount}/${sampledRecipeCount} sampled recipe(s) fully conversion-ready`,
+        `Deep check: ${sampledReadyCount}/${sampledRecipeCount} active sampled recipe(s) quote-ready (canonical calculator)`,
       ],
-      details: failingSamples.map((sample) => `${sample.name}: ${sample.firstIssue}`),
+      details: [
+        ...failingSamples.map((sample) => `${sample.name}: ${sample.firstIssue}`),
+        ...informationalRecipes,
+      ],
       links: [
         { label: "Product Setup", url: "/app/erp/product-setup" },
         { label: "Quotes / CRM", url: "/app/quotes" },
@@ -391,8 +407,12 @@ export async function loader({ request }: { request: Request }) {
         `${activeAgentCredentials} active credential(s)`,
         `${queueReadyItems} queue item(s) ready to quote`,
         `${queueConvertedItems} queue item(s) converted`,
+        ...(agentConversionSetup.length
+          ? [`Automatic agent conversion needs Product Setup (preferred machine / dimensions / materials) for ${agentConversionSetup.length} sampled recipe(s) that are already quote-ready in the calculator`]
+          : []),
         "Safety posture: agent reasoning OFF · agent execution OFF · worker manual only (no schedule) · Slack decision-only — live state on the Operations Hub",
       ],
+      details: agentConversionSetup.map((sample) => `${sample.name}: ${sample.firstIssue} (agent auto-conversion only)`),
       links: [
         { label: "Agent Security", url: "/app/erp/agent-security" },
         { label: "Agent Review Queue", url: "/app/erp/agent-review-queue" },
