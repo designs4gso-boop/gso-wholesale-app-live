@@ -46,8 +46,8 @@ describe("owner access enforcement", () => {
 });
 
 describe("production financial visibility", () => {
-  it("hidden only when owner IDs are configured and the viewer is not an owner", () => {
-    expect(productionFinancialVisibility(as("111"), {}).show).toBe(true); // identity unknown: never hide owner data
+  it("visible to owners (and authorized managers) only — fails CLOSED when no owner is configured (2026-11-11)", () => {
+    expect(productionFinancialVisibility(as("111"), {}).show).toBe(false); // no owner configured: denied by default
     expect(productionFinancialVisibility(as("111"), { [OWNER_USER_IDS_ENV]: "111" }).show).toBe(true);
     expect(productionFinancialVisibility(as("999"), { [OWNER_USER_IDS_ENV]: "111" }).show).toBe(false);
     expect(productionFinancialVisibility(as("999"), { [OWNER_USER_IDS_ENV]: "111", [OWNER_ENFORCEMENT_ENV]: OWNER_ENFORCEMENT_TEMPORARY }).show).toBe(true);

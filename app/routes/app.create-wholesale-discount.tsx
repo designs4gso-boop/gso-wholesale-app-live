@@ -1,8 +1,13 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import { requireOwner } from "../lib/owner-authorization.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // 2026-11-11: creating a live Shopify discount is OWNER-ONLY (the owner has
+  // approved DEACTIVATING the old automatic Wholesale Pricing discount).
+  requireOwner(auth, process.env, "Creating the Wholesale Pricing discount is owner only.");
+  const { admin } = auth;
 
   // Patch 13.0 confirm gate: this route creates the live wholesale discount
   // in Shopify when visited. It must never run from a casual page load.

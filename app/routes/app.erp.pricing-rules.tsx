@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { Form, Link, useActionData, useLoaderData } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server";
@@ -478,7 +479,10 @@ async function searchShopifyCollections(admin: any, query: string) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { admin, session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { admin, session } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
   const targetSearch = String(
@@ -527,7 +531,10 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { admin, session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { admin, session } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
   const targetSearch = String(

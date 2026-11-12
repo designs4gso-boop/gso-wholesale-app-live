@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { Link, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -9,7 +10,10 @@ type Status = CostHealthStatus;
 // in app/lib/cost-health-rules.server.ts (pure, unit-tested). Nothing here
 // writes to the database, Shopify, or any pricing authority.
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
 
   const [materials, machines, productTypes] = await Promise.all([

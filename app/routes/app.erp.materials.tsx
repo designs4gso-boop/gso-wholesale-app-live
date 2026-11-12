@@ -11,6 +11,7 @@ import {
   Badge,
   Divider,
 } from "@shopify/polaris";
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { useEffect, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -349,7 +350,10 @@ function NativeTextarea({ label, value, onChange, helpText }: any) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
 
   const [materials, vendors] = await Promise.all([
     db.material.findMany({
@@ -390,7 +394,10 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const payload = await request.json();
 

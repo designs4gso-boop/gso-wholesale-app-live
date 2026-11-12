@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
@@ -96,7 +97,10 @@ function productStatus(
 export async function loader({ request }: LoaderFunctionArgs) {
   // 15G.1: authenticate and scope every read to the current shop — this
   // loader previously queried with no shop filter at all.
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
   const productTypeFilter = norm(url.searchParams.get("productType"));

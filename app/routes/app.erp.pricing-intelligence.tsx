@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import type React from "react";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -38,7 +39,10 @@ import {
 // and NOTHING ever writes to Shopify.
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   // 15F.0K.4G: cache loads FIRST so gathering can deduplicate production-job
   // twins of Shopify sales and exclude ERP evidence paid by Shopify test
@@ -95,7 +99,10 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session, admin } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session, admin } = financialAuth;
   const shop = session.shop;
   const form = await request.formData();
   if (String(form.get("intent")) !== "refreshShopifyEvidence") {

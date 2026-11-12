@@ -7,7 +7,7 @@ import {
   phraseGateOk,
 } from "../lib/security-guards-shared";
 import { blockingConversionIssues, priceRecipeAtQuantity } from "../lib/recipe-pricing.server";
-import { requireOwner } from "../lib/owner-authorization.server";
+import { requireOwner, requireFinancialAccess } from "../lib/owner-authorization.server";
 import { agentConversionCanonicalGate } from "../lib/agent-quote-canonical-gate.server";
 
 const DEFAULT_SHOP_LABOR_RATE_PER_HOUR = 25;
@@ -567,6 +567,8 @@ async function updateShopifyVariantPrice(admin: any, variantId: string, price: n
 
 export async function action({ request }: { request: Request }) {
   const auth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(auth);
   const { admin, session } = auth;
   const shop = session.shop;
   const formData = await request.formData();
@@ -842,7 +844,10 @@ export async function action({ request }: { request: Request }) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { admin, session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { admin, session } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
   const search = String(url.searchParams.get("search") || "").trim();

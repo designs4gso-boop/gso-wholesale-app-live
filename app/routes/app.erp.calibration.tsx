@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import type React from "react";
 import { Form, Link, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -26,7 +27,10 @@ import {
 // converting one to the other needs coverage data the RIP logs do not record.
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
   const filters = {

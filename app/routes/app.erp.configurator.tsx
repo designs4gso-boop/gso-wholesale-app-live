@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
@@ -346,7 +347,10 @@ async function calculate(shop: string, productType: string, material: string, fi
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
 
@@ -371,7 +375,10 @@ export async function action({ request }: { request: Request }) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   // 15G.1: loaders are read-only. The old auto-reseed (which could DELETE
   // and recreate live stock-bag pricing on a mere page view) is gone;
   // missing pilot data now surfaces as a banner + the explicit reset action.

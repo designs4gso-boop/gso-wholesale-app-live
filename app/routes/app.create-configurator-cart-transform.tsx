@@ -1,4 +1,5 @@
 import { authenticate } from "../shopify.server";
+import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
 
 function json(data: any, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
@@ -24,7 +25,11 @@ function cleanError(error: any) {
 
 export const loader = async ({ request }: { request: Request }) => {
   try {
-    const { admin } = await authenticate.admin(request);
+    const auth = await authenticate.admin(request);
+    // 2026-11-11: activating a live cart transform is OWNER-ONLY (docs: it must never be activated).
+    const owner = resolveOwnerAuthorization(auth);
+    if (!owner.isOwner) return json({ ok: false, blocked: true, message: `Activating the cart transform is owner only. ${owner.reason}` }, 403);
+    const { admin } = auth;
 
     // Patch 13.0 confirm gate: this route creates the live cart transform in
     // Shopify when visited. It must never run from a casual page load.

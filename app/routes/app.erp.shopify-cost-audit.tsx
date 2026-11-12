@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import type React from "react";
 import { useMemo, useState } from "react";
 import { Form, Link, useLoaderData } from "react-router";
@@ -99,7 +100,10 @@ function rowToCsvCells(row: AuditRow) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session, admin } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session, admin } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
   const pull = url.searchParams.get("pull") === "1";

@@ -1,4 +1,5 @@
 ﻿import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
 
@@ -22,7 +23,10 @@ function normalizeGid(value: FormDataEntryValue | null, type: "Product" | "Produ
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
 
@@ -73,7 +77,10 @@ export async function action({ request }: { request: Request }) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
 
   const products = await db.configuratorProduct.findMany({
     where: {

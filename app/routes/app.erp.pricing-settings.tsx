@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import type React from "react";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -55,7 +56,10 @@ const MAX_BAND_ROWS = 8;
 const UNUSED_MARGIN_CURVE_KEYS = ["die-cut-bags", "boxes"];
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const resolved = await resolvePricingPolicyConfig(db, shop);
   const ruleLabel = (key: string) => FAMILY_MARGIN_RULES.find((rule) => rule.key === key)?.label || key;
@@ -201,7 +205,10 @@ function parseBandsForm(form: FormData): unknown[] {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const actor = resolveActorFromSession(session, shop);
   const form = await request.formData();

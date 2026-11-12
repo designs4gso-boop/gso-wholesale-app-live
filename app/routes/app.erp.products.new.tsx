@@ -9,6 +9,7 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { useState } from "react";
 import { Form, redirect, useActionData, useLoaderData } from "react-router";
 import { officialMoqForFamily, salesRulesForFamily } from "../lib/product-family-sales-rules";
@@ -372,7 +373,10 @@ function RecipeSummary({ recipes }: { recipes: any[] }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const formData = await request.formData();
   const intent = formText(formData, "intent");
@@ -542,7 +546,10 @@ export async function action({ request }: { request: Request }) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
 

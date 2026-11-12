@@ -7,7 +7,7 @@ import { materialKind } from "../lib/material-classify";
 import { resolveMaterialUnitCost, resolvePrintMaterialCostPerSqft } from "../lib/cost-calculator.server";
 import { buildCsv } from "../lib/shopify-cost-audit-shared";
 import { APPROVED_COST_TRUTH, applyApprovedCostUpdates, previewApprovedCostUpdates } from "../lib/approved-cost-updates.server";
-import { requireOwner } from "../lib/owner-authorization.server";
+import { requireOwner, requireFinancialAccess } from "../lib/owner-authorization.server";
 // 2026-10-05 read-only production standards (weeding + fixed-product specs + jar application timings)
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 import { ERP_CARD_STYLE, ERP_SMALL_HELP, ERP_TD_STYLE, ERP_TH_STYLE } from "../lib/erp-ui-tokens";
@@ -67,6 +67,8 @@ function pushIssue(issues: WorkbookIssue[], issue: WorkbookIssue) {
 // quotes, no production, no recipes, no schema.
 export async function action({ request }: { request: Request }) {
   const auth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(auth);
   const { session } = auth;
   // 2026-11-11: applying approved costs writes live cost data — owner only.
   requireOwner(auth, process.env, "Applying approved cost updates is owner only.");
@@ -89,7 +91,10 @@ export async function action({ request }: { request: Request }) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
 
   const [materials, vendorProducts, machines, recipes, recipeTierCount, configuratorRows, pricingRuleCount, productCostCount, sourcedCostTierCount, ripCount, latestRip] = await Promise.all([

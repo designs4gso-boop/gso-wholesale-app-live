@@ -84,23 +84,56 @@ export function resolveOwnerAuthorization(
   return result(false, `Owner-only action: you are not the configured owner.${yourId}`);
 }
 
+/** Managers the owner explicitly authorizes for internal financials (staff-roles.server.ts). */
+export const MANAGER_AUTHORIZED_USER_IDS_ENV = "GSO_MANAGER_AUTHORIZED_USER_IDS";
+export const STAFF_ROLES_ASSIGNMENT_ENV = "GSO_STAFF_ROLES";
+export const FINANCIAL_ACCESS_DENIED_MESSAGE = "Internal financials (true cost, profit, margin, internal floors, material / ink cost) are limited to the owner and authorized managers.";
+
 /**
- * 2026-11-11 owner decision: regular PRODUCTION staff do not see revenue, true
- * cost, profit, margin or owner cost controls. Hidden ONLY when owner identity
- * is actually configured (GSO_OWNER_SHOPIFY_USER_IDS) and the viewer is not an
- * owner — with no IDs configured the owners cannot be told apart from staff,
- * so nothing is hidden (owner data is never hidden by accident).
+ * 2026-11-11 owner decision: internal financials are visible to OWNERS and to
+ * MANAGERS the owner explicitly authorizes (role manager in GSO_STAFF_ROLES AND
+ * listed in GSO_MANAGER_AUTHORIZED_USER_IDS). Everyone else is denied — fails
+ * closed, including when no owner is configured.
+ */
+export function financialAccess(
+  auth: { session?: any; sessionToken?: any } | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): { allowed: boolean; reason: string; owner: OwnerAuthorization } {
+  const owner = resolveOwnerAuthorization(auth, env);
+  if (owner.isOwner) return { allowed: true, reason: owner.reason, owner };
+  const id = owner.userId;
+  const ids = (key: string) => String(env[key] || "").split(",").map((part) => part.trim()).filter(Boolean);
+  const isManager = Boolean(id) && ids(STAFF_ROLES_ASSIGNMENT_ENV).some((entry) => entry.split(":").map((part) => part.trim().toLowerCase()).join(":") === `${id}:manager`);
+  if (isManager && ids(MANAGER_AUTHORIZED_USER_IDS_ENV).includes(id!)) {
+    return { allowed: true, reason: `Authorized manager (verified Shopify staff user ID ${id}).`, owner };
+  }
+  return { allowed: false, reason: `${FINANCIAL_ACCESS_DENIED_MESSAGE} ${owner.reason}`, owner };
+}
+
+/** Loader / action guard for internal-financial pages: 403 unless owner or authorized manager. */
+export function requireFinancialAccess(
+  auth: { session?: any; sessionToken?: any } | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): OwnerAuthorization {
+  const access = financialAccess(auth, env);
+  if (!access.allowed) throw ownerOnlyForbiddenResponse(access.owner, FINANCIAL_ACCESS_DENIED_MESSAGE);
+  return access.owner;
+}
+
+/**
+ * 2026-11-11 owner decision: PRODUCTION staff do not see revenue, true cost,
+ * profit, margin or owner cost controls. Visible to owners and authorized
+ * managers only (financialAccess). Fails closed: with no owner configured,
+ * nobody but the account owner / temporary switch sees them.
  */
 export function productionFinancialVisibility(
   auth: { session?: any; sessionToken?: any } | null | undefined,
   env: Record<string, string | undefined> = process.env,
 ): { show: boolean; reason: string; owner: OwnerAuthorization } {
-  const owner = resolveOwnerAuthorization(auth, env);
-  if (owner.isOwner) return { show: true, reason: owner.reason, owner };
-  if (!configuredOwnerUserIds(env).length) {
-    return { show: true, reason: `Financials visible to all staff: ${OWNER_USER_IDS_ENV} is not configured yet, so owners cannot be identified.`, owner };
-  }
-  return { show: false, reason: "Financial figures are owner-only.", owner };
+  const access = financialAccess(auth, env);
+  return access.allowed
+    ? { show: true, reason: access.reason, owner: access.owner }
+    : { show: false, reason: "Financial figures are limited to the owner and authorized managers.", owner: access.owner };
 }
 
 /* 2026-10-19 owner decision: the ENTIRE Cost & Pricing Calculator is owner

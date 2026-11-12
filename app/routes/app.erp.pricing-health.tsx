@@ -9,6 +9,7 @@ import {
   Page,
   Text,
 } from "@shopify/polaris";
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { useRef } from "react";
 import { Form, useLoaderData, useNavigate, useSubmit } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -129,7 +130,10 @@ function minRuleQty(rules: any[], fallback: number) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
   const filters = {

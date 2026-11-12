@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { useLoaderData, Link, Form } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -21,7 +22,10 @@ import { assessCommercialName, cleanCommercialName } from "../lib/commercial-nam
 // in ErpAdminSetting (category "pricing-feedback"); destination data (Product
 // Setup / Cost Book / owner standards / DTP ladder) is NEVER auto-changed.
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const formData = await request.formData();
   if (String(formData.get("intent")) !== "reviewPricingFeedback") return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
@@ -112,7 +116,10 @@ function topEntries(groups: Record<string, any[]>, metricFn: (items: any[]) => n
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
   const range = url.searchParams.get("range") || "30";
