@@ -6,6 +6,42 @@ change ships in code without auto-applying to production on push.
 
 ## Currently staged
 
+### 20261112090000_add_operational_records (overnight 2026-11-12) — STAGED, NOT APPLIED
+ADDITIVE ONLY (new nullable columns / columns with a safe default, two new
+tables, unique + lookup indexes; no drops, renames, type changes or data
+conversion). Verified locally: `prisma migrate diff` of the patched schema
+produces exactly this SQL, and the patched schema validates.
+
+- `ProductionJob`: shippedAt, shipCarrier, shipTrackingNumber, shipPackageCount,
+  pickedUpAt, pickedUpBy, rushRequested (default false), rushApprovalStatus,
+  rushApprovedBy, rushApprovedAt, rushNotes, promisedDate, quotedTrueCost,
+  actualVarianceAmount, actualVariancePct.
+- `ProductionJobItem`: goodQty, spoiledQty, spoilageReason, qcResult, qcBy, qcAt,
+  qcNote, lastReprintReason, lastReprintBy, lastReprintAt.
+- `PurchaseRequest`: requestedBy, approvedBy, approvedAt.
+- `Quote`: requestedDueDate, rushRequested (default false). NO rush fee.
+- New `InventoryReservation` (unique `(shop, idempotencyKey)`) and
+  `NotificationPreference` (unique `(shop, recipientKey, eventType, channel)`).
+
+Backward compatible: today's code never reads these columns, and the live
+schema.prisma does not declare them, so deploying the current code before or
+after activation is safe. No backfill is required (all new data starts empty;
+existing shipments / QC / reprints stay in ProductionJobEvent history).
+Reservation logic is ready in `app/lib/inventory-reservation.ts`; wiring it
+into scheduling / completion is a follow-up commit AFTER activation.
+
+**Activation (owner action — ONE commit, after a production DB backup):**
+1. `git mv prisma/migrations-pending/20261112090000_add_operational_records prisma/migrations/`
+2. `node prisma/migrations-pending/apply-20261112-operational-schema.mjs`
+3. `npx prisma validate` (must pass), commit both changes, push — Render runs
+   `prisma migrate deploy` and regenerates the client in the same deploy.
+
+Rollback (only if needed; drops ONLY what this migration added):
+`DROP TABLE "InventoryReservation"; DROP TABLE "NotificationPreference";`
+then `ALTER TABLE "<table>" DROP COLUMN "<column>";` for each column listed
+above, revert the schema lines, and delete the row for this migration from
+`_prisma_migrations`.
+
 ### 20260812090000_add_order_gid (Phase 15H.4A)
 Adds `ProductionJob.orderGid` (nullable) + `(shop, orderGid)` index — the
 first-class Shopify order linkage. Pre-verified by the 15H.4A read-only
