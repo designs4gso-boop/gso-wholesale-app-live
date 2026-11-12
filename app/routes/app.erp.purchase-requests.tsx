@@ -15,6 +15,8 @@ import db from "../db.server";
 import { groupPurchaseRequests, isPastDate } from "../lib/purchase-request-groups";
 import { applyStockMovement } from "../lib/inventory-stock.server";
 import { permissionDeniedResponse, resolveStaffAccess, type StaffPermission } from "../lib/staff-roles.server";
+import { financialAccess } from "../lib/owner-authorization.server";
+import { stripInternalFinancials } from "../lib/financial-redaction";
 
 /** 2026-11-11 owner rule: staff create purchase requests; only the owner / authorized managers approve purchasing. */
 const PURCHASE_INTENT_PERMISSION: Record<string, StaffPermission> = {
@@ -222,7 +224,14 @@ async function createInventoryMovementForReceipt(tx: any, shop: string, purchase
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // 2026-11-11: assigned roles only (unassigned staff are denied); internal
+  // vendor / unit / purchase cost is serialized ONLY for owners and
+  // financially authorized managers.
+  const staffAccess = resolveStaffAccess(auth);
+  if (!staffAccess.can("createPurchaseRequest")) throw new Response(`Purchase requests need an assigned ERP role. ${staffAccess.reason}`, { status: 403 });
+  const canSeeCost = financialAccess(auth).allowed;
   const shop = session.shop;
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
@@ -264,7 +273,8 @@ export async function loader({ request }: { request: Request }) {
   const lowStockMaterials = materials.filter((material: any) => ["out_of_stock", "low_stock"].includes(materialStatus(material)));
   // Hotfix 2026-10-04: one shared grouping (lib/purchase-request-groups) so the
   // loader and the component cannot disagree on which groups exist.
-  return Response.json({ purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, ...groupPurchaseRequests(purchaseRequests) });
+  const payload = { purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, ...groupPurchaseRequests(purchaseRequests) };
+  return Response.json({ ...(canSeeCost ? payload : stripInternalFinancials(payload)), canSeeCost });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -339,7 +349,8 @@ export async function action({ request }: { request: Request }) {
   if (intent === "createManual") {
     const requestNumber = await nextRequestNumber(shop);
     const requestedQty = num(formData.get("requestedQty"));
-    const typedUnitCost = num(formData.get("unitCost"));
+    // Only financially authorized users may type a cost; others get the server-side cost book (or none).
+    const typedUnitCost = staffAccess.can("viewFinancials") ? num(formData.get("unitCost")) : 0;
     const materialId = String(formData.get("materialId") || "");
     const material = materialId ? await db.material.findFirst({ where: { shop, id: materialId }, include: { primaryVendor: true } }) : null;
     const selectedCostBook = await getCostBookItem(shop, String(formData.get("costBookItemId") || ""));
@@ -353,7 +364,8 @@ export async function action({ request }: { request: Request }) {
       data: {
         shop,
         requestNumber,
-        status: String(formData.get("status") || "requested"),
+        // A new request is draft / requested; only purchasing approvers may create it already ordered.
+        status: (() => { const posted = String(formData.get("status") || "requested"); return ["draft", "requested"].includes(posted) || staffAccess.can("approvePurchasing") ? posted : "requested"; })(),
         priority: String(formData.get("priority") || "normal"),
         materialId: material?.id || null,
         materialName: String(formData.get("materialName") || material?.name || "Manual purchase item"),
@@ -385,10 +397,11 @@ export async function action({ request }: { request: Request }) {
 
     const requestedQty = num(formData.get("requestedQty"));
     const orderedQty = num(formData.get("orderedQty"));
-    const unitCost = num(formData.get("unitCost"));
+    // A form without a cost field keeps the stored cost (never silently zeroes it).
+    const unitCost = formData.has("unitCost") ? num(formData.get("unitCost")) : num(purchaseRequest.unitCost);
     const status = String(formData.get("status") || purchaseRequest.status);
     // Ordering, re-pricing or cancelling is a purchasing APPROVAL (owner / authorized manager).
-    const approvalNeeded = (status !== purchaseRequest.status && ["ordered", "cancelled"].includes(status)) || (formData.has("unitCost") && unitCost !== num(purchaseRequest.unitCost));
+    const approvalNeeded = (status !== purchaseRequest.status && ["ordered", "cancelled"].includes(status)) || unitCost !== num(purchaseRequest.unitCost) || Boolean(String(formData.get("costBookItemId") || ""));
     if (approvalNeeded && !staffAccess.can("approvePurchasing")) return permissionDeniedResponse(staffAccess, "approvePurchasing");
     const neededByRaw = String(formData.get("neededBy") || "");
     const selectedCostBook = await getCostBookItem(shop, String(formData.get("costBookItemId") || ""));
@@ -604,7 +617,7 @@ function vendorOptionList(vendors: any[]) {
   ];
 }
 
-function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any; vendors: any[]; costBookItems: any[] }) {
+function PurchaseRequestCard({ request, vendors, costBookItems, canSeeCost }: { request: any; vendors: any[]; costBookItems: any[]; canSeeCost: boolean }) {
   const busy = useNavigation().state !== "idle";
   const navigate = useNavigate();
   const vendorOptions = vendorOptionList(vendors);
@@ -628,7 +641,7 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
           <Text as="p">Requested: <strong>{qty(request.requestedQty)} {request.unit}</strong></Text>
           <Text as="p">Ordered: <strong>{qty(request.orderedQty)} {request.unit}</strong></Text>
           <Text as="p">Received: <strong>{qty(request.receivedQty)} {request.unit}</strong></Text>
-          <Text as="p">Est. cost: <strong>${money(request.estimatedCost)}</strong></Text>
+          {canSeeCost ? <Text as="p">Est. cost: <strong>${money(request.estimatedCost)}</strong></Text> : null}
           <Text as="p">Sent: <strong>{request.sentAt ? safeDate(request.sentAt) : "Not sent"}</strong></Text>
           <Text as="p">Expected: <strong>{safeDate(request.expectedArrivalDate)}</strong></Text>
         </InlineStack>
@@ -649,7 +662,7 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
           </Card>
         ) : null}
 
-        {bestCost ? (
+        {bestCost && canSeeCost ? (
           <Card>
             <BlockStack gap="150">
               <InlineStack align="space-between" blockAlign="center">
@@ -678,13 +691,13 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
               <NativeSelect label="Vendor Center Vendor" name="vendorId" defaultValue={request.vendorId || request.vendorRecord?.id || ""} options={vendorOptions} />
               <NativeInput label="Vendor fallback" name="vendor" defaultValue={request.vendor || ""} />
               <NativeInput label="Vendor SKU" name="vendorSku" defaultValue={request.vendorSku || ""} />
-              <NativeSelect label="Cost Book Override" name="costBookItemId" options={costBookOptions} />
+              {canSeeCost ? <NativeSelect label="Cost Book Override" name="costBookItemId" options={costBookOptions} /> : null}
             </InlineStack>
             <InlineStack gap="200" wrap>
               <NativeInput label="Lead time days" name="leadTimeDays" defaultValue={request.leadTimeDays ? String(request.leadTimeDays) : ""} />
               <NativeInput label="Requested qty" name="requestedQty" defaultValue={String(request.requestedQty || 0)} />
               <NativeInput label="Ordered qty" name="orderedQty" defaultValue={String(request.orderedQty || request.requestedQty || 0)} />
-              <NativeInput label="Unit cost" name="unitCost" prefix="$" defaultValue={String(request.unitCost || 0)} />
+              {canSeeCost ? <NativeInput label="Unit cost" name="unitCost" prefix="$" defaultValue={String(request.unitCost || 0)} /> : null}
               <NativeInput label="Needed by" name="neededBy" type="date" defaultValue={safeDateInput(request.neededBy)} />
             </InlineStack>
             <InlineStack gap="200" wrap>
@@ -734,7 +747,7 @@ function PurchaseRequestCard({ request, vendors, costBookItems }: { request: any
   );
 }
 
-function LowStockMaterialCard({ material, costBookItems }: { material: any; costBookItems: any[] }) {
+function LowStockMaterialCard({ material, costBookItems, canSeeCost }: { material: any; costBookItems: any[]; canSeeCost: boolean }) {
   const vendor = preferredMaterialVendor(material);
   const suggestedQty = suggestedReorderQty(material);
   const bestCost = bestCostBookForMaterial(material, costBookItems || [], suggestedQty || material.reorderPoint || 1);
@@ -748,13 +761,13 @@ function LowStockMaterialCard({ material, costBookItems }: { material: any; cost
             <Text as="h3" variant="headingMd">{material.name}</Text>
             <Text as="p" tone="subdued">Stock: {qty(material.stockOnHand)} | Reorder point: {qty(material.reorderPoint)} | Unit: {material.unit || material.baseUnit || "each"}</Text>
             <Text as="p" tone="subdued">Vendor: {bestCost?.vendorName || vendor?.name || vendor?.vendorName || material.vendor || "Not set"} | Vendor SKU: {bestCost?.vendorSku || material.vendors?.[0]?.vendorSku || material.sku || "Not set"}</Text>
-            {bestCost ? <Text as="p" tone="success">Best cost: ${money(unitCost)} / {bestCost.unit || material.unit || material.baseUnit || "unit"}{bestCost.moq ? ` | MOQ ${qty(bestCost.moq)}` : ""}</Text> : null}
+            {bestCost && canSeeCost ? <Text as="p" tone="success">Best cost: ${money(unitCost)} / {bestCost.unit || material.unit || material.baseUnit || "unit"}{bestCost.moq ? ` | MOQ ${qty(bestCost.moq)}` : ""}</Text> : null}
           </BlockStack>
           <Badge tone={status === "out_of_stock" ? "critical" : "warning"}>{status.replaceAll("_", " ")}</Badge>
         </InlineStack>
         <InlineStack gap="300" wrap>
           <Text as="p">Suggested qty: <strong>{qty(suggestedQty || material.reorderPoint || 1)}</strong></Text>
-          <Text as="p">Est. cost: <strong>${money((suggestedQty || material.reorderPoint || 1) * unitCost)}</strong></Text>
+          {canSeeCost ? <Text as="p">Est. cost: <strong>${money((suggestedQty || material.reorderPoint || 1) * unitCost)}</strong></Text> : null}
         </InlineStack>
         <Form method="post">
           <input type="hidden" name="intent" value="createFromMaterial" />
@@ -773,7 +786,7 @@ function LowStockMaterialCard({ material, costBookItems }: { material: any; cost
 export default function PurchaseRequestsPage() {
   // Every group the loader returns must be destructured here — the summary
   // badges read them as bare identifiers (2026-10-04 production ReferenceError).
-  const { purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests, sentRequests, followUpRequests, lateRequests } = useLoaderData<any>();
+  const { purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests, sentRequests, followUpRequests, lateRequests, canSeeCost } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const navigate = useNavigate();
   const busy = useNavigation().state !== "idle";
@@ -831,7 +844,7 @@ export default function PurchaseRequestsPage() {
                   </InlineStack>
                   <InlineStack gap="200" wrap>
                     <NativeSelect label="Vendor Center Vendor" name="vendorId" options={vendorOptions} />
-                    <NativeSelect label="Cost Book Item" name="costBookItemId" options={costBookOptions} />
+                    {canSeeCost ? <NativeSelect label="Cost Book Item" name="costBookItemId" options={costBookOptions} /> : null}
                     <NativeInput label="Vendor fallback" name="vendor" />
                     <NativeInput label="Vendor SKU" name="vendorSku" />
                     <NativeInput label="SKU" name="sku" />
@@ -839,7 +852,7 @@ export default function PurchaseRequestsPage() {
                   </InlineStack>
                   <InlineStack gap="200" wrap>
                     <NativeInput label="Requested qty" name="requestedQty" />
-                    <NativeInput label="Unit cost" name="unitCost" prefix="$" />
+                    {canSeeCost ? <NativeInput label="Unit cost" name="unitCost" prefix="$" /> : null}
                     <NativeInput label="Needed by" name="neededBy" type="date" />
                   </InlineStack>
                   <NativeTextarea label="Notes" name="notes" />
@@ -853,14 +866,14 @@ export default function PurchaseRequestsPage() {
         <Layout.Section>
           <BlockStack gap="300">
             <Text as="h2" variant="headingMd">Buy / reorder now</Text>
-            {lowStockMaterials.length ? lowStockMaterials.map((material: any) => <LowStockMaterialCard key={material.id} material={material} costBookItems={costBookItems || []} />) : <Card><Text as="p" tone="subdued">No low-stock materials right now.</Text></Card>}
+            {lowStockMaterials.length ? lowStockMaterials.map((material: any) => <LowStockMaterialCard key={material.id} material={material} costBookItems={costBookItems || []} canSeeCost={Boolean(canSeeCost)} />) : <Card><Text as="p" tone="subdued">No low-stock materials right now.</Text></Card>}
           </BlockStack>
         </Layout.Section>
 
         <Layout.Section>
           <BlockStack gap="300">
             <Text as="h2" variant="headingMd">Open Requests</Text>
-            {openRequests.length ? openRequests.map((request: any) => <PurchaseRequestCard key={request.id} request={request} vendors={vendors || []} costBookItems={costBookItems || []} />) : <Card><Text as="p" tone="subdued">No open purchase requests.</Text></Card>}
+            {openRequests.length ? openRequests.map((request: any) => <PurchaseRequestCard key={request.id} request={request} vendors={vendors || []} costBookItems={costBookItems || []} canSeeCost={Boolean(canSeeCost)} />) : <Card><Text as="p" tone="subdued">No open purchase requests.</Text></Card>}
           </BlockStack>
         </Layout.Section>
 

@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import {
   Page,
   Layout,
@@ -130,7 +131,11 @@ function buildEmailBody(request: any) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: PO / purchase exports carry vendor unit costs and are a purchasing
+  // action — owner / financially authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const url = new URL(request.url);
   const id = url.searchParams.get("id");

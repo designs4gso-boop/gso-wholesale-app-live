@@ -9,6 +9,7 @@ import {
   InlineStack,
   Divider,
 } from "@shopify/polaris";
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -134,7 +135,10 @@ async function createVendorsFromExistingNames(shop: string) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
 
   const [vendors, usage, openPurchaseRequests, lowStockMaterials] = await Promise.all([
@@ -152,7 +156,10 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const formData = await request.formData();
   const intent = clean(formData.get("intent"));

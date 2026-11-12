@@ -1,3 +1,4 @@
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { Page, Layout, Card, Text, Button, Badge, BlockStack, InlineStack } from "@shopify/polaris";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -103,7 +104,10 @@ function getMergedSettings(saved: any[]) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const savedSettings = await db.erpAdminSetting.findMany({ where: { shop }, orderBy: [{ category: "asc" }, { key: "asc" }] });
   const settings = getMergedSettings(savedSettings);
@@ -111,7 +115,10 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: internal financials — owner / authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "saveSettings");

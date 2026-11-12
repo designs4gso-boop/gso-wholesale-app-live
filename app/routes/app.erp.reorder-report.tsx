@@ -10,6 +10,10 @@ import {
   Divider,
 } from "@shopify/polaris";
 import { FormTextField } from "../components/FormTextField";
+import { financialAccess, requireFinancialAccess } from "../lib/owner-authorization.server";
+import { resolveStaffAccess } from "../lib/staff-roles.server";
+import { stripInternalFinancials } from "../lib/financial-redaction";
+import { applyStockMovement } from "../lib/inventory-stock.server";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -65,7 +69,13 @@ function suggestedReorder(material: any) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // 2026-11-11: assigned roles only; material / vendor / movement costs are
+  // serialized only for owners and financially authorized managers.
+  const staffAccess = resolveStaffAccess(auth);
+  if (!staffAccess.can("createPurchaseRequest")) throw new Response(`The reorder report needs an assigned ERP role. ${staffAccess.reason}`, { status: 403 });
+  const canSeeCost = financialAccess(auth).allowed;
+  const { session } = auth;
   const shop = session.shop;
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
@@ -100,18 +110,16 @@ export async function loader({ request }: { request: Request }) {
     include: { material: true },
   });
 
-  return Response.json({
-    materials,
-    lowStock,
-    noReorderPoint,
-    outOfStock,
-    recentMovements,
-    since,
-  });
+  const payload = { materials, lowStock, noReorderPoint, outOfStock, recentMovements, since };
+  return Response.json({ ...(canSeeCost ? payload : stripInternalFinancials(payload)), canSeeCost });
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const financialAuth = await authenticate.admin(request);
+  // 2026-11-11: stock overwrites / quick purchases carry cost and bypass purchase
+  // approval — owner / financially authorized manager only (fails closed).
+  requireFinancialAccess(financialAuth);
+  const { session } = financialAuth;
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
@@ -122,6 +130,7 @@ export async function action({ request }: { request: Request }) {
     if (!material) return Response.json({ ok: false, message: "Material not found." }, { status: 404 });
 
     const stockOnHand = num(formData.get("stockOnHand"));
+    if (stockOnHand < 0) return Response.json({ ok: false, message: "Stock on hand cannot be negative." }, { status: 400 });
     const reorderPoint = num(formData.get("reorderPoint"));
     const leadTimeDays = Math.round(num(formData.get("leadTimeDays")));
     const oldStock = material.stockOnHand ?? 0;
@@ -164,30 +173,12 @@ export async function action({ request }: { request: Request }) {
     if (!material) return Response.json({ ok: false, message: "Material not found." }, { status: 404 });
     if (purchaseQty <= 0) return Response.json({ ok: false, message: "Purchase quantity must be greater than zero." }, { status: 400 });
 
-    const beforeQty = material.stockOnHand || 0;
-    const afterQty = beforeQty + purchaseQty;
     const costPerUnit = material.calculatedUnitCost || material.costPerUnit || 0;
-
-    await db.material.update({
-      where: { id: material.id },
-      data: { stockOnHand: afterQty },
-    });
-
-    await db.materialInventoryMovement.create({
-      data: {
-        shop,
-        materialId: material.id,
-        movementType: "purchase",
-        quantity: purchaseQty,
-        unit: material.unit || material.baseUnit || "each",
-        beforeQty,
-        afterQty,
-        costPerUnit,
-        costImpact: purchaseQty * costPerUnit,
-        source: "reorder_report",
-        notes: String(formData.get("notes") || "Quick purchase received from Reorder Report."),
-      },
-    });
+    // 2026-11-11: atomic increment + movement (inventory-stock.server.ts).
+    await db.$transaction((tx: any) => applyStockMovement(tx, {
+      shop, materialId: material.id, delta: purchaseQty, movementType: "purchase", unit: material.unit || material.baseUnit || "each", costPerUnit,
+      source: "reorder_report", reference: null, notes: String(formData.get("notes") || "Quick purchase received from Reorder Report."),
+    }));
 
     return Response.json({ ok: true, message: "Purchase quantity added to stock." });
   }
@@ -195,7 +186,7 @@ export async function action({ request }: { request: Request }) {
   return Response.json({ ok: false, message: "Unknown reorder report action." }, { status: 400 });
 }
 
-function MaterialCard({ material, lowStockOnly = false }: { material: any; lowStockOnly?: boolean }) {
+function MaterialCard({ material, lowStockOnly = false, canSeeCost = false }: { material: any; lowStockOnly?: boolean; canSeeCost?: boolean }) {
   const status = stockStatus(material);
   const stats = usageStats(material);
   const suggestion = suggestedReorder(material);
@@ -226,7 +217,7 @@ function MaterialCard({ material, lowStockOnly = false }: { material: any; lowSt
 
         <InlineStack gap="300" wrap>
           <Text as="p">Suggested reorder: <strong>{qty(suggestion.suggestedQty)}</strong></Text>
-          <Text as="p">Approx cost: <strong>${money(suggestedCost)}</strong></Text>
+          {canSeeCost ? <Text as="p">Approx cost: <strong>${money(suggestedCost)}</strong></Text> : null}
           <Text as="p">Lead time: <strong>{material.leadTimeDays || preferredVendor?.leadTimeDays ? `${material.leadTimeDays || preferredVendor?.leadTimeDays} days` : "Not set"}</strong></Text>
         </InlineStack>
 
@@ -305,7 +296,7 @@ export default function ReorderReport() {
               <InlineStack gap="300" wrap>
                 <Text as="p">Active materials: <strong>{allMaterials.length}</strong></Text>
                 <Text as="p">Missing reorder points: <strong>{data.noReorderPoint?.length || 0}</strong></Text>
-                <Text as="p">Suggested reorder value: <strong>${money(reorderValue)}</strong></Text>
+                {data.canSeeCost ? <Text as="p">Suggested reorder value: <strong>${money(reorderValue)}</strong></Text> : null}
                 {busy ? <Badge>Saving...</Badge> : null}
               </InlineStack>
             </BlockStack>
@@ -319,7 +310,7 @@ export default function ReorderReport() {
               <Badge tone={lowStockMaterials.length ? "warning" : "success"}>{lowStockMaterials.length}</Badge>
             </InlineStack>
             {lowStockMaterials.length ? (
-              lowStockMaterials.map((material: any) => <MaterialCard key={material.id} material={material} lowStockOnly />)
+              lowStockMaterials.map((material: any) => <MaterialCard key={material.id} material={material} lowStockOnly canSeeCost={Boolean(data.canSeeCost)} />)
             ) : (
               <Card><Text as="p" tone="subdued">No materials are below reorder point.</Text></Card>
             )}
@@ -350,7 +341,7 @@ export default function ReorderReport() {
               <Text as="h2" variant="headingMd">All material inventory</Text>
               <Badge>{allMaterials.length}</Badge>
             </InlineStack>
-            {allMaterials.map((material: any) => <MaterialCard key={material.id} material={material} />)}
+            {allMaterials.map((material: any) => <MaterialCard key={material.id} material={material} canSeeCost={Boolean(data.canSeeCost)} />)}
           </BlockStack>
         </Layout.Section>
       </Layout>
