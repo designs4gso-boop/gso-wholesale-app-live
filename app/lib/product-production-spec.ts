@@ -165,9 +165,9 @@ function bagSpec(family: "sticker-bags" | "stock-bags"): ProductProductionSpec {
 }
 
 /**
- * 2026-11-11 owner decision: the Split Bag — ONE physical blank of two joined
- * 4x5 sections ($0.25), carrying two standard 4x5 label positions per printed
- * side. It reuses the owner 4x5 artboard and derived cutline per position.
+ * 2026-11-11 owner decision (corrected): the Split Bag is a Sticker Bag blank
+ * variant — ONE $0.25 bag, MOQ 64, ONE standard 4x5 label per printed side on
+ * the owner 4x5 artboard and cutline, exactly like the 4x5 Sticker Bag.
  */
 function splitBagSpec(): ProductProductionSpec {
   const base = bagSpec("sticker-bags");
@@ -175,10 +175,10 @@ function splitBagSpec(): ProductProductionSpec {
     ...base,
     family: "split-bags",
     productKey: "split-bag",
-    displayName: "Split Bag (two joined 4x5 sections, custom applied labels)",
-    statusNote: `Two standard 4x5 label positions per printed side; each reuses the owner 4x5 artboard (2D-2) and the owner ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn} in cutline (decision 2026-11-11).`,
-    physical: { bag: "one bag, two joined 4x5 sections", blankCost: "SPLIT_BAG_BLANK_UNIT_COST ($0.25 owner blank cost, 2026-11-11; one blank, never two 4x5 bags)" },
-    pieces: [{ piece: "label", shape: "rect", widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn, quantityPerProduct: 2, label: "Applied 4x5 label (2 positions per printed side)" }],
+    displayName: "Split Bag (Sticker Bag blank, custom applied labels)",
+    statusNote: `One standard 4x5 label per printed side (front only / back only = 1 label, front + back = 2), on the owner 4x5 artboard (2D-2) and the owner ${BAG_4X5_CUTLINE_IN.widthIn} x ${BAG_4X5_CUTLINE_IN.heightIn} in cutline (decision 2026-11-11).`,
+    physical: { bag: "one Split Bag blank", blankCost: "SPLIT_BAG_BLANK_UNIT_COST ($0.25 owner blank cost, 2026-11-11)" },
+    pieces: [{ piece: "label", shape: "rect", widthIn: BAG_4X5_ARTBOARD_IN.widthIn, heightIn: BAG_4X5_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied 4x5 label (one per printed side)" }],
     moqNote: "MOQ 64 (owner decision 2026-11-11; SPLIT_BAG_MOQ). Packout is not modeled yet (first production batch pending); inbound and outbound freight are never assumed.",
     pricingSource: "canonical true cost (bag adapter, split_bag); no owner-approved selling price yet — job-level owner price",
   };

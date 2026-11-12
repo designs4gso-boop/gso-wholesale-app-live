@@ -54,7 +54,7 @@ export const CANONICAL_DISPATCH: Record<CanonicalFamily, { adapter: string; entr
   "split-bags": {
     adapter: "bag-cost-inputs.server.ts",
     entry: "computeBagPhysical(product: split_bag)",
-    note: "SAME physical adapter. One $0.25 blank of two joined 4x5 sections; two standard 4x5 labels per printed side. Customer artwork.",
+    note: "SAME physical adapter and Sticker Bag label rules (one 4x5 label per printed side). Split-Bag-specific: $0.25 blank and MOQ 64 only. Customer artwork.",
   },
   "standard-jars": {
     adapter: "jar-cost-inputs.server.ts",
@@ -114,8 +114,8 @@ export const CANONICAL_PACKOUT: Record<CanonicalFamily, { unitsPerBox: number | 
   "stickers-labels": { unitsPerBox: 5000, source: "Legacy packing rule: 5,000 labels per box at the owner packout standard." },
   "sticker-bags": { unitsPerBox: 5000, source: "Legacy packing rule: 5,000 bags per box at the owner packout standard." },
   "stock-bags": { unitsPerBox: 5000, source: "Legacy packing rule: 5,000 bags per box at the owner packout standard." },
-  // 2026-11-11: no owner box count exists for the Split Bag (twice the 4x5
-  // footprint), so the 4x5 5,000/box rule is NOT borrowed — disclosed as
+  // 2026-11-11: Split Bag carton packout is owner-TBD (real shipment data
+  // pending), so the 4x5 5,000/box rule is NOT borrowed — disclosed as
   // PACKOUT_NOT_MODELED until the owner records one.
   "split-bags": { unitsPerBox: null, source: "Split Bag box count has NO owner standard yet — packout is disclosed as not modelled, never borrowed from the 4x5 rule." },
   banners: { unitsPerBox: null, source: "Banner tube packout has NO verified standard (BANNER_FINISHING_SUPPORT.TUBE_PACKOUT.verified = false)." },

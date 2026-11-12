@@ -50,26 +50,24 @@ export const BAG_4X5_BLANK_SOURCE = "Owner decision 2026-10-08: 4x5 blank bag tr
 export const BAG_4X5_BLANK_EFFECTIVE_DATE = "2026-10-08";
 
 /* ------------------------------------------------------------------ *
- * OWNER DECISION 2026-11-11 — SPLIT BAG (permanent stocked product)
+ * OWNER DECISION 2026-11-11 — SPLIT BAG (corrected: a Sticker Bag blank)
  *
- * ONE physical blank made of two joined 4x5 sections: $0.25 EACH. It is a
- * single blank — never costed as two $0.11 4x5 bags or two $0.25 bags.
+ * The Split Bag is simply another Sticker Bag blank: ONE physical bag at
+ * $0.25 EACH, MOQ 64. Its labels follow the normal Sticker Bag rule — ONE
+ * standard 4x5 label per printed side (owner 4x5 artboard, 3.79 x 4.81 in
+ * cutline, 10 s per applied label):
+ *   front only / back only  1 blank, 1 label, 1 cut/weed, 1 application event
+ *   front + back            1 blank, 2 labels, 2 cut/weed, 2 application events
+ * The earlier "2 labels per side / 4 double-sided" model was WRONG and is
+ * removed. Only the blank identity/cost and the MOQ are Split-Bag-specific.
  *
- * Each physical side carries TWO standard 4x5 label positions, so the same
- * owner 4x5 artboard / derived cutline / 10 s-per-applied-label standard is
- * reused per position:
- *   single-sided  1 blank, 2 labels, 2 cut/weed, 2 application events
- *   double-sided  1 blank, 4 labels, 4 cut/weed, 4 application events
- *
- * No MOQ, freight or box count has been owner-approved for the Split Bag, so
- * none is invented here (see the Split Bag entries in CANONICAL_PACKOUT and
+ * No freight or box count has been owner-approved for the Split Bag, so none
+ * is invented here (see the Split Bag entries in CANONICAL_PACKOUT and
  * docs/GSO_ERP_PROJECT_STATE.md).
  * ------------------------------------------------------------------ */
 export const SPLIT_BAG_BLANK_UNIT_COST = 0.25;
-export const SPLIT_BAG_BLANK_SOURCE = "Owner decision 2026-11-11: Split Bag blank (one physical bag of two joined 4x5 sections) $0.25 each — one blank, never two 4x5 bags. No freight uplift; inbound freight not modelled.";
+export const SPLIT_BAG_BLANK_SOURCE = "Owner decision 2026-11-11: Split Bag blank $0.25 each (one physical bag; a Sticker Bag blank variant). No freight uplift; inbound freight not modelled.";
 export const SPLIT_BAG_BLANK_EFFECTIVE_DATE = "2026-11-11";
-/** Standard 4x5 label positions on EACH physical side of a Split Bag. */
-export const SPLIT_BAG_LABEL_POSITIONS_PER_SIDE = 2;
 
 /**
  * SUPERSEDED 2026-10-08. The 2026-08-24 "$0.09 supplier base before inbound
@@ -204,9 +202,12 @@ export const BAG_PERSONALIZATION_BASIS_NOTE =
 export type BagProduct = "sticker_bag_4x5" | "stock_bag" | "split_bag";
 export type BagSides = 1 | 2;
 
-/** 4x5 label positions per physical side: 2 on a Split Bag, 1 on a 4x5 bag. */
-export function bagLabelPositionsPerSide(product: BagProduct): number {
-  return product === "split_bag" ? SPLIT_BAG_LABEL_POSITIONS_PER_SIDE : 1;
+/**
+ * 4x5 label positions per printed side: ONE on every bag product, the Split
+ * Bag included (owner correction 2026-11-11 — never 2 per side / 4 per bag).
+ */
+export function bagLabelPositionsPerSide(_product: BagProduct): number {
+  return 1;
 }
 
 /** The owner blank cost for each bag product. */
@@ -340,7 +341,7 @@ export type BagPhysicalResult = {
   product: BagProduct;
   bagQuantity: number;
   sides: BagSides;
-  /** 4x5 label positions per side (2 on a Split Bag). */
+  /** 4x5 label positions per side (1 on every bag product; kept for snapshot shape). */
   positionsPerSide: number;
   /** Printed labels = bags x labelled sides x positions per side. */
   labelQuantity: number;
@@ -493,7 +494,7 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
     blockers.push(`${BAG_REASONS.splitBagBelowMoq}: Split Bags have a ${SPLIT_BAG_MOQ}-unit minimum (owner decision 2026-11-11); ${bagQuantity} requested.`);
   }
 
-  // One blank per finished bag, whatever its label count — a Split Bag is ONE blank.
+  // One blank per finished bag, whatever its label count.
   const blankUnit = input.blankUnitCost == null ? bagBlankUnitCostFor(input.product) : Number(input.blankUnitCost);
   if (!Number.isFinite(blankUnit) || blankUnit < 0) {
     reasons.push(BAG_REASONS.bagBlankCostRequired);

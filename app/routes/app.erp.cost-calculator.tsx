@@ -3675,7 +3675,7 @@ function ProductDrivenForm() {
       <label style={{ fontSize: 12, gridColumn: "1 / -1" }}><b>STEP 1 — What are you pricing?</b>
         <select
           key={familyChoice}
-          defaultValue={familyChoice}
+          defaultValue={familyChoice === SPLIT_BAG_CALCULATOR_OPTION.value ? SPLIT_BAG_CALCULATOR_OPTION.pfamily : familyChoice}
           style={inputStyle}
           onChange={(event) => {
             // Same full-form GET as before; only the family params are replaced.
@@ -3697,17 +3697,38 @@ function ProductDrivenForm() {
             <Fragment key={entry.key}>
               <option value={entry.key}>{entry.label}</option>
               {entry.key === "sticker-bags" ? <option value={STOCK_BAG_CALCULATOR_OPTION.value}>{STOCK_BAG_CALCULATOR_OPTION.label}</option> : null}
-              {entry.key === "sticker-bags" ? <option value={SPLIT_BAG_CALCULATOR_OPTION.value}>{SPLIT_BAG_CALCULATOR_OPTION.label}</option> : null}
             </Fragment>
           ))}
         </select>
         <input type="hidden" name="pfamily" value={familyParams.pfamily} />
         {familyParams.pstockbag ? <input type="hidden" name="pstockbag" value={familyParams.pstockbag} /> : null}
-        {familyParams.psplitbag ? <input type="hidden" name="psplitbag" value={familyParams.psplitbag} /> : null}
       </label>
+      {/* 2026-11-11 owner correction: Split Bag is a Sticker Bag BLANK / bag
+          type, not its own category. Same Sticker Bag label costing; only the
+          $0.25 blank and MOQ 64 differ. Posts psplitbag=1. */}
+      {familyParams.pfamily === "sticker-bags" && !familyParams.pstockbag ? (
+        <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>Blank / bag type
+          <select
+            name="psplitbag"
+            key={`bagtype-${familyParams.psplitbag || ""}`}
+            defaultValue={familyParams.psplitbag || ""}
+            style={inputStyle}
+            onChange={(event) => {
+              const data = new FormData(event.currentTarget.form!);
+              if (event.currentTarget.value === SPLIT_BAG_CALCULATOR_OPTION.psplitbag) data.set("psplitbag", SPLIT_BAG_CALCULATOR_OPTION.psplitbag);
+              else data.delete("psplitbag");
+              data.delete("pblank");
+              submit(data, { method: "get" });
+            }}
+          >
+            <option value="">Standard 4x5 Sticker Bag</option>
+            <option value={SPLIT_BAG_CALCULATOR_OPTION.psplitbag}>{SPLIT_BAG_CALCULATOR_OPTION.label}</option>
+          </select>
+        </label>
+      ) : null}
       {isSplitBag ? (
         <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
-          Split Bag: one $0.25 blank made of two joined 4x5 sections, with two standard 4x5 labels on each printed side (single sided = 2 labels, double sided = 4 labels per bag). No Split Bag selling price is approved yet — the owner sets the price on the quote.
+          Split Bag: a Sticker Bag blank at $0.25 each, MOQ 64. One label per printed side — front only or back only = 1 label, front + back = 2 labels per bag. No Split Bag selling price is approved yet — the owner sets the price on the quote.
         </p>
       ) : null}
       {isStockBag ? (
@@ -3775,7 +3796,7 @@ function ProductDrivenForm() {
               {isStockBag
                 ? (<><option value="2">Double sided (standard)</option><option value="1">Single sided</option></>)
                 : isSplitBag
-                  ? (<><option value="1">Single sided (2 labels per bag)</option><option value="2">Double sided (4 labels per bag)</option></>)
+                  ? (<><option value="1">Front only or back only (1 label per bag)</option><option value="2">Front and back (2 labels per bag)</option></>)
                   : (<><option value="1">Front only</option><option value="2">Front and back</option></>)}
             </select>
             <input type="hidden" name="pbagsides" value={bagSidesValue} />

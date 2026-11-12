@@ -11,8 +11,8 @@ export const BAG_4X5_ARTBOARD_IN = { widthIn: 4.0, heightIn: 5.0 } as const;
  * 2C-3A). The 3.875 x 4.875 value introduced by cf04eaf (derived from the
  * generic -0.0625 in offset rule) had no owner decision for the 4x5 and is
  * superseded for this product. Other labels keep the gso-cutline.ts rule.
- * Used by every 4x5 position: 4x5 Sticker Bags, Stock Bags and both
- * positions on each side of a Split Bag.
+ * Used by every 4x5 bag label: 4x5 Sticker Bags, Stock Bags and Split Bags
+ * (one label per printed side).
  */
 export const BAG_4X5_CUTLINE_IN = { widthIn: 3.79, heightIn: 4.81 } as const;
 export const BAG_4X5_CUTLINE_DECISION = "Owner decision 2026-11-11: 4x5 actual cutline 3.79 x 4.81 in (documented owner standard; supersedes the undocumented 3.875 x 4.875 derived value).";

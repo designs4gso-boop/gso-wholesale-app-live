@@ -34,9 +34,10 @@ export const STOCK_BAG_CALCULATOR_OPTION = {
 } as const;
 
 /**
- * 2026-11-11 owner decision: Split Bag — a permanent stocked product on the
- * SAME canonical bag adapter (computeBagPhysical product: split_bag). Posted
- * exactly like Stock Bags: pfamily=sticker-bags + psplitbag=1.
+ * 2026-11-11 owner decision (corrected): Split Bag is a Sticker Bag BLANK /
+ * bag type, not its own product category. It runs on the SAME canonical bag
+ * adapter and Sticker Bag label rules; the calculator offers it under Sticker
+ * Bags -> Blank / bag type and posts pfamily=sticker-bags + psplitbag=1.
  */
 export const SPLIT_BAG_CALCULATOR_OPTION = {
   value: "split-bags",

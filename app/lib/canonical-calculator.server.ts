@@ -767,7 +767,7 @@ export function assembleCanonicalJob(
     blank = {
       ok: true,
       unitCost: production > 0 ? bag.blankCost / production : 0,
-      label: splitBag ? "Split Bag blank (one bag, two joined 4x5 sections)" : "4x5 blank bag",
+      label: splitBag ? "Split Bag blank" : "4x5 blank bag",
       source: splitBag
         ? SPLIT_BAG_BLANK_SOURCE
         : "Owner decision 2026-10-08: $0.11 each, true base cost regardless of colour (supersedes the 2026-08-24 $0.09-before-freight rule); no generic freight uplift, inbound freight not modelled.",
@@ -788,8 +788,8 @@ export function assembleCanonicalJob(
     diagnostics.weedingPages = bag.finishing.weedingPages;
 
     application = bag.application;
-    // One application event per applied 4x5 label: sides x positions per side
-    // (a Split Bag carries two positions on each printed side).
+    // One application event per applied 4x5 label: one per labelled side on
+    // every bag product (Split Bag included — owner correction 2026-11-11).
     const labelsPerBag = cfg.sides * bag.positionsPerSide;
     applicationCost = {
       secondsPerFinishedUnit: labelsPerBag * BAG_APPLICATION_SECONDS_PER_SIDE,
@@ -807,7 +807,7 @@ export function assembleCanonicalJob(
         standardLabel: "4x5 bag application (owner decision: seconds per applied side)",
         laborRatePerHour: BAG_APPLICATION_LABOR_RATE_PER_HOUR,
         finishedUnits: finished,
-        pieces: [{ piece: "side", label: splitBag ? `Applied 4x5 label (${labelsPerBag} per Split Bag: ${cfg.sides} side(s) x ${bag.positionsPerSide})` : `Applied label (${cfg.sides} side(s) per bag)`, secondsPerLabel: BAG_APPLICATION_SECONDS_PER_SIDE, costPerLabel, labels, cost: costPerLabel * labels }],
+        pieces: [{ piece: "side", label: `Applied label (${cfg.sides} side(s) per ${splitBag ? "Split Bag" : "bag"})`, secondsPerLabel: BAG_APPLICATION_SECONDS_PER_SIDE, costPerLabel, labels, cost: costPerLabel * labels }],
         totalLabels: labels,
         totalCost: costPerLabel * labels,
         source: "bag-cost-inputs.server.ts OWNER DECISION 2 — 10 s per applied side at $20/hr",

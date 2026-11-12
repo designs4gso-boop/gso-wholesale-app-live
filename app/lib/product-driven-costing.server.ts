@@ -306,9 +306,9 @@ export function bagApplicationRateFor(bagName: string): { rate: number | null; s
   const text = String(bagName || "");
   if (/14\s?x\s?16|pound/i.test(text)) return { rate: OWNER_STANDARDS.bagApplicationPerLabel14x16.value, source: "owner_standard", basis: "14x16 bag $1.00/label (owner standard)" };
   if (/4\s?x\s?5\b/i.test(text)) return { rate: OWNER_LABOR.bagLabelApplicationPer, source: "owner_standard", basis: "4x5 bag $0.0781/label (owner standard)" };
-  // 2026-11-11: every Split Bag label position IS a standard 4x5 label. (Legacy
+  // 2026-11-11: a Split Bag label IS a standard 4x5 label. (Legacy
   // diagnostic only — the canonical split_bag adapter is the cost authority.)
-  if (/split\s?bag/i.test(text)) return { rate: OWNER_LABOR.bagLabelApplicationPer, source: "owner_standard", basis: "Split Bag 4x5 label positions $0.0781/label (4x5 owner standard)" };
+  if (/split\s?bag/i.test(text)) return { rate: OWNER_LABOR.bagLabelApplicationPer, source: "owner_standard", basis: "Split Bag 4x5 label $0.0781/label (4x5 owner standard)" };
   return { rate: null, source: "missing", basis: "No owner application-labor standard for this bag size" };
 }
 
