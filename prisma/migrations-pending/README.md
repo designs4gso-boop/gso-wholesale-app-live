@@ -6,41 +6,27 @@ change ships in code without auto-applying to production on push.
 
 ## Currently staged
 
-### 20261112090000_add_operational_records (overnight 2026-11-12) — STAGED, NOT APPLIED
-ADDITIVE ONLY (new nullable columns / columns with a safe default, two new
-tables, unique + lookup indexes; no drops, renames, type changes or data
-conversion). Verified locally: `prisma migrate diff` of the patched schema
-produces exactly this SQL, and the patched schema validates.
+### 20261112090000_add_operational_records (overnight 2026-11-12) — ACTIVATED IN REPO
+Activated on branch `release/operational-records-migration-2026-11-12`
+(commit "feat(erp): activate operational records migration"): the folder now
+lives under prisma/migrations/ and schema.prisma declares the fields / models.
+Render's `prisma migrate deploy` applies it on the deploy of that commit — take
+the production DB backup / recovery point FIRST. Release, smoke-test and
+rollback steps: docs/GSO_OPERATIONAL_MIGRATION_RELEASE_2026-11-12.md.
 
-- `ProductionJob`: shippedAt, shipCarrier, shipTrackingNumber, shipPackageCount,
-  pickedUpAt, pickedUpBy, rushRequested (default false), rushApprovalStatus,
-  rushApprovedBy, rushApprovedAt, rushNotes, promisedDate, quotedTrueCost,
-  actualVarianceAmount, actualVariancePct.
-- `ProductionJobItem`: goodQty, spoiledQty, spoilageReason, qcResult, qcBy, qcAt,
-  qcNote, lastReprintReason, lastReprintBy, lastReprintAt.
-- `PurchaseRequest`: requestedBy, approvedBy, approvedAt.
-- `Quote`: requestedDueDate, rushRequested (default false). NO rush fee.
-- New `InventoryReservation` (unique `(shop, idempotencyKey)`) and
-  `NotificationPreference` (unique `(shop, recipientKey, eventType, channel)`).
+ADDITIVE ONLY (30 new nullable / default-backed columns on ProductionJob,
+ProductionJobItem, PurchaseRequest and Quote; new InventoryReservation and
+NotificationPreference tables with their indexes; no drops, renames, type
+changes, foreign keys or data conversion). No backfill.
 
-Backward compatible: today's code never reads these columns, and the live
-schema.prisma does not declare them, so deploying the current code before or
-after activation is safe. No backfill is required (all new data starts empty;
-existing shipments / QC / reprints stay in ProductionJobEvent history).
-Reservation logic is ready in `app/lib/inventory-reservation.ts`; wiring it
-into scheduling / completion is a follow-up commit AFTER activation.
+`apply-20261112-operational-schema.mjs` stays: it is idempotent (re-running on
+the activated schema changes nothing) and the migration test uses it to prove
+schema.prisma declares exactly the migrated fields.
 
-**Activation (owner action — ONE commit, after a production DB backup):**
-1. `git mv prisma/migrations-pending/20261112090000_add_operational_records prisma/migrations/`
-2. `node prisma/migrations-pending/apply-20261112-operational-schema.mjs`
-3. `npx prisma validate` (must pass), commit both changes, push — Render runs
-   `prisma migrate deploy` and regenerates the client in the same deploy.
-
-Rollback (only if needed; drops ONLY what this migration added):
-`DROP TABLE "InventoryReservation"; DROP TABLE "NotificationPreference";`
-then `ALTER TABLE "<table>" DROP COLUMN "<column>";` for each column listed
-above, revert the schema lines, and delete the row for this migration from
-`_prisma_migrations`.
+Rollback: redeploy the previous app commit and leave the additive columns /
+tables in place (old code never reads them). Database recovery from the
+pre-deploy backup only if the migration itself damaged data. No down
+migration is shipped.
 
 ### 20260812090000_add_order_gid (Phase 15H.4A)
 Adds `ProductionJob.orderGid` (nullable) + `(shop, orderGid)` index — the

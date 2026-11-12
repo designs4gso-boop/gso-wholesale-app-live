@@ -83,3 +83,7 @@ Only after a production DB backup: `git mv prisma/migrations-pending/20261112090
 
 ## Rollback point
 `cfb9a36` (current live `main`). The overnight branch adds no applied schema change, so reverting the deploy to `cfb9a36` is sufficient.
+
+## Operational records migration activated 2026-11-12
+
+Branch `release/operational-records-migration-2026-11-12`: `20261112090000_add_operational_records` moved into prisma/migrations and schema.prisma patched by the activation script. QC, reprint, shipment, pickup, purchasing approver and actual-cost/variance writes now also fill the structured columns; cancellation releases active inventory reservations. Reserve-at-scheduling / consume-at-completion triggers await owner definition. Release, smoke-test and rollback steps: docs/GSO_OPERATIONAL_MIGRATION_RELEASE_2026-11-12.md.

@@ -14,6 +14,8 @@ export function redactJobFinancials(job: any) {
     actualLaborRate: null, actualLaborMinutes: null, actualLaborCost: null, actualPackingCost: null, actualShippingCost: null,
     actualOutsourceCost: null, actualOtherCost: null, actualReprintCost: null, actualTotalCost: null, actualFinalProfit: null,
     actualFinalMargin: null, actualCostNotes: null,
+    // 2026-11-12 (migration 20261112090000): quoted-vs-actual columns.
+    quotedTrueCost: null, actualVarianceAmount: null, actualVariancePct: null,
     // Print-log actuals keep their operational figures only.
     actuals: job.actuals ? { entryCount: job.actuals.entryCount, actualSqft: job.actuals.actualSqft, actualInkMl: job.actuals.actualInkMl, actualPrintMinutes: job.actuals.actualPrintMinutes } : null,
     writebackPreview: null, printLogApplied: null,

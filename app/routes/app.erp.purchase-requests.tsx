@@ -339,6 +339,7 @@ export async function action({ request }: { request: Request }) {
         estimatedCost: requestedQty * unitCost,
         neededBy,
         source: "reorder_report",
+        requestedBy: staffAccess.actor,
         notes: String(formData.get("notes") || (bestCostBook ? `Created from low-stock material using Vendor Cost Book: ${bestCostBook.vendorName || "vendor"}.` : "Created from low-stock material.")),
       },
     });
@@ -359,13 +360,14 @@ export async function action({ request }: { request: Request }) {
     const unitCost = bestCostBook ? priceFromCostBook(bestCostBook, requestedQty) : typedUnitCost;
     const neededByRaw = String(formData.get("neededBy") || "");
     const leadTimeDays = bestCostBook?.leadTimeDays || Math.round(num(formData.get("leadTimeDays"))) || selectedVendor?.leadTimeDays || material?.leadTimeDays || null;
+    // A new request is draft / requested; only purchasing approvers may create it already ordered.
+    const initialStatus = (() => { const posted = String(formData.get("status") || "requested"); return ["draft", "requested"].includes(posted) || staffAccess.can("approvePurchasing") ? posted : "requested"; })();
 
     await db.purchaseRequest.create({
       data: {
         shop,
         requestNumber,
-        // A new request is draft / requested; only purchasing approvers may create it already ordered.
-        status: (() => { const posted = String(formData.get("status") || "requested"); return ["draft", "requested"].includes(posted) || staffAccess.can("approvePurchasing") ? posted : "requested"; })(),
+        status: initialStatus,
         priority: String(formData.get("priority") || "normal"),
         materialId: material?.id || null,
         materialName: String(formData.get("materialName") || material?.name || "Manual purchase item"),
@@ -384,6 +386,8 @@ export async function action({ request }: { request: Request }) {
         neededBy: neededByRaw ? new Date(`${neededByRaw}T12:00:00`) : null,
         source: bestCostBook ? "vendor_cost_book" : "manual",
         notes: String(formData.get("notes") || (bestCostBook ? `Cost pulled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"}.` : "")) || null,
+        requestedBy: staffAccess.actor,
+        ...(initialStatus === "ordered" ? { approvedBy: staffAccess.actor, approvedAt: new Date() } : {}),
       },
     });
 
@@ -425,6 +429,8 @@ export async function action({ request }: { request: Request }) {
         estimatedCost: orderedQty * appliedUnitCost,
         neededBy: neededByRaw ? new Date(`${neededByRaw}T12:00:00`) : null,
         orderedAt: status === "ordered" && !purchaseRequest.orderedAt ? new Date() : purchaseRequest.orderedAt,
+        // 2026-11-12: the approver who first orders the request (approvePurchasing was checked above).
+        ...(status === "ordered" && !purchaseRequest.approvedAt ? { approvedBy: staffAccess.actor, approvedAt: new Date() } : {}),
         cancelledAt: status === "cancelled" ? new Date() : purchaseRequest.cancelledAt,
         vendorConfirmationNumber: String(formData.get("vendorConfirmationNumber") || "") || null,
         expectedArrivalDate: String(formData.get("expectedArrivalDate") || "") ? new Date(`${String(formData.get("expectedArrivalDate"))}T12:00:00`) : null,
@@ -472,7 +478,7 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
     const purchaseRequest = await db.purchaseRequest.findFirst({ where: { shop, id } });
     if (!purchaseRequest) return Response.json({ ok: false, message: "Purchase request not found." }, { status: 404 });
     const expectedArrivalDate = purchaseRequest.expectedArrivalDate || (purchaseRequest.leadTimeDays ? addDays(Number(purchaseRequest.leadTimeDays)) : null);
-    await db.purchaseRequest.updateMany({ where: { shop, id }, data: { status: "ordered", orderedAt: new Date(), expectedArrivalDate } });
+    await db.purchaseRequest.updateMany({ where: { shop, id }, data: { status: "ordered", orderedAt: new Date(), expectedArrivalDate, ...(purchaseRequest.approvedAt ? {} : { approvedBy: staffAccess.actor, approvedAt: new Date() }) } });
     return Response.json({ ok: true, message: "Purchase request marked ordered." });
   }
 
@@ -481,7 +487,7 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
     const expectedArrivalRaw = String(formData.get("expectedArrivalDate") || "");
     const followUpRaw = String(formData.get("followUpDate") || "");
     // 2026-10-07: fields not posted by the button keep their saved values (the button used to null them).
-    const existing = await db.purchaseRequest.findFirst({ where: { shop, id }, select: { vendorConfirmationNumber: true, expectedArrivalDate: true } });
+    const existing = await db.purchaseRequest.findFirst({ where: { shop, id }, select: { vendorConfirmationNumber: true, expectedArrivalDate: true, approvedAt: true } });
     const postedConfirmation = String(formData.get("vendorConfirmationNumber") || "");
     await db.purchaseRequest.updateMany({
       where: { shop, id },
@@ -494,6 +500,7 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
         expectedArrivalDate: expectedArrivalRaw ? new Date(`${expectedArrivalRaw}T12:00:00`) : formData.has("expectedArrivalDate") ? null : existing?.expectedArrivalDate ?? null,
         followUpNeeded: true,
         followUpDate: followUpRaw ? new Date(`${followUpRaw}T12:00:00`) : addDays(2),
+        ...(existing?.approvedAt ? {} : { approvedBy: staffAccess.actor, approvedAt: new Date() }),
       },
     });
     return Response.json({ ok: true, message: "PO marked sent and follow-up tracking started." });

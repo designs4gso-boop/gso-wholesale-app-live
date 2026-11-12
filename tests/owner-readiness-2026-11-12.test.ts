@@ -76,6 +76,7 @@ describe("the page", () => {
     expect(data.authorizedManagers).toEqual(["1005"]);
     expect(data.checks.find((c: any) => c.key === "configurator-ids").tone).toBe("red");
     expect(data.checks.find((c: any) => c.key === "jar-band-labor").detail).toContain("3oz, 4oz");
-    expect(data.checks.find((c: any) => c.key === "operational-migration").tone).toBe("amber");
+    // 2026-11-12: migration 20261112090000 is activated (the generated client has InventoryReservation).
+    expect(data.checks.find((c: any) => c.key === "operational-migration").tone).toBe("green");
   });
 });

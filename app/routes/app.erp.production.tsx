@@ -37,6 +37,7 @@ import { PRODUCTION_STATUS_OPTIONS, isStaffProductionStatus } from "../lib/produ
 import { REPRINT_REASONS, fulfillmentQcGuardApplies, isReprintReason, parsePickupInput, parseShipmentInput, reprintReasonLabel, shipmentSummary, statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
 import { permissionDeniedResponse, resolveStaffAccess, type StaffPermission } from "../lib/staff-roles.server";
 import { applyStockMovement } from "../lib/inventory-stock.server";
+import { releaseJobReservations } from "../lib/inventory-reservation.server";
 
 // Hardening (2026-10-04): the staff vocabulary lives in a client-safe module so
 // the change-status action can validate against the SAME list the UI offers.
@@ -887,18 +888,24 @@ export async function action({ request }: { request: Request }) {
       if (!verdict.ok) return Response.json({ ok: false, message: verdict.message }, { status: 400 });
     }
 
-    await db.productionJob.update({
-      where: { id: jobId },
-      data: {
-        status,
-        completedAt: status === "completed" ? new Date() : job.completedAt,
-      },
+    // 2026-11-12 (migration 20261112090000): cancelling RELEASES the job's active
+    // inventory reservations in the same transaction (exactly once — only rows
+    // still "reserved" change; consumed stock is never released).
+    const { released } = await db.$transaction(async (tx: any) => {
+      await tx.productionJob.update({
+        where: { id: jobId },
+        data: {
+          status,
+          completedAt: status === "completed" ? new Date() : job.completedAt,
+        },
+      });
+      return status === "cancelled" ? releaseJobReservations(tx, { shop, jobId }) : { released: 0 };
     });
-    await createEvent(shop, jobId, "status_change", `Status changed from ${labelForStatus(job.status)} to ${labelForStatus(status)}.`, {
+    await createEvent(shop, jobId, "status_change", `Status changed from ${labelForStatus(job.status)} to ${labelForStatus(status)}.${released ? ` ${released} inventory reservation(s) released.` : ""}`, {
       oldValue: job.status,
       newValue: status,
     });
-    return Response.json({ ok: true, message: "Status updated." });
+    return Response.json({ ok: true, message: released ? `Status updated. ${released} inventory reservation(s) released.` : "Status updated." });
   }
 
   // OWNER DECISION 2026-11-11: shipment / pickup records. QC PASS is required
@@ -924,18 +931,33 @@ export async function action({ request }: { request: Request }) {
       const parsed = parseShipmentInput({ carrier: formData.get("carrier"), trackingNumber: formData.get("trackingNumber"), packageCount: formData.get("packageCount"), shipDate: formData.get("shipDate"), actualShippingCost: formData.get("actualShippingCost") });
       if (!parsed.ok) return Response.json({ ok: false, message: parsed.errors.join(" ") }, { status: 400 });
       const record = parsed.record;
-      await db.productionJob.update({
-        where: { id: jobId },
+      // 2026-11-12: structured shipment columns (migration 20261112090000). The
+      // update is conditional on the status we just read, so a replayed / double
+      // submission matches no row and records nothing twice.
+      const shippedRows = await db.productionJob.updateMany({
+        where: { shop, id: jobId, status: job.status },
         // the entered cost fills actualShippingCost only while job costs are still open
-        data: { status: "shipped", ...(record.actualShippingCost != null && !job.actualCostFinalized ? { actualShippingCost: record.actualShippingCost } : {}) },
+        data: {
+          status: "shipped",
+          shippedAt: new Date(`${record.shipDate}T12:00:00Z`),
+          shipCarrier: record.carrier,
+          shipTrackingNumber: record.trackingNumber,
+          shipPackageCount: record.packageCount,
+          ...(record.actualShippingCost != null && !job.actualCostFinalized ? { actualShippingCost: record.actualShippingCost } : {}),
+        },
       });
+      if (!shippedRows.count) return Response.json({ ok: false, message: "This job changed while the shipment was being saved (already recorded?) — refresh and check." }, { status: 409 });
       await createEvent(shop, jobId, "shipped", shipmentSummary(record), { oldValue: job.status, newValue: JSON.stringify(record), createdBy: actor });
       if (record.trackingNumber) await createEvent(shop, jobId, "tracking_added", `Tracking ${record.trackingNumber} (${record.carrier}).`, { newValue: record.trackingNumber, createdBy: actor });
       return Response.json({ ok: true, message: `Shipment recorded. ${shipmentSummary(record)} Mark the job Completed when done.` });
     }
     const parsed = parsePickupInput({ pickedUpAt: formData.get("pickedUpAt"), pickedUpBy: formData.get("pickedUpBy"), note: formData.get("pickupNote") });
     if (!parsed.ok) return Response.json({ ok: false, message: parsed.errors.join(" ") }, { status: 400 });
-    await db.productionJob.update({ where: { id: jobId }, data: { status: "picked_up" } });
+    const pickupRows = await db.productionJob.updateMany({
+      where: { shop, id: jobId, status: job.status },
+      data: { status: "picked_up", pickedUpAt: new Date(parsed.record.pickedUpAt), pickedUpBy: parsed.record.pickedUpBy },
+    });
+    if (!pickupRows.count) return Response.json({ ok: false, message: "This job changed while the pickup was being saved (already recorded?) — refresh and check." }, { status: 409 });
     await createEvent(shop, jobId, "picked_up", `Picked up ${parsed.record.pickedUpAt}${parsed.record.pickedUpBy ? ` by ${parsed.record.pickedUpBy}` : ""}.`, { oldValue: job.status, newValue: JSON.stringify(parsed.record), createdBy: actor });
     return Response.json({ ok: true, message: "Pickup recorded. Mark the job Completed when done." });
   }
@@ -1279,6 +1301,12 @@ Source ref: ${sourceRef}` : ""}`,
         actualFinalProfit: assessment.grossProfit,
         actualFinalMargin: assessment.grossMarginPct,
         actualCostNotes,
+        // 2026-11-12 (migration 20261112090000): the quoted true cost comes from the
+        // immutable quote-item cost snapshot and is written ONCE; the variance is
+        // stored separately and only when an estimate exists (never invented).
+        quotedTrueCost: job.quotedTrueCost ?? (assessment.estimatedTotalCost > 0 ? assessment.estimatedTotalCost : null),
+        actualVarianceAmount: assessment.estimatedTotalCost > 0 ? assessment.varianceDollars : null,
+        actualVariancePct: assessment.variancePct,
         actualCostFinalized: wantsFinalize,
         actualCostFinalizedAt: wantsFinalize ? new Date() : null,
         actualCostFinalizedBy: wantsFinalize ? actor : null,
@@ -1444,6 +1472,12 @@ Source ref: ${sourceRef}` : ""}`,
     // 2026-11-11 QC guard: a reprint invalidates this item's earlier QC PASS
     // (production-qc-guard reads the latest qc_result per item).
     await createEvent(shop, jobId, "qc_result", `QC reset by reprint request for ${item.itemTicket || item.productTitle} (run ${runLabel}).`, { oldValue: String(item.itemTicket || item.productTitle || ""), newValue: "reprint_required", createdBy: actor });
+    // 2026-11-12: structured reprint + QC reset on the item (migration 20261112090000).
+    const reprintAt = new Date();
+    await db.productionJobItem.updateMany({
+      where: { shop, id: item.id },
+      data: { lastReprintReason: reasonCode, lastReprintBy: actor, lastReprintAt: reprintAt, qcResult: "reprint_required", qcBy: actor, qcAt: reprintAt },
+    });
     return Response.json({ ok: true, message: `Reprint recorded for ${item.itemTicket || item.productTitle} (run ${runLabel}). ${instruction}` });
   }
 
@@ -1485,6 +1519,9 @@ Source ref: ${sourceRef}` : ""}`,
     await createEvent(shop, jobId, eventType, `QC ${result.toUpperCase().replace("_", " ")} for ${item.itemTicket || item.productTitle} (run ${runLabel}) by ${actor}.${note ? ` Note: ${note}` : ""}`, { createdBy: actor, oldValue: item.itemTicket || item.productTitle, newValue: result });
     // Machine-readable QC fact (the transition guard reads eventType "qc_result" + newValue "pass").
     await createEvent(shop, jobId, "qc_result", `QC result ${result} for ${item.itemTicket || item.productTitle} (run ${runLabel}).`, { createdBy: actor, oldValue: item.itemTicket || item.productTitle, newValue: result });
+    // 2026-11-12: structured QC record on the item (migration 20261112090000). The
+    // completion guard still reads the qc_result events above.
+    await db.productionJobItem.updateMany({ where: { shop, id: item.id }, data: { qcResult: result, qcBy: actor, qcAt: new Date(), qcNote: note || null } });
     return Response.json({
       ok: true,
       message: result === "reprint_required"

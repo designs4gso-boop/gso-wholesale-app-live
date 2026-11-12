@@ -179,8 +179,11 @@ model Quote {
   // won/lost/canceled/expired alongside the existing ladder; outcomeAt stamps
   // won/lost/canceled/expired, outcomeReason is REQUIRED for lost/canceled,
   // optional for expired; returning to draft/sent clears both.
-  outcomeAt     DateTime?
-  outcomeReason String?
+  outcomeAt        DateTime?
+  outcomeReason    String?
+  // 2026-11-12 (migration 20261112090000) — no rush fee: rush pricing is not approved
+  requestedDueDate DateTime?
+  rushRequested    Boolean   @default(false)
 
   @@index([shop, status])
   @@index([shop, createdAt])
@@ -889,6 +892,23 @@ model ProductionJob {
   // 15H.1: DB-backed ticket identity — the unique index is the FINAL
   // authority behind the advisory-locked allocator (nullable stays allowed;
   // Postgres treats NULLs as distinct).
+  // 2026-11-12 operational records (migration 20261112090000)
+  shippedAt            DateTime?
+  shipCarrier          String?
+  shipTrackingNumber   String?
+  shipPackageCount     Int?
+  pickedUpAt           DateTime?
+  pickedUpBy           String?
+  rushRequested        Boolean   @default(false)
+  rushApprovalStatus   String?
+  rushApprovedBy       String?
+  rushApprovedAt       DateTime?
+  rushNotes            String?
+  promisedDate         DateTime?
+  quotedTrueCost       Float?
+  actualVarianceAmount Float?
+  actualVariancePct    Float?
+
   @@unique([shop, jobTicket])
   @@index([shop])
   @@index([shop, status])
@@ -939,6 +959,18 @@ model ProductionJobItem {
 
   // 15H.1: item tickets are derived (jobTicket + -NN) so uniqueness follows
   // from job-ticket uniqueness — this index makes the DB the final authority.
+  // 2026-11-12 operational records (migration 20261112090000)
+  goodQty           Float?
+  spoiledQty        Float?
+  spoilageReason    String?
+  qcResult          String?
+  qcBy              String?
+  qcAt              DateTime?
+  qcNote            String?
+  lastReprintReason String?
+  lastReprintBy     String?
+  lastReprintAt     DateTime?
+
   @@unique([shop, itemTicket])
   @@index([shop])
   @@index([jobId])
@@ -1209,7 +1241,11 @@ model PurchaseRequest {
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
-  vendorRecord Vendor? @relation("PurchaseRequestVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorRecord Vendor?   @relation("PurchaseRequestVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+  // 2026-11-12 purchasing accountability (migration 20261112090000)
+  requestedBy  String?
+  approvedBy   String?
+  approvedAt   DateTime?
 
   @@index([shop])
   @@index([shop, status])
@@ -1908,4 +1944,44 @@ model OpsAgentRun {
   @@index([status, updatedAt])
   @@index([intentId])
   @@index([agentId, startedAt])
+}
+
+// 2026-11-12 (migration 20261112090000): reserve at scheduling, consume actual at
+// completion, release on cancellation; idempotencyKey makes transitions replay-safe.
+model InventoryReservation {
+  id             String    @id @default(cuid())
+  shop           String
+  materialId     String
+  jobId          String
+  jobItemId      String?
+  quantity       Float
+  consumedQty    Float?
+  unit           String
+  status         String    @default("reserved")
+  idempotencyKey String
+  reservedBy     String?
+  reservedAt     DateTime  @default(now())
+  consumedAt     DateTime?
+  releasedAt     DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+
+  @@unique([shop, idempotencyKey])
+  @@index([shop, materialId, status])
+  @@index([shop, jobId])
+}
+
+// 2026-11-12 (migration 20261112090000): configurable notification preferences; sends nothing itself.
+model NotificationPreference {
+  id           String   @id @default(cuid())
+  shop         String
+  recipientKey String
+  eventType    String
+  channel      String
+  enabled      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+
+  @@unique([shop, recipientKey, eventType, channel])
 }

@@ -1,9 +1,10 @@
--- 2026-11-12 OVERNIGHT — ADDITIVE operational records (owner-approved features).
--- STAGED ONLY: lives in prisma/migrations-pending so `prisma migrate deploy`
--- (run by Render on every deploy) never applies it until the owner activates
--- it (see ../README.md). Every change is additive: new nullable columns or
--- columns with a safe default, and two new tables. No drops, renames, type
--- changes or data conversion. Rollback statements are in the README.
+-- 2026-11-12 — ADDITIVE operational records (owner-approved features).
+-- Staged overnight in prisma/migrations-pending; activated 2026-11-12 (Render's
+-- Pre-Deploy `prisma migrate deploy` applies it). Every change is additive: new
+-- nullable columns or columns with a safe default, two new tables and their
+-- indexes. No drops, renames, type changes, foreign keys or data conversion.
+-- Rollback = redeploy the previous app commit (the extra columns / tables are
+-- ignored); see docs/GSO_OPERATIONAL_MIGRATION_RELEASE_2026-11-12.md.
 
 -- Shipment / pickup / rush / promised date / quoted-vs-actual variance on the job.
 ALTER TABLE "ProductionJob" ADD COLUMN IF NOT EXISTS "shippedAt" TIMESTAMP(3);
