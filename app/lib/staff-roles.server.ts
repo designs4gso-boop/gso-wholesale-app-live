@@ -32,22 +32,25 @@ export type StaffPermission =
   | "createPurchaseRequest"
   | "approveExceptionPricing" // below-floor / override / exception pricing
   | "sendQuote" // ordinary quotes inside approved pricing authority
-  | "selectPrinter" // manual compatible-printer choice
+  | "selectPrinter" // manual compatible-printer choice (owner + authorized print operators only)
+  | "manageIntake" // Print Intake release / assign / reject (file-to-job review; the agent still routes by the printer rules)
   | "recordQc"
   | "recordReprint"
   | "recordShipment"; // shipment / pickup records
 
-const ALL: StaffPermission[] = ["viewFinancials", "ownerOverrides", "approvePurchasing", "createPurchaseRequest", "approveExceptionPricing", "sendQuote", "selectPrinter", "recordQc", "recordReprint", "recordShipment"];
+const ALL: StaffPermission[] = ["viewFinancials", "ownerOverrides", "approvePurchasing", "createPurchaseRequest", "approveExceptionPricing", "sendQuote", "selectPrinter", "manageIntake", "recordQc", "recordReprint", "recordShipment"];
 
 /** Owner-approved permission matrix. */
 export const ROLE_PERMISSIONS: Record<StaffRole, readonly StaffPermission[]> = {
   owner: ALL,
   // Operational management; financial / purchasing / exception authority only when explicitly authorized.
-  manager: ["createPurchaseRequest", "sendQuote", "selectPrinter", "recordQc", "recordReprint", "recordShipment"],
+  // Owner rule 2026-11-11: managers do NOT get manual printer selection by default.
+  manager: ["createPurchaseRequest", "sendQuote", "manageIntake", "recordQc", "recordReprint", "recordShipment"],
   // Customer selling price and quote/order totals only — never internal cost. No discretionary discount.
   sales: ["createPurchaseRequest", "sendQuote"],
   // Operational production; authorized print operators may choose a compatible printer; QC authority.
-  print_operator: ["createPurchaseRequest", "selectPrinter", "recordQc", "recordReprint", "recordShipment"],
+  // Assigning someone the print_operator role IS the owner's printer-selection authorization.
+  print_operator: ["createPurchaseRequest", "selectPrinter", "manageIntake", "recordQc", "recordReprint", "recordShipment"],
   // Bagging / packing / QC tasks; no internal financials.
   bagger: ["createPurchaseRequest", "recordQc", "recordShipment"],
   unassigned: [],
@@ -111,7 +114,8 @@ export const PERMISSION_DENIED_MESSAGE: Record<StaffPermission, string> = {
   createPurchaseRequest: "Creating purchase requests needs an assigned ERP role.",
   approveExceptionPricing: "Exception / below-floor pricing needs owner or authorized-manager approval.",
   sendQuote: "Sending quotes needs an assigned ERP role.",
-  selectPrinter: "Manual printer selection is limited to owners, managers and authorized print operators.",
+  selectPrinter: "Manual printer selection is limited to owners and authorized print operators.",
+  manageIntake: "Print Intake review actions are limited to owners, managers and print operators.",
   recordQc: "QC can be recorded by print operators, baggers, managers and owners.",
   recordReprint: "Reprints can be recorded by print operators, managers and owners.",
   recordShipment: "Shipment / pickup can be recorded by print operators, baggers, managers and owners.",

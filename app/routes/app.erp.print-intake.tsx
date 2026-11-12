@@ -1,3 +1,4 @@
+import { PERMISSION_DENIED_MESSAGE, resolveStaffAccess } from "../lib/staff-roles.server";
 import type React from "react";
 import { Form, Link, useActionData, useLoaderData } from "react-router";
 import crypto from "crypto";
@@ -96,12 +97,16 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // 2026-11-11 role matrix: intake review needs manageIntake (owner / manager / print operator).
+  const staffAccess = resolveStaffAccess(auth);
+  if (!staffAccess.can("manageIntake")) return { ok: false, message: `${PERMISSION_DENIED_MESSAGE.manageIntake} ${staffAccess.reason}` };
   const shop = session.shop;
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
   const intakeId = String(form.get("intakeId") || "");
-  const actor = `admin:${shop}`;
+  const actor = staffAccess.actor || `admin:${shop}`;
   const row = await db.printIntake.findFirst({ where: { id: intakeId, shop } });
   if (!row) return { ok: false, message: "Intake record not found." };
 

@@ -767,8 +767,9 @@ export async function action({ request }: { request: Request }) {
               quantity: Number(formData.get("quantity") || 0),
               family: String(formData.get("family") || "default"),
               finish: String(formData.get("finish") || "CMYK"),
-              // 2026-11-11: a manual compatible-printer choice is limited to owners,
-              // managers and authorized print operators; everyone else gets AUTO.
+              // 2026-11-11: a manual compatible-printer choice is limited to owners and
+              // authorized print operators (selectPrinter); everyone else gets AUTO —
+              // a forged "printer" field from anyone else is ignored on the server.
               printer: (staffAccess.can("selectPrinter") ? String(formData.get("printer") || "auto") : "auto") as any,
               sku: String(formData.get("sku") || ""),
               size: String(formData.get("size") || ""),
