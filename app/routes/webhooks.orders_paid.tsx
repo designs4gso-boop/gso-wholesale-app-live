@@ -176,7 +176,11 @@ export const action = async ({ request }: { request: Request }) => {
     );
     bypassLines = configuratorBypassLinesOf(order, managed);
   } catch (error) {
-    console.error("orders_paid configurator-bypass check failed", error);
+    // 2026-11-11: FAIL CLOSED. If the configurator-product lookup fails we cannot
+    // prove the order is not a raw-variant bypass, so no production job is
+    // created; a 5xx makes Shopify retry the webhook once the database is back.
+    console.error("orders_paid configurator-bypass check failed — order not processed, Shopify will retry", error);
+    return new Response("Configurator bypass check unavailable — retry", { status: 503 });
   }
   if (bypassLines.length) {
     try {

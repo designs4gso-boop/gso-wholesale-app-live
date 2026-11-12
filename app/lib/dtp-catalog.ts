@@ -59,16 +59,17 @@ export function isCurrentSpektraSize(size: string): size is SpektraSizeKey {
 }
 
 /**
- * FREIGHT — UNVERIFIED ASSUMPTION. The runtime still applies the historical
- * $85 per Spektra purchase order (product-driven-costing.server.ts
- * SPEKTRA_FREIGHT_PER_PO); this marker exists so every surface labels it
- * honestly instead of calling it verified.
+ * FREIGHT — UNVERIFIED HISTORICAL FIGURE. DTP QUOTING NEVER USES IT: quote
+ * freight is actual / vendor quote / manual entry only (FREIGHT_NOT_VERIFIED
+ * otherwise). The historical $85 per Spektra PO survives only in the
+ * owner-only pricing-intelligence analysis and the audit trail of how the
+ * approved DTP ladders were derived; this marker labels it honestly there.
  */
 export const SPEKTRA_FREIGHT_ASSUMPTION = {
   amount: 85,
   status: "UNVERIFIED" as const,
   label: "FREIGHT ASSUMPTION — OWNER / VENDOR CONFIRMATION NEEDED",
-  note: "Historical $85 flat per Spektra purchase order. The current public site exposes no usable freight; this figure has not been verified and is kept only because existing DTP quoting needs a freight line. Not part of the 2026-10-06 live cost book.",
+  note: "Historical $85 flat per Spektra purchase order — UNVERIFIED and NOT used in DTP quoting (quote freight is actual / vendor quote / manual entry only). Kept only in the owner-only pricing analysis and the approved-ladder audit trail. Not part of the 2026-10-06 live cost book.",
 };
 
 /** The ERP comparable standard configuration (legacy product spec = soft-touch lamination + CR zipper included). Client-safe. */

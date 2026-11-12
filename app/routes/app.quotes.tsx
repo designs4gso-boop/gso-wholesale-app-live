@@ -685,6 +685,11 @@ function quoteItemData(item: QuoteItemInput, quoteId?: string) {
   };
 }
 
+/** 2026-11-11 owner rule: standard allowed deposit. */
+const STANDARD_DEPOSIT_PERCENT = 50;
+/** 2026-11-11: quote snapshots are immutable in these statuses. */
+const LOCKED_QUOTE_STATUSES = ["deposit_paid", "paid", "production", "completed"];
+
 export async function loader({ request }: { request: Request }) {
   const { session, sessionToken } = await authenticate.admin(request);
   const ownerAuth = resolveOwnerAuthorization({ session, sessionToken });
@@ -1101,7 +1106,16 @@ export async function action({ request }: { request: Request }) {
         return sum + qty * unitPrice;
       }, 0);
 
-      const depositPercent = Number(payload.depositPercent) || 50;
+      // 2026-11-11 owner rule: standard deposit is 50%. Any other percentage is an
+      // explicit OWNER change for this quote (1-99%); no Net terms exist.
+      const requestedDeposit = payload.depositPercent == null || payload.depositPercent === "" ? STANDARD_DEPOSIT_PERCENT : Number(payload.depositPercent);
+      if (!Number.isFinite(requestedDeposit) || requestedDeposit < 1 || requestedDeposit > 99) {
+        return Response.json({ ok: false, message: "Deposit percent must be between 1% and 99% (standard 50%)." }, { status: 400 });
+      }
+      if (requestedDeposit !== STANDARD_DEPOSIT_PERCENT && !resolveOwnerAuthorization({ session, sessionToken }).isOwner) {
+        return Response.json({ ok: false, message: `The standard deposit is ${STANDARD_DEPOSIT_PERCENT}%. Only the owner can change it for a quote.` }, { status: 403 });
+      }
+      const depositPercent = requestedDeposit;
       const depositAmount = Math.round(quoteTotal * (depositPercent / 100) * 100) / 100;
       const balanceDue = Math.round((quoteTotal - depositAmount) * 100) / 100;
 
@@ -1601,9 +1615,12 @@ export async function action({ request }: { request: Request }) {
 
     if (quote.id) {
       const existingQuote = await db.quote.findFirst({ where: { id: quote.id, shop } });
-      if (existingQuote?.status === "paid") {
+      // 2026-11-11 owner rule: the quoted cost / price snapshot is immutable once
+      // money has moved or production started (deposit paid, paid, in production,
+      // completed). Actual cost is recorded separately on the production job.
+      if (LOCKED_QUOTE_STATUSES.includes(String(existingQuote?.status || ""))) {
         const quotes = await getQuotes(shop, viewerIsOwner);
-        return Response.json({ ok: false, error: "Paid quotes are locked and cannot be edited.", quotes });
+        return Response.json({ ok: false, error: `This quote is ${existingQuote?.status} — its pricing and cost snapshot are locked and cannot be edited. Create a new quote for changes.`, quotes });
       }
 
       await db.$transaction([
@@ -2536,6 +2553,7 @@ export default function QuotesPage() {
                         ) : (
                           stageQuotes.map((quote) => {
                             const isPaid = quote.status === "paid";
+                            const isLocked = LOCKED_QUOTE_STATUSES.includes(String(quote.status));
                             const quoteRevenue = (quote.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
                             const productionJob = productionJobForQuote(quote.id);
                             const canCreateProductionJob = ["paid", "production"].includes(quote.status);
@@ -2543,7 +2561,7 @@ export default function QuotesPage() {
                               <Card key={quote.id}>
                                 <BlockStack gap="200">
                                   <Text as="p" fontWeight="bold">{quote.displayName || quote.company || quote.customerName || "Custom Quote"}</Text>
-                                  {isPaid ? <Badge tone="success">PAID - Quote locked</Badge> : null}
+                                  {isLocked ? <Badge tone="success">{`${String(quote.status).replace("_", " ").toUpperCase()} - Quote locked`}</Badge> : null}
                                   <Badge>{customerTierDisplayLabel(quote.customerTier, quote.customerTierLabel)}</Badge>
                                   {tierRule(quote.customerTier).manualTermsOnly ? (
                                     <Badge tone="attention">Manual terms</Badge>

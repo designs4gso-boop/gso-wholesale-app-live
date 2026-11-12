@@ -5064,7 +5064,7 @@ LIVE SPEKTRA ECONOMICS (research ${selected.dtp.liveVendor.sourceDate}; ${select
 Pricing source: ${selected.dtp.pricingSource ?? "—"}${selected.dtp.marketBenchmark ? ` · benchmark ${selected.dtp.marketBenchmark}` : ""}${selected.dtp.benchmark?.competitorComparableUnit != null ? ` · Design & Customize comparable CR ${money2(selected.dtp.benchmark.competitorComparableUnit)}/unit → GSO premium ${selected.dtp.benchmark.premiumPct}%` : ""}
 Commercial policy: ${selected.dtp.commercialPolicy ?? "—"}
 Vendor product: ${selected.dtp.liveVendor.wholesaleTotal != null ? `${money2(selected.dtp.liveVendor.wholesaleTotal)} (${Number(selected.dtp.liveVendor.wholesaleUnit).toFixed(4)}/unit, incl. extra SKUs ${money2(selected.dtp.liveVendor.extraSkuCost)})` : "—"} — ${selected.dtp.liveVendor.statusLabel}
-Art: ${money2(OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(new URLSearchParams(search).get("pdesigns") || 1)))} · Freight: ${money2(SPEKTRA_FREIGHT_ASSUMPTION.amount)} / UNVERIFIED
+Art: ${money2(OWNER_STANDARDS.artSetupPerDesign.value * Math.max(1, Number(new URLSearchParams(search).get("pdesigns") || 1)))} · Freight: not included in this true cost (actual / vendor quote / manual entry only)
 Landed total (live): ${selected.dtp.liveVendor.landedLive != null ? money2(selected.dtp.liveVendor.landedLive) : "—"} vs legacy landed ${money2(selected.jobCost ?? 0)}` : ""}${selected.dtp.shaped && selected.dtp.shaped.shape === "custom" ? `
 
 CUSTOM SHAPED POUCHES

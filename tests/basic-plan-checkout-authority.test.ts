@@ -26,6 +26,8 @@ const h = vi.hoisted(() => {
         if (where.productType && where.productType !== hit.productType) return null;
         return hit;
       },
+      // 2026-11-11: the paid-order webhook's raw-variant bypass check (fails closed on error).
+      findMany: async () => [],
     },
     configuratorPricingRule: { findMany: async () => [] },
     agentReviewQueueItem: { create: async ({ data }: any) => { reviewItems.push(data); return data; } },
