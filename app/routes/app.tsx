@@ -62,6 +62,7 @@ export default function App() {
         <s-link href="/app/erp/vendors">Setup · Vendors</s-link>
         <s-link href="/app/erp/vendor-cost-book">Setup · Vendor Cost Book</s-link>
         <s-link href="/app#advanced">Admin · Advanced Tools</s-link>
+        {isOwner ? <s-link href="/app/erp/owner-readiness">Admin · Staff Access &amp; Readiness</s-link> : null}
         <s-link href="/app/erp/setup-wizard">Help · Launch Readiness</s-link>
         <s-link href="/app/erp/walkthrough">Help · ERP Walkthrough</s-link>
       </s-app-nav>
