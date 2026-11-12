@@ -1,5 +1,6 @@
 import { Page, Layout, Card, Text, Badge, Button, InlineStack, BlockStack, Divider } from "@shopify/polaris";
 import { completionGuardApplies, evaluateQcForCompletion } from "../lib/production-qc-guard";
+import { statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
 import { isStaffProductionStatus } from "../lib/production-status-vocabulary";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -168,6 +169,9 @@ export async function action({ request }: { request: Request }) {
     const dueDate = String(formData.get("dueDate") || "");
     const status = String(formData.get("status") || job.status || "new");
     if (!isStaffProductionStatus(status)) return Response.json({ ok: false, message: "Unknown production status." }, { status: 400 });
+    // OWNER DECISION 2026-11-11: Completed only after Shipped / Picked Up (record those on the Production board).
+    const fulfillment = statusChangeFulfillmentVerdict(job.status, status);
+    if (!fulfillment.ok) return Response.json({ ok: false, message: fulfillment.message }, { status: 400 });
     // OWNER DECISION 2026-10-07: QC PASS REQUIRED BEFORE COMPLETION (same guard as the Production Board).
     if (completionGuardApplies(job.status, status)) {
       const [items, events] = await Promise.all([

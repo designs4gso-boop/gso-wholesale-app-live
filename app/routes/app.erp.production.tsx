@@ -34,6 +34,8 @@ import { appendIntakeAudit } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
 import { PRODUCTION_STATUS_OPTIONS, isStaffProductionStatus } from "../lib/production-status-vocabulary";
+import { REPRINT_REASONS, fulfillmentQcGuardApplies, isReprintReason, parsePickupInput, parseShipmentInput, reprintReasonLabel, shipmentSummary, statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
+import { permissionDeniedResponse, resolveStaffAccess, type StaffPermission } from "../lib/staff-roles.server";
 
 // Hardening (2026-10-04): the staff vocabulary lives in a client-safe module so
 // the change-status action can validate against the SAME list the UI offers.
@@ -710,6 +712,11 @@ export async function action({ request }: { request: Request }) {
     const financials = productionFinancialVisibility(auth);
     if (!financials.show) return Response.json({ ok: false, message: `Owner only. ${financials.owner.reason}` }, { status: 403 });
   }
+  // 2026-11-11 owner role matrix (staff-roles.server.ts): production-record actions
+  // need an assigned role with that permission; owners hold every permission.
+  const PRODUCTION_PERMISSION: Record<string, StaffPermission> = { qcItem: "recordQc", reprintItem: "recordReprint", recordShipment: "recordShipment", recordPickup: "recordShipment" };
+  const staffAccess = resolveStaffAccess(auth);
+  if (PRODUCTION_PERMISSION[intent] && !staffAccess.can(PRODUCTION_PERMISSION[intent])) return permissionDeniedResponse(staffAccess, PRODUCTION_PERMISSION[intent]);
 
   // 15H.4C: link an UNLINKED intake shell job onto the real commercial job.
   // Exact owner selection + confirmation; the service validates both sides,
@@ -759,7 +766,9 @@ export async function action({ request }: { request: Request }) {
               quantity: Number(formData.get("quantity") || 0),
               family: String(formData.get("family") || "default"),
               finish: String(formData.get("finish") || "CMYK"),
-              printer: String(formData.get("printer") || "auto") as any,
+              // 2026-11-11: a manual compatible-printer choice is limited to owners,
+              // managers and authorized print operators; everyone else gets AUTO.
+              printer: (staffAccess.can("selectPrinter") ? String(formData.get("printer") || "auto") : "auto") as any,
               sku: String(formData.get("sku") || ""),
               size: String(formData.get("size") || ""),
               notes: String(formData.get("itemNotes") || ""),
@@ -858,6 +867,10 @@ export async function action({ request }: { request: Request }) {
     if (!isStaffProductionStatus(status)) return Response.json({ ok: false, message: `Invalid production status "${status}".` }, { status: 400 });
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
     if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
+    // OWNER DECISION 2026-11-11: Completed only after Shipped / Picked Up; those
+    // two are set only through the shipment / pickup record.
+    const fulfillment = statusChangeFulfillmentVerdict(job.status, status);
+    if (!fulfillment.ok) return Response.json({ ok: false, message: fulfillment.message }, { status: 400 });
     // OWNER DECISION 2026-10-07: QC PASS REQUIRED BEFORE COMPLETION (existing
     // QC events only; no schema; already-completed jobs are never touched).
     if (completionGuardApplies(job.status, status)) {
@@ -881,6 +894,45 @@ export async function action({ request }: { request: Request }) {
       newValue: status,
     });
     return Response.json({ ok: true, message: "Status updated." });
+  }
+
+  // OWNER DECISION 2026-11-11: shipment / pickup records. QC PASS is required
+  // first; the job moves to Shipped / Picked Up (Completed is a later, separate
+  // step). Details live in a ProductionJobEvent (no schema change). Shipping
+  // cost is exactly what was entered — never invented.
+  if (intent === "recordShipment" || intent === "recordPickup") {
+    const jobId = String(formData.get("jobId") || "");
+    const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
+    if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
+    if (["cancelled", "shipped", "picked_up"].includes(String(job.status))) return Response.json({ ok: false, message: `This job is already ${labelForStatus(job.status)}.` }, { status: 400 });
+    const target = intent === "recordShipment" ? "shipped" : "picked_up";
+    if (fulfillmentQcGuardApplies(job.status, target)) {
+      const [items, events] = await Promise.all([
+        db.productionJobItem.findMany({ where: { shop, jobId }, select: { id: true, itemTicket: true, productTitle: true } }),
+        db.productionJobEvent.findMany({ where: { shop, jobId, eventType: { in: ["qc_result", "production_run_qc_passed", "production_run_qc_hold", "production_run_qc_failed"] } }, orderBy: { createdAt: "asc" }, select: { eventType: true, message: true, oldValue: true, newValue: true, createdAt: true } }),
+      ]);
+      const verdict = evaluateQcForCompletion(items, events);
+      if (!verdict.ok) return Response.json({ ok: false, message: verdict.message }, { status: 400 });
+    }
+    const actor = staffAccess.actor;
+    if (intent === "recordShipment") {
+      const parsed = parseShipmentInput({ carrier: formData.get("carrier"), trackingNumber: formData.get("trackingNumber"), packageCount: formData.get("packageCount"), shipDate: formData.get("shipDate"), actualShippingCost: formData.get("actualShippingCost") });
+      if (!parsed.ok) return Response.json({ ok: false, message: parsed.errors.join(" ") }, { status: 400 });
+      const record = parsed.record;
+      await db.productionJob.update({
+        where: { id: jobId },
+        // the entered cost fills actualShippingCost only while job costs are still open
+        data: { status: "shipped", ...(record.actualShippingCost != null && !job.actualCostFinalized ? { actualShippingCost: record.actualShippingCost } : {}) },
+      });
+      await createEvent(shop, jobId, "shipped", shipmentSummary(record), { oldValue: job.status, newValue: JSON.stringify(record), createdBy: actor });
+      if (record.trackingNumber) await createEvent(shop, jobId, "tracking_added", `Tracking ${record.trackingNumber} (${record.carrier}).`, { newValue: record.trackingNumber, createdBy: actor });
+      return Response.json({ ok: true, message: `Shipment recorded. ${shipmentSummary(record)} Mark the job Completed when done.` });
+    }
+    const parsed = parsePickupInput({ pickedUpAt: formData.get("pickedUpAt"), pickedUpBy: formData.get("pickedUpBy"), note: formData.get("pickupNote") });
+    if (!parsed.ok) return Response.json({ ok: false, message: parsed.errors.join(" ") }, { status: 400 });
+    await db.productionJob.update({ where: { id: jobId }, data: { status: "picked_up" } });
+    await createEvent(shop, jobId, "picked_up", `Picked up ${parsed.record.pickedUpAt}${parsed.record.pickedUpBy ? ` by ${parsed.record.pickedUpBy}` : ""}.`, { oldValue: job.status, newValue: JSON.stringify(parsed.record), createdBy: actor });
+    return Response.json({ ok: true, message: "Pickup recorded. Mark the job Completed when done." });
   }
 
   if (intent === "updateJob") {
@@ -1386,8 +1438,10 @@ Source ref: ${sourceRef}` : ""}`,
   if (intent === "reprintItem") {
     const jobId = String(formData.get("jobId") || "");
     const itemId = String(formData.get("itemId") || "");
-    const reason = String(formData.get("reprintReason") || "");
-    if (!reason) return Response.json({ ok: false, message: "A reprint reason is required." });
+    const reasonCode = String(formData.get("reprintReason") || "");
+    // OWNER DECISION 2026-11-11: one of the owner's reprint categories, validated here.
+    if (!isReprintReason(reasonCode)) return Response.json({ ok: false, message: `Pick a reprint reason: ${REPRINT_REASONS.map((r) => r.label).join(", ")}.` });
+    const reason = `${reprintReasonLabel(reasonCode)} [${reasonCode}]`; // label + stable category code in the event / intake record
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId }, include: { items: true } });
     const item = job?.items.find((row: any) => row.id === itemId);
     if (!job || !item) return Response.json({ ok: false, message: "Job/item not found." });
@@ -1985,14 +2039,7 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
                         <InlineStack gap="150" blockAlign="center" wrap>
                           <select name="reprintReason" defaultValue="" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }}>
                             <option value="" disabled>Reprint reason…</option>
-                            <option value="print defect">Print defect</option>
-                            <option value="color issue">Color issue</option>
-                            <option value="cut issue">Cut issue</option>
-                            <option value="gloss/white issue">Gloss/white issue</option>
-                            <option value="damaged">Damaged</option>
-                            <option value="customer replacement">Customer replacement</option>
-                            <option value="operator rerun">Operator rerun</option>
-                            <option value="other">Other</option>
+                            {REPRINT_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                           </select>
                           <input name="reprintNote" placeholder="Note (optional)" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb", minWidth: 160 }} />
                           <Button submit size="micro">Reprint</Button>
@@ -2078,6 +2125,34 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
               </select>
               <Button submit>Update status</Button>
             </Form>
+            <Text as="p" tone="subdued">Completed is only available after the job is Shipped or Picked Up — record it below (QC PASS required).</Text>
+            <details style={{ marginTop: 6 }}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>Record shipment</summary>
+              <Form method="post">
+                <input type="hidden" name="intent" value="recordShipment" />
+                <input type="hidden" name="jobId" value={job.id} />
+                <BlockStack gap="100">
+                  <input name="carrier" placeholder="Carrier (UPS, FedEx, USPS…) *" required style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }} />
+                  <input name="trackingNumber" placeholder="Tracking number" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }} />
+                  <input name="packageCount" type="number" min={1} defaultValue={1} placeholder="Packages *" required style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }} />
+                  <input name="shipDate" type="date" required style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }} />
+                  <input name="actualShippingCost" type="number" min={0} step="0.01" placeholder="Actual shipping cost $ (blank if not known)" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }} />
+                  <Button submit size="slim">Save shipment</Button>
+                </BlockStack>
+              </Form>
+            </details>
+            <details style={{ marginTop: 6 }}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>Record customer pickup</summary>
+              <Form method="post">
+                <input type="hidden" name="intent" value="recordPickup" />
+                <input type="hidden" name="jobId" value={job.id} />
+                <BlockStack gap="100">
+                  <input name="pickedUpBy" placeholder="Picked up by (optional)" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }} />
+                  <input name="pickupNote" placeholder="Note (optional)" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }} />
+                  <Button submit size="slim">Save pickup (now)</Button>
+                </BlockStack>
+              </Form>
+            </details>
           </div>
 
           <div style={{ minWidth: 320, flex: 2 }}>

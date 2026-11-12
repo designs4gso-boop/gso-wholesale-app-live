@@ -11,7 +11,7 @@ const route = readFileSync(new URL("../app/routes/app.erp.production.tsx", impor
 
 describe("staff production status vocabulary", () => {
   it("accepts only the canonical staff statuses and rejects arbitrary strings", () => {
-    expect(PRODUCTION_STATUS_OPTIONS.length).toBe(17);
+    expect(PRODUCTION_STATUS_OPTIONS.length).toBe(18); // + picked_up (owner workflow 2026-11-11)
     for (const s of STAFF_PRODUCTION_STATUSES) expect(isStaffProductionStatus(s)).toBe(true);
     for (const bad of ["", "shipped; DROP TABLE", "Printing", "approved", "canceled", "done", null, 5, undefined]) expect(isStaffProductionStatus(bad as any), String(bad)).toBe(false);
     expect(staffStatusLabel("proof_approved")).toBe("Proof Approved");

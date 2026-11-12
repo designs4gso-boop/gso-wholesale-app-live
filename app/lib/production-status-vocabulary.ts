@@ -25,6 +25,8 @@ export const PRODUCTION_STATUS_OPTIONS = [
   { label: "Packing", value: "packing" },
   { label: "Ready for Pickup", value: "ready_for_pickup" },
   { label: "Shipped", value: "shipped" },
+  // 2026-11-11 owner workflow: customer pickup is its own fulfillment state.
+  { label: "Picked Up", value: "picked_up" },
   { label: "Completed", value: "completed" },
   { label: "On Hold", value: "on_hold" },
   { label: "Reprint Needed", value: "reprint_needed" },

@@ -79,7 +79,7 @@ describe("15H.5 run identity grammar", () => {
     expect(board).toContain("attemptNumber: 1");
     expect(board).toContain('status: "retry_allowed"');
     expect(board).toContain('"production_reprint_requested"');
-    expect(board).toContain('"A reprint reason is required."');
+    expect(board).toContain("if (!isReprintReason(reasonCode))"); // 2026-11-11: owner reprint categories, server-validated
     // revision: audit + guidance only (row binds when the corrected file arrives)
     expect(board).toContain('intent === "revisionItem"');
     expect(board).toContain('"production_revision_created"');
