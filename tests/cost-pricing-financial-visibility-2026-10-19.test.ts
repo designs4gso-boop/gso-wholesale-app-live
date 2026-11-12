@@ -10,7 +10,7 @@
 // (no Prisma connection) with a mocked Shopify session.
 
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const authState: { sessionToken: any } = { sessionToken: { sub: "1234" } };
 vi.mock("../app/shopify.server", () => ({
@@ -55,6 +55,10 @@ afterEach(() => {
   dbState.writes = [];
 });
 dbState.quote = freshQuote();
+
+// The quotes route is large: import it once up front so a loaded full-suite run
+// cannot time the first test out (it passes in isolation either way).
+beforeAll(async () => { await import("../app/routes/app.quotes"); }, 180_000);
 
 describe("1. low-margin approval is owner only", () => {
   it("a non-owner cannot see the control or grant the override (server refuses, nothing written)", async () => {
