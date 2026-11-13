@@ -48,9 +48,18 @@ export const SPLIT_BAG_CALCULATOR_OPTION = {
   psplitbag: "1",
 } as const;
 
-/** No Split Bag selling ladder exists yet — the owner prices each quote (2026-11-12). */
+/**
+ * 2026-11-12 owner correction: a Split Bag gets an AUTOMATIC recommended price
+ * from the existing provisional universal curve (the canonical fallback for a
+ * family without its own ladder: PROVISIONAL_MARGIN_CURVE by quantity band,
+ * 40% global floor and the family minimum-profit policy) applied to the full
+ * canonical true cost. No dedicated Split Bag ladder exists and the 4x5
+ * Sticker Bag curve is never applied; the owner may override per quote.
+ */
+export const SPLIT_BAG_PROVISIONAL_PRICING_BADGE = "PROVISIONAL PRICING — DEDICATED SPLIT BAG LADDER NOT YET APPROVED";
 export const SPLIT_BAG_PRICE_AUTHORITY_TEXT =
-  "SPLIT BAG AUTOMATIC SELLING PRICE NOT YET APPROVED. The true cost is recorded; the owner enters the customer price on this quote (OWNER-SET CUSTOMER PRICE — THIS QUOTE ONLY) with Owner Set Price & Approve. No Split Bag price ladder exists and the 4x5 Sticker Bag price curve is never applied.";
+  "SPLIT BAG PRICING — provisional automatic recommendation. A dedicated Split Bag quantity ladder has not yet been owner-approved. The calculator is using the current canonical provisional pricing rules (provisional universal curve, 40% global floor, family minimum profit). Owner may override.";
+export const SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT = "The provisional pricing rules could not produce a Split Bag price for this job (no true cost / price yet).";
 
 /** Map a family-selector choice onto the form params the loader reads. */
 export function calculatorFamilyParams(choice: string): { pfamily: string; pstockbag: string | null; psplitbag: string | null } {
@@ -340,6 +349,8 @@ export type SellingPriceAuthorityKind =
   | "owner_dtp_ladder"
   | "owner_dtp_custom_price"
   | "approved_margin_curve"
+  /** 2026-11-12: Split Bag automatic recommendation (provisional universal curve) — owner may override. */
+  | "split_bag_provisional_curve"
   | "cost_blocked"
   | "quote_required"
   | "none";
@@ -396,10 +407,19 @@ export function resolveSellingPriceAuthority(input: {
     return { ...base, approved: false, kind: "none", label: null, missing: CUSTOM_ITEM_AUTHORITY_TEXT };
   }
 
-  // Split Bag: no approved selling price yet (owner decision 2026-11-11) —
-  // PROVISIONAL, owner job-level price. Never the 4x5 Sticker Bag curve.
+  // Split Bag (owner correction 2026-11-12): the automatic recommendation from
+  // the existing provisional universal curve is a quotable price — labelled
+  // provisional, never the 4x5 Sticker Bag curve, never a Split Bag ladder.
   if (input.splitBag && !input.stockBag) {
-    return { ...base, approved: false, kind: "none", label: null, missing: SPLIT_BAG_PRICE_AUTHORITY_TEXT };
+    // Guard: a row priced on the researched 4x5 curve is never a Split Bag price.
+    if (input.marginRuleKey && APPROVED_MARGIN_CURVE_AUTHORITIES[String(input.marginRuleKey)]) {
+      return { ...base, approved: false, kind: "none", label: null, missing: `${SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT} The ${input.marginRuleKey} curve never prices a Split Bag.` };
+    }
+    if (row.totalPrice == null || !(Number(row.totalPrice) > 0) || row.unitPrice == null) {
+      return { ...base, approved: false, kind: "cost_blocked", label: null, missing: SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT };
+    }
+    const ownerMarginEdit = /owner per-tier margin edit/i.test(String(row.commercial?.marginSource || ""));
+    return { ...base, ownerMarginEdit, approved: true, kind: "split_bag_provisional_curve", label: SPLIT_BAG_PRICE_AUTHORITY_TEXT, missing: null };
   }
 
   // Stock Bags: the live storefront price authority (owner decision C).
@@ -586,6 +606,7 @@ export function resolveOwnerResult(input: OwnerResultInput): OwnerResult | null 
       ? belowFloor ? "BELOW MARGIN FLOOR — OWNER OVERRIDE REQUIRED" : "OWNER OVERRIDE REQUIRED"
       : authority.kind === "owner_dtp_custom_price" ? "OWNER CUSTOM PRICE (this job only)"
       : authority.ownerMarginEdit ? "OWNER MARGIN EDIT (this job only)"
+      : authority.kind === "split_bag_provisional_curve" ? `READY TO QUOTE — ${SPLIT_BAG_PROVISIONAL_PRICING_BADGE}`
       : "READY TO QUOTE",
     priceAuthority: authority.ownerMarginEdit ? `Owner job-level margin edit on: ${authority.label}` : authority.label,
     missingAuthority: null,

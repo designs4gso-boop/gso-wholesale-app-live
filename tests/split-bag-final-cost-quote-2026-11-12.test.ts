@@ -74,7 +74,7 @@ import {
 import { assembleCanonicalJob, normalizeCanonicalInput, resolveCanonicalMachineInputs } from "../app/lib/canonical-calculator.server";
 import { CANONICAL_PACKOUT } from "../app/lib/canonical-calculator-shared";
 import { SPLIT_BAG_PRICE_AUTHORITY_TEXT, resolveSellingPriceAuthority } from "../app/lib/calculator-owner-view";
-import { SPLIT_BAG_NO_AUTOMATIC_PRICE_LABEL, SPLIT_BAG_OWNER_PRICE_LABEL, isSplitBagQuoteItem, ownerPricePreview } from "../app/lib/split-bag-quote-pricing";
+import { SPLIT_BAG_OWNER_PRICE_LABEL, SPLIT_BAG_PROVISIONAL_PRICING_BADGE, isSplitBagQuoteItem, ownerPricePreview } from "../app/lib/split-bag-quote-pricing";
 import { ownerSetQuoteItemPrice } from "../app/lib/quote-owner-price-approval.server";
 import { itemPricingAuthority, provisionalQuoteStatusCheck } from "../app/lib/quote-pricing-authority";
 
@@ -237,12 +237,12 @@ function fakeQuoteDb(items: any[], quoteId = "q1") {
 
 const FRONT_ONLY_UNIT = 228.9961959626317 / 500;
 
-describe("27-40. Split Bag quote pricing: owner-set customer price, this quote only", () => {
-  it("27. no automatic selling price before owner approval (saved draft is PROVISIONAL, price null)", () => {
-    const authority = resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, splitBag: true, marginRuleKey: "sticker-bags", row: { jobCost: 228.99, unitCost: FRONT_ONLY_UNIT, totalPrice: 999, unitPrice: 1.99 } });
-    expect(authority).toMatchObject({ approved: false, kind: "none" });
-    expect(authority.missing).toContain(SPLIT_BAG_NO_AUTOMATIC_PRICE_LABEL);
-    expect(authority.missing).toContain(SPLIT_BAG_OWNER_PRICE_LABEL);
+describe("27-40. Split Bag quote pricing: owner-set price (provisional lines / overrides), this quote only", () => {
+  it("27. (superseded by the 2026-11-12 owner correction) a priced Split Bag row is an AUTOMATIC provisional recommendation; a line saved without a price stays provisional", () => {
+    const authority = resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, splitBag: true, marginRuleKey: null, row: { jobCost: 228.99, unitCost: FRONT_ONLY_UNIT, totalPrice: 457.99, unitPrice: 0.916 } });
+    expect(authority).toMatchObject({ approved: true, kind: "split_bag_provisional_curve" });
+    const unpriced = resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, splitBag: true, marginRuleKey: null, row: { jobCost: 228.99, unitCost: FRONT_ONLY_UNIT, totalPrice: null, unitPrice: null } });
+    expect(unpriced.approved).toBe(false);
     const item = quoteItem("i1", FRONT_ONLY_UNIT);
     expect(isSplitBagQuoteItem(item)).toBe(true);
     expect(JSON.parse(item.priceSnapshot).unitPrice).toBeNull();
@@ -324,7 +324,7 @@ describe("27-40. Split Bag quote pricing: owner-set customer price, this quote o
 
   it("UI: Split Bag lines show both labels and a live unit / total / profit / margin preview (owner only)", () => {
     const quotes = readFileSync("app/routes/app.quotes.tsx", "utf8");
-    expect(quotes).toContain("<Badge tone=\"attention\">{SPLIT_BAG_NO_AUTOMATIC_PRICE_LABEL}</Badge>");
+    expect(quotes).toContain("<Badge tone=\"attention\">{SPLIT_BAG_PROVISIONAL_PRICING_BADGE}</Badge>");
     expect(quotes).toContain("<Badge tone=\"info\">{SPLIT_BAG_OWNER_PRICE_LABEL}</Badge>");
     expect(quotes).toContain("const preview = ownerPricePreview({");
     expect(quotes).toMatch(/Customer unit price \$\{preview\.unitPrice/);

@@ -47,7 +47,7 @@ import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_B
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
-import { JAR_LADDER_LOW_MARGIN_WARNING, REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, STOCK_BAG_CALCULATOR_OPTION, calculatorDesignCount, calculatorFamilyChoice, calculatorFamilyParams, calculatorTransitionParams, missingRequiredCalculatorFields, withCanonicalSplitBagGeometry, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
+import { JAR_LADDER_LOW_MARGIN_WARNING, REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, SPLIT_BAG_PRICE_AUTHORITY_TEXT, STOCK_BAG_CALCULATOR_OPTION, calculatorDesignCount, calculatorFamilyChoice, calculatorFamilyParams, calculatorTransitionParams, missingRequiredCalculatorFields, withCanonicalSplitBagGeometry, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
 // 2026-10-19 owner decision C: Stock Bag quotes price through the SAME storefront authority the online checkout uses.
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 import { priceStockBagTierRow, stockBagStorefrontSelection } from "../lib/stock-bag-quote-pricing.server";
@@ -2432,6 +2432,9 @@ export async function action({ request }: { request: Request }) {
         approvedTotalPrice: typeof primary?.totalPrice === "number" ? primary.totalPrice : null,
         approvedQuantity: Number(primary?.quantity) || null,
         marginWarning: storefrontWarning,
+        // 2026-11-12: recorded with every approved authority (Split Bag history for a future ladder).
+        expectedProfit: typeof primary?.profit === "number" ? Math.round(primary.profit * 100) / 100 : null,
+        expectedMarginPct: typeof primary?.actualMarginPct === "number" ? Math.round(primary.actualMarginPct * 10) / 10 : null,
       }
     : {
         approved: false,
@@ -3740,7 +3743,7 @@ function ProductDrivenForm() {
       ) : null}
       {isSplitBag ? (
         <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
-          Split Bag: a Sticker Bag blank at $0.14 vendor cost + $0.024 inbound freight ($0.164 landed) each, MOQ 64. One label per printed side — front only or back only = 1 label, front + back = 2 labels per bag. No Split Bag selling price is approved yet — the owner sets the price on the quote.
+          Split Bag: a Sticker Bag blank at $0.14 vendor cost + $0.024 inbound freight ($0.164 landed) each, MOQ 64. One label per printed side — front only or back only = 1 label, front + back = 2 labels per bag. {SPLIT_BAG_PRICE_AUTHORITY_TEXT}
         </p>
       ) : null}
       {/* 2026-11-12 owner correction: each bag type shows its OWN fixed label geometry. */}

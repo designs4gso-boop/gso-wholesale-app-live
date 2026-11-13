@@ -27,6 +27,12 @@ import {
 } from "./quote-pricing-authority";
 
 export const OWNER_PRICE_APPROVAL_MARKER = "[GSO] Owner set price & approved by ";
+/**
+ * 2026-11-12: approved AUTOMATIC authorities the owner may override on one
+ * quote item (Split Bag provisional recommendation). Every other approved
+ * authority (ladders, storefront, researched curves) keeps its existing rules.
+ */
+export const OWNER_OVERRIDABLE_AUTOMATIC_KINDS = ["split_bag_provisional_curve"] as const;
 
 type Db = {
   quote: { findFirst: (args: any) => Promise<any>; updateMany: (args: any) => Promise<any> };
@@ -56,6 +62,16 @@ export async function ownerSetQuoteItemPrice(
   if (previous?.approved && previous.kind === OWNER_QUOTE_PRICE_KIND) {
     const stale = ownerApprovalStaleGroups(item, quote);
     if (stale.length) previous = resetOwnerApproval(previous, stale, input.owner.actor, approvedAtDate.toISOString());
+  }
+  // 2026-11-12: an automatic Split Bag recommendation may be OVERRIDDEN by the owner for this item.
+  const automatic = previous?.approved === true && (OWNER_OVERRIDABLE_AUTOMATIC_KINDS as readonly string[]).includes(previous.kind) ? previous : null;
+  if (automatic) {
+    previous = {
+      ...automatic,
+      approved: false,
+      missing: `Owner override of the automatic recommendation (${automatic.source || automatic.kind}).`,
+      diagnosticReference: { unitPrice: automatic.approvedUnitPrice ?? null, totalPrice: automatic.approvedTotalPrice ?? null, basis: automatic.source ?? null },
+    };
   }
   if (!previous || previous.approved !== false) {
     return { ok: false, error: previous?.kind === OWNER_QUOTE_PRICE_KIND ? "This item already has an owner-approved price." : "This item is not provisional — it already has an approved pricing authority." };
@@ -95,6 +111,9 @@ export async function ownerSetQuoteItemPrice(
   });
   const approval = record.ownerApproval!;
   approval.internalCostSuppliedByOwner = costSupplied;
+  approval.overrodeRecommendation = automatic
+    ? { kind: automatic.kind, unitPrice: automatic.approvedUnitPrice ?? null, totalPrice: automatic.approvedTotalPrice ?? null, source: automatic.source ?? null }
+    : null;
 
   const snapshot = (() => {
     try {

@@ -255,16 +255,19 @@ describe("Split Bag in the canonical calculator", () => {
   }, 120_000);
 });
 
-describe("Split Bag selling price stays PROVISIONAL; 4x5 prices unchanged", () => {
+describe("Split Bag selling price: automatic provisional recommendation (owner correction 2026-11-12); 4x5 prices unchanged", () => {
   const row = { quantity: 1000, requested: true, jobCost: 400, unitCost: 0.4, unitPrice: 0.9, totalPrice: 900, profit: 500, actualMarginPct: 55, marginPct: 55, belowFloor: false, draftOnly: false, freightTotal: 0, floorPct: 45, blockers: [], status: "READY TO QUOTE", commercial: { controllingRule: "curve", marginSource: "researched curve", ownerLadder: null } };
 
-  it("no approved Split Bag authority — the 4x5 curve is never presented as its price", () => {
-    const split = resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, splitBag: true, marginRuleKey: "bags-4x5", row });
-    expect(split).toMatchObject({ approved: false, kind: "none", missing: SPLIT_BAG_PRICE_AUTHORITY_TEXT });
-    const result = resolveOwnerResult({ family: "sticker-bags", splitBag: true, canonical: { status: "VALID", totalCost: 400, unitCost: 0.4, blockers: [] }, requestedRow: row, multiLine: null, marginRuleKey: "bags-4x5" })!;
-    expect(result.badge).toBe(PROVISIONAL_PRICING_STATUS);
+  it("the 4x5 curve is never presented as a Split Bag price; the provisional universal curve price is the automatic recommendation", () => {
+    const on4x5 = resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, splitBag: true, marginRuleKey: "bags-4x5", row });
+    expect(on4x5).toMatchObject({ approved: false, kind: "none" });
+    const split = resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, splitBag: true, marginRuleKey: null, row });
+    expect(split).toMatchObject({ approved: true, kind: "split_bag_provisional_curve", label: SPLIT_BAG_PRICE_AUTHORITY_TEXT });
+    const result = resolveOwnerResult({ family: "sticker-bags", splitBag: true, canonical: { status: "VALID", totalCost: 400, unitCost: 0.4, blockers: [] }, requestedRow: row, multiLine: null, marginRuleKey: null })!;
+    expect(result.badge).toContain("PROVISIONAL PRICING — DEDICATED SPLIT BAG LADDER NOT YET APPROVED");
+    expect(result.badge).not.toBe(PROVISIONAL_PRICING_STATUS);
     expect(result.trueJobCost).toBe(400);
-    expect(result.recommendedTotal).toBeNull();
+    expect(result.recommendedTotal).toBe(900);
   });
 
   it("4x5 Sticker Bags keep their existing approved authority", () => {
@@ -304,22 +307,27 @@ describe("Split Bag through the real calculator loader and save action", () => {
     expect(tier.draftOnly, JSON.stringify({ b: tier.blockers, m: pm.result?.missing, st: tier.status })).toBe(false);
   }, 120_000);
 
-  it("save recomputes server-side: PROVISIONAL draft named Split Bag, true cost recorded, no customer price", async () => {
+  it("save recomputes server-side: Split Bag quote carries the AUTOMATIC recommended price (owner correction 2026-11-12), true cost recorded", async () => {
     const route = await import("../app/routes/app.erp.cost-calculator");
     const body = new URLSearchParams({ intent: "saveEmergencyQuoteDraft", psearch: `?${SPLIT_QS(2)}`, pseltier: "1000", ecustomer: "Test Customer" });
     const response = await route.action({ request: new Request("https://app.test/app/erp/cost-calculator", { method: "POST", body }) } as any) as Response;
     const json = await response.json();
     expect(json.ok, json.message).toBe(true);
-    expect(json.provisional).toBe(true);
+    expect(json.provisional).toBeFalsy();
     const create = dbState.writes.find((w) => w.op === "quote.create")!;
     const item = create.args.data.items.create[0];
     expect(item.productName).toBe("Split Bag");
-    expect(item.unitPrice).toBe(0);
     expect(item.unitCost).toBeGreaterThan(0);
+    expect(item.unitPrice).toBeGreaterThan(item.unitCost);
     const snapshot = JSON.parse(item.costSnapshot);
     expect(snapshot.canonical.family).toBe("split-bags");
+    expect(snapshot.productBreakdown.splitBag).toBe(true);
     const price = JSON.parse(item.priceSnapshot);
-    expect(price.pricingAuthority).toMatchObject({ approved: false, missing: SPLIT_BAG_PRICE_AUTHORITY_TEXT });
+    expect(price.pricingAuthority).toMatchObject({ approved: true, kind: "split_bag_provisional_curve", source: SPLIT_BAG_PRICE_AUTHORITY_TEXT, approvedQuantity: 1000 });
+    expect(price.pricingAuthority.approvedUnitPrice).toBeCloseTo(item.unitPrice, 9);
+    expect(price.pricingAuthority.expectedProfit).toBeGreaterThan(0);
+    expect(price.pricingAuthority.expectedMarginPct).toBeGreaterThanOrEqual(40);
+    expect(price.recommendedUnitPrice).toBeCloseTo(item.unitPrice, 9);
   }, 120_000);
 });
 

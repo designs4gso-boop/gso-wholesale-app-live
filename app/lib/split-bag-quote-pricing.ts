@@ -1,19 +1,21 @@
-// 2026-11-12 OWNER DECISION — Split Bag customer price = OWNER-SET, THIS QUOTE ONLY.
+// 2026-11-12 OWNER DECISIONS — Split Bag customer price.
 //
-// There is no owner-approved Split Bag selling-price ladder (and the 4x5
-// Sticker Bag ladder never applies), so a Split Bag quote line saves as a
-// PROVISIONAL draft carrying the canonical true cost. The owner then enters a
-// customer unit OR total price with the existing Owner Set Price & Approve
-// (quote-owner-price-approval.server.ts), which writes that one quote item
-// only — never a ladder, tier, product, Material Center row or Shopify price.
-// The price changes revenue / profit / margin only, never the true cost.
+// Correction (later the same day): a Split Bag quote carries an AUTOMATIC
+// recommended price from the existing provisional universal curve
+// (calculator-owner-view.ts, kind "split_bag_provisional_curve") and can be
+// sent as is. There is still no dedicated Split Bag ladder (and the 4x5
+// Sticker Bag ladder never applies). The owner MAY override the price on one
+// quote with Owner Set Price & Approve (quote-owner-price-approval.server.ts),
+// which writes that one quote item only — never a ladder, tier, product,
+// Material Center row or Shopify price, and never the true cost.
 //
 // Pure, client-safe: the live preview the owner sees while typing a price.
 
 import { resolveOwnerSetPrice } from "./quote-pricing-authority";
 
 export const SPLIT_BAG_OWNER_PRICE_LABEL = "OWNER-SET CUSTOMER PRICE — THIS QUOTE ONLY";
-export const SPLIT_BAG_NO_AUTOMATIC_PRICE_LABEL = "SPLIT BAG AUTOMATIC SELLING PRICE NOT YET APPROVED";
+export { SPLIT_BAG_PROVISIONAL_PRICING_BADGE } from "./calculator-owner-view";
+export const SPLIT_BAG_AUTOMATIC_PRICE_KIND = "split_bag_provisional_curve";
 
 const parse = (value: unknown) => {
   try {
@@ -27,9 +29,10 @@ const parse = (value: unknown) => {
 export function isSplitBagQuoteItem(item: { productName?: string | null; costSnapshot?: unknown; priceSnapshot?: unknown } | null | undefined): boolean {
   if (!item) return false;
   const cost = parse(item.costSnapshot);
-  if (cost?.splitBag === true || cost?.canonicalFamilyKey === "split-bags") return true;
-  const missing = String(parse(item.priceSnapshot)?.pricingAuthority?.missing || "");
-  if (/Split Bag/i.test(missing)) return true;
+  if (cost?.splitBag === true || cost?.productBreakdown?.splitBag === true || cost?.canonicalFamilyKey === "split-bags") return true;
+  const authority = parse(item.priceSnapshot)?.pricingAuthority;
+  if (authority?.kind === SPLIT_BAG_AUTOMATIC_PRICE_KIND || authority?.ownerApproval?.overrodeRecommendation?.kind === SPLIT_BAG_AUTOMATIC_PRICE_KIND) return true;
+  if (/Split Bag/i.test(String(authority?.missing || ""))) return true;
   return /\bsplit[\s-]*bag\b/i.test(String(item.productName || ""));
 }
 

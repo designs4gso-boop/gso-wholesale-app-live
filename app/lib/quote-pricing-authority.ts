@@ -58,6 +58,8 @@ export type OwnerApprovalRecord = {
   lowMarginOverride?: { applied: boolean; thresholdPct: number; marginPct: number | null; note: string | null };
   /** The owner supplied the internal unit cost (Manual / Custom line with no authoritative cost). */
   internalCostSuppliedByOwner?: boolean;
+  /** 2026-11-12: the automatic recommendation this owner price overrode (Split Bag). */
+  overrodeRecommendation?: { kind: string; unitPrice: number | null; totalPrice: number | null; source: string | null } | null;
 };
 
 export type PricingAuthorityHistoryEntry = {
@@ -85,6 +87,9 @@ export type PricingAuthorityRecord = {
   approvedQuantity?: number | null;
   /** Approved storefront price below the generic target (warning, never a block). */
   marginWarning?: string | null;
+  /** Approved automatic authority: the profit / margin it produced at save. */
+  expectedProfit?: number | null;
+  expectedMarginPct?: number | null;
   /** Generic/unsourced reference price — diagnostic only, never the customer price. */
   diagnosticReference?: { unitPrice: number | null; totalPrice: number | null; basis: string | null } | null;
   ownerApproval?: OwnerApprovalRecord | null;
