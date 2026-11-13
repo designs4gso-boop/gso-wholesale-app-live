@@ -1,4 +1,5 @@
 import { completionGuardApplies, evaluateQcForCompletion } from "../lib/production-qc-guard";
+import { QC_REQUIRED_AFTER_REPRINT, awaitingQcAfterReprint, itemQcState, itemReprintSummary } from "../lib/production-qc-display";
 import {
   Page,
   Layout,
@@ -1436,49 +1437,71 @@ Source ref: ${sourceRef}` : ""}`,
     const itemId = String(formData.get("itemId") || "");
     const reasonCode = String(formData.get("reprintReason") || "");
     // OWNER DECISION 2026-11-11: one of the owner's reprint categories, validated here.
-    if (!isReprintReason(reasonCode)) return Response.json({ ok: false, message: `Pick a reprint reason: ${REPRINT_REASONS.map((r) => r.label).join(", ")}.` });
+    if (!isReprintReason(reasonCode)) return Response.json({ ok: false, message: `Pick a reprint reason: ${REPRINT_REASONS.map((r) => r.label).join(", ")}.` }, { status: 400 });
     const reason = `${reprintReasonLabel(reasonCode)} [${reasonCode}]`; // label + stable category code in the event / intake record
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId }, include: { items: true } });
     const item = job?.items.find((row: any) => row.id === itemId);
-    if (!job || !item) return Response.json({ ok: false, message: "Job/item not found." });
+    if (!job || !item) return Response.json({ ok: false, message: "Job/item not found." }, { status: 404 });
+    const itemLabel = item.itemTicket || item.productTitle;
+    // 2026-11-12: a reprint that has not been QC'd yet is not recorded twice
+    // (double click / resubmitted form). Record QC on the reprinted piece first.
+    if (awaitingQcAfterReprint(item)) {
+      return Response.json({ ok: false, message: `A reprint is already recorded for ${itemLabel} (${reprintReasonLabel(String(item.lastReprintReason || ""))}, ${item.lastReprintAt ? new Date(item.lastReprintAt).toLocaleString() : "earlier"}) and is waiting for QC. Record QC on the reprinted piece before requesting another reprint. Nothing was changed.` }, { status: 409 });
+    }
     const actor = resolveActorFromSession(session, shop);
+    const note = String(formData.get("reprintNote") || "").slice(0, 200);
     const row = item.itemTicket
       ? await db.printIntake.findFirst({
           where: { shop, authoritativeTicket: item.itemTicket, OR: [{ matchedProductionJobId: jobId }, { generatedProductionJobId: jobId }] },
           orderBy: { updatedAt: "desc" },
         })
       : null;
-    let runLabel = "P1-A1";
-    let instruction = "";
-    if (row) {
-      const nextRun = { revision: row.revisionNumber, reprint: row.reprintNumber + 1, attempt: 1 };
-      runLabel = `${nextRun.revision > 1 ? `R${nextRun.revision}-` : ""}P${nextRun.reprint}-A1`;
-      const nextName = applyRunSuffix(row.routedFilename || item.ripJobName || item.itemTicket || "", nextRun);
-      await db.printIntake.update({
-        where: { id: row.id },
-        data: {
-          reprintNumber: nextRun.reprint,
-          attemptNumber: 1,
-          routedFilename: nextName,
-          status: "retry_allowed",
-          rawParsedHints: appendIntakeAudit(row.rawParsedHints, { at: new Date().toISOString(), actor, action: "reprint_requested", reason }),
-        },
-      });
-      instruction = `Place the artwork back into Prints For Today (original is in the routed archive) — the agent will re-route it as ${nextName}.`;
-    } else {
-      instruction = "No routed artwork on record yet — when artwork is dropped it will run normally; use this reprint note for the record.";
-    }
-    await createEvent(shop, jobId, "production_reprint_requested", `Reprint requested for ${item.itemTicket || item.productTitle} (run ${runLabel}) by ${actor}. Reason: ${reason}.${String(formData.get("reprintNote") || "") ? ` Note: ${String(formData.get("reprintNote")).slice(0, 200)}` : ""}`, { createdBy: actor });
-    // 2026-11-11 QC guard: a reprint invalidates this item's earlier QC PASS
-    // (production-qc-guard reads the latest qc_result per item).
-    await createEvent(shop, jobId, "qc_result", `QC reset by reprint request for ${item.itemTicket || item.productTitle} (run ${runLabel}).`, { oldValue: String(item.itemTicket || item.productTitle || ""), newValue: "reprint_required", createdBy: actor });
-    // 2026-11-12: structured reprint + QC reset on the item (migration 20261112090000).
+    const nextRun = row ? { revision: row.revisionNumber, reprint: row.reprintNumber + 1, attempt: 1 } : null;
+    const runLabel = nextRun ? `${nextRun.revision > 1 ? `R${nextRun.revision}-` : ""}P${nextRun.reprint}-A1` : "P1-A1";
+    const nextName = row && nextRun ? applyRunSuffix(row.routedFilename || item.ripJobName || item.itemTicket || "", nextRun) : "";
     const reprintAt = new Date();
-    await db.productionJobItem.updateMany({
-      where: { shop, id: item.id },
-      data: { lastReprintReason: reasonCode, lastReprintBy: actor, lastReprintAt: reprintAt, qcResult: "reprint_required", qcBy: actor, qcAt: reprintAt },
-    });
-    return Response.json({ ok: true, message: `Reprint recorded for ${item.itemTicket || item.productTitle} (run ${runLabel}). ${instruction}` });
+    // 2026-11-12: ONE transaction — the structured reprint record, the CURRENT QC
+    // reset (a new QC PASS is required), the intake re-route and the audit
+    // events either all persist or none do. Earlier QC / reprint events are
+    // never deleted. The item claim is conditional on the lastReprintAt we
+    // read, so a concurrent duplicate matches no row and changes nothing.
+    const REPRINT_ALREADY_RECORDED = "REPRINT_ALREADY_RECORDED";
+    try {
+      await db.$transaction(async (tx: any) => {
+        const claimed = await tx.productionJobItem.updateMany({
+          where: { shop, id: item.id, lastReprintAt: item.lastReprintAt ?? null },
+          data: { lastReprintReason: reasonCode, lastReprintBy: actor, lastReprintAt: reprintAt, qcResult: null, qcBy: null, qcAt: null, qcNote: null },
+        });
+        if (!claimed.count) throw new Error(REPRINT_ALREADY_RECORDED);
+        if (row && nextRun) {
+          await tx.printIntake.update({
+            where: { id: row.id },
+            data: {
+              reprintNumber: nextRun.reprint,
+              attemptNumber: 1,
+              routedFilename: nextName,
+              status: "retry_allowed",
+              rawParsedHints: appendIntakeAudit(row.rawParsedHints, { at: reprintAt.toISOString(), actor, action: "reprint_requested", reason }),
+            },
+          });
+        }
+        await tx.productionJobEvent.create({
+          data: { shop, jobId, eventType: "production_reprint_requested", message: `Reprint requested for ${itemLabel} (run ${runLabel}) by ${actor}. Reason: ${reason}.${note ? ` Note: ${note}` : ""}`, oldValue: null, newValue: reasonCode, createdBy: actor },
+        });
+        // 2026-11-11 QC guard: a reprint invalidates this item's earlier QC PASS
+        // (production-qc-guard reads the latest qc_result per item).
+        await tx.productionJobEvent.create({
+          data: { shop, jobId, eventType: "qc_result", message: `QC reset by reprint request for ${itemLabel} (run ${runLabel}).`, oldValue: String(itemLabel || ""), newValue: "reprint_required", createdBy: actor },
+        });
+      });
+    } catch (error: any) {
+      if (error?.message === REPRINT_ALREADY_RECORDED) return Response.json({ ok: false, message: `This reprint was already recorded for ${itemLabel} — refresh the page. Nothing was changed.` }, { status: 409 });
+      throw error;
+    }
+    const instruction = row
+      ? `Place the artwork back into Prints For Today (original is in the routed archive) — the agent will re-route it as ${nextName}.`
+      : "No routed artwork on record yet — when artwork is dropped it will run normally; use this reprint note for the record.";
+    return Response.json({ ok: true, message: `REPRINT RECORDED for ${itemLabel} (run ${runLabel}) — reason: ${reprintReasonLabel(reasonCode)}, by ${actor}. QC STATUS: ${QC_REQUIRED_AFTER_REPRINT}. ${instruction}` });
   }
 
   if (intent === "revisionItem") {
@@ -2197,21 +2220,34 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
                 <Text as="h4" variant="headingSm">QC</Text>
                 {(() => {
                   const qcChecks = (job.checklistItems || []).filter((check: any) => check.section === "qc");
-                  const qcEvents = (job.events || []).filter((event: any) => String(event.eventType || "").startsWith("production_run_qc_"));
-                  const latest = qcEvents[0] || null;
-                  const latestResult = latest ? (String(latest.eventType).endsWith("_passed") ? "pass" : String(latest.eventType).endsWith("_hold") ? "hold" : "fail") : null;
+                  // 2026-11-12: per item, from the structured QC / reprint columns (a reprint
+                  // clears the current QC, so a stale PASS is never shown as current).
+                  const itemStates = (job.items || []).map((item: any) => ({ item, qc: itemQcState(item, job.events || []), reprint: itemReprintSummary(item) }));
+                  const allPass = itemStates.length > 0 && itemStates.every((state: any) => state.qc.status === "pass");
+                  const anyRecorded = itemStates.some((state: any) => state.qc.status !== "none");
                   const stepDone = qcChecks.some((check: any) => check.completed);
-                  const disagree = (stepDone && latestResult && latestResult !== "pass") || (!stepDone && latestResult === "pass");
+                  const disagree = (stepDone && anyRecorded && !allPass) || (!stepDone && allPass);
                   return (
                     <BlockStack gap="100">
                       <Text as="p">
                         <b>QC step:</b>{" "}
                         {qcChecks.length ? qcChecks.map((check: any) => `${check.label} — ${check.completed ? `marked complete${check.completedBy ? ` by ${check.completedBy}` : ""}` : "not yet"}`).join("; ") : "no QC step on this job's checklist"}
                       </Text>
-                      <Text as="p">
-                        <b>QC result recorded:</b>{" "}
-                        {latest ? `${latestResult === "pass" ? "PASS" : latestResult === "hold" ? "HOLD" : "REPRINT / FAIL"} — ${latest.createdBy || "staff"}${latest.createdAt ? ` on ${new Date(latest.createdAt).toLocaleDateString()}` : ""}` : "none yet (use QC / Reprint / Revision on an item)"}
-                      </Text>
+                      {!itemStates.length ? <Text as="p">No items on this job.</Text> : null}
+                      {itemStates.map(({ item, qc, reprint }: any) => (
+                        <BlockStack gap="050" key={`qc-${item.id}`}>
+                          <Text as="p" fontWeight="semibold">{item.itemTicket || item.productTitle || "Item"}</Text>
+                          <Text as="p">
+                            <b>CURRENT QC STATUS:</b>{" "}
+                            {qc.status === "pending_reprint" ? <Badge tone="attention">{QC_REQUIRED_AFTER_REPRINT}</Badge> : qc.status === "none" ? "No QC recorded yet (use QC / Reprint / Revision on the item)" : `${qc.label}${qc.by ? ` — ${qc.by}` : ""}${qc.at ? ` at ${new Date(qc.at).toLocaleString()}` : ""}`}
+                          </Text>
+                          {reprint ? (
+                            <Text as="p">
+                              <b>MOST RECENT REPRINT:</b> REPRINT RECORDED — Reason: {reprint.reason} · Recorded by: {reprint.by || "staff"} · Recorded at: {reprint.at ? new Date(reprint.at).toLocaleString() : "—"}
+                            </Text>
+                          ) : null}
+                        </BlockStack>
+                      ))}
                       {disagree ? <Badge tone="critical">QC step and recorded QC result disagree — confirm with the operator before completing this job</Badge> : null}
                     </BlockStack>
                   );

@@ -71,7 +71,7 @@ describe("4. QC completion guard after reprint / reopen", () => {
   });
   it("reprint and reopen handlers write the invalidating qc_result rows", () => {
     const production = src("app/routes/app.erp.production.tsx");
-    expect(production).toContain('"qc_result", `QC reset by reprint request');
+    expect(production).toContain('eventType: "qc_result", message: `QC reset by reprint request'); // 2026-11-12: written inside the reprint transaction
     expect(production).toContain('"qc_result", `QC reset to HOLD by reopen for reprint');
   });
 });
