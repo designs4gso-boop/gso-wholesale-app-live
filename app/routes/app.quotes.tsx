@@ -33,7 +33,7 @@ import { OWNER_QUOTE_PRICE_KIND, itemPricingAuthority, provisionalQuoteStatusChe
 // 2026-10-19 owner decision 4: OWNER SET PRICE & APPROVE — owner-only, server-authorized, audited.
 import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
 import { ownerSetQuoteItemPrice } from "../lib/quote-owner-price-approval.server";
-import { SPLIT_BAG_AUTOMATIC_PRICE_KIND, SPLIT_BAG_OWNER_PRICE_LABEL, SPLIT_BAG_PROVISIONAL_PRICING_BADGE, isSplitBagQuoteItem, ownerPricePreview } from "../lib/split-bag-quote-pricing";
+import { SPLIT_BAG_AUTOMATIC_PRICE_KIND, SPLIT_BAG_LADDER_BADGE, SPLIT_BAG_OWNER_PRICE_LABEL, isSplitBagQuoteItem, ownerPricePreview } from "../lib/split-bag-quote-pricing";
 // 2026-10-19 owner decision: line-level internal cost / margin is OWNER ONLY — redacted server-side for staff.
 import { OWNER_APPROVAL_REQUIRED, mergeStaffNotes, redactQuoteItemForStaff, redactRecipeForStaff, redactRecipeLineForStaff, staffManualItemAuthority, stripFinancialAuditLines } from "../lib/quote-staff-visibility";
 import { QUOTE_OUTCOME_STATUSES, resolveQuoteOutcomeChange } from "../lib/pricing-intelligence.server";
@@ -2586,7 +2586,7 @@ export default function QuotesPage() {
                                             <Text as="p" variant="bodySm"><b>{item.productName}</b> × {Number(item.quantity || 0).toLocaleString()} — customer price: Not available</Text>
                                             {isSplitBagQuoteItem(item) ? (
                                               <InlineStack gap="100" wrap>
-                                                <Badge tone="attention">{SPLIT_BAG_PROVISIONAL_PRICING_BADGE}</Badge>
+                                                <Badge tone="attention">Split Bag line saved without a price — owner price required</Badge>
                                                 <Badge tone="info">{SPLIT_BAG_OWNER_PRICE_LABEL}</Badge>
                                               </InlineStack>
                                             ) : null}
@@ -2638,8 +2638,8 @@ export default function QuotesPage() {
                                       })}
                                     </BlockStack>
                                   ) : null}
-                                  {/* 2026-11-12 owner correction: a Split Bag line quotes at its AUTOMATIC
-                                      provisional recommendation; the owner MAY override it for this quote only. */}
+                                  {/* 2026-11-12 owner decision: a Split Bag line quotes at its AUTOMATIC price (approved
+                                      Sticker Bag ladder on its own true cost); the owner MAY override it for this quote only. */}
                                   {(quote.items || []).filter((item: any) => itemPricingAuthority(item)?.approved && itemPricingAuthority(item)?.kind === SPLIT_BAG_AUTOMATIC_PRICE_KIND).map((item: any) => {
                                     const record = itemPricingAuthority(item)!;
                                     const draft = ownerPriceDrafts[item.id] || { unitPrice: "", totalPrice: "", reason: "" };
@@ -2651,8 +2651,8 @@ export default function QuotesPage() {
                                     return (
                                       <BlockStack key={`split-auto-${item.id}`} gap="100">
                                         <InlineStack gap="100" wrap>
-                                          <Badge tone="info">{`Split Bag automatic recommendation: $${Number(record.approvedUnitPrice ?? item.unitPrice).toFixed(4)}/unit`}</Badge>
-                                          <Badge tone="attention">{SPLIT_BAG_PROVISIONAL_PRICING_BADGE}</Badge>
+                                          <Badge tone="info">{`Split Bag automatic price: $${Number(record.approvedUnitPrice ?? item.unitPrice).toFixed(4)}/unit`}</Badge>
+                                          <Badge tone="success">{SPLIT_BAG_LADDER_BADGE}</Badge>
                                         </InlineStack>
                                         {ownerAccess.isOwner && !isLocked ? (
                                           <details>

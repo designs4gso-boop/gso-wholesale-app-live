@@ -1,10 +1,9 @@
 // 2026-11-12 OWNER DECISIONS — Split Bag customer price.
 //
-// Correction (later the same day): a Split Bag quote carries an AUTOMATIC
-// recommended price from the existing provisional universal curve
-// (calculator-owner-view.ts, kind "split_bag_provisional_curve") and can be
-// sent as is. There is still no dedicated Split Bag ladder (and the 4x5
-// Sticker Bag ladder never applies). The owner MAY override the price on one
+// Final owner decision: a Split Bag quote carries an AUTOMATIC price from the
+// approved Sticker Bag pricing ladder applied to the Split Bag's own true cost
+// (calculator-owner-view.ts, kind "split_bag_sticker_bag_ladder") and can be
+// sent as is (the 4x5 dollar prices are never copied). The owner MAY override the price on one
 // quote with Owner Set Price & Approve (quote-owner-price-approval.server.ts),
 // which writes that one quote item only — never a ladder, tier, product,
 // Material Center row or Shopify price, and never the true cost.
@@ -14,8 +13,8 @@
 import { resolveOwnerSetPrice } from "./quote-pricing-authority";
 
 export const SPLIT_BAG_OWNER_PRICE_LABEL = "OWNER-SET CUSTOMER PRICE — THIS QUOTE ONLY";
-export { SPLIT_BAG_PROVISIONAL_PRICING_BADGE } from "./calculator-owner-view";
-export const SPLIT_BAG_AUTOMATIC_PRICE_KIND = "split_bag_provisional_curve";
+export const SPLIT_BAG_AUTOMATIC_PRICE_KIND = "split_bag_sticker_bag_ladder";
+export const SPLIT_BAG_LADDER_BADGE = "Approved Sticker Bag pricing ladder applied to Split Bag true cost";
 
 const parse = (value: unknown) => {
   try {

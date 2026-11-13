@@ -29,10 +29,10 @@ import {
 export const OWNER_PRICE_APPROVAL_MARKER = "[GSO] Owner set price & approved by ";
 /**
  * 2026-11-12: approved AUTOMATIC authorities the owner may override on one
- * quote item (Split Bag provisional recommendation). Every other approved
+ * quote item (Split Bag priced on the Sticker Bag ladder). Every other approved
  * authority (ladders, storefront, researched curves) keeps its existing rules.
  */
-export const OWNER_OVERRIDABLE_AUTOMATIC_KINDS = ["split_bag_provisional_curve"] as const;
+export const OWNER_OVERRIDABLE_AUTOMATIC_KINDS = ["split_bag_sticker_bag_ladder"] as const;
 
 type Db = {
   quote: { findFirst: (args: any) => Promise<any>; updateMany: (args: any) => Promise<any> };

@@ -1106,7 +1106,9 @@ export function blankClassAllowedFor(uiFamily: string, klass: CalculatorProductC
 // "FAMILY MARGIN RULE NOT CONFIGURED" label. Never invents a new curve.
 export function marginFamilyKeyFor(uiFamily: string, selectedClass: CalculatorProductClass | null, blankName: string): string | null {
   const canonical = canonicalUiFamily(uiFamily);
-  if (canonical === "sticker-bags") return /4\s?x\s?5\b/i.test(String(blankName || "")) ? "bags-4x5" : null;
+  // 2026-11-12 owner decision: the Split Bag inherits the approved Sticker Bag
+  // pricing ladder (bags-4x5 bands / minimums), applied to its OWN true cost.
+  if (canonical === "sticker-bags") return /4\s?x\s?5\b|split\s?bag/i.test(String(blankName || "")) ? "bags-4x5" : null;
   if (canonical === "premium-jars") {
     if (selectedClass === "jar_miron") return "miron-jars";
     if (selectedClass === "jar_chiron") return "chiron-jars";

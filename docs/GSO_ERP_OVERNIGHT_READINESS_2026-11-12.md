@@ -108,3 +108,12 @@ Supersedes the "owner-set price only" rule above. The Cost Calculator now gives 
 - Qty 500 front + back: cost $366.659 -> $733.32 ($1.4666/bag), profit $366.66, 50% (curve band).
 - Qty 3,800 / 30 designs / front + back / Roland: cost $2,792.48 -> $4,654.14 ($1.2248/bag), profit $1,861.65, 40% (curve band = global floor).
 - Saving records the true cost snapshot, recommended unit / total, expected profit / margin and the authority. The quote can be sent with no override. Owner Set Price & Approve now also OVERRIDES an automatic Split Bag price on one quote item (owner only; records the overridden recommendation). The existing quote margin gate applies to edited prices exactly as for other curve-priced products.
+
+## Split Bag priced on the approved Sticker Bag ladder — owner decision 2026-11-12 (final)
+
+Supersedes the provisional-universal-curve recommendation above. A Split Bag now uses the APPROVED Sticker Bag pricing authority (`bags-4x5`, owner-ratified 2026-07-26, docs/GSO_PRICING_AUTHORITY_MATRIX.md) applied to its OWN canonical true cost: the same 11-point display ladder (64 / 128 / 256 / 500 / 640 / 1,000 / 1,500 / 2,000 / 2,500 / 5,000 / 10,000 + the requested quantity), the same quantity bands — single-sided 65 / 64 / 61 / 58 / 57 / 55 / 52 / 50% from 1 / 128 / 256 / 500 / 640 / 1,000 / 1,500 / 5,000; double-sided 65 / 61 / 58 / 54 / 52 / 49 / 47% from 1 / 100 / 256 / 500 / 1,000 / 1,500 / 5,000 — the 45% family minimum, the 40% global floor and the $75 Sticker Bag minimum gross profit. The 4x5 verified market dollar targets (and the specialty tiers built on them) are 4x5 PRICES, so they never price a Split Bag. Authority kind `split_bag_sticker_bag_ladder`; "PRICE AUTHORITY: Approved Sticker Bag pricing ladder applied to Split Bag true cost."
+
+- 500 / 1 design / front only: cost $228.996 -> $545.23 ($1.0905/bag), profit $316.23, 58% (single band 500+).
+- 500 / 1 design / front + back: cost $366.659 -> $797.08 ($1.5942/bag), profit $430.43, 54% (double band 500+).
+- 3,800 / 30 designs / front + back / Roland: cost $2,792.48 -> $5,475.45 ($1.4409/bag), profit $2,682.97, 49% (double band 1,500+).
+- Every tier row re-costs with the CURRENT design count; the table says so ("Tier estimates retain the current job's number of unique designs. This job has N designs.") and shows a Designs column. The owner may still override one quote with Owner Set Price & Approve.

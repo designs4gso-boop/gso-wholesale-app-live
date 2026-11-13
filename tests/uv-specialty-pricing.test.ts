@@ -158,7 +158,8 @@ describe("ownerConfig validator (fail-closed)", () => {
 describe("route wiring + guardrails", () => {
   const src = readFileSync("app/routes/app.erp.cost-calculator.tsx", "utf8");
   it("calculator passes specialty context + conditional $25 file prep in loader AND save", () => {
-    expect((src.match(/specialty: \{/g) || []).length).toBeGreaterThanOrEqual(2);
+    // 2026-11-12: Split Bags pass no specialty context (the 4x5 market base never prices them)
+    expect((src.match(/specialty: (splitBagP|savedSplitBag) \? null : \{/g) || []).length).toBeGreaterThanOrEqual(2);
     expect(src).toContain('pfileprep') ;
     expect(src).toContain("filePrepFeeP");
     expect(src).toContain("filePrepFeeSave");

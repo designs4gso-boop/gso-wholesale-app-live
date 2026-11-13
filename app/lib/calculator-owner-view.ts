@@ -49,17 +49,26 @@ export const SPLIT_BAG_CALCULATOR_OPTION = {
 } as const;
 
 /**
- * 2026-11-12 owner correction: a Split Bag gets an AUTOMATIC recommended price
- * from the existing provisional universal curve (the canonical fallback for a
- * family without its own ladder: PROVISIONAL_MARGIN_CURVE by quantity band,
- * 40% global floor and the family minimum-profit policy) applied to the full
- * canonical true cost. No dedicated Split Bag ladder exists and the 4x5
- * Sticker Bag curve is never applied; the owner may override per quote.
+ * 2026-11-12 owner decision (final): the Split Bag uses the APPROVED Sticker
+ * Bag pricing ladder — the same bags-4x5 quantity bands (single / double
+ * sided), 45% family minimum, 40% global floor and family minimum-profit
+ * policy — applied to the Split Bag's OWN canonical true cost. The 4x5 market
+ * dollar targets (and the specialty tiers built on them) are 4x5 PRICES, not
+ * pricing rules, so they never price a Split Bag. The owner may override a
+ * specific quote.
  */
-export const SPLIT_BAG_PROVISIONAL_PRICING_BADGE = "PROVISIONAL PRICING — DEDICATED SPLIT BAG LADDER NOT YET APPROVED";
 export const SPLIT_BAG_PRICE_AUTHORITY_TEXT =
-  "SPLIT BAG PRICING — provisional automatic recommendation. A dedicated Split Bag quantity ladder has not yet been owner-approved. The calculator is using the current canonical provisional pricing rules (provisional universal curve, 40% global floor, family minimum profit). Owner may override.";
-export const SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT = "The provisional pricing rules could not produce a Split Bag price for this job (no true cost / price yet).";
+  "PRICE AUTHORITY: Approved Sticker Bag pricing ladder applied to Split Bag true cost. Owner may override a specific quote.";
+export const SPLIT_BAG_TIER_TABLE_TEXT =
+  "SPLIT BAG PRICING — Uses approved Sticker Bag quantity pricing ladder with Split Bag true manufacturing cost.";
+/** Market-target exclusion reason passed to computeCommercialPrice for Split Bags. */
+export const SPLIT_BAG_NO_4X5_MARKET_TARGET = "Split Bag: the 4x5 market dollar targets never price a Split Bag (own true cost + Sticker Bag ladder rules only)";
+/** The tier table re-costs every quantity with the CURRENT job's design count. */
+export function tierDesignAssumptionText(designs: number): string {
+  const n = Math.max(1, Math.floor(Number(designs) || 1));
+  return `Tier estimates retain the current job's number of unique designs. This job has ${n} design${n === 1 ? "" : "s"}.`;
+}
+export const SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT = "The Sticker Bag pricing ladder could not produce a Split Bag price for this job (no true cost / price yet).";
 
 /** Map a family-selector choice onto the form params the loader reads. */
 export function calculatorFamilyParams(choice: string): { pfamily: string; pstockbag: string | null; psplitbag: string | null } {
@@ -349,8 +358,8 @@ export type SellingPriceAuthorityKind =
   | "owner_dtp_ladder"
   | "owner_dtp_custom_price"
   | "approved_margin_curve"
-  /** 2026-11-12: Split Bag automatic recommendation (provisional universal curve) — owner may override. */
-  | "split_bag_provisional_curve"
+  /** 2026-11-12: Split Bag priced by the approved Sticker Bag ladder on its own true cost — owner may override. */
+  | "split_bag_sticker_bag_ladder"
   | "cost_blocked"
   | "quote_required"
   | "none";
@@ -407,19 +416,18 @@ export function resolveSellingPriceAuthority(input: {
     return { ...base, approved: false, kind: "none", label: null, missing: CUSTOM_ITEM_AUTHORITY_TEXT };
   }
 
-  // Split Bag (owner correction 2026-11-12): the automatic recommendation from
-  // the existing provisional universal curve is a quotable price — labelled
-  // provisional, never the 4x5 Sticker Bag curve, never a Split Bag ladder.
+  // Split Bag (owner decision 2026-11-12): the approved Sticker Bag ladder
+  // applied to the Split Bag's own true cost. Any other basis (e.g. the
+  // provisional universal curve) is refused rather than shown as its price.
   if (input.splitBag && !input.stockBag) {
-    // Guard: a row priced on the researched 4x5 curve is never a Split Bag price.
-    if (input.marginRuleKey && APPROVED_MARGIN_CURVE_AUTHORITIES[String(input.marginRuleKey)]) {
-      return { ...base, approved: false, kind: "none", label: null, missing: `${SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT} The ${input.marginRuleKey} curve never prices a Split Bag.` };
+    if (String(input.marginRuleKey || "") !== "bags-4x5") {
+      return { ...base, approved: false, kind: "none", label: null, missing: `${SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT} Split Bags price only on the approved Sticker Bag ladder.` };
     }
     if (row.totalPrice == null || !(Number(row.totalPrice) > 0) || row.unitPrice == null) {
       return { ...base, approved: false, kind: "cost_blocked", label: null, missing: SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT };
     }
     const ownerMarginEdit = /owner per-tier margin edit/i.test(String(row.commercial?.marginSource || ""));
-    return { ...base, ownerMarginEdit, approved: true, kind: "split_bag_provisional_curve", label: SPLIT_BAG_PRICE_AUTHORITY_TEXT, missing: null };
+    return { ...base, ownerMarginEdit, approved: true, kind: "split_bag_sticker_bag_ladder", label: SPLIT_BAG_PRICE_AUTHORITY_TEXT, missing: null };
   }
 
   // Stock Bags: the live storefront price authority (owner decision C).
@@ -606,7 +614,6 @@ export function resolveOwnerResult(input: OwnerResultInput): OwnerResult | null 
       ? belowFloor ? "BELOW MARGIN FLOOR — OWNER OVERRIDE REQUIRED" : "OWNER OVERRIDE REQUIRED"
       : authority.kind === "owner_dtp_custom_price" ? "OWNER CUSTOM PRICE (this job only)"
       : authority.ownerMarginEdit ? "OWNER MARGIN EDIT (this job only)"
-      : authority.kind === "split_bag_provisional_curve" ? `READY TO QUOTE — ${SPLIT_BAG_PROVISIONAL_PRICING_BADGE}`
       : "READY TO QUOTE",
     priceAuthority: authority.ownerMarginEdit ? `Owner job-level margin edit on: ${authority.label}` : authority.label,
     missingAuthority: null,

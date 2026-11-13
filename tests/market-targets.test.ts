@@ -335,8 +335,9 @@ describe("15F.0K.4C: specialty finishes skip the standard 4x5 market table", () 
 
   it("route wires the classifier in loader AND save, and renders the exact not-applicable message", () => {
     const src = readFileSync("app/routes/app.erp.cost-calculator.tsx", "utf8");
-    expect(src).toContain("marketTargetSpecialtyReasons: specialtyReasonsP");
-    expect(src).toContain("marketTargetSpecialtyReasons: specialtyReasonsSave");
+    // 2026-11-12: Split Bags additionally exclude the 4x5 market dollar targets
+    expect(src).toContain("marketTargetSpecialtyReasons: splitBagP ? [...specialtyReasonsP, SPLIT_BAG_NO_4X5_MARKET_TARGET] : specialtyReasonsP");
+    expect(src).toContain("marketTargetSpecialtyReasons: savedSplitBag ? [...specialtyReasonsSave, SPLIT_BAG_NO_4X5_MARKET_TARGET] : specialtyReasonsSave");
     expect((src.match(/specialtyFinishReasons\(\{/g) || []).length).toBeGreaterThanOrEqual(2);
     expect(src).toContain("standard 4x5 market comparison not applicable");
     expect(src).toContain("notApplicableMessage");

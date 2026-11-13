@@ -47,7 +47,7 @@ import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_B
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
-import { JAR_LADDER_LOW_MARGIN_WARNING, REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, SPLIT_BAG_PRICE_AUTHORITY_TEXT, STOCK_BAG_CALCULATOR_OPTION, calculatorDesignCount, calculatorFamilyChoice, calculatorFamilyParams, calculatorTransitionParams, missingRequiredCalculatorFields, withCanonicalSplitBagGeometry, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
+import { JAR_LADDER_LOW_MARGIN_WARNING, REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, SPLIT_BAG_NO_4X5_MARKET_TARGET, SPLIT_BAG_PRICE_AUTHORITY_TEXT, SPLIT_BAG_TIER_TABLE_TEXT, tierDesignAssumptionText, STOCK_BAG_CALCULATOR_OPTION, calculatorDesignCount, calculatorFamilyChoice, calculatorFamilyParams, calculatorTransitionParams, missingRequiredCalculatorFields, withCanonicalSplitBagGeometry, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
 // 2026-10-19 owner decision C: Stock Bag quotes price through the SAME storefront authority the online checkout uses.
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 import { priceStockBagTierRow, stockBagStorefrontSelection } from "../lib/stock-bag-quote-pricing.server";
@@ -1316,10 +1316,11 @@ export async function loader({ request }: { request: Request }) {
           finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
           policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
           marginCurveKey: marginCurveKeyP, // 15F.0K.2-A variant-aware curve lookup
-          marketTargetSpecialtyReasons: specialtyReasonsP, // 15F.0K.4C
+          // 2026-11-12: a Split Bag uses the Sticker Bag ladder RULES on its own cost — never the 4x5 market dollar targets.
+          marketTargetSpecialtyReasons: splitBagP ? [...specialtyReasonsP, SPLIT_BAG_NO_4X5_MARKET_TARGET] : specialtyReasonsP, // 15F.0K.4C
           // 15G.4C: specialty commercial tiers for 4x5 bags (holo detected
           // from the selected material; white = decorative unless holo).
-          specialty: {
+          specialty: splitBagP ? null : {
             glossLayers: Number(eparams.get("pglosslayers") || 0),
             decorativeWhiteLayers: /holo/i.test(productInput.material?.name || "") ? 0 : Number(eparams.get("pwhitelayers") || 0),
             requiredWhite: /holo/i.test(productInput.material?.name || "") && Number(eparams.get("pwhitelayers") || 0) > 0,
@@ -1525,6 +1526,8 @@ export async function loader({ request }: { request: Request }) {
       canonicalFamily: pFamily ? canonicalUiFamily(pFamily) : null,
       stockBag: stockBagP,
       splitBag: splitBagP,
+      // 2026-11-12: every tier row re-costs with THIS design count (shown in the tier table).
+      designCount: Math.max(1, Number(calculatorDesignCount(eparams.get("pdesigns")))),
       selectedClass,
       topRequired,
       autoBag: autoBag ? { value: autoBag.id, label: `${autoBag.name} — $${Number(autoBag.unitCost).toFixed(2)} — Verified (auto-selected)` } : null,
@@ -2205,9 +2208,9 @@ export async function action({ request }: { request: Request }) {
         finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
         policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
         marginCurveKey: marginCurveKeySave, // 15F.0K.2-A variant-aware curve lookup
-        marketTargetSpecialtyReasons: specialtyReasonsSave, // 15F.0K.4C
+        marketTargetSpecialtyReasons: savedSplitBag ? [...specialtyReasonsSave, SPLIT_BAG_NO_4X5_MARKET_TARGET] : specialtyReasonsSave, // 15F.0K.4C (2026-11-12 Split Bag parity)
         // 15G.4C loader parity: specialty commercial tiers.
-        specialty: {
+        specialty: savedSplitBag ? null : {
           glossLayers: Number(fRead("pglosslayers") || 0),
           decorativeWhiteLayers: /holo/i.test(productInputSave.material?.name || "") ? 0 : Number(fRead("pwhitelayers") || 0),
           requiredWhite: /holo/i.test(productInputSave.material?.name || "") && Number(fRead("pwhitelayers") || 0) > 0,
@@ -4952,6 +4955,14 @@ function ProductTiers() {
           ? <>Margin family: <b>{mf.label}</b> · researched curve {mf.curve.join(" / ")}% · family minimum {mf.minPct}% · global floor {emergency.floor}% · source: {mf.source}</>
           : <><b style={{ color: "#92400e" }}>FAMILY MARGIN RULE NOT CONFIGURED</b> — provisional universal curve with the {emergency.floor}% global floor. Margins are editable in Advanced Pricing Controls.</>}
       </p>
+      {pm.splitBag ? (
+        <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
+          <b>{SPLIT_BAG_TIER_TABLE_TEXT}</b> {SPLIT_BAG_PRICE_AUTHORITY_TEXT} The 4x5 Sticker Bag dollar prices / market targets are never copied.
+        </div>
+      ) : null}
+      {!pm.isDtp ? (
+        <p style={{ ...smallHelp, margin: "0 0 6px" }}><b>{tierDesignAssumptionText(pm.designCount)}</b>{Number(pm.designCount) > 1 ? " Small-quantity rows spread every design's art / print setup over fewer bags, so their unit cost is much higher." : ""}</p>
+      ) : null}
       {(() => {
         // 2026-11-11: the owner-approved jar ladder controls the price; a realized
         // margin below the generic target is an owner-only note (never raises/blocks).
@@ -4985,7 +4996,7 @@ function ProductTiers() {
           {pm.isDtp ? (
             <thead><tr style={{ background: "#f3f4f6" }}><th style={{ padding: 5 }}>Use</th><th align="left">Quantity</th><th>Vendor tier</th><th>Owner tier</th><th>Job cost</th><th>Unit cost</th><th>Owner unit price</th><th>Customer total</th><th>Gross profit</th><th>Gross margin</th><th align="left">Status</th></tr></thead>
           ) : (
-            <thead><tr style={{ background: "#f3f4f6" }}><th style={{ padding: 5 }}>Use</th><th align="left">Quantity</th><th>Job Cost</th><th>Unit Cost</th><th>Margin</th><th>Unit Price</th><th>Total Price</th><th>Profit</th><th align="left">Status</th></tr></thead>
+            <thead><tr style={{ background: "#f3f4f6" }}><th style={{ padding: 5 }}>Use</th><th align="left">Quantity</th><th>Designs</th><th>Job Cost</th><th>Unit Cost</th><th>Margin</th><th>Unit Price</th><th>Total Price</th><th>Profit</th><th align="left">Status</th></tr></thead>
           )}
           <tbody>
             {tiers.map((tier) => (
@@ -5006,6 +5017,7 @@ function ProductTiers() {
                     {tier.dtp.statusReasons.length ? <div style={{ fontWeight: 400, color: "#6b7280" }}>{tier.dtp.statusReasons.join("; ")}</div> : null}
                   </td>
                 </>) : (<>
+                  <td align="center">{Number(pm.designCount || 1).toLocaleString()}</td>
                   <td align="center">{money2(tier.jobCost)}</td>
                   <td align="center">{money2(tier.unitCost)}</td>
                   <td align="center">{pct1(tier.marginPct)}</td>
@@ -5016,7 +5028,7 @@ function ProductTiers() {
                     {tier.status}
                     {tier.commercial && !tier.draftOnly ? <div style={{ fontWeight: 400, color: "#6b7280", fontSize: 11 }}>{tier.commercial.controllingRule}</div> : null}
                     {/* 15F.0K.3: market position line + badges (info only — never changes price) */}
-                    {tier.commercial?.marketPosition && !tier.draftOnly ? (() => {
+                    {tier.commercial?.marketPosition && !tier.draftOnly && !pm.splitBag ? (() => {
                       const pos = tier.commercial.marketPosition;
                       if (pos.applicable === false) {
                         // 15F.0K.4C: specialty finish — the standard table is
