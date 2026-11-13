@@ -103,7 +103,9 @@ describe("4x5 blank bag authority (1) the owner base cost is $0.11 — ONE autho
 
 describe("4x5 blank bag authority (2) freight is disclosed, never uplifted", () => {
   it("no generic freight uplift is hidden in the bag adapter", () => {
-    const code = codeOf("app/lib/bag-cost-inputs.server.ts");
+    // 2026-11-12: the Split Bag's real lot freight ($120 / 5,000) is its own
+    // owner-sourced line, not a generic uplift — those lines are exempt.
+    const code = codeOf("app/lib/bag-cost-inputs.server.ts").split("\n").filter((l) => !/SPLIT_BAG/.test(l)).join("\n");
     expect(code).not.toMatch(/0\.02/);
     expect(code).not.toMatch(/BAG_4X5_BLANK_UNIT_COST\s*\+/);
     expect(code).not.toMatch(/BAG_4X5_BLANK_UNIT_COST\s*\*\s*1\./);

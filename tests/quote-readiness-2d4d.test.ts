@@ -151,7 +151,7 @@ describe("2D-4D B bags", () => {
     expect(BAG_4X5_BLANK_UNIT_COST).toBe(0.11);
     expect(computeBagPhysical({ product: "sticker_bag_4x5", bagQuantity: 1000, sides: 1 }).blankCost).toBeCloseTo(110, 10);
     const code = readFileSync("app/lib/bag-cost-inputs.server.ts", "utf8")
-      .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+      .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l) && !/SPLIT_BAG/.test(l)).join("\n"); // 2026-11-12: Split Bag lot freight is owner-sourced, exempt
     expect(code).not.toMatch(/0\.02/);
   });
 

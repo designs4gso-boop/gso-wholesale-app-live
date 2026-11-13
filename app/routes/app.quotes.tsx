@@ -33,6 +33,7 @@ import { OWNER_QUOTE_PRICE_KIND, itemPricingAuthority, provisionalQuoteStatusChe
 // 2026-10-19 owner decision 4: OWNER SET PRICE & APPROVE — owner-only, server-authorized, audited.
 import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
 import { ownerSetQuoteItemPrice } from "../lib/quote-owner-price-approval.server";
+import { SPLIT_BAG_NO_AUTOMATIC_PRICE_LABEL, SPLIT_BAG_OWNER_PRICE_LABEL, isSplitBagQuoteItem, ownerPricePreview } from "../lib/split-bag-quote-pricing";
 // 2026-10-19 owner decision: line-level internal cost / margin is OWNER ONLY — redacted server-side for staff.
 import { OWNER_APPROVAL_REQUIRED, mergeStaffNotes, redactQuoteItemForStaff, redactRecipeForStaff, redactRecipeLineForStaff, staffManualItemAuthority, stripFinancialAuditLines } from "../lib/quote-staff-visibility";
 import { QUOTE_OUTCOME_STATUSES, resolveQuoteOutcomeChange } from "../lib/pricing-intelligence.server";
@@ -2583,6 +2584,12 @@ export default function QuotesPage() {
                                         return (
                                           <BlockStack key={item.id} gap="100">
                                             <Text as="p" variant="bodySm"><b>{item.productName}</b> × {Number(item.quantity || 0).toLocaleString()} — customer price: Not available</Text>
+                                            {isSplitBagQuoteItem(item) ? (
+                                              <InlineStack gap="100" wrap>
+                                                <Badge tone="attention">{SPLIT_BAG_NO_AUTOMATIC_PRICE_LABEL}</Badge>
+                                                <Badge tone="info">{SPLIT_BAG_OWNER_PRICE_LABEL}</Badge>
+                                              </InlineStack>
+                                            ) : null}
                                             {record?.missing ? <Text as="p" variant="bodySm" tone="subdued">{record.missing}</Text> : null}
                                             {ownerAccess.isOwner && !isPaid ? (
                                               <BlockStack gap="100">
@@ -2591,18 +2598,25 @@ export default function QuotesPage() {
                                                   {record?.diagnosticReference?.unitPrice != null ? ` Diagnostic reference (not approved): $${Number(record.diagnosticReference.unitPrice).toFixed(2)}/unit.` : ""}
                                                 </Text>
                                                 {(() => {
-                                                  // Live preview (owner only): true cost, expected profit, margin vs the normal target.
-                                                  const qty = Math.max(1, Number(item.quantity || 1));
-                                                  const draftUnit = draft.unitPrice ? Number(draft.unitPrice) : draft.totalPrice ? Number(draft.totalPrice) / qty : NaN;
-                                                  if (!Number.isFinite(draftUnit) || draftUnit <= 0) return null;
-                                                  const revenue = draftUnit * qty;
-                                                  const cost = (draft.internalUnitCost ? Number(draft.internalUnitCost) : Number(item.unitCost || 0)) * qty;
-                                                  const marginPct = ((revenue - cost) / revenue) * 100;
+                                                  // Live preview (owner only): the exact unit / total the approval will record,
+                                                  // expected profit and realized margin (2026-11-12: shared resolver, so the
+                                                  // preview never disagrees with the saved approval). True cost is never changed.
+                                                  if (!draft.unitPrice && !draft.totalPrice) return null;
+                                                  const preview = ownerPricePreview({
+                                                    quantity: Number(item.quantity || 1),
+                                                    trueUnitCost: draft.internalUnitCost ? Number(draft.internalUnitCost) : Number(item.unitCost || 0),
+                                                    unitPrice: draft.unitPrice,
+                                                    totalPrice: draft.totalPrice,
+                                                  });
+                                                  if (!preview.ok) return <Text as="p" variant="bodySm" tone="critical">{preview.error}</Text>;
                                                   const target = tierRule(quote.customerTier).marginFloorPct;
+                                                  const below = preview.realizedMarginPct != null && preview.realizedMarginPct < target;
                                                   return (
-                                                    <Text as="p" variant="bodySm" tone={marginPct < target ? "critical" : "subdued"}>
-                                                      Expected profit ${(revenue - cost).toFixed(2)} · margin {marginPct.toFixed(1)}%
-                                                      {marginPct < target ? ` — BELOW the ${target}% target: approving also records the low-margin override for this line only.` : ""}
+                                                    <Text as="p" variant="bodySm" tone={below ? "critical" : "subdued"}>
+                                                      {isSplitBagQuoteItem(item) ? `${SPLIT_BAG_OWNER_PRICE_LABEL}: ` : ""}
+                                                      Customer unit price ${preview.unitPrice.toFixed(preview.unitPrice < 1 ? 4 : 2)} · customer total ${preview.totalPrice.toFixed(2)} · true cost ${preview.trueTotalCost.toFixed(2)} · expected profit ${preview.expectedProfit.toFixed(2)} · realized margin {preview.realizedMarginPct == null ? "—" : `${preview.realizedMarginPct.toFixed(1)}%`}
+                                                      {preview.markupPct != null ? ` · markup ${preview.markupPct.toFixed(1)}%` : ""}
+                                                      {below ? ` — BELOW the ${target}% target: approving also records the low-margin override for this line only.` : ""}
                                                     </Text>
                                                   );
                                                 })()}

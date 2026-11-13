@@ -48,9 +48,9 @@ export const SPLIT_BAG_CALCULATOR_OPTION = {
   psplitbag: "1",
 } as const;
 
-/** No Split Bag selling ladder exists yet — the owner prices each job. */
+/** No Split Bag selling ladder exists yet — the owner prices each quote (2026-11-12). */
 export const SPLIT_BAG_PRICE_AUTHORITY_TEXT =
-  "Split Bag has no owner-approved selling price yet. The true cost is recorded; the owner sets and approves a job-level price (the 4x5 Sticker Bag price curve is never applied to it).";
+  "SPLIT BAG AUTOMATIC SELLING PRICE NOT YET APPROVED. The true cost is recorded; the owner enters the customer price on this quote (OWNER-SET CUSTOMER PRICE — THIS QUOTE ONLY) with Owner Set Price & Approve. No Split Bag price ladder exists and the 4x5 Sticker Bag price curve is never applied.";
 
 /** Map a family-selector choice onto the form params the loader reads. */
 export function calculatorFamilyParams(choice: string): { pfamily: string; pstockbag: string | null; psplitbag: string | null } {

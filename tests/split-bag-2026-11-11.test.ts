@@ -1,6 +1,6 @@
 // 2026-11-11 — SPLIT BAG (OWNER CORRECTION): a Sticker Bag blank / bag type.
 //
-// Owner authority: ONE physical bag, $0.25 each, MOQ 64. Labels follow the
+// Owner authority: ONE physical bag, MOQ 64 (2026-11-12: $0.14 vendor blank + $0.024 inbound freight line; supersedes $0.25). Labels follow the
 // normal Sticker Bag rule — ONE label per printed side (2026-11-12: the Split
 // Bag label is its own 7.20 x 4.38 art / 7.07 x 4.26 cutline, not the 4x5):
 //   front only / back only  1 blank, 1 label, 1 cut/weed, 1 application event
@@ -104,19 +104,19 @@ async function costJob(qs: string) {
 const amount = (r: any, key: string) => r.trueCost.lines.find((l: any) => l.key === key)?.amount;
 
 describe("Split Bag physical model (bag adapter)", () => {
-  it("1/2. front only (or back only — one printed side): ONE $0.25 blank, ONE label, ONE application event per bag", () => {
+  it("1/2. front only (or back only — one printed side): ONE $0.14 vendor blank, ONE label, ONE application event per bag", () => {
     const r = computeBagPhysical({ product: "split_bag", bagQuantity: 1000, sides: 1 });
-    expect(SPLIT_BAG_BLANK_UNIT_COST).toBe(0.25);
-    expect(r.blankCost).toBeCloseTo(1000 * 0.25, 10);
+    expect(SPLIT_BAG_BLANK_UNIT_COST).toBe(0.14);
+    expect(r.blankCost).toBeCloseTo(1000 * 0.14, 10);
     expect(r.positionsPerSide).toBe(1);
     expect(r.labelQuantity).toBe(1000);
     expect(r.application.applicationEvents).toBe(1000);
     expect(r.application.applicationsPerItem).toBe(1);
   });
 
-  it("3. front + back: ONE $0.25 blank, TWO labels, TWO application events per bag", () => {
+  it("3. front + back: ONE $0.14 vendor blank, TWO labels, TWO application events per bag", () => {
     const r = computeBagPhysical({ product: "split_bag", bagQuantity: 1000, sides: 2 });
-    expect(r.blankCost).toBeCloseTo(250, 10);
+    expect(r.blankCost).toBeCloseTo(140, 10);
     expect(r.labelQuantity).toBe(2000);
     expect(r.application.applicationEvents).toBe(2000);
     expect(bagApplicationCost(1000, 2, "split_bag")).toBeCloseTo(2000 * 10 / 3600 * 20, 10);
@@ -140,7 +140,7 @@ describe("Split Bag physical model (bag adapter)", () => {
       expect(split.finishing.cutPathIn).toBeCloseTo(1000 * sides * 2 * (7.07 + 4.26), 6);
       expect(split.nesting.materialFootprintSqft).toBeGreaterThan(fourX5.nesting.materialFootprintSqft);
       expect(split.application.applicationEvents).toBe(fourX5.application.applicationEvents);
-      expect(split.blankCost).toBeCloseTo(1000 * 0.25, 10);
+      expect(split.blankCost).toBeCloseTo(1000 * 0.14, 10);
       expect(fourX5.blankCost).toBeCloseTo(1000 * 0.11, 10);
     }
   });
@@ -181,13 +181,13 @@ describe("Split Bag in the canonical calculator", () => {
   });
 
   for (const sides of [1, 2] as const) {
-    it(`6/9. ${sides === 1 ? "one side" : "front + back"}: $0.25 blank line, ${sides} label(s)/bag of application, Split Bag identity`, async () => {
+    it(`6/9. ${sides === 1 ? "one side" : "front + back"}: $0.14 vendor blank line, ${sides} label(s)/bag of application, Split Bag identity`, async () => {
       const { result } = await costJob(SPLIT_QS(sides));
       expect(result.status).not.toBe("DRAFT_ONLY");
       expect(result.unitCost).toBeGreaterThan(0);
       expect(result.blockers).toEqual([]);
       const production = result.trueCost.lines.find((l: any) => l.key === "blank_sets")!;
-      expect(production.amount).toBeCloseTo(1000 * 0.25, 6);
+      expect(production.amount).toBeCloseTo(1000 * 0.14, 6);
       expect(amount(result, "application")).toBeCloseTo(1000 * sides * 10 / 3600 * 20, 6);
       expect(result.diagnostics.applicationEvents).toBe(1000 * sides);
       expect(result.diagnostics.applicationBreakdown?.totalLabels).toBe(1000 * sides);
@@ -222,7 +222,7 @@ describe("Split Bag in the canonical calculator", () => {
     expect(mimakiGloss.reasons).toContain("MIMAKI_GLOSS_UNSUPPORTED");
   }, 120_000);
 
-  it("Split Bag shares the Sticker Bag setup / application costing; its larger label raises media, ink, machine and cutting; blank $0.25 vs $0.11", async () => {
+  it("Split Bag shares the Sticker Bag setup / application costing; its larger label raises media, ink, machine and cutting; blank $0.14 (+ $0.024 freight) vs $0.11", async () => {
     for (const sides of [1, 2] as const) {
       const split = (await costJob(SPLIT_QS(sides))).result;
       const sticker = (await costJob(SPLIT_QS(sides).replace("&psplitbag=1", "").replace("pblank=preset%3Asplit-bag", "pblank=v_bag"))).result;
@@ -233,7 +233,7 @@ describe("Split Bag in the canonical calculator", () => {
       for (const key of ["print_media", "ink", "machine", "cutting_machine"]) {
         expect(amount(split, key), key).toBeGreaterThan(amount(sticker, key));
       }
-      expect(amount(split, "blank_sets")).toBeCloseTo(1000 * 0.25, 6);
+      expect(amount(split, "blank_sets")).toBeCloseTo(1000 * 0.14, 6);
       expect(amount(sticker, "blank_sets")).toBeCloseTo(1000 * 0.11, 6);
     }
   }, 120_000);
@@ -249,7 +249,7 @@ describe("Split Bag in the canonical calculator", () => {
 
   it("a posted pblankcost can no longer change any bag's blank cost", async () => {
     const forged = (await costJob(`${SPLIT_QS(1)}&pblankcost=0`)).result;
-    expect(amount(forged, "blank_sets")).toBeCloseTo(250, 6);
+    expect(amount(forged, "blank_sets")).toBeCloseTo(140, 6);
     const forged4x5 = (await costJob("pfamily=sticker-bags&pbagmat=matte&pqty=1000&pbagsides=1&pdesigns=1&pprinter=mimaki&pblankcost=0")).result;
     expect(amount(forged4x5, "blank_sets")).toBeCloseTo(1000 * 0.11, 6);
   }, 120_000);
@@ -290,13 +290,13 @@ describe("Split Bag selling price stays PROVISIONAL; 4x5 prices unchanged", () =
 });
 
 describe("Split Bag through the real calculator loader and save action", () => {
-  it("the loader costs Split Bag canonically with the $0.25 blank auto-selected", async () => {
+  it("the loader costs Split Bag canonically with the $0.14 vendor blank auto-selected", async () => {
     const route = await import("../app/routes/app.erp.cost-calculator");
     const data: any = await route.loader({ request: new Request(`https://app.test/app/erp/cost-calculator?${SPLIT_QS(2)}`) } as any);
     const pm = data.emergency.productMode;
     expect(pm.splitBag).toBe(true);
     expect(pm.stockBag).toBe(false);
-    expect(pm.autoBag.label).toContain("Split Bag — $0.25");
+    expect(pm.autoBag.label).toContain("Split Bag — $0.14");
     expect(pm.canonical.family).toBe("split-bags");
     const tier = pm.tiers.find((t: any) => t.quantity === 1000);
     expect(tier.costAuthority).toBe("canonical");

@@ -36,6 +36,8 @@ import {
   BAG_APPLICATION_LABOR_RATE_PER_HOUR,
   BAG_APPLICATION_SECONDS_PER_SIDE,
   SPLIT_BAG_BLANK_SOURCE,
+  SPLIT_BAG_INBOUND_FREIGHT_PER_UNIT,
+  SPLIT_BAG_INBOUND_FREIGHT_SOURCE,
   computeBagPhysical,
   type BagJobInput,
   type BagPersonalization,
@@ -647,6 +649,8 @@ export function assembleCanonicalJob(
   /** Jars bring their own verified packout and freight. */
   let jarPackout: { boxes: number; unitsPerBox: number; cost: number } | null = null;
   let jarFreightInput: TrueCostInput["freight"] | null = null;
+  /** 2026-11-12: the Split Bag lot's own inbound-freight allocation ($0.024 / bag). */
+  let bagFreightInput: TrueCostInput["freight"] | null = null;
 
   /* ---------------- LABELS / STICKERS ---------------- */
   if (input.family === "stickers-labels") {
@@ -764,6 +768,12 @@ export function assembleCanonicalJob(
 
     // The blank is priced at PRODUCTION quantity by the engine, so hand it the
     // unit cost rather than the adapter's already-multiplied total.
+    // 2026-11-12: the Split Bag blank is the $0.14 VENDOR cost; its $0.024
+    // inbound freight is the engine's separate inbound_freight line (landed
+    // $0.164), so the lot freight is counted exactly once.
+    if (splitBag) {
+      bagFreightInput = { perUnit: SPLIT_BAG_INBOUND_FREIGHT_PER_UNIT, basis: "SPLIT_BAG_LOT_FREIGHT_ALLOCATION", provisional: false, source: SPLIT_BAG_INBOUND_FREIGHT_SOURCE };
+    }
     blank = {
       ok: true,
       unitCost: production > 0 ? bag.blankCost / production : 0,
@@ -1153,7 +1163,7 @@ export function assembleCanonicalJob(
       ? { boxes: 0, unitsPerBox: 1, cost: 0 }
       : { unitsPerBox, laborPerBox: OWNER_STANDARDS.packoutPerBox.value, consumablesPerBox: 0 };
 
-  if (!jarFreightInput) reasons.push(CANONICAL_REASONS.freightNotModeled);
+  if (!jarFreightInput && !bagFreightInput) reasons.push(CANONICAL_REASONS.freightNotModeled);
 
   /* ---------------- calibration / ink ---------------- */
   if (!machine.calibration) reasons.push(CANONICAL_REASONS.calibrationRequired);
@@ -1297,7 +1307,7 @@ export function assembleCanonicalJob(
     runLabor: { mode: "operator_attention" },
     equipmentRatePerHour,
     packout,
-    freight: jarFreightInput ?? {
+    freight: jarFreightInput ?? bagFreightInput ?? {
       perUnit: 0,
       basis: "NO_SEPARATE_INBOUND_FREIGHT",
       provisional: false,

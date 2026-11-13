@@ -52,8 +52,9 @@ export const BAG_4X5_BLANK_EFFECTIVE_DATE = "2026-10-08";
 /* ------------------------------------------------------------------ *
  * OWNER DECISION 2026-11-11 — SPLIT BAG (corrected: a Sticker Bag blank)
  *
- * The Split Bag is simply another Sticker Bag blank: ONE physical bag at
- * $0.25 EACH, MOQ 64. Its labels follow the normal Sticker Bag rule — ONE
+ * The Split Bag is simply another Sticker Bag blank: ONE physical bag, MOQ 64
+ * (blank cost: see the 2026-11-12 vendor authority below). Its labels follow
+ * the normal Sticker Bag rule — ONE
  * label per printed side, 10 s per applied label. 2026-11-12 owner
  * correction: the Split Bag label is LARGER than the 4x5 — art / print
  * 7.20 x 4.38 in, cutline 7.07 x 4.26 in (bag-artboard-geometry.ts):
@@ -63,13 +64,61 @@ export const BAG_4X5_BLANK_EFFECTIVE_DATE = "2026-10-08";
  * removed. The blank identity/cost, the MOQ and the label geometry are
  * Split-Bag-specific.
  *
- * No freight or box count has been owner-approved for the Split Bag, so none
- * is invented here (see the Split Bag entries in CANONICAL_PACKOUT and
- * docs/GSO_ERP_PROJECT_STATE.md).
  * ------------------------------------------------------------------ */
-export const SPLIT_BAG_BLANK_UNIT_COST = 0.25;
-export const SPLIT_BAG_BLANK_SOURCE = "Owner decision 2026-11-11: Split Bag blank $0.25 each (one physical bag; a Sticker Bag blank variant). No freight uplift; inbound freight not modelled.";
-export const SPLIT_BAG_BLANK_EFFECTIVE_DATE = "2026-11-11";
+
+/* ------------------------------------------------------------------ *
+ * OWNER DECISION 2026-11-12 — SPLIT BAG LANDED COST (final vendor quote,
+ * first real purchase, November 2026). SUPERSEDES the provisional $0.25.
+ *
+ *   purchase            5,000 Split Bags
+ *   vendor unit cost    $0.14 / physical bag   (merchandise $700.00)
+ *   inbound freight     $120.00 for the lot    ($0.024 / bag)
+ *   landed unit cost    $0.164 / bag           (landed inventory $820.00)
+ *   packout (INBOUND)   2 cartons x 2,500 bags; carton dimensions / weight
+ *                       PENDING owner measurement on receipt (never invented)
+ *
+ * Vendor cost and inbound freight are SEPARATE components: the blank line
+ * carries the $0.14 vendor cost and the engine's inbound_freight line carries
+ * the $0.024 allocation, so a job pays $0.164 per bag and the $120 lot freight
+ * is never added again to a quote. A future lot with different freight
+ * changes SPLIT_BAG_INBOUND_FREIGHT_LOT only. Inbound freight (vendor -> GSO)
+ * is a landed inventory cost; outbound customer shipping is a separate quote /
+ * order charge and is never derived from it. The 2,500/carton figure is the
+ * vendor's INBOUND carton, not an outbound packout standard.
+ * ------------------------------------------------------------------ */
+export const SPLIT_BAG_INBOUND_FREIGHT_LOT = {
+  source: "Owner final vendor quote, November 2026 — first real Split Bag purchase",
+  orderedQuantity: 5000,
+  vendorUnitCost: 0.14,
+  merchandiseTotal: 700,
+  inboundFreightTotal: 120,
+  bagsPerCarton: 2500,
+  cartons: 2,
+  /** PENDING — measured by the owner when the shipment arrives. */
+  cartonDimensionsIn: null as { l: number; w: number; h: number } | null,
+  /** PENDING — weighed by the owner when the shipment arrives. */
+  cartonWeightLb: null as number | null,
+} as const;
+/** Vendor purchase price per physical bag — NOT landed (freight is separate). */
+export const SPLIT_BAG_BLANK_UNIT_COST = SPLIT_BAG_INBOUND_FREIGHT_LOT.vendorUnitCost;
+/** $120 / 5,000 = $0.024 per physical bag for this lot. */
+export const SPLIT_BAG_INBOUND_FREIGHT_PER_UNIT = SPLIT_BAG_INBOUND_FREIGHT_LOT.inboundFreightTotal / SPLIT_BAG_INBOUND_FREIGHT_LOT.orderedQuantity;
+/** $0.14 + $0.024 = $0.164 — informational; the engine adds the two lines. */
+export const SPLIT_BAG_LANDED_UNIT_COST = SPLIT_BAG_BLANK_UNIT_COST + SPLIT_BAG_INBOUND_FREIGHT_PER_UNIT;
+export const SPLIT_BAG_BLANK_SOURCE = "Owner final vendor quote 2026-11-12: Split Bag vendor cost $0.14 each (5,000-bag lot, $700 merchandise). Inbound freight $120 / 5,000 = $0.024 each is the separate inbound-freight line; landed $0.164 each. Supersedes the provisional $0.25.";
+export const SPLIT_BAG_INBOUND_FREIGHT_SOURCE = "Split Bag inbound freight: $120 for the 5,000-bag lot (owner final vendor quote 2026-11-12) = $0.024 per physical bag. Inbound (vendor -> GSO) landed cost only — customer shipping is separate.";
+export const SPLIT_BAG_BLANK_EFFECTIVE_DATE = "2026-11-12";
+/**
+ * SUPERSEDED 2026-11-12. The provisional 2026-11-11 Split Bag blank cost.
+ * Kept only so a test can prove it is never charged again; saved quote
+ * snapshots keep whatever cost they were created with.
+ */
+export const SPLIT_BAG_BLANK_SUPERSEDED_PROVISIONAL_2026_11_11 = 0.25;
+
+/** Inbound carton count for a Split Bag quantity (2,500 per vendor carton). */
+export function splitBagInboundCartons(quantity: number): number {
+  return Math.ceil(Math.max(0, quantity) / SPLIT_BAG_INBOUND_FREIGHT_LOT.bagsPerCarton);
+}
 
 /**
  * SUPERSEDED 2026-10-08. The 2026-08-24 "$0.09 supplier base before inbound

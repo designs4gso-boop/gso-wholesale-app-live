@@ -232,21 +232,21 @@ describe("Issue 2 / 3 — Quantity and Number of designs are independent", () =>
       const physical = computeBagPhysical({ product: "split_bag", bagQuantity: 500, sides, designs: 1 });
       expect(physical.bagQuantity).toBe(500);
       expect(physical.labelQuantity).toBe(500 * sides);
-      expect(physical.blankCost).toBeCloseTo(125, 9);
+      expect(physical.blankCost).toBeCloseTo(70, 9);
     }
     // 13. the design count changes ONLY setup — never printed faces / media / blanks
     const manyDesigns = (await costJob(LIVE_QS(1, 7))).result;
     expect(manyDesigns.diagnostics.inkableArtworkSqft).toBeCloseTo(one.diagnostics.inkableArtworkSqft, 9);
     expect(lineAmount(manyDesigns, "print_media")).toBeCloseTo(lineAmount(one, "print_media"), 9);
-    expect(lineAmount(manyDesigns, "blank_sets")).toBeCloseTo(125, 9);
+    expect(lineAmount(manyDesigns, "blank_sets")).toBeCloseTo(70, 9);
     expect(lineAmount(manyDesigns, "art_setup")).toBeGreaterThan(lineAmount(one, "art_setup"));
     // the corrected live jobs land near the engine result, not ~$4,900
-    expect(one.trueCost.totalCost).toBeCloseTo(271.996, 2);
-    expect(two.trueCost.totalCost).toBeCloseTo(409.659, 2);
-    // the live symptom reproduced: designs = 500 is what produced ~$4,929
+    expect(one.trueCost.totalCost).toBeCloseTo(228.996, 2); // 2026-11-12 landed cost: $271.996 - $43 ($125 blank -> $70 vendor + $12 inbound freight)
+    expect(two.trueCost.totalCost).toBeCloseTo(366.659, 2); // was $409.659
+    // the live symptom reproduced: designs = 500 is what produced ~$4,929 (~$4,886 on the 2026-11-12 landed cost)
     const bug = (await costJob(LIVE_QS(1, 500))).result;
-    expect(bug.trueCost.totalCost).toBeGreaterThan(4900);
-    expect(bug.trueCost.totalCost).toBeLessThan(4950);
+    expect(bug.trueCost.totalCost).toBeGreaterThan(4850);
+    expect(bug.trueCost.totalCost).toBeLessThan(4900);
   }, 120_000);
 });
 

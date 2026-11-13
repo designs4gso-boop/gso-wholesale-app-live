@@ -2,7 +2,7 @@
 //
 // 1. Split Bag geometry: its own owner-measured label — art / print 7.20 x
 //    4.38 in (area, nesting, media, ink) and cutline 7.07 x 4.26 in (cut
-//    path), never the 4x5 artboard or the 4x5 3.79 x 4.81 cutline. $0.25
+//    path), never the 4x5 artboard or the 4x5 3.79 x 4.81 cutline. $0.14 vendor
 //    blank, MOQ 64 and one label per printed side (never 4) are unchanged.
 // 2. Jar Side Lid / tamper band: selectable on 3oz (art 7.06 x 0.5, cutline
 //    6.935 x 0.375) and 4oz (art 7.125 x 0.5, cutline 7.0 x 0.375). Print /
@@ -136,14 +136,14 @@ describe("Split Bag geometry (owner correction 2026-11-12)", () => {
     expect(JSON.stringify(spec.pieces) + spec.statusNote).not.toMatch(/3\.79|4\.81/);
   });
 
-  it("4/5/6/7. qty 500: front-only and back-only = 500 blanks + 500 faces; front+back = 500 blanks + 1,000 faces (never 2,000); blank $125", () => {
+  it("4/5/6/7. qty 500: front-only and back-only = 500 blanks + 500 faces; front+back = 500 blanks + 1,000 faces (never 2,000); blank $70 (vendor $0.14; 2026-11-12)", () => {
     for (const sides of [1, 2] as const) {
       const r = computeBagPhysical({ product: "split_bag", bagQuantity: 500, sides });
       expect(r.bagQuantity).toBe(500);
       expect(r.labelQuantity).toBe(500 * sides);
       expect(r.labelQuantity).not.toBe(2000);
       expect(r.application.applicationEvents).toBe(500 * sides);
-      expect(r.blankCost).toBeCloseTo(125, 10);
+      expect(r.blankCost).toBeCloseTo(70, 10);
     }
   });
 
@@ -152,7 +152,7 @@ describe("Split Bag geometry (owner correction 2026-11-12)", () => {
     const one = (await costJob(SPLIT_QS(1, 500))).result;
     expect(one.diagnostics.physicalItems ?? 500).toBe(500);
     expect(one.diagnostics.inkableArtworkSqft).toBeCloseTo((500 * 7.2 * 4.38) / 144, 6);
-    expect(lineAmount(one, "blank_sets")).toBeCloseTo(125, 6);
+    expect(lineAmount(one, "blank_sets")).toBeCloseTo(70, 6);
   }, 120_000);
 
   it("8. MOQ remains 64", () => {
@@ -173,7 +173,7 @@ describe("Split Bag geometry (owner correction 2026-11-12)", () => {
       expect(split.diagnostics.mediaConsumedSqft).toBeGreaterThan(std.diagnostics.mediaConsumedSqft);
       expect(lineAmount(split, "print_media")).toBeGreaterThan(lineAmount(std, "print_media"));
       expect(lineAmount(split, "ink")).toBeGreaterThan(lineAmount(std, "ink"));
-      expect(lineAmount(split, "blank_sets")).toBeCloseTo(125, 6);
+      expect(lineAmount(split, "blank_sets")).toBeCloseTo(70, 6);
       expect(split.diagnostics.productSpec!.standard.label).toEqual({ widthIn: 7.2, heightIn: 4.38, cutWidthIn: 7.07, cutHeightIn: 4.26 });
       expect(std.diagnostics.productSpec!.standard.label).toMatchObject({ widthIn: 4, heightIn: 5, cutWidthIn: 3.79, cutHeightIn: 4.81 });
     }

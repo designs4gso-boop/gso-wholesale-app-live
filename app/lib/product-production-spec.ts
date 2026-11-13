@@ -188,7 +188,8 @@ function bagSpec(family: "sticker-bags" | "stock-bags"): ProductProductionSpec {
 
 /**
  * 2026-11-11 owner decision (corrected): the Split Bag is a Sticker Bag blank
- * variant — ONE $0.25 bag, MOQ 64, ONE label per printed side.
+ * variant — ONE bag, MOQ 64, ONE label per printed side (2026-11-12: $0.14
+ * vendor blank + $0.024 inbound freight = $0.164 landed; supersedes $0.25).
  * 2026-11-12 owner correction: the Split Bag label is NOT the 4x5 — its own
  * owner-measured art / print size 7.20 x 4.38 in and cutline 7.07 x 4.26 in.
  */
@@ -201,10 +202,10 @@ function splitBagSpec(): ProductProductionSpec {
     displayName: "Split Bag (Sticker Bag blank, custom applied labels)",
     authorityNote: `${AUTHORITY_LABEL.OWNER_CONFIRMED} — ${SPLIT_BAG_GEOMETRY_DECISION}`,
     statusNote: `One Split Bag label per printed side (front only / back only = 1 label, front + back = 2): art / print ${SPLIT_BAG_ARTBOARD_IN.widthIn.toFixed(2)} x ${SPLIT_BAG_ARTBOARD_IN.heightIn.toFixed(2)} in, cutline ${SPLIT_BAG_CUTLINE_IN.widthIn.toFixed(2)} x ${SPLIT_BAG_CUTLINE_IN.heightIn.toFixed(2)} in (owner correction 2026-11-12).`,
-    physical: { bag: "one Split Bag blank", blankCost: "SPLIT_BAG_BLANK_UNIT_COST ($0.25 owner blank cost, 2026-11-11)" },
+    physical: { bag: "one Split Bag blank", blankCost: "SPLIT_BAG_BLANK_UNIT_COST ($0.14 vendor cost) + SPLIT_BAG_INBOUND_FREIGHT_PER_UNIT ($0.024 inbound freight) = $0.164 landed (owner final vendor quote 2026-11-12)" },
     pieces: [{ piece: "label", shape: "rect", widthIn: SPLIT_BAG_ARTBOARD_IN.widthIn, heightIn: SPLIT_BAG_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied Split Bag label (one per printed side)", cutWidthIn: SPLIT_BAG_CUTLINE_IN.widthIn, cutHeightIn: SPLIT_BAG_CUTLINE_IN.heightIn }],
-    moqNote: "MOQ 64 (owner decision 2026-11-11; SPLIT_BAG_MOQ). Packout is not modeled yet (first production batch pending); inbound and outbound freight are never assumed.",
-    pricingSource: "canonical true cost (bag adapter, split_bag); no owner-approved selling price yet — job-level owner price",
+    moqNote: "MOQ 64 (owner decision 2026-11-11; SPLIT_BAG_MOQ). Packout is not modeled yet (vendor carton = 2,500 bags; carton dimensions / weight pending receipt). Inbound freight is the owner's real lot allocation ($120 / 5,000 = $0.024 per bag); outbound customer freight is never assumed.",
+    pricingSource: "canonical true cost (bag adapter, split_bag); no owner-approved selling price yet — OWNER-SET CUSTOMER PRICE, THIS QUOTE ONLY",
   };
 }
 

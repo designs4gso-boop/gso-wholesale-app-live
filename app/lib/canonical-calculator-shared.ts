@@ -54,7 +54,7 @@ export const CANONICAL_DISPATCH: Record<CanonicalFamily, { adapter: string; entr
   "split-bags": {
     adapter: "bag-cost-inputs.server.ts",
     entry: "computeBagPhysical(product: split_bag)",
-    note: "SAME physical adapter and Sticker Bag label rules (one 4x5 label per printed side). Split-Bag-specific: $0.25 blank and MOQ 64 only. Customer artwork.",
+    note: "SAME physical adapter and Sticker Bag label rules (one 4x5 label per printed side). Split-Bag-specific: $0.14 vendor blank + $0.024 inbound freight (landed $0.164), art 7.20 x 4.38 / cutline 7.07 x 4.26, MOQ 64. Customer artwork.",
   },
   "standard-jars": {
     adapter: "jar-cost-inputs.server.ts",

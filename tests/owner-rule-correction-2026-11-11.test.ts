@@ -283,8 +283,8 @@ describe("E. Split Bag", () => {
     expect(cost(qs(64)).reasons).not.toContain(BAG_REASONS.splitBagBelowMoq);
     expect(getProductProductionSpec("split-bags", "split-bag")?.moqNote).toMatch(/MOQ 64/);
   });
-  it("one $0.25 blank; ONE label per printed side (owner correction — never 4 per bag)", () => {
-    expect(bagBlankUnitCostFor("split_bag")).toBe(0.25);
+  it("one blank ($0.14 vendor cost since 2026-11-12; was $0.25); ONE label per printed side (owner correction — never 4 per bag)", () => {
+    expect(bagBlankUnitCostFor("split_bag")).toBe(0.14);
     expect(bagLabelPositionsPerSide("split_bag")).toBe(1);
   });
   it("selling price stays provisional (no invented ladder)", () => {
@@ -414,14 +414,14 @@ describe("Primer is not configured on either press (owner decision 2026-11-11)",
 });
 
 describe("Split Bag owner rules unchanged", () => {
-  it("MOQ 64, $0.25 blank, 1 label per printed side, 4x5 cutline untouched, packout unmodeled, freight separate, price provisional", () => {
+  it("MOQ 64, $0.14 vendor blank (2026-11-12), 1 label per printed side, 4x5 cutline untouched, packout unmodeled, freight separate, price provisional", () => {
     expect(SPLIT_BAG_MOQ).toBe(64);
-    expect(bagBlankUnitCostFor("split_bag")).toBe(0.25);
+    expect(bagBlankUnitCostFor("split_bag")).toBe(0.14);
     expect(bagLabelPositionsPerSide("split_bag")).toBe(1); // front + back = 2 labels, never 4
     expect(BAG_4X5_CUTLINE_IN).toEqual({ widthIn: 3.79, heightIn: 4.81 });
     const spec = getProductProductionSpec("split-bags", "split-bag")!;
     expect(spec.moqNote).toMatch(/Packout is not modeled/);
-    expect(spec.moqNote).toMatch(/freight are never assumed/);
+    expect(spec.moqNote).toMatch(/outbound customer freight is never assumed/); // 2026-11-12: inbound = the real lot allocation
     expect(spec.pricingSource).toMatch(/no owner-approved selling price/);
   });
 });

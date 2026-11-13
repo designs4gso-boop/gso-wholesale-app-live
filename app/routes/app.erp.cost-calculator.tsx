@@ -96,9 +96,9 @@ import {
  */
 const DTP_FREIGHT_NOT_VERIFIED = { freightPerOrder: 0, freightSource: "excluded" as const, freightNote: "FREIGHT_NOT_VERIFIED: no verified Spektra freight — inbound freight is not included in this true cost. Enter the vendor freight quote (actual) or an allowance to include it." };
 
-/** 2026-11-11: the Split Bag blank — ONE owner-priced bag ($0.25), never a Vendor Cost Book pick. */
+/** 2026-11-11: the Split Bag blank — ONE owner-priced bag ($0.14 vendor cost since 2026-11-12; inbound freight is a separate line), never a Vendor Cost Book pick. */
 const SPLIT_BAG_BLANK = { id: "preset:split-bag", name: "Split Bag", unitCost: SPLIT_BAG_BLANK_UNIT_COST } as const;
-const splitBagComponent = (): ResolvedComponent => ({ name: SPLIT_BAG_BLANK.name, unitCost: SPLIT_BAG_BLANK.unitCost, tiers: [], status: "verified" as const, note: "Owner decision 2026-11-11: one Split Bag blank, $0.25 each." });
+const splitBagComponent = (): ResolvedComponent => ({ name: SPLIT_BAG_BLANK.name, unitCost: SPLIT_BAG_BLANK.unitCost, tiers: [], status: "verified" as const, note: "Owner final vendor quote 2026-11-12: one Split Bag blank, $0.14 vendor cost; the $0.024 inbound freight is a separate line (landed $0.164)." });
 
 /**
  * 2026-10-29: a Miron size with a dated owner cost record (MIRON_SET_COST_PROVENANCE)
@@ -958,7 +958,7 @@ export async function loader({ request }: { request: Request }) {
       ? REQUIRED_STICKER_BAG_SIZES.filter((size) => !presentBagSizes.has(size)).map((size) => ({ value: `type:bag-${size}`, label: `${size} Sticker Bag — NO PRICE — not verified` }))
       : [];
     autoBag = isBagFamily && bagRecords.length === 1 ? (bagRecords[0] as any).item : null;
-    // Split Bag: its blank is the owner $0.25 Split Bag, shown auto-selected —
+    // Split Bag: its blank is the owner Split Bag ($0.14 vendor cost), shown auto-selected —
     // never a 4x5 bag record from the picker.
     if (splitBagP) autoBag = SPLIT_BAG_BLANK;
     const requestedBlankId = String(eparams.get("pblank") || "") || (autoBag ? autoBag.id : "");
@@ -1940,7 +1940,7 @@ export async function action({ request }: { request: Request }) {
     }
     // 14C.2A: Chiron blank cost is flat — quantity tiers ignored at save too
     savedBlank = enforceFlatChironCost(savedBlank, savedClassification ? savedClassification.klass : null);
-    // Loader parity: a Split Bag's blank is always the owner $0.25 Split Bag.
+    // Loader parity: a Split Bag's blank is always the owner Split Bag ($0.14 vendor cost).
     if (savedSplitBag) {
       savedBlank = splitBagComponent();
       savedClassification = { klass: "bag_sticker", includesTop: false };
@@ -2551,6 +2551,8 @@ export async function action({ request }: { request: Request }) {
         : null,
       family: pFamilySave,
       canonicalFamily: canonicalUiFamily(pFamilySave),
+      // 2026-11-12: marks a Split Bag line (owner-set customer price, this quote only).
+      splitBag: savedSplitBag,
       classification: savedClassification ? savedClassification.klass : null,
       includesTop: savedClassification ? savedClassification.includesTop : false,
       // physical Miron Top Type only — never a printed "Lid label" row
@@ -3716,7 +3718,7 @@ function ProductDrivenForm() {
       </label>
       {/* 2026-11-11 owner correction: Split Bag is a Sticker Bag BLANK / bag
           type, not its own category. Same Sticker Bag label costing; only the
-          $0.25 blank and MOQ 64 differ. Posts psplitbag=1. */}
+          blank cost / inbound freight, label geometry and MOQ 64 differ. Posts psplitbag=1. */}
       {familyParams.pfamily === "sticker-bags" && !familyParams.pstockbag ? (
         <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>Blank / bag type
           <select
@@ -3738,7 +3740,7 @@ function ProductDrivenForm() {
       ) : null}
       {isSplitBag ? (
         <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
-          Split Bag: a Sticker Bag blank at $0.25 each, MOQ 64. One label per printed side — front only or back only = 1 label, front + back = 2 labels per bag. No Split Bag selling price is approved yet — the owner sets the price on the quote.
+          Split Bag: a Sticker Bag blank at $0.14 vendor cost + $0.024 inbound freight ($0.164 landed) each, MOQ 64. One label per printed side — front only or back only = 1 label, front + back = 2 labels per bag. No Split Bag selling price is approved yet — the owner sets the price on the quote.
         </p>
       ) : null}
       {/* 2026-11-12 owner correction: each bag type shows its OWN fixed label geometry. */}
