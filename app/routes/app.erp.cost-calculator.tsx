@@ -65,11 +65,12 @@ import { resolveProductDisplayName } from "../lib/commercial-name-resolver.serve
 import { OWNER_STANDARDS } from "../lib/owner-standards";
 import { buildCanonicalPricingSnapshot } from "../lib/pricing-snapshot";
 import { officialMoqForFamily } from "../lib/product-family-sales-rules";
-import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, ownerPriceForQuantity, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
+import { DTP_LADDER_QUANTITIES, DTP_PRICING_ENGINE_VERSION, priceDtpQuote } from "../lib/dtp-owner-pricing.server";
 // 2026-10-06: owner shaped-pouch policy (+10 % surcharge, $700 per new die) and the DTP catalog / freight status.
 import { applyShapedPolicyToDtpRow, type DtpDieChoice } from "../lib/dtp-shaped-bag-policy";
 import { resolveDtpQuoteCost } from "../lib/dtp-quote-cost-authority.server";
 import { compareToBenchmark } from "../lib/dtp-market-benchmark";
+import { qualifyDtpComparison } from "../lib/dtp-comparison-qualification.server";
 import { DTP_COMPARABLE_CONFIG, SPEKTRA_FREIGHT_ASSUMPTION, dtpSizeForVendorSku } from "../lib/dtp-catalog";
 // 2026-10-06: live Spektra cost book (research 2026-10-06) — shown next to the legacy seed cost; NOT yet the quote cost authority.
 import { SPEKTRA_COST_BOOK_META, SPEKTRA_COST_STATUS_LABEL, SPEKTRA_FINISHES, SPEKTRA_MATERIALS, SPEKTRA_SPOT_OPTIONS, SPEKTRA_TOP_FEATURES, SPEKTRA_ZIPPER_OPTIONS, lookupSpektraVendorCost } from "../lib/spektra-live-cost-book";
@@ -929,6 +930,7 @@ export async function loader({ request }: { request: Request }) {
   const stockBagP = pFamily === "sticker-bags" && eparams.get("pstockbag") === "1";
   // 2026-11-11: Split Bag = pfamily=sticker-bags + psplitbag=1 (canonical split-bags family).
   const splitBagP = pFamily === "sticker-bags" && eparams.get("psplitbag") === "1" && !stockBagP;
+  let productMaterialNameP: string | null = null; // 2026-11-13: DTP comparison equivalence check
   // 15B: accepted values come from the shared registry (canonical + legacy
   // aliases of calculator-ENABLED families — reserved dtp-bags stays out).
   if (pFamily && calculatorFamilyValues().includes(pFamily)) {
@@ -1041,6 +1043,7 @@ export async function loader({ request }: { request: Request }) {
           ? { freightPerOrder: dtpAllowance, freightSource: "estimated" as const, freightNote: "ESTIMATED freight allowance entered for this job." }
           : DTP_FREIGHT_NOT_VERIFIED),
     } : null;
+    productMaterialNameP = pickedMaterial?.name || null;
     const productInput: ProductDrivenInput = {
       family: engineFamilyP,
       quantity: requestedQtyP || eQuantities[eQuantities.length - 1] || 1,
@@ -1537,13 +1540,24 @@ export async function loader({ request }: { request: Request }) {
       // reloads; the save form posts the same GET state via psearch).
       tiers: productTiers,
       requestedQty: requestedQtyP,
-      // 15F.0K.3: live Spektra DTP comparison for the bag crossover advisory
-      // (display only — the owner chooses the product; nothing converts).
-      dtpCrossoverCompare: pFamily && canonicalUiFamily(pFamily) === "sticker-bags" && requestedQtyP >= 2500
-        ? (() => {
-            const ladder = ownerPriceForQuantity("spektra-dtp-4x5x2", requestedQtyP);
-            return ladder.unitPrice != null ? { qty: requestedQtyP, unitPrice: ladder.unitPrice, total: ladder.unitPrice * requestedQtyP, tierUsed: ladder.tierUsed } : null;
-          })()
+      // 15F.0K.3 -> 2026-11-13: the bag crossover advisory (requested row at a
+      // bags-4x5 crossover band, 2,500+) is QUALIFIED by quantity per design and
+      // configuration equivalence before any DTP price is shown as comparable.
+      // Display only — the owner chooses the product; nothing converts or blocks.
+      dtpAdvisory: pFamily && canonicalUiFamily(pFamily) === "sticker-bags" && !stockBagP
+        ? qualifyDtpComparison({
+            crossover: (productTiers || []).find((tier: any) => tier.requested)?.commercial?.marketPosition?.crossover ?? null,
+            totalQuantity: requestedQtyP,
+            designs: Math.max(1, Number(calculatorDesignCount(eparams.get("pdesigns")))),
+            faces: Math.max(1, Number(eparams.get("pfaces") || 1)),
+            glossLayers: Number(eparams.get("pglosslayers") || 0),
+            whiteLayers: Number(eparams.get("pwhitelayers") || 0),
+            materialName: productMaterialNameP,
+            splitBag: splitBagP,
+            widthIn: Number(eparams.get("pwidth") || 0),
+            heightIn: Number(eparams.get("pheight") || 0),
+            currentProduct: splitBagP ? "Split Bag" : "Sticker Bag",
+          })
         : null,
       // 2026-10-05: one staff sentence describing the commercial basis for jars.
       pricingBasis: productTiers && productTiers.some((tier: any) => tier.commercial?.ownerLadder)
@@ -5066,27 +5080,47 @@ function ProductTiers() {
       {pm.isDtp ? (
         <p style={smallHelp}>Owner ladder prices (OWNER-APPROVED 2026-10-06 / 2026-10-07 for all five current sizes; 5x4x2 legacy = manual review). "Owner price tier used" follows the highest reached ladder step — never interpolated. 40% is the warning target; DTP hard floors are 30% (1,000–2,499) / 35% (2,500–4,999) / 38% (5,000+); job profit target $500, strategic floor $350. Inbound freight is NOT verified and is not in true cost unless entered for the job (FREIGHT_NOT_VERIFIED).</p>
       ) : null}
-      {/* 15F.0K.3: direct-print crossover advisory (requested-quantity row) —
-          advisory + live DTP comparison only; the owner chooses the product. */}
+      {/* 15F.0K.3 -> 2026-11-13: direct-print advisory, qualified by quantity per
+          design and configuration equivalence. Advisory only — never switches the
+          product, never blocks save / approve / send / production. */}
       {(() => {
-        const requested = (tiers || []).find((tier: any) => tier.requested);
-        const pos = requested?.commercial?.marketPosition;
-        if (!pos || !pos.crossover) return null;
-        const strong = pos.crossover === "strong";
+        const adv = pm.dtpAdvisory;
+        if (!adv) return null;
+        const valid = adv.state === "valid_comparison";
+        const strong = adv.crossover === "strong";
+        const border = valid ? (strong ? "#fecaca" : "#fde68a") : "#c7d2fe";
+        const background = valid ? (strong ? "#fef2f2" : "#fffbeb") : "#eef2ff";
         return (
-          <div style={{ border: `1px solid ${strong ? "#fecaca" : "#fde68a"}`, background: strong ? "#fef2f2" : "#fffbeb", borderRadius: 10, padding: 10, fontSize: 13, marginTop: 8 }}>
-            <b style={{ color: strong ? "#991b1b" : "#92400e" }}>
-              {strong
-                ? "DIRECT-PRINT CROSSOVER — sticker-applied bags are likely above the direct-print market at this volume."
-                : "Direct-print price check recommended at 2,500+ units."}
-            </b>
+          <div data-dtp-advisory-state={adv.state} style={{ border: `1px solid ${border}`, background, borderRadius: 10, padding: 10, fontSize: 13, marginTop: 8 }}>
+            <b style={{ color: valid ? (strong ? "#991b1b" : "#92400e") : "#3730a3" }}>{adv.headline}</b>
             <div style={{ marginTop: 4 }}>
-              {strong ? "The market-target candidate is deliberately OFF at 5,000+ so it never hides this crossover; this price is cost-based. " : ""}
-              Compare a direct-print (Spektra DTP pouch) quote before finalizing — no automatic product conversion.
-              {pm.dtpCrossoverCompare ? (
-                <> Live DTP comparison (4x5x2 pouch, owner ladder): <b>{money2(pm.dtpCrossoverCompare.unitPrice)}/unit ≈ {money2(pm.dtpCrossoverCompare.total)} total</b> at {pm.dtpCrossoverCompare.qty.toLocaleString()} units (ladder tier {Number(pm.dtpCrossoverCompare.tierUsed || 0).toLocaleString()}).</>
-              ) : null}
+              Total quantity: <b>{adv.totalQuantity.toLocaleString()}</b> · Unique designs: <b>{adv.uniqueDesigns}</b> · Quantity per design: <b>{adv.quantityPerDesign.toLocaleString()}</b> · Current product: <b>{adv.currentProduct}</b>
             </div>
+            <div style={{ marginTop: 2 }}>Current configuration: {adv.currentConfiguration}</div>
+            <div style={{ marginTop: 4 }}>{adv.message}</div>
+            <div style={{ marginTop: 4 }}>
+              DTP setup / changeover per design fully modeled: <b>{adv.setupChangeoverModeled ? "Yes" : "No"}</b>
+              {adv.setupChangeoverReasons.length ? <> — {adv.setupChangeoverReasons.join(" ")}</> : null}
+            </div>
+            <div style={{ marginTop: 2 }}>
+              Specialty finish / configuration equivalent: <b>{adv.finishEquivalent ? "Yes" : "No"}</b>
+              {adv.finishEquivalent ? null : <> — {adv.equivalenceChecks.filter((c: any) => !c.equivalent).map((c: any) => c.detail).join(" ")}</>}
+            </div>
+            {valid && adv.comparison ? (
+              <div style={{ marginTop: 4 }}>
+                {strong ? "The market-target candidate is deliberately OFF at 5,000+ so it never hides this crossover; this price is cost-based. " : ""}
+                {(() => {
+                  const requested = (tiers || []).find((tier: any) => tier.requested);
+                  return requested ? <>Current product: true cost <b>{money2(Number(requested.jobCost ?? 0))}</b> · selling price <b>{money2(Number(requested.totalPrice ?? 0))}</b> ({money2(Number(requested.unitPrice ?? 0))}/unit). </> : null;
+                })()}
+                DTP (4x5x2 pouch, owner ladder{adv.comparison.designFees > 0 ? ` + ${money2(adv.comparison.designFees)} extra design fees` : ""}): true cost <b>{adv.comparison.trueCost != null ? money2(adv.comparison.trueCost) : "not available"}</b> · selling price <b>{money2(adv.comparison.total)}</b> ({money2(adv.comparison.unitPrice)}/unit, ladder tier {Number(adv.comparison.tierUsed || 0).toLocaleString()}).
+              </div>
+            ) : adv.singleDesignLadderReference ? (
+              <div style={{ marginTop: 4, color: "#6b7280", fontSize: 12 }}>
+                Single-design DTP ladder figure ({money2(adv.singleDesignLadderReference.unitPrice)}/unit) is a reference only — NOT an equivalent price for this job; do not quote from it.
+              </div>
+            ) : null}
+            <div style={{ marginTop: 4, fontSize: 12 }}>Advisory only — no automatic product conversion; saving, approving, sending and production are not blocked.</div>
           </div>
         );
       })()}
