@@ -73,7 +73,8 @@ describe("shipment / pickup records", () => {
     // 2026-11-14: shipment events are written inside the shipment transaction (tx)
     expect(board).toContain('await tx.productionJobEvent.create({ data: { shop, jobId, eventType: "shipped", message: shipmentSummary(record)');
     expect(board).toContain('await tx.productionJobEvent.create({ data: { shop, jobId, eventType: "tracking_added"');
-    expect(board).toContain('await createEvent(shop, jobId, "picked_up"');
+    // 2026-11-14: the pickup event is written inside the pickup transaction (tx)
+    expect(board).toContain('await tx.productionJobEvent.create({ data: { shop, jobId, eventType: "picked_up"');
     expect(board).toContain('recordShipment: "recordShipment", recordPickup: "recordShipment"');
     expect(board).toContain("record.actualShippingCost != null && !job.actualCostFinalized");
   });

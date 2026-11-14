@@ -35,7 +35,7 @@ import { appendIntakeAudit } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
 import { PRODUCTION_STATUS_OPTIONS, isStaffProductionStatus } from "../lib/production-status-vocabulary";
-import { REPRINT_REASONS, SHIPMENT_ALREADY_RECORDED, formatShipDate, fulfillmentQcGuardApplies, isReprintReason, parsePickupInput, parseShipmentInput, reprintReasonLabel, savedShipmentForJob, shipmentSummary, statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
+import { PICKUP_ALREADY_RECORDED, REPRINT_REASONS, SHIPMENT_ALREADY_RECORDED, formatShipDate, fulfillmentQcGuardApplies, isReprintReason, parsePickupInput, parseShipmentInput, reprintReasonLabel, savedPickupForJob, savedShipmentForJob, shipmentSummary, statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
 import { permissionDeniedResponse, resolveStaffAccess, type StaffPermission } from "../lib/staff-roles.server";
 import { applyStockMovement } from "../lib/inventory-stock.server";
 import { releaseJobReservations } from "../lib/inventory-reservation.server";
@@ -921,7 +921,8 @@ export async function action({ request }: { request: Request }) {
     if (["cancelled", "shipped", "picked_up"].includes(String(job.status))) {
       // 2026-11-14: a replayed shipment names the shipment that is already saved (nothing is overwritten)
       const saved = intent === "recordShipment" ? savedShipmentForJob(job) : null;
-      return Response.json({ ok: false, message: `This job is already ${labelForStatus(job.status)}.${saved ? ` ${SHIPMENT_ALREADY_RECORDED}: ${saved.carrier}${saved.trackingNumber ? `, tracking ${saved.trackingNumber}` : ""}, ${saved.packageCount ?? "?"} package(s), ship date ${formatShipDate(saved.shipDate)}.` : ""}` }, { status: 400 });
+      const savedPickup = intent === "recordPickup" ? savedPickupForJob(job) : null;
+      return Response.json({ ok: false, message: `This job is already ${labelForStatus(job.status)}.${saved ? ` ${SHIPMENT_ALREADY_RECORDED}: ${saved.carrier}${saved.trackingNumber ? `, tracking ${saved.trackingNumber}` : ""}, ${saved.packageCount ?? "?"} package(s), ship date ${formatShipDate(saved.shipDate)}.` : ""}${savedPickup ? ` ${PICKUP_ALREADY_RECORDED}: picked up ${savedPickup.pickedUpAt}${savedPickup.pickedUpBy ? ` by ${savedPickup.pickedUpBy}` : ""}.` : ""}` }, { status: 400 });
     }
     const target = intent === "recordShipment" ? "shipped" : "picked_up";
     if (fulfillmentQcGuardApplies(job.status, target)) {
@@ -965,12 +966,19 @@ export async function action({ request }: { request: Request }) {
     }
     const parsed = parsePickupInput({ pickedUpAt: formData.get("pickedUpAt"), pickedUpBy: formData.get("pickedUpBy"), note: formData.get("pickupNote") });
     if (!parsed.ok) return Response.json({ ok: false, message: parsed.errors.join(" ") }, { status: 400 });
-    const pickupRows = await db.productionJob.updateMany({
-      where: { shop, id: jobId, status: job.status },
-      data: { status: "picked_up", pickedUpAt: new Date(parsed.record.pickedUpAt), pickedUpBy: parsed.record.pickedUpBy },
+    // 2026-11-14 LIVE QA: status + pickedUp* columns + the picked_up audit event
+    // (which carries the note — there is no note column) are ONE transaction.
+    // The update is conditional on the status read, so a replay records nothing.
+    const pickedUpNow = await db.$transaction(async (tx: any) => {
+      const pickupRows = await tx.productionJob.updateMany({
+        where: { shop, id: jobId, status: job.status },
+        data: { status: "picked_up", pickedUpAt: new Date(parsed.record.pickedUpAt), pickedUpBy: parsed.record.pickedUpBy },
+      });
+      if (!pickupRows.count) return false;
+      await tx.productionJobEvent.create({ data: { shop, jobId, eventType: "picked_up", message: `Picked up ${parsed.record.pickedUpAt}${parsed.record.pickedUpBy ? ` by ${parsed.record.pickedUpBy}` : ""}.`, oldValue: job.status, newValue: JSON.stringify(parsed.record), createdBy: actor || null } });
+      return true;
     });
-    if (!pickupRows.count) return Response.json({ ok: false, message: "This job changed while the pickup was being saved (already recorded?) — refresh and check." }, { status: 409 });
-    await createEvent(shop, jobId, "picked_up", `Picked up ${parsed.record.pickedUpAt}${parsed.record.pickedUpBy ? ` by ${parsed.record.pickedUpBy}` : ""}.`, { oldValue: job.status, newValue: JSON.stringify(parsed.record), createdBy: actor });
+    if (!pickedUpNow) return Response.json({ ok: false, message: `${PICKUP_ALREADY_RECORDED} — this job changed while the pickup was being saved. Refresh to see the saved pickup.` }, { status: 409 });
     return Response.json({ ok: true, message: "Pickup recorded. Mark the job Completed when done." });
   }
 
@@ -1605,6 +1613,7 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
   const totalCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
   const materialSummary = summarizeMaterialUsage(job.materialUsages || []);
   const savedShipment = savedShipmentForJob(job, job.events || []);
+  const savedPickup = savedPickupForJob(job, job.events || []);
 
   return (
     <Card>
@@ -2194,6 +2203,16 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
               </Form>
             </details>
             )}
+            {/* 2026-11-14 LIVE QA: a saved pickup is shown read-only from the loader (survives refresh); the blank form is offered only while none is saved. */}
+            {savedPickup ? (
+              <div style={{ marginTop: 6, padding: 8, borderRadius: 8, border: "1px solid #9fd5b0", background: "#f1faf3" }}>
+                <Text as="p" fontWeight="semibold">CUSTOMER PICKUP RECORDED</Text>
+                <Text as="p">Picked up by: {savedPickup.pickedUpBy || "not entered"}</Text>
+                <Text as="p">Pickup date/time: {savedPickup.pickedUpAt ? new Date(savedPickup.pickedUpAt).toLocaleString() : "—"}</Text>
+                {savedPickup.note ? <Text as="p">Note: {savedPickup.note}</Text> : null}
+                <Text as="p" tone="subdued">Recorded by: {savedPickup.recordedBy || "staff"} · Recorded at: {savedPickup.recordedAt ? new Date(savedPickup.recordedAt).toLocaleString() : "—"}</Text>
+              </div>
+            ) : (
             <details style={{ marginTop: 6 }}>
               <summary style={{ cursor: "pointer", fontWeight: 600 }}>Record customer pickup</summary>
               <Form method="post">
@@ -2206,6 +2225,7 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
                 </BlockStack>
               </Form>
             </details>
+            )}
           </div>
 
           <div style={{ minWidth: 320, flex: 2 }}>

@@ -177,6 +177,47 @@ export function formatShipDate(shipDate: string | null): string {
   return match ? `${match[2]}/${match[3]}/${match[1]}` : "—";
 }
 
+/* ---------------- saved customer pickup (read side) ---------------- */
+
+export const PICKUP_ALREADY_RECORDED = "CUSTOMER PICKUP ALREADY RECORDED";
+
+export type SavedPickup = {
+  pickedUpAt: string | null; // ISO
+  pickedUpBy: string | null;
+  /** The pickup note lives ONLY in the picked_up event JSON (no column); null when absent or redacted. */
+  note: string | null;
+  recordedBy: string | null;
+  recordedAt: string | null; // ISO
+  /** "structured" = ProductionJob pickedUp* columns; "event" = pre-migration jobs with only the picked_up event. */
+  source: "structured" | "event";
+};
+
+/**
+ * 2026-11-14 LIVE QA: the saved customer pickup for a job, for display after
+ * refresh. pickedUpAt on the job (migration 20261112090000) is the authority;
+ * the newest "picked_up" event adds the note and who / when recorded it. Jobs
+ * picked up before the columns existed fall back to the event JSON. Pure.
+ */
+export function savedPickupForJob(job: any, events: any[] = []): SavedPickup | null {
+  const latest = (events || [])
+    .filter((event) => event?.eventType === "picked_up")
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0] || null;
+  let fromEvent: any = null;
+  try { fromEvent = latest?.newValue ? JSON.parse(latest.newValue) : null; } catch { fromEvent = null; }
+  const note = fromEvent && typeof fromEvent.note === "string" && fromEvent.note.trim() ? fromEvent.note.trim() : null;
+  const recordedBy = latest?.createdBy || null;
+  const recordedAt = isoDate(latest?.createdAt);
+  const structuredAt = isoDate(job?.pickedUpAt);
+  if (structuredAt) {
+    return { pickedUpAt: structuredAt, pickedUpBy: job.pickedUpBy || null, note, recordedBy, recordedAt, source: "structured" };
+  }
+  const eventAt = isoDate(fromEvent?.pickedUpAt);
+  if (eventAt) {
+    return { pickedUpAt: eventAt, pickedUpBy: typeof fromEvent.pickedUpBy === "string" && fromEvent.pickedUpBy.trim() ? fromEvent.pickedUpBy.trim() : null, note, recordedBy, recordedAt, source: "event" };
+  }
+  return null;
+}
+
 /* ---------------- reprint reasons (owner categories) ---------------- */
 
 export const REPRINT_REASONS = [
