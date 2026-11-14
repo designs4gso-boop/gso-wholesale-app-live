@@ -8,19 +8,25 @@ import {
   BlockStack,
   InlineStack,
   Badge,
-  Divider,
+
 } from "@shopify/polaris";
 import { useNavigate, useLoaderData, useLocation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { resolveStaffAccess } from "../lib/staff-roles.server";
+import { ROLE_LABEL, SIMPLE_BOARD_HREF, navForRole } from "../lib/simple-nav";
 
 // Dashboard loader is READ-ONLY: Prisma count() calls only. Every status
 // filter below mirrors the vocabulary the owning route actually uses, cited
 // inline, so the tile count matches what staff see when they click through.
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
   const shop = session.shop;
   const now = new Date();
+  // SIMPLE MODE (2026-11-14): the role only chooses which tiles / areas are SHOWN on Home.
+  const staff = resolveStaffAccess(auth);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   // app.erp.rip-import-review.tsx defaults to status=unresolved (productionJobId null) + days=30.
   const ripCutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
@@ -40,6 +46,11 @@ export async function loader({ request }: { request: Request }) {
     materials,
     machines,
     vendorProducts,
+    jobsReadyToPrint,
+    jobsPrinting,
+    jobsFinishing,
+    jobsReadyForPickup,
+    jobsOverdue,
   ] = await Promise.all([
     // app.quotes.tsx board stages: draft -> sent -> approved -> deposit_paid -> paid -> production -> completed.
     db.quote.count({ where: { shop, status: { in: ["draft", "sent"] } } }),
@@ -63,6 +74,12 @@ export async function loader({ request }: { request: Request }) {
     db.material.count({ where: { shop, active: true } }),
     db.machine.count({ where: { shop, active: true } }),
     db.vendorProduct.count({ where: { shop, active: true } }),
+    // Simple Mode shop-floor tiles: same status vocabulary as app/lib/simple-production.ts.
+    db.productionJob.count({ where: { shop, active: true, status: "ready_to_print" } }),
+    db.productionJob.count({ where: { shop, active: true, status: "printing" } }),
+    db.productionJob.count({ where: { shop, active: true, status: { in: ["cutting", "laminating", "qc", "packing"] } } }),
+    db.productionJob.count({ where: { shop, active: true, status: "ready_for_pickup" } }),
+    db.productionJob.count({ where: { shop, active: true, dueDate: { lt: startOfToday }, status: { notIn: ["completed", "shipped", "picked_up", "cancelled"] } } }),
   ]);
 
   return Response.json({
@@ -78,12 +95,38 @@ export async function loader({ request }: { request: Request }) {
       ripUnresolved,
       purchaseOpen,
       purchaseLate,
+      jobsReadyToPrint,
+      jobsPrinting,
+      jobsFinishing,
+      jobsReadyForPickup,
+      jobsOverdue,
     },
+    role: staff.role,
+    viewFinancials: staff.can("viewFinancials"),
+    roleReason: staff.role === "unassigned" ? staff.reason : null,
     setup: { recipes, materials, machines, vendorProducts },
   });
 }
 
-type Tile = { label: string; value: number; href: string; helper: string };
+type Tile = { key: string; label: string; value: number; href: string; helper: string };
+
+// SIMPLE MODE (2026-11-14): which attention tiles each role sees on Home (display only).
+const ROLE_TILES: Record<string, readonly string[] | "all"> = {
+  owner: "all",
+  manager: "all",
+  sales: ["quotesToWork", "quotesAwaitingPayment", "reviewNeedsStaff", "reviewReadyToQuote", "jobsProofSent"],
+  print_operator: ["jobsReadyToPrint", "jobsPrinting", "jobsHeld", "jobsOverdue"],
+  bagger: ["jobsFinishing", "jobsReadyForPickup", "jobsHeld", "jobsOverdue"],
+  unassigned: [],
+};
+const ROLE_HOME: Record<string, { purpose: string; action: string; href: string }> = {
+  owner: { purpose: "What needs your attention across the shop today.", action: "Open Quotes", href: "/app/quotes" },
+  manager: { purpose: "What needs attention across the shop today.", action: "Open Production Board", href: SIMPLE_BOARD_HREF },
+  sales: { purpose: "Leads, quotes and customers waiting on you.", action: "Open Quotes", href: "/app/quotes" },
+  print_operator: { purpose: "Jobs ready to print and anything that needs a reprint.", action: "Open Production Board", href: SIMPLE_BOARD_HREF },
+  bagger: { purpose: "Jobs to finish, check, pack and hand over.", action: "Open Production Board", href: SIMPLE_BOARD_HREF },
+  unassigned: { purpose: "Your account does not have an ERP role yet.", action: "Open the ERP walkthrough", href: "/app/erp/walkthrough" },
+};
 type LinkGroup = { title: string; links: { label: string; href: string }[] };
 
 // Everything removed from the sidebar on 2026-10-05 lives here (id="advanced").
@@ -170,78 +213,107 @@ export default function AppHome() {
     if (location.hash === "#advanced") {
       setAdvancedOpen(true);
       document.getElementById("advanced")?.scrollIntoView({ block: "start" });
+    } else if (location.hash.startsWith("#area-")) {
+      document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
     }
   }, [location.hash]);
 
   const a = data.attention;
-  const tiles: Tile[] = [
-    { label: "Quotes to work", value: a.quotesToWork, href: "/app/quotes", helper: "Draft or sent, not yet approved" },
-    { label: "Quotes awaiting payment", value: a.quotesAwaitingPayment, href: "/app/quotes", helper: "Approved or deposit paid" },
-    { label: "Leads needing staff review", value: a.reviewNeedsStaff, href: "/app/erp/agent-review-queue?status=needs_staff_review", helper: "New or needs staff review" },
-    { label: "Leads ready to quote", value: a.reviewReadyToQuote, href: "/app/erp/agent-review-queue?status=ready_to_quote", helper: "Pick a recipe, create draft quote" },
-    { label: "Agent intents needing a decision", value: a.opsIntentsAwaiting, href: "/app/erp/ops-hub", helper: "Awaiting human approval" },
-    { label: "Open production jobs", value: a.jobsOpen, href: "/app/erp/production", helper: "Not completed, shipped or cancelled" },
-    { label: "Proofs out to customers", value: a.jobsProofSent, href: "/app/erp/production", helper: "Status: proof sent" },
-    { label: "Jobs on hold / reprint", value: a.jobsHeld, href: "/app/erp/production", helper: "On hold or reprint needed" },
-    { label: "RIP rows not attached to a job", value: a.ripUnresolved, href: "/app/erp/rip-import-review", helper: "Unresolved, last 30 days" },
-    { label: "Open purchase requests", value: a.purchaseOpen, href: "/app/erp/purchase-requests", helper: "Not received or cancelled" },
-    { label: "Late purchase requests", value: a.purchaseLate, href: "/app/erp/purchase-requests", helper: "Open, expected arrival passed" },
+  const role: string = data.role || "owner";
+  const isOwner = role === "owner";
+  const home = ROLE_HOME[role] || ROLE_HOME.owner;
+  const areas = navForRole(role, { viewFinancials: Boolean(data.viewFinancials) }).filter((section) => section.key !== "home");
+  const allTiles: Tile[] = [
+    { key: "quotesToWork", label: "Quotes to work", value: a.quotesToWork, href: "/app/quotes", helper: "Draft or sent, not yet approved" },
+    { key: "quotesAwaitingPayment", label: "Quotes awaiting payment", value: a.quotesAwaitingPayment, href: "/app/quotes", helper: "Approved or deposit paid" },
+    { key: "reviewNeedsStaff", label: "Leads to review", value: a.reviewNeedsStaff, href: "/app/erp/agent-review-queue?status=needs_staff_review", helper: "New or waiting on staff" },
+    { key: "reviewReadyToQuote", label: "Leads ready to quote", value: a.reviewReadyToQuote, href: "/app/erp/agent-review-queue?status=ready_to_quote", helper: "Create a draft quote" },
+    { key: "jobsOverdue", label: "Late jobs", value: a.jobsOverdue, href: SIMPLE_BOARD_HREF, helper: "Due date has passed" },
+    { key: "jobsHeld", label: "Jobs on hold / reprint", value: a.jobsHeld, href: SIMPLE_BOARD_HREF, helper: "On hold or reprint needed" },
+    { key: "jobsReadyToPrint", label: "Ready to print", value: a.jobsReadyToPrint, href: SIMPLE_BOARD_HREF, helper: "Waiting for a printer" },
+    { key: "jobsPrinting", label: "Printing now", value: a.jobsPrinting, href: SIMPLE_BOARD_HREF, helper: "On a machine" },
+    { key: "jobsFinishing", label: "Finishing / QC / packing", value: a.jobsFinishing, href: SIMPLE_BOARD_HREF, helper: "Cut, check and pack" },
+    { key: "jobsReadyForPickup", label: "Ready for pickup", value: a.jobsReadyForPickup, href: SIMPLE_BOARD_HREF, helper: "Waiting for the customer" },
+    { key: "jobsOpen", label: "Open production jobs", value: a.jobsOpen, href: SIMPLE_BOARD_HREF, helper: "Not completed, shipped or cancelled" },
+    { key: "jobsProofSent", label: "Proofs out to customers", value: a.jobsProofSent, href: SIMPLE_BOARD_HREF, helper: "Waiting for customer approval" },
+    { key: "purchaseOpen", label: "Open purchase requests", value: a.purchaseOpen, href: "/app/erp/purchase-requests", helper: "Not received or cancelled" },
+    { key: "purchaseLate", label: "Late purchase requests", value: a.purchaseLate, href: "/app/erp/purchase-requests", helper: "Expected arrival has passed" },
+    { key: "opsIntentsAwaiting", label: "Agent requests needing a decision", value: a.opsIntentsAwaiting, href: "/app/erp/ops-hub", helper: "Waiting for a person to approve" },
+    { key: "ripUnresolved", label: "Print-log rows not matched to a job", value: a.ripUnresolved, href: "/app/erp/rip-import-review", helper: "Last 30 days" },
   ];
+  const allowed = ROLE_TILES[role] ?? "all";
+  // owners / managers keep the shop-wide tiles; the shop-floor stage tiles are for the roles that work them
+  const SHOP_FLOOR_ONLY = ["jobsReadyToPrint", "jobsPrinting", "jobsFinishing", "jobsReadyForPickup"];
+  const tiles = allowed === "all" ? allTiles.filter((tile) => !SHOP_FLOOR_ONLY.includes(tile.key)) : allTiles.filter((tile) => allowed.includes(tile.key));
   const totalAttention = tiles.reduce((sum, tile) => sum + tile.value, 0);
 
   return (
     <Page
-      title="GSO ERP Command Center"
-      subtitle="Start with what needs attention, then follow the daily workflow. Owner and audit tools are collapsed at the bottom."
-      primaryAction={{ content: "Open Quotes / CRM", onAction: () => navigate("/app/quotes") }}
-      secondaryActions={[
-        { content: "Production Board", onAction: () => navigate("/app/erp/production") },
-        { content: "Launch Readiness", onAction: () => navigate("/app/erp/setup-wizard") },
-      ]}
+      title="Home"
+      subtitle={home.purpose}
+      primaryAction={{ content: home.action, onAction: () => navigate(home.href) }}
     >
       <Layout>
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="100">
-                  <Text as="h2" variant="headingMd">Needs attention today</Text>
-                  <Text as="p" tone="subdued">Live counts from the ERP database. Click Open to go to the page that handles each item.</Text>
-                </BlockStack>
-                <Badge tone={totalAttention > 0 ? "attention" : "success"}>{totalAttention > 0 ? `${totalAttention} items` : "All clear"}</Badge>
-              </InlineStack>
-              <InlineStack gap="300" wrap>
-                {tiles.map((tile) => <AttentionTile key={tile.label} tile={tile} onOpen={navigate} />)}
-              </InlineStack>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+        {role === "unassigned" ? (
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="100">
+                <Text as="h2" variant="headingMd">Ask the owner to give your account an ERP role</Text>
+                <Text as="p" tone="subdued">Until a role is assigned you can read the walkthrough, but the work areas stay hidden.</Text>
+                {data.roleReason ? <details><summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Details</summary><Text as="p" tone="subdued" variant="bodySm">{data.roleReason}</Text></details> : null}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        ) : null}
 
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="400">
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="100">
-                  <Text as="h2" variant="headingMd">Recommended daily workflow</Text>
-                  <Text as="p" tone="subdued">Same order as the sidebar groups: check readiness, triage leads, quote, produce, review.</Text>
-                </BlockStack>
-                <Badge tone="success">Read-only guide</Badge>
-              </InlineStack>
-              <Divider />
-              <InlineStack gap="300" wrap>
-                <Button onClick={() => navigate("/app/erp/setup-wizard")}>1. Help · Launch Readiness</Button>
-                <Button onClick={() => navigate("/app/erp/agent-review-queue")}>2. Operations · Agent Review Queue</Button>
-                <Button variant="primary" onClick={() => navigate("/app/quotes")}>3. Sales · Quotes / CRM</Button>
-                <Button onClick={() => navigate("/app/erp/production")}>4. Production · Production Board</Button>
-                <Button onClick={() => navigate("/app/erp/reports-dashboard")}>5. Reporting · Reports Dashboard</Button>
-              </InlineStack>
-              <Text as="p" tone="subdued">
-                Setup · Product Setup is the front door for new products: it creates the recipe, vendor product, tiers, margins, and product-type defaults behind the scenes.
-              </Text>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+        {tiles.length ? (
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <InlineStack align="space-between" blockAlign="center">
+                  <BlockStack gap="100">
+                    <Text as="h2" variant="headingMd">Needs attention today</Text>
+                    <Text as="p" tone="subdued">Tap Open to go straight to the page that handles it.</Text>
+                  </BlockStack>
+                  <Badge tone={totalAttention > 0 ? "attention" : "success"}>{totalAttention > 0 ? `${totalAttention} items` : "All clear"}</Badge>
+                </InlineStack>
+                <InlineStack gap="300" wrap>
+                  {tiles.map((tile) => <AttentionTile key={tile.key} tile={tile} onOpen={navigate} />)}
+                </InlineStack>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        ) : null}
 
+        {areas.length ? (
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400">
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingMd">Your areas</Text>
+                  <Text as="p" tone="subdued">{`${ROLE_LABEL[role] || "Staff"} view — the same areas as the menu, with every page inside them.`}</Text>
+                </BlockStack>
+                {areas.map((section) => (
+                  <div key={section.key} id={`area-${section.key}`}>
+                    <BlockStack gap="200">
+                      <InlineStack gap="200" blockAlign="center">
+                        <Text as="h3" variant="headingSm">{section.label}</Text>
+                        <Text as="span" tone="subdued">{section.purpose}</Text>
+                      </InlineStack>
+                      <InlineStack gap="200" wrap>
+                        {section.links.map((link, index) => (
+                          <Button key={link.href + link.label} variant={index === 0 ? "primary" : undefined} onClick={() => navigate(link.href)}>{link.label}</Button>
+                        ))}
+                      </InlineStack>
+                    </BlockStack>
+                  </div>
+                ))}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        ) : null}
+
+        {isOwner ? (
         <Layout.Section>
           <BlockStack gap="200">
             <Text as="h2" variant="headingMd">Setup data on file</Text>
@@ -253,7 +325,9 @@ export default function AppHome() {
             </InlineStack>
           </BlockStack>
         </Layout.Section>
+        ) : null}
 
+        {isOwner ? (
         <Layout.Section>
           <Card>
             <details
@@ -287,6 +361,7 @@ export default function AppHome() {
             </details>
           </Card>
         </Layout.Section>
+        ) : null}
       </Layout>
     </Page>
   );

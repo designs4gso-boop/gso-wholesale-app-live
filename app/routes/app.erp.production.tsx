@@ -13,10 +13,12 @@ import {
   Checkbox,
 } from "@shopify/polaris";
 import { FormTextField } from "../components/FormTextField";
-import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
+import { Form, Link, useActionData, useLoaderData, useNavigation, useNavigate, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
 import { productionFinancialVisibility } from "../lib/owner-authorization.server";
 import { redactJobFinancials } from "../lib/production-financial-redaction";
+import { friendlyMessage } from "../lib/employee-messages";
+import { CLASSIC_PRODUCTION_HREF, SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
 import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, assessLinkSource, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, jobSourceType, linkIntakeJobToTarget, runWithTicketRetry } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
@@ -2472,12 +2474,19 @@ export default function ProductionBoard() {
     })),
   ];
 
+  // SIMPLE MODE (2026-11-14): "Open advanced view" from a job workspace lands
+  // here with ?job=<id> — display filter only, the loader and actions are unchanged.
+  const [searchParams] = useSearchParams();
+  const focusJobId = searchParams.get("job");
+  const visibleJobs = focusJobId ? jobs.filter((job: any) => String(job.id) === focusJobId) : jobs;
+  const actionFeedback = friendlyMessage(actionData?.message);
+
   const statusGroups = productionStatuses
-    .map((status) => ({ ...status, jobs: jobs.filter((job: any) => job.status === status.value) }))
-    .filter((group) => group.jobs.length || ["new", "prepress", "printing", "qc", "completed"].includes(group.value));
+    .map((status) => ({ ...status, jobs: visibleJobs.filter((job: any) => job.status === status.value) }))
+    .filter((group) => group.jobs.length || (!focusJobId && ["new", "prepress", "printing", "qc", "completed"].includes(group.value)));
 
   return (
-    <Page title="Production Board" subtitle="Create production jobs from approved/paid quotes, track stages, files, variants, notes, alerts, and printable work orders.">
+    <Page title="Production — Advanced View" subtitle="The full job record: create jobs, costs, files, materials, links and history. Day-to-day work happens on the simple Production Board.">
       <Layout>
         <Layout.Section>
           <Card>
@@ -2495,7 +2504,19 @@ export default function ProductionBoard() {
                   </Form>
                 </InlineStack>
               </InlineStack>
-              {actionData?.message ? <Text as="p" tone={actionData.ok ? "success" : "critical"}>{actionData.message}</Text> : null}
+              {actionData?.message ? (
+                <div>
+                  <Text as="p" tone={actionData.ok ? "success" : "critical"} fontWeight="semibold">{actionFeedback.primary}</Text>
+                  {actionFeedback.detail ? <details><summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Details</summary><Text as="p" tone="subdued" variant="bodySm">{actionFeedback.detail}</Text></details> : null}
+                </div>
+              ) : null}
+              {focusJobId ? (
+                <InlineStack gap="300" blockAlign="center">
+                  <Badge tone="info">Advanced view — showing one job</Badge>
+                  <Link to={jobWorkspaceHref(focusJobId)}>Back to the job page</Link>
+                  <Link to={CLASSIC_PRODUCTION_HREF}>Show all jobs</Link>
+                </InlineStack>
+              ) : <Link to={SIMPLE_BOARD_HREF}>Open the simple Production Board</Link>}
               <Form method="post">
                 <input type="hidden" name="intent" value="createFromQuote" />
                 <InlineStack gap="300" blockAlign="end">

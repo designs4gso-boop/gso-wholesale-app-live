@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { navForRole } from "../app/lib/simple-nav";
 
 const ROOT = resolve(__dirname, "..");
 const navSource = readFileSync(resolve(ROOT, "app/routes/app.tsx"), "utf8");
@@ -63,40 +64,51 @@ const REMOVED_FROM_NAV = [
   "/app/erp/agent-review-queue/new",
 ];
 
-function navBlock(source: string): string {
-  const start = source.indexOf("<s-app-nav>");
-  const end = source.indexOf("</s-app-nav>");
-  expect(start).toBeGreaterThan(-1);
-  expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
-}
-
-function navLinks(source: string): { href: string; label: string }[] {
-  return [...navBlock(source).matchAll(/<s-link href="([^"]+)">([^<]+)<\/s-link>/g)].map((m) => ({ href: m[1], label: m[2] }));
-}
+// SIMPLE MODE (2026-11-14, owner-approved): the sidebar is no longer 26
+// hard-coded links. app.tsx renders navForRole(role) — at most six areas — and
+// every page that used to be a sidebar link is listed inside its area on Home.
+// These tests pin the same intent as before: a short ordered sidebar, nothing
+// "removed" at the top level, and every former sidebar page still reachable.
+const ownerNav = navForRole("owner");
+const ownerReachable = new Set(ownerNav.flatMap((section) => [section.href, ...section.links.map((link) => link.href)]));
 
 describe("ERP sidebar nav (app/routes/app.tsx)", () => {
-  const links = navLinks(navSource);
-
-  it("contains exactly the 26 grouped hrefs in order", () => {
-    expect(links.map((l) => l.href)).toEqual(EXPECTED_NAV_HREFS);
-    expect(links).toHaveLength(26);
+  it("renders the role-aware nav (no hard-coded link list)", () => {
+    const start = navSource.indexOf("<s-app-nav>");
+    const end = navSource.indexOf("</s-app-nav>");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const block = navSource.slice(start, end);
+    expect(block).toContain("navForRole(role, { viewFinancials }).map((section) => (");
+    expect(block).toContain("<s-link key={section.key} href={section.href}>{section.label}</s-link>");
+    expect(block).not.toMatch(/<s-link href="/);
   });
 
-  it("does not contain any removed href", () => {
-    const hrefs = new Set(links.map((l) => l.href));
+  it("the owner sees exactly the six areas in order", () => {
+    expect(ownerNav.map((section) => section.label)).toEqual(["Home", "Sales", "Production", "Inventory", "Purchasing", "Admin"]);
+    expect(ownerNav.map((section) => section.href)).toEqual(["/app", "/app/quotes", "/app/erp/production-board", "/app/erp/materials", "/app/erp/purchase-requests", "/app#advanced"]);
+  });
+
+  it("every page that was a sidebar link is still reachable for the owner", () => {
+    for (const href of EXPECTED_NAV_HREFS) {
+      expect(ownerReachable.has(href), `${href} should be listed in an owner area`).toBe(true);
+    }
+  });
+
+  it("does not put any removed href at the top level", () => {
+    const top = new Set(ownerNav.map((section) => section.href));
     for (const removed of REMOVED_FROM_NAV) {
-      expect(hrefs.has(removed), `${removed} should not be in the sidebar`).toBe(false);
+      expect(top.has(removed), `${removed} should not be in the sidebar`).toBe(false);
     }
   });
 
-  it("uses the new group prefixes (no Owner · and no Audit · Cost Health labels)", () => {
-    for (const link of links) {
-      expect(link.label.startsWith("Owner ·"), `label "${link.label}"`).toBe(false);
-      expect(link.label.includes("Audit · Cost Health"), `label "${link.label}"`).toBe(false);
+  it("uses plain labels (no group prefixes, no Owner · labels)", () => {
+    for (const section of ownerNav) {
+      for (const label of [section.label, ...section.links.map((link) => link.label)]) {
+        expect(label.includes(" · "), `label "${label}"`).toBe(false);
+      }
     }
-    expect(links.find((l) => l.href === "/app#advanced")?.label).toBe("Admin · Advanced Tools");
-    expect(links.find((l) => l.href === "/app/erp/setup-wizard")?.label).toBe("Help · Launch Readiness");
+    expect(ownerNav.find((section) => section.key === "admin")?.links.find((link) => link.href === "/app/erp/setup-wizard")?.label).toBe("Launch Readiness");
   });
 });
 

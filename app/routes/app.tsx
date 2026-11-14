@@ -4,16 +4,22 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { authenticate } from "../shopify.server";
+import { resolveStaffAccess } from "../lib/staff-roles.server";
+import { navForRole } from "../lib/simple-nav";
 import { OWNER_ENFORCEMENT_ENV, OWNER_USER_IDS_ENV, configuredOwnerUserIds, resolveOwnerAuthorization } from "../lib/owner-authorization.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const auth = await authenticate.admin(request);
   const owner = resolveOwnerAuthorization(auth);
+  // SIMPLE MODE (2026-11-14): the role only chooses which nav areas are SHOWN.
+  const staff = resolveStaffAccess(auth);
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
     // 2026-10-19: owner-only nav entries are hidden for staff (the routes themselves refuse non-owners server-side).
     isOwner: owner.isOwner,
+    role: staff.role,
+    viewFinancials: staff.can("viewFinancials"),
     // 2026-11-11 OWNER ACCESS DIAGNOSTIC: shown only while owner access is not
     // yet permanent — the temporary switch is on, or no owner IDs are set. It
     // names the mode and the viewer's OWN verified Shopify staff user ID (the
@@ -25,46 +31,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export default function App() {
-  const { apiKey, isOwner, ownerAccessNotice } = useLoaderData<typeof loader>();
+  const { apiKey, role, viewFinancials, ownerAccessNotice } = useLoaderData<typeof loader>();
 
   return (
     <AppProvider embedded apiKey={apiKey}>
-      {/* Nav groups (2026-10-05). The embedded admin nav renders a flat link
-          list (no section headers), so grouping is expressed by ordering and
-          label prefixes: Dashboard, then "Sales ·", "Production ·",
-          "Purchasing ·", "Operations ·", "Reporting ·", "Pricing ·",
-          "Audit ·", "Setup ·", "Admin ·", "Help ·". Everything that used to be
-          an "Owner ·" or secondary "Audit ·" link (configurator tools, cost
-          audits, admin settings, agent security, pricing rules, production
-          extras, Add Product) now lives ONLY under Dashboard -> "Advanced &
-          owner tools" (/app#advanced) so the daily nav stays short. */}
+      {/* SIMPLE MODE nav (2026-11-14). The embedded admin nav is a flat list, so
+          it carries at most six areas — Home, Sales, Production, Inventory,
+          Purchasing, Admin — chosen by ROLE (app/lib/simple-nav.ts). Each
+          area's pages are listed on Home ("Your areas"); everything else stays
+          under Home -> "Advanced & owner tools" (/app#advanced). Display only:
+          every route still enforces its own permissions server-side. */}
       <s-app-nav>
-        <s-link href="/app">Dashboard</s-link>
-        <s-link href="/app/quotes">Sales · Quotes / CRM</s-link>
-        <s-link href="/app/wholesale/customers">Sales · Wholesale Applications</s-link>
-        {isOwner ? <s-link href="/app/erp/cost-calculator">Sales · Cost Calculator</s-link> : null}
-        <s-link href="/app/erp/production">Production · Production Board</s-link>
-        <s-link href="/app/erp/print-intake">Production · Print Intake</s-link>
-        <s-link href="/app/erp/rip-imports">Production · RIP Imports & Review</s-link>
-        <s-link href="/app/erp/print-logs">Production · Print Logs</s-link>
-        <s-link href="/app/erp/purchase-requests">Purchasing · Purchase Requests</s-link>
-        <s-link href="/app/erp/reorder-report">Purchasing · Reorder Report</s-link>
-        <s-link href="/app/erp/agent-review-queue">Operations · Agent Review Queue</s-link>
-        <s-link href="/app/erp/ops-hub">Operations · Operations Hub</s-link>
-        <s-link href="/app/erp/reports-dashboard">Reporting · Reports Dashboard</s-link>
-        <s-link href="/app/erp/pricing-settings">Pricing · Pricing Settings</s-link>
-        <s-link href="/app/erp/pricing-intelligence">Pricing · Pricing Intelligence</s-link>
-        <s-link href="/app/erp/margin-review">Pricing · Margin Review</s-link>
-        <s-link href="/app/erp/cost-verification">Audit · Cost Verification</s-link>
-        <s-link href="/app/erp/product-setup">Setup · Product Setup</s-link>
-        <s-link href="/app/erp/materials">Setup · Materials</s-link>
-        <s-link href="/app/erp/machines">Setup · Machines</s-link>
-        <s-link href="/app/erp/vendors">Setup · Vendors</s-link>
-        <s-link href="/app/erp/vendor-cost-book">Setup · Vendor Cost Book</s-link>
-        <s-link href="/app#advanced">Admin · Advanced Tools</s-link>
-        {isOwner ? <s-link href="/app/erp/owner-readiness">Admin · Staff Access &amp; Readiness</s-link> : null}
-        <s-link href="/app/erp/setup-wizard">Help · Launch Readiness</s-link>
-        <s-link href="/app/erp/walkthrough">Help · ERP Walkthrough</s-link>
+        {navForRole(role, { viewFinancials }).map((section) => (
+          <s-link key={section.key} href={section.href}>{section.label}</s-link>
+        ))}
       </s-app-nav>
 
       {ownerAccessNotice ? (

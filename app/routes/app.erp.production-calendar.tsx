@@ -340,7 +340,7 @@ export default function ProductionCalendar() {
   const busy = navigation.state !== "idle";
 
   return (
-    <Page title="Production Calendar / Due Date Board" subtitle="Schedule jobs by due date, rush priority, status, assigned person, and machine." backAction={{ content: "Production", url: "/app/erp/production" }}>
+    <Page title="Production Calendar / Due Date Board" subtitle="Schedule jobs by due date, rush priority, status, assigned person, and machine." backAction={{ content: "Production Board", url: "/app/erp/production-board" }}>
       <Layout>
         <Layout.Section>
           <Card>

@@ -127,7 +127,12 @@ describe("owner route lock (tests 1-5)", () => {
     expect(src()).toContain('if (isRouteErrorResponse(error) && error.status === 403) {');
     // and the nav hides the link for staff
     const nav = src("app/routes/app.tsx");
-    expect(nav).toContain('{isOwner ? <s-link href="/app/erp/cost-calculator">Sales · Cost Calculator</s-link> : null}');
+    // 2026-11-14 Simple Mode: the sidebar is role-aware (navForRole); the Cost Calculator is listed for the owner only.
+    expect(nav).toContain("navForRole(role, { viewFinancials })");
+    const { navForRole } = await import("../app/lib/simple-nav");
+    const hrefs = (role: string, viewFinancials = false) => navForRole(role, { viewFinancials }).flatMap((section) => [section.href, ...section.links.map((link) => link.href)]);
+    expect(hrefs("owner")).toContain("/app/erp/cost-calculator");
+    for (const role of ["manager", "sales", "print_operator", "bagger", "unassigned"]) expect(hrefs(role, true), role).not.toContain("/app/erp/cost-calculator");
     // 2026-11-11: resolved once, then used for the nav AND the owner-access diagnostic.
     expect(nav).toContain("const owner = resolveOwnerAuthorization(auth);");
     expect(nav).toContain("isOwner: owner.isOwner,");

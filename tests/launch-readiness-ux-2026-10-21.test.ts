@@ -101,7 +101,10 @@ describe("1-2. naming", () => {
 
   it("the navigation label is Launch Readiness (same route, same position)", () => {
     const nav = src("app/routes/app.tsx");
-    expect(nav).toContain('<s-link href="/app/erp/setup-wizard">Help · Launch Readiness</s-link>');
+    // 2026-11-14 Simple Mode: the label lives in the role-aware nav (app/lib/simple-nav.ts), same route.
+    const simpleNav = src("app/lib/simple-nav.ts");
+    expect(simpleNav).toContain('{ label: "Launch Readiness", href: "/app/erp/setup-wizard" }');
+    expect(simpleNav).not.toContain("Setup Wizard");
     expect(nav).not.toContain("Setup Wizard");
     for (const file of ["app/routes/app._index.tsx", "app/routes/app.erp.walkthrough.tsx"]) {
       expect(src(file), file).not.toContain("Setup Wizard");
