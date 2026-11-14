@@ -35,7 +35,7 @@ import { appendIntakeAudit } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
 import { PRODUCTION_STATUS_OPTIONS, isStaffProductionStatus } from "../lib/production-status-vocabulary";
-import { REPRINT_REASONS, fulfillmentQcGuardApplies, isReprintReason, parsePickupInput, parseShipmentInput, reprintReasonLabel, shipmentSummary, statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
+import { REPRINT_REASONS, SHIPMENT_ALREADY_RECORDED, formatShipDate, fulfillmentQcGuardApplies, isReprintReason, parsePickupInput, parseShipmentInput, reprintReasonLabel, savedShipmentForJob, shipmentSummary, statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
 import { permissionDeniedResponse, resolveStaffAccess, type StaffPermission } from "../lib/staff-roles.server";
 import { applyStockMovement } from "../lib/inventory-stock.server";
 import { releaseJobReservations } from "../lib/inventory-reservation.server";
@@ -911,13 +911,18 @@ export async function action({ request }: { request: Request }) {
 
   // OWNER DECISION 2026-11-11: shipment / pickup records. QC PASS is required
   // first; the job moves to Shipped / Picked Up (Completed is a later, separate
-  // step). Details live in a ProductionJobEvent (no schema change). Shipping
+  // step). Details live in the ProductionJob ship* / pickedUp* columns plus a
+  // ProductionJobEvent audit row. Shipping
   // cost is exactly what was entered — never invented.
   if (intent === "recordShipment" || intent === "recordPickup") {
     const jobId = String(formData.get("jobId") || "");
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
     if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
-    if (["cancelled", "shipped", "picked_up"].includes(String(job.status))) return Response.json({ ok: false, message: `This job is already ${labelForStatus(job.status)}.` }, { status: 400 });
+    if (["cancelled", "shipped", "picked_up"].includes(String(job.status))) {
+      // 2026-11-14: a replayed shipment names the shipment that is already saved (nothing is overwritten)
+      const saved = intent === "recordShipment" ? savedShipmentForJob(job) : null;
+      return Response.json({ ok: false, message: `This job is already ${labelForStatus(job.status)}.${saved ? ` ${SHIPMENT_ALREADY_RECORDED}: ${saved.carrier}${saved.trackingNumber ? `, tracking ${saved.trackingNumber}` : ""}, ${saved.packageCount ?? "?"} package(s), ship date ${formatShipDate(saved.shipDate)}.` : ""}` }, { status: 400 });
+    }
     const target = intent === "recordShipment" ? "shipped" : "picked_up";
     if (fulfillmentQcGuardApplies(job.status, target)) {
       const [items, events] = await Promise.all([
@@ -935,21 +940,27 @@ export async function action({ request }: { request: Request }) {
       // 2026-11-12: structured shipment columns (migration 20261112090000). The
       // update is conditional on the status we just read, so a replayed / double
       // submission matches no row and records nothing twice.
-      const shippedRows = await db.productionJob.updateMany({
-        where: { shop, id: jobId, status: job.status },
-        // the entered cost fills actualShippingCost only while job costs are still open
-        data: {
-          status: "shipped",
-          shippedAt: new Date(`${record.shipDate}T12:00:00Z`),
-          shipCarrier: record.carrier,
-          shipTrackingNumber: record.trackingNumber,
-          shipPackageCount: record.packageCount,
-          ...(record.actualShippingCost != null && !job.actualCostFinalized ? { actualShippingCost: record.actualShippingCost } : {}),
-        },
+      // 2026-11-14 LIVE QA: status + ship* columns + the shipped / tracking
+      // audit events are ONE transaction — all saved or none.
+      const shippedNow = await db.$transaction(async (tx: any) => {
+        const shippedRows = await tx.productionJob.updateMany({
+          where: { shop, id: jobId, status: job.status },
+          // the entered cost fills actualShippingCost only while job costs are still open
+          data: {
+            status: "shipped",
+            shippedAt: new Date(`${record.shipDate}T12:00:00Z`),
+            shipCarrier: record.carrier,
+            shipTrackingNumber: record.trackingNumber,
+            shipPackageCount: record.packageCount,
+            ...(record.actualShippingCost != null && !job.actualCostFinalized ? { actualShippingCost: record.actualShippingCost } : {}),
+          },
+        });
+        if (!shippedRows.count) return false;
+        await tx.productionJobEvent.create({ data: { shop, jobId, eventType: "shipped", message: shipmentSummary(record), oldValue: job.status, newValue: JSON.stringify(record), createdBy: actor || null } });
+        if (record.trackingNumber) await tx.productionJobEvent.create({ data: { shop, jobId, eventType: "tracking_added", message: `Tracking ${record.trackingNumber} (${record.carrier}).`, oldValue: null, newValue: record.trackingNumber, createdBy: actor || null } });
+        return true;
       });
-      if (!shippedRows.count) return Response.json({ ok: false, message: "This job changed while the shipment was being saved (already recorded?) — refresh and check." }, { status: 409 });
-      await createEvent(shop, jobId, "shipped", shipmentSummary(record), { oldValue: job.status, newValue: JSON.stringify(record), createdBy: actor });
-      if (record.trackingNumber) await createEvent(shop, jobId, "tracking_added", `Tracking ${record.trackingNumber} (${record.carrier}).`, { newValue: record.trackingNumber, createdBy: actor });
+      if (!shippedNow) return Response.json({ ok: false, message: `${SHIPMENT_ALREADY_RECORDED} — this job changed while the shipment was being saved. Refresh to see the saved shipment.` }, { status: 409 });
       return Response.json({ ok: true, message: `Shipment recorded. ${shipmentSummary(record)} Mark the job Completed when done.` });
     }
     const parsed = parsePickupInput({ pickedUpAt: formData.get("pickedUpAt"), pickedUpBy: formData.get("pickedUpBy"), note: formData.get("pickupNote") });
@@ -1593,6 +1604,7 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
   const totalRevenue = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
   const totalCost = (job.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
   const materialSummary = summarizeMaterialUsage(job.materialUsages || []);
+  const savedShipment = savedShipmentForJob(job, job.events || []);
 
   return (
     <Card>
@@ -2154,6 +2166,18 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
               <Button submit>Update status</Button>
             </Form>
             <Text as="p" tone="subdued">Completed is only available after the job is Shipped or Picked Up — record it below (QC PASS required).</Text>
+            {/* 2026-11-14 LIVE QA: a saved shipment is shown read-only from the loader (survives refresh); the blank form is offered only while none is saved. */}
+            {savedShipment ? (
+              <div style={{ marginTop: 6, padding: 8, borderRadius: 8, border: "1px solid #9fd5b0", background: "#f1faf3" }}>
+                <Text as="p" fontWeight="semibold">SHIPMENT RECORDED</Text>
+                <Text as="p">Carrier: {savedShipment.carrier}</Text>
+                <Text as="p">Tracking: {savedShipment.trackingNumber || "none entered"}</Text>
+                <Text as="p">Packages: {savedShipment.packageCount ?? "—"}</Text>
+                <Text as="p">Ship date: {formatShipDate(savedShipment.shipDate)}</Text>
+                {showFinancials ? <Text as="p">Actual shipping cost: {savedShipment.actualShippingCost != null ? `$${money(savedShipment.actualShippingCost)}` : "not entered"}</Text> : null}
+                <Text as="p" tone="subdued">Recorded by: {savedShipment.recordedBy || "staff"} · Recorded at: {savedShipment.recordedAt ? new Date(savedShipment.recordedAt).toLocaleString() : "—"}</Text>
+              </div>
+            ) : (
             <details style={{ marginTop: 6 }}>
               <summary style={{ cursor: "pointer", fontWeight: 600 }}>Record shipment</summary>
               <Form method="post">
@@ -2169,6 +2193,7 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
                 </BlockStack>
               </Form>
             </details>
+            )}
             <details style={{ marginTop: 6 }}>
               <summary style={{ cursor: "pointer", fontWeight: 600 }}>Record customer pickup</summary>
               <Form method="post">

@@ -102,6 +102,81 @@ export function shipmentSummary(record: ShipmentRecord): string {
   return `Shipped ${record.shipDate} via ${record.carrier}, ${record.packageCount} package(s)${record.trackingNumber ? `, tracking ${record.trackingNumber}` : ", no tracking number"}${record.actualShippingCost != null ? `, actual shipping $${record.actualShippingCost.toFixed(2)}` : ", shipping cost not entered"}.`;
 }
 
+/* ---------------- saved shipment (read side) ---------------- */
+
+export const SHIPMENT_ALREADY_RECORDED = "SHIPMENT ALREADY RECORDED";
+
+export type SavedShipment = {
+  carrier: string;
+  trackingNumber: string | null;
+  packageCount: number | null;
+  shipDate: string | null; // YYYY-MM-DD
+  /** Entered shipping cost from the audit event; null when not entered OR redacted for the viewer. */
+  actualShippingCost: number | null;
+  recordedBy: string | null;
+  recordedAt: string | null; // ISO
+  /** "structured" = ProductionJob ship* columns; "event" = pre-migration jobs that only have the shipped event. */
+  source: "structured" | "event";
+};
+
+const isoDate = (value: unknown): string | null => {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+};
+
+/**
+ * 2026-11-14 LIVE QA: the saved shipment for a job, for display after refresh.
+ * The structured ProductionJob columns (migration 20261112090000) are the
+ * authority; the newest "shipped" event only adds who / when (and the entered
+ * cost when the viewer may see it). Jobs shipped before the columns existed
+ * fall back to the event's JSON. Pure — never writes.
+ */
+export function savedShipmentForJob(job: any, events: any[] = []): SavedShipment | null {
+  const shippedEvents = (events || [])
+    .filter((event) => event?.eventType === "shipped")
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  const latest = shippedEvents[0] || null;
+  let fromEvent: any = null;
+  try { fromEvent = latest?.newValue ? JSON.parse(latest.newValue) : null; } catch { fromEvent = null; }
+  const eventCost = fromEvent && typeof fromEvent.actualShippingCost === "number" ? fromEvent.actualShippingCost : null;
+  const recordedBy = latest?.createdBy || null;
+  const recordedAt = isoDate(latest?.createdAt);
+  const carrier = String(job?.shipCarrier ?? "").trim();
+  if (carrier) {
+    const shipped = isoDate(job.shippedAt);
+    return {
+      carrier,
+      trackingNumber: job.shipTrackingNumber || null,
+      packageCount: job.shipPackageCount ?? null,
+      shipDate: shipped ? shipped.slice(0, 10) : null,
+      actualShippingCost: eventCost,
+      recordedBy,
+      recordedAt,
+      source: "structured",
+    };
+  }
+  if (fromEvent && String(fromEvent.carrier ?? "").trim()) {
+    return {
+      carrier: String(fromEvent.carrier).trim(),
+      trackingNumber: fromEvent.trackingNumber || null,
+      packageCount: Number.isInteger(fromEvent.packageCount) ? fromEvent.packageCount : null,
+      shipDate: /^\d{4}-\d{2}-\d{2}$/.test(String(fromEvent.shipDate || "")) ? fromEvent.shipDate : null,
+      actualShippingCost: eventCost,
+      recordedBy,
+      recordedAt,
+      source: "event",
+    };
+  }
+  return null;
+}
+
+/** MM/DD/YYYY for a YYYY-MM-DD ship date (no timezone shift). */
+export function formatShipDate(shipDate: string | null): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(shipDate || "");
+  return match ? `${match[2]}/${match[3]}/${match[1]}` : "—";
+}
+
 /* ---------------- reprint reasons (owner categories) ---------------- */
 
 export const REPRINT_REASONS = [

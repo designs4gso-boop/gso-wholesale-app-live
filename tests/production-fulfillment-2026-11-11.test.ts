@@ -70,8 +70,9 @@ describe("shipment / pickup records", () => {
 
   it("the board writes shipped / tracking_added / picked_up events and needs the recordShipment permission", () => {
     const board = readFileSync("app/routes/app.erp.production.tsx", "utf8");
-    expect(board).toContain('await createEvent(shop, jobId, "shipped", shipmentSummary(record)');
-    expect(board).toContain('await createEvent(shop, jobId, "tracking_added"');
+    // 2026-11-14: shipment events are written inside the shipment transaction (tx)
+    expect(board).toContain('await tx.productionJobEvent.create({ data: { shop, jobId, eventType: "shipped", message: shipmentSummary(record)');
+    expect(board).toContain('await tx.productionJobEvent.create({ data: { shop, jobId, eventType: "tracking_added"');
     expect(board).toContain('await createEvent(shop, jobId, "picked_up"');
     expect(board).toContain('recordShipment: "recordShipment", recordPickup: "recordShipment"');
     expect(board).toContain("record.actualShippingCost != null && !job.actualCostFinalized");
