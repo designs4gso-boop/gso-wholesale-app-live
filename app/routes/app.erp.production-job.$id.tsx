@@ -20,7 +20,7 @@ import { REPRINT_REASONS, formatShipDate, savedPickupForJob, savedShipmentForJob
 import { itemQcState, itemReprintSummary } from "../lib/production-qc-display";
 import { staffStatusLabel } from "../lib/production-status-vocabulary";
 import { SIMPLE_BOARD_HREF, classicJobHref } from "../lib/simple-nav";
-import { isJobOverdue, jobWorkspaceView, type JobStepKey, type WorkspaceStep } from "../lib/simple-production";
+import { isJobOverdue, jobWorkspaceView, showsMaterialUse, toMaterialOption, type JobStepKey, type WorkspaceStep } from "../lib/simple-production";
 
 export async function loader(args: { request: Request; params: { id?: string } }) {
   const raw: any = await productionLoader({ request: args.request });
@@ -28,7 +28,9 @@ export async function loader(args: { request: Request; params: { id?: string } }
   const job = ((data.jobs || []) as any[]).find((candidate) => String(candidate.id) === String(args.params.id || ""));
   if (!job) throw new Response("This job was not found. It may have been archived.", { status: 404 });
   // `job` is exactly what the Production page would show this viewer (already redacted for non-financial roles).
-  return Response.json({ job, showFinancials: Boolean(data.showFinancials) });
+  // material picker: id / name / unit only — never a cost, for any viewer
+  const materials = ((data.materials || []) as any[]).map(toMaterialOption);
+  return Response.json({ job, materials, showFinancials: Boolean(data.showFinancials) });
 }
 
 /** Every button on this page posts to the existing Production action — nothing is re-implemented here. */
@@ -237,14 +239,14 @@ function FulfillStep({ job, showFinancials }: { job: any; showFinancials: boolea
 
       {(shipment || pickup || ["shipped", "picked_up"].includes(status)) && status !== "completed" && status !== "cancelled" ? (
         <ActionForm jobId={job.id} intent="changeStatus" hidden={{ status: "completed" }}>
-          {(busy) => <button type="submit" disabled={busy} style={{ ...bigButton("primary", busy), width: "100%", background: "#166534", borderColor: "#166534" }}>Mark job completed</button>}
+          {(busy) => <button type="submit" disabled={busy} style={{ ...bigButton("primary", busy), width: "100%", background: "#166534", borderColor: "#166534" }}>COMPLETE JOB</button>}
         </ActionForm>
       ) : null}
     </div>
   );
 }
 
-function StepBody({ step, job, machine, showFinancials }: { step: WorkspaceStep; job: any; machine: string; showFinancials: boolean }) {
+function StepBody({ step, job, machine, showFinancials, materials, canRecordMaterial }: { step: WorkspaceStep; job: any; machine: string; showFinancials: boolean; materials: any[]; canRecordMaterial: boolean }) {
   const navigate = useNavigate();
   const key: JobStepKey = step.key;
   const files = (job.files || []) as any[];
@@ -265,6 +267,7 @@ function StepBody({ step, job, machine, showFinancials }: { step: WorkspaceStep;
       {key === "qc" ? <QcStep job={job} /> : null}
       {key === "fulfill" ? <FulfillStep job={job} showFinancials={showFinancials} /> : null}
       <ChecklistButtons jobId={job.id} items={step.checklist} />
+      {key === "print" || key === "finish" ? <MaterialUse job={job} materials={materials} canRecord={canRecordMaterial} /> : null}
       {key !== "qc" && key !== "fulfill" && !step.checklist.length ? <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Nothing to tick off for this step on this job.</p> : null}
     </div>
   );
@@ -308,18 +311,65 @@ function FilesTab({ job }: { job: any }) {
   );
 }
 
-function MaterialsTab({ job }: { job: any }) {
+/**
+ * MATERIAL USED — the existing Production "addMaterialUsage" action, in employee
+ * words. Same action, same stock logic: nothing is deducted unless the person
+ * ticks "Deduct from material stock" (unticked by default, exactly as on the
+ * full page), and a deduction only happens for a material chosen from the list.
+ * No cost field exists here for anyone; cost comes from the material record.
+ */
+function MaterialUse({ job, materials, canRecord }: { job: any; materials: { id: string; name: string; unit: string }[]; canRecord: boolean }) {
   const usages = (job.materialUsages || []) as any[];
-  return usages.length ? (
-    <div style={{ display: "grid", gap: 6 }}>
-      {usages.map((usage) => (
-        <div key={usage.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "8px 0", borderBottom: "1px solid #f3f4f6", fontSize: 15 }}>
+  return (
+    <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "grid", gap: 10 }}>
+      <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: 0.4 }}>MATERIAL USED</div>
+      {usages.length ? usages.map((usage) => (
+        <div key={usage.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", fontSize: 15, padding: "6px 0", borderBottom: "1px solid #f3f4f6" }}>
           <span style={{ fontWeight: 600 }}>{usage.materialName}</span>
-          <span>{Number(usage.usedQty || usage.pulledQty || usage.estimatedQty || 0)} {usage.unit}</span>
+          <span>
+            {Number(usage.usedQty || usage.pulledQty || usage.estimatedQty || 0)} {usage.unit}
+            {Number(usage.wasteQty || 0) > 0 ? ` · waste ${Number(usage.wasteQty)}` : ""}
+            {Number(usage.stockDeductedQty || 0) > 0 ? ` · ${Number(usage.stockDeductedQty)} taken from stock` : ""}
+          </span>
         </div>
-      ))}
+      )) : <div style={{ fontSize: 14, color: "#6b7280" }}>Nothing recorded yet.</div>}
+      {canRecord ? (
+        <details>
+          <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 36 }}>Record material use</summary>
+          <ActionForm jobId={job.id} intent="addMaterialUsage">
+            {(busy) => (
+              <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                <label style={{ fontSize: 13, color: "#6b7280" }}>Material
+                  <select name="materialId" defaultValue="" style={input}>
+                    <option value="">Not in the list (type the name below)</option>
+                    {materials.map((material) => <option key={material.id} value={material.id}>{material.name}{material.unit ? ` (${material.unit})` : ""}</option>)}
+                  </select>
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
+                  <label style={{ fontSize: 13, color: "#6b7280" }}>Quantity used<input name="usedQty" type="number" min={0} step="any" required style={input} /></label>
+                  <label style={{ fontSize: 13, color: "#6b7280" }}>Waste<input name="wasteQty" type="number" min={0} step="any" style={input} /></label>
+                </div>
+                <input name="materialNotes" placeholder="Notes (optional)" style={input} />
+                <label style={{ display: "flex", gap: 10, alignItems: "center", minHeight: 44, fontSize: 15 }}>
+                  <input type="checkbox" name="deductInventory" style={{ width: 22, height: 22 }} />
+                  Deduct from material stock
+                </label>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>Stock is only deducted when this box is ticked and the material is chosen from the list. It deducts quantity used plus waste.</div>
+                <details>
+                  <summary style={{ cursor: "pointer", fontSize: 13, color: "#6b7280", minHeight: 32 }}>Material is not in the list</summary>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginTop: 6 }}>
+                    <input name="materialName" placeholder="Material name" style={input} />
+                    <input name="unit" placeholder="Unit (sqft, each…)" style={input} />
+                  </div>
+                </details>
+                <button type="submit" disabled={busy} style={bigButton("primary", busy)}>RECORD MATERIAL USE</button>
+              </div>
+            )}
+          </ActionForm>
+        </details>
+      ) : null}
     </div>
-  ) : <p style={{ margin: 0, color: "#6b7280" }}>No material has been recorded on this job yet.</p>;
+  );
 }
 
 function NotesTab({ job }: { job: any }) {
@@ -365,10 +415,12 @@ function CostsTab({ job }: { job: any }) {
 /* ---------------- page ---------------- */
 
 export default function JobWorkspace() {
-  const { job, showFinancials } = useLoaderData<any>();
+  const { job, materials = [], showFinancials } = useLoaderData<any>();
   const shell = useRouteLoaderData("routes/app") as any;
   const navigate = useNavigate();
-  const isOwner = (shell?.role || (showFinancials ? "owner" : "")) === "owner";
+  const role: string = shell?.role || (showFinancials ? "owner" : "unassigned");
+  const isOwner = role === "owner";
+  const canRecordMaterial = showsMaterialUse(role);
   const view = jobWorkspaceView(job);
   const tone = TONE[view.next.tone] || TONE.action;
   const items = (job.items || []) as any[];
@@ -434,7 +486,7 @@ export default function JobWorkspace() {
               {step.state === "upcoming" ? <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 600 }}>later</span> : null}
             </summary>
             <div style={{ marginTop: 12 }}>
-              <StepBody step={step} job={job} machine={view.machine} showFinancials={showFinancials} />
+              <StepBody step={step} job={job} machine={view.machine} showFinancials={showFinancials} materials={materials} canRecordMaterial={canRecordMaterial} />
             </div>
           </details>
         ))}
@@ -448,7 +500,7 @@ export default function JobWorkspace() {
             ))}
           </div>
           {tab === "files" ? <FilesTab job={job} /> : null}
-          {tab === "materials" ? <MaterialsTab job={job} /> : null}
+          {tab === "materials" ? <MaterialUse job={job} materials={materials} canRecord={canRecordMaterial} /> : null}
           {tab === "notes" ? <NotesTab job={job} /> : null}
           {tab === "costs" && showFinancials ? <CostsTab job={job} /> : null}
         </div>
@@ -472,7 +524,7 @@ export default function JobWorkspace() {
             </div>
             {isOwner ? (
               <div>
-                <p style={{ margin: "0 0 8px", color: "#6b7280" }}>Actual costs, material stock, asset roles, link / merge tools and print-log matching live in the advanced view.</p>
+                <p style={{ margin: "0 0 8px", color: "#6b7280" }}>Actual costs, stock adjustments, removing a material entry, asset roles, link / merge tools and print-log matching live in the advanced view.</p>
                 <Link to={classicJobHref(job.id)} style={{ ...bigButton("secondary"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>Open advanced view</Link>
               </div>
             ) : null}

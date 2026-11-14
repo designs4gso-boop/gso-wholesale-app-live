@@ -19,8 +19,10 @@ export const SIMPLE_STAGES = [
   { key: "prepress", label: "Prepress", statuses: ["prepress", "proof_needed", "proof_sent", "proof_approved"] },
   { key: "production", label: "Production", statuses: ["ready_to_print", "printing"] },
   { key: "finish_qc", label: "Finish / QC", statuses: ["cutting", "laminating", "qc", "packing"] },
-  { key: "ready", label: "Ready", statuses: ["ready_for_pickup"] },
-  { key: "done", label: "Done", statuses: ["shipped", "picked_up", "completed"] },
+  // OWNER CORRECTION 2026-11-14: Shipped / Picked Up still need "Complete Job",
+  // so they stay under READY. DONE means completed and nothing else.
+  { key: "ready", label: "Ready", statuses: ["ready_for_pickup", "shipped", "picked_up"] },
+  { key: "done", label: "Done", statuses: ["completed"] },
 ] as const;
 export type SimpleStageKey = (typeof SIMPLE_STAGES)[number]["key"];
 
@@ -173,7 +175,7 @@ export function jobWorkspaceView(job: any): JobWorkspaceView {
   if (status === "cancelled") next = { text: "Cancelled", detail: "No further work on this job.", tone: "done" };
   else if (status === "completed") next = { text: "DONE", detail: null, tone: "done" };
   else if (status === "on_hold") next = { text: "On hold — check the notes", detail: "Resolve the hold, then move the job back to its stage.", tone: "problem" };
-  else if (currentStep === null) next = { text: "Mark job completed", detail: "Everything is done and the job is shipped or picked up.", tone: "action" };
+  else if (currentStep === null) next = { text: "Complete Job", detail: status === "picked_up" ? "The customer has picked it up." : status === "shipped" ? "The job has shipped." : "Everything else is done.", tone: "action" };
   else {
     const open = byStep[currentStep].find((item) => !item.completed);
     const openLabel = open ? String(open.label || "") : "";
@@ -200,6 +202,23 @@ export function jobWorkspaceView(job: any): JobWorkspaceView {
   }
 
   return { steps, currentStep, next, machine, qcAllPass, fulfilled, suggestedStatus };
+}
+
+/* ---------------- material use (display rule only) ---------------- */
+
+/**
+ * Which roles are SHOWN the "Material used" form on the job page: the roles
+ * that work in Production. Display only — the form posts to the existing
+ * Production action (addMaterialUsage), which keeps its own rules.
+ */
+export const MATERIAL_USE_ROLES: readonly string[] = ["owner", "manager", "print_operator", "bagger"];
+export function showsMaterialUse(role: unknown): boolean {
+  return MATERIAL_USE_ROLES.includes(norm(role));
+}
+
+/** The only material fields the job page needs for its picker — never a cost. */
+export function toMaterialOption(material: any): { id: string; name: string; unit: string } {
+  return { id: String(material.id), name: String(material.name || "Material"), unit: String(material.baseUnit || material.unit || "") };
 }
 
 /* ---------------- slim board card ---------------- */

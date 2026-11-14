@@ -239,8 +239,9 @@ describe("Phase 2 — six board stages over existing statuses", () => {
       prepress: "prepress", proof_needed: "prepress", proof_sent: "prepress", proof_approved: "prepress",
       ready_to_print: "production", printing: "production",
       cutting: "finish_qc", laminating: "finish_qc", qc: "finish_qc", packing: "finish_qc",
-      ready_for_pickup: "ready",
-      shipped: "done", picked_up: "done", completed: "done",
+      // OWNER CORRECTION 2026-11-14: Shipped / Picked Up stay under READY; DONE is completed only
+      ready_for_pickup: "ready", shipped: "ready", picked_up: "ready",
+      completed: "done",
       on_hold: "attention", reprint_needed: "attention",
       cancelled: "hidden",
     });
@@ -262,6 +263,54 @@ describe("Phase 2 — six board stages over existing statuses", () => {
     expect(built.cancelled.map((card) => card.id)).toEqual(["e"]);
     const inColumns = built.columns.flatMap((column) => column.cards.map((card) => card.id));
     expect(inColumns.sort()).toEqual(["c", "d", "f"]);
+  });
+});
+
+describe("OWNER CORRECTION — DONE means completed", () => {
+  const full = [
+    { id: "c1", section: "prepress", label: "Artwork received / linked", sortOrder: 10, completed: true },
+    { id: "c3", section: "production", label: "Labels printed", sortOrder: 30, completed: true },
+    { id: "c7", section: "packing", label: "Packed and labeled", sortOrder: 80, completed: true },
+  ];
+  const passed = { id: "i1", itemTicket: "T-01", quantity: 5, qcResult: "pass", qcBy: "op", qcAt: new Date("2026-11-14T10:00:00Z"), lastReprintAt: null };
+  const shipped = { id: "s", status: "shipped", shipCarrier: "UPS", shippedAt: new Date("2026-11-14T12:00:00Z"), items: [passed], checklistItems: full, events: [] };
+  const pickedUp = { id: "p", status: "picked_up", pickedUpAt: new Date("2026-11-14T12:00:00Z"), pickedUpBy: "Customer", items: [passed], checklistItems: full, events: [] };
+  const completed = { id: "c", status: "completed", items: [passed], checklistItems: full, events: [] };
+
+  it("1-3. shipped and picked-up jobs are under READY; only completed jobs are under DONE", () => {
+    const built = buildSimpleBoard([shipped, pickedUp, completed].map((job) => toBoardCard(job)));
+    const ids = (key: string) => built.columns.find((column) => column.key === key)!.cards.map((card) => card.id).sort();
+    expect(ids("ready")).toEqual(["p", "s"]);
+    expect(ids("done")).toEqual(["c"]);
+    expect(SIMPLE_STAGES.find((stage) => stage.key === "done")!.statuses).toEqual(["completed"]);
+    expect(SIMPLE_STAGES.find((stage) => stage.key === "ready")!.statuses).toEqual(["ready_for_pickup", "shipped", "picked_up"]);
+  });
+
+  it("4-5. their card reads Status: Shipped / Picked Up and NEXT: Complete Job", () => {
+    expect(toBoardCard(shipped)).toMatchObject({ stage: "ready", statusLabel: "Shipped", next: "Complete Job" });
+    expect(toBoardCard(pickedUp)).toMatchObject({ stage: "ready", statusLabel: "Picked Up", next: "Complete Job" });
+    expect(toBoardCard(completed)).toMatchObject({ stage: "done", statusLabel: "Completed", next: "DONE" });
+  });
+
+  it("no card under DONE ever still asks for an action", () => {
+    for (const status of PRODUCTION_STATUS_OPTIONS.map((option) => option.value as string)) {
+      const card = toBoardCard({ id: status, status, items: [passed], checklistItems: full, events: [], shipCarrier: "UPS", shippedAt: new Date() });
+      if (card.stage === "done") expect(card.next, status).toBe("DONE");
+    }
+  });
+
+  it("the finish stage still names the actual task (packing stays in Finish / QC)", () => {
+    const base = [
+      { id: "a", section: "prepress", label: "Proof approved", sortOrder: 10, completed: true },
+      { id: "b", section: "production", label: "Labels printed", sortOrder: 20, completed: true },
+    ];
+    const open = (label: string, section = "production") => [...base, { id: "x", section, label, sortOrder: 50, completed: false }];
+    const todo = { id: "i1", itemTicket: "T-01", quantity: 5, qcResult: null, lastReprintAt: null };
+    expect(toBoardCard({ id: "1", status: "cutting", items: [todo], checklistItems: open("Labels applied to bags"), events: [] })).toMatchObject({ stage: "finish_qc", next: "Apply labels" });
+    expect(toBoardCard({ id: "2", status: "laminating", items: [todo], checklistItems: open("Laminate complete"), events: [] })).toMatchObject({ stage: "finish_qc", next: "Laminate" });
+    expect(toBoardCard({ id: "3", status: "cutting", items: [todo], checklistItems: open("Cut complete"), events: [] })).toMatchObject({ stage: "finish_qc", next: "Cut" });
+    expect(toBoardCard({ id: "4", status: "qc", items: [todo], checklistItems: base, events: [] })).toMatchObject({ stage: "finish_qc", next: "Record QC" });
+    expect(toBoardCard({ id: "5", status: "packing", items: [passed], checklistItems: open("Packed and labeled", "packing"), events: [] })).toMatchObject({ stage: "finish_qc", next: "Pack and label" });
   });
 });
 
@@ -297,7 +346,7 @@ describe("Phase 2 — NEXT STEP", () => {
     expect(next({ status: "qc", items: [item()], checklistItems: checklist(["c1", "c2", "c3", "c4", "c5"]) })).toBe("Record QC");
     expect(next({ status: "qc", items: [item("pass")], checklistItems: checklist(["c1", "c2", "c3", "c4", "c5", "c6"]) })).toBe("Pack and label");
     expect(next({ status: "packing", items: [item("pass")], checklistItems: checklist(["c1", "c2", "c3", "c4", "c5", "c6", "c7"]) })).toBe("Record shipment or pickup");
-    expect(next({ status: "shipped", shipCarrier: "UPS", shippedAt: new Date(), items: [item("pass")], checklistItems: checklist(["c1", "c2", "c3", "c4", "c5", "c6", "c7"]) })).toBe("Mark job completed");
+    expect(next({ status: "shipped", shipCarrier: "UPS", shippedAt: new Date(), items: [item("pass")], checklistItems: checklist(["c1", "c2", "c3", "c4", "c5", "c6", "c7"]) })).toBe("Complete Job");
     expect(next({ status: "completed", items: [item("pass")], checklistItems: checklist() })).toBe("DONE");
   });
 
@@ -400,9 +449,15 @@ describe("Phase 2 — Job Workspace reuses the real Production loader and action
     expect((await postJob({ ...QA_SHIPMENT, carrier: "Other" })).status).toBe(400);
     expect(eventsOf("shipped")).toHaveLength(1);
     const loaded: any = await loadJob();
-    expect(jobWorkspaceView(loaded.job).next.text).toBe("Mark job completed");
+    expect(jobWorkspaceView(loaded.job).next.text).toBe("Complete Job");
+    // still READY (not DONE) until the existing completion action succeeds
+    expect((await loadBoard()).board.columns.find((column: any) => column.key === "ready").cards.map((card: any) => card.status)).toEqual(["shipped"]);
+    expect((await loadBoard()).board.columns.find((column: any) => column.key === "done").cards).toHaveLength(0);
     expect((await postJob({ intent: "changeStatus", status: "completed" })).body.ok).toBe(true);
     expect(h.state.job.status).toBe("completed");
+    const after: any = await loadBoard();
+    expect(after.board.columns.find((column: any) => column.key === "done").cards.map((card: any) => card.next)).toEqual(["DONE"]);
+    expect(after.board.columns.find((column: any) => column.key === "ready").cards).toHaveLength(0);
   }, 120_000);
 
   it("pickup and reprint go through the unchanged action", async () => {
