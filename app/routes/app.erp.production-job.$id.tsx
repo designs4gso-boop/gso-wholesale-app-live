@@ -18,7 +18,8 @@ import { action as productionAction, loader as productionLoader } from "./app.er
 import { friendlyMessage } from "../lib/employee-messages";
 import { REPRINT_REASONS, formatShipDate, savedPickupForJob, savedShipmentForJob } from "../lib/production-fulfillment";
 import { itemQcState, itemReprintSummary } from "../lib/production-qc-display";
-import { staffStatusLabel } from "../lib/production-status-vocabulary";
+import { showsProductionControl } from "../lib/production-role-access";
+import { PRODUCTION_STATUS_OPTIONS, staffStatusLabel } from "../lib/production-status-vocabulary";
 import { SIMPLE_BOARD_HREF, classicJobHref } from "../lib/simple-nav";
 import { isJobOverdue, jobWorkspaceView, showsMaterialUse, toMaterialOption, type JobStepKey, type WorkspaceStep } from "../lib/simple-production";
 
@@ -30,7 +31,9 @@ export async function loader(args: { request: Request; params: { id?: string } }
   // `job` is exactly what the Production page would show this viewer (already redacted for non-financial roles).
   // material picker: id / name / unit only — never a cost, for any viewer
   const materials = ((data.materials || []) as any[]).map(toMaterialOption);
-  return Response.json({ job, materials, showFinancials: Boolean(data.showFinancials) });
+  // link targets are only sent for an unlinked print-intake job (the only place they are used)
+  const linkTargets = job.linkEligible ? data.linkTargets || [] : [];
+  return Response.json({ job, materials, linkTargets, showFinancials: Boolean(data.showFinancials) });
 }
 
 /** Every button on this page posts to the existing Production action — nothing is re-implemented here. */
@@ -125,7 +128,7 @@ const when = (value: string | null | undefined) => (value ? new Date(value).toLo
 
 /* ---------------- step bodies (only existing actions) ---------------- */
 
-function QcStep({ job }: { job: any }) {
+function QcStep({ job, role }: { job: any; role: string }) {
   const items = (job.items || []) as any[];
   if (!items.length) return <p style={{ margin: 0, color: "#6b7280" }}>This job has no items to check.</p>;
   return (
@@ -155,21 +158,26 @@ function QcStep({ job }: { job: any }) {
                 </div>
               )}
             </ActionForm>
-            <details>
-              <summary style={{ cursor: "pointer", fontSize: 13, color: "#6b7280", minHeight: 32 }}>Record a reprint for this item</summary>
-              <ActionForm jobId={job.id} intent="reprintItem" hidden={{ itemId: String(item.id) }}>
-                {(busy) => (
-                  <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                    <select name="reprintReason" defaultValue="" required style={input}>
-                      <option value="" disabled>Why is it being reprinted?</option>
-                      {REPRINT_REASONS.map((reason) => <option key={reason.value} value={reason.value}>{reason.label}</option>)}
-                    </select>
-                    <input name="reprintNote" placeholder="Note (optional)" style={input} />
-                    <button type="submit" disabled={busy} style={bigButton("secondary", busy)}>Record reprint</button>
-                  </div>
-                )}
-              </ActionForm>
-            </details>
+            {showsProductionControl(role, "reprintItem") ? (
+              <details>
+                <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#b91c1c", minHeight: 36 }}>NEEDS REPRINT</summary>
+                <ActionForm jobId={job.id} intent="reprintItem" hidden={{ itemId: String(item.id) }}>
+                  {(busy) => (
+                    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                      <label style={{ fontSize: 13, color: "#6b7280" }}>Reason
+                        <select name="reprintReason" defaultValue="" required style={input}>
+                          <option value="" disabled>Choose a reason</option>
+                          {REPRINT_REASONS.map((reason) => <option key={reason.value} value={reason.value}>{reason.label}</option>)}
+                        </select>
+                      </label>
+                      <input name="reprintNote" placeholder="Note (optional)" style={input} />
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>The reprinted piece needs a new QC PASS before the job can ship or be picked up.</div>
+                      <button type="submit" disabled={busy} style={bigButton("danger", busy)}>START REPRINT</button>
+                    </div>
+                  )}
+                </ActionForm>
+              </details>
+            ) : null}
           </div>
         );
       })}
@@ -246,7 +254,35 @@ function FulfillStep({ job, showFinancials }: { job: any; showFinancials: boolea
   );
 }
 
-function StepBody({ step, job, machine, showFinancials, materials, canRecordMaterial }: { step: WorkspaceStep; job: any; machine: string; showFinancials: boolean; materials: any[]; canRecordMaterial: boolean }) {
+const PROOF_STATE: Record<string, string> = { draft: "Not sent yet", sent: "Sent to customer", viewed: "Customer has opened it", approved: "Approved by customer", changes_requested: "Customer asked for changes" };
+
+/** Customer proof link — the existing createProofPortal / markProofSent actions, unchanged. */
+function CustomerProof({ job }: { job: any }) {
+  const link: string = job.customerProofUrl || "";
+  return (
+    <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "grid", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: 0.4 }}>CUSTOMER PROOF</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: job.proofStatus === "approved" ? "#166534" : job.proofStatus === "changes_requested" ? "#b91c1c" : "#374151" }}>{link ? PROOF_STATE[String(job.proofStatus || "draft")] || "Link ready" : "No customer link yet"}</span>
+      </div>
+      {job.proofCustomerComment ? <div style={{ fontSize: 14 }}>Customer comment: {job.proofCustomerComment}</div> : null}
+      {link ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, alignItems: "start" }}>
+          <button type="button" onClick={() => { try { void navigator.clipboard?.writeText(link); } catch { /* copy is a convenience only */ } }} style={{ ...bigButton("secondary"), minHeight: 44 }}>Copy customer proof link</button>
+          <ActionForm jobId={job.id} intent="markProofSent">
+            {(busy) => <button type="submit" disabled={busy} style={{ ...bigButton("secondary", busy), minHeight: 44, width: "100%" }}>Mark proof sent</button>}
+          </ActionForm>
+        </div>
+      ) : (
+        <ActionForm jobId={job.id} intent="createProofPortal">
+          {(busy) => <button type="submit" disabled={busy} style={{ ...bigButton("secondary", busy), minHeight: 44 }}>Create customer proof link</button>}
+        </ActionForm>
+      )}
+    </div>
+  );
+}
+
+function StepBody({ step, job, machine, showFinancials, materials, canRecordMaterial, role }: { step: WorkspaceStep; job: any; machine: string; showFinancials: boolean; materials: any[]; canRecordMaterial: boolean; role: string }) {
   const navigate = useNavigate();
   const key: JobStepKey = step.key;
   const files = (job.files || []) as any[];
@@ -258,13 +294,30 @@ function StepBody({ step, job, machine, showFinancials, materials, canRecordMate
           <button type="button" onClick={() => navigate(`/app/erp/production/${job.id}/proof`)} style={{ ...bigButton("secondary"), minHeight: 44 }}>Open proof page</button>
         </div>
       ) : null}
+      {key === "artwork" ? <CustomerProof job={job} /> : null}
       {key === "print" ? (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ fontSize: 15 }}>Machine: <b>{machine || "Not assigned"}</b></span>
           <button type="button" onClick={() => navigate(`/app/erp/production/${job.id}/print`)} style={{ ...bigButton("secondary"), minHeight: 44 }}>Open work order</button>
+          <ActionForm jobId={job.id} intent="markPrinted">
+            {(busy) => <button type="submit" disabled={busy} style={{ ...bigButton("secondary", busy), minHeight: 44 }}>{job.printedAt ? "Work order printed ✓ (mark again)" : "Mark work order printed"}</button>}
+          </ActionForm>
         </div>
       ) : null}
-      {key === "qc" ? <QcStep job={job} /> : null}
+      {key === "artwork" && showsProductionControl(role, "revisionItem") && (job.items || []).length ? (
+        <details>
+          <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, minHeight: 36 }}>NEW ARTWORK REVISION</summary>
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            <div style={{ fontSize: 14, color: "#6b7280" }}>Use this when corrected artwork is coming. The old artwork stays in the job history.</div>
+            {((job.items || []) as any[]).map((item) => (
+              <ActionForm key={item.id} jobId={job.id} intent="revisionItem" hidden={{ itemId: String(item.id) }}>
+                {(busy) => <button type="submit" disabled={busy} style={{ ...bigButton("secondary", busy), width: "100%", textAlign: "left" }}>START NEW REVISION{(job.items || []).length > 1 ? ` — ${item.displayTitle || item.productTitle || "item"}` : ""}</button>}
+              </ActionForm>
+            ))}
+          </div>
+        </details>
+      ) : null}
+      {key === "qc" ? <QcStep job={job} role={role} /> : null}
       {key === "fulfill" ? <FulfillStep job={job} showFinancials={showFinancials} /> : null}
       <ChecklistButtons jobId={job.id} items={step.checklist} />
       {key === "print" || key === "finish" ? <MaterialUse job={job} materials={materials} canRecord={canRecordMaterial} /> : null}
@@ -275,17 +328,35 @@ function StepBody({ step, job, machine, showFinancials, materials, canRecordMate
 
 /* ---------------- secondary tabs ---------------- */
 
-function FilesTab({ job }: { job: any }) {
+const FILE_KIND: Record<string, string> = { artwork: "Artwork", proof: "Proof", print_file: "Production file", dieline: "Dieline", customer_pdf: "Customer PDF", image: "Product image", other: "Other file" };
+
+function FilesTab({ job, role }: { job: any; role: string }) {
   const files = (job.files || []) as any[];
+  const canRemove = showsProductionControl(role, "deleteFile");
   return (
     <div style={{ display: "grid", gap: 12 }}>
       {files.length ? files.map((file) => (
-        <div key={file.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 600, overflowWrap: "anywhere" }}>{file.fileName}</div>
-            <div style={{ fontSize: 12, color: "#6b7280" }}>{String(file.fileType || "file").replace(/_/g, " ")}</div>
+        <div key={file.id} style={{ padding: "8px 0", borderBottom: "1px solid #f3f4f6", display: "grid", gap: 6 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, overflowWrap: "anywhere" }}>{file.fileName}</div>
+              <div style={{ fontSize: 13, color: "#6b7280" }}>{FILE_KIND[String(file.fileType || "")] || "File"}</div>
+            </div>
+            <a href={file.fileUrl} target="_blank" rel="noreferrer" style={{ ...bigButton("secondary"), minHeight: 44, display: "inline-flex", alignItems: "center", textDecoration: "none" }}>Open file</a>
           </div>
-          <a href={file.fileUrl} target="_blank" rel="noreferrer" style={{ ...bigButton("secondary"), minHeight: 44, display: "inline-flex", alignItems: "center", textDecoration: "none" }}>Open file</a>
+          {canRemove ? (
+            <details>
+              <summary style={{ cursor: "pointer", fontSize: 13, color: "#b91c1c", minHeight: 32 }}>Remove</summary>
+              <ActionForm jobId={job.id} intent="deleteFile" hidden={{ fileId: String(file.id) }}>
+                {(busy) => (
+                  <div style={{ display: "grid", gap: 8, marginTop: 6 }}>
+                    <div style={{ fontSize: 14 }}>Remove this file from the job? Only the link on this job is removed.</div>
+                    <button type="submit" disabled={busy} style={{ ...bigButton("danger", busy), minHeight: 44 }}>Yes, remove file</button>
+                  </div>
+                )}
+              </ActionForm>
+            </details>
+          ) : null}
         </div>
       )) : <p style={{ margin: 0, color: "#6b7280" }}>No files yet.</p>}
       <details>
@@ -324,13 +395,34 @@ function MaterialUse({ job, materials, canRecord }: { job: any; materials: { id:
     <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "grid", gap: 10 }}>
       <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: 0.4 }}>MATERIAL USED</div>
       {usages.length ? usages.map((usage) => (
-        <div key={usage.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", fontSize: 15, padding: "6px 0", borderBottom: "1px solid #f3f4f6" }}>
-          <span style={{ fontWeight: 600 }}>{usage.materialName}</span>
-          <span>
-            {Number(usage.usedQty || usage.pulledQty || usage.estimatedQty || 0)} {usage.unit}
-            {Number(usage.wasteQty || 0) > 0 ? ` · waste ${Number(usage.wasteQty)}` : ""}
-            {Number(usage.stockDeductedQty || 0) > 0 ? ` · ${Number(usage.stockDeductedQty)} taken from stock` : ""}
-          </span>
+        <div key={usage.id} style={{ padding: "6px 0", borderBottom: "1px solid #f3f4f6", display: "grid", gap: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", fontSize: 15 }}>
+            <span style={{ fontWeight: 600 }}>{usage.materialName}</span>
+            <span>
+              {Number(usage.usedQty || usage.pulledQty || usage.estimatedQty || 0)} {usage.unit}
+              {Number(usage.wasteQty || 0) > 0 ? ` · waste ${Number(usage.wasteQty)}` : ""}
+              {Number(usage.stockDeductedQty || 0) > 0 ? ` · ${Number(usage.stockDeductedQty)} taken from stock` : ""}
+            </span>
+          </div>
+          {canRecord ? (
+            <details>
+              <summary style={{ cursor: "pointer", fontSize: 13, color: "#b91c1c", minHeight: 32 }}>Correct material entry</summary>
+              <ActionForm jobId={job.id} intent="deleteMaterialUsage" hidden={{ usageId: String(usage.id) }}>
+                {(busy) => (
+                  <div style={{ display: "grid", gap: 8, marginTop: 6 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700 }}>Remove this material entry?</div>
+                    <div style={{ fontSize: 14 }}>
+                      {Number(usage.stockDeductedQty || 0) > 0
+                        ? `${Number(usage.stockDeductedQty)} ${usage.unit} was taken from stock for this entry. Removing it puts that amount back into stock.`
+                        : "No stock was taken for this entry, so stock will not change."}
+                      {" "}Then record the correct amount again.
+                    </div>
+                    <button type="submit" disabled={busy} style={{ ...bigButton("danger", busy), minHeight: 44 }}>Yes, remove entry</button>
+                  </div>
+                )}
+              </ActionForm>
+            </details>
+          ) : null}
         </div>
       )) : <div style={{ fontSize: 14, color: "#6b7280" }}>Nothing recorded yet.</div>}
       {canRecord ? (
@@ -412,14 +504,134 @@ function CostsTab({ job }: { job: any }) {
   );
 }
 
+/* ---------------- small contextual tools (collapsed) ---------------- */
+
+const dateInput = (value: unknown) => {
+  if (!value) return "";
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+};
+/** The existing updateJob action rewrites all of these; the ones not edited here are sent back unchanged. */
+const UPDATE_JOB_KEPT_FIELDS = ["internalNotes", "customerNotes", "artworkUrl", "proofUrl", "printFileUrl", "productImageUrl", "assetFolderUrl", "sourceFolderUrl", "assetInboxKey"] as const;
+/** Shipped / Picked Up are set only by a shipment / pickup record (server rule), so they are not offered here. */
+const STATUS_CHOICES = PRODUCTION_STATUS_OPTIONS.filter((option) => !["shipped", "picked_up"].includes(option.value));
+
+function MoreTools({ job, role }: { job: any; role: string }) {
+  const canSettings = showsProductionControl(role, "updateJob");
+  const canStatus = showsProductionControl(role, "changeStatus");
+  const canReopen = showsProductionControl(role, "reopenReprint") && String(job.status) === "completed";
+  if (!canSettings && !canStatus && !canReopen) return null;
+  const section: CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "grid", gap: 8 };
+  return (
+    <details style={{ ...card, padding: "10px 16px" }}>
+      <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#374151", minHeight: 32 }}>{canSettings ? "Job settings" : "More"}</summary>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginTop: 10, alignItems: "start" }}>
+        {canSettings ? (
+          <div style={section}>
+            <div style={{ fontSize: 14, fontWeight: 800 }}>DUE DATE · PRIORITY · ASSIGNED TO</div>
+            <ActionForm jobId={job.id} intent="updateJob" hidden={Object.fromEntries(UPDATE_JOB_KEPT_FIELDS.map((field) => [field, String(job[field] ?? "")]))}>
+              {(busy) => (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <label style={{ fontSize: 13, color: "#6b7280" }}>Due date<input name="dueDate" type="date" defaultValue={dateInput(job.dueDate)} style={input} /></label>
+                  <label style={{ fontSize: 13, color: "#6b7280" }}>Priority
+                    <select name="priority" defaultValue={String(job.priority || "normal")} style={input}>
+                      <option value="low">Low</option>
+                      <option value="normal">Normal</option>
+                      <option value="rush">Rush</option>
+                      <option value="critical">Critical</option>
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 13, color: "#6b7280" }}>Assigned to<input name="assignedTo" defaultValue={job.assignedTo || ""} placeholder="Name" style={input} /></label>
+                  <button type="submit" disabled={busy} style={bigButton("primary", busy)}>SAVE JOB SETTINGS</button>
+                </div>
+              )}
+            </ActionForm>
+          </div>
+        ) : null}
+        {canStatus ? (
+          <div style={section}>
+            <div style={{ fontSize: 14, fontWeight: 800 }}>CHANGE STATUS</div>
+            <ActionForm jobId={job.id} intent="changeStatus">
+              {(busy) => (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <select name="status" defaultValue={String(job.status || "new")} style={input}>
+                    {STATUS_CHOICES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>Use this for On Hold, Cancelled or to move the job by hand. Shipping and pickup are recorded in the Fulfill step.</div>
+                  <button type="submit" disabled={busy} style={bigButton("secondary", busy)}>MOVE JOB</button>
+                </div>
+              )}
+            </ActionForm>
+          </div>
+        ) : null}
+        {canReopen ? (
+          <div style={section}>
+            <div style={{ fontSize: 14, fontWeight: 800 }}>REOPEN FOR REPRINT</div>
+            <ActionForm jobId={job.id} intent="reopenReprint">
+              {(busy) => (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <input name="reopenReason" placeholder="Why does this finished job need a reprint?" required style={input} />
+                  <label style={{ display: "flex", gap: 10, alignItems: "center", minHeight: 44, fontSize: 15 }}>
+                    <input type="checkbox" name="confirmReopen" value="yes" required style={{ width: 22, height: 22 }} />
+                    Yes, reopen this completed job
+                  </label>
+                  <button type="submit" disabled={busy} style={bigButton("danger", busy)}>REOPEN FOR REPRINT</button>
+                </div>
+              )}
+            </ActionForm>
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+/** Only for an unlinked print-intake job, and only for roles the server allows to link it. */
+function LinkIntakeJob({ job, role, linkTargets }: { job: any; role: string; linkTargets: any[] }) {
+  if (!job.linkEligible || !showsProductionControl(role, "linkJobToTarget")) return null;
+  return (
+    <details style={{ ...card, borderColor: "#c4b5fd", background: "#faf5ff" }}>
+      <summary style={{ cursor: "pointer", fontSize: 15, fontWeight: 800, minHeight: 32 }}>This print file is not linked to an order yet — link it</summary>
+      <LinkIntakeForm job={job} linkTargets={linkTargets} />
+    </details>
+  );
+}
+
+function LinkIntakeForm({ job, linkTargets }: { job: any; linkTargets: any[] }) {
+  const fetcher = useFetcher<any>();
+  const busy = fetcher.state !== "idle";
+  return (
+    <fetcher.Form method="post" style={{ display: "grid", gap: 8, marginTop: 10 }}>
+      <input type="hidden" name="intent" value="linkJobToTarget" />
+      <input type="hidden" name="sourceJobId" value={job.id} />
+      <label style={{ fontSize: 13, color: "#6b7280" }}>Which job does it belong to?
+        <select name="linkTarget" defaultValue="" required style={input}>
+          <option value="" disabled>Choose the job</option>
+          {linkTargets.map((target: any) => (target.items || []).length > 1
+            ? target.items.map((item: any) => <option key={`${target.id}|${item.id}`} value={`${target.id}|${item.id}`}>{target.label} → {String(item.productTitle || "").slice(0, 28)} x{item.quantity}</option>)
+            : <option key={target.id} value={`${target.id}|${target.items?.[0]?.id || ""}`}>{target.label}</option>)}
+        </select>
+      </label>
+      <input name="linkReason" placeholder="Reason (optional)" style={input} />
+      <label style={{ display: "flex", gap: 10, alignItems: "center", minHeight: 44, fontSize: 15 }}>
+        <input type="checkbox" name="confirmLink" value="yes" required style={{ width: 22, height: 22 }} />
+        Yes, this is the right job
+      </label>
+      <button type="submit" disabled={busy} style={bigButton("primary", busy)}>LINK TO JOB</button>
+      <Feedback data={fetcher.data} />
+    </fetcher.Form>
+  );
+}
+
 /* ---------------- page ---------------- */
 
 export default function JobWorkspace() {
-  const { job, materials = [], showFinancials } = useLoaderData<any>();
+  const { job, materials = [], linkTargets = [], showFinancials } = useLoaderData<any>();
   const shell = useRouteLoaderData("routes/app") as any;
   const navigate = useNavigate();
   const role: string = shell?.role || (showFinancials ? "owner" : "unassigned");
-  const isOwner = role === "owner";
+  // the server decides who may open the Advanced view (owner / financially authorized manager)
+  const canOpenAdvanced = Boolean(showFinancials);
   const canRecordMaterial = showsMaterialUse(role);
   const view = jobWorkspaceView(job);
   const tone = TONE[view.next.tone] || TONE.action;
@@ -440,7 +652,7 @@ export default function JobWorkspace() {
       title={job.company || job.customerName || "Production job"}
       subtitle="Follow the steps from top to bottom. The next step is always shown first."
       backAction={{ content: "Production Board", onAction: () => navigate(SIMPLE_BOARD_HREF) }}
-      secondaryActions={isOwner ? [{ content: "Open advanced view", onAction: () => navigate(classicJobHref(job.id)) }] : []}
+      secondaryActions={canOpenAdvanced ? [{ content: "Open advanced view", onAction: () => navigate(classicJobHref(job.id)) }] : []}
     >
       <div style={{ display: "grid", gap: 16, paddingBottom: 40 }}>
         <div style={{ ...card, display: "flex", gap: 24, flexWrap: "wrap" }}>
@@ -467,6 +679,8 @@ export default function JobWorkspace() {
           ))}
         </ol>
 
+        <LinkIntakeJob job={job} role={role} linkTargets={linkTargets} />
+
         {view.suggestedStatus ? (
           <ActionForm jobId={job.id} intent="changeStatus" hidden={{ status: view.suggestedStatus }}>
             {(busy) => (
@@ -486,10 +700,12 @@ export default function JobWorkspace() {
               {step.state === "upcoming" ? <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 600 }}>later</span> : null}
             </summary>
             <div style={{ marginTop: 12 }}>
-              <StepBody step={step} job={job} machine={view.machine} showFinancials={showFinancials} materials={materials} canRecordMaterial={canRecordMaterial} />
+              <StepBody step={step} job={job} machine={view.machine} showFinancials={showFinancials} materials={materials} canRecordMaterial={canRecordMaterial} role={role} />
             </div>
           </details>
         ))}
+
+        <MoreTools job={job} role={role} />
 
         <div style={card}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
@@ -499,7 +715,7 @@ export default function JobWorkspace() {
               </button>
             ))}
           </div>
-          {tab === "files" ? <FilesTab job={job} /> : null}
+          {tab === "files" ? <FilesTab job={job} role={role} /> : null}
           {tab === "materials" ? <MaterialUse job={job} materials={materials} canRecord={canRecordMaterial} /> : null}
           {tab === "notes" ? <NotesTab job={job} /> : null}
           {tab === "costs" && showFinancials ? <CostsTab job={job} /> : null}
@@ -522,9 +738,9 @@ export default function JobWorkspace() {
                 </div>
               ))}
             </div>
-            {isOwner ? (
+            {canOpenAdvanced ? (
               <div>
-                <p style={{ margin: "0 0 8px", color: "#6b7280" }}>Actual costs, stock adjustments, removing a material entry, asset roles, link / merge tools and print-log matching live in the advanced view.</p>
+                <p style={{ margin: "0 0 8px", color: "#6b7280" }}>Actual costs, stock adjustments, asset roles, ticket tools and print-log matching live in the advanced view.</p>
                 <Link to={classicJobHref(job.id)} style={{ ...bigButton("secondary"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>Open advanced view</Link>
               </div>
             ) : null}

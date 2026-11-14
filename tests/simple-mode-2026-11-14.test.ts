@@ -161,7 +161,7 @@ describe("Phase 1A — role-aware navigation (display only)", () => {
   });
 
   it("pricing, cost, setup and audit pages are listed for the owner only", () => {
-    const ownerOnly = ["/app/erp/cost-calculator", "/app/erp/pricing-settings", "/app/erp/pricing-intelligence", "/app/erp/margin-review", "/app/erp/cost-verification", "/app/erp/product-setup", "/app/erp/vendor-cost-book", "/app/erp/materials", "/app/erp/owner-readiness", "/app#advanced", "/app/erp/production"];
+    const ownerOnly = ["/app/erp/cost-calculator", "/app/erp/pricing-settings", "/app/erp/pricing-intelligence", "/app/erp/margin-review", "/app/erp/cost-verification", "/app/erp/product-setup", "/app/erp/vendor-cost-book", "/app/erp/materials", "/app/erp/owner-readiness", "/app#advanced"];
     for (const href of ownerOnly) expect(hrefs("owner"), href).toContain(href);
     for (const role of ["manager", "sales", "print_operator", "bagger", "unassigned"]) {
       for (const href of ownerOnly) expect(hrefs(role, true), `${role} ${href}`).not.toContain(href);

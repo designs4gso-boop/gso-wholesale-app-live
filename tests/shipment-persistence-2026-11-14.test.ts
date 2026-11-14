@@ -117,7 +117,8 @@ const passQc = async () => {
 const QA_SHIPMENT = { intent: "recordShipment", carrier: "TEST - Migration QA", trackingNumber: "TEST-SHIP-1012", packageCount: "1", shipDate: "2026-11-14", actualShippingCost: "" };
 const ship = (overrides: Record<string, string> = {}) => post({ ...QA_SHIPMENT, ...overrides });
 const load = async () => {
-  const raw: any = await route.loader({ request: new Request("https://app.test/app/erp/production") });
+  // 2026-11-14: /app/erp/production itself now redirects non-financial staff to Simple Mode; staff reach this SAME loader through the Simple Mode routes, so the reload is made the way staff make it.
+  const raw: any = await route.loader({ request: new Request("https://app.test/app/erp/production-board") });
   return raw instanceof Response ? raw.json() : raw;
 };
 const eventsOf = (type: string) => h.state.events.filter((e: any) => e.eventType === type);

@@ -15,7 +15,8 @@ import type { CSSProperties } from "react";
 import { Page } from "@shopify/polaris";
 import { loader as productionLoader } from "./app.erp.production";
 import { ROLE_STAGE_FOCUS, buildSimpleBoard, toBoardCard, type BoardCard, type SimpleStageKey } from "../lib/simple-production";
-import { CLASSIC_PRODUCTION_HREF, jobWorkspaceHref } from "../lib/simple-nav";
+import { CLASSIC_PRODUCTION_HREF, NEW_JOB_HREF, jobWorkspaceHref } from "../lib/simple-nav";
+import { showsProductionControl } from "../lib/production-role-access";
 
 export async function loader(args: { request: Request }) {
   const raw: any = await productionLoader(args);
@@ -114,7 +115,9 @@ export default function SimpleProductionBoard() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const role: string = shell?.role || "owner";
-  const isOwner = role === "owner";
+  // display only: the server decides (Advanced view redirect, createManualJob role rule)
+  const canOpenAdvanced = role === "owner" || Boolean(shell?.viewFinancials);
+  const canCreateJob = showsProductionControl(role, "createManualJob");
   const focus = ROLE_STAGE_FOCUS[role] as readonly SimpleStageKey[] | undefined;
   const showAll = !focus || params.get("view") === "all";
   const showCancelled = params.get("cancelled") === "1";
@@ -130,9 +133,10 @@ export default function SimpleProductionBoard() {
     <Page
       title="Production Board"
       subtitle="Every job, where it is, and what to do next. Open a job to work on it."
+      primaryAction={canCreateJob ? { content: "New job", onAction: () => navigate(NEW_JOB_HREF) } : undefined}
       secondaryActions={[
         { content: "Calendar", onAction: () => navigate("/app/erp/production-calendar") },
-        ...(isOwner ? [{ content: "Open advanced view", onAction: () => navigate(CLASSIC_PRODUCTION_HREF) }] : []),
+        ...(canOpenAdvanced ? [{ content: "Open advanced view", onAction: () => navigate(CLASSIC_PRODUCTION_HREF) }] : []),
       ]}
     >
       <div style={{ display: "grid", gap: 16, paddingBottom: 32 }}>

@@ -13,11 +13,12 @@ import {
   Checkbox,
 } from "@shopify/polaris";
 import { FormTextField } from "../components/FormTextField";
-import { Form, Link, useActionData, useLoaderData, useNavigation, useNavigate, useSearchParams } from "react-router";
+import { Form, Link, redirect, useActionData, useLoaderData, useNavigation, useNavigate, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
 import { productionFinancialVisibility } from "../lib/owner-authorization.server";
 import { redactJobFinancials } from "../lib/production-financial-redaction";
 import { friendlyMessage } from "../lib/employee-messages";
+import { PRODUCTION_ROLE_DENIED, advancedProductionRedirect, roleMayRunProductionIntent } from "../lib/production-role-access";
 import { CLASSIC_PRODUCTION_HREF, SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
 import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, assessLinkSource, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, jobSourceType, linkIntakeJobToTarget, runWithTicketRetry } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
@@ -531,6 +532,14 @@ export async function loader({ request }: { request: Request }) {
   const baseUrl = publicBaseUrl(request);
   // 2026-11-11: production staff do not receive revenue / cost / profit / margin.
   const financials = productionFinancialVisibility(auth);
+  // OWNER DECISION 2026-11-14: this full page is the Advanced view (owner and
+  // financially authorized managers). Anyone else opening /app/erp/production
+  // itself is sent to Simple Mode. The Simple Mode routes call this same loader
+  // with their own URLs and are not redirected. Access to data is unchanged.
+  if (new URL(request.url).pathname.replace(/\/+$/, "") === CLASSIC_PRODUCTION_HREF) {
+    const target = advancedProductionRedirect(resolveStaffAccess(auth).role, financials.show);
+    if (target) throw redirect(`${target}${new URL(request.url).search}`);
+  }
 
   const [jobs, quotes] = await Promise.all([
     db.productionJob.findMany({
@@ -722,6 +731,12 @@ export async function action({ request }: { request: Request }) {
   const PRODUCTION_PERMISSION: Record<string, StaffPermission> = { qcItem: "recordQc", reprintItem: "recordReprint", recordShipment: "recordShipment", recordPickup: "recordShipment" };
   const staffAccess = resolveStaffAccess(auth);
   if (PRODUCTION_PERMISSION[intent] && !staffAccess.can(PRODUCTION_PERMISSION[intent])) return permissionDeniedResponse(staffAccess, PRODUCTION_PERMISSION[intent]);
+  // OWNER DECISION 2026-11-14 (production-role-access.ts): material use and its
+  // stock deduction / restore, manual job creation, scheduling edits, revisions,
+  // reopen-for-reprint, intake linking and file removal need a listed production
+  // role. Refused here — before any read or write — for Sales, unassigned
+  // accounts and any role not listed for that action.
+  if (!roleMayRunProductionIntent(staffAccess.role, intent)) return Response.json({ ok: false, message: `${PRODUCTION_ROLE_DENIED} ${staffAccess.reason}` }, { status: 403 });
 
   // 15H.4C: link an UNLINKED intake shell job onto the real commercial job.
   // Exact owner selection + confirmation; the service validates both sides,

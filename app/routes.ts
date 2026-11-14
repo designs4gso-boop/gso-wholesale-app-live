@@ -48,6 +48,7 @@ export default [
     // SIMPLE MODE (2026-11-14): slim board + one-job workspace. Both reuse the
     // Production page's loader / action; the page above stays as the Advanced view.
     route("erp/production-board", "routes/app.erp.production-board.tsx"),
+    route("erp/production-new", "routes/app.erp.production-new.tsx"),
     route("erp/production-job/:id", "routes/app.erp.production-job.$id.tsx"),
     route("erp/production-calendar", "routes/app.erp.production-calendar.tsx"),
     route("erp/print-logs", "routes/app.erp.print-logs.tsx"),

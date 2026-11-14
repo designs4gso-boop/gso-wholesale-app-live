@@ -14,6 +14,7 @@ export type SimpleNavLink = { label: string; href: string };
 export type SimpleNavSection = { key: string; label: string; href: string; purpose: string; links: SimpleNavLink[] };
 
 export const SIMPLE_BOARD_HREF = "/app/erp/production-board";
+export const NEW_JOB_HREF = "/app/erp/production-new";
 export const CLASSIC_PRODUCTION_HREF = "/app/erp/production";
 export const jobWorkspaceHref = (jobId: string) => `/app/erp/production-job/${jobId}`;
 export const classicJobHref = (jobId: string) => `${CLASSIC_PRODUCTION_HREF}?job=${encodeURIComponent(jobId)}`;
@@ -50,13 +51,16 @@ export function navForRole(role: SimpleNavRole | string, options: { viewFinancia
       purpose: "Jobs on the floor and what to do next.",
       links: [
         { label: "Production Board", href: SIMPLE_BOARD_HREF },
+        // manual / walk-in jobs: owner, manager, print operator (the server enforces the same list)
+        ...(role !== "bagger" ? [{ label: "New Job", href: NEW_JOB_HREF }] : []),
         { label: "Production Calendar", href: "/app/erp/production-calendar" },
         ...(role !== "bagger" ? [{ label: "Incoming Print Files", href: "/app/erp/print-intake" }] : []),
         ...(isOwner || isManager ? [
           { label: "Print Logs", href: "/app/erp/print-logs" },
           { label: "RIP Imports & Review", href: "/app/erp/rip-imports" },
         ] : []),
-        ...(isOwner ? [{ label: "Advanced Production View", href: CLASSIC_PRODUCTION_HREF }] : []),
+        // the full page is for the owner and financially authorized managers; the server redirects everyone else
+        ...(isOwner || (isManager && options.viewFinancials) ? [{ label: "Advanced Production View", href: CLASSIC_PRODUCTION_HREF }] : []),
       ],
     });
     sections.push(isOwner

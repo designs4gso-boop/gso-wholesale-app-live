@@ -212,7 +212,7 @@ describe("10. no role gains a new material / stock power", () => {
     }
   });
 
-  it("the workspace exposes no adjust-stock or delete-usage control", () => {
-    expect(WORKSPACE_SRC).not.toMatch(/adjustInventory|deleteMaterialUsage|deductQty/);
+  it("the workspace exposes no adjust-stock or deduct-override control (removing an entry is covered in the staff-workflow suite)", () => {
+    expect(WORKSPACE_SRC).not.toMatch(/adjustInventory|deductQty/);
   });
 });
