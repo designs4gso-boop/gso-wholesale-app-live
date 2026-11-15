@@ -89,7 +89,10 @@ export const POUND_BAG_PRICE_AUTHORITY_TEXT =
 export const POUND_BAG_TIER_TABLE_TEXT =
   "QP / P BAG (14X16) PRICING — Owner-approved dedicated ladder: 55% at 4, 53% at 16, 50% at 50, 47% at 100, 44% at 256, 42% at 500, 40% at 1,000+ (smooth between), $75 minimum profit per job, same curve for every side option.";
 /** Market-target exclusion reason passed to computeCommercialPrice for QP / P Bags (14x16). */
-export const POUND_BAG_NO_4X5_MARKET_TARGET = "QP / P Bag (14x16): the 4x5 market dollar targets never price a QP / P Bag (14x16) (own true cost + Sticker Bag ladder rules only)";
+export const POUND_BAG_NO_4X5_MARKET_TARGET = "QP / P Bag (14x16): the 4x5 market dollar targets never price a QP / P Bag (14x16) (own true cost + its own dedicated ladder only)";
+/** Tier-table header line for QP / P Bags (14x16): names the real authority (display only). */
+export const POUND_BAG_PRICING_BASIS_TEXT =
+  "Owner-approved QP / P Bag (14x16) dedicated ladder. The Margin column shows the exact margin used at each quantity (linear between the approved anchors).";
 export const POUND_BAG_PRICE_NOT_COMPUTED_TEXT = "The QP / P Bag (14x16) pricing ladder could not produce a price for this job (no true cost / price yet).";
 export const SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT = "The Sticker Bag pricing ladder could not produce a Split Bag price for this job (no true cost / price yet).";
 
