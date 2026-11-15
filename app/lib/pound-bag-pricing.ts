@@ -1,50 +1,81 @@
-// 2026-11-15 — QP / P Bag (14x16): a place for its OWN selling-price ladder.
+// QP / P Bag (14x16) — its OWN selling-price authority.
 //
-// STATUS: NOTHING HERE PRICES A QUOTE. The calculator still prices this bag on
-// the approved Sticker Bag ladder (calculator-owner-view.ts, kind
-// "pound_bag_sticker_bag_ladder"). The owner has asked for a dedicated
-// large-bag ladder and must approve one first; until then
-// POUND_BAG_APPROVED_PRICE_LADDER is null and this module is not imported by
-// any route.
+// OWNER APPROVAL 2026-11-15: the Balanced dedicated ladder below is the ONE
+// active pricing rule for this product. It replaces the Standard 4x5 Sticker
+// Bag ladder, which this bag inherited for one day and which was calibrated
+// for a sub-$1 bag, not a ~$3 large-format one.
 //
-// The three ladders below are PROPOSALS for owner review (the tables sent to
-// the owner on 2026-11-15 were produced by this exact function). A ladder is
-// a margin curve over quantity (linear between anchors, flat outside them)
-// plus a minimum gross profit per job; it is applied to the bag's OWN
-// canonical true cost. It never touches the 4x5, Split Bag, jar or DTP rules.
+//   margin anchors   4 = 55%, 16 = 53%, 50 = 50%, 100 = 47%, 256 = 44%,
+//                    500 = 42%, 1000 = 40%
+//   between anchors  LINEAR in quantity (smooth — no cliffs); flat below 4
+//                    and above 1000
+//   minimum profit   $75 gross profit per job
+//   safety floor     the existing 40% global margin floor
+//   sides            ONE curve for front only, back only and front + back —
+//                    each side configuration already has its own true cost
+//
+// The cost side is unchanged: the shared Sticker Bag COST engine (canonical
+// bag adapter) produces the true cost; this file only says what margin that
+// cost is priced at. Nothing here is read by the 4x5, Split Bag, Stock Bag,
+// jar or DTP pricing paths.
+//
+// (The Conservative and Aggressive proposals shown to the owner on 2026-11-15
+// were not approved and are deliberately not kept in code.)
 
 export type PoundBagLadderAnchor = { quantity: number; marginPct: number };
 
 export type PoundBagPriceLadder = {
   key: string;
   label: string;
-  status: "PROPOSED" | "OWNER_APPROVED";
+  status: "OWNER_APPROVED";
+  approvedOn: string;
   /** Margin anchors, ascending by quantity. */
   anchors: PoundBagLadderAnchor[];
   /** Minimum gross profit per job, in dollars. */
   minimumProfit: number;
 };
 
+/** The margin-rule / curve key this product prices under (never "bags-4x5"). */
+export const POUND_BAG_PRICE_LADDER_KEY = "qp-p-bag-14x16";
+
 /** The global margin floor every GSO price already respects. */
 export const POUND_BAG_LADDER_GLOBAL_FLOOR_PCT = 40;
 
-export const POUND_BAG_PROPOSED_LADDERS: Record<"conservative" | "balanced" | "aggressive", PoundBagPriceLadder> = {
-  conservative: {
-    key: "conservative", label: "A. Conservative / higher margin", status: "PROPOSED", minimumProfit: 100,
-    anchors: [{ quantity: 4, marginPct: 62 }, { quantity: 16, marginPct: 60 }, { quantity: 50, marginPct: 57 }, { quantity: 100, marginPct: 54 }, { quantity: 256, marginPct: 51 }, { quantity: 500, marginPct: 48 }, { quantity: 1000, marginPct: 45 }],
-  },
-  balanced: {
-    key: "balanced", label: "B. Balanced / recommended", status: "PROPOSED", minimumProfit: 75,
-    anchors: [{ quantity: 4, marginPct: 55 }, { quantity: 16, marginPct: 53 }, { quantity: 50, marginPct: 50 }, { quantity: 100, marginPct: 47 }, { quantity: 256, marginPct: 44 }, { quantity: 500, marginPct: 42 }, { quantity: 1000, marginPct: 40 }],
-  },
-  aggressive: {
-    key: "aggressive", label: "C. Aggressive / volume", status: "PROPOSED", minimumProfit: 60,
-    anchors: [{ quantity: 4, marginPct: 50 }, { quantity: 16, marginPct: 47 }, { quantity: 50, marginPct: 45 }, { quantity: 100, marginPct: 42 }, { quantity: 256, marginPct: 40 }, { quantity: 500, marginPct: 40 }, { quantity: 1000, marginPct: 40 }],
-  },
+export const POUND_BAG_APPROVED_PRICE_LADDER: PoundBagPriceLadder = {
+  key: POUND_BAG_PRICE_LADDER_KEY,
+  label: "QP / P Bag (14x16) dedicated ladder",
+  status: "OWNER_APPROVED",
+  approvedOn: "2026-11-15",
+  minimumProfit: 75,
+  anchors: [
+    { quantity: 4, marginPct: 55 },
+    { quantity: 16, marginPct: 53 },
+    { quantity: 50, marginPct: 50 },
+    { quantity: 100, marginPct: 47 },
+    { quantity: 256, marginPct: 44 },
+    { quantity: 500, marginPct: 42 },
+    { quantity: 1000, marginPct: 40 },
+  ],
 };
 
-/** The ladder the owner has approved. Null = none yet; the calculator keeps its existing authority. */
-export const POUND_BAG_APPROVED_PRICE_LADDER: PoundBagPriceLadder | null = null;
+/** Quantities the calculator's tier table shows for this product: the approved anchors. */
+export const POUND_BAG_DISPLAY_LADDER = POUND_BAG_APPROVED_PRICE_LADDER.anchors.map((anchor) => anchor.quantity);
+
+export const POUND_BAG_PRICE_LADDER_SOURCE = "Owner-approved QP / P Bag (14x16) pricing ladder (2026-11-15)";
+
+/**
+ * The margin rule the calculator carries for this product. Shaped like a
+ * FamilyMarginRule so the existing commercial-price function accepts it; the
+ * five-value `curve` is the display summary only — the price always comes
+ * from the anchors (poundBagLadderMarginPct).
+ */
+export const POUND_BAG_MARGIN_RULE = {
+  key: POUND_BAG_PRICE_LADDER_KEY,
+  label: POUND_BAG_APPROVED_PRICE_LADDER.label,
+  curve: [55, 53, 50, 44, 40],
+  familyMinPct: POUND_BAG_LADDER_GLOBAL_FLOOR_PCT,
+  aliases: [] as string[],
+};
 
 /** Margin for a quantity: linear between anchors, flat before the first and after the last. */
 export function poundBagLadderMarginPct(ladder: PoundBagPriceLadder, quantity: number): number {
@@ -57,10 +88,38 @@ export function poundBagLadderMarginPct(ladder: PoundBagPriceLadder, quantity: n
     const lo = anchors[i - 1];
     const hi = anchors[i];
     if (quantity <= hi.quantity) {
-      return lo.marginPct + ((hi.marginPct - lo.marginPct) * (quantity - lo.quantity)) / (hi.quantity - lo.quantity);
+      // two decimals: exact at every anchor, and a readable percentage in between
+      return Math.round((lo.marginPct + ((hi.marginPct - lo.marginPct) * (quantity - lo.quantity)) / (hi.quantity - lo.quantity)) * 100) / 100;
     }
   }
   return last.marginPct;
+}
+
+/** The approved margin for a quantity of QP / P Bags (14x16). */
+export function poundBagMarginPctForQuantity(quantity: number): number {
+  return Math.max(POUND_BAG_LADDER_GLOBAL_FLOOR_PCT, poundBagLadderMarginPct(POUND_BAG_APPROVED_PRICE_LADDER, Math.max(1, Math.floor(quantity))));
+}
+
+/**
+ * Pricing-policy values for ONE QP / P Bag tier row: the caller's policy with
+ * this product's curve entry (the approved margin for exactly this quantity)
+ * and the approved $75 minimum gross profit. Handed to the existing
+ * computeCommercialPrice, so the cost-based price, the minimum-profit rule
+ * and the 40% floor all run through the SAME code as every other product.
+ * A copy — the caller's values (and so every other product) are untouched.
+ */
+export function poundBagPolicyValues<T extends { marginCurves: { families: Record<string, any> }; minimumGrossProfit: Record<string, any> }>(values: T, quantity: number, familyKey = "sticker-bags"): T {
+  return {
+    ...values,
+    marginCurves: {
+      ...values.marginCurves,
+      families: {
+        ...values.marginCurves.families,
+        [POUND_BAG_PRICE_LADDER_KEY]: { familyMinPct: POUND_BAG_LADDER_GLOBAL_FLOOR_PCT, bands: [{ minQty: 1, targetPct: poundBagMarginPctForQuantity(quantity) }] },
+      },
+    },
+    minimumGrossProfit: { ...values.minimumGrossProfit, [familyKey]: POUND_BAG_APPROVED_PRICE_LADDER.minimumProfit },
+  };
 }
 
 export type PoundBagLadderPrice = {
@@ -77,9 +136,10 @@ export type PoundBagLadderPrice = {
 };
 
 /**
- * The price a ladder gives a job: the larger of cost / (1 - margin) and
- * cost + minimum profit. Pure. Returns null when there is no usable cost —
- * a price is never produced from a missing or zero cost.
+ * Reference implementation of the rule: the larger of cost / (1 - margin) and
+ * cost + minimum profit. Pure. The calculator prices through
+ * computeCommercialPrice (see poundBagPolicyValues); tests hold the two equal.
+ * Returns null when there is no usable cost.
  */
 export function poundBagLadderPrice(ladder: PoundBagPriceLadder, input: { quantity: number; trueCost: number }): PoundBagLadderPrice | null {
   const quantity = Math.floor(Number(input.quantity));

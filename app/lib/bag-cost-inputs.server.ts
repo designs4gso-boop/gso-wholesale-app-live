@@ -187,11 +187,15 @@ export const SPLIT_BAG_MOQ = 64;
  * (pound-bag-blank.server.ts). No record / no cost = BAG_BLANK_COST_REQUIRED
  * (Draft Only) — never the 4x5 $0.11, never the Split Bag $0.14.
  *
- * APPLICATION: the existing owner standard for this bag,
- * OWNER_STANDARDS.bagApplicationPerLabel14x16 — $20/hr at 20 labels/hour =
- * $1.00 per APPLIED label (front only / back only = 1, front + back = 2).
- * Expressed here as seconds per applied label so it runs through the SAME
- * canonical application math as every other bag (seconds x $20/hr).
+ * APPLICATION (OWNER FINAL 2026-11-15) — BAG-THROUGHPUT based, at the
+ * canonical $20/hr. These large labels are slow to place accurately, so the
+ * standard is completed BAGS per hour, not a per-label charge:
+ *   front only / back only   50 completed bags/hour  -> $0.40 per bag
+ *   front + back             30 completed bags/hour  -> $0.6666667 per bag
+ * The double-sided figure ALREADY covers applying both labels — it is one
+ * operation per bag and is never charged as two label applications. The old
+ * "$1.00 per applied 14x16 label" (OWNER_STANDARDS.bagApplicationPerLabel14x16)
+ * is NOT used for this product.
  *
  * MOQ: 4 bags (owner-confirmed 2026-11-15). Eligibility only, like the other
  * bag MOQs — material, cut and application math are untouched by it.
@@ -199,13 +203,32 @@ export const SPLIT_BAG_MOQ = 64;
  */
 /** Owner-confirmed 2026-11-15: the QP / P Bag (14x16) minimum order is 4 bags. */
 export const POUND_BAG_14X16_MOQ = 4;
-export const POUND_BAG_14X16_APPLICATION_LABELS_PER_HOUR = 20;
-export const POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL = 3600 / POUND_BAG_14X16_APPLICATION_LABELS_PER_HOUR; // 180 s = $1.00 at $20/hr
-export const POUND_BAG_14X16_APPLICATION_SOURCE = "Owner standard (13A.3, OWNER_STANDARDS.bagApplicationPerLabel14x16): $20/hr at 20 labels/hour = $1.00 per applied 14x16 label.";
+export const POUND_BAG_14X16_SINGLE_SIDED_BAGS_PER_HOUR = 50;
+export const POUND_BAG_14X16_DOUBLE_SIDED_BAGS_PER_HOUR = 30;
+/** Seconds of application labor per COMPLETED bag (both labels included when double-sided). */
+export function poundBagApplicationSecondsPerBag(sides: number): number {
+  return 3600 / (sides === 2 ? POUND_BAG_14X16_DOUBLE_SIDED_BAGS_PER_HOUR : POUND_BAG_14X16_SINGLE_SIDED_BAGS_PER_HOUR); // 120 s or 72 s
+}
+export const POUND_BAG_14X16_APPLICATION_SOURCE = "Owner final standard 2026-11-15 (bag throughput at $20/hr): single-sided 50 completed bags/hour = $0.40 per bag; double-sided 30 completed bags/hour = $0.6667 per bag (both labels in the one operation — never charged per label).";
 export const POUND_BAG_14X16_BLANK_VENDOR_SKU = "preset:pound-bag";
-/** Seconds of application labor per APPLIED label at the canonical $20/hr. */
-export function bagApplicationSecondsPerLabel(product: BagProduct): number {
-  return product === "pound_bag_14x16" ? POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL : BAG_APPLICATION_SECONDS_PER_SIDE;
+/**
+ * Seconds of application labor per COMPLETED bag at the canonical $20/hr.
+ * 4x5 / Stock / Split Bag: 10 s per applied label (unchanged). QP / P Bag
+ * (14x16): the owner bag-throughput standard — NOT a per-label sum.
+ */
+export function bagApplicationSecondsPerBag(product: BagProduct, sides: number): number {
+  if (product === "pound_bag_14x16") return poundBagApplicationSecondsPerBag(sides);
+  return (sides === 2 ? 2 : 1) * bagLabelPositionsPerSide(product) * BAG_APPLICATION_SECONDS_PER_SIDE;
+}
+
+/**
+ * The same labor expressed per applied label (per-bag seconds / labels on the
+ * bag), for the per-event application record. For every product
+ * labels x this = the per-bag figure exactly, so nothing is counted twice.
+ */
+export function bagApplicationSecondsPerLabel(product: BagProduct, sides: number = 1): number {
+  const labels = (sides === 2 ? 2 : 1) * bagLabelPositionsPerSide(product);
+  return bagApplicationSecondsPerBag(product, sides) / labels;
 }
 
 /** Employee-facing name of the blank for each bag product. */
@@ -638,7 +661,7 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
     itemDescription: bagProductDisplayName(input.product),
     itemQuantity: bagQuantity,
     applicationsPerItem: sides * positionsPerSide,
-    applicationSecondsPerEvent: bagApplicationSecondsPerLabel(input.product),
+    applicationSecondsPerEvent: bagApplicationSecondsPerLabel(input.product, sides),
     printedLabels: labelQuantity,
   });
 
@@ -662,5 +685,5 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
 
 /** Application labor for a bag job, from the canonical 10s-per-applied-label standard. */
 export function bagApplicationCost(bagQuantity: number, sides: BagSides, product: BagProduct = "sticker_bag_4x5"): number {
-  return (bagQuantity * sides * bagLabelPositionsPerSide(product) * bagApplicationSecondsPerLabel(product) / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
+  return (bagQuantity * bagApplicationSecondsPerBag(product, sides) / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
 }

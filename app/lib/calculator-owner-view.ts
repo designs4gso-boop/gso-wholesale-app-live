@@ -15,6 +15,7 @@
 // Missing cost is never $0: every money field here is `number | null`, and a
 // blocked job carries null — never a zero that could read as "free".
 
+import { POUND_BAG_PRICE_LADDER_KEY } from "./pound-bag-pricing";
 import { POUND_BAG_14X16_ARTBOARD_IN, POUND_BAG_14X16_DISPLAY_NAME, POUND_BAG_LEGACY_BLANK_IDS, POUND_BAG_URL_FLAG_ALIASES, SPLIT_BAG_ARTBOARD_IN, poundBagFlagPosted } from "./bag-artboard-geometry";
 
 /* ------------------------------------------------------------------ *
@@ -81,15 +82,15 @@ export const POUND_BAG_CALCULATOR_OPTION = {
   pfamily: "sticker-bags",
   ppoundbag: "1",
 } as const;
-/** The Sticker Bag margin rule the QP / P Bag (14x16) prices on (bands, family minimum, minimum-profit policy). */
-export const POUND_BAG_MARGIN_RULE_KEY = "bags-4x5";
+/** OWNER APPROVAL 2026-11-15: the QP / P Bag (14x16) prices ONLY on its own dedicated ladder (pound-bag-pricing.ts). */
+export const POUND_BAG_MARGIN_RULE_KEY = POUND_BAG_PRICE_LADDER_KEY; // "qp-p-bag-14x16" — its own approved ladder, never "bags-4x5"
 export const POUND_BAG_PRICE_AUTHORITY_TEXT =
-  "PRICE AUTHORITY: Approved Sticker Bag pricing ladder applied to QP / P Bag (14x16) true cost. Owner may override a specific quote.";
+  "PRICE AUTHORITY: Owner-approved QP / P Bag (14x16) pricing ladder (2026-11-15) applied to its own true cost. Owner may override a specific quote.";
 export const POUND_BAG_TIER_TABLE_TEXT =
-  "QP / P BAG (14X16) PRICING — Uses approved Sticker Bag quantity pricing ladder with QP / P Bag (14x16) true manufacturing cost.";
+  "QP / P BAG (14X16) PRICING — Owner-approved dedicated ladder: 55% at 4, 53% at 16, 50% at 50, 47% at 100, 44% at 256, 42% at 500, 40% at 1,000+ (smooth between), $75 minimum profit per job, same curve for every side option.";
 /** Market-target exclusion reason passed to computeCommercialPrice for QP / P Bags (14x16). */
 export const POUND_BAG_NO_4X5_MARKET_TARGET = "QP / P Bag (14x16): the 4x5 market dollar targets never price a QP / P Bag (14x16) (own true cost + Sticker Bag ladder rules only)";
-export const POUND_BAG_PRICE_NOT_COMPUTED_TEXT = "The Sticker Bag pricing ladder could not produce a QP / P Bag (14x16) price for this job (no true cost / price yet).";
+export const POUND_BAG_PRICE_NOT_COMPUTED_TEXT = "The QP / P Bag (14x16) pricing ladder could not produce a price for this job (no true cost / price yet).";
 export const SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT = "The Sticker Bag pricing ladder could not produce a Split Bag price for this job (no true cost / price yet).";
 
 /** Map a family-selector choice onto the form params the loader reads. */
@@ -418,6 +419,8 @@ export type SellingPriceAuthorityKind =
   | "split_bag_sticker_bag_ladder"
   /** 2026-11-15: QP / P Bag (14x16) priced the same way — Sticker Bag ladder on its own true cost; owner may override. */
   | "pound_bag_sticker_bag_ladder"
+  /** 2026-11-15 owner approval: QP / P Bag (14x16) priced on its OWN dedicated ladder; owner may override. (The kind above is kept only so a quote saved earlier that day still reads.) */
+  | "pound_bag_dedicated_ladder"
   | "cost_blocked"
   | "quote_required"
   | "none";
@@ -494,13 +497,13 @@ export function resolveSellingPriceAuthority(input: {
   // the approved Sticker Bag ladder on its OWN true cost, nothing else.
   if (input.poundBag && !input.stockBag) {
     if (String(input.marginRuleKey || "") !== POUND_BAG_MARGIN_RULE_KEY) {
-      return { ...base, approved: false, kind: "none", label: null, missing: `${POUND_BAG_PRICE_NOT_COMPUTED_TEXT} QP / P Bags (14x16) price only on the approved Sticker Bag ladder.` };
+      return { ...base, approved: false, kind: "none", label: null, missing: `${POUND_BAG_PRICE_NOT_COMPUTED_TEXT} QP / P Bags (14x16) price only on their own owner-approved ladder.` };
     }
     if (row.totalPrice == null || !(Number(row.totalPrice) > 0) || row.unitPrice == null) {
       return { ...base, approved: false, kind: "cost_blocked", label: null, missing: POUND_BAG_PRICE_NOT_COMPUTED_TEXT };
     }
     const ownerMarginEdit = /owner per-tier margin edit/i.test(String(row.commercial?.marginSource || ""));
-    return { ...base, ownerMarginEdit, approved: true, kind: "pound_bag_sticker_bag_ladder", label: POUND_BAG_PRICE_AUTHORITY_TEXT, missing: null };
+    return { ...base, ownerMarginEdit, approved: true, kind: "pound_bag_dedicated_ladder", label: POUND_BAG_PRICE_AUTHORITY_TEXT, missing: null };
   }
 
   // Stock Bags: the live storefront price authority (owner decision C).

@@ -10,6 +10,7 @@
 // minutes scale by passes when a minutes/sqft model is supplied. All layer
 // lines are labeled with the layer count and "provisional linear model".
 
+import { POUND_BAG_14X16_DISPLAY_NAME } from "./bag-artboard-geometry";
 import { INK_RATES, OWNER_LABOR, resolveMarginFamily, type CostLine, type SourceLabel } from "./calculator-emergency.server";
 import { WIRED_LABOR, blankItemUnitCostAtQty } from "./cost-calculator.server";
 import { OWNER_STANDARDS } from "./owner-standards";
@@ -302,8 +303,14 @@ export function buildLabelRows(params: {
 
 // Bag application labor by BAG SIZE (owner standards only; unknown sizes are
 // a MISSING blocker, never silently priced at the 4x5 rate).
-export function bagApplicationRateFor(bagName: string): { rate: number | null; source: SourceLabel; basis: string } {
+export function bagApplicationRateFor(bagName: string, facesPerBag: number = 1): { rate: number | null; source: SourceLabel; basis: string } {
   const text = String(bagName || "");
+  // 2026-11-15 owner final: QP / P Bag (14x16) labor is BAG throughput at $20/hr — 50 single-sided bags/hr ($0.40 a bag),
+  // 30 double-sided bags/hr ($0.6667 a bag, both labels). Returned per label so labels x rate = the per-bag figure.
+  if (text === POUND_BAG_14X16_DISPLAY_NAME) {
+    const double = Math.floor(facesPerBag) >= 2;
+    return { rate: double ? 20 / 30 / 2 : 20 / 50, source: "owner_standard", basis: double ? "QP / P Bag double-sided: 30 completed bags/hr = $0.6667 per bag (owner standard)" : "QP / P Bag single-sided: 50 completed bags/hr = $0.40 per bag (owner standard)" };
+  }
   if (/14\s?x\s?16|pound/i.test(text)) return { rate: OWNER_STANDARDS.bagApplicationPerLabel14x16.value, source: "owner_standard", basis: "14x16 bag $1.00/label (owner standard)" };
   if (/4\s?x\s?5\b/i.test(text)) return { rate: OWNER_LABOR.bagLabelApplicationPer, source: "owner_standard", basis: "4x5 bag $0.0781/label (owner standard)" };
   // 2026-11-11: a Split Bag label IS a standard 4x5 label. (Legacy
@@ -820,7 +827,7 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
   // standards only — unknown sizes block instead of borrowing the 4x5 rate).
   let applicationCount = 0;
   if (input.family === "bags-4x5") {
-    const bagRate = bagApplicationRateFor(input.blank?.name || "");
+    const bagRate = bagApplicationRateFor(input.blank?.name || "", faces);
     applicationCount = totalPieces;
     if (bagRate.rate != null) {
       lines.push({ key: "application", label: `Bag-label application — ${totalPieces} label(s) (${quantity} x ${faces}/bag; ${bagRate.basis})`, amount: bagRate.rate * totalPieces, source: "owner_standard" });

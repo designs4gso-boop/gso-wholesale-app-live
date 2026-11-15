@@ -104,13 +104,17 @@ import { assembleCanonicalJob, canonicalFamilyFromUi, normalizeCanonicalInput, r
 import { CANONICAL_DISPATCH, CANONICAL_FAMILIES, CANONICAL_PACKOUT } from "../app/lib/canonical-calculator-shared";
 import { CANONICAL_SUPPORTED_FAMILIES } from "../app/lib/canonical-quote-authority.server";
 import { POUND_BAG_14X16_ALIASES, POUND_BAG_14X16_DISPLAY_NAME, POUND_BAG_URL_FLAG_ALIASES, isPoundBag14x16Name } from "../app/lib/bag-artboard-geometry";
-import { POUND_BAG_APPROVED_PRICE_LADDER, POUND_BAG_PROPOSED_LADDERS, poundBagLadderMarginPct, poundBagLadderPrice } from "../app/lib/pound-bag-pricing";
+import { POUND_BAG_APPROVED_PRICE_LADDER, POUND_BAG_DISPLAY_LADDER, POUND_BAG_MARGIN_RULE, POUND_BAG_PRICE_LADDER_KEY, poundBagLadderMarginPct, poundBagLadderPrice, poundBagMarginPctForQuantity, poundBagPolicyValues } from "../app/lib/pound-bag-pricing";
+import { bagApplicationRateFor } from "../app/lib/product-driven-costing.server";
 import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, POUND_BAG_14X16_ARTBOARD_IN, POUND_BAG_14X16_BAG_IN, POUND_BAG_14X16_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN, bagLabelGeometryFor } from "../app/lib/bag-artboard-geometry";
 import {
   BAG_4X5_BLANK_UNIT_COST,
   BAG_APPLICATION_SECONDS_PER_SIDE,
   BAG_REASONS,
-  POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL,
+  POUND_BAG_14X16_DOUBLE_SIDED_BAGS_PER_HOUR,
+  POUND_BAG_14X16_SINGLE_SIDED_BAGS_PER_HOUR,
+  bagApplicationSecondsPerBag,
+  poundBagApplicationSecondsPerBag,
   POUND_BAG_14X16_MOQ,
   SPLIT_BAG_MOQ,
   STICKER_BAG_MOQ,
@@ -134,7 +138,7 @@ import {
 } from "../app/lib/calculator-owner-view";
 import { OWNER_STANDARDS } from "../app/lib/owner-standards";
 import { getProductProductionSpec, listProductSpecs } from "../app/lib/product-production-spec";
-import { OWN_COST_LADDER_PRICE_KINDS, POUND_BAG_AUTOMATIC_PRICE_KIND, isSplitBagQuoteItem } from "../app/lib/split-bag-quote-pricing";
+import { OWN_COST_LADDER_PRICE_KINDS, POUND_BAG_AUTOMATIC_PRICE_KIND, POUND_BAG_LEGACY_PRICE_KIND, isSplitBagQuoteItem } from "../app/lib/split-bag-quote-pricing";
 
 const ROUTE_SRC = readFileSync("app/routes/app.erp.cost-calculator.tsx", "utf8").replace(/\r\n/g, "\n");
 
@@ -179,7 +183,7 @@ describe("QP / P Bag (14x16) — 1. it is a Sticker Bag bag type in the dropdown
     expect(pm.stockBag).toBe(false);
     expect(pm.canonicalFamily).toBe("sticker-bags"); // still the Sticker Bags UI family
     expect(pm.canonical.family).toBe("pound-bags");
-    expect(pm.autoBag.label).toContain("QP / P Bag (14x16) — $1.00");
+    expect(pm.autoBag.label).toContain("QP / P Bag (14x16) — $1.00"); // 10. blank still the $1.00 record
     expect(pm.autoBag.label).toContain('"14x16 Blank Bag" cost record');
     // fixed geometry: no width / height entry and they are never required inputs
     expect(ROUTE_SRC).toContain("{isPoundBag ? null : (<>");
@@ -240,29 +244,56 @@ describe("QP / P Bag (14x16) — 2-4. geometry", () => {
   });
 });
 
-describe("QP / P Bag (14x16) — 5. application labor is per applied label, through the existing canonical math", () => {
-  it("uses the existing owner 14x16 standard ($1.00 per applied label = 180 s at the canonical $20/hr)", () => {
-    expect(OWNER_STANDARDS.bagApplicationPerLabel14x16.value).toBe(1);
-    expect(POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL).toBe(180);
-    expect((POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL / 3600) * 20).toBeCloseTo(OWNER_STANDARDS.bagApplicationPerLabel14x16.value, 12);
-    expect(bagApplicationSecondsPerLabel("pound_bag_14x16")).toBe(180);
-    // the other bags keep their 10 s per applied side
-    expect(bagApplicationSecondsPerLabel("sticker_bag_4x5")).toBe(BAG_APPLICATION_SECONDS_PER_SIDE);
-    expect(bagApplicationSecondsPerLabel("split_bag")).toBe(BAG_APPLICATION_SECONDS_PER_SIDE);
-    expect(bagApplicationSecondsPerLabel("stock_bag")).toBe(BAG_APPLICATION_SECONDS_PER_SIDE);
+describe("LABOR — 1-7. application is BAG-THROUGHPUT based at $20/hr (owner final 2026-11-15)", () => {
+  it("1-5. single-sided 50 completed bags/hour = $0.40 a bag; double-sided 30 completed bags/hour = $0.6667 a bag", () => {
+    expect(POUND_BAG_14X16_SINGLE_SIDED_BAGS_PER_HOUR).toBe(50);
+    expect(POUND_BAG_14X16_DOUBLE_SIDED_BAGS_PER_HOUR).toBe(30);
+    expect(poundBagApplicationSecondsPerBag(1)).toBe(72);
+    expect(poundBagApplicationSecondsPerBag(2)).toBe(120);
+    expect((bagApplicationSecondsPerBag("pound_bag_14x16", 1) / 3600) * 20).toBeCloseTo(0.4, 12);
+    expect((bagApplicationSecondsPerBag("pound_bag_14x16", 2) / 3600) * 20).toBeCloseTo(0.6666667, 6);
+    // front only and back only are the same single-sided job (there is one "1 side" setting)
+    expect(bagApplicationCost(100, 1, "pound_bag_14x16")).toBeCloseTo(40, 9);
+    expect(bagApplicationCost(100, 2, "pound_bag_14x16")).toBeCloseTo(66.6666667, 6);
+    // the old $1.00 per applied label is not this product's standard any more
+    expect(bagApplicationCost(100, 1, "pound_bag_14x16")).not.toBeCloseTo(100 * OWNER_STANDARDS.bagApplicationPerLabel14x16.value, 6);
+    expect(bagApplicationCost(100, 2, "pound_bag_14x16")).not.toBeCloseTo(200 * OWNER_STANDARDS.bagApplicationPerLabel14x16.value, 6);
+    // the other bags keep 10 s per applied label
+    expect(bagApplicationSecondsPerLabel("sticker_bag_4x5", 1)).toBe(BAG_APPLICATION_SECONDS_PER_SIDE);
+    expect(bagApplicationSecondsPerLabel("sticker_bag_4x5", 2)).toBe(BAG_APPLICATION_SECONDS_PER_SIDE);
+    expect(bagApplicationSecondsPerLabel("split_bag", 2)).toBe(BAG_APPLICATION_SECONDS_PER_SIDE);
+    expect(bagApplicationSecondsPerLabel("stock_bag", 2)).toBe(BAG_APPLICATION_SECONDS_PER_SIDE);
+    expect(bagApplicationSecondsPerBag("sticker_bag_4x5", 2)).toBe(20);
+    expect(bagApplicationCost(500, 2, "sticker_bag_4x5")).toBeCloseTo(500 * 2 * (10 / 3600) * 20, 9);
+    expect(bagApplicationCost(500, 2, "split_bag")).toBeCloseTo(500 * 2 * (10 / 3600) * 20, 9);
   });
 
-  it("front only = 1 applied label per bag, front + back = 2 (never 4)", async () => {
-    expect(bagApplicationCost(100, 1, "pound_bag_14x16")).toBeCloseTo(100, 9);
-    expect(bagApplicationCost(100, 2, "pound_bag_14x16")).toBeCloseTo(200, 9);
+  it("6. a double-sided bag is ONE application operation — never the single-sided labor twice, never two label charges", async () => {
     const front = await job(QS("pound", 1, 100));
     const both = await job(QS("pound", 2, 100));
-    expect(line(front, "application")).toBeCloseTo(100, 6);
-    expect(line(both, "application")).toBeCloseTo(200, 6);
-    expect(front.diagnostics.applicationEvents).toBe(100);
-    expect(both.diagnostics.applicationEvents).toBe(200);
-    expect(both.diagnostics.applicationBreakdown).toMatchObject({ totalLabels: 200, totalCost: 200, laborRatePerHour: 20 });
-    expect(both.diagnostics.applicationBreakdown.pieces[0]).toMatchObject({ secondsPerLabel: 180, costPerLabel: 1, labels: 200 });
+    expect(line(front, "application")).toBeCloseTo(40, 6);
+    expect(line(both, "application")).toBeCloseTo(66.6666667, 5);
+    expect(line(both, "application")).toBeLessThan(2 * line(front, "application")); // 2 x $0.40 = $0.80 would be double-counting
+    expect(both.trueCost.lines.filter((l: any) => l.key === "application")).toHaveLength(1);
+    expect(both.diagnostics.applicationBreakdown.pieces).toHaveLength(1);
+    expect(both.diagnostics.applicationBreakdown.pieces[0]).toMatchObject({ secondsPerLabel: 120, labels: 100 }); // per completed BAG
+    expect(both.diagnostics.applicationBreakdown.pieces[0].costPerLabel).toBeCloseTo(0.6666667, 6);
+    expect(both.diagnostics.applicationBreakdown.totalCost).toBeCloseTo(66.6666667, 5);
+    expect(front.diagnostics.applicationBreakdown.pieces[0]).toMatchObject({ secondsPerLabel: 72, costPerLabel: 0.4, labels: 100, cost: 40 });
+    // the per-event record agrees with the per-bag figure (2 events x 60 s = 120 s)
+    const physical = computeBagPhysical({ product: "pound_bag_14x16", bagQuantity: 100, sides: 2, designs: 1, blankUnitCost: 1 });
+    expect(physical.application.applicationEvents).toBe(200);
+    expect(bagApplicationSecondsPerLabel("pound_bag_14x16", 2) * 2).toBe(120);
+    // the legacy diagnostic run carries the same labor (labels x rate = bags x per-bag)
+    expect(bagApplicationRateFor("QP / P Bag (14x16)", 1).rate! * 100).toBeCloseTo(40, 9);
+    expect(bagApplicationRateFor("QP / P Bag (14x16)", 2).rate! * 200).toBeCloseTo(66.6666667, 6);
+  }, 300_000);
+
+  it("7. the number of designs never multiplies application labor", async () => {
+    for (const sides of [1, 2] as const) {
+      const one = line(await job(QS("pound", sides, 100, 1)), "application");
+      for (const designs of [5, 10, 25]) expect(line(await job(QS("pound", sides, 100, designs)), "application"), `${sides}/${designs}`).toBe(one);
+    }
   }, 300_000);
 });
 
@@ -329,53 +360,138 @@ describe("QP / P Bag (14x16) — 6. the blank cost is the current 14x16 Blank Ba
   });
 });
 
-describe("QP / P Bag (14x16) — 7. approved Sticker Bag pricing ladder on its OWN true cost", () => {
+describe("PRICING — 13-20. the owner-approved dedicated ladder, on the bag's OWN true cost", () => {
   it("true cost is built from its own blank, media, ink, cutting, setup and application", async () => {
     const r = await job(QS("pound", 1, 100));
     expect(r.status).not.toBe("DRAFT_ONLY");
     expect(r.blockers).toEqual([]);
     expect(line(r, "blank_sets")).toBeCloseTo(100, 6);
-    expect(line(r, "application")).toBeCloseTo(100, 6);
+    expect(line(r, "application")).toBeCloseTo(40, 6);
     expect(line(r, "print_media")).toBeGreaterThan(100 * STICKER_SQFT * (213 / 675)); // at least the sticker area at the selected media rate
     expect(line(r, "ink")).toBeGreaterThan(0);
     expect(line(r, "cutting_machine")).toBeGreaterThan(0);
     expect(line(r, "art_setup")).toBeCloseTo(OWNER_STANDARDS.artSetupPerDesign.value, 6);
     expect(line(r, "inbound_freight")).toBe(0); // no owner freight standard — disclosed, not invented
+    expect(line(r, "planned_overage")).toBe(0); // spoilage: unchanged, a separate future owner decision
     expect(r.reasons).toEqual(expect.arrayContaining(["FREIGHT_NOT_MODELED", "PACKOUT_NOT_MODELED"]));
     expect(CANONICAL_PACKOUT["pound-bags"].unitsPerBox).toBeNull(); // never the 4x5 5,000 / box rule
-    expect(r.trueCost.totalCost).toBeCloseTo(363.7057, 3);
-    expect((await job(QS("pound", 2, 100))).trueCost.totalCost).toBeCloseTo(615.5701, 3);
+    // 8. exactly $60 below the old $1.00-a-label model ($363.7057), nothing else moved
+    expect(r.trueCost.totalCost).toBeCloseTo(363.70566651759094 - 60, 6);
+    // 9. the audited 30 bags/hour double-sided model ($615.5701 - $200 + $66.6667)
+    expect((await job(QS("pound", 2, 100))).trueCost.totalCost).toBeCloseTo(615.5700747018486 - 200 + 100 * (20 / 30), 6);
   }, 300_000);
 
-  it("the price is the Sticker Bag ladder band applied to that cost; the 4x5 dollar targets are never used", async () => {
-    const { pm, row, result } = await calculate(QS("pound", 1, 100));
-    expect(pm.marginFamily).toMatchObject({ key: "bags-4x5", configured: true, minPct: 45 });
-    expect(POUND_BAG_MARGIN_RULE_KEY).toBe("bags-4x5");
-    expect(pm.tiers.map((t: any) => t.quantity)).toEqual(expect.arrayContaining(STICKER_BAG_DISPLAY_LADDER));
-    expect(result).toMatchObject({ state: "READY", priceAuthority: POUND_BAG_PRICE_AUTHORITY_TEXT });
-    expect(result.authority).toMatchObject({ approved: true, kind: "pound_bag_sticker_bag_ladder" });
-    expect(result.trueJobCost).toBeCloseTo(363.7057, 3);
-    // cost / (1 - band margin): the ladder rule on the bag's OWN cost
-    const band = [...BAGS_4X5_SINGLE_BANDS].reverse().find((b) => 100 >= b.minQty)!;
-    expect(row.marginPct).toBeGreaterThanOrEqual(band.targetPct);
-    expect(result.recommendedTotal).toBeCloseTo(result.trueJobCost! / (1 - row.marginPct / 100), 4);
-    expect(result.recommendedTotal).toBeCloseTo(1039.159, 2);
-    expect(row.commercial.marketPosition.applicable).toBe(false);
-    expect(row.commercial.marketPosition.targetApplied).toBe(false);
-    expect(String(row.commercial.controllingRule || row.commercial.marginSource)).toMatch(/Cost-based price/);
-    // front + back uses the double-sided bands
+  it("14-15. the anchors are exactly 4=55, 16=53, 50=50, 100=47, 256=44, 500=42, 1000=40; smooth between; flat outside", () => {
+    expect(POUND_BAG_APPROVED_PRICE_LADDER.status).toBe("OWNER_APPROVED");
+    expect(POUND_BAG_APPROVED_PRICE_LADDER.anchors).toEqual([
+      { quantity: 4, marginPct: 55 }, { quantity: 16, marginPct: 53 }, { quantity: 50, marginPct: 50 }, { quantity: 100, marginPct: 47 },
+      { quantity: 256, marginPct: 44 }, { quantity: 500, marginPct: 42 }, { quantity: 1000, marginPct: 40 },
+    ]);
+    expect(POUND_BAG_APPROVED_PRICE_LADDER.minimumProfit).toBe(75);
+    expect(POUND_BAG_DISPLAY_LADDER).toEqual([4, 16, 50, 100, 256, 500, 1000]);
+    for (const anchor of POUND_BAG_APPROVED_PRICE_LADDER.anchors) expect(poundBagMarginPctForQuantity(anchor.quantity), String(anchor.quantity)).toBe(anchor.marginPct);
+    expect(poundBagMarginPctForQuantity(75)).toBe(48.5); // halfway between 50 (at 50) and 47 (at 100)
+    expect(poundBagMarginPctForQuantity(10)).toBe(54);
+    expect(poundBagMarginPctForQuantity(1)).toBe(55);
+    expect(poundBagMarginPctForQuantity(5000)).toBe(40);
+    // smooth: the margin never jumps by more than a fraction of a point per bag, and never rises with quantity
+    let previous = poundBagMarginPctForQuantity(4);
+    for (let quantity = 5; quantity <= 1100; quantity += 1) {
+      const margin = poundBagMarginPctForQuantity(quantity);
+      expect(margin, String(quantity)).toBeLessThanOrEqual(previous);
+      expect(previous - margin, String(quantity)).toBeLessThanOrEqual(0.2);
+      expect(margin, String(quantity)).toBeGreaterThanOrEqual(40);
+      previous = margin;
+    }
+    // only ONE ladder exists in code (the unapproved proposals were removed)
+    const src = readFileSync("app/lib/pound-bag-pricing.ts", "utf8");
+    expect(src).not.toContain("PROPOSED_LADDERS");
+    expect(src.match(/minimumProfit: \d+/g)).toHaveLength(1);
+  });
+
+  it("13, 17-19. the calculator prices on that ladder — not the 4x5 Sticker Bag ladder — with ONE curve for every side option", async () => {
+    const front = await calculate(QS("pound", 1, 100));
     const both = await calculate(QS("pound", 2, 100));
-    const bandDouble = [...BAGS_4X5_DOUBLE_BANDS].reverse().find((b) => 100 >= b.minQty)!;
-    expect(both.row.marginPct).toBeGreaterThanOrEqual(bandDouble.targetPct);
-    expect(both.result.recommendedTotal).toBeCloseTo(1578.385, 2);
-    for (const t of both.pm.tiers) expect(t.marginPct, String(t.quantity)).toBeGreaterThanOrEqual(45);
+    for (const r of [front, both]) {
+      expect(r.pm.marginFamily).toMatchObject({ key: "qp-p-bag-14x16", configured: true, minPct: 40, source: "Owner-approved QP / P Bag (14x16) pricing ladder (2026-11-15)" });
+      expect(r.pm.marginFamily.key).not.toBe("bags-4x5");
+      expect(r.row.marginPct).toBe(47); // the same anchor for front only and for front + back
+      expect(String(r.row.commercial.controllingRule)).toBe("Cost-based price — 47% quantity-band margin");
+      expect(r.result).toMatchObject({ state: "READY", priceAuthority: POUND_BAG_PRICE_AUTHORITY_TEXT });
+      expect(r.result.authority).toMatchObject({ approved: true, kind: "pound_bag_dedicated_ladder" });
+      expect(r.result.recommendedTotal).toBeCloseTo(r.result.trueJobCost! / 0.53, 6);
+      expect(r.row.commercial.marketPosition ?? null).toBeNull(); // no 4x5 market table is consulted at all
+      expect(r.row.commercial.candidates.verifiedMarketTargetPrice ?? null).toBeNull();
+      expect(r.pm.tiers.filter((t: any) => !t.supportRow).map((t: any) => t.quantity)).toEqual([4, 16, 50, 100, 256, 500, 1000]);
+    }
+    expect(POUND_BAG_MARGIN_RULE_KEY).toBe(POUND_BAG_PRICE_LADDER_KEY);
+    expect(POUND_BAG_MARGIN_RULE).toMatchObject({ key: "qp-p-bag-14x16", familyMinPct: 40 });
+    // 18. 100 front only: $303.71 cost -> $573.03 ($5.73 each), $269.33 profit
+    expect(front.result.trueJobCost).toBeCloseTo(303.71, 2);
+    expect(front.result.recommendedTotal).toBeCloseTo(573.03, 1);
+    expect(front.result.recommendedUnit).toBeCloseTo(5.73, 2);
+    expect(front.result.profit).toBeCloseTo(269.33, 1);
+    expect(front.result.marginPct).toBeCloseTo(47, 6);
+    // 19. 100 front + back: $482.24 cost -> $909.88 ($9.10 each)
+    expect(both.result.trueJobCost).toBeCloseTo(482.24, 2);
+    expect(both.result.recommendedTotal).toBeCloseTo(909.88, 1);
+    expect(both.result.recommendedUnit).toBeCloseTo(9.1, 2);
+    expect(both.result.profit).toBeCloseTo(427.64, 1);
+    // the inherited 4x5 ladder would have priced these at 65% / 61%
+    expect(front.result.recommendedTotal).toBeLessThan(front.result.trueJobCost! / (1 - 0.65));
   }, 300_000);
 
-  it("any other pricing basis is refused; the resolver never approves a 14x16 price off the Sticker Bag ladder", () => {
+  it("16, 20. every tier row = the ladder rule on its own cost: $75 minimum profit at the low end, no cliff around any anchor", async () => {
+    for (const sides of [1, 2] as const) {
+      let previousTotal = 0;
+      let previousMargin = Infinity;
+      const unitAt: Record<number, number> = {};
+      for (const quantity of [4, 8, 12, 15, 16, 17, 24, 32, 49, 50, 51, 64, 99, 100, 101, 128, 255, 256, 257, 499, 500, 501, 999, 1000, 1001]) {
+        const { row, result } = await calculate(QS("pound", sides, quantity));
+        const reference = poundBagLadderPrice(POUND_BAG_APPROVED_PRICE_LADDER, { quantity, trueCost: result.trueJobCost! })!;
+        expect(result.recommendedTotal, `${sides}/${quantity}`).toBeCloseTo(reference.totalPrice, 6);
+        expect(result.profit!, `${sides}/${quantity}`).toBeGreaterThanOrEqual(75 - 1e-6);
+        expect(result.marginPct!, `${sides}/${quantity}`).toBeGreaterThanOrEqual(40 - 1e-6);
+        expect(String(row.commercial.controllingRule), `${sides}/${quantity}`).toMatch(reference.controllingRule === "minimum_profit" ? /Minimum gross-profit floor/ : /Cost-based price/);
+        // no cliff: one more bag never lowers the job total, and the realized margin never rises with quantity
+        expect(result.recommendedTotal!, `${sides}/${quantity}`).toBeGreaterThan(previousTotal);
+        expect(result.marginPct!, `${sides}/${quantity}`).toBeLessThanOrEqual(previousMargin + 1e-9);
+        previousTotal = result.recommendedTotal!;
+        previousMargin = result.marginPct!;
+        unitAt[quantity] = result.recommendedUnit!;
+      }
+      // the unit price falls from one table quantity to the next (bag-by-bag it can tick up a cent or two where
+      // one more bag starts a new row of media — a real cost step, not a pricing cliff)
+      const table = [4, 8, 12, 16, 24, 32, 50, 64, 100, 128, 256, 500, 1000];
+      for (let i = 1; i < table.length; i += 1) expect(unitAt[table[i]], `${sides}/${table[i]}`).toBeLessThan(unitAt[table[i - 1]]);
+    }
+    // the $75 minimum controls a 4-bag job (expected), and stops controlling as quantity grows
+    const four = await calculate(QS("pound", 1, 4));
+    expect(four.result.profit).toBeCloseTo(75, 6);
+    expect(String(four.row.commercial.controllingRule)).toMatch(/Minimum gross-profit floor/);
+    expect(String((await calculate(QS("pound", 1, 50))).row.commercial.controllingRule)).toBe("Cost-based price — 50% quantity-band margin");
+  }, 600_000);
+
+  it("the ladder is handed to the shared price function as a per-product copy: other products' policy values are untouched", () => {
+    const values = defaultPricingPolicyValues();
+    const before = JSON.stringify(values);
+    const copy = poundBagPolicyValues(values, 100);
+    expect(JSON.stringify(values)).toBe(before);
+    expect(copy.marginCurves.families["qp-p-bag-14x16"]).toEqual({ familyMinPct: 40, bands: [{ minQty: 1, targetPct: 47 }] });
+    expect(copy.minimumGrossProfit["sticker-bags"]).toBe(75);
+    expect(copy.marginCurves.families["bags-4x5"]).toEqual(values.marginCurves.families["bags-4x5"]);
+    expect(copy.marginCurves.families["bags-4x5-double"]).toEqual(values.marginCurves.families["bags-4x5-double"]);
+    expect(values.marginCurves.families["qp-p-bag-14x16"]).toBeUndefined();
+    expect(marginCurveKeyFor("qp-p-bag-14x16", 2)).toBe("qp-p-bag-14x16"); // no separate double-sided curve
+    expect(marginFamilyKeyFor("sticker-bags", "bag_sticker", "QP / P Bag (14x16)")).toBeNull(); // not reachable through the 4x5 name rule
+  });
+
+  it("any other pricing basis is refused: the resolver approves a QP / P Bag price only on its own ladder", () => {
     const row = { jobCost: 100, unitCost: 1, totalPrice: 250, unitPrice: 2.5 };
-    expect(resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, poundBag: true, marginRuleKey: "bags-4x5", row })).toMatchObject({ approved: true, kind: "pound_bag_sticker_bag_ladder", label: POUND_BAG_PRICE_AUTHORITY_TEXT });
+    expect(resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, poundBag: true, marginRuleKey: "qp-p-bag-14x16", row })).toMatchObject({ approved: true, kind: "pound_bag_dedicated_ladder", label: POUND_BAG_PRICE_AUTHORITY_TEXT });
+    expect(resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, poundBag: true, marginRuleKey: "bags-4x5", row }).approved).toBe(false);
     expect(resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, poundBag: true, marginRuleKey: null, row }).approved).toBe(false);
-    expect(resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, poundBag: true, marginRuleKey: "bags-4x5", row: { ...row, totalPrice: null } }).approved).toBe(false);
+    expect(resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, poundBag: true, marginRuleKey: "qp-p-bag-14x16", row: { ...row, totalPrice: null } }).approved).toBe(false);
   });
 
   it("10-12. MOQ 4: quantities 1-3 are blocked, 4 and above are allowed; the 4x5 (50) and Split Bag (64) minimums are not borrowed", async () => {
@@ -413,14 +529,17 @@ describe("QP / P Bag (14x16) — 7. approved Sticker Bag pricing ladder on its O
     const cost = JSON.parse(item.costSnapshot);
     const price = JSON.parse(item.priceSnapshot);
     expect(item.quantity).toBe(100);
-    expect(item.unitCost * 100).toBeCloseTo(363.7057, 3);
-    expect(item.unitPrice * 100).toBeCloseTo(1039.159, 2);
-    expect(price.pricingAuthority).toMatchObject({ approved: true, kind: "pound_bag_sticker_bag_ladder", approvedQuantity: 100 });
+    expect(item.unitCost * 100).toBeCloseTo(303.7057, 3);
+    expect(item.unitPrice * 100).toBeCloseTo(573.03, 1);
+    expect(price.pricingAuthority).toMatchObject({ approved: true, kind: "pound_bag_dedicated_ladder", approvedQuantity: 100, expectedMarginPct: 47 });
     expect(cost.canonical.family).toBe("pound-bags");
     expect(cost.productBreakdown.poundBag).toBe(true);
     expect(cost.productBreakdown.poundBagBlank).toMatchObject({ recordId: "v_pound", name: "14x16 Blank Bag", defaultUnitCost: 1 });
-    expect(OWNER_OVERRIDABLE_AUTOMATIC_KINDS).toEqual(["split_bag_sticker_bag_ladder", "pound_bag_sticker_bag_ladder"]);
-    expect(OWN_COST_LADDER_PRICE_KINDS[POUND_BAG_AUTOMATIC_PRICE_KIND]).toEqual({ product: "QP / P Bag (14x16)", badge: "Approved Sticker Bag pricing ladder applied to QP / P Bag (14x16) true cost" });
+    expect(OWNER_OVERRIDABLE_AUTOMATIC_KINDS).toEqual(["split_bag_sticker_bag_ladder", "pound_bag_sticker_bag_ladder", "pound_bag_dedicated_ladder"]);
+    expect(POUND_BAG_AUTOMATIC_PRICE_KIND).toBe("pound_bag_dedicated_ladder");
+    expect(OWN_COST_LADDER_PRICE_KINDS[POUND_BAG_AUTOMATIC_PRICE_KIND]).toEqual({ product: "QP / P Bag (14x16)", badge: "Owner-approved QP / P Bag (14x16) pricing ladder applied to its own true cost" });
+    // a quote saved earlier today under the inherited ladder still reads and can still be overridden
+    expect(OWN_COST_LADDER_PRICE_KINDS[POUND_BAG_LEGACY_PRICE_KIND].product).toBe("QP / P Bag (14x16)");
     expect(isSplitBagQuoteItem(item)).toBe(false); // never shown as a Split Bag line
     const quote = { status: "draft", items: [{ productName: item.productName, quantity: 100, unitCost: item.unitCost, unitPrice: item.unitPrice, priceSnapshot: item.priceSnapshot }] };
     expect(provisionalQuoteStatusCheck(quote as any, "sent").ok).toBe(true);
@@ -561,16 +680,16 @@ describe("PRODUCT IDENTITY — QP Bag = P Bag = 14x16 / Pound Bag is ONE product
     expect(stale.pm.poundBag).toBe(false);
     expect(stale.pm.autoBag.label).toContain("4x5 Sticker Bag Blank");
     // an already-saved quote line keeps its recorded authority kind (nothing is renamed in stored data)
-    expect(POUND_BAG_AUTOMATIC_PRICE_KIND).toBe("pound_bag_sticker_bag_ladder");
+    expect(POUND_BAG_LEGACY_PRICE_KIND).toBe("pound_bag_sticker_bag_ladder");
   }, 300_000);
 });
 
 describe("COST — 13-18. the 100-bag front-only true cost is built only from this product", () => {
-  it("every component of the $363.71 example, and nothing from the 4x5 or the Split Bag", async () => {
+  it("every component of the 100-bag front-only example ($303.71), and nothing from the 4x5 or the Split Bag", async () => {
     const r = await job(QS("pound", 1, 100));
     const amounts = Object.fromEntries(r.trueCost.lines.map((l: any) => [l.key, l.amount]));
     expect(amounts.blank_sets).toBeCloseTo(100, 9); // 100 x the $1.00 record
-    expect(amounts.application).toBeCloseTo(100, 9); // 100 applied labels x $1.00
+    expect(amounts.application).toBeCloseTo(40, 9); // 100 completed bags x $0.40
     expect(amounts.print_media).toBeCloseTo(56.5278, 3);
     expect(amounts.ink).toBeCloseTo(51.9288, 3);
     expect(amounts.art_setup).toBeCloseTo(8.3333, 3); // once per design, not per bag
@@ -583,7 +702,7 @@ describe("COST — 13-18. the 100-bag front-only true cost is built only from th
     expect(amounts.packout).toBe(0);
     expect(amounts.inbound_freight).toBe(0); // no freight at all, so none is double-counted
     expect(r.trueCost.lines.reduce((sum: number, l: any) => sum + l.amount, 0)).toBeCloseTo(r.trueCost.totalCost, 6);
-    expect(r.trueCost.totalCost).toBeCloseTo(363.7057, 3);
+    expect(r.trueCost.totalCost).toBeCloseTo(303.7057, 3);
     // 15-16. sticker area: 100 x 14.05 x 16 / 144 = 156.11 sqft inked — one sticker per bag, not two
     const ink = r.trueCost.lines.find((l: any) => l.key === "ink");
     expect(String(ink.formula)).toContain("156.1111 sqft");
@@ -595,12 +714,13 @@ describe("COST — 13-18. the 100-bag front-only true cost is built only from th
     expect(amounts.inbound_freight).not.toBeCloseTo(100 * SPLIT_BAG_INBOUND_FREIGHT_PER_UNIT, 6);
   }, 300_000);
 
-  it("17. front + back doubles the sticker-driven lines and the application; the blank and the setup are NOT doubled", async () => {
+  it("17. front + back doubles the sticker-driven lines only; application is the 30 bags/hour figure, the blank and the setup are NOT doubled", async () => {
     const front = await job(QS("pound", 1, 100));
     const both = await job(QS("pound", 2, 100));
     const f = Object.fromEntries(front.trueCost.lines.map((l: any) => [l.key, l.amount]));
     const b = Object.fromEntries(both.trueCost.lines.map((l: any) => [l.key, l.amount]));
-    expect(b.application).toBeCloseTo(2 * f.application, 9);
+    expect(f.application).toBeCloseTo(40, 9);
+    expect(b.application).toBeCloseTo(100 * (20 / 30), 9); // one double-sided operation per bag, not 2 x $0.40
     expect(b.ink).toBeCloseTo(2 * f.ink, 6);
     expect(both.diagnostics.cutPathIn).toBeCloseTo(2 * front.diagnostics.cutPathIn, 6);
     expect(b.blank_sets).toBe(f.blank_sets);
@@ -619,52 +739,4 @@ describe("COST — 13-18. the 100-bag front-only true cost is built only from th
       expect(r.trueCost.totalCost - setup(r), String(designs)).toBeCloseTo(one.trueCost.totalCost - setup(one), 6);
     }
   }, 300_000);
-});
-
-describe("PRICING — 19-20. the inherited ladder is what prices it today; a dedicated ladder exists only as a proposal", () => {
-  it("19. today: the Sticker Bag (bags-4x5) curve — 65% at 100 front-only — and the $75 minimum gross profit at 4 bags", async () => {
-    const hundred = await calculate(QS("pound", 1, 100));
-    expect(hundred.pm.marginFamily).toMatchObject({ key: "bags-4x5", minPct: 45 });
-    expect(hundred.row.marginPct).toBe(65);
-    expect(String(hundred.row.commercial.controllingRule)).toMatch(/Cost-based price — 65% quantity-band margin/);
-    expect(hundred.result.recommendedTotal).toBeCloseTo(1039.159, 2);
-    const four = await calculate(QS("pound", 1, 4));
-    expect(String(four.row.commercial.controllingRule)).toMatch(/Minimum gross-profit floor/);
-    expect(four.result.recommendedTotal! - four.result.trueJobCost!).toBeCloseTo(75, 6);
-  }, 300_000);
-
-  it("20. no dedicated ladder is approved or wired; the proposals can be evaluated on their own without touching any product", () => {
-    expect(POUND_BAG_APPROVED_PRICE_LADDER).toBeNull();
-    expect(ROUTE_SRC).not.toContain("pound-bag-pricing");
-    expect(readFileSync("app/lib/calculator-owner-view.ts", "utf8")).not.toContain("pound-bag-pricing");
-    expect(readFileSync("app/lib/commercial-pricing-policy.server.ts", "utf8")).not.toContain("pound-bag-pricing");
-    for (const ladder of Object.values(POUND_BAG_PROPOSED_LADDERS)) expect(ladder.status).toBe("PROPOSED");
-    const balanced = POUND_BAG_PROPOSED_LADDERS.balanced;
-    expect(poundBagLadderMarginPct(balanced, 100)).toBe(47);
-    expect(poundBagLadderMarginPct(balanced, 4)).toBe(55);
-    expect(poundBagLadderMarginPct(balanced, 5000)).toBe(40);
-    expect(poundBagLadderMarginPct(balanced, 75)).toBeCloseTo(48.5, 9); // linear between anchors: no cliffs
-    const at100 = poundBagLadderPrice(balanced, { quantity: 100, trueCost: 363.70566651759094 })!;
-    expect(at100.totalPrice).toBeCloseTo(686.24, 2);
-    expect(at100.unitPrice).toBeCloseTo(6.86, 2);
-    expect(at100.controllingRule).toBe("margin_curve");
-    const at4 = poundBagLadderPrice(balanced, { quantity: 4, trueCost: 25.97 })!;
-    expect(at4).toMatchObject({ controllingRule: "minimum_profit" });
-    expect(at4.profit).toBeCloseTo(75, 9);
-    expect(poundBagLadderPrice(balanced, { quantity: 100, trueCost: 0 })).toBeNull();
-    // unit price never rises with quantity on a steadily falling unit cost (no cliffs), for all three proposals
-    for (const ladder of Object.values(POUND_BAG_PROPOSED_LADDERS)) {
-      let previousUnit = Infinity;
-      let previousTotal = 0;
-      for (let quantity = 4; quantity <= 1200; quantity += 1) {
-        const cost = 12 + quantity * 3.52; // the shape of this bag's true cost: a fixed part + ~$3.52 a bag
-        const priced = poundBagLadderPrice(ladder, { quantity, trueCost: cost })!;
-        expect(priced.unitPrice, `${ladder.key} ${quantity}`).toBeLessThanOrEqual(previousUnit + 1e-9);
-        expect(priced.totalPrice, `${ladder.key} ${quantity}`).toBeGreaterThanOrEqual(previousTotal - 1e-9);
-        expect(priced.marginPct, `${ladder.key} ${quantity}`).toBeGreaterThanOrEqual(40 - 1e-9);
-        previousUnit = priced.unitPrice;
-        previousTotal = priced.totalPrice;
-      }
-    }
-  });
 });

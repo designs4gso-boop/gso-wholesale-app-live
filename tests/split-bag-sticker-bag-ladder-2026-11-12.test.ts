@@ -257,7 +257,7 @@ describe("17-18. quote workflow", () => {
   }, 180_000);
 
   it("17. owner override still works quote by quote (and only for the owner)", async () => {
-    expect(OWNER_OVERRIDABLE_AUTOMATIC_KINDS).toEqual(["split_bag_sticker_bag_ladder", "pound_bag_sticker_bag_ladder"]); // 2026-11-15: + the 14x16 / Pound Bag (owner decision; a Sticker Bag bag type on its own canonical family)
+    expect(OWNER_OVERRIDABLE_AUTOMATIC_KINDS).toEqual(["split_bag_sticker_bag_ladder", "pound_bag_sticker_bag_ladder", "pound_bag_dedicated_ladder"]); // 2026-11-15: + the 14x16 / Pound Bag (owner decision; a Sticker Bag bag type on its own canonical family)
     const store = fakeQuoteDb([autoItem("i1"), autoItem("i2")]);
     const result: any = await ownerSetQuoteItemPrice(store.db as any, { shop: "shop-1", quoteId: "q1", itemId: "i1", unitPrice: "1.35", reason: "repeat customer", owner: resolveOwnerAuthorization(as(OWNER)) });
     expect(result.ok, result.error).toBe(true);

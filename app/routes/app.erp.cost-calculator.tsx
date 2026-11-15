@@ -40,6 +40,7 @@ import { glossCoverageBasis, glossCoverageIsBlank } from "../lib/gloss-coverage"
 import { attachVerifiedLabelMaterials, materialCalculatorReadiness } from "../lib/material-calculator-readiness.server";
 import { SPLIT_BAG_BLANK_UNIT_COST, applyOwnerMaterialOverride } from "../lib/canonical-calculator.server";
 import { attachPoundBagBlank, type BagBlankAuthority } from "../lib/pound-bag-blank.server";
+import { POUND_BAG_DISPLAY_LADDER, POUND_BAG_MARGIN_RULE, POUND_BAG_PRICE_LADDER_SOURCE, poundBagMarginPctForQuantity, poundBagPolicyValues } from "../lib/pound-bag-pricing";
 import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
 import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
 import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE } from "../lib/jar-cost-inputs.server";
@@ -1123,15 +1124,15 @@ export async function loader({ request }: { request: Request }) {
     // curve and 40% floor are untouched; the requested quantity is always one
     // of the rows. Only rendered once a quantity was actually entered.
     if (requestedQtyP > 0) {
-      // 2026-11-15: the QP / P Bag (14x16) prices on the approved Sticker Bag ladder rules (its own true cost).
+      // 2026-11-15 owner approval: the QP / P Bag (14x16) prices on its OWN dedicated ladder (never bags-4x5).
       productMarginKey = poundBagP ? POUND_BAG_MARGIN_RULE_KEY : marginFamilyKeyFor(pFamily, selectedClass, pickedBlank?.name || (autoBag ? autoBag.name : ""));
-      productMarginRule = productMarginKey ? resolveMarginFamily(productMarginKey) : null;
+      productMarginRule = poundBagP ? { ...POUND_BAG_MARGIN_RULE } : productMarginKey ? resolveMarginFamily(productMarginKey) : null;
       // 15F.0K.2-A: with no manual eqty list the display ladder comes from
       // ownerConfig tierLadders (per canonical family; Stage-A defaults are
       // the long-standing [64,128,256,640,1000]); DTP keeps its code ladder
       // (1000/2500/5000/7500/10000) and is not configurable.
       const configLadderP = pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamily)] ?? pricingPolicy.values.tierLadders.defaultLadder;
-      const baseTierQuantities = !eparams.get("eqty") ? (isDtpP ? DTP_LADDER_QUANTITIES : configLadderP) : eQuantities;
+      const baseTierQuantities = !eparams.get("eqty") ? (poundBagP ? POUND_BAG_DISPLAY_LADDER : (isDtpP ? DTP_LADDER_QUANTITIES : configLadderP)) : eQuantities; // QP / P Bag: its approved anchor quantities
       // 2D-4C1A FIX 2: a multi-line label job has no approved way to split a
       // new total across customer-entered lines, so alternate rungs are
       // SUPPRESSED — the job as entered is the only quotable quantity.
@@ -1175,6 +1176,7 @@ export async function loader({ request }: { request: Request }) {
       const premiumEligibleP = engineFamilyP === "stickers-labels" && (Number(eparams.get("pwhitelayers") || 0) > 0 || Number(eparams.get("pglosslayers") || 0) > 0);
       const curveDefaults = isDtpP
         ? tierQuantities.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: quantity-threshold rule, never row-position
+        : poundBagP ? tierQuantities.map((qty) => poundBagMarginPctForQuantity(qty)) // owner-approved dedicated ladder, smooth between anchors
         : tierQuantities.map((qty) => resolveMarginPctForQuantity(pricingPolicy.values, marginCurveKeyP, marginRuleForPricingP, qty)); // 15F.0K.2-A shared resolver (config bands -> rule -> floor)
       const tierMargins = eMarginsRaw.length === tierQuantities.length ? eMarginsRaw : curveDefaults;
       const freightInputsP = {
@@ -1343,7 +1345,8 @@ export async function loader({ request }: { request: Request }) {
           marginRule: marginRuleForPricingP, premiumEligible: premiumEligibleP,
           marginPctOverride: overrideMargin,
           finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
-          policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
+          // QP / P Bag (14x16): the same price function, fed this product's approved margin for THIS quantity + its $75 minimum profit.
+          policyValues: poundBagP ? poundBagPolicyValues(pricingPolicy.values, qty, canonicalUiFamily(pFamily)) : pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
           marginCurveKey: marginCurveKeyP, // 15F.0K.2-A variant-aware curve lookup
           // 2026-11-12: a Split Bag uses the Sticker Bag ladder RULES on its own cost — never the 4x5 market dollar targets.
           marketTargetSpecialtyReasons: splitBagP ? [...specialtyReasonsP, SPLIT_BAG_NO_4X5_MARKET_TARGET] : specialtyReasonsP, // 15F.0K.4C
@@ -1603,7 +1606,7 @@ export async function loader({ request }: { request: Request }) {
           ? { kind: "curve_with_envelope", text: "No owner price ladder for this jar (out of ladder range / unapproved size): quantity-band margin curve with the quantity-break envelope (totals never fall when quantity rises)." }
           : null,
       marginFamily: productMarginRule
-        ? { key: productMarginRule.key, label: productMarginRule.label, curve: productMarginRule.curve, minPct: productMarginRule.familyMinPct, configured: true, source: MARGIN_RULE_SOURCE }
+        ? { key: productMarginRule.key, label: productMarginRule.label, curve: productMarginRule.curve, minPct: productMarginRule.familyMinPct, configured: true, source: poundBagP ? POUND_BAG_PRICE_LADDER_SOURCE : MARGIN_RULE_SOURCE }
         : { key: productMarginKey || "", label: "FAMILY MARGIN RULE NOT CONFIGURED", curve: [] as number[], minPct: MARGIN_FLOOR_PCT, configured: false, source: "provisional universal curve" },
       labelForm: labelRowsP ? { count: labelCountP, same: sameSizeP, rows: labelRowsP } : null,
       // 15F.0-J: multi-design split (quantity = TOTAL labels; designs share it)
@@ -2091,10 +2094,10 @@ export async function action({ request }: { request: Request }) {
     // ---- 14C.2: recompute the automatic tiers server-side and resolve the
     // selected customer tier by QUANTITY — posted tier totals are ignored.
     savedMarginKey = savedPoundBag ? POUND_BAG_MARGIN_RULE_KEY : marginFamilyKeyFor(pFamilySave, savedClassification ? savedClassification.klass : null, savedBlank?.name || "");
-    savedMarginRule = savedMarginKey ? resolveMarginFamily(savedMarginKey) : null;
+    savedMarginRule = savedPoundBag ? { ...POUND_BAG_MARGIN_RULE } : savedMarginKey ? resolveMarginFamily(savedMarginKey) : null;
     // 15F.0K.2-A: same ownerConfig ladder resolution as the loader (parity).
     const configLadderSave = pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamilySave)] ?? pricingPolicy.values.tierLadders.defaultLadder;
-    const baseQuantitiesSave = !fRead("eqty") ? (savedIsDtp ? DTP_LADDER_QUANTITIES : configLadderSave) : quantities;
+    const baseQuantitiesSave = !fRead("eqty") ? (savedPoundBag ? POUND_BAG_DISPLAY_LADDER : (savedIsDtp ? DTP_LADDER_QUANTITIES : configLadderSave)) : quantities;
     // 2D-4C1A FIX 2 — loader parity: multi-line label jobs quote only as entered.
     // 2026-10-05 loader parity: jar support rows for the quantity-break envelope.
     const jarPricingFamilySave = canonicalUiFamily(pFamilySave) === "premium-jars" || canonicalUiFamily(pFamilySave) === "standard-jars";
@@ -2127,6 +2130,7 @@ export async function action({ request }: { request: Request }) {
     const premiumEligibleSave = savedEngineFamily === "stickers-labels" && (Number(fRead("pwhitelayers") || 0) > 0 || Number(fRead("pglosslayers") || 0) > 0);
     const curveDefaultsSave = savedIsDtp
       ? tierQuantitiesSave.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: same quantity-threshold rule at save
+      : savedPoundBag ? tierQuantitiesSave.map((qty) => poundBagMarginPctForQuantity(qty)) // loader parity: dedicated ladder
       : tierQuantitiesSave.map((qty) => resolveMarginPctForQuantity(pricingPolicy.values, marginCurveKeySave, marginRuleForPricingSave, qty)); // 15F.0K.2-A shared resolver
     const tierMarginsSave = validMargins.length === tierQuantitiesSave.length ? validMargins : curveDefaultsSave;
     const freightInputsSave = {
@@ -2266,7 +2270,7 @@ export async function action({ request }: { request: Request }) {
         marginRule: marginRuleForPricingSave, premiumEligible: premiumEligibleSave,
         marginPctOverride: overrideMarginSave,
         finishedSqft: run.derived.baseSqft, setupTotal: run.setupTotal, // 15F.0-FINAL area floor inputs
-        policyValues: pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
+        policyValues: savedPoundBag ? poundBagPolicyValues(pricingPolicy.values, qty, canonicalUiFamily(pFamilySave)) : pricingPolicy.values, // 15F.0K.1 ownerConfig read-through
         marginCurveKey: marginCurveKeySave, // 15F.0K.2-A variant-aware curve lookup
         marketTargetSpecialtyReasons: savedSplitBag ? [...specialtyReasonsSave, SPLIT_BAG_NO_4X5_MARKET_TARGET] : specialtyReasonsSave, // 15F.0K.4C (2026-11-12 Split Bag parity)
         // 15G.4C loader parity: specialty commercial tiers.
@@ -3824,7 +3828,7 @@ function ProductDrivenForm() {
       ) : null}
       {isPoundBag ? (
         <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
-          QP / P Bag (14x16): a Sticker Bag blank costed from the current 14x16 Blank Bag cost record. One sticker per printed side — front only or back only = 1 label, front + back = 2 labels per bag — applied at the owner standard of $1.00 per applied label. Minimum order: 4 bags (MOQ 4). {POUND_BAG_PRICE_AUTHORITY_TEXT}
+          QP / P Bag (14x16): a Sticker Bag blank costed from the current 14x16 Blank Bag cost record. One sticker per printed side — front only or back only = 1 label, front + back = 2 labels per bag — with application labor from real bag throughput at $20/hr: 50 single-sided bags/hour ($0.40 a bag) or 30 double-sided bags/hour ($0.67 a bag, both labels included). Minimum order: 4 bags (MOQ 4). {POUND_BAG_PRICE_AUTHORITY_TEXT}
         </p>
       ) : null}
       {/* 2026-11-12 owner correction: each bag type shows its OWN fixed label geometry. */}
@@ -5061,7 +5065,7 @@ function ProductTiers() {
       </p>
       {pm.poundBag ? (
         <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
-          <b>{POUND_BAG_TIER_TABLE_TEXT}</b> {POUND_BAG_PRICE_AUTHORITY_TEXT} The 4x5 Sticker Bag dollar prices / market targets are never copied.
+          <b>{POUND_BAG_TIER_TABLE_TEXT}</b> {POUND_BAG_PRICE_AUTHORITY_TEXT} The 4x5 Sticker Bag ladder, dollar prices and market targets are not used.
         </div>
       ) : null}
       {pm.splitBag ? (

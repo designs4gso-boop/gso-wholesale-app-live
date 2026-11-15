@@ -35,7 +35,7 @@
 
 import { effectiveGlossCoveragePct, glossCoverageIsBlank } from "./gloss-coverage";
 import { poundBagBlankUnitCostAt, type BagBlankAuthority } from "./pound-bag-blank.server";
-import { POUND_BAG_14X16_APPLICATION_SOURCE, bagApplicationSecondsPerLabel, bagProductDisplayName, type BagProduct } from "./bag-cost-inputs.server";
+import { POUND_BAG_14X16_APPLICATION_SOURCE, bagApplicationSecondsPerBag, bagApplicationSecondsPerLabel, bagProductDisplayName, type BagProduct } from "./bag-cost-inputs.server";
 import {
   BAG_APPLICATION_LABOR_RATE_PER_HOUR,
   BAG_APPLICATION_SECONDS_PER_SIDE,
@@ -748,7 +748,9 @@ export function assembleCanonicalJob(
     // 2026-11-15: the QP / P Bag (14x16) — its own blank record, geometry and application standard.
     const poundBag = input.family === "pound-bags";
     const bagProduct: BagProduct = input.family === "stock-bags" ? "stock_bag" : splitBag ? "split_bag" : poundBag ? "pound_bag_14x16" : "sticker_bag_4x5";
-    const applicationSecondsPerLabel = bagApplicationSecondsPerLabel(bagProduct);
+    const applicationSecondsPerLabel = bagApplicationSecondsPerLabel(bagProduct, cfg.sides);
+    // Per COMPLETED bag. QP / P Bag (14x16): owner bag throughput (50/hr single, 30/hr double) — one operation, never a per-label sum.
+    const applicationSecondsPerBag = bagApplicationSecondsPerBag(bagProduct, cfg.sides);
     // 2026-11-11: the SELECTED label media sets the media cost — never a silent Poseidon Matte.
     const { media: bagMedia, blocker: bagMediaBlocker } = resolveSelectedLabelMedia(cfg, "bag");
     if (bagMediaBlocker) blockers.push(bagMediaBlocker);
@@ -818,7 +820,13 @@ export function assembleCanonicalJob(
     // One application event per applied 4x5 label: one per labelled side on
     // every bag product (Split Bag included — owner correction 2026-11-11).
     const labelsPerBag = cfg.sides * bag.positionsPerSide;
-    applicationCost = {
+    applicationCost = poundBag
+      ? {
+          secondsPerFinishedUnit: applicationSecondsPerBag,
+          laborRatePerHour: BAG_APPLICATION_LABOR_RATE_PER_HOUR,
+          note: `${cfg.sides === 2 ? "Double-sided: 30 completed bags/hour (both labels in one operation)" : "Single-sided: 50 completed bags/hour"} = ${applicationSecondsPerBag}s per bag at $${BAG_APPLICATION_LABOR_RATE_PER_HOUR}/hr.`,
+        }
+      : {
       secondsPerFinishedUnit: labelsPerBag * applicationSecondsPerLabel,
       laborRatePerHour: BAG_APPLICATION_LABOR_RATE_PER_HOUR,
       note: `${cfg.sides} labelled side(s)${bag.positionsPerSide > 1 ? ` x ${bag.positionsPerSide} label positions` : ""} x ${applicationSecondsPerLabel}s at $${BAG_APPLICATION_LABOR_RATE_PER_HOUR}/hr.`,
@@ -831,10 +839,13 @@ export function assembleCanonicalJob(
       const costPerLabel = (applicationSecondsPerLabel / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
       const labels = finished * labelsPerBag;
       diagnostics.applicationBreakdown = {
-        standardLabel: poundBag ? "QP / P Bag (14x16) application (owner standard: $1.00 per applied label)" : "4x5 bag application (owner decision: seconds per applied side)",
+        standardLabel: poundBag ? `QP / P Bag (14x16) application (owner bag throughput: ${cfg.sides === 2 ? "30 double-sided" : "50 single-sided"} bags/hour)` : "4x5 bag application (owner decision: seconds per applied side)",
         laborRatePerHour: BAG_APPLICATION_LABOR_RATE_PER_HOUR,
         finishedUnits: finished,
-        pieces: [{ piece: "side", label: `Applied label (${cfg.sides} side(s) per ${splitBag || poundBag ? bagProductDisplayName(bagProduct) : "bag"})`, secondsPerLabel: applicationSecondsPerLabel, costPerLabel, labels, cost: costPerLabel * labels }],
+        pieces: poundBag
+          // ONE application operation per completed bag (a double-sided bag's two labels are inside it)
+          ? [{ piece: "side", label: `Completed bag — ${cfg.sides === 2 ? "front + back applied in one operation" : "one side applied"}`, secondsPerLabel: applicationSecondsPerBag, costPerLabel: (applicationSecondsPerBag / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR, labels: finished, cost: (applicationSecondsPerBag / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR * finished }]
+          : [{ piece: "side", label: `Applied label (${cfg.sides} side(s) per ${splitBag ? bagProductDisplayName(bagProduct) : "bag"})`, secondsPerLabel: applicationSecondsPerLabel, costPerLabel, labels, cost: costPerLabel * labels }],
         totalLabels: labels,
         totalCost: costPerLabel * labels,
         source: poundBag ? POUND_BAG_14X16_APPLICATION_SOURCE : "bag-cost-inputs.server.ts OWNER DECISION 2 — 10 s per applied side at $20/hr",

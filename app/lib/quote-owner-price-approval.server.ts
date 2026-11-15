@@ -32,7 +32,7 @@ export const OWNER_PRICE_APPROVAL_MARKER = "[GSO] Owner set price & approved by 
  * quote item (Split Bag priced on the Sticker Bag ladder). Every other approved
  * authority (ladders, storefront, researched curves) keeps its existing rules.
  */
-export const OWNER_OVERRIDABLE_AUTOMATIC_KINDS = ["split_bag_sticker_bag_ladder", "pound_bag_sticker_bag_ladder"] as const; // 2026-11-15: + QP / P Bag (14x16) (same rule)
+export const OWNER_OVERRIDABLE_AUTOMATIC_KINDS = ["split_bag_sticker_bag_ladder", "pound_bag_sticker_bag_ladder", "pound_bag_dedicated_ladder"] as const; // 2026-11-15: + QP / P Bag (14x16) (same rule)
 
 type Db = {
   quote: { findFirst: (args: any) => Promise<any>; updateMany: (args: any) => Promise<any> };
