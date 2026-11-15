@@ -68,7 +68,7 @@ export function readMaterialOverrideRequest(params: URLSearchParams): MaterialOv
   return { costPerSqft: raw && Number.isFinite(value) ? value : null, reason };
 }
 
-const BAG_FAMILIES = new Set(["sticker-bags", "stock-bags", "split-bags"]);
+const BAG_FAMILIES = new Set(["sticker-bags", "stock-bags", "split-bags", "pound-bags"]);
 const JAR_FAMILIES = new Set(["standard-jars", "premium-jars"]);
 
 /**

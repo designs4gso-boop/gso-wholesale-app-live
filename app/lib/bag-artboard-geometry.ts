@@ -28,6 +28,19 @@ export const SPLIT_BAG_ARTBOARD_IN = { widthIn: 7.2, heightIn: 4.38 } as const;
 export const SPLIT_BAG_CUTLINE_IN = { widthIn: 7.07, heightIn: 4.26 } as const;
 export const SPLIT_BAG_GEOMETRY_DECISION = "Owner correction 2026-11-12: Split Bag art / print size 7.20 x 4.38 in, cutline 7.07 x 4.26 in (physically confirmed; not the 4x5 geometry).";
 
+/**
+ * OWNER DATA 2026-11-15 — the 14x16 / Pound Bag (a Sticker Bag blank).
+ *   bag size            14.39 x 16.39 in (the physical bag — reference only, never printed)
+ *   sticker / art size  14.05 x 16.00 in — the SAME sticker on the front and on the back
+ * The owner gave ONE sticker size and no separate cutline, so the cut path is
+ * the sticker itself (14.05 x 16.00). Nothing is derived from the 4x5 or the
+ * Split Bag, and the generic -0.0625 in offset rule is not applied.
+ */
+export const POUND_BAG_14X16_BAG_IN = { widthIn: 14.39, heightIn: 16.39 } as const;
+export const POUND_BAG_14X16_ARTBOARD_IN = { widthIn: 14.05, heightIn: 16.0 } as const;
+export const POUND_BAG_14X16_CUTLINE_IN = POUND_BAG_14X16_ARTBOARD_IN;
+export const POUND_BAG_14X16_GEOMETRY_DECISION = "Owner data 2026-11-15: 14x16 / Pound Bag — bag 14.39 x 16.39 in, sticker / art 14.05 x 16.00 in, same sticker front and back; no separate cutline given, so the cut path is the 14.05 x 16.00 sticker.";
+
 export type BagLabelGeometry = {
   artboard: { readonly widthIn: number; readonly heightIn: number };
   cutline: { readonly widthIn: number; readonly heightIn: number };
@@ -35,8 +48,11 @@ export type BagLabelGeometry = {
   displayName: string;
 };
 
-/** The label geometry for a bag product ("split_bag" or any 4x5 bag product). */
+/** The label geometry for a bag product ("split_bag", "pound_bag_14x16" or any 4x5 bag product). */
 export function bagLabelGeometryFor(product: string): BagLabelGeometry {
+  if (product === "pound_bag_14x16") {
+    return { artboard: POUND_BAG_14X16_ARTBOARD_IN, cutline: POUND_BAG_14X16_CUTLINE_IN, decision: POUND_BAG_14X16_GEOMETRY_DECISION, displayName: "14x16 / Pound Bag" };
+  }
   return product === "split_bag"
     ? { artboard: SPLIT_BAG_ARTBOARD_IN, cutline: SPLIT_BAG_CUTLINE_IN, decision: SPLIT_BAG_GEOMETRY_DECISION, displayName: "Split Bag" }
     : { artboard: BAG_4X5_ARTBOARD_IN, cutline: BAG_4X5_CUTLINE_IN, decision: BAG_4X5_CUTLINE_DECISION, displayName: "Standard 4x5 Sticker Bag" };

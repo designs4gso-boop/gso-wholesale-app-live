@@ -36,7 +36,7 @@ import { PRODUCTION_ROLE_DENIED, roleMayRunProductionIntent, roleMayViewProducti
 import { SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
 import { resolveStaffAccess } from "../lib/staff-roles.server";
 import { ownerSetQuoteItemPrice } from "../lib/quote-owner-price-approval.server";
-import { SPLIT_BAG_AUTOMATIC_PRICE_KIND, SPLIT_BAG_LADDER_BADGE, SPLIT_BAG_OWNER_PRICE_LABEL, isSplitBagQuoteItem, ownerPricePreview } from "../lib/split-bag-quote-pricing";
+import { OWN_COST_LADDER_PRICE_KINDS, POUND_BAG_AUTOMATIC_PRICE_KIND, POUND_BAG_LADDER_BADGE, SPLIT_BAG_LADDER_BADGE, SPLIT_BAG_OWNER_PRICE_LABEL, isSplitBagQuoteItem, ownerPricePreview } from "../lib/split-bag-quote-pricing";
 // 2026-10-19 owner decision: line-level internal cost / margin is OWNER ONLY — redacted server-side for staff.
 import { OWNER_APPROVAL_REQUIRED, mergeStaffNotes, redactQuoteItemForStaff, redactRecipeForStaff, redactRecipeLineForStaff, staffManualItemAuthority, stripFinancialAuditLines } from "../lib/quote-staff-visibility";
 import { QUOTE_OUTCOME_STATUSES, resolveQuoteOutcomeChange } from "../lib/pricing-intelligence.server";
@@ -2651,7 +2651,7 @@ export default function QuotesPage() {
                                   ) : null}
                                   {/* 2026-11-12 owner decision: a Split Bag line quotes at its AUTOMATIC price (approved
                                       Sticker Bag ladder on its own true cost); the owner MAY override it for this quote only. */}
-                                  {(quote.items || []).filter((item: any) => itemPricingAuthority(item)?.approved && itemPricingAuthority(item)?.kind === SPLIT_BAG_AUTOMATIC_PRICE_KIND).map((item: any) => {
+                                  {(quote.items || []).filter((item: any) => itemPricingAuthority(item)?.approved && Boolean(OWN_COST_LADDER_PRICE_KINDS[String(itemPricingAuthority(item)?.kind || "")])).map((item: any) => {
                                     const record = itemPricingAuthority(item)!;
                                     const draft = ownerPriceDrafts[item.id] || { unitPrice: "", totalPrice: "", reason: "" };
                                     const setDraft = (field: "unitPrice" | "totalPrice" | "reason", value: string) =>
@@ -2662,8 +2662,10 @@ export default function QuotesPage() {
                                     return (
                                       <BlockStack key={`split-auto-${item.id}`} gap="100">
                                         <InlineStack gap="100" wrap>
-                                          <Badge tone="info">{`Split Bag automatic price: $${Number(record.approvedUnitPrice ?? item.unitPrice).toFixed(4)}/unit`}</Badge>
-                                          <Badge tone="success">{SPLIT_BAG_LADDER_BADGE}</Badge>
+                                          <Badge tone="info">{`${OWN_COST_LADDER_PRICE_KINDS[String(record.kind)].product} automatic price: $${Number(record.approvedUnitPrice ?? item.unitPrice).toFixed(4)}/unit`}</Badge>
+                                          {record.kind === POUND_BAG_AUTOMATIC_PRICE_KIND
+                                            ? <Badge tone="success">{POUND_BAG_LADDER_BADGE}</Badge>
+                                            : <Badge tone="success">{SPLIT_BAG_LADDER_BADGE}</Badge>}
                                         </InlineStack>
                                         {ownerAccess.isOwner && !isLocked ? (
                                           <details>

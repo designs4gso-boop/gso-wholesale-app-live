@@ -80,7 +80,8 @@ describe("2D-4 canonical dispatch", () => {
     // 2D-4D1: the two jar families joined the original four once their active
     // scope was pinned down and every offered jar came out fully costed.
     expect([...CANONICAL_FAMILIES]).toEqual([
-      "stickers-labels", "sticker-bags", "stock-bags", "split-bags", "banners", "standard-jars", "premium-jars",
+      // 2026-11-15: + the 14x16 / Pound Bag (owner decision; a Sticker Bag bag type on its own canonical family)
+      "stickers-labels", "sticker-bags", "stock-bags", "split-bags", "pound-bags", "banners", "standard-jars", "premium-jars",
     ]);
     expect(CANONICAL_DISPATCH["standard-jars"].adapter).toBe("jar-cost-inputs.server.ts");
     expect(CANONICAL_DISPATCH["premium-jars"].adapter).toBe("jar-cost-inputs.server.ts");

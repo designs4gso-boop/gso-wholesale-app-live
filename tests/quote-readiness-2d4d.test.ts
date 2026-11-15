@@ -164,7 +164,9 @@ describe("2D-4D B bags", () => {
     // 2026-11-12) the Split Bag 7.20 x 4.38. They live in the client-safe
     // bag-artboard-geometry.ts and the server module re-exports them.
     const geometrySrc = readFileSync("app/lib/bag-artboard-geometry.ts", "utf8");
-    expect(geometrySrc.match(/_ARTBOARD_IN = /g)).toHaveLength(2);
+    // 2026-11-15: + the owner 14x16 / Pound Bag sticker 14.05 x 16.00 (a third bag artboard constant).
+    expect(geometrySrc.match(/_ARTBOARD_IN = /g)).toHaveLength(3);
+    expect(geometrySrc).toContain("export const POUND_BAG_14X16_ARTBOARD_IN = { widthIn: 14.05, heightIn: 16.0 } as const;");
     expect(geometrySrc).toContain("export const SPLIT_BAG_ARTBOARD_IN = { widthIn: 7.2, heightIn: 4.38 } as const;");
     const src = readFileSync("app/lib/bag-cost-inputs.server.ts", "utf8");
     expect(src.match(/_ARTBOARD_IN = /g)).toBeNull();

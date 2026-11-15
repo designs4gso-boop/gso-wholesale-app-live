@@ -320,7 +320,7 @@ describe("2D-4C1 (4) canonical is the cost authority", () => {
     // 2D-4D1 added the two jar families once the owner approved their active
     // scope and every offered jar costed with zero blockers.
     expect(CANONICAL_SUPPORTED_FAMILIES).toEqual([
-      "stickers-labels", "sticker-bags", "stock-bags", "split-bags", "banners", "standard-jars", "premium-jars",
+      "stickers-labels", "sticker-bags", "stock-bags", "split-bags", "pound-bags", "banners", "standard-jars", "premium-jars",
     ]);
   });
 

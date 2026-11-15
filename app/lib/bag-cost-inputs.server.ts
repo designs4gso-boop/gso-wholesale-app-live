@@ -178,6 +178,38 @@ export const STICKER_BAG_MOQ = 50;
  * and application math are untouched.
  */
 export const SPLIT_BAG_MOQ = 64;
+/**
+ * OWNER DATA 2026-11-15 — 14x16 / POUND BAG (a Sticker Bag blank).
+ *
+ * BLANK COST: there is NO constant here on purpose. The blank-cost authority
+ * is the current "14x16 Blank Bag" Vendor Cost Book record (vendorSku
+ * preset:pound-bag), read on the server for every calculation
+ * (pound-bag-blank.server.ts). No record / no cost = BAG_BLANK_COST_REQUIRED
+ * (Draft Only) — never the 4x5 $0.11, never the Split Bag $0.14.
+ *
+ * APPLICATION: the existing owner standard for this bag,
+ * OWNER_STANDARDS.bagApplicationPerLabel14x16 — $20/hr at 20 labels/hour =
+ * $1.00 per APPLIED label (front only / back only = 1, front + back = 2).
+ * Expressed here as seconds per applied label so it runs through the SAME
+ * canonical application math as every other bag (seconds x $20/hr).
+ *
+ * MOQ: no owner minimum exists for this bag, so none is enforced (and none is
+ * borrowed from the 4x5 or the Split Bag).
+ * INBOUND FREIGHT / PACKOUT: no owner standard — disclosed as not modelled.
+ */
+export const POUND_BAG_14X16_APPLICATION_LABELS_PER_HOUR = 20;
+export const POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL = 3600 / POUND_BAG_14X16_APPLICATION_LABELS_PER_HOUR; // 180 s = $1.00 at $20/hr
+export const POUND_BAG_14X16_APPLICATION_SOURCE = "Owner standard (13A.3, OWNER_STANDARDS.bagApplicationPerLabel14x16): $20/hr at 20 labels/hour = $1.00 per applied 14x16 label.";
+export const POUND_BAG_14X16_BLANK_VENDOR_SKU = "preset:pound-bag";
+/** Seconds of application labor per APPLIED label at the canonical $20/hr. */
+export function bagApplicationSecondsPerLabel(product: BagProduct): number {
+  return product === "pound_bag_14x16" ? POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL : BAG_APPLICATION_SECONDS_PER_SIDE;
+}
+
+/** Employee-facing name of the blank for each bag product. */
+export function bagProductDisplayName(product: BagProduct): string {
+  return product === "split_bag" ? "Split Bag" : product === "pound_bag_14x16" ? "14x16 / Pound Bag" : "4x5 bag";
+}
 export const BAG_DEFAULT_MEDIA_WIDTH_IN = 54;
 export const BAG_DEFAULT_MACHINE_KEY = "mimaki-ucjv300-130";
 export const BAG_DEFAULT_CUT_MODE: CutMode = "normal";
@@ -250,7 +282,7 @@ export const BAG_PERSONALIZATION_ART_SETUP_PER_DESIGN = OWNER_STANDARDS.artSetup
 export const BAG_PERSONALIZATION_BASIS_NOTE =
   "One normal art setup event per personalized design at OWNER_STANDARDS.artSetupPerDesign ($25/hr at 3 designs/hr = $8.3333333333). Bag quantity, label quantity, printed sides, application events and production quantity are ALL excluded - none of them multiplies this cost. Customer-facing add-on is $0; this is internal true cost only.";
 
-export type BagProduct = "sticker_bag_4x5" | "stock_bag" | "split_bag";
+export type BagProduct = "sticker_bag_4x5" | "stock_bag" | "split_bag" | "pound_bag_14x16";
 export type BagSides = 1 | 2;
 
 /**
@@ -261,10 +293,16 @@ export function bagLabelPositionsPerSide(_product: BagProduct): number {
   return 1;
 }
 
-/** The owner blank cost for each bag product. */
+/**
+ * The owner blank cost for each bag product. The 14x16 / Pound Bag has NO code
+ * constant (its cost is the Vendor Cost Book record, supplied by the caller),
+ * so it resolves to NaN here and the job blocks with BAG_BLANK_COST_REQUIRED.
+ */
 export function bagBlankUnitCostFor(product: BagProduct): number {
+  if (product === "pound_bag_14x16") return Number.NaN;
   return product === "split_bag" ? SPLIT_BAG_BLANK_UNIT_COST : BAG_4X5_BLANK_UNIT_COST;
 }
+
 
 export type BagPersonalization = {
   logo?: boolean;
@@ -433,7 +471,7 @@ export function bagNestingRuns(labelQuantity: number, product: BagProduct = "sti
     key: "bag-label-run",
     label: "Bag label print run",
     items: [{
-      key: product === "split_bag" ? "split-bag-label" : "4x5-bag-label",
+      key: product === "split_bag" ? "split-bag-label" : product === "pound_bag_14x16" ? "pound-bag-14x16-label" : "4x5-bag-label",
       groupKey: "bag-label",
       shapeType: "rect",
       widthIn: g.artboard.widthIn,
@@ -516,7 +554,7 @@ export function bagSetupCost(
     personalizedDesignEvents: personalized,
     artBasis: SETUP_BASIS,
     printBasis: SETUP_BASIS,
-    basisNote: `${product === "split_bag" ? "Split Bag" : "Custom 4x5 Sticker Bag"}: customer artwork. ${artDesignEvents} design event(s) x $${artRate.toFixed(10)} art + ${printDesignEvents} print-design setup(s) x $${printRate.toFixed(2)} (owner standards). Both charged per DESIGN - bag quantity does not appear in this calculation.`,
+    basisNote: `${product === "split_bag" ? "Split Bag" : product === "pound_bag_14x16" ? "14x16 / Pound Bag" : "Custom 4x5 Sticker Bag"}: customer artwork. ${artDesignEvents} design event(s) x $${artRate.toFixed(10)} art + ${printDesignEvents} print-design setup(s) x $${printRate.toFixed(2)} (owner standards). Both charged per DESIGN - bag quantity does not appear in this calculation.`,
   };
 }
 
@@ -552,11 +590,15 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
 
   // One blank per finished bag, whatever its label count.
   const blankUnit = input.blankUnitCost == null ? bagBlankUnitCostFor(input.product) : Number(input.blankUnitCost);
-  if (!Number.isFinite(blankUnit) || blankUnit < 0) {
+  // 2026-11-15: the 14x16 / Pound Bag blank must be a real, positive cost from its Vendor Cost Book record.
+  const blankMissing = !Number.isFinite(blankUnit) || blankUnit < 0 || (input.product === "pound_bag_14x16" && !(blankUnit > 0));
+  if (blankMissing) {
     reasons.push(BAG_REASONS.bagBlankCostRequired);
-    blockers.push(`${BAG_REASONS.bagBlankCostRequired}: no verified blank bag cost.`);
+    blockers.push(input.product === "pound_bag_14x16"
+      ? `${BAG_REASONS.bagBlankCostRequired}: no cost on the 14x16 Blank Bag record (Vendor Cost Book, vendor SKU ${POUND_BAG_14X16_BLANK_VENDOR_SKU}). Enter its cost there — nothing is assumed.`
+      : `${BAG_REASONS.bagBlankCostRequired}: no verified blank bag cost.`);
   }
-  const blankCost = blankUnit >= 0 ? bagQuantity * blankUnit : 0;
+  const blankCost = !blankMissing ? bagQuantity * blankUnit : 0;
 
   const policy = resolveNestingPolicy({
     machineKey: input.machineKey ?? BAG_DEFAULT_MACHINE_KEY,
@@ -585,10 +627,10 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
   // sides x positions per side (one event per applied 4x5 label).
   const application = computeLabelApplication({
     mode: "customer_provided_item",
-    itemDescription: input.product === "split_bag" ? "Split Bag" : "4x5 bag",
+    itemDescription: bagProductDisplayName(input.product),
     itemQuantity: bagQuantity,
     applicationsPerItem: sides * positionsPerSide,
-    applicationSecondsPerEvent: BAG_APPLICATION_SECONDS_PER_SIDE,
+    applicationSecondsPerEvent: bagApplicationSecondsPerLabel(input.product),
     printedLabels: labelQuantity,
   });
 
@@ -612,5 +654,5 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
 
 /** Application labor for a bag job, from the canonical 10s-per-applied-label standard. */
 export function bagApplicationCost(bagQuantity: number, sides: BagSides, product: BagProduct = "sticker_bag_4x5"): number {
-  return (bagQuantity * sides * bagLabelPositionsPerSide(product) * BAG_APPLICATION_SECONDS_PER_SIDE / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
+  return (bagQuantity * sides * bagLabelPositionsPerSide(product) * bagApplicationSecondsPerLabel(product) / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
 }

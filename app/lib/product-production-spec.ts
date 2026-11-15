@@ -12,7 +12,7 @@
 import { ACTIVE_JAR_PROFILES, type ActiveJarProfile } from "./jar-active-scope";
 import { JAR_LABEL_GEOMETRY, JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, jarGeometryAuthorityFor, JAR_LABEL_GEOMETRY_VERSION, formatJarGeometry, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey, type SpecAuthorityStatus } from "./jar-label-geometry";
 import { JAR_REFERENCE_GEOMETRY_SOURCE, jarReferenceConflicts, type ReferenceConflict } from "./jar-reference-geometry";
-import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, BAG_ARTBOARD_SOURCE, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN, SPLIT_BAG_GEOMETRY_DECISION } from "./bag-artboard-geometry";
+import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, BAG_ARTBOARD_SOURCE, POUND_BAG_14X16_ARTBOARD_IN, POUND_BAG_14X16_BAG_IN, POUND_BAG_14X16_CUTLINE_IN, POUND_BAG_14X16_GEOMETRY_DECISION, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN, SPLIT_BAG_GEOMETRY_DECISION } from "./bag-artboard-geometry";
 
 export const PRODUCT_SPEC_VERSION = "product-production-spec/1.1.0-2026-10-05";
 
@@ -51,7 +51,7 @@ export const LABEL_SETS: Array<{ key: LabelSetKey; label: string; selection: Jar
 export type SpecStatus = "COST_AUTHORITY" | "OWNER_CONFIRMATION_REQUIRED";
 
 export type ProductProductionSpec = {
-  family: "standard-jars" | "premium-jars" | "sticker-bags" | "stock-bags" | "split-bags";
+  family: "standard-jars" | "premium-jars" | "sticker-bags" | "stock-bags" | "split-bags" | "pound-bags";
   productKey: string;
   displayName: string;
   status: SpecStatus;
@@ -209,8 +209,31 @@ function splitBagSpec(): ProductProductionSpec {
   };
 }
 
+/**
+ * 2026-11-15 owner data: the 14x16 / Pound Bag is a Sticker Bag blank variant —
+ * ONE bag (14.39 x 16.39 in), ONE 14.05 x 16.00 in sticker per printed side,
+ * the same sticker front and back. Blank cost = the current 14x16 Blank Bag
+ * Vendor Cost Book record; application $1.00 per applied label (owner standard).
+ */
+function poundBagSpec(): ProductProductionSpec {
+  const base = bagSpec("sticker-bags");
+  const art = `${POUND_BAG_14X16_ARTBOARD_IN.widthIn.toFixed(2)} x ${POUND_BAG_14X16_ARTBOARD_IN.heightIn.toFixed(2)}`;
+  return {
+    ...base,
+    family: "pound-bags",
+    productKey: "pound-bag-14x16",
+    displayName: "14x16 / Pound Bag (Sticker Bag blank, custom applied labels)",
+    authorityNote: `${AUTHORITY_LABEL.OWNER_CONFIRMED} — ${POUND_BAG_14X16_GEOMETRY_DECISION}`,
+    statusNote: `One 14x16 / Pound Bag sticker per printed side (front only / back only = 1 label, front + back = 2), the same size front and back: sticker / art ${art} in on a ${POUND_BAG_14X16_BAG_IN.widthIn.toFixed(2)} x ${POUND_BAG_14X16_BAG_IN.heightIn.toFixed(2)} in bag (owner data 2026-11-15).`,
+    physical: { bag: `one 14x16 / Pound Bag blank (${POUND_BAG_14X16_BAG_IN.widthIn.toFixed(2)} x ${POUND_BAG_14X16_BAG_IN.heightIn.toFixed(2)} in)`, blankCost: "the current 14x16 Blank Bag Vendor Cost Book record (vendor SKU preset:pound-bag), read on the server — no code constant" },
+    pieces: [{ piece: "label", shape: "rect", widthIn: POUND_BAG_14X16_ARTBOARD_IN.widthIn, heightIn: POUND_BAG_14X16_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied 14x16 / Pound Bag sticker (one per printed side)", cutWidthIn: POUND_BAG_14X16_CUTLINE_IN.widthIn, cutHeightIn: POUND_BAG_14X16_CUTLINE_IN.heightIn }],
+    moqNote: "No owner MOQ recorded for the 14x16 / Pound Bag — none is enforced. Packout and inbound freight are not modeled (no owner standard); outbound customer freight is never assumed.",
+    pricingSource: "canonical true cost (bag adapter, pound_bag_14x16); approved Sticker Bag pricing ladder applied to that cost — owner may override a specific quote",
+  };
+}
+
 export function listProductSpecs(): ProductProductionSpec[] {
-  return [...ACTIVE_JAR_PROFILES.map(jarSpec), bagSpec("sticker-bags"), bagSpec("stock-bags"), splitBagSpec()];
+  return [...ACTIVE_JAR_PROFILES.map(jarSpec), bagSpec("sticker-bags"), bagSpec("stock-bags"), splitBagSpec(), poundBagSpec()];
 }
 
 export function getProductProductionSpec(family: string | null | undefined, productKey: string | null | undefined): ProductProductionSpec | null {

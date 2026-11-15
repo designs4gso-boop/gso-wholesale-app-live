@@ -84,7 +84,7 @@ describe("authority statuses", () => {
       }
     }
     expect(listProductSpecs().filter((s) => s.authorityStatus === "OWNER_CONFIRMED").map((s) => s.productKey).sort()).toEqual([
-      "bag-4x5/sticker", "bag-4x5/stock", "chiron/100ml_tall", "chiron/100ml_wide", "chiron/150ml", "miron/100ml_tall", "miron/100ml_wide", "miron/150ml", "miron/250ml", "split-bag", "standard/3oz", "standard/4oz",
+      "bag-4x5/sticker", "bag-4x5/stock", "chiron/100ml_tall", "chiron/100ml_wide", "chiron/150ml", "miron/100ml_tall", "miron/100ml_wide", "miron/150ml", "miron/250ml", "pound-bag-14x16", "split-bag", "standard/3oz", "standard/4oz",
     ]);
   });
 

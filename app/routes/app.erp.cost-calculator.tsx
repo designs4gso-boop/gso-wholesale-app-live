@@ -39,15 +39,17 @@ import { canonicalLabelCutType, canonicalCutTypeIsWireable } from "../lib/canoni
 import { glossCoverageBasis, glossCoverageIsBlank } from "../lib/gloss-coverage";
 import { attachVerifiedLabelMaterials, materialCalculatorReadiness } from "../lib/material-calculator-readiness.server";
 import { SPLIT_BAG_BLANK_UNIT_COST, applyOwnerMaterialOverride } from "../lib/canonical-calculator.server";
+import { attachPoundBagBlank, type BagBlankAuthority } from "../lib/pound-bag-blank.server";
 import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
 import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
 import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE } from "../lib/jar-cost-inputs.server";
 // 2026-10-05 fixed-product spec layer (client-safe): standard jar dimensions are RESOLVED, never typed.
 import { JAR_LABEL_GEOMETRY, formatJarCutline, formatJarGeometry, type JarSizeKey } from "../lib/jar-label-geometry";
-import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN } from "../lib/bag-artboard-geometry";
+import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, POUND_BAG_14X16_ARTBOARD_IN, POUND_BAG_14X16_BAG_IN, POUND_BAG_14X16_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN } from "../lib/bag-artboard-geometry";
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
+import { POUND_BAG_CALCULATOR_OPTION, POUND_BAG_MARGIN_RULE_KEY, POUND_BAG_NO_4X5_MARKET_TARGET, POUND_BAG_PRICE_AUTHORITY_TEXT, POUND_BAG_TIER_TABLE_TEXT, QP_BAG_PENDING_OPTION_LABEL } from "../lib/calculator-owner-view";
 import { JAR_LADDER_LOW_MARGIN_WARNING, REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, SPLIT_BAG_NO_4X5_MARKET_TARGET, SPLIT_BAG_PRICE_AUTHORITY_TEXT, SPLIT_BAG_TIER_TABLE_TEXT, tierDesignAssumptionText, STOCK_BAG_CALCULATOR_OPTION, calculatorDesignCount, calculatorFamilyChoice, calculatorFamilyParams, calculatorTransitionParams, missingRequiredCalculatorFields, withCanonicalSplitBagGeometry, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
 // 2026-10-19 owner decision C: Stock Bag quotes price through the SAME storefront authority the online checkout uses.
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
@@ -100,6 +102,15 @@ const DTP_FREIGHT_NOT_VERIFIED = { freightPerOrder: 0, freightSource: "excluded"
 
 /** 2026-11-11: the Split Bag blank — ONE owner-priced bag ($0.14 vendor cost since 2026-11-12; inbound freight is a separate line), never a Vendor Cost Book pick. */
 const SPLIT_BAG_BLANK = { id: "preset:split-bag", name: "Split Bag", unitCost: SPLIT_BAG_BLANK_UNIT_COST } as const;
+/**
+ * 2026-11-15: the 14x16 / Pound Bag blank — never a picker choice and never a
+ * code price. Its cost is the CURRENT 14x16 Blank Bag record the server read
+ * (pound-bag-blank.server.ts); with no record / no cost it stays unpriced (Draft Only).
+ */
+const POUND_BAG_BLANK_ID = "preset:pound-bag-14x16";
+const poundBagComponent = (authority: BagBlankAuthority | null | undefined): ResolvedComponent => authority && (authority.defaultUnitCost > 0 || authority.tiers.length)
+  ? { name: POUND_BAG_CALCULATOR_OPTION.label, unitCost: authority.defaultUnitCost > 0 ? authority.defaultUnitCost : null, tiers: authority.tiers, status: "verified" as const, note: authority.source }
+  : { name: POUND_BAG_CALCULATOR_OPTION.label, unitCost: null, tiers: [], status: "estimated" as const, note: "No cost on the 14x16 Blank Bag record (Vendor Cost Book) — Draft Only." };
 const splitBagComponent = (): ResolvedComponent => ({ name: SPLIT_BAG_BLANK.name, unitCost: SPLIT_BAG_BLANK.unitCost, tiers: [], status: "verified" as const, note: "Owner final vendor quote 2026-11-12: one Split Bag blank, $0.14 vendor cost; the $0.024 inbound freight is a separate line (landed $0.164)." });
 
 /**
@@ -500,7 +511,8 @@ export async function loader({ request }: { request: Request }) {
   const canonicalInput = canonicalInputRaw
     // 2026-11-11: an owner job-level material $/sqft override is applied LAST,
     // on the server, against the verified owner identity — never a posted total.
-    ? await applyOwnerMaterialOverride({ db, shop }, { ...(await attachVerifiedLabelMaterials({ db, shop }, canonicalInputRaw)), machineLoad: await loadMachineWorkload(db, shop) }, auth)
+    // 2026-11-15: a 14x16 / Pound Bag also gets its current blank cost record, read on the server (no-op for every other family).
+    ? await attachPoundBagBlank({ db, shop }, await applyOwnerMaterialOverride({ db, shop }, { ...(await attachVerifiedLabelMaterials({ db, shop }, canonicalInputRaw)), machineLoad: await loadMachineWorkload(db, shop) }, auth))
     : null;
   // 2D-4C1: the calibration lookup is resolved ONCE and reused, so a tier
   // ladder costs one DB round trip rather than one per rung. assembleCanonicalJob
@@ -931,6 +943,9 @@ export async function loader({ request }: { request: Request }) {
   const stockBagP = pFamily === "sticker-bags" && eparams.get("pstockbag") === "1";
   // 2026-11-11: Split Bag = pfamily=sticker-bags + psplitbag=1 (canonical split-bags family).
   const splitBagP = pFamily === "sticker-bags" && eparams.get("psplitbag") === "1" && !stockBagP;
+  // 2026-11-15: 14x16 / Pound Bag = pfamily=sticker-bags + ppoundbag=1 (canonical pound-bags family).
+  const poundBagP = pFamily === "sticker-bags" && eparams.get("ppoundbag") === "1" && !stockBagP && !splitBagP;
+  const poundBlankP: BagBlankAuthority | null = poundBagP && canonicalInput?.family === "pound-bags" ? canonicalInput.bags?.blankAuthority ?? null : null;
   let productMaterialNameP: string | null = null; // 2026-11-13: DTP comparison equivalence check
   // 15B: accepted values come from the shared registry (canonical + legacy
   // aliases of calculator-ENABLED families — reserved dtp-bags stays out).
@@ -964,6 +979,8 @@ export async function loader({ request }: { request: Request }) {
     // Split Bag: its blank is the owner Split Bag ($0.14 vendor cost), shown auto-selected —
     // never a 4x5 bag record from the picker.
     if (splitBagP) autoBag = SPLIT_BAG_BLANK;
+    // 14x16 / Pound Bag: its blank is the current 14x16 Blank Bag record — never a picker choice.
+    if (poundBagP) autoBag = { id: POUND_BAG_BLANK_ID, name: POUND_BAG_CALCULATOR_OPTION.label, unitCost: poundBlankP?.defaultUnitCost ?? 0 };
     const requestedBlankId = String(eparams.get("pblank") || "") || (autoBag ? autoBag.id : "");
     let pickedBlank = blankItemById.get(requestedBlankId) || null;
     let pickedEntry = pickedBlank ? classified.find((entry) => entry.item.id === pickedBlank!.id) : null;
@@ -1006,8 +1023,8 @@ export async function loader({ request }: { request: Request }) {
     const canonicalBagComponent: ResolvedComponent | null = canonicalBagSize && REQUIRED_STICKER_BAG_SIZES.includes(canonicalBagSize)
       ? { name: `${canonicalBagSize} Sticker Bag`, unitCost: null, tiers: [], status: "estimated", note: "Owner cost not provided yet — Draft Only." }
       : null;
-    if (canonicalBagComponent || splitBagP) selectedClass = "bag_sticker";
-    const blankComponent = splitBagP ? splitBagComponent() : enforceFlatChironCost(
+    if (canonicalBagComponent || splitBagP || poundBagP) selectedClass = "bag_sticker";
+    const blankComponent = splitBagP ? splitBagComponent() : poundBagP ? poundBagComponent(poundBlankP) : enforceFlatChironCost(
       eparams.get("pblank") === "custom"
         ? (customName && customCost > 0 && customNote
             ? { name: customName, unitCost: customCost, tiers: [], status: "estimated" as const, note: `Custom item — ${customNote}` }
@@ -1101,7 +1118,8 @@ export async function loader({ request }: { request: Request }) {
     // curve and 40% floor are untouched; the requested quantity is always one
     // of the rows. Only rendered once a quantity was actually entered.
     if (requestedQtyP > 0) {
-      productMarginKey = marginFamilyKeyFor(pFamily, selectedClass, pickedBlank?.name || (autoBag ? autoBag.name : ""));
+      // 2026-11-15: the 14x16 / Pound Bag prices on the approved Sticker Bag ladder rules (its own true cost).
+      productMarginKey = poundBagP ? POUND_BAG_MARGIN_RULE_KEY : marginFamilyKeyFor(pFamily, selectedClass, pickedBlank?.name || (autoBag ? autoBag.name : ""));
       productMarginRule = productMarginKey ? resolveMarginFamily(productMarginKey) : null;
       // 15F.0K.2-A: with no manual eqty list the display ladder comes from
       // ownerConfig tierLadders (per canonical family; Stage-A defaults are
@@ -1147,6 +1165,8 @@ export async function loader({ request }: { request: Request }) {
         glossLayers: Number(eparams.get("pglosslayers") || 0),
         materialName: productInput.material?.name || "",
       });
+      // 2026-11-15: a 14x16 / Pound Bag never prices on the 4x5 market dollar targets (same rule as the Split Bag below).
+      if (poundBagP) specialtyReasonsP.push(POUND_BAG_NO_4X5_MARKET_TARGET);
       const premiumEligibleP = engineFamilyP === "stickers-labels" && (Number(eparams.get("pwhitelayers") || 0) > 0 || Number(eparams.get("pglosslayers") || 0) > 0);
       const curveDefaults = isDtpP
         ? tierQuantities.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: quantity-threshold rule, never row-position
@@ -1330,6 +1350,8 @@ export async function loader({ request }: { request: Request }) {
             requiredWhite: /holo/i.test(productInput.material?.name || "") && Number(eparams.get("pwhitelayers") || 0) > 0,
             holographic: /holo/i.test(productInput.material?.name || ""),
           },
+          // 2026-11-15: a 14x16 / Pound Bag passes no 4x5 specialty context either (own true cost only).
+          ...(poundBagP ? { specialty: null } : {}),
         });
         // 15G.4C: optional customer-facing specialty file-prep fee — charged
         // ONLY when staff must build the mask (flag), $25 flat per job,
@@ -1530,11 +1552,20 @@ export async function loader({ request }: { request: Request }) {
       canonicalFamily: pFamily ? canonicalUiFamily(pFamily) : null,
       stockBag: stockBagP,
       splitBag: splitBagP,
+      // 2026-11-15: 14x16 / Pound Bag, and where its blank cost came from (null = no cost record).
+      poundBag: poundBagP,
+      poundBagBlank: poundBagP ? (poundBlankP ? { name: poundBlankP.name, unitCost: poundBlankP.defaultUnitCost, tiers: poundBlankP.tiers.length, source: poundBlankP.source } : null) : undefined,
       // 2026-11-12: every tier row re-costs with THIS design count (shown in the tier table).
       designCount: Math.max(1, Number(calculatorDesignCount(eparams.get("pdesigns")))),
       selectedClass,
       topRequired,
-      autoBag: autoBag ? { value: autoBag.id, label: `${autoBag.name} — $${Number(autoBag.unitCost).toFixed(2)} — Verified (auto-selected)` } : null,
+      autoBag: autoBag
+        ? (poundBagP
+          ? { value: autoBag.id, label: poundBlankP && (poundBlankP.defaultUnitCost > 0 || poundBlankP.tiers.length)
+              ? `${autoBag.name} — ${poundBlankP.defaultUnitCost > 0 ? `$${poundBlankP.defaultUnitCost.toFixed(2)}` : "quantity-tier cost"} — from the "${poundBlankP.name}" cost record (auto-selected)`
+              : `${autoBag.name} — NO COST on the 14x16 Blank Bag record — Draft Only until a cost is entered in the Vendor Cost Book` }
+          : { value: autoBag.id, label: `${autoBag.name} — $${Number(autoBag.unitCost).toFixed(2)} — Verified (auto-selected)` })
+        : null,
       bagCount: bagRecords.length,
       result: productCost ? { lines: productCost.lines, derived: productCost.derived, missing: productCost.missing, warnings: productCost.warnings, totalCost: productCost.totalCost, unitCost: productCost.unitCost } : null,
       // 14C.2 automatic tiers + label-builder echo (form state survives
@@ -1545,7 +1576,7 @@ export async function loader({ request }: { request: Request }) {
       // bags-4x5 crossover band, 2,500+) is QUALIFIED by quantity per design and
       // configuration equivalence before any DTP price is shown as comparable.
       // Display only — the owner chooses the product; nothing converts or blocks.
-      dtpAdvisory: pFamily && canonicalUiFamily(pFamily) === "sticker-bags" && !stockBagP
+      dtpAdvisory: pFamily && canonicalUiFamily(pFamily) === "sticker-bags" && !stockBagP && !poundBagP // a 14x16 bag has no comparable DTP pouch
         ? qualifyDtpComparison({
             crossover: (productTiers || []).find((tier: any) => tier.requested)?.commercial?.marketPosition?.crossover ?? null,
             totalQuantity: requestedQtyP,
@@ -1786,7 +1817,7 @@ export async function action({ request }: { request: Request }) {
   // posted params carry IDs and business inputs only, never trusted totals.
   // 2026-11-12: Split Bag geometry is canonical on save too (same rule as the loader).
   const psearchParams = withCanonicalSplitBagGeometry(new URLSearchParams(String(form.get("psearch") || "").replace(/^\?/, "")));
-  const savedSplitGeometry = withCanonicalSplitBagGeometry(new URLSearchParams({ pfamily: String(form.get("pfamily") || psearchParams.get("pfamily") || ""), psplitbag: String(form.get("psplitbag") || psearchParams.get("psplitbag") || ""), pstockbag: String(form.get("pstockbag") || psearchParams.get("pstockbag") || "") }));
+  const savedSplitGeometry = withCanonicalSplitBagGeometry(new URLSearchParams({ pfamily: String(form.get("pfamily") || psearchParams.get("pfamily") || ""), psplitbag: String(form.get("psplitbag") || psearchParams.get("psplitbag") || ""), ppoundbag: String(form.get("ppoundbag") || psearchParams.get("ppoundbag") || ""), pstockbag: String(form.get("pstockbag") || psearchParams.get("pstockbag") || "") }));
   const fRead = (key: string) => {
     if ((key === "pwidth" || key === "pheight") && savedSplitGeometry.has(key)) return String(savedSplitGeometry.get(key));
     const direct = form.get(key);
@@ -1799,7 +1830,7 @@ export async function action({ request }: { request: Request }) {
    * one that was displayed. Same normaliser, same assembler, same bytes. */
   const canonicalInputSaveRaw = normalizeCanonicalInput(psearchParams);
   const canonicalInputSave = canonicalInputSaveRaw
-    ? await applyOwnerMaterialOverride({ db, shop }, { ...(await attachVerifiedLabelMaterials({ db, shop }, canonicalInputSaveRaw)), machineLoad: await loadMachineWorkload(db, shop) }, auth)
+    ? await attachPoundBagBlank({ db, shop }, await applyOwnerMaterialOverride({ db, shop }, { ...(await attachVerifiedLabelMaterials({ db, shop }, canonicalInputSaveRaw)), machineLoad: await loadMachineWorkload(db, shop) }, auth))
     : null;
   const canonicalMachineSave = canonicalInputSave
     ? await resolveCanonicalMachineInputs({ db, shop }, canonicalInputSave)
@@ -1875,6 +1906,9 @@ export async function action({ request }: { request: Request }) {
   // 2026-10-19 loader parity: Stock Bags = pfamily=sticker-bags + pstockbag=1.
   const savedStockBag = pFamilySave === "sticker-bags" && fRead("pstockbag") === "1";
   const savedSplitBag = pFamilySave === "sticker-bags" && fRead("psplitbag") === "1" && !savedStockBag;
+  // 2026-11-15 loader parity: 14x16 / Pound Bag = pfamily=sticker-bags + ppoundbag=1.
+  const savedPoundBag = pFamilySave === "sticker-bags" && fRead("ppoundbag") === "1" && !savedStockBag && !savedSplitBag;
+  const savedPoundBlank: BagBlankAuthority | null = savedPoundBag && canonicalInputSave?.family === "pound-bags" ? canonicalInputSave.bags?.blankAuthority ?? null : null;
   if (pFamilySave && calculatorFamilyValues().includes(pFamilySave)) {
     type FetchedComponent = { component: ResolvedComponent; meta: { name: string; productType?: string; vendor?: string; vendorSku?: string; addOns?: Array<{ name: string; pricingType: string; amount: number; enabled: boolean }> } | null };
     const fetchComponent = async (rawId: string): Promise<FetchedComponent | null> => {
@@ -1963,6 +1997,11 @@ export async function action({ request }: { request: Request }) {
       savedBlank = splitBagComponent();
       savedClassification = { klass: "bag_sticker", includesTop: false };
     }
+    // Loader parity: a 14x16 / Pound Bag's blank is always the current 14x16 Blank Bag record.
+    if (savedPoundBag) {
+      savedBlank = poundBagComponent(savedPoundBlank);
+      savedClassification = { klass: "bag_sticker", includesTop: false };
+    }
     savedBlankNameForNaming = savedBlank?.name || null;
     const savedTopRaw = String(fRead("plid") || "");
     const savedTopFetched = savedTopRaw.startsWith("type:")
@@ -2046,7 +2085,7 @@ export async function action({ request }: { request: Request }) {
     eSetup = productSnapshot.setupTotal;
     // ---- 14C.2: recompute the automatic tiers server-side and resolve the
     // selected customer tier by QUANTITY — posted tier totals are ignored.
-    savedMarginKey = marginFamilyKeyFor(pFamilySave, savedClassification ? savedClassification.klass : null, savedBlank?.name || "");
+    savedMarginKey = savedPoundBag ? POUND_BAG_MARGIN_RULE_KEY : marginFamilyKeyFor(pFamilySave, savedClassification ? savedClassification.klass : null, savedBlank?.name || "");
     savedMarginRule = savedMarginKey ? resolveMarginFamily(savedMarginKey) : null;
     // 15F.0K.2-A: same ownerConfig ladder resolution as the loader (parity).
     const configLadderSave = pricingPolicy.values.tierLadders.families[canonicalUiFamily(pFamilySave)] ?? pricingPolicy.values.tierLadders.defaultLadder;
@@ -2079,6 +2118,7 @@ export async function action({ request }: { request: Request }) {
       glossLayers: Number(fRead("pglosslayers") || 0),
       materialName: productInputSave.material?.name || "",
     }); // 15F.0K.4C loader parity
+    if (savedPoundBag) specialtyReasonsSave.push(POUND_BAG_NO_4X5_MARKET_TARGET); // 2026-11-15 loader parity
     const premiumEligibleSave = savedEngineFamily === "stickers-labels" && (Number(fRead("pwhitelayers") || 0) > 0 || Number(fRead("pglosslayers") || 0) > 0);
     const curveDefaultsSave = savedIsDtp
       ? tierQuantitiesSave.map((qty) => dtpMarginPctForQuantity(qty)) // 15C.1: same quantity-threshold rule at save
@@ -2231,6 +2271,7 @@ export async function action({ request }: { request: Request }) {
           requiredWhite: /holo/i.test(productInputSave.material?.name || "") && Number(fRead("pwhitelayers") || 0) > 0,
           holographic: /holo/i.test(productInputSave.material?.name || ""),
         },
+        ...(savedPoundBag ? { specialty: null } : {}), // 2026-11-15 loader parity
       });
       const filePrepFeeSave = specialtyFilePrepFee({ requested: fRead("pfileprep") === "1", glossLayers: Number(fRead("pglosslayers") || 0), whiteLayers: Number(fRead("pwhitelayers") || 0) });
       const belowFloor = commercial.marginPctApplied < floorForFamilySave;
@@ -2406,6 +2447,7 @@ export async function action({ request }: { request: Request }) {
         family: canonicalUiFamily(pFamilySave),
         stockBag: savedStockBag,
         splitBag: savedSplitBag,
+        poundBag: savedPoundBag,
         marginRuleKey: savedMarginKey,
         row: savedSelectedTier,
         multiLine: savedMultiLine ? { combined: savedMultiLine } : null,
@@ -2574,6 +2616,9 @@ export async function action({ request }: { request: Request }) {
       canonicalFamily: canonicalUiFamily(pFamilySave),
       // 2026-11-12: marks a Split Bag line (owner-set customer price, this quote only).
       splitBag: savedSplitBag,
+      // 2026-11-15: marks a 14x16 / Pound Bag line and records the blank cost record it was costed from.
+      poundBag: savedPoundBag,
+      poundBagBlank: savedPoundBag && savedPoundBlank ? { recordType: savedPoundBlank.recordType, recordId: savedPoundBlank.recordId, name: savedPoundBlank.name, defaultUnitCost: savedPoundBlank.defaultUnitCost, tiers: savedPoundBlank.tiers } : null,
       classification: savedClassification ? savedClassification.klass : null,
       includesTop: savedClassification ? savedClassification.includesTop : false,
       // physical Miron Top Type only — never a printed "Lid label" row
@@ -3553,6 +3598,10 @@ function ProductDrivenForm() {
   const isStockBag = isBags && Boolean(pm?.stockBag);
   // 2026-11-11: Split Bag = the canonical split-bags family (pfamily=sticker-bags + psplitbag=1).
   const isSplitBag = isBags && Boolean(pm?.splitBag);
+  // 2026-11-15: 14x16 / Pound Bag = the canonical pound-bags family (pfamily=sticker-bags + ppoundbag=1).
+  const isPoundBag = isBags && Boolean(pm?.poundBag);
+  /** A bag type whose label geometry is fixed by the owner — no width / height entry. */
+  const isFixedGeometryBag = isSplitBag || isPoundBag;
   // 2026-10-05: the 14C.2 typed-dimension jar label builder was replaced by the
   // fixed-product flow below (label set + resolved standard dimensions).
 
@@ -3673,7 +3722,7 @@ function ProductDrivenForm() {
    * canonical pair (pfamily=sticker-bags + pstockbag=1) the engine reads.
    * Calculate is held back client-side while a VISIBLE required field is
    * empty; the server stays fail-closed on its own regardless. */
-  const familyChoice = calculatorFamilyChoice(canonicalFamily, canonParams.get("pstockbag"), canonParams.get("psplitbag"));
+  const familyChoice = calculatorFamilyChoice(canonicalFamily, canonParams.get("pstockbag"), canonParams.get("psplitbag"), canonParams.get("ppoundbag"));
   const familyParams = calculatorFamilyParams(familyChoice);
   /* 2026-10-19 owner decisions A + B: the canonical bag and banner engines read
    * their OWN field names (pbagsides; pbannerw/pbannerh/pbannersides/
@@ -3690,7 +3739,7 @@ function ProductDrivenForm() {
     missingNames.has(name) ? { ...inputStyle, borderColor: "#dc2626", outline: "2px solid #fecaca" } : inputStyle;
   const formShape = {
     isBags, isStockBag, jars, isStickers, isBanners, isCustom, isDtp, topRequired,
-    autoBag: Boolean(pm?.autoBag), contourCut: canonCutType === "contour", isSplitBag,
+    autoBag: Boolean(pm?.autoBag), contourCut: canonCutType === "contour", isSplitBag: isFixedGeometryBag,
   };
   /* 2026-11-12 live QA: every visible field is seeded from the URL (the state
    * the server costed), and the browser's own form restoration is OFF - it can
@@ -3714,7 +3763,7 @@ function ProductDrivenForm() {
       <label style={{ fontSize: 12, gridColumn: "1 / -1" }}><b>STEP 1 — What are you pricing?</b>
         <select
           key={familyChoice}
-          defaultValue={familyChoice === SPLIT_BAG_CALCULATOR_OPTION.value ? SPLIT_BAG_CALCULATOR_OPTION.pfamily : familyChoice}
+          defaultValue={familyChoice === SPLIT_BAG_CALCULATOR_OPTION.value ? SPLIT_BAG_CALCULATOR_OPTION.pfamily : familyChoice === POUND_BAG_CALCULATOR_OPTION.value ? POUND_BAG_CALCULATOR_OPTION.pfamily : familyChoice}
           style={inputStyle}
           onChange={(event) => {
             // Same full-form GET; only the family params are replaced.
@@ -3744,19 +3793,25 @@ function ProductDrivenForm() {
         <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>Blank / bag type
           <select
             name="psplitbag"
-            key={`bagtype-${familyParams.psplitbag || ""}`}
-            defaultValue={familyParams.psplitbag || ""}
+            key={`bagtype-${familyParams.psplitbag || ""}-${familyParams.ppoundbag || ""}`}
+            defaultValue={familyParams.ppoundbag ? POUND_BAG_CALCULATOR_OPTION.value : familyParams.psplitbag || ""}
             style={inputStyle}
             onChange={(event) => {
               // Bag type never touches Quantity or Number of designs.
               const data = new FormData(event.currentTarget.form!);
               const split = event.currentTarget.value === SPLIT_BAG_CALCULATOR_OPTION.psplitbag;
-              submit(calculatorTransitionParams(data, { pfamily: "sticker-bags", pstockbag: null, psplitbag: split ? SPLIT_BAG_CALCULATOR_OPTION.psplitbag : null }), { method: "get" });
+              const pound = event.currentTarget.value === POUND_BAG_CALCULATOR_OPTION.value;
+              submit(calculatorTransitionParams(data, { pfamily: "sticker-bags", pstockbag: null, psplitbag: split ? SPLIT_BAG_CALCULATOR_OPTION.psplitbag : null, ppoundbag: pound ? POUND_BAG_CALCULATOR_OPTION.ppoundbag : null }), { method: "get" });
             }}
           >
             <option value="">Standard 4x5 Sticker Bag</option>
             <option value={SPLIT_BAG_CALCULATOR_OPTION.psplitbag}>{SPLIT_BAG_CALCULATOR_OPTION.label}</option>
+            {/* 2026-11-15: the server reads ppoundbag=1 (hidden below); this select's own value is not a Split Bag flag. */}
+            <option value={POUND_BAG_CALCULATOR_OPTION.value}>{POUND_BAG_CALCULATOR_OPTION.label}</option>
+            {/* QP has no owner cost / geometry / MOQ in the system yet — listed, never selectable, nothing guessed. */}
+            <option value="qp-pending" disabled>{QP_BAG_PENDING_OPTION_LABEL}</option>
           </select>
+          {familyParams.ppoundbag ? <input type="hidden" name="ppoundbag" value={familyParams.ppoundbag} /> : null}
         </label>
       ) : null}
       {isSplitBag ? (
@@ -3764,8 +3819,22 @@ function ProductDrivenForm() {
           Split Bag: a Sticker Bag blank at $0.14 vendor cost + $0.024 inbound freight ($0.164 landed) each, MOQ 64. One label per printed side — front only or back only = 1 label, front + back = 2 labels per bag. {SPLIT_BAG_PRICE_AUTHORITY_TEXT}
         </p>
       ) : null}
+      {isPoundBag ? (
+        <p style={{ ...smallHelp, gridColumn: "1 / -1", margin: 0 }}>
+          14x16 / Pound Bag: a Sticker Bag blank costed from the current 14x16 Blank Bag cost record. One sticker per printed side — front only or back only = 1 label, front + back = 2 labels per bag — applied at the owner standard of $1.00 per applied label. No minimum quantity is set for this bag. {POUND_BAG_PRICE_AUTHORITY_TEXT}
+        </p>
+      ) : null}
       {/* 2026-11-12 owner correction: each bag type shows its OWN fixed label geometry. */}
-      {isBags && !isStockBag ? (
+      {isPoundBag ? (
+        <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 8, padding: 8, fontSize: 12 }}>
+          <b>14X16 / POUND BAG production spec</b>
+          <div>Bag size: <b>{POUND_BAG_14X16_BAG_IN.widthIn.toFixed(2)} × {POUND_BAG_14X16_BAG_IN.heightIn.toFixed(2)} in</b></div>
+          <div>Sticker / art size (front and back): <b>{POUND_BAG_14X16_ARTBOARD_IN.widthIn.toFixed(2)} × {POUND_BAG_14X16_ARTBOARD_IN.heightIn.toFixed(2)} in</b></div>
+          <div>Cutline: <b>{POUND_BAG_14X16_CUTLINE_IN.widthIn.toFixed(2)} × {POUND_BAG_14X16_CUTLINE_IN.heightIn.toFixed(2)} in</b> (the sticker itself — no separate cutline on file)</div>
+          <div style={smallHelp}>Owner-confirmed and fixed — no width / height entry; the server always costs this geometry.</div>
+        </div>
+      ) : null}
+      {isBags && !isStockBag && !isPoundBag ? (
         <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 8, padding: 8, fontSize: 12 }}>
           <b>{isSplitBag ? "SPLIT BAG production spec" : "STANDARD 4X5 STICKER BAG production spec"}</b>
           <div>Art / print size: <b>{(isSplitBag ? SPLIT_BAG_ARTBOARD_IN : BAG_4X5_ARTBOARD_IN).widthIn.toFixed(2)} × {(isSplitBag ? SPLIT_BAG_ARTBOARD_IN : BAG_4X5_ARTBOARD_IN).heightIn.toFixed(2)} in</b></div>
@@ -3830,14 +3899,14 @@ function ProductDrivenForm() {
         <label style={{ fontSize: 12 }}>* Quantity{isDtp ? ` (MOQ ${(pm?.dtpSpec?.moq || 1000).toLocaleString()})` : ""}<input key="pqty" name="pqty" type="number" min={isDtp ? pm?.dtpSpec?.moq || 1000 : 1} defaultValue={urlValue("pqty")} autoComplete="off" style={fieldStyle("pqty")} /></label>
         <label style={{ fontSize: 12 }}>* Number of designs<input key="pdesigns" name="pdesigns" type="number" min={0} step={1} defaultValue={calculatorDesignCount(canonParams.get("pdesigns"))} autoComplete="off" style={fieldStyle("pdesigns")} /><span style={smallHelp}>Unique artworks — not the quantity and not the printed sides.</span></label>
         {isBags ? (
-          <label style={{ fontSize: 12 }}>{isStockBag || isSplitBag ? "Sides" : "Print / application"}
+          <label style={{ fontSize: 12 }}>{isStockBag || isFixedGeometryBag ? "Sides" : "Print / application"}
             {/* 2026-10-19 owner decision A: the canonical bag engine reads its side
                 count from pbagsides — mirrored from this selection for Sticker AND
                 Stock Bags. Stock Bags default Double Sided (storefront standard). */}
             <select name="pfaces" value={bagSidesValue} onChange={(event) => setBagSides(event.currentTarget.value)} style={inputStyle}>
               {isStockBag
                 ? (<><option value="2">Double sided (standard)</option><option value="1">Single sided</option></>)
-                : isSplitBag
+                : isFixedGeometryBag
                   ? (<><option value="1">Front only or back only (1 label per bag)</option><option value="2">Front and back (2 labels per bag)</option></>)
                   : (<><option value="1">Front only</option><option value="2">Front and back</option></>)}
             </select>
@@ -4035,9 +4104,17 @@ function ProductDrivenForm() {
           <input type="hidden" name="pwidth" value={SPLIT_BAG_ARTBOARD_IN.widthIn} />
           <input type="hidden" name="pheight" value={SPLIT_BAG_ARTBOARD_IN.heightIn} />
         </>) : null}
+        {isPoundBag ? (<>
+          {/* Canonical, non-customizable 14x16 / Pound Bag sticker size — never re-entered. */}
+          <input type="hidden" name="pwidth" value={POUND_BAG_14X16_ARTBOARD_IN.widthIn} />
+          <input type="hidden" name="pheight" value={POUND_BAG_14X16_ARTBOARD_IN.heightIn} />
+        </>) : null}
         {!isDtp && !jars && !isSplitBag ? (<>
-          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" defaultValue={urlValue("pwidth")} style={fieldStyle("pwidth")} /></label>
-          <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" defaultValue={urlValue("pheight")} style={fieldStyle("pheight")} /></label>
+          {/* 2026-11-15: the 14x16 / Pound Bag has a fixed sticker size — no width / height entry */}
+          {isPoundBag ? null : (<>
+            <label style={{ fontSize: 12 }}>* {isBanners ? "Banner width (in)" : jars ? "Label width (in) — every label" : "Print width (in)"}<input name="pwidth" type="number" step="0.01" defaultValue={urlValue("pwidth")} style={fieldStyle("pwidth")} /></label>
+            <label style={{ fontSize: 12 }}>* {isBanners ? "Banner height (in)" : jars ? "Label height (in) — every label" : "Print height (in)"}<input name="pheight" type="number" step="0.01" defaultValue={urlValue("pheight")} style={fieldStyle("pheight")} /></label>
+          </>)}
         </>) : null}
         {!isDtp ? (<label style={{ fontSize: 12 }}>* Material
           <select name="pmat" defaultValue={urlValue("pmat")} style={fieldStyle("pmat")}>
@@ -4402,6 +4479,7 @@ function OwnerResultCard() {
     family: pm.canonicalFamily,
     stockBag: Boolean(pm.stockBag),
     splitBag: Boolean(pm.splitBag),
+    poundBag: Boolean(pm.poundBag),
     canonical: canonical ? { status: canonical.status, totalCost: canonical.totalCost, unitCost: canonical.unitCost, blockers: canonical.blockers } : null,
     requestedRow,
     multiLine: pm.multiLine,
@@ -4420,7 +4498,7 @@ function OwnerResultCard() {
   const tone = tones[result.state] || tones.PRICING_BLOCKED;
   const money2 = (value: number) => `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const notAvailable = <span style={{ color: "#991b1b" }}>Not available</span>;
-  const familyLabel = pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : pm.splitBag ? SPLIT_BAG_CALCULATOR_OPTION.label : calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily)?.label || "";
+  const familyLabel = pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : pm.splitBag ? SPLIT_BAG_CALCULATOR_OPTION.label : pm.poundBag ? POUND_BAG_CALCULATOR_OPTION.label : calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily)?.label || "";
   const stat = (label: string, value: React.ReactNode, sub?: React.ReactNode) => (
     <div style={{ minWidth: 150 }}>
       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: "#6b7280" }}>{label}</div>
@@ -4960,12 +5038,12 @@ function ProductTiers() {
   /* 2026-10-19 owner decision E: the SAME authority classifier the save action
    * uses. With no approved selling-price authority the tier prices are
    * diagnostic references only and the save is a PROVISIONAL draft. */
-  const tierAuthority = resolveSellingPriceAuthority({ family: pm.canonicalFamily, stockBag: Boolean(pm.stockBag), splitBag: Boolean(pm.splitBag), marginRuleKey: mf?.key || null, row: selected });
+  const tierAuthority = resolveSellingPriceAuthority({ family: pm.canonicalFamily, stockBag: Boolean(pm.stockBag), splitBag: Boolean(pm.splitBag), poundBag: Boolean(pm.poundBag), marginRuleKey: mf?.key || null, row: selected });
   const provisionalPrices = !tierAuthority.approved && tierAuthority.kind !== "cost_blocked";
   // 15D.2: never prefill with panel placeholders; real record name, else the
   // registry family label, else blank for the owner to type.
   const familyEntryForLabel = calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily);
-  const productLabel = pm.productLabel || (pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : pm.splitBag ? SPLIT_BAG_CALCULATOR_OPTION.label : familyEntryForLabel?.label) || "";
+  const productLabel = pm.productLabel || (pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : pm.splitBag ? SPLIT_BAG_CALCULATOR_OPTION.label : pm.poundBag ? POUND_BAG_CALCULATOR_OPTION.label : familyEntryForLabel?.label) || "";
   return (
     <div style={{ marginTop: 12, borderTop: "2px solid #b45309", paddingTop: 10 }}>
       <b style={{ fontSize: 15 }}>RECOMMENDED CUSTOMER PRICE</b>
@@ -4977,6 +5055,11 @@ function ProductTiers() {
           ? <>Margin family: <b>{mf.label}</b> · researched curve {mf.curve.join(" / ")}% · family minimum {mf.minPct}% · global floor {emergency.floor}% · source: {mf.source}</>
           : <><b style={{ color: "#92400e" }}>FAMILY MARGIN RULE NOT CONFIGURED</b> — provisional universal curve with the {emergency.floor}% global floor. Margins are editable in Advanced Pricing Controls.</>}
       </p>
+      {pm.poundBag ? (
+        <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
+          <b>{POUND_BAG_TIER_TABLE_TEXT}</b> {POUND_BAG_PRICE_AUTHORITY_TEXT} The 4x5 Sticker Bag dollar prices / market targets are never copied.
+        </div>
+      ) : null}
       {pm.splitBag ? (
         <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 8, fontSize: 12, marginBottom: 6 }}>
           <b>{SPLIT_BAG_TIER_TABLE_TEXT}</b> {SPLIT_BAG_PRICE_AUTHORITY_TEXT} The 4x5 Sticker Bag dollar prices / market targets are never copied.
@@ -5050,7 +5133,7 @@ function ProductTiers() {
                     {tier.status}
                     {tier.commercial && !tier.draftOnly ? <div style={{ fontWeight: 400, color: "#6b7280", fontSize: 11 }}>{tier.commercial.controllingRule}</div> : null}
                     {/* 15F.0K.3: market position line + badges (info only — never changes price) */}
-                    {tier.commercial?.marketPosition && !tier.draftOnly && !pm.splitBag ? (() => {
+                    {tier.commercial?.marketPosition && !tier.draftOnly && !pm.splitBag && !pm.poundBag ? (() => {
                       const pos = tier.commercial.marketPosition;
                       if (pos.applicable === false) {
                         // 15F.0K.4C: specialty finish — the standard table is

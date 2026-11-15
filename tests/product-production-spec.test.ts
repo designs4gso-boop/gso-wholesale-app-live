@@ -75,7 +75,9 @@ describe("listProductSpecs / getProductProductionSpec", () => {
     expect(specs.filter((s) => s.family === "stock-bags").map((s) => s.productKey)).toEqual(["bag-4x5/stock"]);
     // 2026-11-11: the Split Bag (owner decision) on the same 4x5 artboard authority.
     expect(specs.filter((s) => s.family === "split-bags").map((s) => s.productKey)).toEqual(["split-bag"]);
-    expect(specs.length).toBe(ACTIVE_JAR_PROFILES.length + 3);
+    // 2026-11-15: + the 14x16 / Pound Bag (owner decision; a Sticker Bag bag type on its own canonical family)
+    expect(specs.filter((s) => s.family === "pound-bags").map((s) => s.productKey)).toEqual(["pound-bag-14x16"]);
+    expect(specs.length).toBe(ACTIVE_JAR_PROFILES.length + 4);
   });
 
   it("the exact supported jar list: miron 50/100T/100W/150/250, chiron 100T/100W/150, standard 3oz/4oz", () => {

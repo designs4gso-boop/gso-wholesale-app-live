@@ -17,7 +17,7 @@ export const CANONICAL_CALCULATOR_VERSION = "17D.7-canonical-calculator";
  * Families
  * ------------------------------------------------------------------ */
 
-export const CANONICAL_FAMILIES = ["stickers-labels", "sticker-bags", "stock-bags", "split-bags", "banners", "standard-jars", "premium-jars"] as const;
+export const CANONICAL_FAMILIES = ["stickers-labels", "sticker-bags", "stock-bags", "split-bags", "pound-bags", "banners", "standard-jars", "premium-jars"] as const;
 export type CanonicalFamily = (typeof CANONICAL_FAMILIES)[number];
 
 /**
@@ -55,6 +55,11 @@ export const CANONICAL_DISPATCH: Record<CanonicalFamily, { adapter: string; entr
     adapter: "bag-cost-inputs.server.ts",
     entry: "computeBagPhysical(product: split_bag)",
     note: "SAME physical adapter and Sticker Bag label rules (one 4x5 label per printed side). Split-Bag-specific: $0.14 vendor blank + $0.024 inbound freight (landed $0.164), art 7.20 x 4.38 / cutline 7.07 x 4.26, MOQ 64. Customer artwork.",
+  },
+  "pound-bags": {
+    adapter: "bag-cost-inputs.server.ts",
+    entry: "computeBagPhysical(product: pound_bag_14x16)",
+    note: "SAME physical adapter and Sticker Bag label rules (one label per printed side). 14x16-specific: blank cost = the current 14x16 Blank Bag Vendor Cost Book record (no code constant), sticker / art 14.05 x 16.00 (bag 14.39 x 16.39), application $1.00 per applied label (owner standard), no MOQ, no inbound freight or packout standard. Customer artwork.",
   },
   "standard-jars": {
     adapter: "jar-cost-inputs.server.ts",
@@ -118,6 +123,8 @@ export const CANONICAL_PACKOUT: Record<CanonicalFamily, { unitsPerBox: number | 
   // pending), so the 4x5 5,000/box rule is NOT borrowed — disclosed as
   // PACKOUT_NOT_MODELED until the owner records one.
   "split-bags": { unitsPerBox: null, source: "Split Bag box count has NO owner standard yet — packout is disclosed as not modelled, never borrowed from the 4x5 rule." },
+  // 2026-11-15: the 14x16 / Pound Bag has no owner box count — never the 4x5 5,000/box rule.
+  "pound-bags": { unitsPerBox: null, source: "14x16 / Pound Bag box count has NO owner standard yet — packout is disclosed as not modelled, never borrowed from the 4x5 rule." },
   banners: { unitsPerBox: null, source: "Banner tube packout has NO verified standard (BANNER_FINISHING_SUPPORT.TUBE_PACKOUT.verified = false)." },
   // Jars carry their OWN verified per-size box counts (JAR_UNITS_PER_BOX) plus
   // a consumables rate, so the adapter supplies packout directly and this

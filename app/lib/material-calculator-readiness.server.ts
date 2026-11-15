@@ -231,7 +231,7 @@ export async function attachVerifiedLabelMaterials<T extends {
   return { ...input, labels: { ...input.labels, materials } };
 }
 
-const BAG_FAMILIES = new Set(["sticker-bags", "stock-bags", "split-bags"]);
+const BAG_FAMILIES = new Set(["sticker-bags", "stock-bags", "split-bags", "pound-bags"]);
 const JAR_FAMILIES = new Set(["standard-jars", "premium-jars"]);
 type MediaSelection = { materialKey?: string | null; materialId?: string | null; materials?: Record<string, VerifiedLabelMaterial>; materialMissing?: string[] };
 
