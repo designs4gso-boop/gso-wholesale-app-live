@@ -103,12 +103,15 @@ import db from "../app/db.server";
 import { assembleCanonicalJob, canonicalFamilyFromUi, normalizeCanonicalInput, resolveCanonicalMachineInputs } from "../app/lib/canonical-calculator.server";
 import { CANONICAL_DISPATCH, CANONICAL_FAMILIES, CANONICAL_PACKOUT } from "../app/lib/canonical-calculator-shared";
 import { CANONICAL_SUPPORTED_FAMILIES } from "../app/lib/canonical-quote-authority.server";
+import { POUND_BAG_14X16_ALIASES, POUND_BAG_14X16_DISPLAY_NAME, POUND_BAG_URL_FLAG_ALIASES, isPoundBag14x16Name } from "../app/lib/bag-artboard-geometry";
+import { POUND_BAG_APPROVED_PRICE_LADDER, POUND_BAG_PROPOSED_LADDERS, poundBagLadderMarginPct, poundBagLadderPrice } from "../app/lib/pound-bag-pricing";
 import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, POUND_BAG_14X16_ARTBOARD_IN, POUND_BAG_14X16_BAG_IN, POUND_BAG_14X16_CUTLINE_IN, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN, bagLabelGeometryFor } from "../app/lib/bag-artboard-geometry";
 import {
   BAG_4X5_BLANK_UNIT_COST,
   BAG_APPLICATION_SECONDS_PER_SIDE,
   BAG_REASONS,
   POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL,
+  POUND_BAG_14X16_MOQ,
   SPLIT_BAG_MOQ,
   STICKER_BAG_MOQ,
   bagApplicationCost,
@@ -122,7 +125,6 @@ import {
   POUND_BAG_CALCULATOR_OPTION,
   POUND_BAG_MARGIN_RULE_KEY,
   POUND_BAG_PRICE_AUTHORITY_TEXT,
-  QP_BAG_PENDING_OPTION_LABEL,
   calculatorFamilyChoice,
   calculatorFamilyParams,
   calculatorTransitionParams,
@@ -144,9 +146,9 @@ async function job(qs: string) {
 const line = (r: any, key: string) => r.trueCost.lines.find((l: any) => l.key === key)?.amount ?? 0;
 const STICKER_SQFT = (14.05 * 16) / 144;
 
-describe("14x16 / Pound Bag — 1. it is a Sticker Bag bag type in the dropdown", () => {
-  it("the Blank / bag type dropdown offers Standard 4x5, Split Bag and 14x16 / Pound Bag", () => {
-    expect(POUND_BAG_CALCULATOR_OPTION).toEqual({ value: "pound-bags", label: "14x16 / Pound Bag", pfamily: "sticker-bags", ppoundbag: "1" });
+describe("QP / P Bag (14x16) — 1. it is a Sticker Bag bag type in the dropdown", () => {
+  it("the Blank / bag type dropdown offers Standard 4x5, Split Bag and QP / P Bag (14x16)", () => {
+    expect(POUND_BAG_CALCULATOR_OPTION).toEqual({ value: "pound-bags", label: "QP / P Bag (14x16)", pfamily: "sticker-bags", ppoundbag: "1" });
     expect(ROUTE_SRC).toContain('<option value="">Standard 4x5 Sticker Bag</option>');
     expect(ROUTE_SRC).toContain("<option value={SPLIT_BAG_CALCULATOR_OPTION.psplitbag}>{SPLIT_BAG_CALCULATOR_OPTION.label}</option>");
     expect(ROUTE_SRC).toContain("<option value={POUND_BAG_CALCULATOR_OPTION.value}>{POUND_BAG_CALCULATOR_OPTION.label}</option>");
@@ -170,14 +172,14 @@ describe("14x16 / Pound Bag — 1. it is a Sticker Bag bag type in the dropdown"
     expect(CANONICAL_DISPATCH["pound-bags"].entry).toBe("computeBagPhysical(product: pound_bag_14x16)");
   });
 
-  it("the loader reports a 14x16 / Pound Bag with its own blank and no manual width / height fields", async () => {
+  it("the loader reports a QP / P Bag (14x16) with its own blank and no manual width / height fields", async () => {
     const { pm } = await calculate(QS("pound", 1, 100));
     expect(pm.poundBag).toBe(true);
     expect(pm.splitBag).toBe(false);
     expect(pm.stockBag).toBe(false);
     expect(pm.canonicalFamily).toBe("sticker-bags"); // still the Sticker Bags UI family
     expect(pm.canonical.family).toBe("pound-bags");
-    expect(pm.autoBag.label).toContain("14x16 / Pound Bag — $1.00");
+    expect(pm.autoBag.label).toContain("QP / P Bag (14x16) — $1.00");
     expect(pm.autoBag.label).toContain('"14x16 Blank Bag" cost record');
     // fixed geometry: no width / height entry and they are never required inputs
     expect(ROUTE_SRC).toContain("{isPoundBag ? null : (<>");
@@ -189,7 +191,7 @@ describe("14x16 / Pound Bag — 1. it is a Sticker Bag bag type in the dropdown"
   }, 300_000);
 });
 
-describe("14x16 / Pound Bag — 2-4. geometry", () => {
+describe("QP / P Bag (14x16) — 2-4. geometry", () => {
   it("2. the bag is 14.39 x 16.39 in", () => {
     expect(POUND_BAG_14X16_BAG_IN).toEqual({ widthIn: 14.39, heightIn: 16.39 });
     expect(getProductProductionSpec("pound-bags", "pound-bag-14x16")!.physical.bag).toContain("14.39 x 16.39 in");
@@ -206,7 +208,7 @@ describe("14x16 / Pound Bag — 2-4. geometry", () => {
     const physical = computeBagPhysical({ product: "pound_bag_14x16", bagQuantity: 100, sides: 1, designs: 1, blankUnitCost: 1 });
     expect(physical.nesting.usedShapeAreaSqft).toBeCloseTo(100 * STICKER_SQFT, 6);
     const r = await job(QS("pound", 1, 100));
-    expect(r.diagnostics.productSpec).toMatchObject({ family: "pound-bags", productKey: "pound-bag-14x16", displayName: "14x16 / Pound Bag", standard: { label: { widthIn: 14.05, heightIn: 16, cutWidthIn: 14.05, cutHeightIn: 16 } } });
+    expect(r.diagnostics.productSpec).toMatchObject({ family: "pound-bags", productKey: "pound-bag-14x16", displayName: "QP / P Bag (14x16)", standard: { label: { widthIn: 14.05, heightIn: 16, cutWidthIn: 14.05, cutHeightIn: 16 } } });
     // a posted / stale size can never replace it
     const stale = withCanonicalSplitBagGeometry(new URLSearchParams(`${QS("pound", 1, 100)}&pwidth=4&pheight=5`));
     expect(stale.get("pwidth")).toBe("14.05");
@@ -238,7 +240,7 @@ describe("14x16 / Pound Bag — 2-4. geometry", () => {
   });
 });
 
-describe("14x16 / Pound Bag — 5. application labor is per applied label, through the existing canonical math", () => {
+describe("QP / P Bag (14x16) — 5. application labor is per applied label, through the existing canonical math", () => {
   it("uses the existing owner 14x16 standard ($1.00 per applied label = 180 s at the canonical $20/hr)", () => {
     expect(OWNER_STANDARDS.bagApplicationPerLabel14x16.value).toBe(1);
     expect(POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL).toBe(180);
@@ -264,7 +266,7 @@ describe("14x16 / Pound Bag — 5. application labor is per applied label, throu
   }, 300_000);
 });
 
-describe("14x16 / Pound Bag — 6. the blank cost is the current 14x16 Blank Bag record", () => {
+describe("QP / P Bag (14x16) — 6. the blank cost is the current 14x16 Blank Bag record", () => {
   it("there is no code constant for it", () => {
     expect(Number.isNaN(bagBlankUnitCostFor("pound_bag_14x16"))).toBe(true);
     const physical = computeBagPhysical({ product: "pound_bag_14x16", bagQuantity: 100, sides: 1, designs: 1 });
@@ -316,15 +318,18 @@ describe("14x16 / Pound Bag — 6. the blank cost is the current 14x16 Blank Bag
     expect(normalizeCanonicalInput(new URLSearchParams(QS("pound", 1, 100)))!.bags!.blankAuthority).toBeUndefined();
   }, 300_000);
 
-  it("a Quarter Pound (QP) record is never taken for the 14x16 blank", () => {
-    const qp = { id: "v_qp", name: "Quarter Pound Bag", productType: "bag", vendorSku: null, defaultUnitCost: 0.5, active: true, tiers: [] };
-    expect(pickPoundBagBlank([qp], [])).toBeNull();
-    expect(pickPoundBagBlank([qp, { ...POUND_14X16 }], [])!.recordId).toBe("v_pound");
-    expect(pickPoundBagBlank([{ ...POUND_14X16, vendorSku: null, name: "Pound bag" }], [])!.name).toBe("Pound bag"); // name match when the SKU is absent
+  it("a blank record under any alias name (QP / P Bag / Pound bag / 14x16) is this blank; two matches are ambiguous and give no cost", () => {
+    for (const name of ["QP Bag", "Quarter Pound Bag", "P Bag", "Pound bag", "14x16 Blank Bag"]) {
+      expect(pickPoundBagBlank([{ ...POUND_14X16, vendorSku: null, name }], [])!.name, name).toBe(name);
+    }
+    expect(pickPoundBagBlank([{ ...POUND_14X16, vendorSku: null, name: "4x5 Sticker Bag Blank (Safe Care)" }], [])).toBeNull();
+    expect(pickPoundBagBlank([{ ...POUND_14X16, vendorSku: null, name: "QP Bag" }, { ...POUND_14X16, id: "v2", vendorSku: null, name: "Pound bag" }], [])).toBeNull();
+    // the vendor SKU still wins over a name match
+    expect(pickPoundBagBlank([{ ...POUND_14X16, id: "v2", vendorSku: null, name: "QP Bag" }, { ...POUND_14X16 }], [])!.recordId).toBe("v_pound");
   });
 });
 
-describe("14x16 / Pound Bag — 7. approved Sticker Bag pricing ladder on its OWN true cost", () => {
+describe("QP / P Bag (14x16) — 7. approved Sticker Bag pricing ladder on its OWN true cost", () => {
   it("true cost is built from its own blank, media, ink, cutting, setup and application", async () => {
     const r = await job(QS("pound", 1, 100));
     expect(r.status).not.toBe("DRAFT_ONLY");
@@ -373,14 +378,30 @@ describe("14x16 / Pound Bag — 7. approved Sticker Bag pricing ladder on its OW
     expect(resolveSellingPriceAuthority({ family: "sticker-bags", stockBag: false, poundBag: true, marginRuleKey: "bags-4x5", row: { ...row, totalPrice: null } }).approved).toBe(false);
   });
 
-  it("no minimum quantity is enforced (none is on file), and none is borrowed from the 4x5 or the Split Bag", async () => {
-    const small = await job(QS("pound", 1, 25));
-    expect(small.blockers).toEqual([]);
-    expect(small.reasons).not.toContain(BAG_REASONS.stickerBagBelowMoq);
-    expect(small.reasons).not.toContain(BAG_REASONS.splitBagBelowMoq);
+  it("10-12. MOQ 4: quantities 1-3 are blocked, 4 and above are allowed; the 4x5 (50) and Split Bag (64) minimums are not borrowed", async () => {
+    expect(POUND_BAG_14X16_MOQ).toBe(4);
+    for (const qty of [1, 2, 3]) {
+      const r = await job(QS("pound", 1, qty));
+      expect(r.reasons, String(qty)).toContain(BAG_REASONS.poundBagBelowMoq);
+      expect(r.status, String(qty)).toBe("DRAFT_ONLY");
+      const { result } = await calculate(QS("pound", 1, qty));
+      expect(result.state, String(qty)).not.toBe("READY");
+      expect(result.recommendedTotal ?? null, String(qty)).toBeNull();
+      expect(JSON.stringify(result.reasons), String(qty)).toContain("Quantity is below the QP / P Bag (14x16) minimum (4)");
+    }
+    for (const qty of [4, 5, 25, 49, 63]) {
+      const r = await job(QS("pound", 2, qty));
+      expect(r.blockers, String(qty)).toEqual([]);
+      expect(r.reasons, String(qty)).not.toContain(BAG_REASONS.poundBagBelowMoq);
+      expect(r.reasons, String(qty)).not.toContain(BAG_REASONS.stickerBagBelowMoq);
+      expect(r.reasons, String(qty)).not.toContain(BAG_REASONS.splitBagBelowMoq);
+    }
+    expect((await calculate(QS("pound", 1, 4))).result.state).toBe("READY");
     expect(STICKER_BAG_MOQ).toBe(50);
     expect(SPLIT_BAG_MOQ).toBe(64);
-    expect(getProductProductionSpec("pound-bags", "pound-bag-14x16")!.moqNote).toContain("No owner MOQ");
+    expect(getProductProductionSpec("pound-bags", "pound-bag-14x16")!.moqNote).toContain("MOQ 4");
+    expect(ROUTE_SRC).toContain("Minimum order: 4 bags (MOQ 4).");
+    expect(ROUTE_SRC).not.toMatch(/No minimum quantity is set/i);
   }, 300_000);
 
   it("the saved quote carries the ladder price, the authority and the blank record it was costed from; the owner may override it", async () => {
@@ -399,14 +420,14 @@ describe("14x16 / Pound Bag — 7. approved Sticker Bag pricing ladder on its OW
     expect(cost.productBreakdown.poundBag).toBe(true);
     expect(cost.productBreakdown.poundBagBlank).toMatchObject({ recordId: "v_pound", name: "14x16 Blank Bag", defaultUnitCost: 1 });
     expect(OWNER_OVERRIDABLE_AUTOMATIC_KINDS).toEqual(["split_bag_sticker_bag_ladder", "pound_bag_sticker_bag_ladder"]);
-    expect(OWN_COST_LADDER_PRICE_KINDS[POUND_BAG_AUTOMATIC_PRICE_KIND]).toEqual({ product: "14x16 / Pound Bag", badge: "Approved Sticker Bag pricing ladder applied to 14x16 / Pound Bag true cost" });
+    expect(OWN_COST_LADDER_PRICE_KINDS[POUND_BAG_AUTOMATIC_PRICE_KIND]).toEqual({ product: "QP / P Bag (14x16)", badge: "Approved Sticker Bag pricing ladder applied to QP / P Bag (14x16) true cost" });
     expect(isSplitBagQuoteItem(item)).toBe(false); // never shown as a Split Bag line
     const quote = { status: "draft", items: [{ productName: item.productName, quantity: 100, unitCost: item.unitCost, unitPrice: item.unitPrice, priceSnapshot: item.priceSnapshot }] };
     expect(provisionalQuoteStatusCheck(quote as any, "sent").ok).toBe(true);
   }, 300_000);
 });
 
-describe("14x16 / Pound Bag — specialty printing controls are the existing Sticker Bag ones", () => {
+describe("QP / P Bag (14x16) — specialty printing controls are the existing Sticker Bag ones", () => {
   it("gloss on the Roland costs gloss ink; a blank gloss coverage is still the 90% estimate; Mimaki gloss stays blocked", async () => {
     const base = QS("pound", 1, 100, 1, "roland").replace("&pglosslayers=0", "");
     const none = await job(`${base}&pglosslayers=0`);
@@ -481,29 +502,169 @@ describe("8-9. Standard 4x5 and Split Bag are unchanged", () => {
   });
 });
 
-describe("10-15. QP / Quarter Pound Bag — no owner authority in the repo, so it is NOT calculable", () => {
-  it("10. it is listed as not set up and cannot be selected", () => {
-    expect(QP_BAG_PENDING_OPTION_LABEL).toBe("QP / Quarter Pound Bag — not set up yet (owner data needed)");
-    expect(ROUTE_SRC).toContain('<option value="qp-pending" disabled>{QP_BAG_PENDING_OPTION_LABEL}</option>');
-    expect(ROUTE_SRC).not.toMatch(/name="pqpbag"/);
+describe("PRODUCT IDENTITY — QP Bag = P Bag = 14x16 / Pound Bag is ONE product", () => {
+  it("1. one canonical name; every other name is an alias of it", () => {
+    expect(POUND_BAG_14X16_DISPLAY_NAME).toBe("QP / P Bag (14x16)");
+    expect(POUND_BAG_CALCULATOR_OPTION.label).toBe("QP / P Bag (14x16)");
+    for (const alias of POUND_BAG_14X16_ALIASES) expect(isPoundBag14x16Name(alias), alias).toBe(true);
+    for (const alias of ["qp bag", "Quarter-Pound bag", "P-Bag", "pound bag", "14 x 16 bag", "14x16 / Pound Bag"]) expect(isPoundBag14x16Name(alias), alias).toBe(true);
+    for (const other of ["4x5 Sticker Bag", "Split Bag", "4x6 Blank Bag", "Stock Bag", "DTP 4x5x2 pouch"]) expect(isPoundBag14x16Name(other), other).toBe(false);
+    // one canonical family, one bag product, one production spec
+    expect((CANONICAL_FAMILIES as readonly string[]).filter((family) => /pound|qp|quarter/i.test(family))).toEqual(["pound-bags"]);
+    expect(listProductSpecs().filter((spec) => /pound|qp|quarter|14x16/i.test(`${spec.productKey} ${spec.displayName}`)).map((spec) => spec.productKey)).toEqual(["pound-bag-14x16"]);
+    expect(getProductProductionSpec("pound-bags", "pound-bag-14x16")!.displayName).toContain("QP / P Bag (14x16)");
   });
 
-  it("11-13, 15. there is no QP family, bag product, geometry, blank cost, MOQ or price rule — nothing falls back to another bag", () => {
-    expect((CANONICAL_FAMILIES as readonly string[]).some((family) => /qp|quarter/i.test(family))).toBe(false);
-    expect(listProductSpecs().some((spec) => /\bqp\b|quarter/i.test(`${spec.productKey} ${spec.displayName}`))).toBe(false);
-    expect(Object.keys(OWN_COST_LADDER_PRICE_KINDS).some((kind) => /qp|quarter/i.test(kind))).toBe(false);
-    // a hand-typed QP flag is not a product: it is ignored, never costed as a QP bag
-    for (const flag of ["pqpbag=1", "pquarterpound=1", "pbagtype=qp"]) {
-      const input = normalizeCanonicalInput(new URLSearchParams(`pfamily=sticker-bags&pqty=100&pbagsides=1&${flag}`))!;
-      expect(input.family).toBe("sticker-bags");
+  it("2-3. the calculator shows exactly ONE option for it and no QP placeholder", () => {
+    const select = ROUTE_SRC.slice(ROUTE_SRC.indexOf('name="psplitbag"'), ROUTE_SRC.indexOf("</select>", ROUTE_SRC.indexOf('name="psplitbag"')));
+    expect(select.match(/<option /g)).toHaveLength(3); // Standard 4x5, Split Bag, QP / P Bag (14x16)
+    expect(select).toContain("<option value={POUND_BAG_CALCULATOR_OPTION.value}>{POUND_BAG_CALCULATOR_OPTION.label}</option>");
+    expect(ROUTE_SRC).not.toContain("qp-pending");
+    expect(ROUTE_SRC).not.toContain("QP_BAG_PENDING_OPTION_LABEL");
+    expect(readFileSync("app/lib/calculator-owner-view.ts", "utf8")).not.toContain("not set up yet");
+    expect(ROUTE_SRC).not.toContain("14x16 / Pound Bag");
+    expect(ROUTE_SRC).not.toMatch(/disabled>\{/);
+  });
+
+  it("4. old identifiers still open the same product: alias URL flags and the old Pound bag preset pick", async () => {
+    expect([...POUND_BAG_URL_FLAG_ALIASES]).toEqual(["ppoundbag", "pqpbag", "ppbag", "pbag14x16", "pquarterpound"]);
+    const base = QS("pound", 1, 100).replace("&ppoundbag=1", "");
+    const canonical = await job(QS("pound", 1, 100));
+    for (const alias of ["pqpbag=1", "ppbag=1", "pbag14x16=1", "pquarterpound=1", "pblank=preset%3Apound-bag", "pblank=type%3Abag-14x16"]) {
+      const qs = `${base}&${alias}`;
+      expect(normalizeCanonicalInput(new URLSearchParams(qs))!.family, alias).toBe("pound-bags");
+      const rewritten = withCanonicalSplitBagGeometry(new URLSearchParams(qs));
+      expect(rewritten.get("ppoundbag"), alias).toBe("1");
+      expect([rewritten.get("pwidth"), rewritten.get("pheight")], alias).toEqual(["14.05", "16"]);
+      for (const flag of ["pqpbag", "ppbag", "pbag14x16", "pquarterpound"]) expect(rewritten.get(flag), alias).toBeNull();
+      expect((await job(qs)).trueCost.totalCost, alias).toBe(canonical.trueCost.totalCost);
+      const { pm, result } = await calculate(qs);
+      expect(pm.poundBag, alias).toBe(true);
+      expect(result.trueJobCost, alias).toBeCloseTo(canonical.trueCost.totalCost, 6);
     }
-    // the bag-type select's own value never reaches the Split Bag / Pound Bag flags
-    expect(canonicalFamilyFromUi("sticker-bags", false, false, false)).toBe("sticker-bags");
-    expect(normalizeCanonicalInput(new URLSearchParams("pfamily=sticker-bags&pqty=100&pbagsides=1&psplitbag=qp-pending"))!.family).toBe("sticker-bags");
-    expect(normalizeCanonicalInput(new URLSearchParams("pfamily=sticker-bags&pqty=100&pbagsides=1&psplitbag=pound-bags"))!.family).toBe("sticker-bags");
-  });
+    // an alias never beats the Stock Bag or Split Bag flags, and means nothing outside Sticker Bags
+    expect(normalizeCanonicalInput(new URLSearchParams(`${base}&pqpbag=1&psplitbag=1`))!.family).toBe("split-bags");
+    expect(normalizeCanonicalInput(new URLSearchParams(`${base}&pqpbag=1&pstockbag=1`))!.family).toBe("stock-bags");
+    expect(normalizeCanonicalInput(new URLSearchParams("pfamily=stickers-labels&pqty=100&pqpbag=1"))!.family).toBe("stickers-labels");
+    // leaving the product drops every alias flag
+    const away = calculatorTransitionParams(new URLSearchParams(`${base}&pqpbag=1`), { pfamily: "sticker-bags", pstockbag: null, psplitbag: null, ppoundbag: null });
+    expect([away.get("ppoundbag"), away.get("pqpbag"), away.get("pwidth")]).toEqual([null, null, null]);
+  }, 300_000);
 
-  it("14. no QP application rule exists either", () => {
-    expect(Object.keys(OWNER_STANDARDS).some((key) => /qp|quarter/i.test(key))).toBe(false);
+  it("the 14x16 blank is never a pick inside the Standard 4x5 product list (it would be costed as a 4x5)", async () => {
+    const { pm } = await calculate(QS("4x5", 2, 500).replace("&pblank=vendor%3Av_bag", ""));
+    expect(pm.poundBag).toBe(false);
+    expect(pm.bagCount).toBe(1); // only the 4x5 record is offered
+    expect(pm.autoBag.label).toContain("4x5 Sticker Bag Blank");
+    // a stale link that points at the 14x16 record under Standard 4x5 selects nothing from it
+    const stale = await calculate(QS("4x5", 2, 500).replace("vendor%3Av_bag", "vendor%3Av_pound"));
+    expect(stale.pm.poundBag).toBe(false);
+    expect(stale.pm.autoBag.label).toContain("4x5 Sticker Bag Blank");
+    // an already-saved quote line keeps its recorded authority kind (nothing is renamed in stored data)
+    expect(POUND_BAG_AUTOMATIC_PRICE_KIND).toBe("pound_bag_sticker_bag_ladder");
+  }, 300_000);
+});
+
+describe("COST — 13-18. the 100-bag front-only true cost is built only from this product", () => {
+  it("every component of the $363.71 example, and nothing from the 4x5 or the Split Bag", async () => {
+    const r = await job(QS("pound", 1, 100));
+    const amounts = Object.fromEntries(r.trueCost.lines.map((l: any) => [l.key, l.amount]));
+    expect(amounts.blank_sets).toBeCloseTo(100, 9); // 100 x the $1.00 record
+    expect(amounts.application).toBeCloseTo(100, 9); // 100 applied labels x $1.00
+    expect(amounts.print_media).toBeCloseTo(56.5278, 3);
+    expect(amounts.ink).toBeCloseTo(51.9288, 3);
+    expect(amounts.art_setup).toBeCloseTo(8.3333, 3); // once per design, not per bag
+    expect(amounts.print_setup).toBeCloseTo(1, 9);
+    expect(amounts.run_labor).toBeCloseTo(9.5805, 3);
+    expect(amounts.cutting_machine + amounts.cutting_attention).toBeCloseTo(5.1741, 3);
+    expect(amounts.weeding).toBeCloseTo(12, 6);
+    expect(amounts.machine).toBeCloseTo(19.1611, 3);
+    expect(amounts.planned_overage).toBe(0);
+    expect(amounts.packout).toBe(0);
+    expect(amounts.inbound_freight).toBe(0); // no freight at all, so none is double-counted
+    expect(r.trueCost.lines.reduce((sum: number, l: any) => sum + l.amount, 0)).toBeCloseTo(r.trueCost.totalCost, 6);
+    expect(r.trueCost.totalCost).toBeCloseTo(363.7057, 3);
+    // 15-16. sticker area: 100 x 14.05 x 16 / 144 = 156.11 sqft inked — one sticker per bag, not two
+    const ink = r.trueCost.lines.find((l: any) => l.key === "ink");
+    expect(String(ink.formula)).toContain("156.1111 sqft");
+    // cut path: 100 stickers x 2 x (14.05 + 16) in
+    expect(r.diagnostics.cutPathIn).toBeCloseTo(100 * 2 * (14.05 + 16), 6);
+    // 18. no 4x5 / Split Bag numbers anywhere
+    expect(amounts.blank_sets).not.toBeCloseTo(100 * BAG_4X5_BLANK_UNIT_COST, 6);
+    expect(amounts.blank_sets).not.toBeCloseTo(100 * SPLIT_BAG_BLANK_UNIT_COST, 6);
+    expect(amounts.inbound_freight).not.toBeCloseTo(100 * SPLIT_BAG_INBOUND_FREIGHT_PER_UNIT, 6);
+  }, 300_000);
+
+  it("17. front + back doubles the sticker-driven lines and the application; the blank and the setup are NOT doubled", async () => {
+    const front = await job(QS("pound", 1, 100));
+    const both = await job(QS("pound", 2, 100));
+    const f = Object.fromEntries(front.trueCost.lines.map((l: any) => [l.key, l.amount]));
+    const b = Object.fromEntries(both.trueCost.lines.map((l: any) => [l.key, l.amount]));
+    expect(b.application).toBeCloseTo(2 * f.application, 9);
+    expect(b.ink).toBeCloseTo(2 * f.ink, 6);
+    expect(both.diagnostics.cutPathIn).toBeCloseTo(2 * front.diagnostics.cutPathIn, 6);
+    expect(b.blank_sets).toBe(f.blank_sets);
+    expect(b.art_setup).toBe(f.art_setup);
+    expect(b.print_setup).toBe(f.print_setup);
+    expect(both.trueCost.totalCost).toBeLessThan(2 * front.trueCost.totalCost);
+  }, 300_000);
+
+  it("setup follows the design count only: 100 bags with 1 / 5 / 10 / 25 designs", async () => {
+    const one = await job(QS("pound", 1, 100, 1));
+    for (const designs of [5, 10, 25]) {
+      const r = await job(QS("pound", 1, 100, designs));
+      const setup = (x: any) => line(x, "art_setup") + line(x, "print_setup");
+      expect(setup(r), String(designs)).toBeCloseTo(designs * setup(one), 6);
+      // nothing else moves with the design count
+      expect(r.trueCost.totalCost - setup(r), String(designs)).toBeCloseTo(one.trueCost.totalCost - setup(one), 6);
+    }
+  }, 300_000);
+});
+
+describe("PRICING — 19-20. the inherited ladder is what prices it today; a dedicated ladder exists only as a proposal", () => {
+  it("19. today: the Sticker Bag (bags-4x5) curve — 65% at 100 front-only — and the $75 minimum gross profit at 4 bags", async () => {
+    const hundred = await calculate(QS("pound", 1, 100));
+    expect(hundred.pm.marginFamily).toMatchObject({ key: "bags-4x5", minPct: 45 });
+    expect(hundred.row.marginPct).toBe(65);
+    expect(String(hundred.row.commercial.controllingRule)).toMatch(/Cost-based price — 65% quantity-band margin/);
+    expect(hundred.result.recommendedTotal).toBeCloseTo(1039.159, 2);
+    const four = await calculate(QS("pound", 1, 4));
+    expect(String(four.row.commercial.controllingRule)).toMatch(/Minimum gross-profit floor/);
+    expect(four.result.recommendedTotal! - four.result.trueJobCost!).toBeCloseTo(75, 6);
+  }, 300_000);
+
+  it("20. no dedicated ladder is approved or wired; the proposals can be evaluated on their own without touching any product", () => {
+    expect(POUND_BAG_APPROVED_PRICE_LADDER).toBeNull();
+    expect(ROUTE_SRC).not.toContain("pound-bag-pricing");
+    expect(readFileSync("app/lib/calculator-owner-view.ts", "utf8")).not.toContain("pound-bag-pricing");
+    expect(readFileSync("app/lib/commercial-pricing-policy.server.ts", "utf8")).not.toContain("pound-bag-pricing");
+    for (const ladder of Object.values(POUND_BAG_PROPOSED_LADDERS)) expect(ladder.status).toBe("PROPOSED");
+    const balanced = POUND_BAG_PROPOSED_LADDERS.balanced;
+    expect(poundBagLadderMarginPct(balanced, 100)).toBe(47);
+    expect(poundBagLadderMarginPct(balanced, 4)).toBe(55);
+    expect(poundBagLadderMarginPct(balanced, 5000)).toBe(40);
+    expect(poundBagLadderMarginPct(balanced, 75)).toBeCloseTo(48.5, 9); // linear between anchors: no cliffs
+    const at100 = poundBagLadderPrice(balanced, { quantity: 100, trueCost: 363.70566651759094 })!;
+    expect(at100.totalPrice).toBeCloseTo(686.24, 2);
+    expect(at100.unitPrice).toBeCloseTo(6.86, 2);
+    expect(at100.controllingRule).toBe("margin_curve");
+    const at4 = poundBagLadderPrice(balanced, { quantity: 4, trueCost: 25.97 })!;
+    expect(at4).toMatchObject({ controllingRule: "minimum_profit" });
+    expect(at4.profit).toBeCloseTo(75, 9);
+    expect(poundBagLadderPrice(balanced, { quantity: 100, trueCost: 0 })).toBeNull();
+    // unit price never rises with quantity on a steadily falling unit cost (no cliffs), for all three proposals
+    for (const ladder of Object.values(POUND_BAG_PROPOSED_LADDERS)) {
+      let previousUnit = Infinity;
+      let previousTotal = 0;
+      for (let quantity = 4; quantity <= 1200; quantity += 1) {
+        const cost = 12 + quantity * 3.52; // the shape of this bag's true cost: a fixed part + ~$3.52 a bag
+        const priced = poundBagLadderPrice(ladder, { quantity, trueCost: cost })!;
+        expect(priced.unitPrice, `${ladder.key} ${quantity}`).toBeLessThanOrEqual(previousUnit + 1e-9);
+        expect(priced.totalPrice, `${ladder.key} ${quantity}`).toBeGreaterThanOrEqual(previousTotal - 1e-9);
+        expect(priced.marginPct, `${ladder.key} ${quantity}`).toBeGreaterThanOrEqual(40 - 1e-9);
+        previousUnit = priced.unitPrice;
+        previousTotal = priced.totalPrice;
+      }
+    }
   });
 });

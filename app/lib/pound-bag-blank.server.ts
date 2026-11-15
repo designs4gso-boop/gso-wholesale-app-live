@@ -1,6 +1,6 @@
-// 2026-11-15 — 14x16 / Pound Bag blank cost authority.
+// 2026-11-15 — QP / P Bag (14x16) blank cost authority.
 //
-// The blank cost of the 14x16 / Pound Bag is NOT a code constant. It is the
+// The blank cost of the QP / P Bag (14x16) is NOT a code constant. It is the
 // CURRENT "14x16 Blank Bag" record:
 //   1. the Vendor Cost Book record (VendorProduct) whose vendor SKU is
 //      preset:pound-bag — the record Approved Cost Updates creates / maintains;
@@ -14,6 +14,7 @@
 
 import { blankItemUnitCostAtQty, resolveMaterialUnitCost } from "./cost-calculator.server";
 import { materialKind } from "./material-classify";
+import { isPoundBag14x16Name } from "./bag-artboard-geometry";
 import { POUND_BAG_14X16_BLANK_VENDOR_SKU } from "./bag-cost-inputs.server";
 
 export type BagBlankCostTier = { minQty: number; maxQty: number | null; unitCost: number };
@@ -28,11 +29,12 @@ export type BagBlankAuthority = {
   source: string;
 };
 
-/** Same name rule Approved Cost Updates uses for the 14x16 blank; a Quarter Pound (QP) bag is a different product. */
-export const POUND_BAG_BLANK_NAME_PATTERN = /(14\s?x\s?16|pound)\s*(blank\s*)?bag/i;
-const NOT_A_POUND_BAG = /quarter|\bqp\b|1\s*\/\s*4/i;
-
-const isPoundBagName = (name: unknown) => POUND_BAG_BLANK_NAME_PATTERN.test(String(name || "")) && !NOT_A_POUND_BAG.test(String(name || ""));
+/**
+ * Owner clarification 2026-11-15: QP Bag = P Bag = 14x16 / Pound Bag — ONE
+ * product, so a blank record under any of those names is this blank. Two
+ * matching records are still ambiguous and resolve to no authority.
+ */
+const isPoundBagName = (name: unknown) => isPoundBag14x16Name(name);
 const sku = (value: unknown) => String(value || "").trim().toLowerCase();
 
 function fromVendorProduct(record: any, how: string): BagBlankAuthority {

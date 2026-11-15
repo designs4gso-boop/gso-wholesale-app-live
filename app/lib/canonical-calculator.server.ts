@@ -102,7 +102,7 @@ import {
 } from "./jar-cost-inputs.server";
 import { activeJarProfile } from "./jar-active-scope";
 import { JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, validateJarGeometryOverride } from "./jar-label-geometry";
-import { BAG_ARTBOARD_SOURCE, bagLabelGeometryFor } from "./bag-artboard-geometry";
+import { BAG_ARTBOARD_SOURCE, bagLabelGeometryFor, poundBagFlagPosted } from "./bag-artboard-geometry";
 import { PRODUCT_SPEC_VERSION, getProductProductionSpec } from "./product-production-spec";
 import { CANONICAL_INK_RATES } from "./ink-rates-shared";
 import type { MachineLoadSnapshot } from "./machine-load-balancing";
@@ -221,7 +221,7 @@ export type CanonicalBagInput = LabelMediaSelection & {
   personalization?: BagPersonalization;
   blankUnitCost?: number | null;
   /**
-   * 2026-11-15 — 14x16 / Pound Bag only. The CURRENT 14x16 Blank Bag record,
+   * 2026-11-15 — QP / P Bag (14x16) only. The CURRENT 14x16 Blank Bag record,
    * read on the server (attachPoundBagBlank). Never a query-string value.
    * Null / absent = no blank authority: the job blocks.
    */
@@ -745,7 +745,7 @@ export function assembleCanonicalJob(
   if (input.family === "sticker-bags" || input.family === "stock-bags" || input.family === "split-bags" || input.family === "pound-bags") {
     const cfg: CanonicalBagInput = input.bags ?? { sides: 1 as BagSides };
     const splitBag = input.family === "split-bags";
-    // 2026-11-15: the 14x16 / Pound Bag — its own blank record, geometry and application standard.
+    // 2026-11-15: the QP / P Bag (14x16) — its own blank record, geometry and application standard.
     const poundBag = input.family === "pound-bags";
     const bagProduct: BagProduct = input.family === "stock-bags" ? "stock_bag" : splitBag ? "split_bag" : poundBag ? "pound_bag_14x16" : "sticker_bag_4x5";
     const applicationSecondsPerLabel = bagApplicationSecondsPerLabel(bagProduct);
@@ -792,7 +792,7 @@ export function assembleCanonicalJob(
     blank = {
       ok: true,
       unitCost: production > 0 ? bag.blankCost / production : 0,
-      label: splitBag ? "Split Bag blank" : poundBag ? "14x16 / Pound Bag blank" : "4x5 blank bag",
+      label: splitBag ? "Split Bag blank" : poundBag ? "QP / P Bag (14x16) blank" : "4x5 blank bag",
       source: splitBag
         ? SPLIT_BAG_BLANK_SOURCE
         : poundBag
@@ -831,7 +831,7 @@ export function assembleCanonicalJob(
       const costPerLabel = (applicationSecondsPerLabel / 3600) * BAG_APPLICATION_LABOR_RATE_PER_HOUR;
       const labels = finished * labelsPerBag;
       diagnostics.applicationBreakdown = {
-        standardLabel: poundBag ? "14x16 / Pound Bag application (owner standard: $1.00 per applied label)" : "4x5 bag application (owner decision: seconds per applied side)",
+        standardLabel: poundBag ? "QP / P Bag (14x16) application (owner standard: $1.00 per applied label)" : "4x5 bag application (owner decision: seconds per applied side)",
         laborRatePerHour: BAG_APPLICATION_LABOR_RATE_PER_HOUR,
         finishedUnits: finished,
         pieces: [{ piece: "side", label: `Applied label (${cfg.sides} side(s) per ${splitBag || poundBag ? bagProductDisplayName(bagProduct) : "bag"})`, secondsPerLabel: applicationSecondsPerLabel, costPerLabel, labels, cost: costPerLabel * labels }],
@@ -1343,7 +1343,7 @@ export function assembleCanonicalJob(
       specVersion: PRODUCT_SPEC_VERSION,
       family: input.family,
       productKey: bagProductKey,
-      displayName: input.family === "sticker-bags" ? "4x5 Sticker Bag" : input.family === "split-bags" ? "Split Bag" : input.family === "pound-bags" ? "14x16 / Pound Bag" : "4x5 Stock Bag",
+      displayName: input.family === "sticker-bags" ? "4x5 Sticker Bag" : input.family === "split-bags" ? "Split Bag" : input.family === "pound-bags" ? "QP / P Bag (14x16)" : "4x5 Stock Bag",
       source: BAG_ARTBOARD_SOURCE,
       labelSet: null,
       standard: (() => {
@@ -1511,7 +1511,7 @@ export function canonicalFamilyFromUi(uiFamily: string, stockBag: boolean, split
   if (uiFamily === "stickers-labels") return "stickers-labels";
   if (uiFamily === "banners") return "banners";
   // 2026-11-11: Split Bag = pfamily=sticker-bags + psplitbag=1 (Stock Bags win if both are posted).
-  // 2026-11-15: 14x16 / Pound Bag = pfamily=sticker-bags + ppoundbag=1 (Stock Bags, then Split Bag, win if several are posted).
+  // 2026-11-15: QP / P Bag (14x16) = pfamily=sticker-bags + ppoundbag=1 (Stock Bags, then Split Bag, win if several are posted).
   if (uiFamily === "sticker-bags") return stockBag ? "stock-bags" : splitBag ? "split-bags" : poundBag ? "pound-bags" : "sticker-bags";
   // 2D-4D1: jars route canonically for their ACTIVE scope.
   if (uiFamily === "standard-jars" || uiFamily === "premium-jars") return uiFamily;
@@ -1599,7 +1599,7 @@ function finishingBreakdownFrom(trueCost: TrueCostResult): CanonicalFinishingBre
 }
 
 export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalculatorInput | null {
-  const family = canonicalFamilyFromUi(str(params, "pfamily"), flag(params, "pstockbag"), flag(params, "psplitbag"), flag(params, "ppoundbag"));
+  const family = canonicalFamilyFromUi(str(params, "pfamily"), flag(params, "pstockbag"), flag(params, "psplitbag"), poundBagFlagPosted(params));
   if (!family) return null;
 
   const base = {

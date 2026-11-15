@@ -15,7 +15,7 @@
 // Missing cost is never $0: every money field here is `number | null`, and a
 // blocked job carries null — never a zero that could read as "free".
 
-import { POUND_BAG_14X16_ARTBOARD_IN, SPLIT_BAG_ARTBOARD_IN } from "./bag-artboard-geometry";
+import { POUND_BAG_14X16_ARTBOARD_IN, POUND_BAG_14X16_DISPLAY_NAME, POUND_BAG_LEGACY_BLANK_IDS, POUND_BAG_URL_FLAG_ALIASES, SPLIT_BAG_ARTBOARD_IN, poundBagFlagPosted } from "./bag-artboard-geometry";
 
 /* ------------------------------------------------------------------ *
  * Stock Bags — an explicit family in the selector.
@@ -69,7 +69,7 @@ export function tierDesignAssumptionText(designs: number): string {
   return `Tier estimates retain the current job's number of unique designs. This job has ${n} design${n === 1 ? "" : "s"}.`;
 }
 /**
- * 2026-11-15 owner decision: the 14x16 / Pound Bag is a Sticker Bag BLANK / bag
+ * 2026-11-15 owner decision: the QP / P Bag (14x16) is a Sticker Bag BLANK / bag
  * type. Same canonical bag adapter; its own blank record, sticker geometry and
  * application standard. Offered under Sticker Bags -> Blank / bag type; posts
  * pfamily=sticker-bags + ppoundbag=1. Priced like the Split Bag: the APPROVED
@@ -77,26 +77,19 @@ export function tierDesignAssumptionText(designs: number): string {
  */
 export const POUND_BAG_CALCULATOR_OPTION = {
   value: "pound-bags",
-  label: "14x16 / Pound Bag",
+  label: POUND_BAG_14X16_DISPLAY_NAME,
   pfamily: "sticker-bags",
   ppoundbag: "1",
 } as const;
-/** The Sticker Bag margin rule the 14x16 / Pound Bag prices on (bands, family minimum, minimum-profit policy). */
+/** The Sticker Bag margin rule the QP / P Bag (14x16) prices on (bands, family minimum, minimum-profit policy). */
 export const POUND_BAG_MARGIN_RULE_KEY = "bags-4x5";
 export const POUND_BAG_PRICE_AUTHORITY_TEXT =
-  "PRICE AUTHORITY: Approved Sticker Bag pricing ladder applied to 14x16 / Pound Bag true cost. Owner may override a specific quote.";
+  "PRICE AUTHORITY: Approved Sticker Bag pricing ladder applied to QP / P Bag (14x16) true cost. Owner may override a specific quote.";
 export const POUND_BAG_TIER_TABLE_TEXT =
-  "14X16 / POUND BAG PRICING — Uses approved Sticker Bag quantity pricing ladder with 14x16 / Pound Bag true manufacturing cost.";
-/** Market-target exclusion reason passed to computeCommercialPrice for 14x16 / Pound Bags. */
-export const POUND_BAG_NO_4X5_MARKET_TARGET = "14x16 / Pound Bag: the 4x5 market dollar targets never price a 14x16 / Pound Bag (own true cost + Sticker Bag ladder rules only)";
-export const POUND_BAG_PRICE_NOT_COMPUTED_TEXT = "The Sticker Bag pricing ladder could not produce a 14x16 / Pound Bag price for this job (no true cost / price yet).";
-/**
- * QP / Quarter Pound Bag: NOT calculable. The repo holds no owner authority for
- * it (no blank cost record, no bag or sticker dimensions, no MOQ), so it is
- * listed but cannot be selected — nothing is guessed.
- */
-export const QP_BAG_PENDING_OPTION_LABEL = "QP / Quarter Pound Bag — not set up yet (owner data needed)";
-
+  "QP / P BAG (14X16) PRICING — Uses approved Sticker Bag quantity pricing ladder with QP / P Bag (14x16) true manufacturing cost.";
+/** Market-target exclusion reason passed to computeCommercialPrice for QP / P Bags (14x16). */
+export const POUND_BAG_NO_4X5_MARKET_TARGET = "QP / P Bag (14x16): the 4x5 market dollar targets never price a QP / P Bag (14x16) (own true cost + Sticker Bag ladder rules only)";
+export const POUND_BAG_PRICE_NOT_COMPUTED_TEXT = "The Sticker Bag pricing ladder could not produce a QP / P Bag (14x16) price for this job (no true cost / price yet).";
 export const SPLIT_BAG_PRICE_NOT_COMPUTED_TEXT = "The Sticker Bag pricing ladder could not produce a Split Bag price for this job (no true cost / price yet).";
 
 /** Map a family-selector choice onto the form params the loader reads. */
@@ -107,7 +100,7 @@ export function calculatorFamilyParams(choice: string): { pfamily: string; pstoc
   if (choice === SPLIT_BAG_CALCULATOR_OPTION.value) {
     return { pfamily: SPLIT_BAG_CALCULATOR_OPTION.pfamily, pstockbag: null, psplitbag: SPLIT_BAG_CALCULATOR_OPTION.psplitbag };
   }
-  // 2026-11-15: only the 14x16 / Pound Bag carries the ppoundbag param; every other choice is exactly as before.
+  // 2026-11-15: only the QP / P Bag (14x16) carries the ppoundbag param; every other choice is exactly as before.
   if (choice === POUND_BAG_CALCULATOR_OPTION.value) {
     return { pfamily: POUND_BAG_CALCULATOR_OPTION.pfamily, pstockbag: null, psplitbag: null, ppoundbag: POUND_BAG_CALCULATOR_OPTION.ppoundbag };
   }
@@ -150,14 +143,14 @@ export function isSplitBagParams(params: { get(name: string): unknown }): boolea
     && String(params.get("pstockbag") ?? "") !== STOCK_BAG_CALCULATOR_OPTION.pstockbag;
 }
 
-/** Exact owner 14x16 / Pound Bag sticker / art size, as the query-string values the legacy path reads. */
+/** Exact owner QP / P Bag (14x16) sticker / art size, as the query-string values the legacy path reads. */
 export const POUND_BAG_PARAM_WIDTH = String(POUND_BAG_14X16_ARTBOARD_IN.widthIn); // "14.05"
 export const POUND_BAG_PARAM_HEIGHT = String(POUND_BAG_14X16_ARTBOARD_IN.heightIn); // "16"
 
 /** pfamily=sticker-bags + ppoundbag=1 (and not a Stock Bag or a Split Bag). */
 export function isPoundBagParams(params: { get(name: string): unknown }): boolean {
   return String(params.get("pfamily") ?? "") === POUND_BAG_CALCULATOR_OPTION.pfamily
-    && String(params.get("ppoundbag") ?? "") === POUND_BAG_CALCULATOR_OPTION.ppoundbag
+    && poundBagFlagPosted(params) // ppoundbag=1, or any legacy alias of the same product
     && String(params.get("pstockbag") ?? "") !== STOCK_BAG_CALCULATOR_OPTION.pstockbag
     && String(params.get("psplitbag") ?? "") !== SPLIT_BAG_CALCULATOR_OPTION.psplitbag;
 }
@@ -174,7 +167,7 @@ export function calculatorDesignCount(raw: unknown): string {
 
 /**
  * A copy of the params with the canonical FIXED bag geometry forced: the Split
- * Bag, and (2026-11-15) the 14x16 / Pound Bag. No-op for every other product.
+ * Bag, and (2026-11-15) the QP / P Bag (14x16). No-op for every other product.
  */
 export function withCanonicalSplitBagGeometry(params: URLSearchParams): URLSearchParams {
   const out = new URLSearchParams(params);
@@ -182,6 +175,10 @@ export function withCanonicalSplitBagGeometry(params: URLSearchParams): URLSearc
     out.set("pwidth", SPLIT_BAG_PARAM_WIDTH);
     out.set("pheight", SPLIT_BAG_PARAM_HEIGHT);
   } else if (isPoundBagParams(out)) {
+    // legacy identifiers (pqpbag / ppbag / the old "Pound bag" preset pick) become the ONE canonical flag
+    for (const alias of POUND_BAG_URL_FLAG_ALIASES) out.delete(alias);
+    if ((POUND_BAG_LEGACY_BLANK_IDS as readonly string[]).includes(String(out.get("pblank") ?? ""))) out.delete("pblank");
+    out.set("ppoundbag", POUND_BAG_CALCULATOR_OPTION.ppoundbag);
     out.set("pwidth", POUND_BAG_PARAM_WIDTH);
     out.set("pheight", POUND_BAG_PARAM_HEIGHT);
   }
@@ -206,7 +203,8 @@ export function calculatorTransitionParams(
   out.set("pfamily", next.pfamily);
   if (next.pstockbag) out.set("pstockbag", next.pstockbag); else out.delete("pstockbag");
   if (next.psplitbag) out.set("psplitbag", next.psplitbag); else out.delete("psplitbag");
-  if (next.ppoundbag) out.set("ppoundbag", next.ppoundbag); else out.delete("ppoundbag");
+  for (const alias of POUND_BAG_URL_FLAG_ALIASES) out.delete(alias);
+  if (next.ppoundbag) out.set("ppoundbag", next.ppoundbag);
   out.set("pdesigns", calculatorDesignCount(out.get("pdesigns")));
   out.delete("pblank");
   // leaving a fixed-geometry bag type (or switching between the two) never carries its size along
@@ -302,6 +300,7 @@ const BLOCKER_PLAIN: Record<string, { kind: BlockerKind; text: string }> = {
   STICKER_BAG_BELOW_MOQ: { kind: "blocked", text: "Quantity is below the Sticker Bag minimum" },
   STOCK_BAG_BELOW_MOQ: { kind: "blocked", text: "Quantity is below the Stock Bag minimum (50)" },
   SPLIT_BAG_BELOW_MOQ: { kind: "blocked", text: "Quantity is below the Split Bag minimum (64)" },
+  POUND_BAG_BELOW_MOQ: { kind: "blocked", text: "Quantity is below the QP / P Bag (14x16) minimum (4)" },
   STANDARD_PRODUCTION_DIMENSIONS_NOT_CONFIRMED: { kind: "blocked", text: "Confirmed product dimensions" },
   LABEL_GEOMETRY_UNSUPPORTED: { kind: "blocked", text: "Confirmed label dimensions for this product" },
   MISSING_APPLICATION_STANDARD: { kind: "blocked", text: "Needs Review — missing owner application timing (e.g. 3oz / 4oz side lid band)" },
@@ -417,7 +416,7 @@ export type SellingPriceAuthorityKind =
   | "approved_margin_curve"
   /** 2026-11-12: Split Bag priced by the approved Sticker Bag ladder on its own true cost — owner may override. */
   | "split_bag_sticker_bag_ladder"
-  /** 2026-11-15: 14x16 / Pound Bag priced the same way — Sticker Bag ladder on its own true cost; owner may override. */
+  /** 2026-11-15: QP / P Bag (14x16) priced the same way — Sticker Bag ladder on its own true cost; owner may override. */
   | "pound_bag_sticker_bag_ladder"
   | "cost_blocked"
   | "quote_required"
@@ -443,7 +442,7 @@ export function resolveSellingPriceAuthority(input: {
   stockBag: boolean;
   /** pfamily=sticker-bags + psplitbag=1. */
   splitBag?: boolean;
-  /** pfamily=sticker-bags + ppoundbag=1 (14x16 / Pound Bag). */
+  /** pfamily=sticker-bags + ppoundbag=1 (QP / P Bag (14x16)). */
   poundBag?: boolean;
   /** marginFamilyKeyFor(...) — the researched curve key, or null. */
   marginRuleKey: string | null;
@@ -491,11 +490,11 @@ export function resolveSellingPriceAuthority(input: {
     return { ...base, ownerMarginEdit, approved: true, kind: "split_bag_sticker_bag_ladder", label: SPLIT_BAG_PRICE_AUTHORITY_TEXT, missing: null };
   }
 
-  // 14x16 / Pound Bag (owner decision 2026-11-15): same rule as the Split Bag —
+  // QP / P Bag (14x16) (owner decision 2026-11-15): same rule as the Split Bag —
   // the approved Sticker Bag ladder on its OWN true cost, nothing else.
   if (input.poundBag && !input.stockBag) {
     if (String(input.marginRuleKey || "") !== POUND_BAG_MARGIN_RULE_KEY) {
-      return { ...base, approved: false, kind: "none", label: null, missing: `${POUND_BAG_PRICE_NOT_COMPUTED_TEXT} 14x16 / Pound Bags price only on the approved Sticker Bag ladder.` };
+      return { ...base, approved: false, kind: "none", label: null, missing: `${POUND_BAG_PRICE_NOT_COMPUTED_TEXT} QP / P Bags (14x16) price only on the approved Sticker Bag ladder.` };
     }
     if (row.totalPrice == null || !(Number(row.totalPrice) > 0) || row.unitPrice == null) {
       return { ...base, approved: false, kind: "cost_blocked", label: null, missing: POUND_BAG_PRICE_NOT_COMPUTED_TEXT };
@@ -569,7 +568,7 @@ export type OwnerResultInput = {
   stockBag?: boolean;
   /** pfamily=sticker-bags + psplitbag=1. */
   splitBag?: boolean;
-  /** pfamily=sticker-bags + ppoundbag=1 (14x16 / Pound Bag). */
+  /** pfamily=sticker-bags + ppoundbag=1 (QP / P Bag (14x16)). */
   poundBag?: boolean;
   canonical: { status: string; totalCost: number; unitCost: number | null; blockers: string[] } | null;
   /** The server tier row for the requested quantity (loader productMode.tiers). */

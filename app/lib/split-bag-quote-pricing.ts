@@ -15,13 +15,13 @@ import { resolveOwnerSetPrice } from "./quote-pricing-authority";
 export const SPLIT_BAG_OWNER_PRICE_LABEL = "OWNER-SET CUSTOMER PRICE — THIS QUOTE ONLY";
 export const SPLIT_BAG_AUTOMATIC_PRICE_KIND = "split_bag_sticker_bag_ladder";
 export const SPLIT_BAG_LADDER_BADGE = "Approved Sticker Bag pricing ladder applied to Split Bag true cost";
-/** 2026-11-15: the 14x16 / Pound Bag quotes the same way — an automatic Sticker Bag ladder price the owner may override. */
+/** 2026-11-15: the QP / P Bag (14x16) quotes the same way — an automatic Sticker Bag ladder price the owner may override. */
 export const POUND_BAG_AUTOMATIC_PRICE_KIND = "pound_bag_sticker_bag_ladder";
-export const POUND_BAG_LADDER_BADGE = "Approved Sticker Bag pricing ladder applied to 14x16 / Pound Bag true cost";
+export const POUND_BAG_LADDER_BADGE = "Approved Sticker Bag pricing ladder applied to QP / P Bag (14x16) true cost";
 /** Automatic "Sticker Bag ladder on the product's own true cost" authorities, with the wording a quote shows for each. */
 export const OWN_COST_LADDER_PRICE_KINDS: Record<string, { product: string; badge: string }> = {
   [SPLIT_BAG_AUTOMATIC_PRICE_KIND]: { product: "Split Bag", badge: SPLIT_BAG_LADDER_BADGE },
-  [POUND_BAG_AUTOMATIC_PRICE_KIND]: { product: "14x16 / Pound Bag", badge: POUND_BAG_LADDER_BADGE },
+  [POUND_BAG_AUTOMATIC_PRICE_KIND]: { product: "QP / P Bag (14x16)", badge: POUND_BAG_LADDER_BADGE },
 };
 
 const parse = (value: unknown) => {

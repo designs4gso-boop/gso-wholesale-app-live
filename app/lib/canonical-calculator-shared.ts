@@ -123,8 +123,8 @@ export const CANONICAL_PACKOUT: Record<CanonicalFamily, { unitsPerBox: number | 
   // pending), so the 4x5 5,000/box rule is NOT borrowed — disclosed as
   // PACKOUT_NOT_MODELED until the owner records one.
   "split-bags": { unitsPerBox: null, source: "Split Bag box count has NO owner standard yet — packout is disclosed as not modelled, never borrowed from the 4x5 rule." },
-  // 2026-11-15: the 14x16 / Pound Bag has no owner box count — never the 4x5 5,000/box rule.
-  "pound-bags": { unitsPerBox: null, source: "14x16 / Pound Bag box count has NO owner standard yet — packout is disclosed as not modelled, never borrowed from the 4x5 rule." },
+  // 2026-11-15: the QP / P Bag (14x16) has no owner box count — never the 4x5 5,000/box rule.
+  "pound-bags": { unitsPerBox: null, source: "QP / P Bag (14x16) box count has NO owner standard yet — packout is disclosed as not modelled, never borrowed from the 4x5 rule." },
   banners: { unitsPerBox: null, source: "Banner tube packout has NO verified standard (BANNER_FINISHING_SUPPORT.TUBE_PACKOUT.verified = false)." },
   // Jars carry their OWN verified per-size box counts (JAR_UNITS_PER_BOX) plus
   // a consumables rate, so the adapter supplies packout directly and this

@@ -210,7 +210,7 @@ function splitBagSpec(): ProductProductionSpec {
 }
 
 /**
- * 2026-11-15 owner data: the 14x16 / Pound Bag is a Sticker Bag blank variant —
+ * 2026-11-15 owner data: the QP / P Bag (14x16) is a Sticker Bag blank variant —
  * ONE bag (14.39 x 16.39 in), ONE 14.05 x 16.00 in sticker per printed side,
  * the same sticker front and back. Blank cost = the current 14x16 Blank Bag
  * Vendor Cost Book record; application $1.00 per applied label (owner standard).
@@ -222,12 +222,12 @@ function poundBagSpec(): ProductProductionSpec {
     ...base,
     family: "pound-bags",
     productKey: "pound-bag-14x16",
-    displayName: "14x16 / Pound Bag (Sticker Bag blank, custom applied labels)",
+    displayName: "QP / P Bag (14x16) (Sticker Bag blank, custom applied labels)",
     authorityNote: `${AUTHORITY_LABEL.OWNER_CONFIRMED} — ${POUND_BAG_14X16_GEOMETRY_DECISION}`,
-    statusNote: `One 14x16 / Pound Bag sticker per printed side (front only / back only = 1 label, front + back = 2), the same size front and back: sticker / art ${art} in on a ${POUND_BAG_14X16_BAG_IN.widthIn.toFixed(2)} x ${POUND_BAG_14X16_BAG_IN.heightIn.toFixed(2)} in bag (owner data 2026-11-15).`,
-    physical: { bag: `one 14x16 / Pound Bag blank (${POUND_BAG_14X16_BAG_IN.widthIn.toFixed(2)} x ${POUND_BAG_14X16_BAG_IN.heightIn.toFixed(2)} in)`, blankCost: "the current 14x16 Blank Bag Vendor Cost Book record (vendor SKU preset:pound-bag), read on the server — no code constant" },
-    pieces: [{ piece: "label", shape: "rect", widthIn: POUND_BAG_14X16_ARTBOARD_IN.widthIn, heightIn: POUND_BAG_14X16_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied 14x16 / Pound Bag sticker (one per printed side)", cutWidthIn: POUND_BAG_14X16_CUTLINE_IN.widthIn, cutHeightIn: POUND_BAG_14X16_CUTLINE_IN.heightIn }],
-    moqNote: "No owner MOQ recorded for the 14x16 / Pound Bag — none is enforced. Packout and inbound freight are not modeled (no owner standard); outbound customer freight is never assumed.",
+    statusNote: `One QP / P Bag (14x16) sticker per printed side (front only / back only = 1 label, front + back = 2), the same size front and back: sticker / art ${art} in on a ${POUND_BAG_14X16_BAG_IN.widthIn.toFixed(2)} x ${POUND_BAG_14X16_BAG_IN.heightIn.toFixed(2)} in bag (owner data 2026-11-15).`,
+    physical: { bag: `one QP / P Bag (14x16) blank (${POUND_BAG_14X16_BAG_IN.widthIn.toFixed(2)} x ${POUND_BAG_14X16_BAG_IN.heightIn.toFixed(2)} in)`, blankCost: "the current 14x16 Blank Bag Vendor Cost Book record (vendor SKU preset:pound-bag), read on the server — no code constant" },
+    pieces: [{ piece: "label", shape: "rect", widthIn: POUND_BAG_14X16_ARTBOARD_IN.widthIn, heightIn: POUND_BAG_14X16_ARTBOARD_IN.heightIn, quantityPerProduct: 1, label: "Applied QP / P Bag (14x16) sticker (one per printed side)", cutWidthIn: POUND_BAG_14X16_CUTLINE_IN.widthIn, cutHeightIn: POUND_BAG_14X16_CUTLINE_IN.heightIn }],
+    moqNote: "MOQ 4 (owner-confirmed 2026-11-15; POUND_BAG_14X16_MOQ). Packout and inbound freight are not modeled (no owner standard); outbound customer freight is never assumed.",
     pricingSource: "canonical true cost (bag adapter, pound_bag_14x16); approved Sticker Bag pricing ladder applied to that cost — owner may override a specific quote",
   };
 }

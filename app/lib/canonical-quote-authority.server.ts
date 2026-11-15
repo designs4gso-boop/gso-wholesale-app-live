@@ -63,7 +63,7 @@ export const CANONICAL_SUPPORTED_FAMILIES: CanonicalFamily[] = [
   "stock-bags",
   // 2026-11-11: Split Bag — same canonical bag adapter (2026-11-12: $0.14 vendor blank + $0.024 inbound freight).
   "split-bags",
-  // 2026-11-15: 14x16 / Pound Bag — same canonical bag adapter (blank = current 14x16 Blank Bag record).
+  // 2026-11-15: QP / P Bag (14x16) — same canonical bag adapter (blank = current 14x16 Blank Bag record).
   "pound-bags",
   "banners",
   // 2D-4D1 PROMOTED. Every ACTIVE jar profile is now fully costed: verified

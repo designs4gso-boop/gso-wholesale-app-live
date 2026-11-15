@@ -193,10 +193,12 @@ export const SPLIT_BAG_MOQ = 64;
  * Expressed here as seconds per applied label so it runs through the SAME
  * canonical application math as every other bag (seconds x $20/hr).
  *
- * MOQ: no owner minimum exists for this bag, so none is enforced (and none is
- * borrowed from the 4x5 or the Split Bag).
+ * MOQ: 4 bags (owner-confirmed 2026-11-15). Eligibility only, like the other
+ * bag MOQs — material, cut and application math are untouched by it.
  * INBOUND FREIGHT / PACKOUT: no owner standard — disclosed as not modelled.
  */
+/** Owner-confirmed 2026-11-15: the QP / P Bag (14x16) minimum order is 4 bags. */
+export const POUND_BAG_14X16_MOQ = 4;
 export const POUND_BAG_14X16_APPLICATION_LABELS_PER_HOUR = 20;
 export const POUND_BAG_14X16_APPLICATION_SECONDS_PER_LABEL = 3600 / POUND_BAG_14X16_APPLICATION_LABELS_PER_HOUR; // 180 s = $1.00 at $20/hr
 export const POUND_BAG_14X16_APPLICATION_SOURCE = "Owner standard (13A.3, OWNER_STANDARDS.bagApplicationPerLabel14x16): $20/hr at 20 labels/hour = $1.00 per applied 14x16 label.";
@@ -208,7 +210,7 @@ export function bagApplicationSecondsPerLabel(product: BagProduct): number {
 
 /** Employee-facing name of the blank for each bag product. */
 export function bagProductDisplayName(product: BagProduct): string {
-  return product === "split_bag" ? "Split Bag" : product === "pound_bag_14x16" ? "14x16 / Pound Bag" : "4x5 bag";
+  return product === "split_bag" ? "Split Bag" : product === "pound_bag_14x16" ? "QP / P Bag (14x16)" : "4x5 bag";
 }
 export const BAG_DEFAULT_MEDIA_WIDTH_IN = 54;
 export const BAG_DEFAULT_MACHINE_KEY = "mimaki-ucjv300-130";
@@ -220,6 +222,8 @@ export const BAG_REASONS = {
   stickerBagBelowMoq: "STICKER_BAG_BELOW_MOQ",
   /** 2026-11-11: Split Bags below the owner-approved 64-unit MOQ. */
   splitBagBelowMoq: "SPLIT_BAG_BELOW_MOQ",
+  /** 2026-11-15: QP / P Bags (14x16) below the owner-confirmed 4-unit MOQ. */
+  poundBagBelowMoq: "POUND_BAG_BELOW_MOQ",
   bagBlankCostRequired: "BAG_BLANK_COST_REQUIRED",
   /**
    * personalizedDesignCount must be a positive integer when supplied.
@@ -294,7 +298,7 @@ export function bagLabelPositionsPerSide(_product: BagProduct): number {
 }
 
 /**
- * The owner blank cost for each bag product. The 14x16 / Pound Bag has NO code
+ * The owner blank cost for each bag product. The QP / P Bag (14x16) has NO code
  * constant (its cost is the Vendor Cost Book record, supplied by the caller),
  * so it resolves to NaN here and the job blocks with BAG_BLANK_COST_REQUIRED.
  */
@@ -554,7 +558,7 @@ export function bagSetupCost(
     personalizedDesignEvents: personalized,
     artBasis: SETUP_BASIS,
     printBasis: SETUP_BASIS,
-    basisNote: `${product === "split_bag" ? "Split Bag" : product === "pound_bag_14x16" ? "14x16 / Pound Bag" : "Custom 4x5 Sticker Bag"}: customer artwork. ${artDesignEvents} design event(s) x $${artRate.toFixed(10)} art + ${printDesignEvents} print-design setup(s) x $${printRate.toFixed(2)} (owner standards). Both charged per DESIGN - bag quantity does not appear in this calculation.`,
+    basisNote: `${product === "split_bag" ? "Split Bag" : product === "pound_bag_14x16" ? "QP / P Bag (14x16)" : "Custom 4x5 Sticker Bag"}: customer artwork. ${artDesignEvents} design event(s) x $${artRate.toFixed(10)} art + ${printDesignEvents} print-design setup(s) x $${printRate.toFixed(2)} (owner standards). Both charged per DESIGN - bag quantity does not appear in this calculation.`,
   };
 }
 
@@ -587,10 +591,14 @@ export function computeBagPhysical(input: BagJobInput): BagPhysicalResult {
     reasons.push(BAG_REASONS.splitBagBelowMoq);
     blockers.push(`${BAG_REASONS.splitBagBelowMoq}: Split Bags have a ${SPLIT_BAG_MOQ}-unit minimum (owner decision 2026-11-11); ${bagQuantity} requested.`);
   }
+  if (input.product === "pound_bag_14x16" && bagQuantity > 0 && bagQuantity < POUND_BAG_14X16_MOQ) {
+    reasons.push(BAG_REASONS.poundBagBelowMoq);
+    blockers.push(`${BAG_REASONS.poundBagBelowMoq}: QP / P Bags (14x16) have a ${POUND_BAG_14X16_MOQ}-unit minimum (owner-confirmed 2026-11-15); ${bagQuantity} requested.`);
+  }
 
   // One blank per finished bag, whatever its label count.
   const blankUnit = input.blankUnitCost == null ? bagBlankUnitCostFor(input.product) : Number(input.blankUnitCost);
-  // 2026-11-15: the 14x16 / Pound Bag blank must be a real, positive cost from its Vendor Cost Book record.
+  // 2026-11-15: the QP / P Bag (14x16) blank must be a real, positive cost from its Vendor Cost Book record.
   const blankMissing = !Number.isFinite(blankUnit) || blankUnit < 0 || (input.product === "pound_bag_14x16" && !(blankUnit > 0));
   if (blankMissing) {
     reasons.push(BAG_REASONS.bagBlankCostRequired);
