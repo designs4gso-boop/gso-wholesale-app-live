@@ -294,7 +294,7 @@ function StepBody({ step, job, machine, showFinancials, materials, canRecordMate
           <button type="button" onClick={() => navigate(`/app/erp/production/${job.id}/proof`)} style={{ ...bigButton("secondary"), minHeight: 44 }}>Open proof page</button>
         </div>
       ) : null}
-      {key === "artwork" ? <CustomerProof job={job} /> : null}
+      {key === "artwork" && showsProductionControl(role, "createProofPortal") ? <CustomerProof job={job} /> : null}
       {key === "print" ? (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ fontSize: 15 }}>Machine: <b>{machine || "Not assigned"}</b></span>

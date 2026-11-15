@@ -172,13 +172,16 @@ const MATRIX: Record<string, { allowed: Role[]; fields: Record<string, string>; 
 
 describe("the server table is exactly the owner-approved matrix", () => {
   it("lists the same actions and roles", () => {
-    expect(Object.keys(PRODUCTION_INTENT_ROLES).sort()).toEqual(Object.keys(MATRIX).sort());
+    // 2026-11-14 server hardening ADDED rows to this table (status, checklist, notes, files, proof, calendar,
+    // create-from-quote — pinned in simple-mode-server-authorization). Every row pinned here is unchanged.
+    expect(Object.keys(PRODUCTION_INTENT_ROLES)).toEqual(expect.arrayContaining(Object.keys(MATRIX)));
     for (const [intent, row] of Object.entries(MATRIX)) expect([...PRODUCTION_INTENT_ROLES[intent]].sort(), intent).toEqual([...row.allowed].sort());
   });
 
   it("Sales and unassigned accounts are allowed nothing in it", () => {
     for (const intent of Object.keys(PRODUCTION_INTENT_ROLES)) {
-      for (const role of ["sales", "unassigned", "", "anything-else"]) expect(roleMayRunProductionIntent(role, intent), `${role} ${intent}`).toBe(false);
+      // the one Sales entry (added by the server hardening): an accepted quote -> production job
+      for (const role of ["sales", "unassigned", "", "anything-else"]) expect(roleMayRunProductionIntent(role, intent), `${role} ${intent}`).toBe(role === "sales" && intent === "createFromQuote");
     }
   });
 

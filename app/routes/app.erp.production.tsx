@@ -18,7 +18,7 @@ import { authenticate } from "../shopify.server";
 import { productionFinancialVisibility } from "../lib/owner-authorization.server";
 import { redactJobFinancials } from "../lib/production-financial-redaction";
 import { friendlyMessage } from "../lib/employee-messages";
-import { PRODUCTION_ROLE_DENIED, advancedProductionRedirect, roleMayRunProductionIntent } from "../lib/production-role-access";
+import { PRODUCTION_ROLE_DENIED, PRODUCTION_VIEW_DENIED_REDIRECT, advancedProductionRedirect, roleMayRunProductionIntent, roleMayViewProduction } from "../lib/production-role-access";
 import { CLASSIC_PRODUCTION_HREF, SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
 import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, assessLinkSource, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, jobSourceType, linkIntakeJobToTarget, runWithTicketRetry } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
@@ -532,6 +532,10 @@ export async function loader({ request }: { request: Request }) {
   const baseUrl = publicBaseUrl(request);
   // 2026-11-11: production staff do not receive revenue / cost / profit / margin.
   const financials = productionFinancialVisibility(auth);
+  // SERVER HARDENING 2026-11-14: production pages are for production roles.
+  // This loader also serves the Simple Mode board and job page, so Sales and
+  // unassigned accounts are turned away here — before any job is read.
+  if (!roleMayViewProduction(resolveStaffAccess(auth).role)) throw redirect(PRODUCTION_VIEW_DENIED_REDIRECT);
   // OWNER DECISION 2026-11-14: this full page is the Advanced view (owner and
   // financially authorized managers). Anyone else opening /app/erp/production
   // itself is sent to Simple Mode. The Simple Mode routes call this same loader
@@ -736,6 +740,10 @@ export async function action({ request }: { request: Request }) {
   // reopen-for-reprint, intake linking and file removal need a listed production
   // role. Refused here — before any read or write — for Sales, unassigned
   // accounts and any role not listed for that action.
+  // SERVER HARDENING 2026-11-14: the same table now also covers status moves
+  // (incl. Complete job), checklist, notes, file links, proof link / proof sent,
+  // work-order printed, file roles, ticket backfill and create-from-quote; any
+  // intent it does not list needs a production floor role (fail closed).
   if (!roleMayRunProductionIntent(staffAccess.role, intent)) return Response.json({ ok: false, message: `${PRODUCTION_ROLE_DENIED} ${staffAccess.reason}` }, { status: 403 });
 
   // 15H.4C: link an UNLINKED intake shell job onto the real commercial job.

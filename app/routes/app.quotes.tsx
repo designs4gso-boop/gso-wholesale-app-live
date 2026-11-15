@@ -32,6 +32,8 @@ import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "
 import { OWNER_QUOTE_PRICE_KIND, itemPricingAuthority, provisionalQuoteStatusCheck, quotePricingAuthorityState, quoteStatusChangeCheck, reconcileQuoteItemPricingAuthority } from "../lib/quote-pricing-authority";
 // 2026-10-19 owner decision 4: OWNER SET PRICE & APPROVE — owner-only, server-authorized, audited.
 import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
+import { PRODUCTION_ROLE_DENIED, roleMayRunProductionIntent } from "../lib/production-role-access";
+import { resolveStaffAccess } from "../lib/staff-roles.server";
 import { ownerSetQuoteItemPrice } from "../lib/quote-owner-price-approval.server";
 import { SPLIT_BAG_AUTOMATIC_PRICE_KIND, SPLIT_BAG_LADDER_BADGE, SPLIT_BAG_OWNER_PRICE_LABEL, isSplitBagQuoteItem, ownerPricePreview } from "../lib/split-bag-quote-pricing";
 // 2026-10-19 owner decision: line-level internal cost / margin is OWNER ONLY — redacted server-side for staff.
@@ -811,6 +813,13 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "createProductionJobFromQuote") {
+    // SERVER HARDENING 2026-11-14: turning a quote into a production job needs
+    // owner, manager or sales (production-role-access.ts createFromQuote).
+    // Refused before any read or write for unassigned accounts and other roles.
+    const quoteStaff = resolveStaffAccess({ session, sessionToken });
+    if (!roleMayRunProductionIntent(quoteStaff.role, "createFromQuote")) {
+      return Response.json({ ok: false, intent: "createProductionJobFromQuote", error: `${PRODUCTION_ROLE_DENIED} ${quoteStaff.reason}` }, { status: 403 });
+    }
     try {
       const result = await createProductionJobFromQuoteInQuotes(shop, payload.quoteId);
       const quotes = await getQuotes(shop, viewerIsOwner);
