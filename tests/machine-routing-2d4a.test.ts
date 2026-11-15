@@ -291,18 +291,25 @@ describe("2D-4A white and gloss are priced on their own calibrations", () => {
     expect(channel(twoAt30, "white").totalMl).toBeCloseTo(channel(one, "white").totalMl, 6);
   });
 
-  it("12. gloss uses the Roland gloss calibration and its 50% owner default", () => {
+  // 2026-11-15 owner rule (live QA bug): a BLANK gloss coverage in the Cost Calculator is the
+  // 90% pre-art estimate the form promises. This test used to pin the bug itself — a blank field
+  // silently costed at the ink engine's 50% default. An ENTERED 50 is still 50 (same maths as before).
+  it("12. gloss uses the Roland gloss calibration; a blank Cost Calculator field is the 90% pre-art estimate", () => {
     const r = resolvedFor(LABEL("&pglosslayers=1"));
     const gloss = channel(r, "gloss");
     expect(gloss.calibrationKey).toBe("roland-gloss");
     expect(gloss.mlPerSqftPerPass).toBe(4.18);
-    expect(gloss.coveragePct).toBe(50);
-    expect(gloss.coverageSource).toBe("gloss_default");
-    // 62.5 sqft x 50% x 4.18 mL/sqft x 1 pass
-    expect(gloss.totalMl).toBeCloseTo(62.5 * 0.5 * 4.18, 6);
+    expect(gloss.coveragePct).toBe(90);
+    // 62.5 sqft x 90% x 4.18 mL/sqft x 1 pass
+    expect(gloss.totalMl).toBeCloseTo(62.5 * 0.9 * 4.18, 6);
     expect(gloss.inkCost).toBeCloseTo(gloss.totalMl * CANONICAL_INK_RATES.rolandPerMl, 8);
-    // gloss is NOT blocked by a missing coverage — white is, gloss has a default
+    // gloss is NOT blocked by a missing coverage — white is, gloss has an estimate
     expect(r.status).not.toBe("DRAFT_ONLY");
+    // an entered 50% is costed exactly as the old default was: 62.5 sqft x 50% x 4.18 mL/sqft x 1 pass
+    const fifty = channel(resolvedFor(LABEL("&pglosslayers=1&pglosscoverage=50")), "gloss");
+    expect(fifty.coveragePct).toBe(50);
+    expect(fifty.totalMl).toBeCloseTo(62.5 * 0.5 * 4.18, 6);
+    expect(fifty.inkCost).toBeCloseTo(fifty.totalMl * CANONICAL_INK_RATES.rolandPerMl, 8);
   });
 
   it("white and gloss are never merged into the CMYK arithmetic", () => {

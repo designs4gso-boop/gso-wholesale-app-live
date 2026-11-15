@@ -36,6 +36,7 @@ import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
 import { loadMachineWorkload } from "../lib/machine-load.server";
 import { isCostedAuthority, persistQuoteIfCanonicalAllows, resolveCostAuthority } from "../lib/canonical-quote-authority.server";
 import { canonicalLabelCutType, canonicalCutTypeIsWireable } from "../lib/canonical-calculator-shared";
+import { glossCoverageBasis, glossCoverageIsBlank } from "../lib/gloss-coverage";
 import { attachVerifiedLabelMaterials, materialCalculatorReadiness } from "../lib/material-calculator-readiness.server";
 import { SPLIT_BAG_BLANK_UNIT_COST, applyOwnerMaterialOverride } from "../lib/canonical-calculator.server";
 import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
@@ -2502,7 +2503,7 @@ export async function action({ request }: { request: Request }) {
           routing: canonicalSnapshot.routing
             ? { printerSelection: canonicalSnapshot.routing.printerSelection, effectivePrinter: canonicalSnapshot.routing.effectivePrinter, whiteLayers: canonicalSnapshot.routing.whiteLayers, glossLayers: canonicalSnapshot.routing.glossLayers }
             : null,
-          inkChannels: (canonicalSnapshot.inkChannels || []).map((channel) => ({ kind: channel.kind, passes: channel.passes, coveragePct: channel.coveragePct, coverageSource: channel.coverageSource, mlPerSqftPerPass: channel.mlPerSqftPerPass, totalMl: channel.totalMl, inkCost: channel.inkCost })),
+          inkChannels: (canonicalSnapshot.inkChannels || []).map((channel) => ({ kind: channel.kind, passes: channel.passes, coveragePct: channel.coveragePct, coverageSource: channel.kind === "gloss" && glossCoverageIsBlank(fRead("pglosscoverage")) ? "estimated_pre_art" : channel.coverageSource, mlPerSqftPerPass: channel.mlPerSqftPerPass, totalMl: channel.totalMl, inkCost: channel.inkCost })),
           reasons: canonicalSnapshot.reasons,
           blockers: canonicalSnapshot.blockers,
         }
@@ -4081,7 +4082,14 @@ function ProductDrivenForm() {
           </span>
         </label>
         <label style={{ fontSize: 12 }}>Gloss layers (0–14)<input name="pglosslayers" type="number" min={0} max={14} defaultValue={urlValue("pglosslayers", "0")} style={inputStyle} /></label>
-        <label style={{ fontSize: 12 }}>Gloss coverage % (blank = 90% pre-art estimate)<input name="pglosscoverage" type="number" min={0} max={100} step="1" placeholder="90% estimated" defaultValue={urlValue("pglosscoverage")} style={inputStyle} /></label>
+        <label style={{ fontSize: 12 }}>Gloss coverage % (blank = 90% pre-art estimate)<input name="pglosscoverage" type="number" min={0} max={100} step="1" placeholder="90% estimated" defaultValue={urlValue("pglosscoverage")} style={inputStyle} />
+          {/* 2026-11-15: says which percentage the calculation on screen actually used */}
+          {glossCoverageBasis(Number(urlValue("pglosslayers", "0")), urlValue("pglosscoverage")).label ? (
+            <span data-gloss-coverage-basis={glossCoverageBasis(Number(urlValue("pglosslayers", "0")), urlValue("pglosscoverage")).basis} style={smallHelp}>
+              <b>{glossCoverageBasis(Number(urlValue("pglosslayers", "0")), urlValue("pglosscoverage")).label}</b> — used in this calculation.
+            </span>
+          ) : null}
+        </label>
         <label style={{ fontSize: 12 }}>Specialty file prep
           <select name="pfileprep" defaultValue={urlValue("pfileprep")} style={inputStyle}>
             <option value="">Customer supplied production-ready mask — $0</option>

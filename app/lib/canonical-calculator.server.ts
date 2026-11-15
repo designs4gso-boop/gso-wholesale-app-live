@@ -32,6 +32,7 @@
 // than resolving to a confident number. A blocked job never publishes a unit
 // cost — see true-cost-engine.server.ts.
 
+import { effectiveGlossCoveragePct, glossCoverageIsBlank } from "./gloss-coverage";
 import {
   BAG_APPLICATION_LABOR_RATE_PER_HOUR,
   BAG_APPLICATION_SECONDS_PER_SIDE,
@@ -1598,7 +1599,13 @@ export function normalizeCanonicalInput(params: URLSearchParams): CanonicalCalcu
     whiteLayers: Math.max(0, Math.floor(num(params, "pwhitelayers", 0))),
     whiteCoveragePct: String(params.get("pwhitecoverage") ?? "").trim() !== "" ? num(params, "pwhitecoverage") : null,
     glossLayers: Math.max(0, Math.floor(num(params, "pglosslayers", 0))),
-    glossCoveragePct: String(params.get("pglosscoverage") ?? "").trim() !== "" ? num(params, "pglosscoverage") : null,
+    // 2026-11-15: gloss selected + coverage left blank = the 90% pre-art estimate the
+    // form promises (one rule, gloss-coverage.ts). A blank never reaches the ink engine
+    // as null, where it would silently take that engine's own 50% default.
+    glossCoveragePct: effectiveGlossCoveragePct(
+      Math.max(0, Math.floor(num(params, "pglosslayers", 0))),
+      glossCoverageIsBlank(params.get("pglosscoverage")) ? null : num(params, "pglosscoverage"),
+    ),
     cmykCoveragePct: String(params.get("pcmykcoverage") ?? "").trim() !== "" ? num(params, "pcmykcoverage") : null,
     cutMode: (str(params, "pcutmode") || "normal") as CutMode,
     loadedMediaWidthIn: params.get("pmediawidth") ? num(params, "pmediawidth") : undefined,
