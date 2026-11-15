@@ -9,8 +9,10 @@ import {
   Badge,
   Divider,
 } from "@shopify/polaris";
-import { Form, Link, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
+import { Form, Link, useActionData, useLoaderData, useNavigation, useNavigate, redirect } from "react-router";
 import { authenticate } from "../shopify.server";
+import { PRODUCTION_ROLE_DENIED, PRODUCTION_VIEW_DENIED_REDIRECT, roleMayViewProduction } from "../lib/production-role-access";
+import { resolveStaffAccess } from "../lib/staff-roles.server";
 import db from "../db.server";
 import {
   MATCH_ENTRY_RETIRED_MESSAGE,
@@ -223,7 +225,10 @@ async function createEvent(shop: string, jobId: string, eventType: string, messa
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // SERVER HARDENING 2026-11-15: production print pages are for production roles (Sales / unassigned are turned away before anything is read).
+  if (!roleMayViewProduction(resolveStaffAccess(auth).role)) throw redirect(PRODUCTION_VIEW_DENIED_REDIRECT);
   const shop = session.shop;
 
   const [imports, unmatchedEntries, jobs] = await Promise.all([
@@ -250,7 +255,11 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // SERVER HARDENING 2026-11-15: refused before any read or write for Sales, unassigned accounts and any non-production role.
+  const printStaff = resolveStaffAccess(auth);
+  if (!roleMayViewProduction(printStaff.role)) return Response.json({ ok: false, message: `${PRODUCTION_ROLE_DENIED} ${printStaff.reason}` }, { status: 403 });
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");

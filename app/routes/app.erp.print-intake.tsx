@@ -1,8 +1,9 @@
 import { PERMISSION_DENIED_MESSAGE, resolveStaffAccess } from "../lib/staff-roles.server";
 import type React from "react";
-import { Form, Link, useActionData, useLoaderData } from "react-router";
+import { Form, Link, useActionData, useLoaderData, redirect } from "react-router";
 import crypto from "crypto";
 import { authenticate } from "../shopify.server";
+import { PRODUCTION_VIEW_DENIED_REDIRECT, roleMayViewProduction } from "../lib/production-role-access";
 import db from "../db.server";
 import { decodeIntakeOutcomes, type IntakeOutcome } from "../lib/print-intake-routing.server";
 import { CREDENTIAL_PLACEHOLDER, credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
@@ -43,7 +44,10 @@ async function ensureSetting(shop: string) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // SERVER HARDENING 2026-11-15: production print pages are for production roles (Sales / unassigned are turned away before anything is read).
+  if (!roleMayViewProduction(resolveStaffAccess(auth).role)) throw redirect(PRODUCTION_VIEW_DENIED_REDIRECT);
   const setting = await ensureSetting(session.shop);
   const { outcomes } = decodeIntakeOutcomes(setting.notes);
   // 15H.3: the server-authoritative review queue (PrintIntake rows) plus
