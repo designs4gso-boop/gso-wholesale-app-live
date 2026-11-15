@@ -13,10 +13,13 @@ import {
   Checkbox,
 } from "@shopify/polaris";
 import { FormTextField } from "../components/FormTextField";
-import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
+import { Form, Link, redirect, useActionData, useLoaderData, useNavigation, useNavigate, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
 import { productionFinancialVisibility } from "../lib/owner-authorization.server";
 import { redactJobFinancials } from "../lib/production-financial-redaction";
+import { friendlyMessage } from "../lib/employee-messages";
+import { PRODUCTION_ROLE_DENIED, PRODUCTION_VIEW_DENIED_REDIRECT, advancedProductionRedirect, roleMayRunProductionIntent, roleMayViewProduction } from "../lib/production-role-access";
+import { CLASSIC_PRODUCTION_HREF, SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
 import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, assessLinkSource, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, jobSourceType, linkIntakeJobToTarget, runWithTicketRetry } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
@@ -529,6 +532,18 @@ export async function loader({ request }: { request: Request }) {
   const baseUrl = publicBaseUrl(request);
   // 2026-11-11: production staff do not receive revenue / cost / profit / margin.
   const financials = productionFinancialVisibility(auth);
+  // SERVER HARDENING 2026-11-14: production pages are for production roles.
+  // This loader also serves the Simple Mode board and job page, so Sales and
+  // unassigned accounts are turned away here — before any job is read.
+  if (!roleMayViewProduction(resolveStaffAccess(auth).role)) throw redirect(PRODUCTION_VIEW_DENIED_REDIRECT);
+  // OWNER DECISION 2026-11-14: this full page is the Advanced view (owner and
+  // financially authorized managers). Anyone else opening /app/erp/production
+  // itself is sent to Simple Mode. The Simple Mode routes call this same loader
+  // with their own URLs and are not redirected. Access to data is unchanged.
+  if (new URL(request.url).pathname.replace(/\/+$/, "") === CLASSIC_PRODUCTION_HREF) {
+    const target = advancedProductionRedirect(resolveStaffAccess(auth).role, financials.show);
+    if (target) throw redirect(`${target}${new URL(request.url).search}`);
+  }
 
   const [jobs, quotes] = await Promise.all([
     db.productionJob.findMany({
@@ -720,6 +735,16 @@ export async function action({ request }: { request: Request }) {
   const PRODUCTION_PERMISSION: Record<string, StaffPermission> = { qcItem: "recordQc", reprintItem: "recordReprint", recordShipment: "recordShipment", recordPickup: "recordShipment" };
   const staffAccess = resolveStaffAccess(auth);
   if (PRODUCTION_PERMISSION[intent] && !staffAccess.can(PRODUCTION_PERMISSION[intent])) return permissionDeniedResponse(staffAccess, PRODUCTION_PERMISSION[intent]);
+  // OWNER DECISION 2026-11-14 (production-role-access.ts): material use and its
+  // stock deduction / restore, manual job creation, scheduling edits, revisions,
+  // reopen-for-reprint, intake linking and file removal need a listed production
+  // role. Refused here — before any read or write — for Sales, unassigned
+  // accounts and any role not listed for that action.
+  // SERVER HARDENING 2026-11-14: the same table now also covers status moves
+  // (incl. Complete job), checklist, notes, file links, proof link / proof sent,
+  // work-order printed, file roles, ticket backfill and create-from-quote; any
+  // intent it does not list needs a production floor role (fail closed).
+  if (!roleMayRunProductionIntent(staffAccess.role, intent)) return Response.json({ ok: false, message: `${PRODUCTION_ROLE_DENIED} ${staffAccess.reason}` }, { status: 403 });
 
   // 15H.4C: link an UNLINKED intake shell job onto the real commercial job.
   // Exact owner selection + confirmation; the service validates both sides,
@@ -2472,12 +2497,19 @@ export default function ProductionBoard() {
     })),
   ];
 
+  // SIMPLE MODE (2026-11-14): "Open advanced view" from a job workspace lands
+  // here with ?job=<id> — display filter only, the loader and actions are unchanged.
+  const [searchParams] = useSearchParams();
+  const focusJobId = searchParams.get("job");
+  const visibleJobs = focusJobId ? jobs.filter((job: any) => String(job.id) === focusJobId) : jobs;
+  const actionFeedback = friendlyMessage(actionData?.message);
+
   const statusGroups = productionStatuses
-    .map((status) => ({ ...status, jobs: jobs.filter((job: any) => job.status === status.value) }))
-    .filter((group) => group.jobs.length || ["new", "prepress", "printing", "qc", "completed"].includes(group.value));
+    .map((status) => ({ ...status, jobs: visibleJobs.filter((job: any) => job.status === status.value) }))
+    .filter((group) => group.jobs.length || (!focusJobId && ["new", "prepress", "printing", "qc", "completed"].includes(group.value)));
 
   return (
-    <Page title="Production Board" subtitle="Create production jobs from approved/paid quotes, track stages, files, variants, notes, alerts, and printable work orders.">
+    <Page title="Production — Advanced View" subtitle="The full job record: create jobs, costs, files, materials, links and history. Day-to-day work happens on the simple Production Board.">
       <Layout>
         <Layout.Section>
           <Card>
@@ -2495,7 +2527,19 @@ export default function ProductionBoard() {
                   </Form>
                 </InlineStack>
               </InlineStack>
-              {actionData?.message ? <Text as="p" tone={actionData.ok ? "success" : "critical"}>{actionData.message}</Text> : null}
+              {actionData?.message ? (
+                <div>
+                  <Text as="p" tone={actionData.ok ? "success" : "critical"} fontWeight="semibold">{actionFeedback.primary}</Text>
+                  {actionFeedback.detail ? <details><summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Details</summary><Text as="p" tone="subdued" variant="bodySm">{actionFeedback.detail}</Text></details> : null}
+                </div>
+              ) : null}
+              {focusJobId ? (
+                <InlineStack gap="300" blockAlign="center">
+                  <Badge tone="info">Advanced view — showing one job</Badge>
+                  <Link to={jobWorkspaceHref(focusJobId)}>Back to the job page</Link>
+                  <Link to={CLASSIC_PRODUCTION_HREF}>Show all jobs</Link>
+                </InlineStack>
+              ) : <Link to={SIMPLE_BOARD_HREF}>Open the simple Production Board</Link>}
               <Form method="post">
                 <input type="hidden" name="intent" value="createFromQuote" />
                 <InlineStack gap="300" blockAlign="end">

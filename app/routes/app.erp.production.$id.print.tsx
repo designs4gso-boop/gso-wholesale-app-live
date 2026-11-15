@@ -1,8 +1,10 @@
-﻿import { useLoaderData } from "react-router";
+﻿import { redirect, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import { productionFinancialVisibility } from "../lib/owner-authorization.server";
 import { redactJobFinancials } from "../lib/production-financial-redaction";
 import db from "../db.server";
+import { PRODUCTION_VIEW_DENIED_REDIRECT, roleMayViewProduction } from "../lib/production-role-access";
+import { resolveStaffAccess } from "../lib/staff-roles.server";
 import {
   buildBrandRates,
   computeEntryCosts,
@@ -160,6 +162,8 @@ function labelForStatus(status: string) {
 export async function loader({ request, params }: { request: Request; params: any }) {
   const auth = await authenticate.admin(request);
   const { session } = auth;
+  // SERVER HARDENING 2026-11-14: production pages are for production roles (Sales / unassigned are turned away before any job is read).
+  if (!roleMayViewProduction(resolveStaffAccess(auth).role)) throw redirect(PRODUCTION_VIEW_DENIED_REDIRECT);
   // 2026-11-11: production staff receive no revenue / cost / profit / margin.
   const financials = productionFinancialVisibility(auth);
   const shop = session.shop;

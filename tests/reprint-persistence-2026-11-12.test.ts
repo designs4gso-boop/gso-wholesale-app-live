@@ -137,7 +137,8 @@ describe("reprint persistence through the real production action", () => {
     await reprint();
     for (const sub of [OWNER, "1004"]) {
       h.sub = sub;
-      const raw: any = await route.loader({ request: new Request("https://app.test/app/erp/production") });
+      // 2026-11-14: /app/erp/production itself now redirects non-financial staff to Simple Mode; staff reach this SAME loader through the Simple Mode routes, so the reload is made the way staff make it.
+      const raw: any = await route.loader({ request: new Request("https://app.test/app/erp/production-board") });
       const data: any = raw instanceof Response ? await raw.json() : raw;
       const loaded = data.jobs[0].items[0];
       expect(loaded).toMatchObject({ lastReprintReason: "machine_error", lastReprintBy: "owner@gso.test", qcResult: null });

@@ -2,11 +2,13 @@ import { Page, Layout, Card, Text, Badge, Button, InlineStack, BlockStack, Divid
 import { completionGuardApplies, evaluateQcForCompletion } from "../lib/production-qc-guard";
 import { statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
 import { isStaffProductionStatus } from "../lib/production-status-vocabulary";
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { Form, redirect, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { productionFinancialVisibility } from "../lib/owner-authorization.server";
 import { redactJobFinancials } from "../lib/production-financial-redaction";
 import db from "../db.server";
+import { PRODUCTION_ROLE_DENIED, PRODUCTION_VIEW_DENIED_REDIRECT, roleMayRunProductionIntent, roleMayViewProduction } from "../lib/production-role-access";
+import { resolveStaffAccess } from "../lib/staff-roles.server";
 
 const statuses = [
   { label: "New", value: "new" },
@@ -121,6 +123,8 @@ async function createEvent(shop: string, jobId: string, eventType: string, messa
 export async function loader({ request }: { request: Request }) {
   const auth = await authenticate.admin(request);
   const { session } = auth;
+  // SERVER HARDENING 2026-11-14: production pages are for production roles (Sales / unassigned are turned away before any job is read).
+  if (!roleMayViewProduction(resolveStaffAccess(auth).role)) throw redirect(PRODUCTION_VIEW_DENIED_REDIRECT);
   // 2026-11-11: production staff receive no revenue / cost / profit / margin.
   const financials = productionFinancialVisibility(auth);
   const shop = session.shop;
@@ -156,10 +160,14 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
+  // SERVER HARDENING 2026-11-14 (production-role-access.ts): refused before any read or write.
+  const staffAccess = resolveStaffAccess(auth);
+  if (!roleMayRunProductionIntent(staffAccess.role, intent)) return Response.json({ ok: false, message: `${PRODUCTION_ROLE_DENIED} ${staffAccess.reason}` }, { status: 403 });
 
   if (intent === "updateSchedule") {
     const jobId = String(formData.get("jobId") || "");
@@ -340,7 +348,7 @@ export default function ProductionCalendar() {
   const busy = navigation.state !== "idle";
 
   return (
-    <Page title="Production Calendar / Due Date Board" subtitle="Schedule jobs by due date, rush priority, status, assigned person, and machine." backAction={{ content: "Production", url: "/app/erp/production" }}>
+    <Page title="Production Calendar / Due Date Board" subtitle="Schedule jobs by due date, rush priority, status, assigned person, and machine." backAction={{ content: "Production Board", url: "/app/erp/production-board" }}>
       <Layout>
         <Layout.Section>
           <Card>

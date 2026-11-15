@@ -139,6 +139,8 @@ describe("sales / admin honesty fixes (source pins)", () => {
     const mat = src("app/routes/app.erp.materials.tsx");
     expect(mat).toContain("{actionFeedback ? <div");
     const nav = src("app/routes/app.tsx");
-    expect(nav).toContain('<s-link href="/app/wholesale/customers">Sales · Wholesale Applications</s-link>');
+    // 2026-11-14 Simple Mode: the link is listed in the Sales area of the role-aware nav.
+    expect(nav).toContain("navForRole(role, { viewFinancials })");
+    expect(src("app/lib/simple-nav.ts")).toContain('{ label: "Wholesale Applications", href: "/app/wholesale/customers" }');
   });
 });

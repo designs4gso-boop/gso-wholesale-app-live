@@ -1,9 +1,11 @@
-import { Form, useActionData, useLoaderData } from "react-router";
+import { Form, redirect, useActionData, useLoaderData } from "react-router";
 import { staffStatusLabel } from "../lib/production-status-vocabulary";
 import { authenticate } from "../shopify.server";
 import { productionFinancialVisibility } from "../lib/owner-authorization.server";
 import { redactJobFinancials } from "../lib/production-financial-redaction";
 import db from "../db.server";
+import { PRODUCTION_ROLE_DENIED, PRODUCTION_VIEW_DENIED_REDIRECT, roleMayRunProductionIntent, roleMayViewProduction } from "../lib/production-role-access";
+import { resolveStaffAccess } from "../lib/staff-roles.server";
 
 function safeDate(value: any) {
   if (!value) return new Date().toLocaleDateString();
@@ -93,6 +95,8 @@ async function createEvent(shop: string, jobId: string, eventType: string, messa
 export async function loader({ request, params }: { request: Request; params: any }) {
   const auth = await authenticate.admin(request);
   const { session } = auth;
+  // SERVER HARDENING 2026-11-14: production pages are for production roles (Sales / unassigned are turned away before any job is read).
+  if (!roleMayViewProduction(resolveStaffAccess(auth).role)) throw redirect(PRODUCTION_VIEW_DENIED_REDIRECT);
   const shop = session.shop;
   const id = params.id;
 
@@ -112,11 +116,15 @@ export async function loader({ request, params }: { request: Request; params: an
 }
 
 export async function action({ request, params }: { request: Request; params: any }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
   const shop = session.shop;
   const id = params.id;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
+  // SERVER HARDENING 2026-11-14 (production-role-access.ts): refused before any read or write.
+  const staffAccess = resolveStaffAccess(auth);
+  if (!roleMayRunProductionIntent(staffAccess.role, intent)) return Response.json({ ok: false, message: `${PRODUCTION_ROLE_DENIED} ${staffAccess.reason}` }, { status: 403 });
 
   const job = await db.productionJob.findFirst({ where: { shop, id } });
   if (!job) throw new Response("Production job not found", { status: 404 });

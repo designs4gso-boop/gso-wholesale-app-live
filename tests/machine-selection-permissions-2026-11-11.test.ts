@@ -49,8 +49,16 @@ describe("manual printer selection (server-side)", () => {
   it("authorized print operator may choose", async () => {
     expect(await createManualJob("1003", "mimaki")).toBe("mimaki");
   });
-  it.each([["sales", "1002"], ["bagger", "1004"], ["manager (not granted by default)", "1001"], ["unknown staff", "9999"]])("%s: a forged printer field is ignored -> AUTO", async (_label, sub) => {
-    expect(await createManualJob(sub, "roland")).toBe("auto");
+  it("manager (not granted by default): a forged printer field is ignored -> AUTO", async () => {
+    expect(await createManualJob("1001", "roland")).toBe("auto");
+  });
+  // OWNER DECISION 2026-11-14 (production-role-access.ts): Sales, Bagger and
+  // unassigned accounts may no longer create manual production jobs at all, so
+  // a forged request is refused before the creation service is ever called —
+  // stricter than "printer ignored -> AUTO".
+  it.each([["sales", "1002"], ["bagger", "1004"], ["unknown staff", "9999"]])("%s: a forged manual-job request is refused; nothing is created", async (_label, sub) => {
+    expect(await createManualJob(sub, "roland")).toBeUndefined();
+    expect(h.captured).toHaveLength(0);
   });
 });
 
