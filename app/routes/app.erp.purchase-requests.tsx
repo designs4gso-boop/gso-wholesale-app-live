@@ -31,6 +31,16 @@ const PURCHASE_INTENT_PERMISSION: Record<string, StaffPermission> = {
   cancelRequest: "approvePurchasing",
 };
 
+/** 2026-11-15: a requester may only move a request between these; every other status is a purchasing approval. */
+const REQUESTER_STATUSES = ["draft", "requested"];
+/** Statuses that mean the purchase was approved (ordered or already arriving). */
+const APPROVED_STATUSES = ["ordered", "partially_received", "received"];
+
+/** Closed requests are never re-opened by the order buttons. */
+const CLOSED_STATUSES = ["received", "cancelled"];
+const closedRequestResponse = (status: unknown) =>
+  Response.json({ ok: false, message: `This request is already ${String(status).replace(/_/g, " ")} and was not changed.` }, { status: 400 });
+
 const statusOptions = [
   { label: "Draft", value: "draft" },
   { label: "Requested", value: "requested" },
@@ -274,7 +284,7 @@ export async function loader({ request }: { request: Request }) {
   // Hotfix 2026-10-04: one shared grouping (lib/purchase-request-groups) so the
   // loader and the component cannot disagree on which groups exist.
   const payload = { purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, ...groupPurchaseRequests(purchaseRequests) };
-  return Response.json({ ...(canSeeCost ? payload : stripInternalFinancials(payload)), canSeeCost });
+  return Response.json({ ...(canSeeCost ? payload : stripInternalFinancials(payload)), canSeeCost, canApprove: staffAccess.can("approvePurchasing") });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -284,8 +294,10 @@ export async function action({ request }: { request: Request }) {
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
   const staffAccess = resolveStaffAccess(auth);
-  const needed = PURCHASE_INTENT_PERMISSION[intent];
-  if (needed && !staffAccess.can(needed)) return permissionDeniedResponse(staffAccess, needed);
+  const needed = Object.prototype.hasOwnProperty.call(PURCHASE_INTENT_PERMISSION, intent) ? PURCHASE_INTENT_PERMISSION[intent] : null;
+  // 2026-11-15: fail closed — an action that is not in the permission map never runs.
+  if (!needed) return Response.json({ ok: false, message: "Unknown purchase request action." }, { status: 400 });
+  if (!staffAccess.can(needed)) return permissionDeniedResponse(staffAccess, needed);
 
   if (intent === "createFromMaterial") {
     const materialId = String(formData.get("materialId") || "");
@@ -362,6 +374,7 @@ export async function action({ request }: { request: Request }) {
     const leadTimeDays = bestCostBook?.leadTimeDays || Math.round(num(formData.get("leadTimeDays"))) || selectedVendor?.leadTimeDays || material?.leadTimeDays || null;
     // A new request is draft / requested; only purchasing approvers may create it already ordered.
     const initialStatus = (() => { const posted = String(formData.get("status") || "requested"); return ["draft", "requested"].includes(posted) || staffAccess.can("approvePurchasing") ? posted : "requested"; })();
+    if (!statusOptions.some((option) => option.value === initialStatus)) return Response.json({ ok: false, message: "Unknown purchase request status." }, { status: 400 });
 
     await db.purchaseRequest.create({
       data: {
@@ -387,7 +400,7 @@ export async function action({ request }: { request: Request }) {
         source: bestCostBook ? "vendor_cost_book" : "manual",
         notes: String(formData.get("notes") || (bestCostBook ? `Cost pulled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"}.` : "")) || null,
         requestedBy: staffAccess.actor,
-        ...(initialStatus === "ordered" ? { approvedBy: staffAccess.actor, approvedAt: new Date() } : {}),
+        ...(APPROVED_STATUSES.includes(initialStatus) ? { approvedBy: staffAccess.actor, approvedAt: new Date() } : {}),
       },
     });
 
@@ -404,8 +417,12 @@ export async function action({ request }: { request: Request }) {
     // A form without a cost field keeps the stored cost (never silently zeroes it).
     const unitCost = formData.has("unitCost") ? num(formData.get("unitCost")) : num(purchaseRequest.unitCost);
     const status = String(formData.get("status") || purchaseRequest.status);
-    // Ordering, re-pricing or cancelling is a purchasing APPROVAL (owner / authorized manager).
-    const approvalNeeded = (status !== purchaseRequest.status && ["ordered", "cancelled"].includes(status)) || unitCost !== num(purchaseRequest.unitCost) || Boolean(String(formData.get("costBookItemId") || ""));
+    if (!statusOptions.some((option) => option.value === status)) return Response.json({ ok: false, message: "Unknown purchase request status." }, { status: 400 });
+    // Ordering, receiving, re-pricing or cancelling is a purchasing APPROVAL (owner / authorized manager).
+    // 2026-11-15: ANY status change other than draft <-> requested needs it (a forged
+    // "partially_received" used to skip approval and open the request for receiving).
+    const requesterMove = REQUESTER_STATUSES.includes(status) && REQUESTER_STATUSES.includes(String(purchaseRequest.status));
+    const approvalNeeded = (status !== purchaseRequest.status && !requesterMove) || unitCost !== num(purchaseRequest.unitCost) || Boolean(String(formData.get("costBookItemId") || ""));
     if (approvalNeeded && !staffAccess.can("approvePurchasing")) return permissionDeniedResponse(staffAccess, "approvePurchasing");
     const neededByRaw = String(formData.get("neededBy") || "");
     const selectedCostBook = await getCostBookItem(shop, String(formData.get("costBookItemId") || ""));
@@ -430,7 +447,8 @@ export async function action({ request }: { request: Request }) {
         neededBy: neededByRaw ? new Date(`${neededByRaw}T12:00:00`) : null,
         orderedAt: status === "ordered" && !purchaseRequest.orderedAt ? new Date() : purchaseRequest.orderedAt,
         // 2026-11-12: the approver who first orders the request (approvePurchasing was checked above).
-        ...(status === "ordered" && !purchaseRequest.approvedAt ? { approvedBy: staffAccess.actor, approvedAt: new Date() } : {}),
+        // 2026-11-15: also when an approver moves it straight to partially received / received.
+        ...(APPROVED_STATUSES.includes(status) && status !== purchaseRequest.status && !purchaseRequest.approvedAt ? { approvedBy: staffAccess.actor, approvedAt: new Date() } : {}),
         cancelledAt: status === "cancelled" ? new Date() : purchaseRequest.cancelledAt,
         vendorConfirmationNumber: String(formData.get("vendorConfirmationNumber") || "") || null,
         expectedArrivalDate: String(formData.get("expectedArrivalDate") || "") ? new Date(`${String(formData.get("expectedArrivalDate"))}T12:00:00`) : null,
@@ -477,8 +495,10 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
     const id = String(formData.get("id") || "");
     const purchaseRequest = await db.purchaseRequest.findFirst({ where: { shop, id } });
     if (!purchaseRequest) return Response.json({ ok: false, message: "Purchase request not found." }, { status: 404 });
+    // 2026-11-15: a received / cancelled request is closed — re-ordering it would let the same stock be received twice.
+    if (CLOSED_STATUSES.includes(String(purchaseRequest.status))) return closedRequestResponse(purchaseRequest.status);
     const expectedArrivalDate = purchaseRequest.expectedArrivalDate || (purchaseRequest.leadTimeDays ? addDays(Number(purchaseRequest.leadTimeDays)) : null);
-    await db.purchaseRequest.updateMany({ where: { shop, id }, data: { status: "ordered", orderedAt: new Date(), expectedArrivalDate, ...(purchaseRequest.approvedAt ? {} : { approvedBy: staffAccess.actor, approvedAt: new Date() }) } });
+    await db.purchaseRequest.updateMany({ where: { shop, id, status: purchaseRequest.status }, data: { status: String(purchaseRequest.status) === "partially_received" ? "partially_received" : "ordered", orderedAt: purchaseRequest.orderedAt || new Date(), expectedArrivalDate, ...(purchaseRequest.approvedAt ? {} : { approvedBy: staffAccess.actor, approvedAt: new Date() }) } });
     return Response.json({ ok: true, message: "Purchase request marked ordered." });
   }
 
@@ -487,15 +507,17 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
     const expectedArrivalRaw = String(formData.get("expectedArrivalDate") || "");
     const followUpRaw = String(formData.get("followUpDate") || "");
     // 2026-10-07: fields not posted by the button keep their saved values (the button used to null them).
-    const existing = await db.purchaseRequest.findFirst({ where: { shop, id }, select: { vendorConfirmationNumber: true, expectedArrivalDate: true, approvedAt: true } });
+    const existing = await db.purchaseRequest.findFirst({ where: { shop, id }, select: { vendorConfirmationNumber: true, expectedArrivalDate: true, approvedAt: true, status: true, orderedAt: true } });
+    if (!existing) return Response.json({ ok: false, message: "Purchase request not found." }, { status: 404 });
+    if (CLOSED_STATUSES.includes(String(existing.status))) return closedRequestResponse(existing.status);
     const postedConfirmation = String(formData.get("vendorConfirmationNumber") || "");
     await db.purchaseRequest.updateMany({
-      where: { shop, id },
+      where: { shop, id, status: existing.status },
       data: {
         sentAt: new Date(),
         sentBy: String(formData.get("sentBy") || "GSO") || null,
-        status: "ordered",
-        orderedAt: new Date(),
+        status: String(existing.status) === "partially_received" ? "partially_received" : "ordered",
+        orderedAt: existing.orderedAt || new Date(),
         vendorConfirmationNumber: formData.has("vendorConfirmationNumber") ? postedConfirmation || null : existing?.vendorConfirmationNumber ?? null,
         expectedArrivalDate: expectedArrivalRaw ? new Date(`${expectedArrivalRaw}T12:00:00`) : formData.has("expectedArrivalDate") ? null : existing?.expectedArrivalDate ?? null,
         followUpNeeded: true,
@@ -548,7 +570,9 @@ Cost auto-filled from Vendor Cost Book: ${bestCostBook.vendorName || "vendor"} /
 
   if (intent === "cancelRequest") {
     const id = String(formData.get("id") || "");
-    await db.purchaseRequest.updateMany({ where: { shop, id }, data: { status: "cancelled", cancelledAt: new Date() } });
+    // 2026-11-15: a fully received request stays received (its stock is already in inventory).
+    const cancelled = await db.purchaseRequest.updateMany({ where: { shop, id, status: { not: "received" } }, data: { status: "cancelled", cancelledAt: new Date() } });
+    if (!cancelled.count) return Response.json({ ok: false, message: "This request was not cancelled — it is already received or no longer exists." }, { status: 400 });
     return Response.json({ ok: true, message: "Purchase request cancelled." });
   }
 
@@ -624,7 +648,7 @@ function vendorOptionList(vendors: any[]) {
   ];
 }
 
-function PurchaseRequestCard({ request, vendors, costBookItems, canSeeCost }: { request: any; vendors: any[]; costBookItems: any[]; canSeeCost: boolean }) {
+function PurchaseRequestCard({ request, vendors, costBookItems, canSeeCost, canApprove }: { request: any; vendors: any[]; costBookItems: any[]; canSeeCost: boolean; canApprove: boolean }) {
   const busy = useNavigation().state !== "idle";
   const navigate = useNavigate();
   const vendorOptions = vendorOptionList(vendors);
@@ -693,7 +717,7 @@ function PurchaseRequestCard({ request, vendors, costBookItems, canSeeCost }: { 
           <input type="hidden" name="id" value={request.id} />
           <BlockStack gap="200">
             <InlineStack gap="200" wrap>
-              <NativeSelect label="Status" name="status" defaultValue={request.status} options={statusOptions} />
+              <NativeSelect label="Status" name="status" defaultValue={request.status} options={canApprove ? statusOptions : statusOptions.filter((option) => REQUESTER_STATUSES.includes(option.value) || option.value === request.status)} />
               <NativeSelect label="Priority" name="priority" defaultValue={request.priority} options={priorityOptions} />
               <NativeSelect label="Vendor Center Vendor" name="vendorId" defaultValue={request.vendorId || request.vendorRecord?.id || ""} options={vendorOptions} />
               <NativeInput label="Vendor fallback" name="vendor" defaultValue={request.vendor || ""} />
@@ -724,6 +748,7 @@ function PurchaseRequestCard({ request, vendors, costBookItems, canSeeCost }: { 
         <InlineStack gap="200" wrap>
           <Button onClick={() => navigate(`/app/erp/purchase-export?id=${request.id}`)}>Print / Email PO</Button>
           <Button url={`/app/erp/purchase-export?id=${request.id}&format=csv`}>Download CSV</Button>
+          {canApprove ? (<>
           <Form method="post">
             <input type="hidden" name="intent" value="markSent" />
             <input type="hidden" name="id" value={request.id} />
@@ -735,6 +760,7 @@ function PurchaseRequestCard({ request, vendors, costBookItems, canSeeCost }: { 
             <input type="hidden" name="id" value={request.id} />
             <Button submit>Mark ordered</Button>
           </Form>
+          </>) : null}
           <Form method="post">
             <input type="hidden" name="intent" value="receiveRequest" />
             <input type="hidden" name="id" value={request.id} />
@@ -743,11 +769,13 @@ function PurchaseRequestCard({ request, vendors, costBookItems, canSeeCost }: { 
               <Button submit>Receive</Button>
             </InlineStack>
           </Form>
+          {canApprove ? (
           <Form method="post">
             <input type="hidden" name="intent" value="cancelRequest" />
             <input type="hidden" name="id" value={request.id} />
             <Button tone="critical" submit>Cancel</Button>
           </Form>
+          ) : null}
         </InlineStack>
       </BlockStack>
     </Card>
@@ -793,7 +821,7 @@ function LowStockMaterialCard({ material, costBookItems, canSeeCost }: { materia
 export default function PurchaseRequestsPage() {
   // Every group the loader returns must be destructured here — the summary
   // badges read them as bare identifiers (2026-10-04 production ReferenceError).
-  const { purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests, sentRequests, followUpRequests, lateRequests, canSeeCost } = useLoaderData<any>();
+  const { purchaseRequests, materials, vendors, costBookItems, lowStockMaterials, openRequests, orderedRequests, receivedRequests, sentRequests, followUpRequests, lateRequests, canSeeCost, canApprove } = useLoaderData<any>();
   const actionData = useActionData<any>();
   const navigate = useNavigate();
   const busy = useNavigation().state !== "idle";
@@ -880,7 +908,7 @@ export default function PurchaseRequestsPage() {
         <Layout.Section>
           <BlockStack gap="300">
             <Text as="h2" variant="headingMd">Open Requests</Text>
-            {openRequests.length ? openRequests.map((request: any) => <PurchaseRequestCard key={request.id} request={request} vendors={vendors || []} costBookItems={costBookItems || []} canSeeCost={Boolean(canSeeCost)} />) : <Card><Text as="p" tone="subdued">No open purchase requests.</Text></Card>}
+            {openRequests.length ? openRequests.map((request: any) => <PurchaseRequestCard key={request.id} request={request} vendors={vendors || []} costBookItems={costBookItems || []} canSeeCost={Boolean(canSeeCost)} canApprove={Boolean(canApprove)} />) : <Card><Text as="p" tone="subdued">No open purchase requests.</Text></Card>}
           </BlockStack>
         </Layout.Section>
 
