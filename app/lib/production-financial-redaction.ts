@@ -21,7 +21,8 @@ export function redactJobFinancials(job: any) {
     writebackPreview: null, printLogApplied: null,
     finalizeGate: job.finalizeGate ? { ...job.finalizeGate, varianceDollars: null, variancePct: null, estimatedTotalCost: null } : null,
     items: (job.items || []).map((item: any) => ({ ...item, unitPrice: null, unitCost: null, costSnapshot: null, priceSnapshot: null })),
-    materialUsages: (job.materialUsages || []).map((usage: any) => ({ ...usage, costPerUnit: null, totalCost: null })),
+    // 2026-11-15: an imported print-log row keeps its provenance in `notes` (ink $ / mL, machine $ / hour) — never sent to staff.
+    materialUsages: (job.materialUsages || []).map((usage: any) => ({ ...usage, costPerUnit: null, totalCost: null, ...(String(usage.source || "") === "print_log" ? { notes: null } : {}) })),
     inventoryMovements: (job.inventoryMovements || []).map((movement: any) => ({ ...movement, costPerUnit: null, costImpact: null })),
     events: (job.events || []).map((event: any) => (MONEY_TEXT.test(`${event.message || ""} ${event.oldValue || ""} ${event.newValue || ""}`)
       ? { ...event, message: "(financial detail — owner only)", oldValue: null, newValue: null }
