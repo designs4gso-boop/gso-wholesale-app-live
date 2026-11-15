@@ -8,8 +8,8 @@
 // (checklist items, structured QC columns, shipment / pickup records) to say
 // what a person should do next.
 
-import { itemQcState } from "./production-qc-display";
-import { savedPickupForJob, savedShipmentForJob } from "./production-fulfillment";
+import { itemQcState, type ItemQcState } from "./production-qc-display";
+import { qcEventItemKey, qcResultOf } from "./production-qc-guard";
 import { staffStatusLabel } from "./production-status-vocabulary";
 
 /* ---------------- 6 board stages (UI groups of existing statuses) ---------------- */
@@ -64,8 +64,12 @@ export type JobStepKey = (typeof JOB_STEPS)[number]["key"];
 
 /** How far the STATUS alone says the job has got (index into JOB_STEPS; 6 = all steps behind it). */
 const STATUS_STEP_FLOOR: Record<string, number> = {
-  new: 0, prepress: 0, proof_needed: 0, proof_sent: 0, proof_approved: 0,
+  new: 0, prepress: 0, proof_needed: 0, proof_sent: 0,
+  // the proof is approved: artwork is behind the job, printing is next
+  proof_approved: 1,
   ready_to_print: 1, printing: 1,
+  // a reprint goes back to the printer (artwork is not redone)
+  reprint_needed: 1,
   cutting: 2, laminating: 2,
   qc: 3,
   packing: 4,
@@ -129,6 +133,35 @@ function finishActionFor(label: string): string {
   return "Cut / finish";
 }
 
+export const QC_NEEDED_AGAIN = "Needs a new QC PASS";
+
+/**
+ * QC state of one item as the job page shows it. Same as itemQcState, except
+ * that a PASS which a LATER QC event has overturned (for example "reopen for
+ * reprint" records a HOLD for every item) is shown as needing a new QC PASS,
+ * which is what the server's shipment / completion guard already requires.
+ * Display only.
+ */
+export function workspaceItemQc(item: any, events: any[] = []): ItemQcState {
+  const base = itemQcState(item, events);
+  if (base.status !== "pass" || !item?.qcAt) return base;
+  const passedAt = new Date(item.qcAt).getTime();
+  const keys = [norm(item.itemTicket), norm(item.productTitle)].filter(Boolean);
+  const overturned = (events || []).some((event) => {
+    const result = qcResultOf(event);
+    return result != null && result !== "pass" && keys.includes(qcEventItemKey(event)) && new Date(event.createdAt || 0).getTime() > passedAt;
+  });
+  return overturned ? { status: "hold", label: QC_NEEDED_AGAIN, by: null, at: null } : base;
+}
+
+/** Where an On Hold job was before the hold (from its existing status-change history); 0 when unknown. */
+function heldFromFloor(events: any[]): number {
+  const hold = [...(events || [])]
+    .filter((event) => event?.eventType === "status_change" && norm(event?.newValue) === "on_hold")
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0];
+  return hold ? STATUS_STEP_FLOOR[norm(hold.oldValue)] ?? 0 : 0;
+}
+
 /**
  * The job workspace view: which step is current and the one NEXT STEP line.
  *
@@ -144,12 +177,14 @@ export function jobWorkspaceView(job: any): JobWorkspaceView {
   const events = job?.events || [];
   const byStep = checklistByStep(job?.checklistItems || []);
   const machine = jobMachine(job);
-  const floor = STATUS_STEP_FLOOR[status] ?? 0;
+  const floor = status === "on_hold" ? Math.min(heldFromFloor(events), 5) : STATUS_STEP_FLOOR[status] ?? 0;
 
-  const qcStates = items.map((item: any) => itemQcState(item, events));
+  const qcStates = items.map((item: any) => workspaceItemQc(item, events));
   const qcAllPass = items.length > 0 && qcStates.every((state: any) => state.status === "pass");
   const awaitingReprintQc = qcStates.some((state: any) => state.status === "pending_reprint");
-  const fulfilled = ["shipped", "picked_up", "completed"].includes(status) || Boolean(savedShipmentForJob(job, events)) || Boolean(savedPickupForJob(job, events));
+  // Shipped / Picked Up are only reachable through a shipment / pickup record, so the status IS the
+  // evidence. A job reopened for reprint keeps its old record but must be shipped / handed over again.
+  const fulfilled = ["shipped", "picked_up", "completed"].includes(status);
 
   const done = (key: JobStepKey, index: number): boolean => {
     if (status === "completed") return true;
@@ -182,7 +217,7 @@ export function jobWorkspaceView(job: any): JobWorkspaceView {
     if (currentStep === "artwork") {
       if (status === "proof_sent") next = { text: "Waiting for customer proof approval", detail: openLabel || null, tone: "waiting" };
       else if (/proof/i.test(openLabel)) next = { text: "Approve proof", detail: openLabel, tone: "action" };
-      else if (!open || /art/i.test(openLabel)) next = { text: "Link artwork", detail: openLabel || null, tone: "action" };
+      else if (!open || /artwork/i.test(openLabel)) next = { text: "Link artwork", detail: openLabel || null, tone: "action" };
       else next = { text: openLabel, detail: null, tone: "action" };
     } else if (currentStep === "print") {
       if (open && !/print/i.test(openLabel)) next = { text: openLabel, detail: "Before printing", tone: "action" };

@@ -86,7 +86,7 @@ function JobBoardCard({ card }: { card: BoardCard }) {
 function AttentionGroup({ title, cards, color }: { title: string; cards: BoardCard[]; color: string }) {
   return (
     <details style={{ flex: "1 1 220px", minWidth: 0, border: `1px solid ${cards.length ? color : "#e5e7eb"}`, borderRadius: 12, background: "white", padding: "10px 12px" }}>
-      <summary style={{ cursor: cards.length ? "pointer" : "default", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: 32 }}>
+      <summary style={{ cursor: cards.length ? "pointer" : "default", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: 44 }}>
         <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.4 }}>{title}</span>
         <span style={{ fontSize: 20, fontWeight: 800, color: cards.length ? color : "#9ca3af" }}>{cards.length}</span>
       </summary>
@@ -94,7 +94,7 @@ function AttentionGroup({ title, cards, color }: { title: string; cards: BoardCa
         <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
           {cards.map((card) => (
             <Link key={card.id} to={jobWorkspaceHref(card.id)} style={{ display: "flex", justifyContent: "space-between", gap: 8, minHeight: 40, alignItems: "center", padding: "4px 8px", borderRadius: 8, background: "#f9fafb", color: "#111827", textDecoration: "none", fontSize: 13 }}>
-              <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.customer} — {card.product}</span>
+              <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>{card.customer} — {card.product}</span>
               <span style={{ color: "#6b7280", whiteSpace: "nowrap" }}>{card.dueDate ? formatDue(card) : ""}</span>
             </Link>
           ))}

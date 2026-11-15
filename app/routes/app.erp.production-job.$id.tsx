@@ -10,18 +10,18 @@
 // (app/lib/simple-production.ts, app/lib/employee-messages.ts). The full
 // Production page stays available to the owner as the Advanced view.
 
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link, isRouteErrorResponse, useFetcher, useLoaderData, useNavigate, useRouteError, useRouteLoaderData } from "react-router";
 import { Page } from "@shopify/polaris";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { action as productionAction, loader as productionLoader } from "./app.erp.production";
 import { friendlyMessage } from "../lib/employee-messages";
 import { REPRINT_REASONS, formatShipDate, savedPickupForJob, savedShipmentForJob } from "../lib/production-fulfillment";
-import { itemQcState, itemReprintSummary } from "../lib/production-qc-display";
+import { itemReprintSummary } from "../lib/production-qc-display";
 import { showsProductionControl } from "../lib/production-role-access";
 import { PRODUCTION_STATUS_OPTIONS, staffStatusLabel } from "../lib/production-status-vocabulary";
 import { SIMPLE_BOARD_HREF, classicJobHref } from "../lib/simple-nav";
-import { isJobOverdue, jobWorkspaceView, showsMaterialUse, toMaterialOption, type JobStepKey, type WorkspaceStep } from "../lib/simple-production";
+import { isJobOverdue, jobWorkspaceView, showsMaterialUse, workspaceItemQc, toMaterialOption, type JobStepKey, type WorkspaceStep } from "../lib/simple-production";
 
 export async function loader(args: { request: Request; params: { id?: string } }) {
   const raw: any = await productionLoader({ request: args.request });
@@ -80,8 +80,13 @@ function Feedback({ data }: { data: any }) {
 function ActionForm({ jobId, intent, hidden, children }: { jobId: string; intent: string; hidden?: Record<string, string>; children: (busy: boolean) => ReactNode }) {
   const fetcher = useFetcher<any>();
   const busy = fetcher.state !== "idle";
+  // clear what was typed once it is saved, so a second tap cannot record the same entry twice
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.ok) formRef.current?.reset();
+  }, [fetcher.state, fetcher.data]);
   return (
-    <fetcher.Form method="post">
+    <fetcher.Form method="post" ref={formRef}>
       <input type="hidden" name="intent" value={intent} />
       <input type="hidden" name="jobId" value={jobId} />
       {Object.entries(hidden || {}).map(([name, value]) => <input key={name} type="hidden" name={name} value={value} />)}
@@ -111,7 +116,7 @@ function ChecklistButtons({ jobId, items }: { jobId: string; items: any[] }) {
               {item.completed ? (
                 <>
                   <span style={{ fontSize: 15, fontWeight: 600, color: "#166534" }}>✓ {item.label}</span>
-                  <button type="submit" disabled={busy} style={{ minHeight: 36, padding: "0 12px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 13, cursor: "pointer" }}>Undo</button>
+                  <button type="submit" disabled={busy} style={{ minHeight: 44, padding: "0 12px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 13, cursor: "pointer" }}>Undo</button>
                 </>
               ) : (
                 <button type="submit" disabled={busy} style={{ ...bigButton("primary", busy), width: "100%", textAlign: "left" }}>Mark done: {item.label}</button>
@@ -134,7 +139,7 @@ function QcStep({ job, role }: { job: any; role: string }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       {items.map((item) => {
-        const qc = itemQcState(item, job.events || []);
+        const qc = workspaceItemQc(item, job.events || []);
         const reprint = itemReprintSummary(item);
         const passed = qc.status === "pass";
         return (
@@ -160,7 +165,7 @@ function QcStep({ job, role }: { job: any; role: string }) {
             </ActionForm>
             {showsProductionControl(role, "reprintItem") ? (
               <details>
-                <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#b91c1c", minHeight: 36 }}>NEEDS REPRINT</summary>
+                <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#b91c1c", minHeight: 44 }}>NEEDS REPRINT</summary>
                 <ActionForm jobId={job.id} intent="reprintItem" hidden={{ itemId: String(item.id) }}>
                   {(busy) => (
                     <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
@@ -213,7 +218,8 @@ function FulfillStep({ job, showFinancials }: { job: any; showFinancials: boolea
         </div>
       ) : null}
 
-      {!shipment && !pickup && !["shipped", "picked_up", "completed", "cancelled"].includes(status) ? (
+      {/* a job that left Shipped / Picked Up (reopened for reprint, put on hold) must be shipped or handed over again */}
+      {!["shipped", "picked_up", "completed", "cancelled"].includes(status) ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
           <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
             <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Shipping it</div>
@@ -245,7 +251,7 @@ function FulfillStep({ job, showFinancials }: { job: any; showFinancials: boolea
         </div>
       ) : null}
 
-      {(shipment || pickup || ["shipped", "picked_up"].includes(status)) && status !== "completed" && status !== "cancelled" ? (
+      {["shipped", "picked_up"].includes(status) ? (
         <ActionForm jobId={job.id} intent="changeStatus" hidden={{ status: "completed" }}>
           {(busy) => <button type="submit" disabled={busy} style={{ ...bigButton("primary", busy), width: "100%", background: "#166534", borderColor: "#166534" }}>COMPLETE JOB</button>}
         </ActionForm>
@@ -255,6 +261,10 @@ function FulfillStep({ job, showFinancials }: { job: any; showFinancials: boolea
 }
 
 const PROOF_STATE: Record<string, string> = { draft: "Not sent yet", sent: "Sent to customer", viewed: "Customer has opened it", approved: "Approved by customer", changes_requested: "Customer asked for changes" };
+
+const PROOF_SEND_STATUSES = ["new", "prepress", "proof_needed", "proof_sent", "proof_approved"];
+/** Notes as staff should read them: the system bookkeeping lines ("Source: ... | Request: ...") are left to the Advanced view. */
+const staffNotes = (value: unknown) => String(value || "").split("\n").filter((line) => !/^\s*Source:\s/i.test(line)).join("\n").trim();
 
 /** Customer proof link — the existing createProofPortal / markProofSent actions, unchanged. */
 function CustomerProof({ job }: { job: any }) {
@@ -269,9 +279,12 @@ function CustomerProof({ job }: { job: any }) {
       {link ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, alignItems: "start" }}>
           <button type="button" onClick={() => { try { void navigator.clipboard?.writeText(link); } catch { /* copy is a convenience only */ } }} style={{ ...bigButton("secondary"), minHeight: 44 }}>Copy customer proof link</button>
-          <ActionForm jobId={job.id} intent="markProofSent">
-            {(busy) => <button type="submit" disabled={busy} style={{ ...bigButton("secondary", busy), minHeight: 44, width: "100%" }}>Mark proof sent</button>}
-          </ActionForm>
+          {/* marking a proof sent moves the job to Proof Sent, so it is only offered while the job is still in prepress */}
+          {PROOF_SEND_STATUSES.includes(String(job.status || "new")) ? (
+            <ActionForm jobId={job.id} intent="markProofSent">
+              {(busy) => <button type="submit" disabled={busy} style={{ ...bigButton("secondary", busy), minHeight: 44, width: "100%" }}>Mark proof sent</button>}
+            </ActionForm>
+          ) : null}
         </div>
       ) : (
         <ActionForm jobId={job.id} intent="createProofPortal">
@@ -306,7 +319,7 @@ function StepBody({ step, job, machine, showFinancials, materials, canRecordMate
       ) : null}
       {key === "artwork" && showsProductionControl(role, "revisionItem") && (job.items || []).length ? (
         <details>
-          <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, minHeight: 36 }}>NEW ARTWORK REVISION</summary>
+          <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, minHeight: 44 }}>NEW ARTWORK REVISION</summary>
           <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
             <div style={{ fontSize: 14, color: "#6b7280" }}>Use this when corrected artwork is coming. The old artwork stays in the job history.</div>
             {((job.items || []) as any[]).map((item) => (
@@ -319,7 +332,8 @@ function StepBody({ step, job, machine, showFinancials, materials, canRecordMate
       ) : null}
       {key === "qc" ? <QcStep job={job} role={role} /> : null}
       {key === "fulfill" ? <FulfillStep job={job} showFinancials={showFinancials} /> : null}
-      <ChecklistButtons jobId={job.id} items={step.checklist} />
+      {/* QC is recorded with the QC buttons above; a tick-box "QC passed" would not count as QC */}
+      {key !== "qc" ? <ChecklistButtons jobId={job.id} items={step.checklist} /> : null}
       {key === "print" || key === "finish" ? <MaterialUse job={job} materials={materials} canRecord={canRecordMaterial} /> : null}
       {key !== "qc" && key !== "fulfill" && !step.checklist.length ? <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Nothing to tick off for this step on this job.</p> : null}
     </div>
@@ -346,7 +360,7 @@ function FilesTab({ job, role }: { job: any; role: string }) {
           </div>
           {canRemove ? (
             <details>
-              <summary style={{ cursor: "pointer", fontSize: 13, color: "#b91c1c", minHeight: 32 }}>Remove</summary>
+              <summary style={{ cursor: "pointer", fontSize: 13, color: "#b91c1c", minHeight: 44 }}>Remove</summary>
               <ActionForm jobId={job.id} intent="deleteFile" hidden={{ fileId: String(file.id) }}>
                 {(busy) => (
                   <div style={{ display: "grid", gap: 8, marginTop: 6 }}>
@@ -360,7 +374,7 @@ function FilesTab({ job, role }: { job: any; role: string }) {
         </div>
       )) : <p style={{ margin: 0, color: "#6b7280" }}>No files yet.</p>}
       <details>
-        <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 36 }}>Add a file link</summary>
+        <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44 }}>Add a file link</summary>
         <ActionForm jobId={job.id} intent="addFile">
           {(busy) => (
             <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
@@ -406,7 +420,7 @@ function MaterialUse({ job, materials, canRecord }: { job: any; materials: { id:
           </div>
           {canRecord ? (
             <details>
-              <summary style={{ cursor: "pointer", fontSize: 13, color: "#b91c1c", minHeight: 32 }}>Correct material entry</summary>
+              <summary style={{ cursor: "pointer", fontSize: 13, color: "#b91c1c", minHeight: 44 }}>Correct material entry</summary>
               <ActionForm jobId={job.id} intent="deleteMaterialUsage" hidden={{ usageId: String(usage.id) }}>
                 {(busy) => (
                   <div style={{ display: "grid", gap: 8, marginTop: 6 }}>
@@ -427,7 +441,7 @@ function MaterialUse({ job, materials, canRecord }: { job: any; materials: { id:
       )) : <div style={{ fontSize: 14, color: "#6b7280" }}>Nothing recorded yet.</div>}
       {canRecord ? (
         <details>
-          <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 36 }}>Record material use</summary>
+          <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44 }}>Record material use</summary>
           <ActionForm jobId={job.id} intent="addMaterialUsage">
             {(busy) => (
               <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
@@ -448,7 +462,7 @@ function MaterialUse({ job, materials, canRecord }: { job: any; materials: { id:
                 </label>
                 <div style={{ fontSize: 12, color: "#6b7280" }}>Stock is only deducted when this box is ticked and the material is chosen from the list. It deducts quantity used plus waste.</div>
                 <details>
-                  <summary style={{ cursor: "pointer", fontSize: 13, color: "#6b7280", minHeight: 32 }}>Material is not in the list</summary>
+                  <summary style={{ cursor: "pointer", fontSize: 13, color: "#6b7280", minHeight: 44 }}>Material is not in the list</summary>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginTop: 6 }}>
                     <input name="materialName" placeholder="Material name" style={input} />
                     <input name="unit" placeholder="Unit (sqft, each…)" style={input} />
@@ -476,7 +490,7 @@ function NotesTab({ job }: { job: any }) {
           </div>
         )}
       </ActionForm>
-      {job.internalNotes ? <div style={{ padding: 10, borderRadius: 10, background: "#f9fafb", fontSize: 15, whiteSpace: "pre-wrap" }}>{job.internalNotes}</div> : null}
+      {staffNotes(job.internalNotes) ? <div style={{ padding: 10, borderRadius: 10, background: "#f9fafb", fontSize: 15, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{staffNotes(job.internalNotes)}</div> : null}
       {notes.map((note, index) => (
         <div key={note.id || index} style={{ padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
           <div style={{ fontSize: 15, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{note.message}</div>
@@ -524,7 +538,7 @@ function MoreTools({ job, role }: { job: any; role: string }) {
   const section: CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "grid", gap: 8 };
   return (
     <details style={{ ...card, padding: "10px 16px" }}>
-      <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#374151", minHeight: 32 }}>{canSettings ? "Job settings" : "More"}</summary>
+      <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#374151", minHeight: 44 }}>{canSettings ? "Job settings" : "More"}</summary>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginTop: 10, alignItems: "start" }}>
         {canSettings ? (
           <div style={section}>
@@ -591,7 +605,7 @@ function LinkIntakeJob({ job, role, linkTargets }: { job: any; role: string; lin
   if (!job.linkEligible || !showsProductionControl(role, "linkJobToTarget")) return null;
   return (
     <details style={{ ...card, borderColor: "#c4b5fd", background: "#faf5ff" }}>
-      <summary style={{ cursor: "pointer", fontSize: 15, fontWeight: 800, minHeight: 32 }}>This print file is not linked to an order yet — link it</summary>
+      <summary style={{ cursor: "pointer", fontSize: 15, fontWeight: 800, minHeight: 44 }}>This print file is not linked to an order yet — link it</summary>
       <LinkIntakeForm job={job} linkTargets={linkTargets} />
     </details>
   );
@@ -694,7 +708,7 @@ export default function JobWorkspace() {
 
         {view.steps.map((step) => (
           <details key={`${step.key}-${step.state}`} open={step.state === "current"} style={{ ...card, borderColor: step.state === "current" ? "#111827" : "#e5e7eb", borderWidth: step.state === "current" ? 2 : 1 }}>
-            <summary style={{ cursor: "pointer", fontSize: 17, fontWeight: 800, minHeight: 32, color: step.state === "upcoming" ? "#6b7280" : "#111827" }}>
+            <summary style={{ cursor: "pointer", fontSize: 17, fontWeight: 800, minHeight: 44, color: step.state === "upcoming" ? "#6b7280" : "#111827" }}>
               {step.state === "done" ? "✓ " : `${step.number}. `}{step.label}
               {step.state === "current" ? <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: "#111827", color: "white" }}>NOW</span> : null}
               {step.state === "upcoming" ? <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 600 }}>later</span> : null}
@@ -722,7 +736,7 @@ export default function JobWorkspace() {
         </div>
 
         <details style={card}>
-          <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#6b7280", minHeight: 32 }}>Advanced / details</summary>
+          <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#6b7280", minHeight: 44 }}>Advanced / details</summary>
           <div style={{ display: "grid", gap: 12, marginTop: 12, fontSize: 13 }}>
             <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
               <Fact label="Job ticket" value={job.jobTicket || "—"} />

@@ -105,7 +105,7 @@ describe("6. MATERIAL USED appears in Simple Mode for production roles", () => {
     expect(WORKSPACE_SRC).toContain("const canRecordMaterial = showsMaterialUse(role);");
     for (const text of ["MATERIAL USED", "Quantity used", "Waste", "Notes (optional)", "RECORD MATERIAL USE", "Deduct from material stock"]) expect(WORKSPACE_SRC, text).toContain(text);
     // the record form stays collapsed until asked for, so the step is not cluttered
-    expect(WORKSPACE_SRC).toContain('<summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 36 }}>Record material use</summary>');
+    expect(WORKSPACE_SRC).toContain('<summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44 }}>Record material use</summary>');
   });
 });
 

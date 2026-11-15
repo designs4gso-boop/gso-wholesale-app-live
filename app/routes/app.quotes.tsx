@@ -32,7 +32,8 @@ import { buildApprovalSnapshot, lowMarginApprovalLine, quoteMarginState } from "
 import { OWNER_QUOTE_PRICE_KIND, itemPricingAuthority, provisionalQuoteStatusCheck, quotePricingAuthorityState, quoteStatusChangeCheck, reconcileQuoteItemPricingAuthority } from "../lib/quote-pricing-authority";
 // 2026-10-19 owner decision 4: OWNER SET PRICE & APPROVE — owner-only, server-authorized, audited.
 import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
-import { PRODUCTION_ROLE_DENIED, roleMayRunProductionIntent } from "../lib/production-role-access";
+import { PRODUCTION_ROLE_DENIED, roleMayRunProductionIntent, roleMayViewProduction } from "../lib/production-role-access";
+import { SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
 import { resolveStaffAccess } from "../lib/staff-roles.server";
 import { ownerSetQuoteItemPrice } from "../lib/quote-owner-price-approval.server";
 import { SPLIT_BAG_AUTOMATIC_PRICE_KIND, SPLIT_BAG_LADDER_BADGE, SPLIT_BAG_OWNER_PRICE_LABEL, isSplitBagQuoteItem, ownerPricePreview } from "../lib/split-bag-quote-pricing";
@@ -708,7 +709,7 @@ export async function loader({ request }: { request: Request }) {
 
   const productionJobs = await db.productionJob.findMany({
     where: { shop: session.shop, active: true },
-    select: { id: true, quoteId: true, status: true, updatedAt: true },
+    select: { id: true, quoteId: true, status: true, updatedAt: true, jobTicket: true },
     orderBy: { updatedAt: "desc" },
   });
 
@@ -719,6 +720,9 @@ export async function loader({ request }: { request: Request }) {
     productionJobs,
     // Owner-only controls render only for the verified owner; the action re-checks.
     ownerAccess: { isOwner: ownerAuth.isOwner, userId: ownerAuth.userId, reason: ownerAuth.reason },
+    // 2026-11-14 display only: Sales may create a production job from a quote but may not open
+    // Production pages (the server turns them away), so they are not offered a link into Production.
+    canOpenProduction: roleMayViewProduction(resolveStaffAccess({ session, sessionToken }).role),
   });
 }
 
@@ -825,7 +829,7 @@ export async function action({ request }: { request: Request }) {
       const quotes = await getQuotes(shop, viewerIsOwner);
       const productionJobs = await db.productionJob.findMany({
         where: { shop, active: true },
-        select: { id: true, quoteId: true, status: true, updatedAt: true },
+        select: { id: true, quoteId: true, status: true, updatedAt: true, jobTicket: true },
         orderBy: { updatedAt: "desc" },
       });
 
@@ -836,7 +840,7 @@ export async function action({ request }: { request: Request }) {
         productionJobs,
         jobId: result.job.id,
         created: result.created,
-        message: result.created ? "Production job created." : "Production job already exists.",
+        message: `${result.created ? "Production job created." : "Production job already exists."}${result.job?.jobTicket ? ` Job ticket ${result.job.jobTicket}.` : ""}`,
       });
     } catch (error: any) {
       return Response.json({
@@ -2160,12 +2164,10 @@ export default function QuotesPage() {
     );
   }
 
+  // 2026-11-14: opens the Simple Mode job page (every production role may open it; the owner
+  // reaches the Advanced view from there). Only offered when canOpenProduction is true.
   function openProductionJob(jobId?: string) {
-    if (jobId) {
-      navigate(`/app/erp/production?job=${jobId}`);
-    } else {
-      navigate("/app/erp/production");
-    }
+    navigate(jobId ? jobWorkspaceHref(jobId) : SIMPLE_BOARD_HREF);
   }
 
   let tone: "success" | "warning" | "critical" = "success";
@@ -2773,8 +2775,10 @@ export default function QuotesPage() {
                                     <Button onClick={() => loadQuote(quote)}>Open</Button>
                                     {productionJob ? (
                                       <InlineStack gap="100" blockAlign="center">
-                                        <Button variant="primary" onClick={() => openProductionJob(productionJob.id)}>Open Production Job</Button>
-                                        <Text as="span" tone="subdued" variant="bodySm">created {productionJob.updatedAt ? new Date(productionJob.updatedAt).toLocaleDateString() : ""}</Text>
+                                        {loaderData.canOpenProduction
+                                          ? <Button variant="primary" onClick={() => openProductionJob(productionJob.id)}>Open Production Job</Button>
+                                          : <Badge tone="success">Production job created</Badge>}
+                                        <Text as="span" tone="subdued" variant="bodySm">{productionJob.jobTicket ? `${productionJob.jobTicket} · ` : ""}created {productionJob.updatedAt ? new Date(productionJob.updatedAt).toLocaleDateString() : ""}</Text>
                                       </InlineStack>
                                     ) : canCreateProductionJob ? (
                                       <Button variant="primary" onClick={() => createProductionJob(quote.id)}>Create Production Job</Button>

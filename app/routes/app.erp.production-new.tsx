@@ -33,6 +33,16 @@ export async function loader({ request }: { request: Request }) {
   });
 }
 
+/**
+ * A refused job (for example a finish the chosen printer cannot do) must not
+ * wipe what the employee typed: the form is keyed on the loader's requestId,
+ * so the loader is not re-run after a refusal. Nothing was created, so reusing
+ * the same requestId for the corrected attempt is safe.
+ */
+export function shouldRevalidate({ actionResult, defaultShouldRevalidate }: { actionResult?: any; defaultShouldRevalidate: boolean }) {
+  return actionResult && actionResult.ok === false ? false : defaultShouldRevalidate;
+}
+
 /** Posts to the existing Production action — nothing is re-implemented here. */
 export async function action(args: { request: Request }) {
   return productionAction({ request: args.request });

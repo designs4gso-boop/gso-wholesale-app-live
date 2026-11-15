@@ -37,6 +37,10 @@ export const EMPLOYEE_MESSAGE_RULES: readonly { match: RegExp; primary: string }
   { match: /PRICE_NOT_AVAILABLE/i, primary: "No price is available yet — ask the owner" },
   { match: /^Owner only\b/i, primary: "Only the owner can do this" },
   { match: /needs an assigned ERP role|No ERP role is assigned/i, primary: "Your account doesn't have access to this yet — ask the owner" },
+  { match: /can't do this on a production job/i, primary: "Your role can't do this — ask a manager" },
+  { match: /Work order print event tracked/i, primary: "Work order marked as printed" },
+  { match: /reopened for reprint/i, primary: "Job reopened for reprint" },
+  { match: /use the normal Reprint button/i, primary: "This job isn't completed — use NEEDS REPRINT on the item instead" },
 ];
 
 /** Plain-English first line for a message; the original stays available as `detail`. */

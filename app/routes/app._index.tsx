@@ -114,7 +114,8 @@ type Tile = { key: string; label: string; value: number; href: string; helper: s
 const ROLE_TILES: Record<string, readonly string[] | "all"> = {
   owner: "all",
   manager: "all",
-  sales: ["quotesToWork", "quotesAwaitingPayment", "reviewNeedsStaff", "reviewReadyToQuote", "jobsProofSent"],
+  // Sales may not open Production pages (server rule), so no tile here may lead there.
+  sales: ["quotesToWork", "quotesAwaitingPayment", "reviewNeedsStaff", "reviewReadyToQuote"],
   print_operator: ["jobsReadyToPrint", "jobsPrinting", "jobsHeld", "jobsOverdue"],
   bagger: ["jobsFinishing", "jobsReadyForPickup", "jobsHeld", "jobsOverdue"],
   unassigned: [],
@@ -252,6 +253,8 @@ export default function AppHome() {
       title="Home"
       subtitle={home.purpose}
       primaryAction={{ content: home.action, onAction: () => navigate(home.href) }}
+      // the Cost Calculator stays one click from Home for the owner (the route itself is owner-only)
+      secondaryActions={isOwner ? [{ content: "Cost Calculator", onAction: () => navigate("/app/erp/cost-calculator") }] : []}
     >
       <Layout>
         {role === "unassigned" ? (

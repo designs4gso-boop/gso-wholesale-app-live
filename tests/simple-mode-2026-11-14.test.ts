@@ -491,7 +491,7 @@ describe("Phase 2 — Job Workspace reuses the real Production loader and action
     expect(src).toContain("return productionAction({ request: args.request });");
     expect(src).not.toMatch(/db\.server|prisma|\$transaction|updateMany|resolveStaffAccess/);
     // saved shipment / pickup and QC state come from the existing helpers
-    for (const helper of ["savedShipmentForJob(job, job.events || [])", "savedPickupForJob(job, job.events || [])", "itemQcState(item, job.events || [])", "itemReprintSummary(item)"]) expect(src).toContain(helper);
+    for (const helper of ["savedShipmentForJob(job, job.events || [])", "savedPickupForJob(job, job.events || [])", "workspaceItemQc(item, job.events || [])", "itemReprintSummary(item)"]) expect(src).toContain(helper);
     for (const text of ["NEXT STEP", "Open advanced view", "Advanced / details"]) expect(src).toContain(text);
     // action feedback renders inside each form, next to its button
     expect(src).toContain("<Feedback data={fetcher.data} />");
