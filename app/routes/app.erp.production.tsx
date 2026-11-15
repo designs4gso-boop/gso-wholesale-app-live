@@ -24,6 +24,7 @@ import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, assessLink
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
+import { MATERIAL_USAGE_REPLAY_WINDOW_MS, isMaterialUsageReplay, manualUsageSource } from "../lib/material-usage-guard";
 import { buildBrandRates, computeEntryCosts, machineRatePerHour, type BrandInkRates } from "../lib/rip-actual-costs.server";
 import { PRINT_LOG_USAGE_SOURCE } from "../lib/print-log-writeback-shared";
 import { assetStateLabel, isFetchableAssetUrl } from "../lib/security-guards-shared";
@@ -745,6 +746,10 @@ export async function action({ request }: { request: Request }) {
   // work-order printed, file roles, ticket backfill and create-from-quote; any
   // intent it does not list needs a production floor role (fail closed).
   if (!roleMayRunProductionIntent(staffAccess.role, intent)) return Response.json({ ok: false, message: `${PRODUCTION_ROLE_DENIED} ${staffAccess.reason}` }, { status: 403 });
+  // 2026-11-15: this app uses offline Shopify sessions, which carry no person, so the
+  // session-based actor fell back to "shop-admin:… (offline session)" on every record.
+  // The verified Shopify staff user (session token) is recorded instead when that happens.
+  const verifiedActor = (fromSession: string) => (/\(offline session\)$/.test(fromSession) ? staffAccess.actor : fromSession);
 
   // 15H.4C: link an UNLINKED intake shell job onto the real commercial job.
   // Exact owner selection + confirmation; the service validates both sides,
@@ -760,7 +765,7 @@ export async function action({ request }: { request: Request }) {
         sourceJobId: String(formData.get("sourceJobId") || ""),
         targetJobId: targetJobId || "",
         targetItemId: targetItemId || null,
-        actor: resolveActorFromSession(session, shop),
+        actor: verifiedActor(resolveActorFromSession(session, shop)),
         reason: String(formData.get("linkReason") || ""),
       });
       return Response.json({ ok: result.ok, message: result.message });
@@ -774,7 +779,7 @@ export async function action({ request }: { request: Request }) {
   // the session; validation + canonical machine resolution in the service.
   if (intent === "createManualJob") {
     try {
-      const actor = resolveActorFromSession(session, shop);
+      const actor = verifiedActor(resolveActorFromSession(session, shop));
       const result = await createProductionJobFromSource(db, {
         shop,
         actor,
@@ -1106,7 +1111,7 @@ Source ref: ${sourceRef}` : ""}`,
     const checklistId = String(formData.get("checklistId") || "");
     const jobId = String(formData.get("jobId") || "");
     const completed = String(formData.get("completed") || "false") === "true";
-    const checklistActor = resolveActorFromSession(session, shop);
+    const checklistActor = verifiedActor(resolveActorFromSession(session, shop));
     await db.productionChecklistItem.updateMany({
       where: { shop, id: checklistId, jobId },
       data: { completed, completedAt: completed ? new Date() : null, completedBy: completed ? checklistActor : null },
@@ -1133,6 +1138,17 @@ Source ref: ${sourceRef}` : ""}`,
     const billableQty = usedQty || pulledQty || estimatedQty || 0;
     const totalCost = Number((ownerCosts && formData.get("totalCost")) || 0) || (billableQty + wasteQty + reprintQty) * costPerUnit;
 
+    // 2026-11-15 replay guard: the same material + quantities posted again for the same job
+    // within a few seconds is a double-click / network retry, not a second use. It is NOT
+    // recorded again, so stock is never deducted twice for one entry.
+    const replayOf = await db.productionMaterialUsage.findFirst({
+      where: { shop, jobId, materialId: material?.id || null, materialName, unit, usedQty, pulledQty, wasteQty, reprintQty, createdAt: { gte: new Date(Date.now() - MATERIAL_USAGE_REPLAY_WINDOW_MS) } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (isMaterialUsageReplay(replayOf, { jobId, materialId: material?.id || null, materialName, unit, usedQty, pulledQty, wasteQty, reprintQty })) {
+      return Response.json({ ok: true, message: "This material use was already recorded a moment ago — it was not added a second time." });
+    }
+
     const usage = await db.productionMaterialUsage.create({
       data: {
         shop,
@@ -1148,7 +1164,7 @@ Source ref: ${sourceRef}` : ""}`,
         reprintQty,
         costPerUnit,
         totalCost,
-        source: String(formData.get("source") || "manual"),
+        source: manualUsageSource(formData.get("source")),
         notes: String(formData.get("materialNotes") || "") || null,
       },
     });
@@ -1329,7 +1345,7 @@ Source ref: ${sourceRef}` : ""}`,
       }
     }
 
-    const actor = resolveActorFromSession(session, shop);
+    const actor = verifiedActor(resolveActorFromSession(session, shop));
     const actualCostNotes = String(formData.get("actualCostNotes") || "") || null;
     await db.productionJob.update({
       where: { id: jobId },
@@ -1379,7 +1395,7 @@ Source ref: ${sourceRef}` : ""}`,
     if (!job.actualCostFinalized) return Response.json({ ok: false, message: "This job is not finalized — nothing to reopen." });
     if (phrase !== REOPEN_PHRASE) return Response.json({ ok: false, message: `Type the exact phrase "${REOPEN_PHRASE}" to reopen a finalized job cost. Nothing was changed.` });
     if (reason.length < 5) return Response.json({ ok: false, message: "A written reopen reason (5+ characters) is required. Nothing was changed." });
-    const actor = resolveActorFromSession(session, shop);
+    const actor = verifiedActor(resolveActorFromSession(session, shop));
     const prior = {
       totalCost: Number(job.actualTotalCost || 0),
       profit: Number(job.actualFinalProfit || 0),
@@ -1492,7 +1508,7 @@ Source ref: ${sourceRef}` : ""}`,
     if (awaitingQcAfterReprint(item)) {
       return Response.json({ ok: false, message: `A reprint is already recorded for ${itemLabel} (${reprintReasonLabel(String(item.lastReprintReason || ""))}, ${item.lastReprintAt ? new Date(item.lastReprintAt).toLocaleString() : "earlier"}) and is waiting for QC. Record QC on the reprinted piece before requesting another reprint. Nothing was changed.` }, { status: 409 });
     }
-    const actor = resolveActorFromSession(session, shop);
+    const actor = verifiedActor(resolveActorFromSession(session, shop));
     const note = String(formData.get("reprintNote") || "").slice(0, 200);
     const row = item.itemTicket
       ? await db.printIntake.findFirst({
@@ -1554,7 +1570,7 @@ Source ref: ${sourceRef}` : ""}`,
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId }, include: { items: true } });
     const item = job?.items.find((row: any) => row.id === itemId);
     if (!job || !item) return Response.json({ ok: false, message: "Job/item not found." });
-    const actor = resolveActorFromSession(session, shop);
+    const actor = verifiedActor(resolveActorFromSession(session, shop));
     const latest = item.itemTicket
       ? await db.printIntake.findFirst({ where: { shop, authoritativeTicket: item.itemTicket }, orderBy: { revisionNumber: "desc" }, select: { revisionNumber: true } })
       : null;
@@ -1576,7 +1592,7 @@ Source ref: ${sourceRef}` : ""}`,
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId }, include: { items: true } });
     const item = job?.items.find((row: any) => row.id === itemId);
     if (!job || !item) return Response.json({ ok: false, message: "Job/item not found." });
-    const actor = resolveActorFromSession(session, shop);
+    const actor = verifiedActor(resolveActorFromSession(session, shop));
     const row = item.itemTicket
       ? await db.printIntake.findFirst({ where: { shop, authoritativeTicket: item.itemTicket }, orderBy: { updatedAt: "desc" }, select: { revisionNumber: true, reprintNumber: true, attemptNumber: true } })
       : null;
@@ -1610,7 +1626,7 @@ Source ref: ${sourceRef}` : ""}`,
     if (String(job.status) !== "completed" && !job.actualCostFinalized) {
       return Response.json({ ok: false, message: "Job is not completed/finalized — use the normal Reprint button instead." });
     }
-    const actor = resolveActorFromSession(session, shop);
+    const actor = verifiedActor(resolveActorFromSession(session, shop));
     await db.productionJob.update({ where: { id: job.id }, data: { status: "reprint_needed" } });
     await createEvent(
       shop, job.id, "production_job_reopened_for_reprint",
@@ -1981,7 +1997,6 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
                     <select name="source" defaultValue="manual" style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #bbb" }}>
                       <option value="manual">Manual</option>
                       <option value="recipe">Recipe estimate</option>
-                      <option value="print_log">Print log</option>
                       <option value="inventory">Inventory pull</option>
                       <option value="vendor_invoice">Vendor invoice</option>
                     </select>
