@@ -1,5 +1,52 @@
 # GSO ERP Project State
 
+## CURRENT STATE — 2026-11-15 overnight stabilization (READ THIS FIRST; supersedes older blocks below where they disagree)
+
+**Repo / release.** `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp-release-20261017`, branch `main`, Render auto-deploys `main`. Live `main` before this work: `bc418f1`. This work: branch `overnight/erp-stabilization-2026-11-15`, merged to `main` as "release(erp): overnight stabilization 2026-11-15" (current SHA: `git log -1 --first-parent main`). No schema change, no migration, no env change. Never run `npm run dev` or `shopify app deploy` against the live app; `shopify.app.preview.toml` is local / untracked and must never be staged.
+
+**Test baselines.** Full suite: exactly 5 known failures, all personalization (missing `shopify-theme/templates/product.configurator-pilot.json`). Typecheck: 263 errors (pre-existing; a new error in a changed file must be fixed even if the total is unchanged). Tests regenerate `docs/generated/*` — restore with `git checkout -- docs/generated` before committing. On this Windows machine a branch switch rewrites files with CRLF and breaks multi-line source-pin tests; restore LF first.
+
+### Simple Mode (deployed `b69139a`, 2026-11-14) — owner has NOT yet visually reviewed it
+- Role-aware navigation (`app/lib/simple-nav.ts`), Home, six-stage Production Board (NEW / PREPRESS / PRODUCTION / FINISH / QC / READY / DONE) with an attention strip (ON HOLD / REPRINT NEEDED / OVERDUE), a Job Workspace (ARTWORK / PRINT / FINISH / QC / PACK / FULFILL), New Job, and the owner's Advanced Production view.
+- **Server authorization (hardened `d167d9b`, tightened 2026-11-15):** every production page and action needs a production role. Sales keeps exactly one production action (create a job from a paid quote) and is never sent into Production. Unassigned accounts hold nothing. The role table is `PRODUCTION_INTENT_ROLES` in `app/lib/production-role-access.ts`; **an action that is not listed there is refused for every role (default DENY)** — add a new action to the table when it is reviewed. Print Logs, RIP Imports and Incoming Print Files now also require a production role on the server.
+- **LATE / OVERDUE:** a due date is a calendar date; a job is late only when that date is before today in the business timezone `America/Los_Angeles` (`app/lib/business-date.ts`). Same answer on the board, job page, Home, Advanced view and calendar. New Job stores a picked date at noon UTC.
+- Live PASS (owner, 2026-11-12..14): QC PASS, reprint reset, fresh QC after reprint, shipment persistence, pickup persistence, Completed gate positive and negative. Do not repeat those live tests.
+
+### Cost Calculator — live-verified benchmarks (pinned in `tests/live-benchmark-lock-2026-11-15.test.ts`; never change the expected numbers without owner approval)
+| Job | True cost | Price | Unit | Margin |
+|---|---|---|---|---|
+| Split Bag, 3,800, 30 designs, front + back, Poseidon Matte, Roland, white 0, gloss 1, coverage **85%** | $4,164.21 | $8,165.12 | $2.15 | 49% |
+| Same job, gloss coverage **blank (= 90%)** | $4,233.32 | $8,300.62 | $2.18 | 49% (profit $4,067.31) |
+| QP / P Bag (14x16), 100 **front only** | $303.71 ($3.0371 each) | $573.03 | $5.73 | 47% (profit $269.32) |
+| QP / P Bag (14x16), 100 **front + back** | $482.24 ($4.8224 each) | $909.88 | $9.10 | 47% (profit $427.64) |
+
+- **Gloss coverage:** in the Cost Calculator a blank coverage with gloss layers > 0 means **90%** (`app/lib/gloss-coverage.ts`, deployed `cddbf5d`). The deeper ink engine still has a 50% fallback for other internal callers; it is not reached from the calculator. Do not restore the hidden 50%.
+- **QP / P Bag (14x16) is ONE product** (aliases: QP, QP Bag, Quarter Pound Bag, P Bag, Pound Bag, 14x16, 14x16 / Pound Bag, large sticker bag). Canonical family `pound-bags` (UI: `pfamily=sticker-bags&ppoundbag=1`).
+  - Geometry: bag 14.39 x 16.39 in; sticker / art 14.05 x 16.00 in, same front and back.
+  - Blank: the "14x16 Blank Bag" Vendor Cost Book record (`preset:pound-bag`), currently **$1.00**; no record = the job blocks, never a guessed cost.
+  - MOQ **4**.
+  - Application labor at $20/hr by completed-bag throughput: front only / back only **50 bags/hr = $0.40 per bag**; front + back **30 bags/hr = $0.6666667 per bag as ONE operation** (never two $0.40 operations, never per label).
+  - Price: its **own dedicated ladder** (`app/lib/pound-bag-pricing.ts`) — margin anchors 4 = 55%, 16 = 53%, 50 = 50%, 100 = 47%, 256 = 44%, 500 = 42%, 1000+ = 40%; **linear between anchors (specific to this product)**; $75 minimum gross profit per job; 40% global floor; one curve for every side option. Never the Standard 4x5 ladder or its market targets.
+  - **Spoilage / planned overage: 0% — OPEN OWNER DECISION. Do not invent an allowance.**
+- Standard 4x5 (500 front + back = $264.22 cost / $750.00) and Split Bag pricing are unchanged and pinned.
+
+### Operational QA (code level, 2026-11-15)
+- **Actual cost / variance — PASS.** The quote cost snapshot on the job items is never written after job creation; `quotedTrueCost` is written once; actual cost lives in separate `actual*` fields; variance = actual − quoted (percent is null with no estimate, never 0%); only the owner or a financially authorized manager can save, finalize or reopen; finalization records who / when (now the verified Shopify staff user, not "offline session"); reopen needs the phrase `OWNER COST REOPEN` + a reason and keeps the prior figures in history. Tests: `tests/operational-qa-actual-cost-redaction-2026-11-15.test.ts`.
+- **Purchase requests — PASS after fixes.** Staff create requests (requester captured); only the owner / authorized manager approves. Any status change other than draft ↔ requested now needs approval (a forged "partially received" used to skip it); the first approver is captured on every path and never overwritten; received / cancelled requests are not re-opened by the order buttons; nothing orders from a vendor. Tests: `tests/purchase-request-approval-2026-11-15.test.ts`.
+- **Financial redaction — PASS after fixes** for production payloads (board, job page, work order, proof, calendar) and purchasing. Fixed: margin % in Quotes error messages to non-owners; ink / machine rates in imported print-log usage notes.
+- **Inventory: automatic reservation and automatic consumption are OFF** (the reservation helpers have no caller). The only per-job stock change is the manual "Deduct from material stock" option; a double-submitted entry is now recorded and deducted once.
+
+### Open owner decisions (do not decide these in code)
+1. QP / P Bag spoilage / planned overage allowance (currently 0%).
+2. Automatic inventory reservation: the scheduling event that reserves, the source of the expected quantity, and how it reconciles with the manual deduction (must never double-deduct).
+3. **Stock units:** the Materials page treats "Stock on hand" as purchase units (e.g. rolls) while a job's manual deduction subtracts the usage quantity in base units (e.g. sqft) from the same number. Decide the one unit stock is kept in before relying on deductions for roll media.
+4. **Quotes page access:** the Quotes loader has no role check, so a Print Operator, Bagger or unassigned account that opens `/app/quotes` directly receives quotes with selling prices and customer contacts (cost and margin are redacted; the menu does not link it). Decide whether Quotes should be limited to owner / manager / sales.
+5. **Leads to Review for Sales:** the lead queue is financial-access only on the server, so the link and tiles were hidden from Sales and unauthorized managers. Decide whether Sales should get a (redacted) lead queue.
+6. Purchase receiving: any assigned role (including Sales and Bagger) can receive an ordered request into stock. Confirm or narrow.
+7. Material use on a cost-finalized or completed job is still allowed (stored totals do not change, but the usage rows do). Confirm or block.
+8. Sales proof authority: unchanged — proof actions need owner / manager / print operator.
+9. Carried over: 3oz / 4oz tamper-band seconds, 50ml geometry samples, banner finishing inputs, Mimaki white calibration, Split Bag packout / freight.
+
 ## Overnight finalization (2026-11-12, branch `overnight/final-operational-readiness-2026-11-11`)
 
 See docs/GSO_ERP_OVERNIGHT_READINESS_2026-11-12.md. Server-side financial redaction for Purchase Requests / Reorder Report; PO export, Vendors, Machines, Shopify Links, Configurator Jar Mapping and Admin Settings gated to owner / authorized manager; manual printer selection = owner + authorized print operator only (managers not by default); Print Intake review needs manageIntake; owner-only Staff Access & Launch Readiness page; calibration review needs an owner-set minimum job count (GSO_CALIBRATION_REVIEW_MIN_SAMPLES) and never auto-changes; customer-notification foundation never sends; STAGED (not applied) additive migration 20261112090000_add_operational_records (reservations, structured QC / reprint / shipment / waste, purchasing approver, rush, promised date, variance, notification preferences).
