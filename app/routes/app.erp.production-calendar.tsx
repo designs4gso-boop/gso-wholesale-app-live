@@ -7,6 +7,7 @@ import { authenticate } from "../shopify.server";
 import { productionFinancialVisibility } from "../lib/owner-authorization.server";
 import { redactJobFinancials } from "../lib/production-financial-redaction";
 import db from "../db.server";
+import { businessDateKey, dueInDays, formatDueDate } from "../lib/business-date";
 import { PRODUCTION_ROLE_DENIED, PRODUCTION_VIEW_DENIED_REDIRECT, roleMayRunProductionIntent, roleMayViewProduction } from "../lib/production-role-access";
 import { resolveStaffAccess } from "../lib/staff-roles.server";
 
@@ -54,10 +55,10 @@ function startOfLocalDay(date = new Date()) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
-function daysBetween(from: Date, to: Date) {
-  const start = startOfLocalDay(from).getTime();
-  const end = startOfLocalDay(to).getTime();
-  return Math.round((end - start) / 86400000);
+// 2026-11-15: calendar days are counted between DATES in the business timezone
+// (today) and the due date's own calendar date — not with the server's clock zone.
+function daysBetween(_from: Date, to: Date) {
+  return dueInDays(to) ?? 0;
 }
 
 function dueTone(job: any) {
@@ -104,10 +105,10 @@ function groupJobs(jobs: any[]) {
   const activeJobs = jobs.filter((job) => !["completed", "cancelled"].includes(job.status));
 
   return {
-    overdue: activeJobs.filter((job) => job.dueDate && new Date(job.dueDate) < today),
+    overdue: activeJobs.filter((job) => job.dueDate && daysBetween(today, new Date(job.dueDate)) < 0),
     today: activeJobs.filter((job) => job.dueDate && daysBetween(today, new Date(job.dueDate)) === 0),
     tomorrow: activeJobs.filter((job) => job.dueDate && daysBetween(today, new Date(job.dueDate)) === 1),
-    week: activeJobs.filter((job) => job.dueDate && daysBetween(today, new Date(job.dueDate)) >= 2 && new Date(job.dueDate) <= endOfWeek),
+    week: activeJobs.filter((job) => job.dueDate && daysBetween(today, new Date(job.dueDate)) >= 2 && daysBetween(today, new Date(job.dueDate)) <= 7),
     noDueDate: activeJobs.filter((job) => !job.dueDate),
     rush: activeJobs.filter((job) => ["rush", "critical"].includes(job.priority)),
     completed: jobs.filter((job) => job.status === "completed"),
@@ -217,11 +218,11 @@ export async function action({ request }: { request: Request }) {
     const days = Number(formData.get("days") || 0);
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
     if (!job) return Response.json({ ok: false, message: "Production job not found." }, { status: 404 });
-    const due = startOfLocalDay();
-    due.setDate(due.getDate() + days);
-    due.setHours(12, 0, 0, 0);
+    // 2026-11-15: "today" is today's date in the business timezone (after 4 PM Pacific the server's UTC day is already tomorrow).
+    const due = new Date(`${businessDateKey()}T12:00:00.000Z`);
+    due.setUTCDate(due.getUTCDate() + days);
     await db.productionJob.update({ where: { id: jobId }, data: { dueDate: due } });
-    await createEvent(shop, jobId, "due_date_updated", `Due date changed to ${due.toLocaleDateString()} from calendar quick action.`, dateInput(job.dueDate), dateInput(due));
+    await createEvent(shop, jobId, "due_date_updated", `Due date changed to ${formatDueDate(due)} from calendar quick action.`, dateInput(job.dueDate), dateInput(due));
     return Response.json({ ok: true, message: "Due date updated." });
   }
 
