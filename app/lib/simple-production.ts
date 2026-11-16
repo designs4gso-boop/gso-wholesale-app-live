@@ -11,6 +11,7 @@
 import { itemQcState, type ItemQcState } from "./production-qc-display";
 import { qcEventItemKey, qcResultOf } from "./production-qc-guard";
 import { staffStatusLabel } from "./production-status-vocabulary";
+import { isPastDueDate } from "./business-date";
 
 /* ---------------- 6 board stages (UI groups of existing statuses) ---------------- */
 
@@ -286,8 +287,9 @@ export function isJobOverdue(job: any, now: Date = new Date()): boolean {
   const due = iso(job?.dueDate);
   if (!due) return false;
   if (["completed", "shipped", "picked_up", "cancelled"].includes(norm(job?.status))) return false;
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  return new Date(due).getTime() < startOfToday;
+  // 2026-11-15: a due date is a calendar DATE. It is late only when that date is before
+  // today in the business timezone (America/Los_Angeles) — never because UTC crossed midnight.
+  return isPastDueDate(due, now);
 }
 
 /**

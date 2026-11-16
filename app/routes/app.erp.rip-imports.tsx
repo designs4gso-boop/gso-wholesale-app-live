@@ -1,7 +1,9 @@
 import type React from "react";
-import { Form, Link, useActionData, useLoaderData } from "react-router";
+import { Form, Link, useActionData, useLoaderData, redirect } from "react-router";
 import crypto from "crypto";
 import { authenticate } from "../shopify.server";
+import { PRODUCTION_ROLE_DENIED, PRODUCTION_VIEW_DENIED_REDIRECT, roleMayViewProduction } from "../lib/production-role-access";
+import { resolveStaffAccess } from "../lib/staff-roles.server";
 import db from "../db.server";
 import { credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
 import { loadRipNameIndex, resolveRipIdentity } from "../lib/rip-identity-match.server";
@@ -174,7 +176,10 @@ async function ensureSetting(shop: string) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // SERVER HARDENING 2026-11-15: production print pages are for production roles (Sales / unassigned are turned away before anything is read).
+  if (!roleMayViewProduction(resolveStaffAccess(auth).role)) throw redirect(PRODUCTION_VIEW_DENIED_REDIRECT);
   const shop = session.shop;
   const setting = await ensureSetting(shop);
   const imports = await db.printLogImport.findMany({
@@ -197,7 +202,11 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const { session } = auth;
+  // SERVER HARDENING 2026-11-15: refused before any read or write for Sales, unassigned accounts and any non-production role.
+  const printStaff = resolveStaffAccess(auth);
+  if (!roleMayViewProduction(printStaff.role)) return Response.json({ ok: false, message: `${PRODUCTION_ROLE_DENIED} ${printStaff.reason}` }, { status: 403 });
   const shop = session.shop;
   const form = await request.formData();
   const upload = form.get("ripFile");

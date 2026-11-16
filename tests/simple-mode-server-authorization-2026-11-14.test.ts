@@ -298,13 +298,22 @@ describe("UNASSIGNED has zero production mutation capability; SALES keeps exactl
     }
   });
 
-  it("the rule table gives unassigned nothing and Sales only createFromQuote; unlisted intents need a floor role", () => {
+  it("the rule table gives unassigned nothing and Sales only createFromQuote; unlisted intents are denied for EVERY role (default DENY, owner rule 2026-11-15)", () => {
     for (const intent of [...Object.keys(PRODUCTION_INTENT_ROLES), ...CLASSIC_INTENTS, "someFutureIntent", "", "constructor", "toString", "__proto__"]) {
       for (const role of ["unassigned", "", "anything-else", null, undefined]) expect(roleMayRunProductionIntent(role, intent), `${role} ${intent}`).toBe(false);
       expect(roleMayRunProductionIntent("sales", intent), `sales ${intent}`).toBe(intent === "createFromQuote");
     }
     expect([...PRODUCTION_FLOOR_ROLES].sort()).toEqual(["bagger", "manager", "owner", "print_operator"]);
-    for (const role of FLOOR) expect(roleMayRunProductionIntent(role, "someFutureIntent")).toBe(true);
+    // 2026-11-15 owner rule: "a newly added action must default DENY until reviewed" — this
+    // replaces the 2026-11-14 fallback that let any floor role run an unlisted intent.
+    for (const intent of ["someFutureIntent", "", "constructor", "toString", "__proto__"]) {
+      for (const role of FLOOR) expect(roleMayRunProductionIntent(role, intent), `${role} ${intent}`).toBe(false);
+    }
+    // every action the production, proof and calendar routes handle is listed (nothing real fell into the deny default)
+    for (const intent of [...CLASSIC_INTENTS, ...intentsIn(SRC.proof), ...intentsIn(SRC.calendar)]) expect(Object.keys(PRODUCTION_INTENT_ROLES), intent).toContain(intent);
+    for (const intent of ["qcItem", "recordShipment", "recordPickup"]) expect([...PRODUCTION_INTENT_ROLES[intent]].sort()).toEqual(["bagger", "manager", "owner", "print_operator"]);
+    expect([...PRODUCTION_INTENT_ROLES.reprintItem].sort()).toEqual(["manager", "owner", "print_operator"]);
+    for (const intent of ["saveFinalCosts", "reopenJobCost", "pullPrintLogActuals", "adjustInventory"]) expect([...PRODUCTION_INTENT_ROLES[intent]].sort()).toEqual(["manager", "owner"]);
   });
 
   it("each gate sits before the first database call of its action", () => {

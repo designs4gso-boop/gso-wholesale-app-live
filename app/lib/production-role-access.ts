@@ -57,7 +57,22 @@ export const PRODUCTION_INTENT_ROLES: Record<string, readonly string[]> = {
   linkJobToTarget: LEADS,
   // removing a wrongly attached production file
   deleteFile: LEADS,
+  // 2026-11-15 (default DENY): the actions below used to pass through the "any
+  // floor role" fallback. They are now listed, so the fallback can deny. Each
+  // keeps its own stricter check in the route (recordQc / recordReprint /
+  // recordShipment permissions; owner / authorized-manager cost controls).
+  qcItem: PRODUCTION_FLOOR_ROLES,
+  reprintItem: LEADS, // same three roles that hold recordReprint
+  recordShipment: PRODUCTION_FLOOR_ROLES,
+  recordPickup: PRODUCTION_FLOOR_ROLES,
+  saveFinalCosts: ["owner", "manager"],
+  reopenJobCost: ["owner", "manager"],
+  pullPrintLogActuals: ["owner", "manager"],
+  adjustInventory: ["owner", "manager"],
 };
+
+/** An action that is not listed above is refused for EVERY role until it is reviewed and added. */
+const UNLISTED_INTENT_ROLES: readonly string[] = [];
 
 export const PRODUCTION_ROLE_DENIED = "Your role can't do this on a production job.";
 
@@ -69,13 +84,12 @@ export function roleMayViewProduction(role: unknown): boolean {
 }
 
 /**
- * Server + screen rule. An intent this table does not cover (QC, reprint,
- * shipment, pickup, the owner cost controls — each with its own stricter
- * check) still needs a production floor role, so nothing is open to an
- * account merely because it is signed in.
+ * Server + screen rule. DEFAULT DENY (owner rule 2026-11-15): an intent this
+ * table does not list is refused for every role, so a newly added action
+ * cannot run for anyone until it has been reviewed and given a role list.
  */
 export function roleMayRunProductionIntent(role: unknown, intent: unknown): boolean {
-  const allowed = Object.prototype.hasOwnProperty.call(PRODUCTION_INTENT_ROLES, String(intent ?? "")) ? PRODUCTION_INTENT_ROLES[String(intent ?? "")] : PRODUCTION_FLOOR_ROLES;
+  const allowed = Object.prototype.hasOwnProperty.call(PRODUCTION_INTENT_ROLES, String(intent ?? "")) ? PRODUCTION_INTENT_ROLES[String(intent ?? "")] : UNLISTED_INTENT_ROLES;
   return allowed.includes(norm(role));
 }
 

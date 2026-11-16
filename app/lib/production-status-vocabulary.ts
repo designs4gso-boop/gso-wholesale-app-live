@@ -44,3 +44,17 @@ export function isStaffProductionStatus(value: unknown): value is StaffProductio
 export function staffStatusLabel(value: string): string {
   return PRODUCTION_STATUS_OPTIONS.find((o) => o.value === value)?.label || value;
 }
+
+/** Where a production job came from, in staff words (never the raw source code). */
+export const JOB_SOURCE_LABELS: Record<string, string> = {
+  shopify: "Shopify order",
+  quote: "Quote",
+  manual: "Manual job",
+  intake: "Print file (not linked yet)",
+  other: "Other",
+};
+
+export function jobSourceLabel(value: unknown): string {
+  const key = String(value ?? "").trim().toLowerCase();
+  return JOB_SOURCE_LABELS[key] || (key ? "Other" : "—");
+}

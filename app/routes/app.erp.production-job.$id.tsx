@@ -15,12 +15,14 @@ import { Link, isRouteErrorResponse, useFetcher, useLoaderData, useNavigate, use
 import { Page } from "@shopify/polaris";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { action as productionAction, loader as productionLoader } from "./app.erp.production";
+import { jobEventsWithNoteHistory } from "../lib/job-note-history.server";
 import { friendlyMessage } from "../lib/employee-messages";
 import { REPRINT_REASONS, formatShipDate, savedPickupForJob, savedShipmentForJob } from "../lib/production-fulfillment";
 import { itemReprintSummary } from "../lib/production-qc-display";
 import { showsProductionControl } from "../lib/production-role-access";
-import { PRODUCTION_STATUS_OPTIONS, staffStatusLabel } from "../lib/production-status-vocabulary";
-import { SIMPLE_BOARD_HREF, classicJobHref } from "../lib/simple-nav";
+import { PRODUCTION_STATUS_OPTIONS, jobSourceLabel, staffStatusLabel } from "../lib/production-status-vocabulary";
+import { SIMPLE_BOARD_HREF, classicJobHref, jobWorkspaceHref } from "../lib/simple-nav";
+import { formatDueDate } from "../lib/business-date";
 import { isJobOverdue, jobWorkspaceView, showsMaterialUse, workspaceItemQc, toMaterialOption, type JobStepKey, type WorkspaceStep } from "../lib/simple-production";
 
 export async function loader(args: { request: Request; params: { id?: string } }) {
@@ -33,7 +35,20 @@ export async function loader(args: { request: Request; params: { id?: string } }
   const materials = ((data.materials || []) as any[]).map(toMaterialOption);
   // link targets are only sent for an unlinked print-intake job (the only place they are used)
   const linkTargets = job.linkEligible ? data.linkTargets || [] : [];
+  // 2026-11-15: the shared loader sends only the 20 newest history events, so on a busy job the
+  // staff notes dropped off this page. They are read for this one job (job-note-history.server.ts).
+  job.events = await jobEventsWithNoteHistory(job, Boolean(data.showFinancials));
   return Response.json({ job, materials, linkTargets, showFinancials: Boolean(data.showFinancials) });
+}
+
+/**
+ * Linking an intake job archives that job, so reloading THIS page right after a successful
+ * link showed "This job was not found" instead of the result. That one reload is skipped;
+ * the form then opens the job it was linked into.
+ */
+export function shouldRevalidate({ formData, actionResult, defaultShouldRevalidate }: { formData?: FormData; actionResult?: any; defaultShouldRevalidate: boolean }) {
+  if (formData?.get("intent") === "linkJobToTarget" && actionResult?.ok) return false;
+  return defaultShouldRevalidate;
 }
 
 /** Every button on this page posts to the existing Production action — nothing is re-implemented here. */
@@ -548,7 +563,7 @@ function MoreTools({ job, role }: { job: any; role: string }) {
                 <div style={{ display: "grid", gap: 8 }}>
                   <label style={{ fontSize: 13, color: "#6b7280" }}>Due date<input name="dueDate" type="date" defaultValue={dateInput(job.dueDate)} style={input} /></label>
                   <label style={{ fontSize: 13, color: "#6b7280" }}>Priority
-                    <select name="priority" defaultValue={String(job.priority || "normal")} style={input}>
+                    <select name="priority" key={String(job.priority || "normal")} defaultValue={String(job.priority || "normal")} style={input}>
                       <option value="low">Low</option>
                       <option value="normal">Normal</option>
                       <option value="rush">Rush</option>
@@ -568,7 +583,11 @@ function MoreTools({ job, role }: { job: any; role: string }) {
             <ActionForm jobId={job.id} intent="changeStatus">
               {(busy) => (
                 <div style={{ display: "grid", gap: 8 }}>
-                  <select name="status" defaultValue={String(job.status || "new")} style={input}>
+                  {/* 2026-11-15: a Shipped / Picked Up job is not in this list, and the browser then silently
+                      pre-selected "New" — one tap on MOVE JOB sent a shipped job back to New. Nothing is
+                      pre-selected for such a job; the key re-syncs the list after every move. */}
+                  <select name="status" key={String(job.status || "new")} defaultValue={STATUS_CHOICES.some((option) => option.value === String(job.status || "new")) ? String(job.status || "new") : ""} required style={input}>
+                    {STATUS_CHOICES.some((option) => option.value === String(job.status || "new")) ? null : <option value="" disabled>Choose a status</option>}
                     {STATUS_CHOICES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                   <div style={{ fontSize: 12, color: "#6b7280" }}>Use this for On Hold, Cancelled or to move the job by hand. Shipping and pickup are recorded in the Fulfill step.</div>
@@ -614,12 +633,20 @@ function LinkIntakeJob({ job, role, linkTargets }: { job: any; role: string; lin
 function LinkIntakeForm({ job, linkTargets }: { job: any; linkTargets: any[] }) {
   const fetcher = useFetcher<any>();
   const busy = fetcher.state !== "idle";
+  const navigate = useNavigate();
+  const [chosen, setChosen] = useState("");
+  // after a successful link this (intake) job is archived — continue on the job it was linked into
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data?.ok) return;
+    const targetId = chosen.split("|")[0];
+    navigate(targetId ? jobWorkspaceHref(targetId) : SIMPLE_BOARD_HREF);
+  }, [fetcher.state, fetcher.data]);
   return (
     <fetcher.Form method="post" style={{ display: "grid", gap: 8, marginTop: 10 }}>
       <input type="hidden" name="intent" value="linkJobToTarget" />
       <input type="hidden" name="sourceJobId" value={job.id} />
       <label style={{ fontSize: 13, color: "#6b7280" }}>Which job does it belong to?
-        <select name="linkTarget" defaultValue="" required style={input}>
+        <select name="linkTarget" defaultValue="" required style={input} onChange={(event) => setChosen(event.currentTarget.value)}>
           <option value="" disabled>Choose the job</option>
           {linkTargets.map((target: any) => (target.items || []).length > 1
             ? target.items.map((item: any) => <option key={`${target.id}|${item.id}`} value={`${target.id}|${item.id}`}>{target.label} → {String(item.productTitle || "").slice(0, 28)} x{item.quantity}</option>)
@@ -673,7 +700,7 @@ export default function JobWorkspace() {
           <Fact label="Customer" value={job.company || job.customerName || "Not set"} />
           <Fact label="Product" value={product} />
           <Fact label="Quantity" value={quantity > 0 ? quantity.toLocaleString() : "Not set"} />
-          <Fact label="Due" value={job.dueDate ? `${new Date(job.dueDate).toLocaleDateString()}${overdue ? " · LATE" : ""}` : "Not set"} alert={overdue} />
+          <Fact label="Due" value={job.dueDate ? `${formatDueDate(job.dueDate)}${overdue ? " · LATE" : ""}` : "Not set"} alert={overdue} />
           <Fact label="Priority" value={String(job.priority || "normal").toUpperCase()} alert={["rush", "critical"].includes(String(job.priority))} />
           <Fact label="Assigned to" value={job.assignedTo || "Nobody yet"} />
           <Fact label="Status" value={staffStatusLabel(String(job.status || ""))} />
@@ -741,7 +768,7 @@ export default function JobWorkspace() {
             <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
               <Fact label="Job ticket" value={job.jobTicket || "—"} />
               <Fact label="Quote" value={job.quoteNumber || "—"} />
-              <Fact label="Source" value={String(job.sourceType || "—")} />
+              <Fact label="Source" value={jobSourceLabel(job.sourceType)} />
             </div>
             {items.map((item) => item.itemTicket ? <div key={item.id} style={{ color: "#6b7280" }}>Item ticket: {item.itemTicket}</div> : null)}
             <div>

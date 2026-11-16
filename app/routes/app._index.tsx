@@ -12,6 +12,7 @@ import {
 } from "@shopify/polaris";
 import { useNavigate, useLoaderData, useLocation } from "react-router";
 import { authenticate } from "../shopify.server";
+import { businessTodayCutoff } from "../lib/business-date";
 import db from "../db.server";
 import { resolveStaffAccess } from "../lib/staff-roles.server";
 import { ROLE_LABEL, SIMPLE_BOARD_HREF, navForRole } from "../lib/simple-nav";
@@ -26,7 +27,8 @@ export async function loader({ request }: { request: Request }) {
   const now = new Date();
   // SIMPLE MODE (2026-11-14): the role only chooses which tiles / areas are SHOWN on Home.
   const staff = resolveStaffAccess(auth);
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // 2026-11-15: "before today" in the business timezone (a date-only due date is not late until its day is over in Pacific time).
+  const startOfToday = businessTodayCutoff(now);
   // app.erp.rip-import-review.tsx defaults to status=unresolved (productionJobId null) + days=30.
   const ripCutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
@@ -57,7 +59,8 @@ export async function loader({ request }: { request: Request }) {
     db.quote.count({ where: { shop, status: { in: ["approved", "deposit_paid"] } } }),
     // app.erp.production.tsx lists active jobs; terminal statuses per
     // app/lib/production-status-vocabulary.ts + app/lib/ops/production-planner.ts.
-    db.productionJob.count({ where: { shop, active: true, status: { notIn: ["completed", "shipped", "cancelled"] } } }),
+    // 2026-11-15: a picked-up job is fulfilled exactly like a shipped one (the tile says "not completed, shipped or cancelled").
+    db.productionJob.count({ where: { shop, active: true, status: { notIn: ["completed", "shipped", "picked_up", "cancelled"] } } }),
     db.productionJob.count({ where: { shop, active: true, status: "proof_sent" } }),
     db.productionJob.count({ where: { shop, active: true, status: { in: ["on_hold", "reprint_needed"] } } }),
     // app.erp.agent-review-queue.tsx: "needs_staff_review" filter = status in [new, needs_staff_review].
@@ -103,7 +106,10 @@ export async function loader({ request }: { request: Request }) {
     },
     role: staff.role,
     viewFinancials: staff.can("viewFinancials"),
-    roleReason: staff.role === "unassigned" ? staff.reason : null,
+    // 2026-11-15: staff see the one thing the owner needs from them (their staff ID), not a server setting name.
+    roleReason: staff.role === "unassigned"
+      ? (staff.userId ? `Your Shopify staff user ID is ${staff.userId}. Give this number to the owner.` : "This sign-in carries no verified Shopify staff identity. Sign out of Shopify, sign back in and open the app again.")
+      : null,
     setup: { recipes, materials, machines, vendorProducts },
   });
 }
@@ -115,7 +121,8 @@ const ROLE_TILES: Record<string, readonly string[] | "all"> = {
   owner: "all",
   manager: "all",
   // Sales may not open Production pages (server rule), so no tile here may lead there.
-  sales: ["quotesToWork", "quotesAwaitingPayment", "reviewNeedsStaff", "reviewReadyToQuote"],
+  // 2026-11-15: the lead-review tiles are not listed — that page is owner / authorized-manager only on the server.
+  sales: ["quotesToWork", "quotesAwaitingPayment"],
   print_operator: ["jobsReadyToPrint", "jobsPrinting", "jobsHeld", "jobsOverdue"],
   bagger: ["jobsFinishing", "jobsReadyForPickup", "jobsHeld", "jobsOverdue"],
   unassigned: [],
@@ -245,7 +252,12 @@ export default function AppHome() {
   const allowed = ROLE_TILES[role] ?? "all";
   // owners / managers keep the shop-wide tiles; the shop-floor stage tiles are for the roles that work them
   const SHOP_FLOOR_ONLY = ["jobsReadyToPrint", "jobsPrinting", "jobsFinishing", "jobsReadyForPickup"];
-  const tiles = allowed === "all" ? allTiles.filter((tile) => !SHOP_FLOOR_ONLY.includes(tile.key)) : allTiles.filter((tile) => allowed.includes(tile.key));
+  // 2026-11-15: tiles whose page is financial-access only on the server are shown only to viewers who can open it
+  // (a manager without financial authorization used to get tiles that answered "owner only").
+  const FINANCIAL_PAGE_TILES = ["reviewNeedsStaff", "reviewReadyToQuote", "ripUnresolved"];
+  const canOpenFinancialPages = isOwner || Boolean(data.viewFinancials);
+  const tiles = (allowed === "all" ? allTiles.filter((tile) => !SHOP_FLOOR_ONLY.includes(tile.key)) : allTiles.filter((tile) => allowed.includes(tile.key)))
+    .filter((tile) => canOpenFinancialPages || !FINANCIAL_PAGE_TILES.includes(tile.key));
   const totalAttention = tiles.reduce((sum, tile) => sum + tile.value, 0);
 
   return (

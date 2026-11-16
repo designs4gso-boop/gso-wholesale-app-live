@@ -18,6 +18,7 @@
 // Future hardening MAY add a unique index on (shop, quoteId); this service is
 // concurrency-safe without it.
 
+import { parseDueDateInput } from "./business-date";
 import { quotePricingAuthorityState } from "./quote-pricing-authority";
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
@@ -1274,10 +1275,9 @@ export async function createProductionJobFromSource(
     const manualItems = verdict.items;
     const family = manualItems[0]?.family || "default";
     const dueDate = (() => {
-      const raw = clean(source.payload.dueDate);
-      if (!raw) return null;
-      const parsed = new Date(raw);
-      return Number.isNaN(parsed.getTime()) ? null : parsed;
+      // 2026-11-15: a date-picker value is stored at noon UTC (as Job settings does), not
+      // midnight UTC, which showed as the previous day in Pacific time.
+      return parseDueDateInput(clean(source.payload.dueDate));
     })();
     const jobTicket = await buildNextJobTicket(tx, shop);
     const job = await tx.productionJob.create({

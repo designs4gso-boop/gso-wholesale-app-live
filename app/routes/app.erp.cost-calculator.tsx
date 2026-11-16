@@ -51,7 +51,7 @@ import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, POUND_BAG_14X16_ARTBOARD_IN, P
 import { AUTHORITY_LABEL, LABEL_SETS, PENDING_CONFIRMATION_WARNING, getProductProductionSpec, labelSetSelection } from "../lib/product-production-spec";
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
 // 2026-10-19 owner view: headline result, plain blocker summary, required-field check, Stock Bags option (presentation only).
-import { POUND_BAG_CALCULATOR_OPTION, POUND_BAG_MARGIN_RULE_KEY, POUND_BAG_NO_4X5_MARKET_TARGET, POUND_BAG_PRICE_AUTHORITY_TEXT, POUND_BAG_TIER_TABLE_TEXT, isPoundBagParams } from "../lib/calculator-owner-view";
+import { POUND_BAG_CALCULATOR_OPTION, POUND_BAG_MARGIN_RULE_KEY, POUND_BAG_NO_4X5_MARKET_TARGET, POUND_BAG_PRICE_AUTHORITY_TEXT, POUND_BAG_PRICING_BASIS_TEXT, POUND_BAG_TIER_TABLE_TEXT, isPoundBagParams } from "../lib/calculator-owner-view";
 import { JAR_LADDER_LOW_MARGIN_WARNING, REQUIRED_FIELDS_MESSAGE, SPLIT_BAG_CALCULATOR_OPTION, SPLIT_BAG_NO_4X5_MARKET_TARGET, SPLIT_BAG_PRICE_AUTHORITY_TEXT, SPLIT_BAG_TIER_TABLE_TEXT, tierDesignAssumptionText, STOCK_BAG_CALCULATOR_OPTION, calculatorDesignCount, calculatorFamilyChoice, calculatorFamilyParams, calculatorTransitionParams, missingRequiredCalculatorFields, withCanonicalSplitBagGeometry, resolveOwnerResult, summarizeCalculatorBlockers, type OwnerResult } from "../lib/calculator-owner-view";
 // 2026-10-19 owner decision C: Stock Bag quotes price through the SAME storefront authority the online checkout uses.
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
@@ -1600,7 +1600,11 @@ export async function loader({ request }: { request: Request }) {
           })
         : null,
       // 2026-10-05: one staff sentence describing the commercial basis for jars.
-      pricingBasis: productTiers && productTiers.some((tier: any) => tier.commercial?.ownerLadder)
+      // 2026-11-15 display only: the QP / P Bag header names its real authority
+      // instead of the generic five-value "researched curve" summary.
+      pricingBasis: poundBagP && productTiers
+        ? { kind: "pound_bag_dedicated_ladder", text: POUND_BAG_PRICING_BASIS_TEXT }
+        : productTiers && productTiers.some((tier: any) => tier.commercial?.ownerLadder)
         ? { kind: "owner_ladder", text: "Owner-approved jar ladder (16D, approved 2026-08-12) controls the customer price — the generic margin floor never raises it and the margin curve is not used (Chiron uses the equivalent Miron ladder)." }
         : productTiers && (canonicalUiFamily(pFamily) === "premium-jars" || canonicalUiFamily(pFamily) === "standard-jars")
           ? { kind: "curve_with_envelope", text: "No owner price ladder for this jar (out of ladder range / unapproved size): quantity-band margin curve with the quantity-break envelope (totals never fall when quantity rises)." }

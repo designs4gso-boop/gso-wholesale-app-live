@@ -90,7 +90,9 @@ describe("Quotes — after a production job is created from a quote", () => {
 describe("Home", () => {
   it("the Sales Home shows no tile that leads into Production", () => {
     const salesTiles = HOME_SRC.match(/\n\s*sales: \[([^\]]*)\],/)?.[1] || "";
-    expect(salesTiles).toBe('"quotesToWork", "quotesAwaitingPayment", "reviewNeedsStaff", "reviewReadyToQuote"');
+    // 2026-11-15: the two lead-review tiles were removed — that page is owner / authorized-manager only on the
+    // server, so for Sales they were links that always answered "owner only" (see simple-mode-objective-fixes test).
+    expect(salesTiles).toBe('"quotesToWork", "quotesAwaitingPayment"');
     const tileHref = (key: string) => HOME_SRC.match(new RegExp(`\\{ key: "${key}",[^}]*href: ([^,]+),`))?.[1] || "";
     for (const key of salesTiles.split(",").map((part) => part.trim().replace(/"/g, ""))) {
       expect(tileHref(key), key).not.toBe("");

@@ -10,6 +10,7 @@
 // Six columns are UI groups of the existing backend statuses
 // (app/lib/simple-production.ts). No status is added or changed.
 
+import { formatDueDate } from "../lib/business-date";
 import { Link, useLoaderData, useNavigate, useRouteLoaderData, useSearchParams } from "react-router";
 import type { CSSProperties } from "react";
 import { Page } from "@shopify/polaris";
@@ -36,7 +37,7 @@ const PRIORITY_LABEL: Record<string, string> = { critical: "CRITICAL", rush: "RU
 
 function formatDue(card: BoardCard) {
   if (!card.dueDate) return "No due date";
-  return new Date(card.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return formatDueDate(card.dueDate, { month: "short", day: "numeric" });
 }
 
 function Field({ label, value, strong }: { label: string; value: string; strong?: boolean }) {

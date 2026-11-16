@@ -315,6 +315,9 @@ async function getQuotes(shop: string, ownerView = false) {
   }));
 }
 
+/** What a non-owner is told when the margin gate blocks an action (no percentage, no floor). */
+const STAFF_MARGIN_BLOCK_MESSAGE = "Owner Approval Required — ask the owner to approve this quote's price before continuing.";
+
 /** Staff view of the margin gate: workflow flags only (no percentages, reasons or warnings). */
 function staffMarginState(state: ReturnType<typeof quoteMarginState>) {
   return {
@@ -732,6 +735,9 @@ export async function action({ request }: { request: Request }) {
   const payload = await request.json();
   // Owner-only financial detail in every quotes list this action returns (staff get the redacted view).
   const viewerIsOwner = resolveOwnerAuthorization({ session, sessionToken }).isOwner;
+  // 2026-11-15: the low-margin block message names the margin % and the floor. Only the owner
+  // receives it; everyone else gets the plain workflow wording (redacted on the SERVER).
+  const marginBlockError = (message: string) => (viewerIsOwner ? message : STAFF_MARGIN_BLOCK_MESSAGE);
 
   /* 2026-10-19 owner decision 4: OWNER SET PRICE & APPROVE. Owner identity is
    * the verified Shopify session token, never a posted field; a non-owner is
@@ -889,7 +895,7 @@ export async function action({ request }: { request: Request }) {
         const marginState = quoteMarginState(quote);
         if (marginState.approvalRequired) {
           const quotes = await getQuotes(shop, viewerIsOwner);
-          return Response.json({ intent: "status", ok: false, error: marginState.blockMessage, quotes });
+          return Response.json({ intent: "status", ok: false, error: marginBlockError(marginState.blockMessage), quotes });
         }
       }
     }
@@ -960,7 +966,7 @@ export async function action({ request }: { request: Request }) {
       {
         const marginState = quoteMarginState(quote);
         if (marginState.approvalRequired) {
-          return Response.json({ intent: "approveCreateOrder", ok: false, error: marginState.blockMessage });
+          return Response.json({ intent: "approveCreateOrder", ok: false, error: marginBlockError(marginState.blockMessage) });
         }
         // 2026-10-19 owner decision E: no Shopify order / invoice for a PROVISIONAL quote.
         const pricingAuthorityState = quotePricingAuthorityState(quote);
@@ -1105,7 +1111,7 @@ export async function action({ request }: { request: Request }) {
       {
         const marginState = quoteMarginState(quote);
         if (marginState.approvalRequired) {
-          return Response.json({ intent: "createDepositOrder", ok: false, error: marginState.blockMessage });
+          return Response.json({ intent: "createDepositOrder", ok: false, error: marginBlockError(marginState.blockMessage) });
         }
         // 2026-10-19 owner decision E: no Shopify order / invoice for a PROVISIONAL quote.
         const pricingAuthorityState = quotePricingAuthorityState(quote);
@@ -1272,7 +1278,7 @@ export async function action({ request }: { request: Request }) {
       {
         const marginState = quoteMarginState(quote);
         if (marginState.approvalRequired) {
-          return Response.json({ intent: "createBalanceOrder", ok: false, error: marginState.blockMessage });
+          return Response.json({ intent: "createBalanceOrder", ok: false, error: marginBlockError(marginState.blockMessage) });
         }
         // 2026-10-19 owner decision E: no Shopify order / invoice for a PROVISIONAL quote.
         const pricingAuthorityState = quotePricingAuthorityState(quote);
@@ -1401,7 +1407,7 @@ export async function action({ request }: { request: Request }) {
     {
       const marginState = quoteMarginState(quote);
       if (marginState.approvalRequired) {
-        return Response.json({ intent: "sendInvoiceEmail", ok: false, error: marginState.blockMessage });
+        return Response.json({ intent: "sendInvoiceEmail", ok: false, error: marginBlockError(marginState.blockMessage) });
       }
       // 2026-10-19 owner decision E: a PROVISIONAL quote is never sent to the customer.
       const pricingAuthorityState = quotePricingAuthorityState(quote);
@@ -1623,7 +1629,7 @@ export async function action({ request }: { request: Request }) {
       const saveMarginState = quoteMarginState({ ...(quoteBeforeSave || {}), customerTier, notes: quote.notes, items: protectedItems } as any);
       if (saveMarginState.approvalRequired) {
         const quotes = await getQuotes(shop, viewerIsOwner);
-        return Response.json({ ok: false, error: saveMarginState.blockMessage, quotes });
+        return Response.json({ ok: false, error: marginBlockError(saveMarginState.blockMessage), quotes });
       }
     }
 
