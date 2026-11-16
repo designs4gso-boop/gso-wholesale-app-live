@@ -103,7 +103,8 @@ describe("who may create a purchase request, and who is recorded as the requeste
   }, 60_000);
 
   it("an unassigned account cannot create, edit or receive", async () => {
-    for (const fields of [{ intent: "createManual", materialName: "x" }, { intent: "updateRequest", id: "pr1" }, { intent: "receiveRequest", id: "pr1", receiveQty: "1" }]) {
+    const attempts: Array<Record<string, string>> = [{ intent: "createManual", materialName: "x" }, { intent: "updateRequest", id: "pr1" }, { intent: "receiveRequest", id: "pr1", receiveQty: "1" }];
+    for (const fields of attempts) {
       expect((await act("unassigned", fields)).status).toBe(403);
     }
     expect(h.writes).toEqual([]);

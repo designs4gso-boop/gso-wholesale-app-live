@@ -35,7 +35,9 @@ export function navForRole(role: SimpleNavRole | string, options: { viewFinancia
       purpose: "Customers, quotes and orders.",
       links: [
         { label: "Quotes & Customers", href: "/app/quotes" },
-        { label: "Leads to Review", href: "/app/erp/agent-review-queue" },
+        // 2026-11-15: the lead queue is a financial page on the server (owner / financially authorized manager);
+        // everyone else was shown a link that always answered "owner only".
+        ...(isOwner || (isManager && options.viewFinancials) ? [{ label: "Leads to Review", href: "/app/erp/agent-review-queue" }] : []),
         { label: "Wholesale Applications", href: "/app/wholesale/customers" },
         // cost & pricing tools are owner only (the route also refuses everyone else)
         ...(isOwner ? [{ label: "Price a Job (Cost Calculator)", href: "/app/erp/cost-calculator" }] : []),

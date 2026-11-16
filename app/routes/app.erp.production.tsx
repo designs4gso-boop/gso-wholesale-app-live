@@ -24,6 +24,9 @@ import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, assessLink
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
+import { formatDueDate } from "../lib/business-date";
+import { jobSourceLabel } from "../lib/production-status-vocabulary";
+import { isJobOverdue } from "../lib/simple-production";
 import { MATERIAL_USAGE_REPLAY_WINDOW_MS, isMaterialUsageReplay, manualUsageSource } from "../lib/material-usage-guard";
 import { buildBrandRates, computeEntryCosts, machineRatePerHour, type BrandInkRates } from "../lib/rip-actual-costs.server";
 import { PRINT_LOG_USAGE_SOURCE } from "../lib/print-log-writeback-shared";
@@ -117,9 +120,8 @@ function glanceDue(job: any): { text: string; tone: GlanceTone } {
   if (!job.dueDate) return { text: "Not set", tone: undefined };
   const due = new Date(job.dueDate);
   if (Number.isNaN(due.getTime())) return { text: "Not set", tone: undefined };
-  const closed = ["completed", "shipped", "cancelled"].includes(String(job.status || ""));
-  const overdue = !closed && due.getTime() < Date.now() - 24 * 60 * 60 * 1000;
-  return { text: due.toLocaleDateString(), tone: overdue ? "critical" : undefined };
+  // 2026-11-15: the same late rule as the Simple Mode board (business-timezone date; shipped / picked up / completed / cancelled are never late).
+  return { text: formatDueDate(job.dueDate), tone: isJobOverdue(job) ? "critical" : undefined };
 }
 
 function glanceMachine(job: any) {
@@ -692,7 +694,8 @@ export async function loader({ request }: { request: Request }) {
     .map((job) => ({
       id: job.id,
       jobTicket: job.jobTicket,
-      label: `[${job.sourceType}] ${job.jobTicket || job.id} · ${job.quoteNumber || ""} · ${job.customerName || "—"} (${job.status})`,
+      // 2026-11-15: staff words only — no raw source / status codes, no database id.
+      label: [`${jobSourceLabel(job.sourceType)}: ${job.jobTicket || "no ticket yet"}`, job.quoteNumber && !/^MANUAL-/i.test(String(job.quoteNumber)) ? String(job.quoteNumber) : "", job.customerName || job.company || "", labelForStatus(String(job.status || ""))].filter(Boolean).join(" · "),
       items: (job.items || []).map((item: any) => ({ id: item.id, itemTicket: item.itemTicket, productTitle: item.displayTitle || item.productTitle, quantity: item.quantity })),
     }));
 
