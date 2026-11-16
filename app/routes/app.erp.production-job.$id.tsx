@@ -37,7 +37,7 @@ export async function loader(args: { request: Request; params: { id?: string } }
   const linkTargets = job.linkEligible ? data.linkTargets || [] : [];
   // 2026-11-15: the shared loader sends only the 20 newest history events, so on a busy job the
   // staff notes dropped off this page. They are read for this one job (job-note-history.server.ts).
-  job.events = await jobEventsWithNoteHistory(args.request, job, Boolean(data.showFinancials));
+  job.events = await jobEventsWithNoteHistory(job, Boolean(data.showFinancials));
   return Response.json({ job, materials, linkTargets, showFinancials: Boolean(data.showFinancials) });
 }
 

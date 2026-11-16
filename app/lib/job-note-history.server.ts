@@ -9,7 +9,6 @@
 // Read only. The rows pass through the same money masking as every other
 // history event before they reach a viewer without financial access.
 
-import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { redactJobFinancials } from "./production-financial-redaction";
 
@@ -18,11 +17,12 @@ const NOTE_LIMIT = 100;
 const eventKey = (event: any) => String(event?.id || `${new Date(event?.createdAt || 0).toISOString()}|${event?.eventType}|${event?.message}`);
 
 /** `job.events` plus this job's notes (newest 100) and, for an On Hold job, the status change that put it on hold. */
-export async function jobEventsWithNoteHistory(request: Request, job: any, showFinancials: boolean): Promise<any[]> {
+export async function jobEventsWithNoteHistory(job: any, showFinancials: boolean): Promise<any[]> {
   const current: any[] = job?.events || [];
-  if (!job?.id) return current;
-  const { session } = await authenticate.admin(request);
-  const where = { shop: session.shop, jobId: String(job.id) };
+  // `job` was already loaded for this viewer by the Production loader (authenticated, role-checked,
+  // shop-scoped); its own shop + id scope this read.
+  if (!job?.id || !job?.shop) return current;
+  const where = { shop: String(job.shop), jobId: String(job.id) };
   const [notes, holds] = await Promise.all([
     db.productionJobEvent.findMany({ where: { ...where, eventType: { in: ["note"] } }, orderBy: { createdAt: "desc" }, take: NOTE_LIMIT }),
     String(job.status) === "on_hold"

@@ -229,6 +229,17 @@ describe("approver metadata — captured on the FIRST approval and never overwri
     expect(h.pr.unitCost).toBe(0.29); // the owner's re-price itself is allowed
   }, 60_000);
 
+  it("an older ordered request with no approver on record: a requester's note never makes them the approver; an approver's save does", async () => {
+    h.pr = request({ status: "ordered", approvedBy: null, approvedAt: null, orderedAt: T0 });
+    for (const role of NON_APPROVERS) {
+      expect((await act(role, { intent: "updateRequest", id: "pr1", status: "ordered", requestedQty: "100", orderedQty: "100", notes: `note from ${role}` })).status).toBe(200);
+      expect(h.pr).toMatchObject({ approvedBy: null, approvedAt: null, notes: `note from ${role}` });
+    }
+    await act("authorizedManager", { intent: "updateRequest", id: "pr1", status: "ordered", requestedQty: "100", orderedQty: "100" });
+    expect(h.pr).toMatchObject({ approvedBy: actorOf("authorizedManager"), orderedAt: T0 });
+    expect(h.pr.approvedAt).toBeInstanceOf(Date);
+  }, 60_000);
+
   it("saving a draft / requested request stamps no approver", async () => {
     await act("owner", { intent: "updateRequest", id: "pr1", status: "draft", requestedQty: "100", orderedQty: "100" });
     await act("owner", { intent: "updateRequest", id: "pr1", status: "requested", requestedQty: "100", orderedQty: "100" });

@@ -448,7 +448,9 @@ export async function action({ request }: { request: Request }) {
         orderedAt: status === "ordered" && !purchaseRequest.orderedAt ? new Date() : purchaseRequest.orderedAt,
         // 2026-11-12: the approver who first orders the request (approvePurchasing was checked above).
         // 2026-11-15: also when an approver moves it straight to partially received / received.
-        ...(APPROVED_STATUSES.includes(status) && status !== purchaseRequest.status && !purchaseRequest.approvedAt ? { approvedBy: staffAccess.actor, approvedAt: new Date() } : {}),
+        // Only an approver is ever stamped: a requester adding notes to an older ordered request that has
+        // no approver on record must not become its approver.
+        ...(APPROVED_STATUSES.includes(status) && !purchaseRequest.approvedAt && staffAccess.can("approvePurchasing") ? { approvedBy: staffAccess.actor, approvedAt: new Date() } : {}),
         cancelledAt: status === "cancelled" ? new Date() : purchaseRequest.cancelledAt,
         vendorConfirmationNumber: String(formData.get("vendorConfirmationNumber") || "") || null,
         expectedArrivalDate: String(formData.get("expectedArrivalDate") || "") ? new Date(`${String(formData.get("expectedArrivalDate"))}T12:00:00`) : null,
