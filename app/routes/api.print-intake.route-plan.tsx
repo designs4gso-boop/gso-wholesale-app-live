@@ -1,4 +1,5 @@
-import db from "../db.server";
+import liveDb from "../db.server";
+import { readOnlyIntakeDb } from "../lib/print-intake-dry-run.server";
 import {
   applyRunSuffix,
   basenameOf,
@@ -28,6 +29,8 @@ import { NEEDS_LINK_TO_JOB_REASON, appendIntakeAudit, canonicalReviewReason, rea
 // files of the same item / design (`_cmyk`, `_g`, `_w`) are read together so
 // one physical job is never split across presses; conflicts go to review. A
 // file that was already routed keeps the press it was sent to.
+// Patch A (2026-11-18): `dryRun: true` plans against a read-only database
+// facade — the same decision is returned and NOTHING is written.
 // Patch D (2026-11-18): a file inside a folder whose name BEGINS with an
 // existing job ticket inherits that job (priority after a ticket in the
 // filename, before stored names). A multi-item job with no certain item goes
@@ -36,7 +39,7 @@ import { NEEDS_LINK_TO_JOB_REASON, appendIntakeAudit, canonicalReviewReason, rea
 // such a job is a printer conflict), and a lone `_cmyk` layer on a job with no
 // stated finish is held for print-mode confirmation rather than sent early.
 
-function json(data: unknown, status = 200) {
+function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
 }
 
@@ -45,8 +48,18 @@ export async function action({ request }: { request: Request }) {
   try {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
-    return json({ ok: false, error: "Body must be JSON." }, 400);
+    return jsonResponse({ ok: false, error: "Body must be JSON." }, 400);
   }
+  // Patch A (2026-11-18): TRUE read-only dry run. With `dryRun: true` the whole
+  // plan runs against a read-only facade of the database — every read works,
+  // every write (review rows, linkage, audit, assigned-file updates) is
+  // suppressed on the SERVER and counted. The response carries dryRun / wrote
+  // so the agent can prove nothing was written.
+  const dryRun = body.dryRun === true;
+  const readOnly = dryRun ? readOnlyIntakeDb(liveDb) : null;
+  const db = readOnly ? readOnly.client : liveDb;
+  const json = (data: unknown, status = 200) =>
+    jsonResponse(readOnly ? { ...(data as Record<string, unknown>), dryRun: true, wrote: false, suppressedWrites: readOnly.suppressedWrites() } : data, status);
   const token = String(body.token || "").trim();
   if (!token) return json({ ok: false, error: "Missing upload token." }, 401);
   const setting = await db.printLogAutoImportSetting.findUnique({ where: { uploadToken: token } });
@@ -315,6 +328,6 @@ export async function action({ request }: { request: Request }) {
 
 export const loader = () =>
   new Response(
-    JSON.stringify({ ok: true, endpoint: "POST JSON {token, fileName, subfolder?} for a deterministic print-intake routing plan. Read-only." }),
+    JSON.stringify({ ok: true, endpoint: "POST JSON {token, fileName, subfolder?, fileHash?, dryRun?} for a deterministic print-intake routing plan. A normal plan records its decision; dryRun: true writes nothing." }),
     { headers: { "Content-Type": "application/json" } },
   );

@@ -13,5 +13,6 @@
   "StableFileSeconds": 20,
   "ClaimStaleMinutes": 30,
   "ProcessFilesModifiedAfterUtc": "2026-07-19T17:20:00Z",
-  "TicketJobFoldersEnabled": true
+  "TicketJobFoldersEnabled": true,
+  "MaxEligibleFilesPerScan": 60
 }

@@ -122,7 +122,7 @@ describe("15H.5 run identity grammar", () => {
 
   it("N+agent. pending-retries: one bounded call per pass; ledger stays the cache; fail closed offline", () => {
     const agent = readFileSync("tools/gso-print-intake-agent.ps1", "utf8");
-    expect(agent).toContain("gso-print-intake-agent/1.8");
+    expect(agent).toContain("gso-print-intake-agent/1.9");
     expect(agent).toContain("pending = $true");
     expect(agent).toContain('"pending_retry"');
     expect(agent).toContain("retry_pending");

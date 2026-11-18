@@ -14,7 +14,14 @@
 #   (default)   one pass then exit (same as -Once)
 #   -Loop       poll continuously every PollSeconds
 #   -Once       single pass then exit
-#   -DryRun     plan + log only; no copies, no moves, no reports
+#   -DryRun     TRUE READ-ONLY (Patch A): asks the ERP what WOULD happen with
+#               dryRun=true - the server suppresses every database write and
+#               says so; no claims, no copies, no moves, no reports, no ledger.
+#               If the server does not confirm the dry run, the agent stops.
+#
+# Safety stops (Patch A): the agent refuses to process anything when no go-live
+# cutoff is configured, and when one scan finds more than the flood cap (60)
+# eligible files it processes NONE of them and exits for human review.
 #   -Health     config/folders/endpoint/token checks; writes nothing
 #   -SelfTest   offline unit checks (no config, no network, no NAS)
 param(
@@ -26,7 +33,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.8 (Patch D ticket job folders; 15H.5 run identity + pending retries)"
+$ScriptVersion = "gso-print-intake-agent/1.9 (Patch A read-only dry run + flood cap + mandatory cutoff; Patch D ticket job folders)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -52,6 +59,8 @@ function Read-IntakeConfig([string]$Path) {
     # Patch D: also process files DIRECTLY inside one level of job folders whose
     # name starts with a job ticket. Missing = on; set false for root-only.
     TicketJobFoldersEnabled = if ($null -eq $raw.TicketJobFoldersEnabled) { $true } else { [bool]$raw.TicketJobFoldersEnabled }
+    # Patch A: flood cap. May be LOWERED in config, never raised above the hard cap.
+    MaxEligibleFilesPerScan = Get-EffectiveFloodCap $raw.MaxEligibleFilesPerScan
   }
   foreach ($key in @("ApiBaseUrl","UploadToken","PrintsForTodayFolder","RoutedArchiveFolder","LogFolder")) {
     if ([string]::IsNullOrWhiteSpace($config[$key])) { throw "Config missing required value: $key" }
@@ -66,6 +75,22 @@ function Read-IntakeConfig([string]$Path) {
   # file in Prints For Today on first start.
   $config.CutoffUtc = ConvertTo-CutoffUtc $config.ProcessFilesModifiedAfterUtc
   return $config
+}
+
+# ---------- Patch A: flood cap (pure, self-testable) ----------
+# One scan may never hand more than this many files to the pipeline. Above the
+# cap NOTHING is processed (not the first 60 either) and the agent exits so a
+# person looks before anything is ingested.
+$HardFloodCap = 60
+
+function Get-EffectiveFloodCap($Configured) {
+  $value = 0
+  if ($null -ne $Configured -and [int]::TryParse([string]$Configured, [ref]$value) -and $value -ge 1) { return [Math]::Min($value, $HardFloodCap) }
+  return $HardFloodCap
+}
+
+function Test-EligibleCountWithinCap([int]$Count, [int]$Cap) {
+  return ($Count -le $Cap)
 }
 
 # ISO-8601 UTC cutoff -> [DateTime] (Utc kind). Empty/missing -> $null (no
@@ -192,13 +217,13 @@ function Get-IntakeDisposition($Config, [string]$Hash, [string]$FileName) {
   return $rows[0]
 }
 
-function Get-RoutePlan($Config, [string]$FileName, [string]$Subfolder, [string]$FileHash, [long]$FileSize, $FolderFiles = @()) {
+function Get-RoutePlan($Config, [string]$FileName, [string]$Subfolder, [string]$FileHash, [long]$FileSize, $FolderFiles = @(), [bool]$IsDryRun = $false) {
   # 15F.0J.5: the full SHA-256 + size ride the PLAN request so the server can
   # match the print-intake identity idempotently (the server never creates a
   # job for a dropped file). Patch D: folderFiles = the names of the other
   # artwork files in the same ticket job folder, so sibling layers of one job
   # are sent to one press.
-  return Invoke-IntakeJsonPost $Config $Config.PlanUrl @{ token = $Config.UploadToken; fileName = $FileName; subfolder = $Subfolder; fileHash = $FileHash; fileSize = $FileSize; folderFiles = @($FolderFiles) } 60
+  return Invoke-IntakeJsonPost $Config $Config.PlanUrl @{ token = $Config.UploadToken; fileName = $FileName; subfolder = $Subfolder; fileHash = $FileHash; fileSize = $FileSize; folderFiles = @($FolderFiles); dryRun = $IsDryRun } 60
 }
 
 function Send-IntakeReport($Config, [hashtable]$Outcome) {
@@ -321,6 +346,30 @@ function Test-PlanRoute($Json) {
   return ($null -ne $Json) -and ($Json.ok -eq $true) -and ($null -ne $Json.plan) -and ($Json.plan.decision -eq "route")
 }
 
+# Patch A: a dry-run response is only trusted when the server says it ran
+# read-only AND wrote nothing.
+function Test-DryRunHonoured($Json) {
+  return ($null -ne $Json) -and ($Json.ok -eq $true) -and ($Json.dryRun -eq $true) -and ($Json.wrote -eq $false)
+}
+
+# What WOULD happen, in plain lines (dry run only - nothing is done).
+function Format-DryRunOutcome($Plan) {
+  if ($Plan.decision -eq "route") {
+    $ticket = if ($Plan.itemTicket) { [string]$Plan.itemTicket } else { [string]$Plan.jobTicket }
+    return @(
+      ("WOULD MATCH: " + $ticket + " (by " + [string]$Plan.rule + ")"),
+      ("WOULD ROUTE: " + ([string]$Plan.machine).ToUpperInvariant() + " as " + [string]$Plan.ripName + " (" + [string]$Plan.machineRule + ")")
+    )
+  }
+  $reasons = (@($Plan.reasons) -join "|")
+  $label = "NEEDS REVIEW"
+  if ($reasons -match "needs_link_to_item") { $label = "NEEDS REVIEW - LINK TO ITEM" }
+  elseif ($reasons -match "needs_link_to_job|no_deterministic_match|_not_found_in_eligible_jobs") { $label = "NEEDS REVIEW - LINK TO JOB" }
+  elseif ($reasons -match "confirm_print_mode") { $label = "NEEDS REVIEW - CONFIRM PRINT MODE" }
+  elseif ($reasons -match "conflicting_printer_tokens|_contradiction|layer_split") { $label = "NEEDS REVIEW - PRINTER CONFLICT" }
+  return @(("WOULD REVIEW: " + $label + " (" + $reasons + ")"))
+}
+
 function Test-PlanReview($Json) {
   return ($null -ne $Json) -and ($Json.ok -eq $true) -and ($null -ne $Json.plan) -and ($Json.plan.decision -eq "review")
 }
@@ -400,7 +449,7 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
         Select-Object -First 60 | ForEach-Object { $_.Name })
     }
 
-    $planResult = Get-RoutePlan $Config $File.Name $subfolder $hash $File.Length $folderFiles
+    $planResult = Get-RoutePlan $Config $File.Name $subfolder $hash $File.Length $folderFiles ([bool]$DryRun)
     if ($planResult.exception -or $planResult.status -eq 0 -or $planResult.status -ge 500) {
       Write-IntakeLog $Config "plan_unreachable" $File.Name "status=$($planResult.status) exception=$($planResult.exception); will retry next pass"
       return
@@ -415,12 +464,17 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
     }
 
     if ($DryRun) {
-      $plan = $planResult.json.plan
-      if ($plan.decision -eq "route") {
-        Write-IntakeLog $Config "dry_run" $File.Name "decision=route machine=$($plan.machine) rule=$($plan.machineRule) matchedBy=$($plan.rule) ripName=$($plan.ripName) (no claim, no copy, no move, no report)"
-      } else {
-        Write-IntakeLog $Config "dry_run" $File.Name "decision=review reasons=$($plan.reasons -join '|') (no claim, no copy, no move, no report)"
+      # Patch A: the SERVER must confirm it ran read-only. If it did not, stop -
+      # a dry run that might have written is not a dry run.
+      if (-not (Test-DryRunHonoured $planResult.json)) {
+        Write-IntakeLog $Config "dry_run_not_honoured" $File.Name "the server did not confirm a read-only plan; stopping"
+        throw "fatal_dry_run"
       }
+      $plan = $planResult.json.plan
+      $would = Format-DryRunOutcome $plan
+      Write-Host ("DRY RUN  " + $File.Name)
+      foreach ($line in $would) { Write-Host ("  " + $line) }
+      Write-IntakeLog $Config "dry_run" $File.Name (($would -join "; ") + " (read-only: server wrote nothing; no claim, no copy, no move, no report)")
       return
     }
 
@@ -507,6 +561,9 @@ function Invoke-IntakeHealth($Config) {
     Write-Host "go-live cutoff (ProcessFilesModifiedAfterUtc): NOT SET - every artwork file in the folder is eligible"
   }
   $scan = Get-EligibleArtworkFiles $Config
+  Write-Host ("flood cap: more than $($Config.MaxEligibleFilesPerScan) eligible files in one scan = process NONE and stop")
+  if ($null -eq $Config.CutoffUtc) { Write-Host "REFUSED: no go-live cutoff is configured - the agent will not process anything until ProcessFilesModifiedAfterUtc is set." }
+  elseif (-not (Test-EligibleCountWithinCap $scan.files.Count $Config.MaxEligibleFilesPerScan)) { Write-Host "SAFETY STOP - TOO MANY ELIGIBLE FILES ($($scan.files.Count) > $($Config.MaxEligibleFilesPerScan)): the agent would process none of them." }
   Write-Host ("ticket job folders (one level, name starts with a job ticket): " + $(if ($Config.TicketJobFoldersEnabled) { "ON - " + @(Get-TicketJobFolders $Config).Count + " found" } else { "OFF (root files only)" }))
   Write-Host ("historical files ignored by cutoff: " + $scan.ignoredHistorical)
   Write-Host ("eligible pending artwork files: " + $scan.files.Count)
@@ -669,6 +726,25 @@ function Invoke-IntakeSelfTest {
     Assert "non-artwork files in a ticket folder are ignored" (@($scanJob.files | Where-Object { $_.Name -eq "notes.txt" }).Count -eq 0)
     Assert "exactly one ticket job folder is found; reserved names never are" ((@(Get-TicketJobFolders $scanConfig).Count -eq 1) -and (@(Get-TicketJobFolders $scanConfig | Where-Object { $_.Name -match "_agent-test|_routed-archive" }).Count -eq 0))
     Assert "scanning ticket folders creates no claim files" (@(Get-ChildItem -Path $scanRoot -Recurse -Filter "*.gsoclaim" -File).Count -eq 0)
+    # ---- Patch A: flood cap, mandatory cutoff, read-only dry run ----
+    Assert "flood cap: 60 or fewer may proceed" ((Test-EligibleCountWithinCap 0 60) -and (Test-EligibleCountWithinCap 1 60) -and (Test-EligibleCountWithinCap 60 60))
+    Assert "flood cap: 61 or more processes none" ((-not (Test-EligibleCountWithinCap 61 60)) -and (-not (Test-EligibleCountWithinCap 10000 60)))
+    Assert "flood cap defaults to 60 and can be lowered but never raised" (((Get-EffectiveFloodCap $null) -eq 60) -and ((Get-EffectiveFloodCap 25) -eq 25) -and ((Get-EffectiveFloodCap 500) -eq 60) -and ((Get-EffectiveFloodCap 0) -eq 60) -and ((Get-EffectiveFloodCap "abc") -eq 60))
+    $floodDir = Join-Path $scanRoot "GSO-20260718-0009 FLOOD"; New-Item -ItemType Directory -Path $floodDir -Force | Out-Null
+    for ($i = 1; $i -le 61; $i++) { $ff = Join-Path $floodDir "flood-$i.pdf"; Set-Content -Path $ff -Value "f"; (Get-Item $ff).LastWriteTimeUtc = $cutoff.AddMinutes(11) }
+    $scanFlood = Get-EligibleArtworkFiles $scanConfig
+    Assert "a real scan above the cap is refused as a whole (67 eligible > 60)" (($scanFlood.files.Count -eq 67) -and (-not (Test-EligibleCountWithinCap $scanFlood.files.Count 60)))
+    Assert "the cutoff is what keeps historical files out: with it only new files count" (@($scanFlood.files | Where-Object { $_.LastWriteTimeUtc -le $cutoff }).Count -eq 0)
+    $dryOk = '{"ok":true,"dryRun":true,"wrote":false,"plan":{"decision":"route","rule":"job_subfolder","jobTicket":"GSO-20260718-0001","itemTicket":"GSO-20260718-0001-01","ripName":"GSO-20260718-0001-01","machine":"roland","machineRule":"gloss_requires_roland"}}' | ConvertFrom-Json
+    $dryNoFlag = '{"ok":true,"plan":{"decision":"route"}}' | ConvertFrom-Json
+    $dryWrote = '{"ok":true,"dryRun":true,"wrote":true,"plan":{"decision":"route"}}' | ConvertFrom-Json
+    Assert "dry run is trusted only when the server confirms dryRun=true and wrote=false" ((Test-DryRunHonoured $dryOk) -and (-not (Test-DryRunHonoured $dryNoFlag)) -and (-not (Test-DryRunHonoured $dryWrote)) -and (-not (Test-DryRunHonoured $null)))
+    $wouldRoute = Format-DryRunOutcome $dryOk.plan
+    Assert "dry run shows WOULD MATCH + WOULD ROUTE" (($wouldRoute[0] -eq "WOULD MATCH: GSO-20260718-0001-01 (by job_subfolder)") -and ($wouldRoute[1] -eq "WOULD ROUTE: ROLAND as GSO-20260718-0001-01 (gloss_requires_roland)"))
+    $wouldReview = Format-DryRunOutcome (('{"decision":"review","reasons":["no_deterministic_match","needs_link_to_job"]}' | ConvertFrom-Json))
+    Assert "dry run shows WOULD REVIEW with the queue label" (@($wouldReview)[0] -eq "WOULD REVIEW: NEEDS REVIEW - LINK TO JOB (no_deterministic_match|needs_link_to_job)")
+    $dryPayload = @{ token = "t"; fileName = "a.pdf"; dryRun = $true } | ConvertTo-Json -Compress
+    Assert "plan payload carries dryRun as a JSON boolean" ($dryPayload -match '"dryRun":true')
     $planPayload = @{ token = "t"; fileName = "a.pdf"; subfolder = "GSO-20260718-0001 FLAVAZ"; fileHash = "h"; fileSize = 1; folderFiles = @("flavaz_og_3oz_F_g.pdf") } | ConvertTo-Json -Compress
     Assert "plan payload carries sibling names as a JSON array (even a single one)" ($planPayload -match '"folderFiles":\["flavaz_og_3oz_F_g\.pdf"\]')
   } finally {
@@ -684,6 +760,14 @@ if ($SelfTest) { Invoke-IntakeSelfTest }
 
 $config = Read-IntakeConfig $ConfigPath
 if ($Health) { Invoke-IntakeHealth $config; exit 0 }
+
+# Patch A: NO CUTOFF = NO PROCESSING. The agent never falls back to "every file
+# in the folder is eligible" (the live folder holds 10,000+ historical files).
+if ($null -eq $config.CutoffUtc) {
+  Write-IntakeLog $config "refused_no_cutoff" "-" "ProcessFilesModifiedAfterUtc is not set - refusing to process anything"
+  Write-Host "REFUSED TO START - NO GO-LIVE CUTOFF. Set ProcessFilesModifiedAfterUtc in the config."
+  exit 4
+}
 
 $modeLabel = if ($DryRun) { "dry-run" } elseif ($Loop) { "loop" } else { "once" }
 Write-IntakeLog $config "agent_started" "-" "version=$ScriptVersion mode=$modeLabel source=$($config.PrintsForTodayFolder)"
@@ -716,12 +800,21 @@ while ($true) {
     Write-IntakeLog $config "scan_summary" "-" ($scanSummary + $(if ($config.CutoffUtc) { " cutoffUtc=$($config.CutoffUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'))" } else { " cutoffUtc=(not set)" }))
     $lastScanSummary = $scanSummary
   }
+  # Patch A: flood cap. Above the cap NOTHING is processed and the agent exits
+  # (a scheduled -Loop stays stopped until a person restarts it).
+  if (-not (Test-EligibleCountWithinCap $files.Count $config.MaxEligibleFilesPerScan)) {
+    Write-IntakeLog $config "safety_stop" "-" "SAFETY STOP - TOO MANY ELIGIBLE FILES: $($files.Count) eligible in one scan (cap $($config.MaxEligibleFilesPerScan)). Processed NONE. Check the watch folder and the cutoff, then restart the agent."
+    Write-Host "SAFETY STOP - TOO MANY ELIGIBLE FILES ($($files.Count) > $($config.MaxEligibleFilesPerScan)). Processed none."
+    exit 3
+  }
+  if ($DryRun) { Write-Host ("DRY RUN (read-only) - eligible files: " + $files.Count + "; historical files ignored by cutoff: " + $scan.ignoredHistorical) }
   foreach ($file in $files) {
     Write-IntakeLog $config "detected" $file.Name "size=$($file.Length)"
     try {
       Invoke-ProcessIntakeFile $config $file $ledger
     } catch {
       if ($_.Exception.Message -eq "fatal_config") { Write-IntakeLog $config "agent_stopped" "-" "fatal config error; fix token and restart"; exit 2 }
+      if ($_.Exception.Message -eq "fatal_dry_run") { Write-Host "DRY RUN STOPPED - the server did not confirm a read-only plan."; exit 5 }
       Write-IntakeLog $config "file_error" $file.Name "unexpected: $($_.Exception.Message); file left in place"
     }
   }
