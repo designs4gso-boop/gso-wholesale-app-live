@@ -28,6 +28,10 @@ import { NEEDS_LINK_TO_JOB_REASON, appendIntakeAudit, canonicalReviewReason, rea
 // files of the same item / design (`_cmyk`, `_g`, `_w`) are read together so
 // one physical job is never split across presses; conflicts go to review. A
 // file that was already routed keeps the press it was sent to.
+// Patch D (2026-11-18): a file inside a folder whose name BEGINS with an
+// existing job ticket inherits that job (priority after a ticket in the
+// filename, before stored names). A multi-item job with no certain item goes
+// to review (link to item); nothing is matched from other folder text.
 // Safety follow-up: white / gloss REQUIRE the Roland (an explicit Mimaki on
 // such a job is a printer conflict), and a lone `_cmyk` layer on a job with no
 // stated finish is held for print-mode confirmation rather than sent early.
@@ -51,6 +55,13 @@ export async function action({ request }: { request: Request }) {
   const fileName = basenameOf(String(body.fileName || "").trim());
   if (!fileName) return json({ ok: false, error: "Missing fileName." }, 400);
   const subfolder = basenameOf(String(body.subfolder || "").trim());
+  // Patch D: names of the other artwork files in the same ticket job folder
+  // (basenames only). They only ever inform the press decision for sibling
+  // LAYERS of the same design — they are never a matching signal.
+  const folderFiles = (Array.isArray(body.folderFiles) ? (body.folderFiles as unknown[]) : [])
+    .slice(0, 60)
+    .map((name) => basenameOf(String(name || "").trim()).slice(0, 200))
+    .filter(Boolean);
   const fileHashEarly = String(body.fileHash || "").trim().toLowerCase();
   const hasFullHashEarly = /^[0-9a-f]{64}$/.test(fileHashEarly);
   // Patch B: known intake files for this shop, so the press is decided for the
@@ -67,7 +78,7 @@ export async function action({ request }: { request: Request }) {
     siblingRows = []; // sibling lookup must never break the plan response
   }
   const machineContext = (jobId: string | null, jobItemCount: number, itemTicket: string | null, jobFileNames: string[] = []) =>
-    buildIntakeMachineContext({ fileName, fileHash: fileHashEarly, jobId, jobItemCount, itemTicket, rows: siblingRows, jobFileNames });
+    buildIntakeMachineContext({ fileName, fileHash: fileHashEarly, jobId, jobItemCount, itemTicket, rows: siblingRows, jobFileNames: [...jobFileNames, ...folderFiles] });
 
   // 15H.3: server-authoritative disposition FIRST. A rejected hash never
   // re-plans; an owner-assigned hash routes deterministically to the exact

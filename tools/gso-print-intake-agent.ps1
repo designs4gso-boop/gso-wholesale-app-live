@@ -1,7 +1,7 @@
 ﻿# GSO Print Intake Agent (Patch 13A.6G).
 # Watches "Prints For Today", asks the ERP for a deterministic routing plan
-# (exact item/job ticket, stored filename, or job subfolder identity - never
-# fuzzy), copies the file into the correct machine hot folder under the exact
+# (exact item/job ticket, a job folder whose name STARTS with the job ticket,
+# or stored filename - never fuzzy), copies the file into the correct machine hot folder under the exact
 # ERP RIP name, preserves the original, and reports every outcome back to the
 # ERP for the intake audit trail. PowerShell 5.1 compatible. JSON transport
 # only - no multipart.
@@ -26,7 +26,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.7 (15H.5 run identity + pending retries)"
+$ScriptVersion = "gso-print-intake-agent/1.8 (Patch D ticket job folders; 15H.5 run identity + pending retries)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -49,6 +49,9 @@ function Read-IntakeConfig([string]$Path) {
     StableFileSeconds     = if ($raw.StableFileSeconds) { [int]$raw.StableFileSeconds } else { 20 }
     ClaimStaleMinutes     = if ($raw.ClaimStaleMinutes) { [int]$raw.ClaimStaleMinutes } else { 30 }
     ProcessFilesModifiedAfterUtc = [string]$raw.ProcessFilesModifiedAfterUtc
+    # Patch D: also process files DIRECTLY inside one level of job folders whose
+    # name starts with a job ticket. Missing = on; set false for root-only.
+    TicketJobFoldersEnabled = if ($null -eq $raw.TicketJobFoldersEnabled) { $true } else { [bool]$raw.TicketJobFoldersEnabled }
   }
   foreach ($key in @("ApiBaseUrl","UploadToken","PrintsForTodayFolder","RoutedArchiveFolder","LogFolder")) {
     if ([string]::IsNullOrWhiteSpace($config[$key])) { throw "Config missing required value: $key" }
@@ -189,10 +192,13 @@ function Get-IntakeDisposition($Config, [string]$Hash, [string]$FileName) {
   return $rows[0]
 }
 
-function Get-RoutePlan($Config, [string]$FileName, [string]$Subfolder, [string]$FileHash, [long]$FileSize) {
+function Get-RoutePlan($Config, [string]$FileName, [string]$Subfolder, [string]$FileHash, [long]$FileSize, $FolderFiles = @()) {
   # 15F.0J.5: the full SHA-256 + size ride the PLAN request so the server can
-  # match-or-AUTO-CREATE the print-intake identity idempotently.
-  return Invoke-IntakeJsonPost $Config $Config.PlanUrl @{ token = $Config.UploadToken; fileName = $FileName; subfolder = $Subfolder; fileHash = $FileHash; fileSize = $FileSize } 60
+  # match the print-intake identity idempotently (the server never creates a
+  # job for a dropped file). Patch D: folderFiles = the names of the other
+  # artwork files in the same ticket job folder, so sibling layers of one job
+  # are sent to one press.
+  return Invoke-IntakeJsonPost $Config $Config.PlanUrl @{ token = $Config.UploadToken; fileName = $FileName; subfolder = $Subfolder; fileHash = $FileHash; fileSize = $FileSize; folderFiles = @($FolderFiles) } 60
 }
 
 function Send-IntakeReport($Config, [hashtable]$Outcome) {
@@ -227,6 +233,30 @@ function Test-PathIsReserved([string]$FullName, $Config) {
   return $false
 }
 
+# ---------- Patch D: ticket-named job folders ----------
+# A job folder is a DIRECT child of the inbox root whose name BEGINS with one
+# exact job ticket: "GSO-20261118-0003", "GSO-20261118-0003 FLAVAZ",
+# "GSO-20261118-0003 - FLAVAZ CAMP". Only the ticket is identity. A folder named
+# after a customer / design / "PRINT TODAY", a ticket later in the name, or an
+# item ticket is NOT a job folder and is never scanned.
+$TicketJobFolderPattern = '^GSO[-_]\d{8}[-_]\d{4}(?!\d)(?![-_]\d)'
+
+function Test-TicketJobFolderName([string]$Name) {
+  return (([string]$Name).Trim() -match $TicketJobFolderPattern)
+}
+
+# One level only: the ticket folders directly under the root. Never recursive.
+function Get-TicketJobFolders($Config) {
+  $folders = @()
+  if (-not $Config.TicketJobFoldersEnabled) { return $folders }
+  foreach ($dir in @(Get-ChildItem -LiteralPath $Config.PrintsForTodayFolder -Directory -ErrorAction SilentlyContinue)) {
+    if (-not (Test-TicketJobFolderName $dir.Name)) { continue }
+    if (Test-PathIsReserved $dir.FullName $Config) { continue }
+    $folders += $dir
+  }
+  return $folders
+}
+
 # Single scan pass: eligible artwork files (sorted oldest-first) plus the
 # count of historical files ignored by the cutoff. Ignored files are filtered
 # HERE, before detection logging, claims, hashing, ledger lookups, plan calls,
@@ -238,10 +268,16 @@ function Test-PathIsReserved([string]$FullName, $Config) {
 # name - one new root file is detected on the next poll no matter how many
 # thousands of files the subfolders hold. Hashing/ledger lookups happen only
 # for top-level eligible files.
+# Patch D: plus the files DIRECTLY inside one level of ticket-named job folders
+# (Get-TicketJobFolders). Nothing deeper is ever read, and the same cutoff,
+# reserved-folder and artwork-extension filters apply to those files.
 function Get-EligibleArtworkFiles($Config) {
   $eligible = @()
   $ignoredHistorical = 0
   $all = @(Get-ChildItem -LiteralPath $Config.PrintsForTodayFolder -File -ErrorAction SilentlyContinue)
+  foreach ($jobFolder in @(Get-TicketJobFolders $Config)) {
+    $all += @(Get-ChildItem -LiteralPath $jobFolder.FullName -File -ErrorAction SilentlyContinue)
+  }
   foreach ($file in $all) {
     if ($ArtworkExtensions -notcontains $file.Extension.ToLowerInvariant()) { continue }
     if (Test-PathIsReserved $file.FullName $Config) { continue }
@@ -354,7 +390,17 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
     $parent = Split-Path -Path $File.FullName -Parent
     if ($parent -and ($parent.TrimEnd('\') -ne $Config.PrintsForTodayFolder.TrimEnd('\'))) { $subfolder = Split-Path -Path $parent -Leaf }
 
-    $planResult = Get-RoutePlan $Config $File.Name $subfolder $hash $File.Length
+    # Patch D: inside a ticket job folder, tell the ERP which other artwork files
+    # sit beside this one (names only, cutoff-eligible only) so the layers of one
+    # job go to one press.
+    $folderFiles = @()
+    if ($subfolder -and (Test-TicketJobFolderName $subfolder)) {
+      $folderFiles = @(Get-ChildItem -LiteralPath $parent -File -ErrorAction SilentlyContinue |
+        Where-Object { ($ArtworkExtensions -contains $_.Extension.ToLowerInvariant()) -and ($_.Name -ne $File.Name) -and (Test-FileEligibleByCutoff $_.LastWriteTimeUtc $Config.CutoffUtc) } |
+        Select-Object -First 60 | ForEach-Object { $_.Name })
+    }
+
+    $planResult = Get-RoutePlan $Config $File.Name $subfolder $hash $File.Length $folderFiles
     if ($planResult.exception -or $planResult.status -eq 0 -or $planResult.status -ge 500) {
       Write-IntakeLog $Config "plan_unreachable" $File.Name "status=$($planResult.status) exception=$($planResult.exception); will retry next pass"
       return
@@ -461,6 +507,7 @@ function Invoke-IntakeHealth($Config) {
     Write-Host "go-live cutoff (ProcessFilesModifiedAfterUtc): NOT SET - every artwork file in the folder is eligible"
   }
   $scan = Get-EligibleArtworkFiles $Config
+  Write-Host ("ticket job folders (one level, name starts with a job ticket): " + $(if ($Config.TicketJobFoldersEnabled) { "ON - " + @(Get-TicketJobFolders $Config).Count + " found" } else { "OFF (root files only)" }))
   Write-Host ("historical files ignored by cutoff: " + $scan.ignoredHistorical)
   Write-Host ("eligible pending artwork files: " + $scan.files.Count)
   if ($null -eq $Config.CutoffUtc -and $scan.files.Count -gt 100) {
@@ -591,6 +638,39 @@ function Invoke-IntakeSelfTest {
     # Ignored files never reach claims/hash/API/report: the scan result is the
     # ONLY input to the processing loop, and scanning created no claim files.
     Assert "scan itself creates no claim files for ignored files" (@(Get-ChildItem -Path $scanRoot -Recurse -Filter "*.gsoclaim" -File).Count -eq 0)
+
+    # ---- Patch D: ticket-named job folders (one level, exact ticket at the start) ----
+    Assert "ticket folder names: ticket only, ticket + customer, ticket - customer, underscore form" ((Test-TicketJobFolderName "GSO-20260718-0001") -and (Test-TicketJobFolderName "GSO-20260718-0001 FLAVAZ") -and (Test-TicketJobFolderName "GSO-20260718-0001 - FLAVAZ CAMP") -and (Test-TicketJobFolderName "gso_20260718_0001 x"))
+    $notTicketNames = @("FLAVAZ", "KRUD", "PRINT TODAY", "PRINTS FOR TODAY", "FLAVAZ GSO-20260718-0001", "GSO-2026-0001", "GSO-20260718-00011", "GSO-20260718-0001-01 item", "GSO 20260718 0001", "")
+    Assert "customer / design / late-ticket / item-ticket / malformed folder names are never job folders" (@($notTicketNames | Where-Object { Test-TicketJobFolderName $_ }).Count -eq 0)
+    $jobDir = Join-Path $scanRoot "GSO-20260718-0001 FLAVAZ"
+    foreach ($sub in @("GSO-20260718-0001 FLAVAZ", "GSO-20260718-0001 FLAVAZ\proofs", "FLAVAZ GSO-20260718-0002", "FLAVAZ")) { New-Item -ItemType Directory -Path (Join-Path $scanRoot $sub) -Force | Out-Null }
+    $layerC = Join-Path $jobDir "flavaz_og_3oz_F_cmyk.pdf"; Set-Content -Path $layerC -Value "c"
+    (Get-Item $layerC).LastWriteTimeUtc = $cutoff.AddMinutes(9)
+    $layerG = Join-Path $jobDir "flavaz_og_3oz_F_g.pdf"; Set-Content -Path $layerG -Value "g"
+    (Get-Item $layerG).LastWriteTimeUtc = $cutoff.AddMinutes(10)
+    $jobOld = Join-Path $jobDir "old proof.pdf"; Set-Content -Path $jobOld -Value "o"
+    (Get-Item $jobOld).LastWriteTimeUtc = $cutoff.AddDays(-10)
+    Set-Content -Path (Join-Path $jobDir "notes.txt") -Value "n"
+    $jobNested = Join-Path $jobDir "proofs\nested.pdf"; Set-Content -Path $jobNested -Value "x"
+    (Get-Item $jobNested).LastWriteTimeUtc = $cutoff.AddMinutes(9)
+    $lateTicketFile = Join-Path $scanRoot "FLAVAZ GSO-20260718-0002\late.pdf"; Set-Content -Path $lateTicketFile -Value "l"
+    (Get-Item $lateTicketFile).LastWriteTimeUtc = $cutoff.AddMinutes(9)
+    $customerFile = Join-Path $scanRoot "FLAVAZ\customer.pdf"; Set-Content -Path $customerFile -Value "k"
+    (Get-Item $customerFile).LastWriteTimeUtc = $cutoff.AddMinutes(9)
+    $scanOff = Get-EligibleArtworkFiles $scanConfig
+    Assert "ticket folders are not scanned when the switch is off (root-only result unchanged)" ($scanOff.files.Count -eq 4)
+    $scanConfig.TicketJobFoldersEnabled = $true
+    $scanJob = Get-EligibleArtworkFiles $scanConfig
+    Assert "files directly inside a ticket job folder are eligible (root 4 + 2 layer files)" (($scanJob.files.Count -eq 6) -and (@($scanJob.files | Where-Object { $_.Name -in @("flavaz_og_3oz_F_cmyk.pdf","flavaz_og_3oz_F_g.pdf") }).Count -eq 2))
+    Assert "a file nested below a ticket folder is NOT processed (one level only)" (@($scanJob.files | Where-Object { $_.Name -eq "nested.pdf" }).Count -eq 0)
+    Assert "customer-named, ticket-not-at-start and other subfolders stay ignored" (@($scanJob.files | Where-Object { $_.FullName -match "FLAVAZ GSO-|\\FLAVAZ\\|jobsub|PRINTS FOR TODAY|deep" }).Count -eq 0)
+    Assert "the go-live cutoff still applies inside a ticket folder" (($scanJob.ignoredHistorical -eq 3) -and (@($scanJob.files | Where-Object { $_.Name -eq "old proof.pdf" }).Count -eq 0))
+    Assert "non-artwork files in a ticket folder are ignored" (@($scanJob.files | Where-Object { $_.Name -eq "notes.txt" }).Count -eq 0)
+    Assert "exactly one ticket job folder is found; reserved names never are" ((@(Get-TicketJobFolders $scanConfig).Count -eq 1) -and (@(Get-TicketJobFolders $scanConfig | Where-Object { $_.Name -match "_agent-test|_routed-archive" }).Count -eq 0))
+    Assert "scanning ticket folders creates no claim files" (@(Get-ChildItem -Path $scanRoot -Recurse -Filter "*.gsoclaim" -File).Count -eq 0)
+    $planPayload = @{ token = "t"; fileName = "a.pdf"; subfolder = "GSO-20260718-0001 FLAVAZ"; fileHash = "h"; fileSize = 1; folderFiles = @("flavaz_og_3oz_F_g.pdf") } | ConvertTo-Json -Compress
+    Assert "plan payload carries sibling names as a JSON array (even a single one)" ($planPayload -match '"folderFiles":\["flavaz_og_3oz_F_g\.pdf"\]')
   } finally {
     Remove-Item $temp -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
   }

@@ -20,11 +20,17 @@ export const NEEDS_LINK_TO_JOB_LABEL = "NEEDS REVIEW — LINK TO JOB";
 export const PRINTER_CONFLICT_LABEL = "NEEDS REVIEW — PRINTER CONFLICT";
 export const PRINTER_CONFLICT_REASONS = ["printer_token_conflict", "premium_mode_mimaki_contradiction", "printer_assignment_contradiction", "layer_printer_split"];
 
+// Patch D (2026-11-18): a file in a ticket folder whose job has several items
+// and nothing certain says which item — a person picks the item.
+export const NEEDS_LINK_TO_ITEM_REASON = "needs_link_to_item";
+export const NEEDS_LINK_TO_ITEM_LABEL = "NEEDS REVIEW — LINK TO ITEM";
+
 // Safety follow-up: a lone `_cmyk` layer on a job whose finish is not stated.
 export const CONFIRM_PRINT_MODE_REASON = "confirm_print_mode";
 export const CONFIRM_PRINT_MODE_LABEL = "NEEDS REVIEW — CONFIRM PRINT MODE";
 
 export const REVIEW_REASON_LABELS: Record<string, string> = {
+  needs_link_to_item: "The folder names the job, but the job has several items and nothing certain says which one — pick the item with Assign.",
   confirm_print_mode: "This is a CMYK layer file and the job does not say whether a gloss or white layer is coming. Set the finish or press on the job, add a ROLAND / MIMAKI tag to the filename, or drop the other layer — then Release / Retry.",
   layer_printer_split: "Another layer of this same job was already sent to the other press — one job is never split across presses.",
   needs_link_to_job: "No existing production job matches this file — pick the job with Assign.",
@@ -52,6 +58,9 @@ export function canonicalReviewReason(reasons: string[] | string | null | undefi
   const list = (Array.isArray(reasons) ? reasons : [String(reasons || "")]).map((reason) => String(reason || ""));
   const text = list.join(" | ");
   if (/rejected_by_owner/.test(text)) return "rejected_by_owner";
+  if (/needs_link_to_item/.test(text)) return NEEDS_LINK_TO_ITEM_REASON;
+  if (/_and_folder_ticket_.*_disagree/.test(text)) return "ticket_folder_mismatch";
+  if (/_on_closed_job/.test(text)) return "ticket_on_closed_job";
   if (/needs_link_to_job/.test(text)) return NEEDS_LINK_TO_JOB_REASON;
   if (/conflicting_printer_tokens/.test(text)) return "printer_token_conflict";
   if (/layer_split_sibling_already_routed/.test(text)) return "layer_printer_split";
@@ -155,3 +164,32 @@ export function validateIntakeAssignment(params: {
   }
   return { ok: true, item: job.items[0] || null };
 }
+
+// ---------- Patch D (2026-11-18): job search + bulk assignment helpers ----------
+// Search is a HUMAN selection aid only. It narrows the "Assign to..." list; it
+// never links anything by itself and is never used by the route-plan endpoint.
+
+export const INTAKE_JOB_SEARCH_MAX = 80;
+export const INTAKE_BULK_ASSIGN_MAX = 50;
+
+export function cleanIntakeJobSearch(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, INTAKE_JOB_SEARCH_MAX);
+}
+
+/** Jobs a person may assign an intake file to: this shop, active, not finalized, not closed — optionally narrowed by a search term. */
+export function intakeAssignableJobsWhere(shop: string, search: string): Record<string, unknown> {
+  const term = cleanIntakeJobSearch(search);
+  const base: Record<string, unknown> = { shop, active: true, actualCostFinalized: false, status: { notIn: [...CLOSED_JOB_STATUSES] } };
+  if (!term) return base;
+  const contains = { contains: term, mode: "insensitive" };
+  return { ...base, OR: [{ jobTicket: contains }, { customerName: contains }, { company: contains }, { quoteNumber: contains }] };
+}
+
+/** The intake ids ticked for a bulk assign: de-duplicated, order kept; refused when empty or over the limit. */
+export function parseBulkIntakeIds(values: unknown[]): { ok: true; ids: string[] } | { ok: false; reason: string } {
+  const ids = [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
+  if (!ids.length) return { ok: false, reason: "Tick at least one file to assign." };
+  if (ids.length > INTAKE_BULK_ASSIGN_MAX) return { ok: false, reason: `Assign at most ${INTAKE_BULK_ASSIGN_MAX} files at a time.` };
+  return { ok: true, ids };
+}
+

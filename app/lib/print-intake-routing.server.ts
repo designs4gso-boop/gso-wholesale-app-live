@@ -4,8 +4,9 @@
 // in and tests import directly.
 //
 // Safety contract:
-// - deterministic hierarchy only (item ticket > job ticket w/ single item >
-//   exact stored filename > exact stored job file > job subfolder identity);
+// - deterministic hierarchy only (item ticket in filename > job ticket in
+//   filename w/ single item > job ticket at the START of the parent folder
+//   name (Patch D) > exact stored filename > exact stored job file);
 // - NEVER first-match-wins, contains-only, fuzzy, nearest-date, or
 //   customer-name matching; two+ candidates at any tier route NOTHING;
 // - the server returns a machine KEY only — hot-folder paths live exclusively
@@ -96,6 +97,22 @@ export function extractJobTicketFrom(text: string): string {
   const match = String(text || "").replace(/_/g, "-").match(JOB_TICKET_RE);
   return match ? match[0].toUpperCase() : "";
 }
+
+// Patch D (2026-11-18): a TICKET-NAMED JOB FOLDER. The folder name must BEGIN
+// with one exact job ticket ("GSO-20261118-0003", "GSO-20261118-0003 FLAVAZ",
+// "GSO-20261118-0003 - FLAVAZ CAMP"). Only the ticket is identity — any text
+// after it is ignored, a ticket later in the name is not accepted, and a name
+// that is not a ticket (customer, design, "PRINT TODAY") is never a signal.
+const FOLDER_JOB_TICKET_RE = /^GSO-\d{8}-\d{4}(?!\d)(?!-\d)/i;
+
+export function extractFolderJobTicket(folderName: string | null | undefined): string {
+  const match = basenameOf(String(folderName || "")).trim().replace(/_/g, "-").match(FOLDER_JOB_TICKET_RE);
+  return match ? match[0].toUpperCase() : "";
+}
+
+// Job statuses a dropped file may no longer be linked to automatically (same
+// set the manual Assign action refuses).
+const INTAKE_CLOSED_JOB_STATUSES = new Set(["completed", "cancelled", "canceled", "archived"]);
 
 // ---------- machine decision (conservative v1) ----------
 
@@ -457,9 +474,17 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
   if (!isArtworkFileName(fileName)) return review(["not_an_artwork_file_type"]);
   const fileIdentity = normalizeFileIdentity(fileName);
   const subfolder = String(params.subfolder || "").trim();
+  // Patch D: the ticket of the job folder the file sits in ("" when the file is
+  // in the root or in a folder whose name does not begin with a ticket).
+  const folderTicket = subfolder ? extractFolderJobTicket(subfolder) : "";
 
   // (a) exact item ticket in the filename
   const itemTicket = extractItemTicketFrom(fileName);
+  // A ticket in the filename that contradicts the folder's ticket is never guessed.
+  const fileNameJobTicket = itemTicket ? itemTicket.slice(0, 17) : extractJobTicketFrom(fileName);
+  if (folderTicket && fileNameJobTicket && fileNameJobTicket !== folderTicket) {
+    return review([`filename_ticket_${fileNameJobTicket}_and_folder_ticket_${folderTicket}_disagree`]);
+  }
   if (itemTicket) {
     const hits: { job: IntakeJob; item: IntakeItem }[] = [];
     for (const job of params.jobs) {
@@ -488,7 +513,26 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
     return review([`job_ticket_${jobTicket}_not_found_in_eligible_jobs`]);
   }
 
-  // (c) exact normalized filename vs stored per-item/job print names
+  // (c) Patch D: exact job ticket at the start of the PARENT FOLDER name. The
+  // folder alone identifies the JOB; the item is only taken when it is certain
+  // (single-item job, or the file's exact stored name on exactly one item).
+  if (folderTicket) {
+    const jobs = params.jobs.filter((job) => String(job.jobTicket || "").toUpperCase() === folderTicket);
+    if (jobs.length > 1) return review(["subfolder_ticket_matches_multiple_jobs"], jobs.map((job) => candidateOf(job, null, "job_subfolder")));
+    if (jobs.length === 0) return review([`folder_ticket_${folderTicket}_not_found_in_eligible_jobs`]);
+    const job = jobs[0];
+    if (INTAKE_CLOSED_JOB_STATUSES.has(String(job.status || "").toLowerCase())) {
+      return review([`folder_ticket_${folderTicket}_on_closed_job`], [candidateOf(job, null, "job_subfolder")]);
+    }
+    if (job.items.length === 1) return routeItem(job, job.items[0], "job_subfolder", fileName, params.machineContextFor);
+    const storedNameItems = fileIdentity.length >= 6
+      ? job.items.filter((item) => [item.suggestedFileName, item.ripJobName].map(normalizeFileIdentity).some((identity) => identity && identity === fileIdentity))
+      : [];
+    if (storedNameItems.length === 1) return routeItem(job, storedNameItems[0], "job_subfolder", fileName, params.machineContextFor);
+    return review(["folder_job_has_multiple_items_needs_link_to_item"], job.items.map((item) => candidateOf(job, item, "job_subfolder")));
+  }
+
+  // (d) exact normalized filename vs stored per-item/job print names
   if (fileIdentity.length >= 6) {
     const nameHits: { job: IntakeJob; item: IntakeItem }[] = [];
     for (const job of params.jobs) {
@@ -505,7 +549,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
     if (uniqueNameHits.length === 1) return routeItem(uniqueNameHits[0].job, uniqueNameHits[0].item, "stored_filename", fileName, params.machineContextFor);
     if (uniqueNameHits.length > 1) return review(["stored_filename_matches_multiple_items"], uniqueNameHits.map((hit) => candidateOf(hit.job, hit.item, "stored_filename")));
 
-    // (d) exact match vs stored ProductionJobFile names — job-level identity,
+    // (e) exact match vs stored ProductionJobFile names — job-level identity,
     // routable only when the job has exactly one item
     const fileJobHits = params.jobs.filter((job) => job.fileNames.some((name) => normalizeFileIdentity(name) === fileIdentity));
     if (fileJobHits.length === 1) {
@@ -514,20 +558,6 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
       return review(["job_file_matches_job_with_multiple_items"], job.items.map((item) => candidateOf(job, item, "job_file_name")));
     }
     if (fileJobHits.length > 1) return review(["job_file_matches_multiple_jobs"], fileJobHits.map((job) => candidateOf(job, null, "job_file_name")));
-  }
-
-  // (e) generated job subfolder identity ("TICKET - CUSTOMER - PRODUCT")
-  if (subfolder) {
-    const subTicket = extractJobTicketFrom(subfolder);
-    if (subTicket) {
-      const jobs = params.jobs.filter((job) => String(job.jobTicket || "").toUpperCase() === subTicket);
-      if (jobs.length === 1) {
-        const job = jobs[0];
-        if (job.items.length === 1) return routeItem(job, job.items[0], "job_subfolder", fileName, params.machineContextFor);
-        return review(["subfolder_job_has_multiple_items_pick_item_in_review"], job.items.map((item) => candidateOf(job, item, "job_subfolder")));
-      }
-      if (jobs.length > 1) return review(["subfolder_ticket_matches_multiple_jobs"], jobs.map((job) => candidateOf(job, null, "job_subfolder")));
-    }
   }
 
   return review(["no_deterministic_match"]);

@@ -10,6 +10,11 @@ import { CREDENTIAL_PLACEHOLDER, credentialStatusLabel, maskCredential } from ".
 import {
   CONFIRM_PRINT_MODE_LABEL,
   CONFIRM_PRINT_MODE_REASON,
+  NEEDS_LINK_TO_ITEM_LABEL,
+  NEEDS_LINK_TO_ITEM_REASON,
+  cleanIntakeJobSearch,
+  intakeAssignableJobsWhere,
+  parseBulkIntakeIds,
   NEEDS_LINK_TO_JOB_LABEL,
   PRINTER_CONFLICT_LABEL,
   PRINTER_CONFLICT_REASONS,
@@ -60,16 +65,19 @@ export async function loader({ request }: { request: Request }) {
   const reviewRows = await db.printIntake.findMany({
     where: { shop: session.shop, status: { in: [...REVIEW_STATUSES] } },
     orderBy: { updatedAt: "desc" },
-    take: 50,
+    take: 200,
   });
+  // Patch D: optional job search (?q=) — narrows the "Assign to..." list for a
+  // person. It is never used for automatic matching.
+  const jobQuery = cleanIntakeJobSearch(new URL(request.url).searchParams.get("q"));
   // 15H.4C-N: commercial jobs first — Shopify orders, then quotes, then
   // manual, then anything else. Labels carry ticket + order/quote + name.
   const SOURCE_ORDER: Record<string, number> = { shopify: 0, quote: 1, manual: 2, other: 3, intake: 4 };
   const assignableJobs = (await db.productionJob.findMany({
-    where: { shop: session.shop, active: true, actualCostFinalized: false, status: { notIn: ["completed", "cancelled", "canceled", "archived"] } },
+    where: intakeAssignableJobsWhere(session.shop, jobQuery) as any,
     orderBy: { updatedAt: "desc" },
-    take: 30,
-    select: { id: true, jobTicket: true, quoteId: true, quoteNumber: true, orderGid: true, customerName: true, items: { select: { id: true, itemTicket: true, productTitle: true }, orderBy: { sortOrder: "asc" } } },
+    take: jobQuery ? 60 : 30,
+    select: { id: true, jobTicket: true, quoteId: true, quoteNumber: true, orderGid: true, customerName: true, company: true, items: { select: { id: true, itemTicket: true, productTitle: true }, orderBy: { sortOrder: "asc" } } },
   }))
     .map((job) => ({ ...job, sourceType: jobSourceType(job) }))
     .sort((a, b) => (SOURCE_ORDER[a.sourceType] ?? 9) - (SOURCE_ORDER[b.sourceType] ?? 9))
@@ -77,13 +85,14 @@ export async function loader({ request }: { request: Request }) {
       id: job.id,
       jobTicket: job.jobTicket,
       customerName: job.customerName,
-      label: `[${job.sourceType}] ${job.jobTicket || job.id} · ${job.quoteNumber || ""} · ${job.customerName || "—"}`,
+      label: `[${job.sourceType}] ${job.jobTicket || job.id} · ${job.quoteNumber || ""} · ${job.customerName || "—"}${job.company ? ` (${job.company})` : ""}`,
       items: job.items,
     }));
   // 15G.1A: the raw upload token never leaves the server — the browser gets
   // only the masked configured/not-configured status.
   return {
     incomingFolder: setting.incomingFolder,
+    jobQuery,
     credential: maskCredential(setting.uploadToken),
     outcomes: outcomes.slice(0, 50),
     reviewRows: reviewRows.map((row) => ({
@@ -101,7 +110,9 @@ export async function loader({ request }: { request: Request }) {
         ? PRINTER_CONFLICT_LABEL
         : (row.status === "review" || row.status === "assigned") && row.reviewReason === CONFIRM_PRINT_MODE_REASON
           ? CONFIRM_PRINT_MODE_LABEL
-          : row.status === "review" && !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,
+          : row.status === "review" && row.reviewReason === NEEDS_LINK_TO_ITEM_REASON
+            ? NEEDS_LINK_TO_ITEM_LABEL
+            : row.status === "review" && !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,
       ticket: row.authoritativeTicket,
       matchedProductionJobId: row.matchedProductionJobId,
       generatedProductionJobId: row.generatedProductionJobId,
@@ -123,6 +134,33 @@ export async function action({ request }: { request: Request }) {
   const intent = String(form.get("intent") || "");
   const intakeId = String(form.get("intakeId") || "");
   const actor = staffAccess.actor || `admin:${shop}`;
+
+  // Patch D: BULK ASSIGN — several ticked files to ONE existing job. Same
+  // permission, same validation as the single Assign (a multi-item job needs the
+  // exact item), all-or-nothing, never creates a job, never touches files.
+  if (intent === "bulkAssign") {
+    const parsedIds = parseBulkIntakeIds(form.getAll("intakeIds"));
+    if (!parsedIds.ok) return { ok: false, message: parsedIds.reason };
+    const [bulkJobId, bulkItemIdRaw] = String(form.get("target") || "").split("|");
+    if (!bulkJobId) return { ok: false, message: "Pick a job/item to assign the ticked files to." };
+    const rows = await db.printIntake.findMany({ where: { shop, id: { in: parsedIds.ids } } });
+    if (rows.length !== parsedIds.ids.length) return { ok: false, message: "One or more ticked files were not found. Nothing was assigned." };
+    const alreadyRouted = rows.filter((candidate) => candidate.status === "routed");
+    if (alreadyRouted.length) return { ok: false, message: `${alreadyRouted.length} ticked file(s) are already routed (${alreadyRouted.slice(0, 3).map((candidate) => candidate.originalFilename).join(", ")}). Nothing was assigned.` };
+    const bulkJob = await db.productionJob.findFirst({
+      where: { id: bulkJobId, shop },
+      select: { id: true, shop: true, active: true, status: true, actualCostFinalized: true, jobTicket: true, items: { select: { id: true, itemTicket: true } } },
+    });
+    const bulkVerdict = validateIntakeAssignment({ shop, job: bulkJob as any, itemId: bulkItemIdRaw || null });
+    if (!bulkVerdict.ok) return { ok: false, message: `${bulkVerdict.reason} Nothing was assigned.` };
+    const now = new Date().toISOString();
+    await db.$transaction([
+      ...rows.map((candidate) => db.printIntake.update({ where: { id: candidate.id }, data: intakeAssignmentData(candidate, bulkJob!, bulkVerdict.item, actor, now) })),
+      ...rows.map((candidate) => db.productionJobEvent.create({ data: intakeAssignmentEvent(shop, candidate, bulkJob!, bulkVerdict.item, actor) })),
+    ] as never);
+    return { ok: true, message: `${rows.length} file(s) assigned to ${bulkJob!.jobTicket || bulkJob!.id} — the agent will route them on its next pass.` };
+  }
+
   const row = await db.printIntake.findFirst({ where: { id: intakeId, shop } });
   if (!row) return { ok: false, message: "Intake record not found." };
 
@@ -153,23 +191,8 @@ export async function action({ request }: { request: Request }) {
     });
     const verdict = validateIntakeAssignment({ shop, job: job as any, itemId });
     if (!verdict.ok) return { ok: false, message: verdict.reason };
-    const ticket = verdict.item?.itemTicket || job!.jobTicket || null;
-    await db.printIntake.update({
-      where: { id: row.id },
-      data: {
-        status: "assigned",
-        matchedProductionJobId: job!.id,
-        authoritativeTicket: ticket,
-        reviewReason: row.reviewReason,
-        rawParsedHints: appendIntakeAudit(
-          JSON.stringify({ ...readIntakeMeta(row.rawParsedHints), assignedItemId: verdict.item?.id || null }),
-          { at: new Date().toISOString(), actor, action: "assigned_to_job", reason: `${job!.jobTicket || job!.id}${verdict.item ? ` / ${verdict.item.itemTicket || verdict.item.id}` : ""}` },
-        ),
-      },
-    });
-    await db.productionJobEvent.create({
-      data: { shop, jobId: job!.id, eventType: "intake_file_assigned", message: `Intake file "${row.originalFilename}" (sha8 ${row.fileHashSha256.slice(0, 8)}) assigned by owner${ticket ? ` as ${ticket}` : ""}. Agent will route it on the next pass.`, createdBy: actor },
-    });
+    await db.printIntake.update({ where: { id: row.id }, data: intakeAssignmentData(row, job!, verdict.item, actor, new Date().toISOString()) });
+    await db.productionJobEvent.create({ data: intakeAssignmentEvent(shop, row, job!, verdict.item, actor) });
     return { ok: true, message: `${row.originalFilename} assigned to ${job!.jobTicket || job!.id} — the agent will route it on its next pass.` };
   }
 
@@ -189,6 +212,29 @@ export async function action({ request }: { request: Request }) {
   }
 
   return { ok: false, message: "Unknown action." };
+}
+
+// One assignment write, shared by the single and the bulk Assign so the two can
+// never drift apart (server-only: used by the action above).
+type AssignTargetJob = { id: string; jobTicket: string | null };
+type AssignTargetItem = { id: string; itemTicket: string | null } | null;
+
+function intakeAssignmentData(row: { reviewReason: string | null; rawParsedHints: string | null }, job: AssignTargetJob, item: AssignTargetItem, actor: string, at: string) {
+  return {
+    status: "assigned",
+    matchedProductionJobId: job.id,
+    authoritativeTicket: item?.itemTicket || job.jobTicket || null,
+    reviewReason: row.reviewReason,
+    rawParsedHints: appendIntakeAudit(
+      JSON.stringify({ ...readIntakeMeta(row.rawParsedHints), assignedItemId: item?.id || null }),
+      { at, actor, action: "assigned_to_job", reason: `${job.jobTicket || job.id}${item ? ` / ${item.itemTicket || item.id}` : ""}` },
+    ),
+  };
+}
+
+function intakeAssignmentEvent(shop: string, row: { originalFilename: string; fileHashSha256: string }, job: AssignTargetJob, item: AssignTargetItem, actor: string) {
+  const ticket = item?.itemTicket || job.jobTicket || null;
+  return { shop, jobId: job.id, eventType: "intake_file_assigned", message: `Intake file "${row.originalFilename}" (sha8 ${row.fileHashSha256.slice(0, 8)}) assigned by owner${ticket ? ` as ${ticket}` : ""}. Agent will route it on the next pass.`, createdBy: actor };
 }
 
 const card: React.CSSProperties = { marginTop: 16, border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "white" };
@@ -273,7 +319,7 @@ const STATUS_STYLE: Record<string, React.CSSProperties> = {
 };
 
 export default function PrintIntake() {
-  const { incomingFolder, credential, outcomes, reviewRows, assignableJobs } = useLoaderData<typeof loader>();
+  const { incomingFolder, jobQuery, credential, outcomes, reviewRows, assignableJobs } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const counts = {
     routed: outcomes.filter((outcome) => outcome.decision === "routed").length,
@@ -298,7 +344,9 @@ export default function PrintIntake() {
       <section style={card}>
         <b>Intake folder:</b> <code>{incomingFolder}</code>
         <div style={{ fontSize: 13, color: "#6b7280", marginTop: 6 }}>
-          Staff workflow: save the print-ready file into this folder (or the job&apos;s subfolder). Done. Files named with
+          Staff workflow: save the print-ready file into this folder, or into a <b>job folder whose name starts with the job
+          ticket</b> (for example <code>GSO-20261118-0003 FLAVAZ</code>) — every file directly inside that folder belongs to that
+          existing job, no renaming needed. Only the ticket counts; other folder names are ignored. Done. Files named with
           the item ticket (GSO-YYYYMMDD-NNNN-II) route instantly; the production board&apos;s &quot;Copy Print File
           Name&quot; button gives the exact name.
         </div>
@@ -336,6 +384,16 @@ export default function PrintIntake() {
           the agent re-plan a blocked file on its next pass; <b>Assign</b> routes it to the exact job/item you pick;{" "}
           <b>Reject</b> stops retries (the file itself is never deleted). Every action is audited.
         </p>
+        <Form method="get" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "0 0 10px", fontSize: 13 }}>
+          <label htmlFor="intake-job-search"><b>Find a job to assign to:</b></label>
+          <input id="intake-job-search" name="q" defaultValue={jobQuery} placeholder="ticket, customer, company or order number" style={{ padding: 6, minWidth: 280 }} />
+          <button type="submit" style={{ padding: "4px 10px" }}>Search jobs</button>
+          {jobQuery ? <Link to="/app/erp/print-intake" style={{ color: "#1d4ed8" }}>Clear</Link> : null}
+          <span style={{ color: "#6b7280" }}>
+            {jobQuery ? `${assignableJobs.length} open job(s) match "${jobQuery}"` : `Showing the ${assignableJobs.length} most recently updated open jobs`}
+            {" "}— this only narrows the lists below; nothing is linked until you press Assign.
+          </span>
+        </Form>
         {reviewRows.length === 0 ? (
           <p style={{ color: "#6b7280" }}>
             Nothing needs review right now. A file appears here when the intake agent cannot match it to exactly one
@@ -347,13 +405,16 @@ export default function PrintIntake() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "#f3f4f6" }}>
-                  <th align="left" style={{ padding: 6 }}>File</th><th align="left">Hash</th><th align="left">Printer / mode</th>
+                  <th align="left" style={{ padding: 6 }}>Pick</th><th align="left">File</th><th align="left">Hash</th><th align="left">Printer / mode</th>
                   <th align="left">Status</th><th align="left">Reason</th><th align="left">Ticket / job</th><th align="left">Updated</th><th align="left">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {reviewRows.map((row) => (
                   <tr key={row.id} style={{ borderTop: "1px solid #e5e7eb", verticalAlign: "top" }}>
+                    <td style={{ padding: 6 }}>
+                      <input type="checkbox" name="intakeIds" value={row.id} form="intake-bulk-assign" aria-label={`Select ${row.fileName} for bulk assign`} />
+                    </td>
                     <td style={{ padding: 6, maxWidth: 260, wordBreak: "break-all" }}>{row.fileName}</td>
                     <td><code>{row.hash8}</code></td>
                     <td>{row.printer || "—"}{row.printMode ? ` / ${row.printMode}` : ""}</td>
@@ -407,6 +468,27 @@ export default function PrintIntake() {
                 ))}
               </tbody>
             </table>
+            <Form method="post" id="intake-bulk-assign" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10, padding: 10, border: "1px dashed #c4b5fd", borderRadius: 10, fontSize: 13 }}>
+              <input type="hidden" name="intent" value="bulkAssign" />
+              <b>Assign every ticked file to one job:</b>
+              <select name="target" defaultValue="" style={{ maxWidth: 340 }}>
+                <option value="" disabled>{assignableJobs.length ? "Assign ticked files to…" : "No open jobs to assign to"}</option>
+                {assignableJobs.map((job) => (
+                  job.items.length > 1
+                    ? job.items.map((item) => (
+                        <option key={item.id} value={`${job.id}|${item.id}`}>
+                          {job.label} → {item.itemTicket || item.id} — {item.productTitle.slice(0, 26)}
+                        </option>
+                      ))
+                    : <option key={job.id} value={`${job.id}|${job.items[0]?.id || ""}`}>{job.label}</option>
+                ))}
+              </select>
+              <button type="submit" style={{ padding: "4px 10px" }}>Assign ticked files</button>
+              <span style={{ color: "#6b7280" }}>
+                Use this only for files that truly belong to the same job (for example the layers of one design). A job with several
+                items is listed once per item — pick the exact item. All ticked files are assigned, or none.
+              </span>
+            </Form>
           </div>
         )}
       </section>
