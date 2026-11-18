@@ -141,7 +141,7 @@ describe("1-7. a successfully routed, matched file is recorded once on the exist
   });
 
   it("a Roland job says Roland; the PrintIntake row stays, linked to the same job, routed", async () => {
-    state.jobs = [job({ items: [item({ selectedFinish: "Matte + 4X Spot Gloss" })] })];
+    state.jobs = [job({ items: [item({ selectedFinish: "Holo + White" })] })]; // white still requires the Roland
     await deliver("GSO-20261118-0001-01 art.pdf", HASH("a"));
     expect(state.files[0].notes).toContain("Sent to Roland as ");
     expect(state.intakes).toHaveLength(1);
@@ -185,14 +185,14 @@ describe("8-9. idempotency and multi-layer jobs", () => {
     await assign(intakeFor(GLOSS).id);
     const c = await deliver(CMYK, HASH("a"));
     const g = await deliver(GLOSS, HASH("b"));
-    expect(c.planned.machine).toBe("roland");
-    expect(g.planned.machine).toBe("roland");
+    expect(c.planned.machine).toBe("mimaki"); // 2026-11-18: a CMYK + gloss pair stays together on the Mimaki
+    expect(g.planned.machine).toBe("mimaki");
     expect(state.files).toHaveLength(2);
     expect(state.files.map((file) => file.originalFileName).sort()).toEqual([CMYK, GLOSS].sort());
     expect(new Set(state.files.map((file) => file.jobId))).toEqual(new Set(["job_1"]));
     expect(new Set(state.files.map((file) => file.sourceRef)).size).toBe(2);
-    expect(state.files.every((file) => file.fileType === "print_file" && file.assetRole === "printFile" && /Sent to Roland/.test(file.notes))).toBe(true);
-    await sendReport({ fileName: CMYK, decision: "routed", jobId: "job_1", ripName: c.planned.ripName, machine: "roland", fileHash8: HASH("a").slice(0, 8), fileHash: HASH("a") });
+    expect(state.files.every((file) => file.fileType === "print_file" && file.assetRole === "printFile" && /Sent to Mimaki/.test(file.notes))).toBe(true);
+    await sendReport({ fileName: CMYK, decision: "routed", jobId: "job_1", ripName: c.planned.ripName, machine: "mimaki", fileHash8: HASH("a").slice(0, 8), fileHash: HASH("a") });
     expect(state.files).toHaveLength(2);
   });
 

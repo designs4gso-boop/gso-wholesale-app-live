@@ -62,7 +62,7 @@ export function buildBrandRates(machines: Array<{ name?: string | null; inkChann
   // estimates and actual-cost reporting price ink identically — variance
   // reflects USAGE, not the old seeded-channel price mismatch ($156.99/750,
   // $190/1000). DB channel rates are only a fallback for a channel kind the
-  // canonical table does not define. Mimaki gloss stays null (no gloss on the Mimaki).
+  // canonical table does not define. Mimaki clear / gloss has its own canonical rate (2026-11-18).
   const out: BrandInkRates[] = [];
   for (const machine of machines) {
     const name = String(machine.name || "");
@@ -166,11 +166,10 @@ export function computeEntryCosts(entry: EntryInput, rates: BrandInkRates[]): En
   if (totalMl <= 0) warnings.push("Missing ink ml.");
   if (safeNumber(entry.printMinutes) <= 0) warnings.push("Missing print minutes.");
 
-  // Routing business rule (warn-only), corrected 2026-11-11: the Mimaki
-  // prints CMYK and White; only gloss is routed away from it.
-  if (brand === "mimaki" && gloss > 0) {
-    warnings.push("ROUTING: gloss ink on Mimaki — gloss is not operational on the Mimaki; gloss jobs should carry the ROLAND tag.");
-  }
+  // 2026-11-18: the Mimaki gloss / clear channel is restored and in production
+  // (owner). Gloss ink on a Mimaki result is normal and is priced at its own
+  // rate ($0.09/ml) on top of CMYK — the old "gloss on Mimaki" routing warning
+  // is retired.
 
   return {
     brand,

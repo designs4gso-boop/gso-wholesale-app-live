@@ -225,13 +225,15 @@ export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: Mac
 //
 // (hierarchy corrected by the owner the same day — safety follow-up):
 //
-//   SPECIAL PRODUCTION REQUIREMENTS decide the physical press first:
-//     the JOB needs WHITE (any layer, incl. the holographic white underbase)
-//     or GLOSS / spot gloss (any layer)            -> the Roland is REQUIRED
-//       + explicit ROLAND (ERP or filename), or nothing explicit -> Roland
-//       + explicit MIMAKI (ERP or filename)  -> PRINTER CONFLICT, never Mimaki
-//   CMYK only:
-//       explicit ROLAND -> Roland; explicit MIMAKI -> Mimaki; no hint -> Mimaki
+//   2026-11-18 — MIMAKI GLOSS RESTORED: gloss / clear is no longer Roland-only
+//   and no longer decides the press.
+//     explicit ROLAND (ERP or filename)                 -> Roland (whole job)
+//     explicit MIMAKI (ERP or filename)                 -> Mimaki (whole job)
+//     nothing explicit, CMYK only                       -> Mimaki
+//     nothing explicit, CMYK + gloss layer pair         -> Mimaki, kept together
+//   WHITE is unchanged: the JOB needs white (any layer, incl. the holographic
+//   white underbase) -> the Roland is required; white + explicit MIMAKI ->
+//   PRINTER CONFLICT, never Mimaki.
 //
 // No load balancing, no "less busy" AUTO, no review for a plain CMYK file.
 // Requirements are read at the JOB level: the item's ERP metadata first (it
@@ -239,7 +241,7 @@ export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: Mac
 // known for the same item / design (so `_cmyk` + `_g` both go to the Roland).
 // Conflicting instructions never route:
 //   - both printer tags on the job's files, or a tag against the ERP press
-//   - white or gloss work explicitly sent to the Mimaki
+//   - white work explicitly sent to the Mimaki
 //   - a sibling layer already delivered to the other press (layer split)
 // LATE-LAYER GUARD: a file that names itself a `_cmyk` LAYER, on a job whose
 // ERP record states no finish at all, with no sibling layer known and no
@@ -252,7 +254,10 @@ export type IntakeLayer = "cmyk" | "gloss" | "white";
 // logs: `_cmyk` = CMYK layer, `_g` = gloss layer, `_w` = white layer (the
 // `_cmyk` / `_w` files of one design appear as same-day pairs; the `_g` file ran
 // on the Roland RIP). `_F` / `_B` and every other suffix are NOT interpreted.
-const INTAKE_LAYER_BY_TOKEN: Record<string, IntakeLayer> = { cmyk: "cmyk", g: "gloss", w: "white" };
+// 2026-11-18: `_gloss` / `_GLOSS` is the same gloss layer as `_g` (owner-confirmed
+// Mimaki naming: crud_HEATH_F_CMYK.pdf + crud_HEATH_F_g.pdf = ONE Mimaki job,
+// combined with RasterLink's Composition workflow).
+const INTAKE_LAYER_BY_TOKEN: Record<string, IntakeLayer> = { cmyk: "cmyk", g: "gloss", gloss: "gloss", w: "white" };
 
 /** Standalone layer tokens in a dropped filename, plus the design stem they belong to. */
 export function parseIntakeLayerTokens(fileName: string | null | undefined): { layers: IntakeLayer[]; stem: string } {
@@ -339,16 +344,18 @@ export function decideIntakeMachine(item: IntakeItem, fileName = "", context: In
     if (hints.whiteLayers > 0 || layers.includes("white")) white = true;
   }
 
-  // White and gloss REQUIRE the Roland. An explicit Mimaki instruction on such
-  // a job is a contradiction for a person to resolve — never routed to the Mimaki.
+  // 2026-11-18 (owner): the Mimaki gloss / clear channel is restored — GLOSS NO
+  // LONGER DECIDES THE PRESS. A CMYK + gloss job goes wherever a CMYK job goes
+  // (Mimaki unless the ERP or a filename tag says Roland), and its layers stay
+  // together. WHITE still requires the Roland: an explicit Mimaki on a white
+  // job is a contradiction for a person to resolve.
   const explicit = assigned || (rolandTag ? "roland" : mimakiTag ? "mimaki" : null);
-  if (gloss && explicit === "mimaki") return blocked("gloss_job_but_mimaki_selected_contradiction");
   if (white && explicit === "mimaki") return blocked("white_job_but_mimaki_selected_contradiction");
 
   // Late-layer guard (see the header): only a self-declared `_cmyk` layer with
   // nothing else known about the job is held. A stated finish, an explicit
   // press, or any known special layer all resolve immediately.
-  if (!explicit && !gloss && !white && parseIntakeLayerTokens(fileName).layers.includes("cmyk") && !intakePrintModeStated(item)) {
+  if (!explicit && !gloss && !white && parseIntakeLayerTokens(fileName).layers.includes("cmyk") && !intakePrintModeStated(item)) { // a WHITE sibling could still arrive
     return blocked(INTAKE_CONFIRM_PRINT_MODE);
   }
 
@@ -356,9 +363,8 @@ export function decideIntakeMachine(item: IntakeItem, fileName = "", context: In
   if (assigned) decision = { machine: assigned, machineRule: "explicit_erp_machine", reasons: [`explicit_erp_${assigned}_assignment`] };
   else if (rolandTag) decision = { machine: "roland", machineRule: "explicit_roland_tag", reasons: ["standalone_roland_tag_in_filename"] };
   else if (mimakiTag) decision = { machine: "mimaki", machineRule: "explicit_mimaki_tag", reasons: ["standalone_mimaki_tag_in_filename"] };
-  else if (gloss) decision = { machine: "roland", machineRule: "gloss_requires_roland", reasons: ["gloss_requires_roland"] };
   else if (white) decision = { machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] };
-  else decision = { machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] };
+  else decision = { machine: "mimaki", machineRule: "default_cmyk", reasons: [gloss ? "cmyk_gloss_default_mimaki" : "cmyk_only_default_mimaki"] };
 
   // One physical job is never split across presses: if a sibling layer was
   // already delivered elsewhere, a person decides (nothing is re-sent here).

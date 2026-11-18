@@ -30,11 +30,11 @@ describe("owner standards and verified rates (14B.0)", () => {
     expect(MACHINE_RATE_CURRENT).toBe(5); // OWNER APPROVED 2026-10-07: machine recovery $5/hr (was $8/hr provisional); only machine-recovery lines moved.
   });
 
-  it("ink rates: Mimaki verified, Roland provisional-uniform, Mimaki gloss MISSING (never guessed)", () => {
+  it("ink rates: Mimaki verified, Roland provisional-uniform, Mimaki clear / gloss $0.09/ml landed (owner 2026-11-18)", () => {
     expect(INK_RATES.mimakiCmykPerMl).toBeCloseTo(0.176, 6);
     expect(INK_RATES.mimakiWhitePerMl).toBeCloseTo(0.176, 6);
     expect(INK_RATES.rolandPerMl).toBeCloseTo(149 / 750, 9);
-    expect(INK_RATES.mimakiGlossPerMl).toBeNull();
+    expect(INK_RATES.mimakiGlossPerMl).toBeCloseTo(0.09, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed
   });
 
   it("material roll dimensions are recorded per owner spec", () => {
@@ -252,9 +252,14 @@ describe("automatic full costing (14B.1)", () => {
     expect(two.lines.find((line) => line.key === "material")!.amount).toBeCloseTo(two.lines.find((l) => l.key === "material")!.amount, 6);
   });
 
-  it("missing Mimaki gloss blocks; white ink uses the verified rate; freight is its own labeled line", () => {
+  it("Mimaki gloss is priced at its own rate (no longer missing); white ink uses the verified rate; freight is its own labeled line", () => {
     const gloss = computeAutoCost("bags-4x5", autoInputs({ spotGloss: true }));
-    expect(gloss.missing.some((label) => label.includes("Spot gloss"))).toBe(true);
+    expect(gloss.missing.some((label) => label.includes("Spot gloss"))).toBe(false); // 2026-11-18: the Mimaki gloss rate exists
+    const glossLine = gloss.lines.find((line) => line.key === "ink_gloss")!;
+    const cmykLine = gloss.lines.find((line) => line.key === "ink_cmyk")!;
+    expect(glossLine.source).toBe("estimated");
+    expect(glossLine.amount).toBeGreaterThan(0);
+    expect(glossLine.amount / cmykLine.amount).toBeCloseTo(0.09 / 0.176, 9); // same usage basis, gloss rate instead of CMYK rate — a separate, added line
     const white = computeAutoCost("bags-4x5", autoInputs({ whiteInk: true }));
     expect(white.lines.find((line) => line.key === "ink_white")!.source).toBe("verified");
     const freight = white.lines.find((line) => line.key === "freight")!;

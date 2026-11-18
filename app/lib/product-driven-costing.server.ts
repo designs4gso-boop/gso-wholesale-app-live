@@ -693,8 +693,20 @@ export function computeProductDrivenCost(input: ProductDrivenInput): {
           lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s)`, amount: 0, source: "missing", note: "Mimaki ink price/usage basis missing — gloss cannot be estimated." });
         }
       } else {
-        // Defensive: a future verified Mimaki gloss rate prices linearly.
-        lines.push({ key: "ink_gloss", label: `Gloss ink — ${glossLayers} layer(s), provisional linear model`, amount: glossRate * input.inkMlPerSqft * wasteAdjustedSqft * glossLayers, source: "estimated" });
+        // 2026-11-18: Mimaki clear / gloss has its own landed rate ($0.09/ml).
+        // Usage is the SAME owner-approved provisional basis as before (CMYK
+        // ml/sqft x gloss layers x approved gloss factor) — only the $/ml
+        // changed from the CMYK rate to the gloss rate. Still an estimate until
+        // RasterLink gloss actuals calibrate it.
+        const glossMl = wasteAdjustedSqft * input.inkMlPerSqft * glossLayers * MIMAKI_INK_CALIBRATION.glossFactor;
+        lines.push({
+          key: "ink_gloss",
+          label: `Gloss ink (Mimaki clear) — ${glossLayers} layer(s) — provisional usage estimate`,
+          amount: glossMl * glossRate,
+          source: "estimated",
+          formula: `${wasteAdjustedSqft.toFixed(2)} sqft x ${input.inkMlPerSqft} ml/sqft x ${glossLayers} layer(s) x factor ${MIMAKI_INK_CALIBRATION.glossFactor.toFixed(2)} x $${glossRate}/ml`,
+          note: "Mimaki clear / gloss at $0.09/ml landed (owner 2026-11-18). Usage is the provisional CMYK-basis estimate — reconcile against RasterLink gloss actuals.",
+        });
       }
       }
     }

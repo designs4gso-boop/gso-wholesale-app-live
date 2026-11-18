@@ -94,7 +94,7 @@ describe("ISSUE 3 (corrected 2026-11-11) — the Mimaki prints CMYK + White; onl
     expect(decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any).machine).toBe("roland");
     expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBe("mimaki");
     expect(decideMachine({ selectedFinish: "Spot Gloss", materialSummary: "spot gloss", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBeNull();
-    expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeNull();
+    expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeCloseTo(0.09, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed (the shared production router above is unchanged)
   });
 
   it("Cost Health treats Mimaki white slots as real capacity (not hardware-only) and still never warns that the Mimaki lacks a gloss channel", () => {

@@ -41,7 +41,7 @@ export const REVIEW_REASON_LABELS: Record<string, string> = {
   ambiguous_candidates: "Two or more production jobs/items match.",
   unsupported_file_type: "Not a supported artwork file type.",
   printer_token_conflict: "The job's files name BOTH printers.",
-  premium_mode_mimaki_contradiction: "White or gloss work with the Mimaki selected — white and gloss run on the Roland.",
+  premium_mode_mimaki_contradiction: "White work with the Mimaki selected — white runs on the Roland.",
   printer_assignment_contradiction: "Filename printer tag contradicts the press assigned in the ERP.",
   auto_machine_load_unavailable: "Auto press selection unavailable (machine load incomplete) — assign Mimaki or Roland, or add a MIMAKI / ROLAND filename tag.",
   unknown_production_requirements: "No deterministic printer/mode could be derived.",

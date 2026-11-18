@@ -230,12 +230,17 @@ describe("8-9. root-level filename tickets still work, and outrank nothing they 
 describe("10. multi-layer files in one ticket folder keep one job identity and one press", () => {
   const CMYK = "flavaz_og_3oz_F_cmyk.pdf";
   const GLOSS = "flavaz_og_3oz_F_g.pdf";
-  it("both layers inherit the folder's job; the sibling list sends the CMYK layer to the Roland on the first poll", async () => {
+  it("both layers inherit the folder's job; a CMYK + gloss pair stays together on the Mimaki, a CMYK + white pair on the Roland — from the first poll", async () => {
     const c = await plan({ fileName: CMYK, subfolder: FOLDER, fileHash: HASH("a"), folderFiles: [GLOSS] });
     const g = await plan({ fileName: GLOSS, subfolder: FOLDER, fileHash: HASH("b"), folderFiles: [CMYK] });
-    expect(c).toMatchObject({ decision: "route", rule: "job_subfolder", jobId: "job_3", machine: "roland", machineRule: "gloss_requires_roland" });
-    expect(g).toMatchObject({ decision: "route", rule: "job_subfolder", jobId: "job_3", machine: "roland" });
-    expect(new Set(state.intakes.map((row) => row.matchedProductionJobId))).toEqual(new Set(["job_3"]));
+    expect(c).toMatchObject({ decision: "route", rule: "job_subfolder", jobId: "job_3", machine: "mimaki", machineRule: "default_cmyk" });
+    expect(g).toMatchObject({ decision: "route", rule: "job_subfolder", jobId: "job_3", machine: "mimaki" });
+    const WHITE = "flavaz_og_3oz_B_w.pdf";
+    // a white pair for the SAME single-item job, after its other layers already went to the Mimaki, is held - the job is never split
+    const split = await plan({ fileName: "flavaz_og_3oz_B_cmyk.pdf", subfolder: FOLDER, fileHash: HASH("c"), folderFiles: [WHITE] });
+    expect(split.decision).toBe("review");
+    expect(canonicalReviewReason(split.reasons)).toBe("layer_printer_split");
+    expect(new Set(state.intakes.filter((row) => row.status === "routed").map((row) => row.matchedProductionJobId))).toEqual(new Set(["job_3"]));
   });
   it("sibling names only ever inform the press for the SAME design — they are not a matching signal", async () => {
     // an unrelated gloss file in the folder does not drag a different design to the Roland
@@ -293,8 +298,9 @@ describe("13-14, 17. manual and bulk assignment", () => {
     expect(state.events).toHaveLength(3);
     expect(state.events.every((event) => event.jobId === "job_3" && event.eventType === "intake_file_assigned")).toBe(true);
     expect(JSON.parse(state.intakes[0].rawParsedHints).assignedItemId).toBe("item_1");
-    // the next plan routes them — the gloss layer pulls its CMYK sibling to the Roland
-    expect(await plan({ fileName: "a_cmyk.pdf", fileHash: HASH("0") })).toMatchObject({ decision: "route", rule: "assigned_by_owner", jobId: "job_3", machine: "roland" });
+    // the next plan routes them — the CMYK + gloss pair stays together on the Mimaki (2026-11-18)
+    expect(await plan({ fileName: "a_cmyk.pdf", fileHash: HASH("0") })).toMatchObject({ decision: "route", rule: "assigned_by_owner", jobId: "job_3", machine: "mimaki" });
+    expect(await plan({ fileName: "a_g.pdf", fileHash: HASH("1") })).toMatchObject({ decision: "route", rule: "assigned_by_owner", jobId: "job_3", machine: "mimaki" });
     expect(jobWrites()).toEqual([]);
     expect(state.jobs).toHaveLength(1);
   });
@@ -409,8 +415,8 @@ describe("18-23. earlier patches still hold inside ticket folders", () => {
     expect(state.files).toHaveLength(2);
     expect(state.files[0]).toMatchObject({ jobId: "job_3", fileType: "print_file", assetRole: "printFile", assetSource: "nas", originalFileName: CMYK, sourceRef: HASH("a"), fileName: "GSO-20261118-0003-01_JAR_3OZ.pdf", jobTicket: "GSO-20261118-0003" });
     expect(state.files[0].notes).toContain("Item: GSO-20261118-0003-01");
-    expect(state.files.every((file) => /Sent to Roland/.test(file.notes))).toBe(true);
-    const again = await sendReport({ fileName: CMYK, decision: "routed", jobId: "job_3", ripName: c.planned.ripName, machine: "roland", fileHash8: HASH("a").slice(0, 8), fileHash: HASH("a") });
+    expect(state.files.every((file) => /Sent to Mimaki/.test(file.notes))).toBe(true);
+    const again = await sendReport({ fileName: CMYK, decision: "routed", jobId: "job_3", ripName: c.planned.ripName, machine: "mimaki", fileHash8: HASH("a").slice(0, 8), fileHash: HASH("a") });
     expect(again.printFile).toBe("unchanged");
     expect(state.files).toHaveLength(2);
     expect(state.intakes.map((row) => row.originalSubfolder)).toEqual([FOLDER, FOLDER]);

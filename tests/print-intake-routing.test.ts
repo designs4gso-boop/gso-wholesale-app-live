@@ -167,7 +167,7 @@ describe("machine routing (owner rules, corrected 2026-11-11)", () => {
     const decision = decideIntakeRoute({ fileName: "GSO-20260627-0002-01_TEST.pdf", jobs: [job] });
     expect(decision.decision).toBe("route");
     expect(decision.machine).toBe("roland");
-    expect(decision.machineRule).toBe("gloss_requires_roland");
+    expect(decision.machineRule).toBe("white_requires_roland"); // 2026-11-18: the WHITE sends it to the Roland; gloss no longer decides the press for Print Intake
     expect(decision.rule).toBe("item_ticket"); // exact item-ticket matching intact
     expect(decision.ripName).toBe("GSO-20260627-0002-01");
   });
@@ -225,7 +225,11 @@ describe("machine routing (owner rules, corrected 2026-11-11)", () => {
     expect(both.machine).toBeNull();
     expect(both.reasons).toContain("machine_summary_contradictory_or_unknown");
 
-    const reviewed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [makeItem({ selectedFinish: "Gloss", machineSummary: "Mimaki UCJV300" })] })] });
+    // 2026-11-18: for PRINT INTAKE gloss on the Mimaki is valid again (the shared decideMachine above is unchanged);
+    // WHITE with an explicit Mimaki is still the contradiction that reviews.
+    const glossOnMimaki = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [makeItem({ selectedFinish: "Gloss", machineSummary: "Mimaki UCJV300" })] })] });
+    expect(glossOnMimaki).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "explicit_erp_machine" });
+    const reviewed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [makeItem({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300" })] })] });
     expect(reviewed.decision).toBe("review");
     expect(reviewed.machineRule).toBeNull();
   });

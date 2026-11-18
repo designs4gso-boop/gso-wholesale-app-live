@@ -37,7 +37,7 @@ describe("brand rates and machine attribution", () => {
     const rates = buildBrandRates(machines);
     const mimaki = rates.find((rate) => rate.brand === "mimaki")!;
     expect(mimaki.cmykPerMl).toBeCloseTo(0.176, 6);
-    expect(mimaki.glossPerMl).toBeNull(); // Mimaki has no gloss channel
+    expect(mimaki.glossPerMl).toBeCloseTo(0.09, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed
     const roland = rates.find((rate) => rate.brand === "roland")!;
     expect(roland.cmykPerMl).toBeCloseTo(149 / 750, 6);
     expect(roland.glossPerMl).toBeCloseTo(149 / 750, 6);
@@ -81,19 +81,21 @@ describe("entry cost computation", () => {
     // (no gloss on the Mimaki — no rate may exist).
     const noWhite = buildBrandRates([{ name: "Mimaki UCJV300", inkChannels: [{ inkType: "cmyk", inkName: "Cyan", enabled: true, costPerMl: 0.176 }] }]);
     expect(noWhite[0].whitePerMl).toBeCloseTo(176 / 1000, 9);
-    expect(noWhite[0].glossPerMl).toBeNull();
+    expect(noWhite[0].glossPerMl).toBeCloseTo(0.09, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed
     const costs = computeEntryCosts({ machineName: "Mimaki", cmykInkMl: 10, whiteInkMl: 5, glossInkMl: 0, inkMl: 15, printMinutes: 5 }, noWhite);
     expect(costs.inkCost).toBeCloseTo(10 * 0.176 + 5 * 0.176, 6);
     const glossCosts = computeEntryCosts({ machineName: "Mimaki", cmykInkMl: 10, whiteInkMl: 0, glossInkMl: 5, inkMl: 15, printMinutes: 5 }, noWhite);
-    expect(glossCosts.warnings.some((warning) => warning.includes("No gloss/clear channel cost"))).toBe(true);
-    expect(glossCosts.inkCost).toBeCloseTo(10 * 0.176, 6);
+    // 2026-11-18: Mimaki gloss actuals are priced on their OWN channel and ADDED to CMYK — never at the CMYK or Roland rate.
+    expect(glossCosts.warnings.some((warning) => warning.includes("No gloss/clear channel cost"))).toBe(false);
+    expect(glossCosts.inkCost).toBeCloseTo(10 * 0.176 + 5 * 0.09, 6);
   });
 
-  it("flags GLOSS on Mimaki per the routing business rule; Mimaki white is normal (2026-11-11)", () => {
+  it("gloss on the Mimaki is normal again (2026-11-18) and raises no routing warning; Mimaki white is normal (2026-11-11)", () => {
     const white = computeEntryCosts({ machineName: "Mimaki UCJV300", cmykInkMl: 20, whiteInkMl: 8, glossInkMl: 0, inkMl: 28, printMinutes: 12 }, rates);
     expect(white.warnings.some((warning) => warning.includes("ROUTING"))).toBe(false);
     const costs = computeEntryCosts({ machineName: "Mimaki UCJV300", cmykInkMl: 20, whiteInkMl: 0, glossInkMl: 4, inkMl: 24, printMinutes: 12 }, rates);
-    expect(costs.warnings.some((warning) => warning.includes("ROUTING") && warning.includes("gloss is not operational on the Mimaki"))).toBe(true);
+    expect(costs.warnings.some((warning) => warning.includes("ROUTING"))).toBe(false);
+    expect(costs.inkCost).toBeCloseTo(20 * 0.176 + 4 * 0.09, 6);
     const rolandOk = computeEntryCosts({ machineName: "Roland LG-540", cmykInkMl: 20, whiteInkMl: 8, glossInkMl: 3, inkMl: 31, printMinutes: 12 }, rates);
     expect(rolandOk.warnings.some((warning) => warning.includes("ROUTING"))).toBe(false);
   });

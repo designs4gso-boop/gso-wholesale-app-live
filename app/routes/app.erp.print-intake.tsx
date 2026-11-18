@@ -355,15 +355,15 @@ export default function PrintIntake() {
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
         <b>Which printer gets the file (owner rules, 2026-11-18).</b>
         <div style={{ fontSize: 13, marginTop: 6 }}>
-          <b>White and gloss / spot gloss always need the Roland LG-640</b> (holographic counts — it prints a white layer). If such a job
-          also says Mimaki — on the job in the ERP or as a <code>MIMAKI</code> filename tag — it is never sent to the Mimaki; it shows as{" "}
-          <b>NEEDS REVIEW — PRINTER CONFLICT</b>. CMYK-only work goes to the press named on the job or in the filename
-          (<code>ROLAND</code> / <code>MIMAKI</code>), otherwise to the <b>Mimaki</b>. There is no load balancing. Layer files of one job
-          (<code>_cmyk</code>, <code>_g</code> gloss, <code>_w</code> white) are read together, so the whole job goes to one press. Other
-          conflicts (both printer tags, a tag against the ERP press, a layer already sent to the other press) are also held. A{" "}
-          <code>_cmyk</code> layer on a job that states no finish at all is held as <b>NEEDS REVIEW — CONFIRM PRINT MODE</b> until the job
-          says what it needs. Roland-bound plans stay in Needs review with the blocking reason until the Roland hot folder is confirmed
-          and enabled in the agent config.
+          <b>Gloss prints on either press</b> (the Mimaki gloss / clear channel is back in production). A CMYK-only job, or a
+          CMYK + gloss job, goes to the press named on the job or in the filename (<code>ROLAND</code> / <code>MIMAKI</code>), otherwise
+          to the <b>Mimaki</b>. Layer files of one job are read together — <code>_cmyk</code> with <code>_g</code> / <code>_gloss</code>{" "}
+          (or <code>_w</code> white) — so the whole job goes to one press. <b>White still needs the Roland LG-640</b> (holographic counts —
+          it prints a white layer); a white job that also says Mimaki is never sent to the Mimaki and shows as{" "}
+          <b>NEEDS REVIEW — PRINTER CONFLICT</b>. There is no load balancing. Other conflicts (both printer tags, a tag against the ERP
+          press, a layer already sent to the other press) are also held. A <code>_cmyk</code> layer on a job that states no finish at
+          all is held as <b>NEEDS REVIEW — CONFIRM PRINT MODE</b> until the job says what it needs. Roland-bound plans stay in Needs
+          review with the blocking reason until the Roland hot folder is confirmed and enabled in the agent config.
         </div>
         <details style={{ ...finePrint, color: "#6b7280" }}>
           <summary style={{ cursor: "pointer" }}>Technical detail (config keys)</summary>

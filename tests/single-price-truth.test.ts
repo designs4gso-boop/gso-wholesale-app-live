@@ -67,7 +67,8 @@ describe("ink rate authority", () => {
     expect(INK_RATES.mimakiCmykPerMl).toBe(CANONICAL_INK_RATES.mimakiCmykPerMl);
     expect(INK_RATES.mimakiWhitePerMl).toBe(CANONICAL_INK_RATES.mimakiWhitePerMl);
     expect(INK_RATES.rolandPerMl).toBe(CANONICAL_INK_RATES.rolandPerMl);
-    expect(INK_RATES.mimakiGlossPerMl).toBeNull();
+    expect(INK_RATES.mimakiGlossPerMl).toBe(CANONICAL_INK_RATES.mimakiGlossPerMl);
+    expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeCloseTo(90 / 1000, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed
     expect(CANONICAL_INK_RATES.mimakiCmykPerMl).toBeCloseTo(176 / 1000, 12);
     expect(CANONICAL_INK_RATES.rolandPerMl).toBeCloseTo(149 / 750, 12);
   });
@@ -81,14 +82,15 @@ describe("ink rate authority", () => {
     const roland = rates.find((rate) => rate.brand === "roland")!;
     expect(mimaki.cmykPerMl).toBeCloseTo(176 / 1000, 12);
     expect(mimaki.whitePerMl).toBeCloseTo(176 / 1000, 12);
-    expect(mimaki.glossPerMl).toBeNull(); // Mimaki is CMYK-only — no gloss rate may exist
+    expect(mimaki.glossPerMl).toBeCloseTo(90 / 1000, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed
     expect(roland.cmykPerMl).toBeCloseTo(149 / 750, 12);
     expect(roland.whitePerMl).toBeCloseTo(149 / 750, 12);
     expect(roland.glossPerMl).toBeCloseTo(149 / 750, 12);
   });
 
   it("no Mimaki white/gloss pricing path becomes reachable (routing preserved)", () => {
-    expect(channelInkRatePerMl("mimaki", "gloss")).toBeNull();
+    expect(channelInkRatePerMl("mimaki", "gloss")).toBeCloseTo(0.09, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed
+    expect(channelInkRatePerMl("mimaki", "other")).toBeNull(); // an unknown channel (e.g. primer) is never priced as gloss
     expect(inkBrandFromMachineName("Roland TrueVIS LG-640")).toBe("roland");
     expect(inkBrandFromMachineName("Mimaki UCJV300-130")).toBe("mimaki");
     const mimakiGlossJob = computeProductDrivenCost(baseBagInput({ quantity: 100, faces: 1, printer: "mimaki", glossLayers: 3 }));

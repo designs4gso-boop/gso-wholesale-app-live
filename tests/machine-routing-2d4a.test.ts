@@ -206,10 +206,11 @@ describe("2D-4A canonical machine routing", () => {
     }
   });
 
-  it("6b. the capability table: Mimaki CMYK + White, Roland everything; no Mimaki gloss rate", () => {
+  it("6b. the capability table (quote / cost estimating) is unchanged; the Mimaki clear / gloss RATE now exists", () => {
     expect(MACHINE_CAPABILITIES.mimaki).toEqual({ cmyk: true, white: true, gloss: false });
     expect(MACHINE_CAPABILITIES.roland).toEqual({ cmyk: true, white: true, gloss: true });
-    expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeNull();
+    // 2026-11-18: the rate exists, but estimating gloss on the Mimaki stays off until a Mimaki gloss usage calibration is measured.
+    expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeCloseTo(0.09, 12);
   });
 
   it("7. the operator never supplies a calibration internal", () => {

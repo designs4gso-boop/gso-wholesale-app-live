@@ -456,7 +456,7 @@ describe("guard rails", () => {
   it("16. ink purchasing is unchanged and stays out of calibration", () => {
     expect(CANONICAL_INK_RATES.rolandPerMl).toBe(149 / 750);
     expect(CANONICAL_INK_RATES.mimakiCmykPerMl).toBe(176 / 1000);
-    expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeNull();
+    expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeCloseTo(0.09, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed
   });
 
   it("17. no money may live in a calibration row or the schema model", () => {

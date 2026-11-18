@@ -243,7 +243,7 @@ describe("15H.4A order convergence foundation", () => {
     };
     const byItemTicket = decideIntakeRoute({ fileName: `${payload.items[0].itemTicket}_artwork.pdf`, jobs: [intakeJob] });
     expect(byItemTicket.decision).toBe("route");
-    expect(byItemTicket.machine).toBe("roland"); // 3X gloss in the canonical summary routes Roland
+    expect(byItemTicket.machine).toBe("mimaki"); // 2026-11-18: Mimaki gloss restored — a gloss job with no explicit press follows CMYK to the Mimaki
     const byJobTicket = decideIntakeRoute({ fileName: "GSO-20260812-0006 final.pdf", jobs: [intakeJob] });
     expect(byJobTicket.decision).toBe("route");
     const bySuggested = decideIntakeRoute({ fileName: `${payload.items[0].suggestedFileName}.pdf`, jobs: [intakeJob] });

@@ -5,6 +5,12 @@
 // Layer files of one job (`_cmyk`, `_g`, `_w`) are decided together, so one
 // physical job is never split across presses; conflicts go to review.
 //
+// UPDATE 2026-11-18 (owner): the Mimaki gloss / clear channel is restored. Gloss
+// no longer decides the press — a CMYK + gloss job follows the CMYK rule (Mimaki
+// unless explicitly Roland). WHITE still requires the Roland; the Roland-
+// requirement, conflict and layer-split cases below are therefore proven with
+// white. The new gloss rules live in tests/mimaki-gloss-restored-2026-11-18.test.ts.
+//
 // The shared `decideMachine` (production dispatch, order -> job) and the Cost
 // Calculator / quote routing are deliberately NOT changed; section 9 pins that.
 import { readFileSync } from "node:fs";
@@ -128,10 +134,11 @@ describe("2. job requirements", () => {
       expect(decideIntakeMachine(item(fields)), JSON.stringify(fields)).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" });
     }
   });
-  it("gloss and spot-gloss jobs route Roland", () => {
-    for (const fields of [{ selectedFinish: "Gloss" }, { selectedFinish: "Matte + 4X Spot Gloss" }, { selectedFinish: "GLOSS-3X" }, { materialSummary: "Finish: 2X Spot Gloss | Gloss Layers: 2X" }, { selectedFinish: "Holo + White + 4X Spot Gloss" }]) {
-      expect(decideIntakeMachine(item(fields)), JSON.stringify(fields)).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
+  it("gloss and spot-gloss jobs no longer force a press: nothing explicit -> Mimaki (2026-11-18); gloss + white still -> Roland for the white", () => {
+    for (const fields of [{ selectedFinish: "Gloss" }, { selectedFinish: "Matte + 4X Spot Gloss" }, { selectedFinish: "GLOSS-3X" }, { materialSummary: "Finish: 2X Spot Gloss | Gloss Layers: 2X" }]) {
+      expect(decideIntakeMachine(item(fields)), JSON.stringify(fields)).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
     }
+    expect(decideIntakeMachine(item({ selectedFinish: "Holo + White + 4X Spot Gloss" }))).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" });
   });
   it("CMYK-only with no printer hint routes Mimaki — a stated zero, a colour or a product word is not a requirement", () => {
     for (const fields of [{}, { selectedFinish: "No Specialty — 0X", materialSummary: "Material: Matte | Finish: No Specialty — 0X | Gloss Layers: 0X | White Layers: 0" }, { selectedFinish: "CMYK", materialSummary: "Product Type: jar_3oz_black_white | Material: Matte | Bag Color: White" },{ selectedFinish: "Matte", materialSummary: "Bag Color: White | Sides: Front" }]) {
@@ -180,13 +187,13 @@ describe("4. layer suffixes", () => {
   it("_cmyk alone, with no other layer known for the job, routes Mimaki", () => {
     expect(decideIntakeMachine(item(), "crud_TOAD KILLA_F_cmyk.pdf")).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
   });
-  it("_g on its own file means gloss -> Roland; _w means white -> Roland", () => {
-    expect(decideIntakeMachine(item(), "crud_TOAD KILLA_F_g.pdf")).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
+  it("_g on its own file is a gloss layer and follows CMYK to the Mimaki; _w means white -> Roland", () => {
+    expect(decideIntakeMachine(item(), "crud_TOAD KILLA_F_g.pdf")).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
     expect(decideIntakeMachine(item(), "blue chip_HAWAIIAN SKUNK_W.pdf")).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" });
   });
-  it("_cmyk + _g of the same job BOTH resolve Roland; _cmyk + _w of the same job BOTH resolve Roland", () => {
+  it("_cmyk + _g of the same job BOTH resolve Mimaki; _cmyk + _w of the same job BOTH resolve Roland", () => {
     const pair = (a: string, b: string) => [decideIntakeMachine(item(), a, { relatedFileNames: [b] }).machine, decideIntakeMachine(item(), b, { relatedFileNames: [a] }).machine];
-    expect(pair("crud_TOAD KILLA_F_cmyk.pdf", "crud_TOAD KILLA_F_g.pdf")).toEqual(["roland", "roland"]);
+    expect(pair("crud_TOAD KILLA_F_cmyk.pdf", "crud_TOAD KILLA_F_g.pdf")).toEqual(["mimaki", "mimaki"]);
     expect(pair("blue chip_HAWAIIAN SKUNK_cmyk.pdf", "blue chip_HAWAIIAN SKUNK_W.pdf")).toEqual(["roland", "roland"]);
   });
   it("siblings are found by item ticket, single-item job, or the exact design stem — never by a near name", () => {
@@ -207,16 +214,16 @@ describe("4. layer suffixes", () => {
 });
 
 describe("5. conflicts go to review, never to a press", () => {
-  it("both printer tags, a tag against the ERP press, or gloss sent to the Mimaki", () => {
+  it("both printer tags, a tag against the ERP press, or white sent to the Mimaki", () => {
     const cases: Array<[ReturnType<typeof decideIntakeMachine>, string]> = [
       [decideIntakeMachine(item(), "Cust_Product_Roland_Mimaki.pdf"), "printer_token_conflict"],
       [decideIntakeMachine(item(), "art_cmyk_MIMAKI.pdf", { relatedFileNames: ["art_g_ROLAND.pdf"] }), "printer_token_conflict"],
       [decideIntakeMachine(item({ machineSummary: "Roland LG-640" }), "GSO-20261118-0001-01_MIMAKI.pdf"), "printer_assignment_contradiction"],
       [decideIntakeMachine(item({ machineSummary: "Mimaki UCJV300-130" }), "GSO-20261118-0001-01_ROLAND.pdf"), "printer_assignment_contradiction"],
-      [decideIntakeMachine(item({ selectedFinish: "Spot Gloss", machineSummary: "Mimaki UCJV300-130" })), "premium_mode_mimaki_contradiction"],
-      [decideIntakeMachine(item(), "art_cmyk_MIMAKI.pdf", { relatedFileNames: ["art_g.pdf"] }), "premium_mode_mimaki_contradiction"],
-      [decideIntakeMachine(item({ machineSummary: "Mimaki UCJV300-130" }), "art_g.pdf"), "premium_mode_mimaki_contradiction"],
-      [decideIntakeMachine(item(), "art_g.pdf", { routedSiblingPrinters: ["mimaki"] }), "layer_printer_split"],
+      [decideIntakeMachine(item({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300-130" })), "premium_mode_mimaki_contradiction"],
+      [decideIntakeMachine(item(), "art_cmyk_MIMAKI.pdf", { relatedFileNames: ["art_w.pdf"] }), "premium_mode_mimaki_contradiction"],
+      [decideIntakeMachine(item({ machineSummary: "Mimaki UCJV300-130" }), "art_w.pdf"), "premium_mode_mimaki_contradiction"],
+      [decideIntakeMachine(item(), "art_w.pdf", { routedSiblingPrinters: ["mimaki"] }), "layer_printer_split"],
     ];
     for (const [decision, code] of cases) {
       expect(decision.machine, code).toBeNull();
@@ -239,12 +246,12 @@ describe("5. conflicts go to review, never to a press", () => {
 
 describe("6. through the real endpoint: one job, one press", () => {
   const CMYK = "crud_TOAD KILLA_F_cmyk.pdf";
-  const GLOSS = "crud_TOAD KILLA_F_g.pdf";
+  const GLOSS = "crud_TOAD KILLA_F_w.pdf"; // the special (white) layer — kept under its old constant name
 
-  it("layer names stored on the job: the CMYK layer routes Roland before the gloss layer is even dropped", async () => {
+  it("layer names stored on the job: the CMYK layer routes Roland before the white layer is even dropped", async () => {
     state.jobs = [job({ files: [{ fileName: CMYK, originalFileName: null }, { fileName: GLOSS, originalFileName: null }] })];
-    expect(await plan({ fileName: CMYK, fileHash: HASH("a") })).toMatchObject({ decision: "route", rule: "job_file_name", machine: "roland", machineRule: "gloss_requires_roland", jobId: "job_1" });
-    expect(await plan({ fileName: GLOSS, fileHash: HASH("b") })).toMatchObject({ decision: "route", machine: "roland", machineRule: "gloss_requires_roland", jobId: "job_1" });
+    expect(await plan({ fileName: CMYK, fileHash: HASH("a") })).toMatchObject({ decision: "route", rule: "job_file_name", machine: "roland", machineRule: "white_requires_roland", jobId: "job_1" });
+    expect(await plan({ fileName: GLOSS, fileHash: HASH("b") })).toMatchObject({ decision: "route", machine: "roland", machineRule: "white_requires_roland", jobId: "job_1" });
     expect(state.intakes.map((row) => row.printer)).toEqual(["roland", "roland"]);
     expect(jobWrites()).toEqual([]);
   });
@@ -253,7 +260,7 @@ describe("6. through the real endpoint: one job, one press", () => {
     expect((await plan({ fileName: CMYK, fileHash: HASH("a") })).decision).toBe("review");
     expect((await plan({ fileName: GLOSS, fileHash: HASH("b") })).decision).toBe("review");
     expect((await assign(intakeFor(CMYK).id)).ok).toBe(true);
-    expect(await plan({ fileName: CMYK, fileHash: HASH("a") })).toMatchObject({ decision: "route", rule: "assigned_by_owner", machine: "roland", machineRule: "gloss_requires_roland" });
+    expect(await plan({ fileName: CMYK, fileHash: HASH("a") })).toMatchObject({ decision: "route", rule: "assigned_by_owner", machine: "roland", machineRule: "white_requires_roland" });
     expect((await assign(intakeFor(GLOSS).id)).ok).toBe(true);
     expect(await plan({ fileName: GLOSS, fileHash: HASH("b") })).toMatchObject({ decision: "route", rule: "assigned_by_owner", machine: "roland" });
     expect(state.intakes.map((row) => [row.status, row.printer])).toEqual([["routed", "roland"], ["routed", "roland"]]);
@@ -285,9 +292,9 @@ describe("6. through the real endpoint: one job, one press", () => {
     expect(intakeFor(CMYK)).toMatchObject({ status: "routed", printer: "mimaki" });
   });
 
-  it("ERP gloss metadata on the item sends a plain-named file to the Roland", async () => {
+  it("ERP gloss metadata on the item no longer sends the file to the Roland — it follows CMYK to the Mimaki (2026-11-18)", async () => {
     state.jobs = [job({ items: [item({ selectedFinish: "Matte + 4X Spot Gloss", materialSummary: "Material: Matte | Finish: 4X Spot Gloss" })] })];
-    expect(await plan({ fileName: "GSO-20261118-0001-01 art.pdf", fileHash: HASH("a") })).toMatchObject({ decision: "route", rule: "item_ticket", machine: "roland", machineRule: "gloss_requires_roland" });
+    expect(await plan({ fileName: "GSO-20261118-0001-01 art.pdf", fileHash: HASH("a") })).toMatchObject({ decision: "route", rule: "item_ticket", machine: "mimaki", machineRule: "default_cmyk" });
   });
 
   it("a matched conflict is recorded as a review row and never routed", async () => {
@@ -376,9 +383,9 @@ describe("9. nothing outside Print Intake changed", () => {
 // explicit Mimaki on such a job is a printer conflict; and a CMYK layer is never
 // sent early when the job's print mode is unknown.
 // ---------------------------------------------------------------------------
-describe("10. white / gloss are Roland requirements — an explicit Mimaki is a conflict, never a route", () => {
+describe("10. WHITE is a Roland requirement — an explicit Mimaki is a conflict, never a route (gloss was removed from this rule 2026-11-18)", () => {
   const WHITE = { selectedFinish: "White ink" };
-  const GLOSS = { selectedFinish: "Matte + 4X Spot Gloss" };
+  const GLOSS = { selectedFinish: "Holo + White + 4X Spot Gloss" }; // gloss alone no longer counts; this one also needs white
   const HOLO = { selectedFinish: "No Specialty — 0X", materialSummary: "Material: Holographic | Gloss Layers: 0X | White Layers: 1 | Holographic: yes" };
   const conflict = (decision: ReturnType<typeof decideIntakeMachine>) => {
     expect(decision.machine).toBeNull();
@@ -387,7 +394,7 @@ describe("10. white / gloss are Roland requirements — an explicit Mimaki is a 
   };
   it("1-2. white or gloss with no explicit press -> Roland", () => {
     expect(decideIntakeMachine(item(WHITE))).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" });
-    expect(decideIntakeMachine(item(GLOSS))).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
+    expect(decideIntakeMachine(item(GLOSS))).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" });
     expect(decideIntakeMachine(item(HOLO))).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" });
   });
   it("3-4. white or gloss with an explicit ROLAND (ERP or filename) -> Roland", () => {
@@ -399,7 +406,7 @@ describe("10. white / gloss are Roland requirements — an explicit Mimaki is a 
   it("5-6. white or gloss with a MIMAKI filename tag -> printer conflict, no route", () => {
     for (const fields of [WHITE, GLOSS, HOLO]) conflict(decideIntakeMachine(item(fields), "GSO-20261118-0001-01_MIMAKI.pdf"));
     conflict(decideIntakeMachine(item(), "art_w_MIMAKI.pdf"));
-    conflict(decideIntakeMachine(item(), "art_g_MIMAKI.pdf"));
+    expect(decideIntakeMachine(item(), "art_g_MIMAKI.pdf")).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag" }); // gloss + Mimaki is valid now
     conflict(decideIntakeMachine(item(), "art_cmyk_MIMAKI.pdf", { relatedFileNames: ["art_w.pdf"] }));
     conflict(decideIntakeMachine(item(), "Cust_2x white_MIMAKI.pdf"));
   });
@@ -421,20 +428,20 @@ describe("10. white / gloss are Roland requirements — an explicit Mimaki is a 
     expect(result.decision).toBe("review");
     expect(result.machine ?? null).toBeNull();
     expect(state.intakes[0]).toMatchObject({ status: "review", reviewReason: "premium_mode_mimaki_contradiction", printer: null });
-    expect(reviewReasonLabel("premium_mode_mimaki_contradiction")).toContain("White or gloss");
+    expect(reviewReasonLabel("premium_mode_mimaki_contradiction")).toContain("White work with the Mimaki selected");
   });
 });
 
 describe("11. late-layer splits are prevented", () => {
   const CMYK = "crud_TOAD KILLA_F_cmyk.pdf";
-  it("12-13. a _cmyk file whose ERP job already says gloss or white routes Roland before any sibling arrives", async () => {
-    expect(decideIntakeMachine(item({ selectedFinish: "Matte + 4X Spot Gloss" }), CMYK)).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
+  it("12-13. a _cmyk file whose ERP job already says white routes Roland before any sibling arrives; a gloss job's _cmyk file goes to the Mimaki", async () => {
+    expect(decideIntakeMachine(item({ selectedFinish: "Matte + 4X Spot Gloss" }), CMYK)).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
     expect(decideIntakeMachine(item({ selectedFinish: "Holo + White" }), CMYK)).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" });
     expect(decideIntakeMachine(item({ selectedFinish: null, materialSummary: "Label Material: Holographic Vinyl | White Layers: 1 | Holographic: yes" }), CMYK).machine).toBe("roland");
     state.jobs = [job({ items: [item({ selectedFinish: "GLOSS-3X" })] })];
     await plan({ fileName: CMYK, fileHash: HASH("a") });
     await assign(intakeFor(CMYK).id);
-    expect(await plan({ fileName: CMYK, fileHash: HASH("a") })).toMatchObject({ decision: "route", machine: "roland", machineRule: "gloss_requires_roland" });
+    expect(await plan({ fileName: CMYK, fileHash: HASH("a") })).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "default_cmyk" }); // a gloss job's CMYK layer: Mimaki
   });
   it("14. a _cmyk file whose ERP job states a CMYK-only finish routes Mimaki immediately", () => {
     for (const fields of [{ selectedFinish: "CMYK" }, { selectedFinish: "No Specialty — 0X", materialSummary: "Finish: No Specialty — 0X | Gloss Layers: 0X | White Layers: 0 | Holographic: no" }, { selectedFinish: "No Spot Gloss" }, { selectedFinish: null, materialSummary: "Family: Jars | Specialty: No Spot Gloss | Holographic: no" }, { selectedFinish: "base" }]) {
@@ -458,11 +465,11 @@ describe("11. late-layer splits are prevented", () => {
     expect(decideIntakeMachine(unknown, "crud_TOAD KILLA_F_cmyk_MIMAKI.pdf")).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag" });
     expect(decideIntakeMachine(unknown, "crud_TOAD KILLA_F_cmyk_ROLAND.pdf").machine).toBe("roland");
     expect(decideIntakeMachine({ ...unknown, machineSummary: "Mimaki UCJV300-130" }, CMYK).machine).toBe("mimaki");
-    expect(decideIntakeMachine(unknown, CMYK, { relatedFileNames: ["crud_TOAD KILLA_F_g.pdf"] }).machine).toBe("roland");
+    expect(decideIntakeMachine(unknown, CMYK, { relatedFileNames: ["crud_TOAD KILLA_F_g.pdf"] }).machine).toBe("mimaki"); // a known gloss sibling: the pair stays on the Mimaki
     expect(decideIntakeMachine(unknown, CMYK, { relatedFileNames: ["crud_TOAD KILLA_F_w.pdf"] }).machine).toBe("roland");
   });
-  it("through the endpoint: the held CMYK layer waits, then routes Roland once its gloss sibling is known — the job is never split", async () => {
-    const GLOSS = "crud_TOAD KILLA_F_g.pdf";
+  it("through the endpoint: the held CMYK layer waits, then routes Roland once its WHITE sibling is known — the job is never split", async () => {
+    const GLOSS = "crud_TOAD KILLA_F_w.pdf"; // the special (white) layer
     state.jobs = [job({ items: [item({ selectedFinish: null, materialSummary: null, machineSummary: null })] })];
     await plan({ fileName: CMYK, fileHash: HASH("a") });
     await assign(intakeFor(CMYK).id);
@@ -475,22 +482,22 @@ describe("11. late-layer splits are prevented", () => {
     await plan({ fileName: CMYK, fileHash: HASH("a") });
     await plan({ fileName: CMYK, fileHash: HASH("a") });
     expect(state.writes.length).toBe(writesAfterFirstHold); // repeat polls of the held file write nothing
-    await plan({ fileName: GLOSS, fileHash: HASH("b") }); // the gloss layer arrives (unmatched -> review row)
-    expect(await plan({ fileName: CMYK, fileHash: HASH("a") })).toMatchObject({ decision: "route", rule: "assigned_by_owner", machine: "roland", machineRule: "gloss_requires_roland" });
+    await plan({ fileName: GLOSS, fileHash: HASH("b") }); // the white layer arrives (unmatched -> review row)
+    expect(await plan({ fileName: CMYK, fileHash: HASH("a") })).toMatchObject({ decision: "route", rule: "assigned_by_owner", machine: "roland", machineRule: "white_requires_roland" });
     await assign(intakeFor(GLOSS).id);
     expect(await plan({ fileName: GLOSS, fileHash: HASH("b") })).toMatchObject({ decision: "route", machine: "roland" });
     expect(state.intakes.map((row) => row.printer)).toEqual(["roland", "roland"]);
     expect(jobWrites()).toEqual([]);
   });
-  it("16-17. _cmyk + _g and _cmyk + _w siblings both resolve Roland (unchanged)", () => {
+  it("16-17. _cmyk + _w siblings both resolve Roland; _cmyk + _g siblings both resolve Mimaki", () => {
     const unknown = item({ selectedFinish: null, materialSummary: null, machineSummary: null });
-    for (const sibling of ["crud_TOAD KILLA_F_g.pdf", "crud_TOAD KILLA_F_w.pdf"]) {
-      expect(decideIntakeMachine(unknown, CMYK, { relatedFileNames: [sibling] }).machine).toBe("roland");
-      expect(decideIntakeMachine(unknown, sibling, { relatedFileNames: [CMYK] }).machine).toBe("roland");
+    for (const [sibling, press] of [["crud_TOAD KILLA_F_g.pdf", "mimaki"], ["crud_TOAD KILLA_F_w.pdf", "roland"]]) {
+      expect(decideIntakeMachine(unknown, CMYK, { relatedFileNames: [sibling] }).machine, sibling).toBe(press);
+      expect(decideIntakeMachine(unknown, sibling, { relatedFileNames: [CMYK] }).machine, sibling).toBe(press);
     }
   });
   it("18. a layer already routed to the other press is a conflict — never a silent switch", () => {
-    const late = decideIntakeMachine(item(), "crud_TOAD KILLA_F_g.pdf", { relatedFileNames: [CMYK], routedSiblingPrinters: ["mimaki"] });
+    const late = decideIntakeMachine(item(), "crud_TOAD KILLA_F_w.pdf", { relatedFileNames: [CMYK], routedSiblingPrinters: ["mimaki"] });
     expect(late.machine).toBeNull();
     expect(canonicalReviewReason(late.reasons)).toBe("layer_printer_split");
   });
