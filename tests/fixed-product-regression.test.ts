@@ -51,7 +51,9 @@ const jarQs = (profileKey: string, qty: number, set: { side: boolean; lid: boole
 };
 
 describe("every supported jar x every label set prices from the one spec authority", () => {
-  for (const profile of ACTIVE_JAR_PROFILES) {
+  // 2026-11-17: the MIRON Ceres sets are costed but FREIGHT PENDING (no final unit cost by
+  // design) — their behaviour is pinned in tests/miron-ceres-costing-2026-11-17.test.ts.
+  for (const profile of ACTIVE_JAR_PROFILES.filter((p) => !p.size.startsWith("ceres_"))) {
     for (const set of LABEL_SETS) {
       it(`${profile.key} / ${set.key}`, () => {
         const qty = 200;

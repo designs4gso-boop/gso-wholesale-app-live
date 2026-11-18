@@ -20,11 +20,11 @@
 //
 // Pure data + the dependency-free GSO cutline rule.
 
-import { deriveGsoLabelCutDiameter, deriveGsoLabelCutlineFromArtboard } from "./gso-cutline";
+import { GSO_CUTLINE_INSET_PER_AXIS_IN, deriveGsoLabelCutDiameter, deriveGsoLabelCutlineFromArtboard } from "./gso-cutline";
 
 export const JAR_LABEL_GEOMETRY_VERSION = "17D.2-jar-label-geometry";
 
-export type JarSizeKey = "50ml" | "100ml_tall" | "100ml_wide" | "150ml" | "250ml" | "3oz" | "4oz";
+export type JarSizeKey = "50ml" | "100ml_tall" | "100ml_wide" | "150ml" | "250ml" | "3oz" | "4oz" | "ceres_50ml" | "ceres_100ml";
 
 export type JarLabelGeometry = {
   /** Side wrap, rectangular. */
@@ -34,6 +34,50 @@ export type JarLabelGeometry = {
   /** Optional tamper / lid-side band, rectangular. */
   tamper: { widthIn: number; heightIn: number };
 };
+
+/* ------------------------------------------------------------------ *
+ * MIRON Ceres 50 mL + Yuha 48 / Ceres 100 mL + Yuha 58 (owner, 2026-11-17)
+ *
+ * The owner supplied these as physical CUT sizes BEFORE bleed, in
+ * MILLIMETRES — and millimetres are the source of truth. Every other entry in
+ * JAR_LABEL_GEOMETRY is a LABEL / ART size from which the cutline is derived
+ * (art - 0.125 in per axis). So the art size stored for a Ceres label is the
+ * exact inverse: cut + 0.125 in per axis (the one GSO bleed rule, added ONCE),
+ * and the engine's derived cutline lands back on the owner's cut size.
+ *
+ * "side" = jar body wrap, "lid" = lid top circle, "tamper" = lid side band.
+ *
+ * PRELIMINARY: these are test-fit dimensions, not owner-approved production
+ * dielines. They are NOT in JAR_OWNER_CONFIRMED_GEOMETRY, so every quote that
+ * uses them shows the pending-confirmation status.
+ * ------------------------------------------------------------------ */
+export type JarCutGeometryMm = {
+  side: { widthMm: number; heightMm: number };
+  lid: { diameterMm: number };
+  tamper: { widthMm: number; heightMm: number };
+};
+
+export const MIRON_CERES_LABEL_CUT_MM: Record<"ceres_50ml" | "ceres_100ml", JarCutGeometryMm> = {
+  ceres_50ml: { side: { widthMm: 166.5, heightMm: 25.3 }, lid: { diameterMm: 45 }, tamper: { widthMm: 165, heightMm: 11 } },
+  ceres_100ml: { side: { widthMm: 198, heightMm: 31 }, lid: { diameterMm: 50.8 }, tamper: { widthMm: 198, heightMm: 10 } },
+};
+
+export const MIRON_CERES_GEOMETRY_STATUS = "PHYSICAL SAMPLE TEST-FIT REQUIRED BEFORE PRODUCTION";
+export const MIRON_CERES_GEOMETRY_NOTE =
+  `${MIRON_CERES_GEOMETRY_STATUS} — preliminary test-fit cut sizes supplied by the owner in millimetres on 2026-11-17 (cut size before bleed). Usable for preliminary costing, calculator estimates, test prints and sample fitting only; not a production-verified dieline.`;
+
+const MM_PER_INCH = 25.4;
+/** Label / art size (inches, 4 dp = 0.0025 mm) for a CUT size in mm: cut + the GSO bleed, once. */
+export function jarArtInFromCutMm(cutMm: number): number {
+  return Math.round((cutMm / MM_PER_INCH + GSO_CUTLINE_INSET_PER_AXIS_IN) * 10000) / 10000;
+}
+function jarArtGeometryFromCutMm(cut: JarCutGeometryMm): JarLabelGeometry {
+  return {
+    side: { widthIn: jarArtInFromCutMm(cut.side.widthMm), heightIn: jarArtInFromCutMm(cut.side.heightMm) },
+    lid: { diameterIn: jarArtInFromCutMm(cut.lid.diameterMm) },
+    tamper: { widthIn: jarArtInFromCutMm(cut.tamper.widthMm), heightIn: jarArtInFromCutMm(cut.tamper.heightMm) },
+  };
+}
 
 export const JAR_LABEL_GEOMETRY: Record<JarSizeKey, JarLabelGeometry> = {
   "50ml": { side: { widthIn: 5.6, heightIn: 1.5 }, lid: { diameterIn: 1.6 }, tamper: { widthIn: 5.6, heightIn: 0.5 } },
@@ -45,6 +89,9 @@ export const JAR_LABEL_GEOMETRY: Record<JarSizeKey, JarLabelGeometry> = {
   "250ml": { side: { widthIn: 9.375, heightIn: 2.875 }, lid: { diameterIn: 2.02 }, tamper: { widthIn: 9.375, heightIn: 0.5 } },
   "3oz": { side: { widthIn: 7.06, heightIn: 1.7 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.06, heightIn: 0.5 } },
   "4oz": { side: { widthIn: 7.125, heightIn: 2.125 }, lid: { diameterIn: 2.16 }, tamper: { widthIn: 7.125, heightIn: 0.5 } },
+  // 2026-11-17 MIRON Ceres — derived from the owner's millimetre CUT sizes (see MIRON_CERES_LABEL_CUT_MM). Preliminary.
+  ceres_50ml: jarArtGeometryFromCutMm(MIRON_CERES_LABEL_CUT_MM.ceres_50ml),
+  ceres_100ml: jarArtGeometryFromCutMm(MIRON_CERES_LABEL_CUT_MM.ceres_100ml),
 };
 
 /** CUTLINE geometry — derived from the label / art size, never stored over it. */

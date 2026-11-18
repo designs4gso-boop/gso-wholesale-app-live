@@ -280,7 +280,11 @@ describe("ZERO cost change: 30 jar fixtures, control case, weeding and applicati
     // only geometry-driven lines may move; blank, setup and application stay.
     const RESIZED = new Set(["250ml", "3oz", "4oz"]);
     const GEOMETRY_FREE = ["blank_sets", "art_setup", "print_setup", "application"];
-    for (const p of ACTIVE_JAR_PROFILES) for (const s of LABEL_SETS) {
+    // 2026-11-17: the two MIRON Ceres sets were added after this capture and have no
+    // pre-gate fixture; they are covered by tests/miron-ceres-costing-2026-11-17.test.ts.
+    const CAPTURED = ACTIVE_JAR_PROFILES.filter((p) => !p.size.startsWith("ceres_"));
+    expect(ACTIVE_JAR_PROFILES.length - CAPTURED.length).toBe(2);
+    for (const p of CAPTURED) for (const s of LABEL_SETS) {
       const r = runAt8(jarQs(p.key, s.selection));
       const key = `${p.key}/${s.key}`;
       expect(before[key], key).toBeDefined();
@@ -294,7 +298,7 @@ describe("ZERO cost change: 30 jar fixtures, control case, weeding and applicati
       expect(r.unitCost, key).toBeCloseTo(before[key].unit, 9);
       expect(r.trueCost.lines.map((l) => [l.key, l.amount]), key).toEqual(before[key].lines);
     }
-    expect(Object.keys(before).length).toBe(ACTIVE_JAR_PROFILES.length * LABEL_SETS.length);
+    expect(Object.keys(before).length).toBe(CAPTURED.length * LABEL_SETS.length);
   });
 
   it("weeding and application numbers are frozen", () => {
@@ -307,6 +311,8 @@ describe("ZERO cost change: 30 jar fixtures, control case, weeding and applicati
     expect(JAR_APPLICATION_SECONDS_BY_SIZE).toEqual({
       "50ml": { side: 12, lid: 10, tamper: 12 }, "100ml_tall": { side: 12, lid: 10, tamper: 12 }, "100ml_wide": { side: 12, lid: 10, tamper: 12 },
       "150ml": { side: 13, lid: 10, tamper: 12 }, "250ml": { side: 15, lid: 10, tamper: 12 }, "3oz": { side: 10, lid: 8, tamper: null }, "4oz": { side: 10, lid: 8, tamper: null },
+      // 2026-11-17 MIRON Ceres sets: the owner's 50ml / 100ml per-size timings (the existing seven are unchanged)
+      ceres_50ml: { side: 12, lid: 10, tamper: 12 }, ceres_100ml: { side: 12, lid: 10, tamper: 12 },
     });
     expect(OWNER_STANDARDS.jarApplicationPerLabel.value).toBeCloseTo(0.2, 12);
   });

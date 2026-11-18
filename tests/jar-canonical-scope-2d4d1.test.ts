@@ -105,10 +105,11 @@ const lineOf = (result: ReturnType<typeof run>, key: string) =>
 /* ------------------------------------------------------------------ */
 
 describe("2D-4D1 — the active jar scope is exactly what the owner offers", () => {
-  it("lists the ten offered combinations and nothing else", () => {
+  it("lists the ten offered combinations (+ the two MIRON Ceres sets of 2026-11-17) and nothing else", () => {
     expect(ACTIVE_JAR_KEYS.slice().sort()).toEqual([
       "chiron/100ml_tall", "chiron/100ml_wide", "chiron/150ml",
       "miron/100ml_tall", "miron/100ml_wide", "miron/150ml", "miron/250ml", "miron/50ml",
+      "miron/ceres_100ml", "miron/ceres_50ml",
       "standard/3oz", "standard/4oz",
     ]);
   });
@@ -121,6 +122,7 @@ describe("2D-4D1 — the active jar scope is exactly what the owner offers", () 
       .toEqual([
         "chiron/100ml_tall", "chiron/100ml_wide", "chiron/150ml",
         "miron/100ml_tall", "miron/100ml_wide", "miron/150ml", "miron/250ml", "miron/50ml",
+        "miron/ceres_100ml", "miron/ceres_50ml",
       ]);
     expect(activeJarProfilesForFamily("standard-jars").map((p) => p.key).sort())
       .toEqual(["standard/3oz", "standard/4oz"]);
@@ -224,7 +226,11 @@ describe("2D-4D1 — the jar families are promoted, and the mechanism survives",
 
 describe("2D-4D1 — every active profile actually costs", () => {
   it("produces a real unit cost with no blockers for all ten", () => {
-    for (const profile of ACTIVE_JAR_PROFILES) {
+    // 2026-11-17: the MIRON Ceres sets are FREIGHT PENDING by owner instruction — they have
+    // exactly one blocker (unknown inbound freight) and are pinned in miron-ceres-costing-2026-11-17.
+    const FULLY_COSTED = ACTIVE_JAR_PROFILES.filter((p) => !p.size.startsWith("ceres_"));
+    expect(FULLY_COSTED).toHaveLength(10);
+    for (const profile of FULLY_COSTED) {
       const result = run(qs({
         pfamily: profile.uiFamily,
         pjar: profile.key,
@@ -550,6 +556,9 @@ describe("2D-4D2 — the jar authorities trace to owner records", () => {
       "250ml": { side: 15, lid: 10, tamper: 12 },
       "3oz": { side: 10, lid: 8, tamper: null },
       "4oz": { side: 10, lid: 8, tamper: null },
+      // 2026-11-17 MIRON Ceres sets: the owner's 50ml / 100ml timings (not separately timed on a Ceres jar).
+      ceres_50ml: { side: 12, lid: 10, tamper: 12 },
+      ceres_100ml: { side: 12, lid: 10, tamper: 12 },
     });
   });
 
@@ -751,7 +760,8 @@ describe("2D-4D3 — the legitimate PROVISIONAL disclosures survive the lock", (
   });
 
   it("does not mark a jar VALID just because the overage got verified", () => {
-    for (const profile of ACTIVE_JAR_PROFILES) {
+    // The freight-pending MIRON Ceres sets are DRAFT_ONLY (stricter than PROVISIONAL) — pinned in their own suite.
+    for (const profile of ACTIVE_JAR_PROFILES.filter((p) => !p.size.startsWith("ceres_"))) {
       const result = run(qs({
         pfamily: profile.uiFamily,
         pjar: profile.key,

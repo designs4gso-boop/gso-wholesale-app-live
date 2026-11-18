@@ -429,6 +429,7 @@ describe("owner rule contract", () => {
   it("box density is per size, not a flat 100", () => {
     expect(JAR_UNITS_PER_BOX).toEqual({
       "50ml": 100, "100ml_tall": 100, "100ml_wide": 100, "150ml": 50, "250ml": 25, "3oz": 150, "4oz": 100,
+      ceres_50ml: 100, ceres_100ml: 100, // 2026-11-17: existing 50ml / 100ml density, not yet measured on a Ceres jar
     });
     expect(packoutFor("250ml", 1000).boxes).toBe(40);
     expect(packoutFor("3oz", 1000).boxes).toBe(7); // ceil(1000/150)

@@ -226,7 +226,9 @@ describe("Miron 100ml Tall — every integer quantity 50..1000 (Side + Lid)", ()
 });
 
 describe("every supported jar x Side+Lid at the owner ladder quantities", () => {
-  for (const profile of ACTIVE_JAR_PROFILES) {
+  // 2026-11-17: the MIRON Ceres sets are COSTING-ONLY — no customer price ladder exists and
+  // their landed cost is freight-pending, so there is no selling price to sanity-check.
+  for (const profile of ACTIVE_JAR_PROFILES.filter((p) => !p.size.startsWith("ceres_"))) {
     it(`${profile.key}: prices, floors hold, totals monotone across 50..2500 breaks`, () => {
       const variant = profile.brand === "standard" ? "&pjarvariant=black_white" : "";
       const base = `pfamily=${profile.uiFamily}&pjarmat=matte&pqty=128&pjar=${profile.key}${variant}&pjarside=1&pjarlid=1&pprinter=mimaki&pwhitelayers=0&pglosslayers=0`;

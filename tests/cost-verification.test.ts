@@ -279,7 +279,13 @@ describe("approved cost updates (13.2.2)", () => {
 
 describe("blank bag + DTP creation (13.2.3)", () => {
   it("pins the creation specs (names, SKUs, types, Vendor TBD)", () => {
-    const specs = APPROVED_COST_TRUTH.filter((item) => item.creation).map((item) => item.creation!);
+    const allSpecs = APPROVED_COST_TRUTH.filter((item) => item.creation).map((item) => item.creation!);
+    // 2026-11-17: the two MIRON Ceres jar + Yuha lid sets are created under their real supplier SKUs (vendor MIRON).
+    expect(allSpecs.filter((spec) => spec.vendor === "MIRON")).toEqual([
+      { name: "MIRON Ceres 50 mL + Yuha 48 (jar + lid set)", productType: "jar", vendor: "MIRON", vendorSku: "HF10685-204+EGA01A1A021-200" },
+      { name: "MIRON Ceres 100 mL + Yuha 58 (jar + lid set)", productType: "jar", vendor: "MIRON", vendorSku: "HF10657-204+EGA01A1A022-200" },
+    ]);
+    const specs = allSpecs.filter((spec) => spec.vendor !== "MIRON");
     // 2D-4C2D1: the 4x5 blank bag entry was REMOVED along with its creation
     // spec — there is no pending correction, so nothing may be created for it.
     expect(specs.map((spec) => spec.name)).toEqual(["4x6 Blank Bag", "14x16 Blank Bag", "DTP 4x5x2 Blank Pouch"]);

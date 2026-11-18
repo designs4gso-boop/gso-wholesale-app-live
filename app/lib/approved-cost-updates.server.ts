@@ -20,6 +20,8 @@ import {
 const MIRON_MARKER = "[VERIFIED 2026-07-17 owner-approved Miron jar + normal SAN lid sheet]";
 /** 2026-10-29 owner decision: the 50ml Miron blank jar + lid ladder (supersedes the 2026-10-28 and 2026-07-17 values). */
 const MIRON_50ML_MARKER = "[VERIFIED 2026-10-29 owner-approved 50ml Miron blank jar + lid cost ladder]";
+/** 2026-11-17 owner-provided supplier prices: MIRON Ceres jar + matching Yuha Special lid (before labels, freight and tax). */
+const MIRON_CERES_MARKER = "[VERIFIED 2026-11-17 owner-provided MIRON Ceres jar + Yuha Special lid supplier prices]";
 const SAFECARE_MARKER = "[VERIFIED 2026-07-17 owner-approved SAFECARE jar cost]";
 const BAG_MARKER = "[VERIFIED 2026-07-17 owner-approved blank bag cost]";
 /* ------------------------------------------------------------------ *
@@ -94,6 +96,13 @@ export const APPROVED_COST_TRUTH: ApprovedItem[] = [
   { key: "miron-100ml-wide", label: "100ml wide Miron jar + lid", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["preset:miron-100ml-wide"], matchName: /^100\s?ml.*wide.*miron/i, tiers: tiersFrom([2.9, 2.67, 2.44, 2.26, 2.1]), marker: MIRON_MARKER },
   { key: "miron-150ml", label: "150ml Miron jar + lid", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["preset:miron-150ml"], matchName: /^150\s?ml.*miron/i, tiers: tiersFrom([3.26, 3.0, 2.76, 2.54, 2.37]), marker: MIRON_MARKER },
   { key: "miron-250ml", label: "250ml Miron jar + lid", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["preset:miron-250ml"], matchName: /^250\s?ml.*miron/i, tiers: tiersFrom([3.92, 3.6, 3.32, 3.11, 2.92]), marker: MIRON_MARKER },
+  // 1b. MIRON Ceres sets (owner-provided 2026-11-17) — jar + matching Yuha Special lid,
+  // tiered. DISTINCT from the generic rows above (those are jar + normal SAN lid): matched
+  // only by their own SKU pair or the word "Ceres", and CREATED when missing, so no generic
+  // Miron row is ever overwritten. The tier values are the jar + lid totals; the canonical
+  // cost path reads the per-component ladders in jar-cost-inputs.server.ts MIRON_SET_COMPONENTS.
+  { key: "miron-ceres-50ml", label: "MIRON Ceres 50 mL + Yuha 48 (jar + lid set)", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["HF10685-204+EGA01A1A021-200"], matchName: /ceres.*50\s?ml/i, tiers: tiersFrom([2.74, 2.52, 2.31, 2.12, 1.98]), marker: MIRON_CERES_MARKER, tierNote: "Owner-provided 2026-11-17", note: "Jar HF10685-204 $1.90/1.72/1.55/1.44/1.34 + Yuha 48 Special lid EGA01A1A021-200 (black UREA, violet Phan inlay) $0.84/0.80/0.76/0.68/0.64. Before labels, inbound freight and tax.", creation: { name: "MIRON Ceres 50 mL + Yuha 48 (jar + lid set)", productType: "jar", vendor: "MIRON", vendorSku: "HF10685-204+EGA01A1A021-200" } },
+  { key: "miron-ceres-100ml", label: "MIRON Ceres 100 mL + Yuha 58 (jar + lid set)", target: "vendor_product", kind: "tiered", policy: "update", matchVendorSkus: ["HF10657-204+EGA01A1A022-200"], matchName: /ceres.*100\s?ml/i, tiers: tiersFrom([3.51, 3.24, 2.97, 2.77, 2.6]), marker: MIRON_CERES_MARKER, tierNote: "Owner-provided 2026-11-17", note: "Jar HF10657-204 $2.46/2.23/2.02/1.90/1.79 + Yuha 58 Special lid EGA01A1A022-200 (black UREA, violet Phan inlay) $1.05/1.01/0.95/0.87/0.81. Before labels, inbound freight and tax.", creation: { name: "MIRON Ceres 100 mL + Yuha 58 (jar + lid set)", productType: "jar", vendor: "MIRON", vendorSku: "HF10657-204+EGA01A1A022-200" } },
 
   // 2. SAFECARE jars — flat cost each.
   { key: "safecare-3oz-clear", label: "3oz clear jar", target: "vendor_product", kind: "flat", policy: "update", matchVendorSkus: ["preset:3oz-jar-clear"], matchName: /^3\s?oz.*clear/i, flatCost: 0.5, marker: SAFECARE_MARKER },

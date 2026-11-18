@@ -215,6 +215,9 @@ describe("Q1. the 2026-10-29 owner ladder is the one canonical 50ml blank jar + 
       "100ml_wide": [2.9, 2.67, 2.44, 2.26, 2.1],
       "150ml": [3.26, 3.0, 2.76, 2.54, 2.37],
       "250ml": [3.92, 3.6, 3.32, 3.11, 2.92],
+      // 2026-11-17: NEW distinct products (MIRON Ceres jar + Yuha Special lid) — additions, not changes
+      ceres_50ml: [2.74, 2.52, 2.31, 2.12, 1.98],
+      ceres_100ml: [3.51, 3.24, 2.97, 2.77, 2.6],
     });
     expect(CHIRON_SET_COST).toEqual({ "100ml_tall": 1.8, "100ml_wide": 1.8, "150ml": 1.9 });
     expect(STANDARD_SET_COST).toEqual({ "3oz": { clear: 0.5, black_white: 0.62 }, "4oz": { clear: 0.6, black_white: 0.65 } });
@@ -279,6 +282,61 @@ describe("Q2. a real 50ml quote through the calculator loader (side + lid + tamp
       expect(page).not.toContain("$2.46 — Verified");
       expect(page).toContain("READY TO QUOTE");
       expect(page).not.toContain("Application Error");
+    } finally {
+      delete (globalThis as any).VENDOR_ROWS;
+    }
+  }, 120_000);
+});
+
+/* ================================================================== *
+ * 2026-11-17 — MIRON Ceres 50 mL + Yuha 48 through the REAL calculator
+ * loader and the RENDERED page: components visible, freight pending,
+ * no landed unit cost, no selling price.
+ * ================================================================== */
+describe("Q3. MIRON Ceres 50 mL + Yuha 48 in the calculator (rendered)", () => {
+  const CERES_ROW = {
+    id: "vp_c50", shop: "shop-1", name: "MIRON Ceres 50 mL + Yuha 48 (jar + lid set)", productType: "jar", vendor: "MIRON",
+    vendorSku: "HF10685-204+EGA01A1A021-200", active: true, defaultUnitCost: 2.74, moq: 1, addOns: [],
+    tiers: [[1, 249, 2.74], [250, 499, 2.52], [500, 999, 2.31], [1000, 2499, 2.12], [2500, null, 1.98]].map(([minQty, maxQty, unitCost]) => ({ minQty, maxQty, unitCost })),
+  };
+  const ceresQs = (qty: number) => [
+    "pfamily=premium-jars&pjarmat=matte", `pqty=${qty}`, "pblank=vendor:vp_c50", "plid=type:standard-top", "pjar=miron/ceres_50ml", "pjarvariant=",
+    "pjarset=side_lid", "pjartamperopt=1", "pjarside=1", "pjarlid=1", "pjartamper=1",
+    "pdesigns=1", "pmat=m_matte", "pprinter=mimaki", "pcut=square-rect", "pwhitelayers=0", "pglosslayers=0", "pcmykcoverage=40",
+  ].join("&");
+
+  it("shows jar and lid separately, FREIGHT PENDING, a known subtotal and no landed unit cost or selling price", async () => {
+    (globalThis as any).VENDOR_ROWS = [STALE_ROW, CERES_ROW];
+    try {
+      const { route, data } = await loaderData(ceresQs(500));
+      const pm = data.emergency.productMode;
+      // the picker offers the Ceres set as its own option, next to (not instead of) the generic 50ml
+      const option = pm.blankOptions.find((o: any) => o.value === "vendor:vp_c50");
+      expect(option.jarProfile).toBe("miron/ceres_50ml");
+      expect(option.label).toContain("MIRON Ceres 50 mL + Yuha 48");
+      expect(option.label).toContain("tiered $2.74 → $1.98 (owner-approved jar cost)");
+      expect(pm.blankOptions.find((o: any) => o.value === "vendor:vp_50").jarProfile).toBe("miron/50ml");
+
+      const canonical = pm.canonical;
+      expect(canonical.status).toBe("DRAFT_ONLY");
+      expect(canonical.unitCost).toBeNull();
+      expect(canonical.diagnostics.blankComponents.map((c: any) => [c.sku, c.unitCost])).toEqual([["HF10685-204", 1.55], ["EGA01A1A021-200", 0.76]]);
+      expect(canonical.diagnostics.landedCost.status).toBe("FREIGHT_PENDING");
+      // costing only: no tier row carries a customer price
+      expect((pm.tiers || []).every((tier: any) => tier.draftOnly || tier.totalPrice == null)).toBe(true);
+
+      const page = render(route, data, ceresQs(500));
+      expect(page).not.toContain("Application Error");
+      expect(page).toContain("SUPPLIER COMPONENTS");
+      expect(page).toContain("MIRON Ceres 50 mL jar · SKU HF10685-204");
+      expect(page).toContain("Yuha 48 Special lid · SKU EGA01A1A021-200 · Black UREA, violet Phan inlay");
+      expect(page).toContain("39 per pack · est. 13 pack(s)");
+      expect(page).toContain("pieces per pack: UNKNOWN");
+      expect(page).toContain("Known production cost (excludes inbound freight)");
+      expect(page).toContain("FREIGHT PENDING SUPPLIER PACK DATA");
+      expect(page).toContain("Final landed cost: PENDING");
+      expect(page).toContain("PHYSICAL SAMPLE TEST-FIT REQUIRED BEFORE PRODUCTION");
+      expect(page).not.toContain("READY TO QUOTE");
     } finally {
       delete (globalThis as any).VENDOR_ROWS;
     }

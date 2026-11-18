@@ -43,6 +43,10 @@ describe("geometry extraction is behaviour-preserving", () => {
       "250ml": { side: { widthIn: 9.375, heightIn: 2.875 }, lid: { diameterIn: 2.02 }, tamper: { widthIn: 9.375, heightIn: 0.5 } },
       "3oz": { side: { widthIn: 7.06, heightIn: 1.7 }, lid: { diameterIn: 2.0 }, tamper: { widthIn: 7.06, heightIn: 0.5 } },
       "4oz": { side: { widthIn: 7.125, heightIn: 2.125 }, lid: { diameterIn: 2.16 }, tamper: { widthIn: 7.125, heightIn: 0.5 } },
+      // 2026-11-17 MIRON Ceres (preliminary): owner CUT size in mm / 25.4 + the 0.125 in GSO bleed, to 4 dp
+      //   50 mL: 166.5 x 25.3 mm, 45 mm, 165 x 11 mm      100 mL: 198 x 31 mm, 50.8 mm, 198 x 10 mm
+      ceres_50ml: { side: { widthIn: 6.6801, heightIn: 1.1211 }, lid: { diameterIn: 1.8967 }, tamper: { widthIn: 6.6211, heightIn: 0.5581 } },
+      ceres_100ml: { side: { widthIn: 7.9203, heightIn: 1.3455 }, lid: { diameterIn: 2.125 }, tamper: { widthIn: 7.9203, heightIn: 0.5187 } },
     });
     expect(BAG_4X5_ARTBOARD_IN).toEqual({ widthIn: 4.0, heightIn: 5.0 });
   });
@@ -85,6 +89,7 @@ describe("listProductSpecs / getProductProductionSpec", () => {
     expect(keys).toEqual([
       "chiron/100ml_tall", "chiron/100ml_wide", "chiron/150ml",
       "miron/100ml_tall", "miron/100ml_wide", "miron/150ml", "miron/250ml", "miron/50ml",
+      "miron/ceres_100ml", "miron/ceres_50ml", // 2026-11-17 MIRON Ceres jar + Yuha lid sets
       "standard/3oz", "standard/4oz",
     ]);
   });

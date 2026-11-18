@@ -1,5 +1,49 @@
 # GSO ERP Project State
 
+## CURRENT TASK — 2026-11-17: MIRON Ceres 50 mL + 100 mL costing setup (local commit on branch `costing/miron-ceres-50-100-2026-11-17`; NOT pushed, NOT merged, NOT deployed)
+
+**PARKED, NOT COMPLETE — Print Intake.** The Print Intake follow-up audit is finished; NO Print Intake patch has been implemented. Outstanding order when it resumes: C (unmatched files go to review, no auto-created job) → B (routing rules) → E (print-file record) → D (ticket-folder matching + bulk linking) → A (watcher configuration) → F (RIP result automation) → G (retire the six test cards). Nothing in this MIRON task touched Print Intake.
+
+### What was added (costing only — no selling price, no Shopify price, no margin, no schema change, no migration)
+Two NEW jar products in the one canonical jar cost authority (`app/lib/jar-cost-inputs.server.ts` + `jar-label-geometry.ts` + `jar-active-scope.ts`), which the Cost Calculator and ERP quotes both read through `canonical-calculator.server.ts`:
+
+| | MIRON Ceres 50 mL + Yuha 48 | MIRON Ceres 100 mL + Yuha 58 |
+|---|---|---|
+| Profile key | `miron/ceres_50ml` | `miron/ceres_100ml` |
+| Jar SKU | HF10685-204 | HF10657-204 |
+| Lid | Yuha 48 Special, SKU EGA01A1A021-200 | Yuha 58 Special, SKU EGA01A1A022-200 |
+| Lid description | Black UREA, violet Phan inlay | Black UREA, violet Phan inlay |
+| Jar cost (1–249 / 250–499 / 500–999 / 1,000–2,499 / 2,500+) | $1.90 / $1.72 / $1.55 / $1.44 / $1.34 | $2.46 / $2.23 / $2.02 / $1.90 / $1.79 |
+| Lid cost (same tiers) | $0.84 / $0.80 / $0.76 / $0.68 / $0.64 | $1.05 / $1.01 / $0.95 / $0.87 / $0.81 |
+| Jar + lid (validation totals) | $2.74 / $2.52 / $2.31 / $2.12 / $1.98 | $3.51 / $3.24 / $2.97 / $2.77 / $2.60 |
+| Jar pieces per pack | 39 | 28 |
+| Lid pieces per pack | UNKNOWN (stored as null) | UNKNOWN (stored as null) |
+| Supplier sheet quantity (as given; unit of packing not stated) | jar 5,616 · lid 396 | jar 3,584 · lid 207 |
+| Body wrap — CUT size | 166.5 × 25.3 mm | 198 × 31 mm |
+| Lid top circle — CUT diameter | 45 mm | 50.8 mm |
+| Lid side band — CUT size | 165 × 11 mm | 198 × 10 mm |
+
+- Supplier prices are BEFORE labels, inbound freight and tax. Jar and lid are stored as separate components (`MIRON_SET_COMPONENTS`); the set cost is their sum.
+- **These are distinct products from the existing generic "Miron 50ml / 100ml / 100ml tall" profiles** (jar + normal SAN lid; different cost, lid and label geometry; no supplier SKU on record). Nothing on those profiles changed. A record is a Ceres set only when its name says "Ceres".
+- **Label geometry is PRELIMINARY — PHYSICAL SAMPLE TEST-FIT REQUIRED BEFORE PRODUCTION.** Millimetres are the source of truth (`MIRON_CERES_LABEL_CUT_MM`). The engine stores label / art size and derives the cutline as art − 0.125 in, so the art size is cut + 0.125 in (the one GSO bleed, added once) and the derived cutline equals the owner's cut size. Not in `JAR_OWNER_CONFIRMED_GEOMETRY`; every quote shows "owner confirmation pending" and the test-fit note.
+- **1% planned jar overage applies** (existing owner rule, once): jar + lid, label media, ink and freight price at the planned quantity (500 → 505); application labor and packout stay on the finished quantity.
+- **Supplier tier follows the quantity actually purchased** (finished + 1%), which is the existing behaviour for every Miron jar: 246 finished → 249 → under-250 price; 247 finished → 250 → 250 price.
+- **Application labor:** existing per-label model at $20/hr on finished jars — body wrap 12 s + lid top 10 s + lid side band 12 s = 34 s = $0.1889 per jar.
+- **Inbound freight is PENDING, never $0.** The freight line is unknown (null); the calculator shows "Known production cost (excludes inbound freight)", "Inbound freight: FREIGHT PENDING SUPPLIER PACK DATA" and "Final landed cost: PENDING", publishes no landed unit cost and generates no selling price. Freight / landed cost is not final until the supplier freight data below is confirmed.
+- **Tax:** supplier purchase tax is not modelled anywhere in ERP product costing; none was added.
+- **Vendor Cost Book record:** the two sets appear in the Cost Calculator once the owner applies `miron-ceres-50ml` / `miron-ceres-100ml` on Cost Verification → approved cost updates (creates one record per set; never matches a generic Miron row). No production data was written by this task.
+- Tests: `tests/miron-ceres-costing-2026-11-17.test.ts` (+ a rendered calculator test in `tests/miron-50ml-quoting-readiness-2026-10-29.test.ts`, Q3).
+
+### Still needed from the owner / supplier for these two sets
+1. Carton dimensions (jar and lid).
+2. Packed carton weights.
+3. Lid pieces per pack / carton (Yuha 48 and Yuha 58).
+4. What the supplier sheet quantities (5,616 / 396 / 3,584 / 207) count — pallet, carton or order lot.
+5. Physical label test-fit of all six label sizes, then owner approval as production dielines.
+6. Application timing on a Ceres jar — the 12 / 10 / 12 s used are the owner's existing 50ml / 100ml per-size timings, not timed on a Ceres jar.
+7. Outbound box density — 100 finished jars per box is the existing 50ml / 100ml figure, not measured on a Ceres jar.
+8. Customer selling price ladder — none exists for the Ceres sets (costing only).
+
 ## CURRENT STATE — 2026-11-15 overnight stabilization (READ THIS FIRST; supersedes older blocks below where they disagree)
 
 **Repo / release.** `C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp-release-20261017`, branch `main`, Render auto-deploys `main`. Live `main` before this work: `bc418f1`. This work: branch `overnight/erp-stabilization-2026-11-15`, merged to `main` as "release(erp): overnight stabilization 2026-11-15" (current SHA: `git log -1 --first-parent main`). No schema change, no migration, no env change. Never run `npm run dev` or `shopify app deploy` against the live app; `shopify.app.preview.toml` is local / untracked and must never be staged.
