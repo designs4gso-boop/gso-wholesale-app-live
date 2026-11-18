@@ -200,8 +200,8 @@ export const JAR_APPLICATION_SECONDS_BY_SIZE: Record<JarSizeKey, JarApplicationS
  * been timed on the physical jar itself. Disclosed, never silent.
  */
 export const JAR_APPLICATION_SECONDS_PENDING_TIMING: Partial<Record<JarSizeKey, string>> = {
-  ceres_50ml: "Owner 50ml per-size timing (12s body wrap / 10s lid top / 12s lid side band) applied to the Ceres 50 mL set; not yet timed on a Ceres jar.",
-  ceres_100ml: "Owner 100ml per-size timing (12s body wrap / 10s lid top / 12s lid side band) applied to the Ceres 100 mL set; not yet timed on a Ceres jar.",
+  ceres_50ml: "PROVISIONAL — NOT PHYSICALLY TIMED ON CERES SAMPLE. Owner 50ml per-size timing (12s body wrap / 10s lid top / 12s lid side band) applied to the Ceres 50 mL set; not yet timed on a Ceres jar.",
+  ceres_100ml: "PROVISIONAL — NOT PHYSICALLY TIMED ON CERES SAMPLE. Owner 100ml per-size timing (12s body wrap / 10s lid top / 12s lid side band) applied to the Ceres 100 mL set; not yet timed on a Ceres jar.",
 };
 
 /** Where each number came from, so a quote can show it without guessing. */
@@ -331,7 +331,8 @@ export const JAR_UNITS_PER_BOX: Record<JarSizeKey, number> = {
   "3oz": 150,
   "4oz": 100,
   // 2026-11-17 MIRON Ceres: the existing 50ml / 100ml outbound box density (100 per box).
-  // Not measured on a Ceres jar — an open owner confirmation, listed in the project state.
+  // PROVISIONAL — NOT VERIFIED ON CERES PACKOUT (owner-approved for preliminary costing, 2026-11-17).
+  // This is GSO's outbound box, not supplier carton data.
   ceres_50ml: 100,
   ceres_100ml: 100,
 };
@@ -476,6 +477,9 @@ export const MIRON_TIER_MIN_QTYS = [1, 250, 500, 1000, 2500];
  * Pack data: null means the supplier has not told us — it is unknown, never
  * zero. `supplierQuantity` is the quantity figure on the supplier sheet,
  * recorded as given (the sheet does not say what unit of packing it counts).
+ * REFERENCE ONLY (owner, 2026-11-17): it is NOT pallet capacity, carton
+ * capacity or pack quantity until MIRON confirms what it represents, and it
+ * must not drive any freight calculation. Nothing reads it for cost.
  * ------------------------------------------------------------------ */
 export type JarSupplierComponent = {
   role: "jar" | "lid";
