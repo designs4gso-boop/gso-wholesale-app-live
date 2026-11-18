@@ -7,6 +7,7 @@ import { materialKind } from "../lib/material-classify";
 import { resolveMaterialUnitCost, resolvePrintMaterialCostPerSqft } from "../lib/cost-calculator.server";
 import { buildCsv } from "../lib/shopify-cost-audit-shared";
 import { APPROVED_COST_TRUTH, applyApprovedCostUpdates, previewApprovedCostUpdates } from "../lib/approved-cost-updates.server";
+import { ApprovedUpdateApplyOne } from "../components/ApprovedUpdateApplyOne";
 import { requireOwner, requireFinancialAccess } from "../lib/owner-authorization.server";
 // 2026-10-05 read-only production standards (weeding + fixed-product specs + jar application timings)
 import { WEEDING_STANDARD } from "../lib/weeding-standard";
@@ -85,6 +86,11 @@ export async function action({ request }: { request: Request }) {
   const onlyKey = String(formData.get("onlyKey") ?? "").trim();
   if (onlyKey && !APPROVED_COST_TRUTH.some((item) => item.key === onlyKey)) {
     return { ok: false as const, error: `Unknown approved-cost key "${onlyKey}".` };
+  }
+  // 2026-11-18: a per-item apply must name its item. Without a key it is refused,
+  // so a single-item control can never fall through to applying every pending update.
+  if (String(formData.get("applyScope") ?? "").trim() === "single" && !onlyKey) {
+    return { ok: false as const, error: "No approved-cost item was named for a single-item apply. Nothing was applied." };
   }
   const result = await applyApprovedCostUpdates(db, session.shop, onlyKey ? { onlyKeys: [onlyKey] } : {});
   return { ok: true as const, applied: result.applied, skippedCount: result.skipped.length };
@@ -984,7 +990,7 @@ export default function CostVerificationRoute() {
 
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={thStyle}>Item</th><th style={thStyle}>Status</th><th style={thStyle}>Current app value</th><th style={thStyle}>Approved value</th><th style={thStyle}>Changes on apply</th><th style={thStyle}>Matched record / note</th></tr></thead>
+            <thead><tr><th style={thStyle}>Item</th><th style={thStyle}>Status</th><th style={thStyle}>Current app value</th><th style={thStyle}>Approved value</th><th style={thStyle}>Changes on apply</th><th style={thStyle}>Matched record / note</th><th style={thStyle}>Apply one item</th></tr></thead>
             <tbody>
               {data.approvedUpdates.map((row) => (
                 <tr key={row.key}>
@@ -994,6 +1000,11 @@ export default function CostVerificationRoute() {
                   <td style={tdStyle}>{row.approvedSummary}</td>
                   <td style={tdStyle}>{row.changes.length ? row.changes.join("; ") : "—"}</td>
                   <td style={tdStyle}>{row.matchedName || "—"}{row.note ? <div style={smallHelp}>{row.note}</div> : null}</td>
+                  <td style={tdStyle}>
+                    {row.status === "will_update" || row.status === "will_create"
+                      ? <ApprovedUpdateApplyOne updateKey={row.key} label={row.label} confirmPhrase={APPLY_CONFIRM_PHRASE} applying={applying} />
+                      : "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1001,14 +1012,20 @@ export default function CostVerificationRoute() {
         </div>
 
         {willUpdateCount > 0 ? (
-          <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 12 }}>
+          <div style={{ ...smallHelp, marginTop: 12 }}>
+            To apply <b>one</b> item, type the phrase in that row and press "Apply only this update" — no other row changes.
+            The form below is the <b>bulk</b> control: it applies <b>every</b> pending row at once.
+          </div>
+        ) : null}
+        {willUpdateCount > 0 ? (
+          <Form method="post" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 12, border: "1px dashed #b45309", borderRadius: 10, padding: 10 }}>
             <input type="hidden" name="intent" value="applyApprovedCosts" />
             <label style={{ fontSize: 13 }}>
-              Type <code>{APPLY_CONFIRM_PHRASE}</code> to apply {willUpdateCount} update(s)/creation(s)<br />
+              <b>BULK — applies ALL pending rows.</b> Type <code>{APPLY_CONFIRM_PHRASE}</code> to apply all {willUpdateCount} update(s)/creation(s)<br />
               <input name="confirmPhrase" autoComplete="off" placeholder={APPLY_CONFIRM_PHRASE} style={{ padding: 10, border: "1px solid #d1d5db", borderRadius: 8, width: 280 }} />
             </label>
             <button type="submit" disabled={applying} style={{ background: applying ? "#9ca3af" : "#b45309", color: "white", border: 0, borderRadius: 10, padding: "12px 18px", fontWeight: 800 }}>
-              {applying ? "Applying..." : "Apply approved cost updates"}
+              {applying ? "Applying..." : `Apply ALL ${willUpdateCount} pending updates`}
             </button>
           </Form>
         ) : (
