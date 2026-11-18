@@ -20,7 +20,12 @@ export const NEEDS_LINK_TO_JOB_LABEL = "NEEDS REVIEW — LINK TO JOB";
 export const PRINTER_CONFLICT_LABEL = "NEEDS REVIEW — PRINTER CONFLICT";
 export const PRINTER_CONFLICT_REASONS = ["printer_token_conflict", "premium_mode_mimaki_contradiction", "printer_assignment_contradiction", "layer_printer_split"];
 
+// Safety follow-up: a lone `_cmyk` layer on a job whose finish is not stated.
+export const CONFIRM_PRINT_MODE_REASON = "confirm_print_mode";
+export const CONFIRM_PRINT_MODE_LABEL = "NEEDS REVIEW — CONFIRM PRINT MODE";
+
 export const REVIEW_REASON_LABELS: Record<string, string> = {
+  confirm_print_mode: "This is a CMYK layer file and the job does not say whether a gloss or white layer is coming. Set the finish or press on the job, add a ROLAND / MIMAKI tag to the filename, or drop the other layer — then Release / Retry.",
   layer_printer_split: "Another layer of this same job was already sent to the other press — one job is never split across presses.",
   needs_link_to_job: "No existing production job matches this file — pick the job with Assign.",
   conflicting_tickets: "Filename carries conflicting GSO tickets.",
@@ -30,7 +35,7 @@ export const REVIEW_REASON_LABELS: Record<string, string> = {
   ambiguous_candidates: "Two or more production jobs/items match.",
   unsupported_file_type: "Not a supported artwork file type.",
   printer_token_conflict: "The job's files name BOTH printers.",
-  premium_mode_mimaki_contradiction: "Gloss mode with a Mimaki token (gloss is not operational on the Mimaki).",
+  premium_mode_mimaki_contradiction: "White or gloss work with the Mimaki selected — white and gloss run on the Roland.",
   printer_assignment_contradiction: "Filename printer tag contradicts the press assigned in the ERP.",
   auto_machine_load_unavailable: "Auto press selection unavailable (machine load incomplete) — assign Mimaki or Roland, or add a MIMAKI / ROLAND filename tag.",
   unknown_production_requirements: "No deterministic printer/mode could be derived.",
@@ -51,7 +56,8 @@ export function canonicalReviewReason(reasons: string[] | string | null | undefi
   if (/conflicting_printer_tokens/.test(text)) return "printer_token_conflict";
   if (/layer_split_sibling_already_routed/.test(text)) return "layer_printer_split";
   // white_gloss_job_but_erp_assigned_mimaki / premium_mode_but_mimaki_token are historical (pre-2026-11-11) codes.
-  if (/premium_mode_but_mimaki_token|gloss_mode_but_mimaki_token|white_gloss_job_but_erp_assigned_mimaki|gloss_job_but_mimaki_selected/.test(text)) return "premium_mode_mimaki_contradiction";
+  if (/premium_mode_but_mimaki_token|gloss_mode_but_mimaki_token|white_gloss_job_but_erp_assigned_mimaki|gloss_job_but_mimaki_selected|white_job_but_mimaki_selected/.test(text)) return "premium_mode_mimaki_contradiction";
+  if (/confirm_print_mode/.test(text)) return CONFIRM_PRINT_MODE_REASON;
   if (/roland_filename_tag_but_erp_assigned_mimaki|mimaki_filename_tag_but_erp_assigned_roland/.test(text)) return "printer_assignment_contradiction";
   if (/auto_machine_load_unavailable/.test(text)) return "auto_machine_load_unavailable";
   if (/not_an_artwork_file_type/.test(text)) return "unsupported_file_type";

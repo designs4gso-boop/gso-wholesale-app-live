@@ -2,6 +2,24 @@
 
 ## CURRENT TASK — 2026-11-18: Print Intake Patch C + Patch B implemented (unmatched files go to review, no job is ever created; press is decided at the job level). E is next; D / A / F / G still pending. Watcher OFF.
 
+### Print Intake Patch B safety follow-up (2026-11-18) — FINAL routing hierarchy. This supersedes the hierarchy list and "Owner should know" items (a), (b) and (d) in the Patch B section below.
+- **SPECIAL PRODUCTION REQUIREMENTS decide the physical press first:**
+  - White → **Roland**.
+  - Gloss / spot gloss → **Roland**.
+  - Holographic requiring white → **Roland**. Verified: "White Layers: 1" on a holographic order is a real printed white underbase (the order builder calls it the bundled required white), not a storage flag.
+- **CONFLICT:** an explicit Mimaki — the press assigned on the job in the ERP, or a `MIMAKI` filename tag — on a job that needs white or gloss goes to human review as **NEEDS REVIEW — PRINTER CONFLICT**. It is never sent to the Mimaki and never silently switched to the Roland. (White is now protected exactly like gloss.)
+- **CMYK only:** explicit Roland → Roland; explicit Mimaki → Mimaki; no hint → Mimaki. No load balancing.
+- **How the late-layer split hazard was resolved:**
+  1. **The ERP job is read first.** The job item's finish / material metadata states white, gloss or holographic before any file arrives, so a `_cmyk` layer of a gloss or white job routes to the Roland immediately, without waiting for the `_g` / `_w` file. Read-only production check: 20 of 22 job items state their finish (every Shopify-order and manual item, most quote items).
+  2. **A stated CMYK-only finish routes at once.** If the job states a finish with no white or gloss ("CMYK", "No Specialty — 0X", "No Spot Gloss", …), a `_cmyk` file goes to the Mimaki immediately. Nothing normal is held.
+  3. **Only the genuinely unknown case is held.** A file that names itself a `_cmyk` layer, on a job whose ERP record states NO finish at all (2 of 22 items — quote conversions with an empty finish), with no sibling layer known and no explicit press, is held as **NEEDS REVIEW — CONFIRM PRINT MODE** instead of being sent to the Mimaki. It resolves by itself on the next plan once the job states a finish or a press, the filename carries a `ROLAND` / `MIMAKI` tag, or its `_g` / `_w` sibling is dropped (then both go to the Roland). No timer, no guessing. Repeat polls of a held file write nothing.
+  4. **Backstop unchanged:** if a layer was nevertheless already delivered to one press and a sibling would land on the other, the later file is held as a printer conflict; an already-routed file keeps its press.
+- **Also fixed for Print Intake:** a finish that literally reads "No Spot Gloss" / "No Gloss" / "No Specialty" is no longer read as a gloss requirement (two production jar items carry "No Spot Gloss"). This is an intake-only check (`needsGlossLayer`); the shared `needsGloss` used by production dispatch still treats that text as gloss and was deliberately not changed here — flagged for a later owner decision.
+- **Still requires a person:** printer conflicts (above); the confirm-print-mode hold; a sibling arriving after an explicitly-pressed CMYK layer was already delivered; unmatched and ambiguous files (Patch C — review row only, no job, no route).
+- **Scope:** Print Intake only. The shared `decideMachine`, production dispatch, quote and Cost Calculator routing are unchanged. No schema change. No job is created on any path.
+- **Tests:** `tests/print-intake-job-level-routing-2026-11-18.test.ts` now has 43 tests (the 20 owner-listed safety cases added). Full suite 3,834 passed / the 5 known personalization failures / 2 skipped; typecheck 263 (baseline); production build passed.
+- **Watcher remains OFF.** Patch E is next.
+
 ### Print Intake Patch B — job-level press routing (2026-11-18)
 - **Owner routing hierarchy for files arriving through Print Intake** (`decideIntakeMachine` in `app/lib/print-intake-routing.server.ts`):
   1. Explicit press assigned on the job item in the ERP (Roland / Mimaki) → that press.

@@ -8,6 +8,8 @@ import db from "../db.server";
 import { decodeIntakeOutcomes, type IntakeOutcome } from "../lib/print-intake-routing.server";
 import { CREDENTIAL_PLACEHOLDER, credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
 import {
+  CONFIRM_PRINT_MODE_LABEL,
+  CONFIRM_PRINT_MODE_REASON,
   NEEDS_LINK_TO_JOB_LABEL,
   PRINTER_CONFLICT_LABEL,
   PRINTER_CONFLICT_REASONS,
@@ -95,7 +97,11 @@ export async function loader({ request }: { request: Request }) {
       reasonLabel: reviewReasonLabel(row.reviewReason),
       // Patch C: a review row with no linked job waits for a person to link it (label resolved server-side).
       // Patch B: contradictory printer instructions read as a printer conflict, not as a missing link.
-      needsLinkLabel: row.status !== "review" ? null : PRINTER_CONFLICT_REASONS.includes(String(row.reviewReason || "")) ? PRINTER_CONFLICT_LABEL : !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,
+      needsLinkLabel: (row.status === "review" || row.status === "assigned") && PRINTER_CONFLICT_REASONS.includes(String(row.reviewReason || ""))
+        ? PRINTER_CONFLICT_LABEL
+        : (row.status === "review" || row.status === "assigned") && row.reviewReason === CONFIRM_PRINT_MODE_REASON
+          ? CONFIRM_PRINT_MODE_LABEL
+          : row.status === "review" && !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,
       ticket: row.authoritativeTicket,
       matchedProductionJobId: row.matchedProductionJobId,
       generatedProductionJobId: row.generatedProductionJobId,
@@ -301,13 +307,15 @@ export default function PrintIntake() {
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
         <b>Which printer gets the file (owner rules, 2026-11-18).</b>
         <div style={{ fontSize: 13, marginTop: 6 }}>
-          In order: (1) the press assigned on the job in the ERP; (2) a standalone <code>ROLAND</code> / <code>MIMAKI</code> tag in the
-          filename; (3) a job that needs <b>gloss / spot gloss or white</b> on any layer &rarr; <b>Roland LG-640</b>; (4) CMYK only &rarr;{" "}
-          <b>Mimaki</b>. There is no load balancing. Layer files of one job (<code>_cmyk</code>, <code>_g</code> gloss, <code>_w</code> white)
-          are read together, so the whole job goes to one press. Contradictory instructions (both printer tags, a tag against the ERP
-          press, gloss sent to the Mimaki, or a layer already sent to the other press) are never routed — they show as{" "}
-          <b>NEEDS REVIEW — PRINTER CONFLICT</b>. Roland-bound plans stay in Needs review with the blocking reason until the Roland hot
-          folder is confirmed and enabled in the agent config.
+          <b>White and gloss / spot gloss always need the Roland LG-640</b> (holographic counts — it prints a white layer). If such a job
+          also says Mimaki — on the job in the ERP or as a <code>MIMAKI</code> filename tag — it is never sent to the Mimaki; it shows as{" "}
+          <b>NEEDS REVIEW — PRINTER CONFLICT</b>. CMYK-only work goes to the press named on the job or in the filename
+          (<code>ROLAND</code> / <code>MIMAKI</code>), otherwise to the <b>Mimaki</b>. There is no load balancing. Layer files of one job
+          (<code>_cmyk</code>, <code>_g</code> gloss, <code>_w</code> white) are read together, so the whole job goes to one press. Other
+          conflicts (both printer tags, a tag against the ERP press, a layer already sent to the other press) are also held. A{" "}
+          <code>_cmyk</code> layer on a job that states no finish at all is held as <b>NEEDS REVIEW — CONFIRM PRINT MODE</b> until the job
+          says what it needs. Roland-bound plans stay in Needs review with the blocking reason until the Roland hot folder is confirmed
+          and enabled in the agent config.
         </div>
         <details style={{ ...finePrint, color: "#6b7280" }}>
           <summary style={{ cursor: "pointer" }}>Technical detail (config keys)</summary>

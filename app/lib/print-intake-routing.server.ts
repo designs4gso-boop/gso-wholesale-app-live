@@ -206,19 +206,28 @@ export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: Mac
 // production dispatch and order -> job creation and keeps its 2026-11-11
 // behaviour; the Cost Calculator / quotes use machine-routing.server.ts.
 //
-//   1. explicit ERP assignment on the item (Roland / Mimaki)   -> that press
-//   2. explicit ROLAND / MIMAKI tag on the file or a sibling layer file
-//                                                               -> that press
-//   3. the JOB needs GLOSS / spot gloss (any layer)             -> Roland
-//   4. the JOB needs WHITE (any layer)                          -> Roland
-//   5. CMYK only, nothing explicit                              -> Mimaki
+// (hierarchy corrected by the owner the same day — safety follow-up):
+//
+//   SPECIAL PRODUCTION REQUIREMENTS decide the physical press first:
+//     the JOB needs WHITE (any layer, incl. the holographic white underbase)
+//     or GLOSS / spot gloss (any layer)            -> the Roland is REQUIRED
+//       + explicit ROLAND (ERP or filename), or nothing explicit -> Roland
+//       + explicit MIMAKI (ERP or filename)  -> PRINTER CONFLICT, never Mimaki
+//   CMYK only:
+//       explicit ROLAND -> Roland; explicit MIMAKI -> Mimaki; no hint -> Mimaki
+//
 // No load balancing, no "less busy" AUTO, no review for a plain CMYK file.
-// Requirements are read at the JOB level: the item's ERP metadata first, then
-// every layer file known for the same item / design (so `_cmyk` + `_g` both
-// go to the Roland). Conflicting instructions never route:
+// Requirements are read at the JOB level: the item's ERP metadata first (it
+// knows white / gloss before any layer file arrives), then every layer file
+// known for the same item / design (so `_cmyk` + `_g` both go to the Roland).
+// Conflicting instructions never route:
 //   - both printer tags on the job's files, or a tag against the ERP press
-//   - gloss work explicitly sent to the Mimaki (no gloss on the Mimaki)
+//   - white or gloss work explicitly sent to the Mimaki
 //   - a sibling layer already delivered to the other press (layer split)
+// LATE-LAYER GUARD: a file that names itself a `_cmyk` LAYER, on a job whose
+// ERP record states no finish at all, with no sibling layer known and no
+// explicit press, is HELD (confirm print mode) instead of being sent to the
+// Mimaki — a gloss / white sibling could still arrive and the job would split.
 
 export type IntakeLayer = "cmyk" | "gloss" | "white";
 
@@ -256,6 +265,16 @@ export function needsWhiteLayer(item: Pick<IntakeItem, "selectedFinish" | "mater
   return String(item.selectedFinish || "").trim().toLowerCase() === "white";
 }
 
+/**
+ * Gloss requirement for PRINT INTAKE. Same tokens as the shared needsGloss, but
+ * a NEGATED finish ("No Spot Gloss", "No Gloss", "No Specialty") is not a gloss
+ * requirement. Intake-only: the shared needsGloss is left as it is.
+ */
+export function needsGlossLayer(item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">): boolean {
+  const text = finishHaystack(item).replace(/\bno\s+(?:spot\s+)?(?:gloss|uv|varnish|specialty)\b/g, " ");
+  return GLOSS_TOKENS.some((token) => text.includes(token));
+}
+
 export type IntakeMachineContext = {
   /** Other files known for the same item / design (their layer suffixes and printer tags count for the whole job). */
   relatedFileNames?: string[];
@@ -264,6 +283,18 @@ export type IntakeMachineContext = {
 };
 
 export const INTAKE_PRINTER_CONFLICT_PREFIX = "printer_conflict";
+export const INTAKE_CONFIRM_PRINT_MODE = "print_mode_unknown_for_cmyk_layer_confirm_print_mode";
+
+/**
+ * True when the ERP record STATES the item's finish (whatever it is): a
+ * selected finish, or a Finish / Specialty / layer-count / holographic entry in
+ * the material summary. Order, manual and most quote items do; a quote item
+ * converted with no finish at all does not — its print mode is unknown.
+ */
+export function intakePrintModeStated(item: Pick<IntakeItem, "selectedFinish" | "materialSummary">): boolean {
+  if (String(item.selectedFinish || "").trim()) return true;
+  return /\b(?:finish|specialty|gloss layers|white layers|holographic)\s*:/i.test(String(item.materialSummary || ""));
+}
 
 export function decideIntakeMachine(item: IntakeItem, fileName = "", context: IntakeMachineContext = {}): MachineDecision {
   const blocked = (reason: string): MachineDecision => ({ machine: null, machineRule: null, reasons: [reason] });
@@ -282,7 +313,7 @@ export function decideIntakeMachine(item: IntakeItem, fileName = "", context: In
   }
 
   // JOB-level requirements: ERP metadata first, layer files supplement it.
-  let gloss = needsGloss(item);
+  let gloss = needsGlossLayer(item);
   let white = needsWhiteLayer(item);
   for (const name of files) {
     const hints = parseFilenamePrintHints(name);
@@ -291,8 +322,18 @@ export function decideIntakeMachine(item: IntakeItem, fileName = "", context: In
     if (hints.whiteLayers > 0 || layers.includes("white")) white = true;
   }
 
+  // White and gloss REQUIRE the Roland. An explicit Mimaki instruction on such
+  // a job is a contradiction for a person to resolve — never routed to the Mimaki.
   const explicit = assigned || (rolandTag ? "roland" : mimakiTag ? "mimaki" : null);
   if (gloss && explicit === "mimaki") return blocked("gloss_job_but_mimaki_selected_contradiction");
+  if (white && explicit === "mimaki") return blocked("white_job_but_mimaki_selected_contradiction");
+
+  // Late-layer guard (see the header): only a self-declared `_cmyk` layer with
+  // nothing else known about the job is held. A stated finish, an explicit
+  // press, or any known special layer all resolve immediately.
+  if (!explicit && !gloss && !white && parseIntakeLayerTokens(fileName).layers.includes("cmyk") && !intakePrintModeStated(item)) {
+    return blocked(INTAKE_CONFIRM_PRINT_MODE);
+  }
 
   let decision: MachineDecision;
   if (assigned) decision = { machine: assigned, machineRule: "explicit_erp_machine", reasons: [`explicit_erp_${assigned}_assignment`] };

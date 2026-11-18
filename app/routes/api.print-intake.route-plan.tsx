@@ -28,6 +28,9 @@ import { NEEDS_LINK_TO_JOB_REASON, appendIntakeAudit, canonicalReviewReason, rea
 // files of the same item / design (`_cmyk`, `_g`, `_w`) are read together so
 // one physical job is never split across presses; conflicts go to review. A
 // file that was already routed keeps the press it was sent to.
+// Safety follow-up: white / gloss REQUIRE the Roland (an explicit Mimaki on
+// such a job is a printer conflict), and a lone `_cmyk` layer on a job with no
+// stated finish is held for print-mode confirmation rather than sent early.
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -102,7 +105,20 @@ export async function action({ request }: { request: Request }) {
     }
     const machineDecision = decideIntakeMachine(assignedItem as any, fileName, machineContext(assignedJob.id, assignedJob.items.length, assignedItem.itemTicket));
     if (!machineDecision.machine) {
-      return json({ ok: true, fileName, plan: { decision: "review", rule: null, reasons: ["assigned_but_machine_unresolved", ...machineDecision.reasons], candidates: [], autoCreated: false } });
+      // Safety follow-up: record WHY the assigned file is waiting so Incoming
+      // Print Files shows it (status stays "assigned"; written once, not per poll).
+      const heldReason = canonicalReviewReason(machineDecision.reasons);
+      if (existingIntake.reviewReason !== heldReason) {
+        try {
+          await db.printIntake.update({
+            where: { id: existingIntake.id },
+            data: { reviewReason: heldReason, rawParsedHints: appendIntakeAudit(existingIntake.rawParsedHints, { at: new Date().toISOString(), actor: "route-plan", action: "assigned_but_not_routed", reason: heldReason }) },
+          });
+        } catch {
+          // recording the reason must never break the plan response
+        }
+      }
+      return json({ ok: true, fileName, plan: { decision: "review", rule: null, machine: null, reasons: ["assigned_but_machine_unresolved", ...machineDecision.reasons], candidates: [], autoCreated: false } });
     }
     const assignedRun = { revision: existingIntake.revisionNumber, reprint: existingIntake.reprintNumber, attempt: existingIntake.attemptNumber };
     const assignedRunDefault = assignedRun.revision === 1 && assignedRun.reprint === 0 && assignedRun.attempt === 1;
