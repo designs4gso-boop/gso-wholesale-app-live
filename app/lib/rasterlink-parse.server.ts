@@ -44,6 +44,108 @@ export function parseDelimited(text: string): Record<string, string>[] {
   });
 }
 
+// ---------- Patch F (2026-11-18): RasterLink result RECORDS ----------
+// Real result files do not hold one job per line. RasterLink writes a job's
+// result across TWO physical rows, and separates records with blank lines:
+//
+//   "art.pdf","OK","C:0.028cc ...","20260822_091348","20260822_091353",,,,     <- job row
+//   ,,,,,,,"130",                                                             <- continuation: KEY_ARRANGE_CNT (+ result / detail)
+//
+// and a file may also contain EMPTY records (an all-empty row, optionally
+// followed by its own count row) for members that carry no file name.
+// Surveyed on 1,221 real files (45 layout variants). The reading that the
+// files themselves prove:
+//   - a row WITH a file name is a job row;
+//   - a row WITHOUT a file name that sits DIRECTLY under a job row (no blank
+//     line and no all-empty row between) and carries nothing except an
+//     arranged count, a result and/or a result detail is that job's
+//     CONTINUATION — its values fill the job row's EMPTY cells only;
+//   - every other row without a file name that carries only those cells
+//     (an empty record's count row, a count separated from the job by a blank
+//     or empty row, a second count row) belongs to no identifiable job and is
+//     NOT a result: it is dropped and counted, never attached by guesswork.
+// Rows without a file name that carry ink or timestamps are left exactly as
+// before (legacy behaviour), so nothing else changes.
+
+const CONTINUATION_ONLY_KEYS = new Set(["KEY_ARRANGE_CNT", "KEY_RESULT", "KEY_RESULT_DETAIL"]);
+
+export type RasterlinkStructure = {
+  rows: Record<string, string>[];
+  jobRows: number;
+  continuationsMerged: number;
+  orphanRowsDropped: number;
+  emptyRecords: number;
+};
+
+function tokenizeCsvLines(text: string): string[][] {
+  const input = text.replace(/^﻿/, "");
+  const rows: string[][] = [];
+  let field = "";
+  let row: string[] = [];
+  let quoted = false;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    const next = input[i + 1];
+    if (ch === '"') {
+      if (quoted && next === '"') { field += '"'; i += 1; } else quoted = !quoted;
+    } else if (ch === "," && !quoted) { row.push(field); field = ""; }
+    else if ((ch === "\n" || ch === "\r") && !quoted) {
+      if (ch === "\r" && next === "\n") i += 1;
+      row.push(field); field = "";
+      rows.push(row); // blank lines and all-empty rows are KEPT: they are record boundaries
+      row = [];
+    } else field += ch;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+export function readRasterlinkStructure(text: string): RasterlinkStructure {
+  const lines = tokenizeCsvLines(text);
+  const headerIndex = lines.findIndex((cells) => cells.some((cell) => cell.trim()));
+  const out: RasterlinkStructure = { rows: [], jobRows: 0, continuationsMerged: 0, orphanRowsDropped: 0, emptyRecords: 0 };
+  if (headerIndex < 0) return out;
+  const headers = lines[headerIndex].map((header) => header.trim());
+  // The job row that the NEXT physical row may still continue (null once a
+  // blank line, an empty row or a continuation has been seen).
+  let open: Record<string, string> | null = null;
+  for (const cells of lines.slice(headerIndex + 1)) {
+    if (!cells.some((cell) => cell.trim())) {
+      if (cells.length > 1) out.emptyRecords += 1; // an all-empty row (",,,,") starts an EMPTY record
+      open = null; // blank line or empty row: nothing below continues the job above
+      continue;
+    }
+    const record: Record<string, string> = {};
+    headers.forEach((header, index) => { record[header] = String(cells[index] ?? "").trim(); });
+    if (record.KEY_FILENAME) {
+      out.rows.push(record);
+      out.jobRows += 1;
+      open = record;
+      continue;
+    }
+    const filled = Object.keys(record).filter((key) => record[key]);
+    const continuationShaped = filled.length > 0 && filled.every((key) => CONTINUATION_ONLY_KEYS.has(key));
+    if (!continuationShaped) {
+      out.rows.push(record); // carries ink / timestamps without a name: legacy handling, unchanged
+      open = null;
+      continue;
+    }
+    if (open) {
+      if (!open.KEY_ARRANGE_CNT && record.KEY_ARRANGE_CNT) {
+        open.KEY_ARRANGE_CNT = record.KEY_ARRANGE_CNT;
+        open.__arrangeSource = "continuation_row";
+      }
+      if (!open.KEY_RESULT_DETAIL && record.KEY_RESULT_DETAIL) open.KEY_RESULT_DETAIL = record.KEY_RESULT_DETAIL;
+      if (record.KEY_RESULT) open.__continuationResult = record.KEY_RESULT;
+      out.continuationsMerged += 1;
+      open = null; // a job has ONE continuation row; anything further is not its own
+      continue;
+    }
+    out.orphanRowsDropped += 1;
+  }
+  return out;
+}
+
 // RasterLink CSVs are identified by their KEY_* headers. VersaWorks CSVs
 // ("Event", "Nick Name", ...) must never match, so the existing parser branch
 // stays untouched for them.
@@ -213,7 +315,8 @@ export type RasterlinkEntry = {
 
 export function parseRasterlinkRows(text: string, uploadFileName: string): RasterlinkEntry[] {
   const entries: RasterlinkEntry[] = [];
-  for (const row of parseDelimited(text)) {
+  // Patch F: records, not physical lines (see readRasterlinkStructure).
+  for (const row of readRasterlinkStructure(text).rows) {
     const fileName = row.KEY_FILENAME || "";
     const result = row.KEY_RESULT || "";
     const detail = row.KEY_RESULT_DETAIL || "";
@@ -269,6 +372,9 @@ export function parseRasterlinkRows(text: string, uploadFileName: string): Raste
           resultDetail: detail,
           arrangeCnt,
           arrangeAssumed: arrangeCnt == null,
+          // Patch F: where the arranged count came from in the file.
+          arrangeSource: arrangeCnt == null ? null : row.__arrangeSource || "job_row",
+          ...(row.__continuationResult ? { continuationResult: row.__continuationResult } : {}),
           perItem: estimated ? { cyanCc: ink.cyanCc, magentaCc: ink.magentaCc, yellowCc: ink.yellowCc, blackCc: ink.blackCc, whiteCc: ink.whiteCc, clearCc: ink.clearCc, totalCc: ink.perItemTotalCc } : null,
           inkBasis: estimated ? INK_BASIS_ESTIMATE : INK_BASIS_MISSING,
           ripStart: ripStart?.toISOString() || null,
