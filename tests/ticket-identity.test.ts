@@ -6,7 +6,6 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   allocateJobTicket,
-  createOrReusePrintIntakeJob,
   createProductionJobFromSource,
   isTicketUniqueViolation,
   itemTicketFor,
@@ -166,18 +165,12 @@ describe("15H.1 ticket identity foundation", () => {
     expect(result.job.id).toBe("quote_job");
   });
 
-  it("10. print-intake path stays hash-idempotent (fast path returns the existing identity)", async () => {
-    const existing = { id: "pi_9", generatedProductionJobId: "job_9", authoritativeTicket: "GSO-20260811-0009", routedFilename: "GSO-20260811-0009__ROLAND__GLOSS-3X__FILE__A1" };
-    const db = { printIntake: { findUnique: async () => existing }, $transaction: async () => { throw new Error("must not open a transaction on the fast path"); } };
-    const result = await createOrReusePrintIntakeJob(db, {
-      shop: "shop.test",
-      fileName: "whatever.pdf",
-      fileHash: "a".repeat(64),
-      machine: "roland",
-      machineRule: "white_or_gloss",
-      mode: "GLOSS-3X",
-    });
-    expect(result).toMatchObject({ created: false, productionJobId: "job_9", jobTicket: "GSO-20260811-0009" });
+  it("10. print intake has NO job-creation path (Patch C 2026-11-18): the creator is gone from the job source module", async () => {
+    const source = await import("../app/lib/production-job-source.server");
+    expect((source as any).createOrReusePrintIntakeJob).toBeUndefined();
+    const text = readFileSync("app/lib/production-job-source.server.ts", "utf8");
+    expect(text).not.toContain('customerName: "Unlinked (print intake)"');
+    expect(text).not.toContain("created_from_print_intake");
   });
 
   it("12. simulator fails closed against production and cannot mint tickets", () => {

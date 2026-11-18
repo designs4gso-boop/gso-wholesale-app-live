@@ -149,7 +149,9 @@ describe("15H.5 run identity grammar", () => {
     expect(readFileSync("app/lib/commercial-pricing-policy.server.ts", "utf8")).toContain("BAGS_4X5_FRONT_LADDER");
     const matcher = readFileSync("app/lib/rip-identity-match.server.ts", "utf8");
     expect(matcher).toContain("ACTUALS_TRUSTED_CONFIDENCE");
-    // grammar lives in ONE place: the retired local copy delegates
-    expect(source).toContain("return buildIntakeRipName(ticket, machine, mode, originalFileName, attempt);");
+    // grammar lives in ONE place: print-intake-routing owns buildIntakeRipName. The job-source
+    // module's delegating copy went away with the print-intake job creator (Patch C 2026-11-18).
+    expect(source).not.toContain("function buildIntakeRipNameLocal");
+    expect(readFileSync("app/lib/print-intake-routing.server.ts", "utf8")).toContain("export function buildIntakeRipName(");
   });
 });

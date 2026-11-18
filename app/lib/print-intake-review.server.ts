@@ -10,7 +10,13 @@ export const REVIEW_STATUSES = ["review", "failed", "retry_allowed", "assigned",
 export type IntakeDisposition = "keep_blocked" | "retry_allowed" | "already_routed" | "rejected" | "assigned";
 
 // Machine-readable review reason codes (15H.3-D). Human labels below.
+// Patch C (2026-11-18): a dropped file with no existing job to link to. It
+// never creates a job; a person links it from Incoming Print Files.
+export const NEEDS_LINK_TO_JOB_REASON = "needs_link_to_job";
+export const NEEDS_LINK_TO_JOB_LABEL = "NEEDS REVIEW — LINK TO JOB";
+
 export const REVIEW_REASON_LABELS: Record<string, string> = {
+  needs_link_to_job: "No existing production job matches this file — pick the job with Assign.",
   conflicting_tickets: "Filename carries conflicting GSO tickets.",
   unknown_ticket: "Ticket in the filename is not on any eligible job.",
   ticket_folder_mismatch: "Filename ticket and folder ticket disagree.",
@@ -22,7 +28,7 @@ export const REVIEW_REASON_LABELS: Record<string, string> = {
   printer_assignment_contradiction: "Filename printer tag contradicts the press assigned in the ERP.",
   auto_machine_load_unavailable: "Auto press selection unavailable (machine load incomplete) — assign Mimaki or Roland, or add a MIMAKI / ROLAND filename tag.",
   unknown_production_requirements: "No deterministic printer/mode could be derived.",
-  ticket_allocation_failed: "Ticket allocation/DB failure during auto-create.",
+  ticket_allocation_failed: "Ticket allocation/DB failure (historical — print intake no longer creates jobs).",
   hot_folder_unreachable: "Machine hot folder is disabled or unreachable on the agent.",
   copy_verify_failed: "Routed copy failed size verification.",
   legacy_ledger_blocked: "Blocked by a pre-15F.0J.5 agent ledger entry — release to retry under current logic.",
@@ -35,6 +41,7 @@ export function canonicalReviewReason(reasons: string[] | string | null | undefi
   const list = (Array.isArray(reasons) ? reasons : [String(reasons || "")]).map((reason) => String(reason || ""));
   const text = list.join(" | ");
   if (/rejected_by_owner/.test(text)) return "rejected_by_owner";
+  if (/needs_link_to_job/.test(text)) return NEEDS_LINK_TO_JOB_REASON;
   if (/conflicting_printer_tokens/.test(text)) return "printer_token_conflict";
   // white_gloss_job_but_erp_assigned_mimaki / premium_mode_but_mimaki_token are historical (pre-2026-11-11) codes.
   if (/premium_mode_but_mimaki_token|gloss_mode_but_mimaki_token|white_gloss_job_but_erp_assigned_mimaki|gloss_job_but_mimaki_selected/.test(text)) return "premium_mode_mimaki_contradiction";

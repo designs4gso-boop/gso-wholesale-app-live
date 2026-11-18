@@ -4,25 +4,22 @@ import {
   basenameOf,
   decideIntakeRoute,
   decideMachine,
-  decideMachineFromFilename,
   eligibleJobsWhere,
-  parseFilenamePrintHints,
   ripFileBaseName,
   type IntakeJob,
 } from "../lib/print-intake-routing.server";
-import { createOrReusePrintIntakeJob } from "../lib/production-job-source.server";
 import { loadMachineWorkload } from "../lib/machine-load.server";
-import { appendIntakeAudit, canonicalReviewReason, readIntakeMeta } from "../lib/print-intake-review.server";
+import { NEEDS_LINK_TO_JOB_REASON, appendIntakeAudit, canonicalReviewReason, readIntakeMeta } from "../lib/print-intake-review.server";
 
 // Print Intake plan endpoint. 13A.6G behavior preserved for MATCHED files
-// (deterministic hierarchy, machine key only, no local paths). 15F.0J.5:
-// an UNMATCHED file with a full SHA-256 and a deterministic printer/mode is
-// no longer parked as needs_review — the endpoint AUTO-CREATES a controlled
-// print-intake ProductionJob (advisory-locked authoritative ticket,
-// idempotent on shop+hash) and returns a routeable plan carrying linkage
-// warnings. Commercial/linkage review never blocks deterministic routing;
-// true routing blockers (conflicting printer tokens, unsupported modes)
-// still review. Token-authenticated; shop-scoped.
+// (deterministic hierarchy, machine key only, no local paths).
+//
+// Patch C (2026-11-18): this endpoint NEVER creates a ProductionJob. A file
+// that cannot be deterministically matched to an EXISTING job gets a durable
+// PrintIntake review row ("NEEDS REVIEW — LINK TO JOB"), no printer and no
+// route. It waits in Incoming Print Files until a person assigns it to a real
+// job; the assigned branch below then routes it. (The 15F.0J.5 auto-created
+// "Unlinked (print intake)" job is gone.) Token-authenticated; shop-scoped.
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -162,12 +159,14 @@ export async function action({ request }: { request: Request }) {
   // review object (idempotent on shop+hash) so the ERP queue and the agent's
   // disposition checks have authoritative truth. Never downgrades a routed row.
   const reviewShop = setting.shop;
-  async function recordReviewRow(reasons: string[], extraAudit?: string) {
+  async function recordReviewRow(reasons: string[], extraAudit?: string, options: { skipIfUnchanged?: boolean } = {}) {
     if (!hasFullHash) return;
     const reasonCode = canonicalReviewReason(reasons);
     try {
       const current = await db.printIntake.findUnique({ where: { shop_fileHashSha256: { shop: reviewShop, fileHashSha256: fileHash } } });
       if (current?.status === "routed" || current?.status === "rejected") return;
+      // Patch C idempotency: a repeat poll of a file already waiting for the same reason writes nothing.
+      if (options.skipIfUnchanged && current?.status === "review" && current.reviewReason === reasonCode) return;
       const audit = { at: new Date().toISOString(), actor: "route-plan", action: extraAudit || "plan_reviewed", reason: reasonCode };
       if (current) {
         await db.printIntake.update({
@@ -244,76 +243,19 @@ export async function action({ request }: { request: Request }) {
     return json({ ok: true, fileName, plan: { ...plan, ripName: routedRipName, autoCreated: false, matchedExisting: true } });
   }
 
-  // 15F.0J.5-D: unmatched (or ambiguous-candidate) file — printer/mode from
-  // SAFE filename hints. Deterministic -> auto-create + route; conflicts or
-  // unsupported modes stay review (true routing blockers).
-  const unmatchedReasons = ["no_deterministic_match"];
-  const isUnmatched = plan.decision === "review" && plan.reasons.some((reason) => unmatchedReasons.includes(reason) || reason.includes("_not_found_in_eligible_jobs"));
+  // Patch C: unmatched (or ambiguous-candidate) file -> REVIEW, never a job.
+  // No ProductionJob, no item, no printer, no route. The file stays where
+  // staff put it and waits for "Assign to..." on Incoming Print Files.
+  const isUnmatched = plan.decision === "review" && plan.reasons.some((reason) => reason === "no_deterministic_match" || reason.includes("_not_found_in_eligible_jobs"));
   const isAmbiguousCandidates = plan.decision === "review" && plan.candidates.length > 1;
-  if ((isUnmatched || isAmbiguousCandidates) && hasFullHash) {
-    const machineDecision = decideMachineFromFilename(fileName, machineLoad);
-    if (!machineDecision.machine) {
-      const reviewReasons = [...plan.reasons, ...machineDecision.reasons];
-      await recordReviewRow(reviewReasons);
-      return json({ ok: true, fileName, plan: { ...plan, reasons: reviewReasons, autoCreated: false } });
-    }
-    const hints = parseFilenamePrintHints(fileName);
-    const linkageWarnings = [
-      isAmbiguousCandidates
-        ? "Ambiguous existing production candidates — production linkage needs review (routed to a controlled print-intake job meanwhile)."
-        : "Commercial linkage pending: no quote/order/customer attached (link later from the Production Board).",
-    ];
-    try {
-      const created = await createOrReusePrintIntakeJob(db, {
-        shop: setting.shop,
-        fileName,
-        subfolder,
-        fileHash,
-        fileSize,
-        machine: machineDecision.machine,
-        machineRule: String(machineDecision.machineRule || "default_cmyk"),
-        mode: machineDecision.mode,
-        hints,
-        reviewWarnings: linkageWarnings,
-      });
-      return json({
-        ok: true,
-        fileName,
-        plan: {
-          decision: "route",
-          rule: "print_intake_auto_created",
-          jobId: created.productionJobId,
-          itemId: null,
-          jobTicket: created.jobTicket,
-          itemTicket: null,
-          ripName: created.ripName,
-          machine: machineDecision.machine,
-          machineRule: machineDecision.machineRule,
-          reasons: machineDecision.reasons,
-          candidates: plan.candidates,
-          autoCreated: created.created,
-          matchedExisting: false,
-          printIntakeId: created.printIntakeId,
-          reviewWarnings: linkageWarnings,
-        },
-      });
-    } catch (error) {
-      // 15F.0J.5A: ticket/DB failure is a ROUTING BLOCKER — leave the file
-      // for retry with an ACTIONABLE, credential-safe error code + message.
-      const message = String((error as Error)?.message || error || "");
-      const code = (error as any)?.gsoCode === "advisory_lock_failed" || /advisory_lock_failed|deserialize.*void/i.test(message)
-        ? "advisory_lock_failed"
-        : /unknown argument|unknown field|unknown arg/i.test(message)
-          ? "schema_mismatch"
-          : /printIntake/i.test(message)
-            ? "print_intake_create_failed"
-            : /unique constraint|p2002/i.test(message)
-              ? "unique_conflict_recovered"
-              : "production_job_create_failed";
-      const safeMessage = message.replace(/postgres(ql)?:\/\/\S+/gi, "[redacted-connection]").slice(0, 200);
-      await recordReviewRow([`${code}: ${safeMessage}`], "auto_create_failed");
-      return json({ ok: true, fileName, plan: { ...plan, reasons: [...plan.reasons, `${code}: ${safeMessage}`], errorCode: code, autoCreated: false } });
-    }
+  if (isUnmatched || isAmbiguousCandidates) {
+    const reviewReasons = isAmbiguousCandidates ? plan.reasons : [...plan.reasons, NEEDS_LINK_TO_JOB_REASON];
+    await recordReviewRow(reviewReasons, "needs_link_to_job", { skipIfUnchanged: true });
+    return json({
+      ok: true,
+      fileName,
+      plan: { ...plan, decision: "review", rule: null, machine: null, machineRule: null, ripName: null, jobId: null, itemId: null, reasons: reviewReasons, autoCreated: false, matchedExisting: false, needsLinkToJob: true },
+    });
   }
   if (plan.decision === "review") await recordReviewRow(plan.reasons);
   return json({ ok: true, fileName, plan: { ...plan, autoCreated: false } });

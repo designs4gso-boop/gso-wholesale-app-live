@@ -1,6 +1,7 @@
-// 15F.0J.5 — automatic print-intake job creation, tickets, existing-job
-// linking. Pure decision tests + source pins (DB flows are advisory-locked
-// transactions pinned by source; no live DB in tests).
+// 15F.0J.5 — print-intake filename hints, tickets, existing-job linking.
+// Patch C (2026-11-18): automatic print-intake job creation was REMOVED. The
+// source pins below now prove the creator is gone; the behavioural proof is in
+// tests/print-intake-no-auto-create-2026-11-18.test.ts.
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -86,8 +87,8 @@ describe("filename print hints (15F.0J.5-D safety)", () => {
     expect(decision.decision).toBe("route");
     expect(decision.rule).toBe("item_ticket");
     expect(decision.jobTicket).toBe("GSO-20260726-0001");
-    // unmatched files still return review from the PURE decider — the ROUTE
-    // (server) layer upgrades deterministic ones to auto-created plans
+    // unmatched files return review from the PURE decider, and (Patch C) the
+    // server layer keeps them in review — it never creates a job for them
     const unmatched = decideIntakeRoute({ fileName: "Totally New File_matte.pdf", jobs: [jobWith()] });
     expect(unmatched.decision).toBe("review");
     expect(unmatched.reasons).toContain("no_deterministic_match");
@@ -100,21 +101,25 @@ describe("route-plan + creator source pins (15F.0J.5)", () => {
   const agentSrc = readFileSync(new URL("../tools/gso-print-intake-agent.ps1", import.meta.url), "utf8");
   const schemaSrc = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
 
-  it("tests 1/7/8/9: unmatched deterministic files AUTO-CREATE and route — commercial gaps become warnings, never blockers", () => {
-    expect(routeSrc).toContain("createOrReusePrintIntakeJob(db, {");
-    expect(routeSrc).toContain("decideMachineFromFilename(fileName, machineLoad)");
-    expect(routeSrc).toContain('rule: "print_intake_auto_created"');
-    expect(routeSrc).toContain("Commercial linkage pending: no quote/order/customer attached");
-    expect(routeSrc).toContain("reviewWarnings: linkageWarnings");
-    // ambiguous candidates route to a controlled job with linkage review
-    expect(routeSrc).toContain("Ambiguous existing production candidates");
+  it("tests 1/7/8/9 (Patch C): unmatched files go to REVIEW — the route-plan endpoint has no job-creation path at all", () => {
+    expect(routeSrc).not.toContain("createOrReusePrintIntakeJob");
+    expect(routeSrc).not.toContain("print_intake_auto_created");
+    expect(routeSrc).not.toContain("productionJob.create");
+    expect(routeSrc).not.toContain("productionJob.upsert");
+    expect(routeSrc).not.toContain("productionJobItem.create");
+    expect(routeSrc).not.toContain("decideMachineFromFilename"); // an unmatched file gets no printer
+    expect(routeSrc).toContain('await recordReviewRow(reviewReasons, "needs_link_to_job", { skipIfUnchanged: true });');
+    expect(routeSrc).toContain("needsLinkToJob: true");
+    // ambiguous candidates also review (no controlled job is created for them)
+    expect(routeSrc).toContain("if (isUnmatched || isAmbiguousCandidates) {");
   });
 
-  it("tests 4/5/6: idempotent on shop+hash — advisory lock, in-transaction recheck, P2002 backstop, no second ticket sequence", () => {
-    expect(creatorSrc).toContain('await acquireSourceLock(tx, shop, "print_intake", fileHash)');
-    expect(creatorSrc).toContain("const jobTicket = await buildNextJobTicket(tx, shop)"); // SAME authoritative generator
-    expect(creatorSrc).toContain('String(error?.code) === "P2002"');
-    expect(creatorSrc).toContain("shop_fileHashSha256");
+  it("tests 4/5/6 (Patch C): the creator and its markers are gone from the job source module; PrintIntake stays unique on shop+hash", () => {
+    expect(creatorSrc).not.toContain("createOrReusePrintIntakeJob(");
+    expect(creatorSrc).not.toContain('"print_intake", fileHash');
+    expect(creatorSrc).toContain("Print Intake never creates a ProductionJob (Patch C, 2026-11-18)");
+    expect(creatorSrc).toContain("const jobTicket = await buildNextJobTicket(tx, shop)"); // legitimate creators still use the ONE generator
+    expect(creatorSrc).toContain('if (String(error?.code) !== "P2002") return false;'); // ticket-constraint retry for the legitimate creators
     expect(schemaSrc).toContain("@@unique([shop, fileHashSha256])");
   });
 
@@ -125,24 +130,20 @@ describe("route-plan + creator source pins (15F.0J.5)", () => {
     expect(creatorSrc).toContain("no such function|not supported on|sqlite"); // ONLY SQLite skips; everything else throws
   });
 
-  it("test 19 + 15F.0J.5A-B: nothing fabricated AND no nonexistent ProductionJob.source field — PrintIntake owns provenance", () => {
-    expect(creatorSrc).toContain("quantity: 0, // unknown — never fabricated");
-    expect(creatorSrc).toContain("PRINT INTAKE — UNLINKED");
-    expect(creatorSrc).not.toContain('source: "print_intake"'); // Prisma "Unknown argument `source`" fixed
-    expect(creatorSrc).toContain("ProductionJob has NO `source` column");
-    expect(creatorSrc).toContain("created_from_print_intake"); // event carries provenance
-    expect(creatorSrc).not.toContain('status: "paid"');
-    expect(creatorSrc).toContain('customerName: "Unlinked (print intake)"');
+  it("test 19 (Patch C): no fabricated print-intake job, customer or item remains in the creator module; schema untouched", () => {
+    expect(creatorSrc).not.toContain("PRINT INTAKE — UNLINKED");
+    expect(creatorSrc).not.toContain('customerName: "Unlinked (print intake)"');
+    expect(creatorSrc).not.toContain("created_from_print_intake");
+    expect(creatorSrc).not.toContain("print_intake_auto_created");
+    expect(creatorSrc).not.toContain('source: "print_intake"');
     const jobBlock = schemaSrc.split("model ProductionJob {")[1].split("\n}")[0]; // scope to THIS model only
     expect(/\n  source\s+String/.test(jobBlock)).toBe(false); // no `source` column added to ProductionJob
   });
 
-  it("15F.0J.5A-D/E: actionable error codes; live fixture GSO PIPELINE TEST 3_1X SPOT GLOSS_Roland.pdf -> Roland GLOSS-1X", () => {
-    for (const code of ["advisory_lock_failed", "schema_mismatch", "print_intake_create_failed", "unique_conflict_recovered", "production_job_create_failed"]) {
-      expect(routeSrc).toContain(code);
+  it("15F.0J.5A-D/E: filename hints still parse the live fixture (used for matched/assigned routing); no create-error codes remain in the endpoint", () => {
+    for (const code of ["advisory_lock_failed", "schema_mismatch", "print_intake_create_failed", "production_job_create_failed"]) {
+      expect(routeSrc).not.toContain(code);
     }
-    expect(routeSrc).toContain("errorCode: code");
-    expect(routeSrc).toContain("[redacted-connection]"); // no credentials in messages
     const fixture = "GSO PIPELINE TEST 3_1X SPOT GLOSS_Roland.pdf";
     const hints = parseFilenamePrintHints(fixture);
     expect(hints.glossLayers).toBe(1); // the bare "3" in "TEST 3" never counts
@@ -172,8 +173,7 @@ describe("route-plan + creator source pins (15F.0J.5)", () => {
     expect(agentSrc).toContain("Get-ChildItem -LiteralPath $Config.PrintsForTodayFolder -File -ErrorAction SilentlyContinue");
   });
 
-  it("tests 18/20: board visibility + RIP match-back — job carries source print_intake; routed name leads with the exact ticket", () => {
-    expect(creatorSrc).toContain("ripJobName: ripName"); // PrintLogEntry ticket regexes match the routed name
+  it("tests 18/20: RIP match-back — a routed name leads with the exact ticket; PrintIntake migration present", () => {
     const example = buildIntakeRipName("GSO-20260726-0042", "roland", "GLOSS-3X", "Flame Society_art.pdf");
     expect(example.startsWith("GSO-20260726-0042__")).toBe(true);
     // migration exists but is deploy-applied, never dev-run against prod

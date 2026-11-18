@@ -8,6 +8,7 @@ import db from "../db.server";
 import { decodeIntakeOutcomes, type IntakeOutcome } from "../lib/print-intake-routing.server";
 import { CREDENTIAL_PLACEHOLDER, credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
 import {
+  NEEDS_LINK_TO_JOB_LABEL,
   REVIEW_STATUSES,
   appendIntakeAudit,
   readIntakeMeta,
@@ -90,6 +91,8 @@ export async function loader({ request }: { request: Request }) {
       status: row.status,
       reviewReason: row.reviewReason,
       reasonLabel: reviewReasonLabel(row.reviewReason),
+      // Patch C: a review row with no linked job waits for a person to link it (label resolved server-side).
+      needsLinkLabel: row.status === "review" && !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,
       ticket: row.authoritativeTicket,
       matchedProductionJobId: row.matchedProductionJobId,
       generatedProductionJobId: row.generatedProductionJobId,
@@ -323,9 +326,9 @@ export default function PrintIntake() {
         </p>
         {reviewRows.length === 0 ? (
           <p style={{ color: "#6b7280" }}>
-            Nothing needs review right now. A file appears here when the intake agent cannot match it to exactly one job
-            (missing ticket, duplicate, contradictory printer data, or Roland not yet enabled); you then Release, Assign
-            or Reject it from this table.
+            Nothing needs review right now. A file appears here when the intake agent cannot match it to exactly one
+            existing job (missing ticket, duplicate, contradictory printer data, or Roland not yet enabled). Dropping a file
+            never creates a production job — you Assign it to the real job, or Release / Reject it, from this table.
           </p>
         ) : (
           <div style={{ overflowX: "auto" }}>
@@ -342,7 +345,7 @@ export default function PrintIntake() {
                     <td style={{ padding: 6, maxWidth: 260, wordBreak: "break-all" }}>{row.fileName}</td>
                     <td><code>{row.hash8}</code></td>
                     <td>{row.printer || "—"}{row.printMode ? ` / ${row.printMode}` : ""}</td>
-                    <td><span style={STATUS_STYLE[row.status || ""] || chip}>{({ retry_allowed: "Retry allowed", needs_review: "Needs review", assigned: "Assigned", rejected: "Rejected", new: "New", auto_created: "Auto-created" } as Record<string, string>)[String(row.status || "")] || String(row.status || "").replaceAll("_", " ")}</span></td>
+                    <td><span style={STATUS_STYLE[row.status || ""] || chip}>{row.needsLinkLabel ? row.needsLinkLabel : ({ retry_allowed: "Retry allowed", needs_review: "Needs review", assigned: "Assigned", rejected: "Rejected", new: "New", auto_created: "Auto-created" } as Record<string, string>)[String(row.status || "")] || String(row.status || "").replaceAll("_", " ")}</span></td>
                     <td style={{ maxWidth: 240 }}>{row.reasonLabel}</td>
                     <td>{row.ticket || (row.matchedProductionJobId || row.generatedProductionJobId ? "linked" : "—")}</td>
                     <td style={{ whiteSpace: "nowrap" }}>{new Date(row.updatedAt).toLocaleString()}</td>
@@ -448,7 +451,7 @@ export default function PrintIntake() {
         <ol style={{ fontSize: 13, lineHeight: 1.9, margin: 0, paddingLeft: 20 }}>
           <li>On the shop PC: copy <code>tools\gso-print-intake-agent-config.example.json</code> to <code>gso-print-intake-agent-config.json</code> (git-ignored) and set <code>UploadToken</code> (see the credential card below — the token itself is only shown once, at rotation).</li>
           <li>Health check (writes nothing): <code>powershell -ExecutionPolicy Bypass -File tools\gso-print-intake-agent.ps1 -Health</code></li>
-          <li>Dry run (plans only, no copies/moves/reports): <code>... -DryRun</code>, then one real pass: <code>... -Once</code></li>
+          <li>Dry run (no copies/moves/reports — but NOT read-only: it calls the ERP plan endpoint, which records review rows here): <code>... -DryRun</code>, then one real pass: <code>... -Once</code></li>
           <li>Enable routing by setting <code>MimakiRoutingEnabled: true</code> in the config after the dry run looks right.</li>
           <li>Install at startup: <code>schtasks /Create /TN &quot;GSO Print Intake Agent&quot; /SC ONSTART /TR &quot;powershell -ExecutionPolicy Bypass -File C:\path\to\tools\gso-print-intake-agent.ps1 -Loop&quot;</code></li>
         </ol>

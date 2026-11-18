@@ -22,7 +22,7 @@ import { parseDueDateInput } from "./business-date";
 import { quotePricingAuthorityState } from "./quote-pricing-authority";
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
-import { buildIntakeRipName, decideMachine } from "./print-intake-routing.server";
+import { decideMachine } from "./print-intake-routing.server";
 import { loadMachineWorkload } from "./machine-load.server";
 import type { MachineLoadSnapshot } from "./machine-load-balancing";
 import { ZAKEKE_ASSET_SOURCE, readZakekeDesignFromLine, zakekeSnapshot } from "./zakeke-design.server";
@@ -1524,154 +1524,10 @@ export async function linkIntakeJobToTarget(dbClient: any, input: {
   });
 }
 
-// ---------- 15F.0J.5: automatic PRINT-INTAKE job creation ----------
-// For a genuinely new dropped file with a DETERMINISTIC printer/mode and no
-// exact production match: create ONE PrintIntake record + ONE controlled
-// ProductionJob through the SAME advisory-locked ticket generator (never a
-// second sequence). Idempotent on (shop, full SHA-256): the advisory lock is
-// keyed on the hash, the unique constraint backstops races, and a repeat
-// call returns the existing identity. NOTHING commercial is fabricated —
-// no revenue, price, payment, approval, or customer beyond parsed hints;
-// the job is explicitly UNLINKED until quote/order/customer are attached.
-export type PrintIntakeCreateInput = {
-  shop: string;
-  fileName: string;
-  subfolder?: string | null;
-  fileHash: string; // full SHA-256 (lowercase hex)
-  fileSize?: number;
-  machine: "mimaki" | "roland";
-  machineRule: string;
-  mode: string; // CMYK | GLOSS-NX | WHITE-NX | combined
-  hints?: unknown;
-  reviewWarnings?: string[];
-};
-
-export async function createOrReusePrintIntakeJob(dbClient: any, input: PrintIntakeCreateInput): Promise<{
-  created: boolean;
-  printIntakeId: string;
-  productionJobId: string;
-  jobTicket: string;
-  ripName: string;
-}> {
-  const shop = input.shop;
-  const fileHash = String(input.fileHash || "").toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(fileHash)) throw new Error("createOrReusePrintIntakeJob requires a full SHA-256 hash.");
-  // 15H.3-K: reuse honors BOTH pointer types. A row created by the MATCHED
-  // branch stores matchedProductionJobId (no generated pointer) — if that
-  // job later deactivates and the file re-plans, the original linkage wins;
-  // a second job is NEVER created for a hash that already has an identity.
-  const reuseIdentity = (row: any) => {
-    const jobId = row?.generatedProductionJobId || row?.matchedProductionJobId;
-    if (!row || !jobId || !row.authoritativeTicket) return null;
-    return { created: false, printIntakeId: row.id, productionJobId: jobId, jobTicket: row.authoritativeTicket, ripName: row.routedFilename || row.authoritativeTicket };
-  };
-  // Fast path outside the transaction (same result the lock would produce).
-  const existing = await dbClient.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
-  const existingIdentity = reuseIdentity(existing);
-  if (existingIdentity) return existingIdentity;
-  const cleanedName = String(input.fileName || "").slice(0, 200);
-  const warnings = input.reviewWarnings && input.reviewWarnings.length
-    ? input.reviewWarnings
-    : ["Commercial linkage pending: no quote/order/customer attached (link later from the Production Board)."];
-  try {
-    // 15H.1: ticket-constraint P2002 reruns the whole transaction (fresh
-    // lock + recheck + fresh ticket); the catch below keeps handling ONLY
-    // the PrintIntake (shop, hash) unique-race backstop.
-    return await runWithTicketRetry(() => dbClient.$transaction(async (tx: any) => {
-      // Concurrency: one lock per file content — two simultaneous plans for
-      // the same hash serialize here (15D.1 advisory-lock strategy).
-      await acquireSourceLock(tx, shop, "print_intake", fileHash);
-      const inside = await tx.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
-      const insideIdentity = reuseIdentity(inside);
-      if (insideIdentity) return insideIdentity;
-      const jobTicket = await buildNextJobTicket(tx, shop);
-      const ripName = buildIntakeRipNameLocal(jobTicket, input.machine, input.mode, cleanedName);
-      // 15F.0J.5A: ProductionJob has NO `source` column — PrintIntake is the
-      // authoritative source record (generatedProductionJobId + the
-      // created_from_print_intake event + notes/customer markers carry the
-      // provenance; the board infers "Print Intake" from those).
-      const job = await tx.productionJob.create({
-        data: {
-          shop,
-          jobTicket,
-          assetInboxKey: jobTicket,
-          customerName: "Unlinked (print intake)",
-          status: "new",
-          priority: "normal",
-          internalNotes: [
-            "PRINT INTAKE — UNLINKED. Auto-created from a dropped file; no quote/order/payment exists.",
-            `Original file: ${cleanedName}`,
-            `Printer: ${input.machine} (${input.machineRule}) — mode ${input.mode}.`,
-            ...warnings,
-          ].join("\n"),
-          items: {
-            create: [{
-              shop,
-              itemTicket: itemTicketFor(jobTicket, 0),
-              ripJobName: ripName,
-              suggestedFileName: ripName,
-              productTitle: `PRINT INTAKE — ${cleanedName.replace(/\.[a-z0-9]{1,5}$/i, "").slice(0, 80)}`,
-              quantity: 0, // unknown — never fabricated; set at commercial linkage
-              unitPrice: 0,
-              unitCost: 0,
-              selectedFinish: input.mode,
-              machineSummary: input.machine === "roland" ? "Roland LG-640" : "Mimaki UCJV300-130",
-              productionNotes: `Auto-created by print intake. Routed as ${ripName}. Quantity/pricing unknown until linked.`,
-              costSnapshot: JSON.stringify({ source: "print_intake_auto_created", note: "No cost/revenue data — commercial linkage pending.", hints: input.hints ?? null }),
-              sortOrder: 1,
-            }],
-          },
-        },
-      });
-      const intake = inside
-        ? await tx.printIntake.update({
-            where: { id: inside.id },
-            data: { generatedProductionJobId: job.id, authoritativeTicket: jobTicket, printer: input.machine, printMode: input.mode, routingRule: input.machineRule, routedFilename: ripName, status: "routed", reviewReason: warnings.join(" | ") },
-          })
-        : await tx.printIntake.create({
-            data: {
-              shop,
-              originalFilename: cleanedName,
-              originalSubfolder: input.subfolder || null,
-              fileHashSha256: fileHash,
-              fileSize: Math.max(0, Math.floor(input.fileSize || 0)),
-              status: "routed",
-              generatedProductionJobId: job.id,
-              authoritativeTicket: jobTicket,
-              printer: input.machine,
-              printMode: input.mode,
-              routingRule: input.machineRule,
-              routedFilename: ripName,
-              reviewReason: warnings.join(" | "),
-              rawParsedHints: JSON.stringify({ hints: input.hints ?? null, warnings }),
-            },
-          });
-      await tx.productionJobEvent.create({
-        data: {
-          shop,
-          jobId: job.id,
-          eventType: "created_from_print_intake",
-          message: `Print-intake job auto-created from "${cleanedName}" (hash ${fileHash.slice(0, 8)}). Routed to ${input.machine} as ${ripName}. Commercial linkage pending.`,
-        },
-      });
-      return { created: true, printIntakeId: intake.id, productionJobId: job.id, jobTicket, ripName };
-    }));
-  } catch (error: any) {
-    // Unique-constraint race backstop (PrintIntake shop+hash): the other
-    // request won — return its identity. Ticket-constraint P2002s never
-    // reach here un-retried (runWithTicketRetry) and would not match the
-    // hash lookup anyway.
-    if (String(error?.code) === "P2002" && !isTicketUniqueViolation(error)) {
-      const winner = await dbClient.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: fileHash } } });
-      const winnerIdentity = reuseIdentity(winner);
-      if (winnerIdentity) return winnerIdentity;
-    }
-    throw error;
-  }
-}
-
-// 15H.5: the duplicated local copy is retired — print-intake-routing owns
-// the ONE canonical routed-name builder (now run-identity aware).
-function buildIntakeRipNameLocal(ticket: string, machine: string, mode: string, originalFileName: string, attempt = 1): string {
-  return buildIntakeRipName(ticket, machine, mode, originalFileName, attempt);
-}
+// ---------- Print Intake never creates a ProductionJob (Patch C, 2026-11-18) ----------
+// The 15F.0J.5 helper that auto-created an "Unlinked (print intake)"
+// ProductionJob for an unmatched dropped file was REMOVED. A dropped file can
+// only ever link to a job that already exists through the real order / quote /
+// manual workflow; an unmatched file waits in Incoming Print Files for a person
+// to link it (see api.print-intake.route-plan.tsx). Do not reintroduce a
+// print-intake job creator here.

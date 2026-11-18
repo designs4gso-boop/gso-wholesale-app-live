@@ -12,7 +12,6 @@ import {
   reviewReasonLabel,
   validateIntakeAssignment,
 } from "../app/lib/print-intake-review.server";
-import { createOrReusePrintIntakeJob } from "../app/lib/production-job-source.server";
 import { decideMachineFromFilename } from "../app/lib/print-intake-routing.server";
 
 describe("15H.3 intake review + retry", () => {
@@ -71,34 +70,14 @@ describe("15H.3 intake review + retry", () => {
     expect(validateIntakeAssignment({ shop: "shop.test", job: multi as any, itemId: "zz" }).ok).toBe(false);
   });
 
-  it("K. matched-row reuse: matchedProductionJobId identity is honored — no duplicate job for the same hash", async () => {
-    const matchedRow = {
-      id: "pi1",
-      generatedProductionJobId: null,
-      matchedProductionJobId: "existing_job",
-      authoritativeTicket: "GSO-20260812-0002-01",
-      routedFilename: "GSO-20260812-0002-01",
-    };
-    const db = {
-      printIntake: { findUnique: async () => matchedRow },
-      $transaction: async () => { throw new Error("must not create a new job when a matched identity exists"); },
-    };
-    const result = await createOrReusePrintIntakeJob(db, {
-      shop: "shop.test",
-      fileName: "whatever.pdf",
-      fileHash: "b".repeat(64),
-      machine: "roland",
-      machineRule: "white_or_gloss",
-      mode: "GLOSS-3X",
-    });
-    expect(result).toMatchObject({ created: false, productionJobId: "existing_job", jobTicket: "GSO-20260812-0002-01" });
-  });
-
-  it("K2. generated pointer keeps working exactly as before", async () => {
-    const generatedRow = { id: "pi2", generatedProductionJobId: "gen_job", matchedProductionJobId: null, authoritativeTicket: "GSO-20260812-0003", routedFilename: null };
-    const db = { printIntake: { findUnique: async () => generatedRow }, $transaction: async () => { throw new Error("no new job"); } };
-    const result = await createOrReusePrintIntakeJob(db, { shop: "s", fileName: "f.pdf", fileHash: "c".repeat(64), machine: "mimaki", machineRule: "default_cmyk", mode: "CMYK" });
-    expect(result).toMatchObject({ created: false, productionJobId: "gen_job", jobTicket: "GSO-20260812-0003" });
+  it("K. Patch C (2026-11-18): the print-intake job creator no longer exists — a hash can only ever link to an existing job", async () => {
+    const source = await import("../app/lib/production-job-source.server");
+    expect((source as any).createOrReusePrintIntakeJob).toBeUndefined();
+    const plan = readFileSync("app/routes/api.print-intake.route-plan.tsx", "utf8");
+    expect(plan).not.toContain("createOrReusePrintIntakeJob");
+    expect(plan).not.toContain("productionJob.create");
+    expect(canonicalReviewReason(["no_deterministic_match", "needs_link_to_job"])).toBe("needs_link_to_job");
+    expect(reviewReasonLabel("needs_link_to_job")).toContain("Assign");
   });
 
   it("M. the three blocked live files classify deterministically under current rules", () => {
