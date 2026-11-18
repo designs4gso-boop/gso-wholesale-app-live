@@ -21,6 +21,7 @@ export type RipMatchConfidence =
   | "exact_rip_job_name"
   | "exact_job_ticket"
   | "exact_stored_filename"
+  | "exact_routed_print_file"
   | "manual_owner_assignment"
   | "suggestion_only"
   | "ambiguous"
@@ -47,6 +48,9 @@ export const ACTUALS_TRUSTED_CONFIDENCE: ReadonlySet<string> = new Set([
   "exact_stored_filename",
   "manual_owner_assignment",
 ]);
+// Patch F (2026-11-18): "exact_routed_print_file" links a RIP result to its job
+// on the print log, but is deliberately NOT in the trusted set above — it does
+// not authorize actual-cost linkage or writeback until the owner approves that.
 
 export function normalizeRipIdentity(value: string | null | undefined): string {
   return String(value || "")
@@ -232,6 +236,33 @@ export async function resolveRipIdentity(
     const uniqueNames = [...new Map(nameHits.map((item) => [item.id, item])).values()];
     if (uniqueNames.length === 1) return matchedResult(parsed, "exact_stored_filename", uniqueNames[0].jobId, uniqueNames[0].id, reasons);
     if (uniqueNames.length > 1) return ambiguousResult(parsed, `ambiguous_stored_filename:${sourceIdentity}`, uniqueNames.map((item) => item.jobId));
+  }
+
+  // 6. Patch F (2026-11-18): exact ROUTED PRINT FILE name. Print Intake records
+  // every file it actually delivered to a press as a ProductionJobFile
+  // (print_file / nas) under the exact name the RIP received. A RIP result whose
+  // job name equals that routed name — with or without the extension, exact
+  // equality only — belongs to that job. Job-level match (the file row carries
+  // no item); two jobs holding the same routed name is ambiguous, never guessed.
+  if (rawNames.length && db.productionJobFile?.findMany) {
+    const stripExtension = (value: string) => value.replace(/\.[a-z0-9]{1,5}$/i, "");
+    const baseNames = [...new Set(rawNames.map(stripExtension).filter((value) => value.length >= 4))];
+    const routedJobIds = new Set<string>();
+    for (const baseName of baseNames) {
+      // startsWith only narrows the read; the decision below is EXACT equality
+      // of the name without its extension.
+      const candidates = await db.productionJobFile.findMany({
+        where: { shop, fileType: "print_file", assetSource: "nas", fileName: { startsWith: baseName } },
+        select: { jobId: true, fileName: true },
+        take: 20,
+      });
+      for (const file of candidates) {
+        if (stripExtension(String(file.fileName || "")) === baseName) routedJobIds.add(String(file.jobId));
+      }
+    }
+    const jobIds = [...routedJobIds];
+    if (jobIds.length === 1) return matchedResult(parsed, "exact_routed_print_file", jobIds[0], null, reasons);
+    if (jobIds.length > 1) return ambiguousResult(parsed, `ambiguous_routed_print_file:${baseNames[0]}`, jobIds);
   }
 
   if (!parsed.itemTicket && !parsed.jobTicket) {
