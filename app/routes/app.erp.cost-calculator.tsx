@@ -4616,9 +4616,42 @@ function CanonicalTrueCost() {
 
   return (
     <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+      {/* ---- 2026-11-17: supplier components of a component-priced jar set (jar + lid stay visible) ---- */}
+      {d.blankComponents?.length ? (
+        <div style={{ ...sectionStyle, fontSize: 12 }}>
+          <b>SUPPLIER COMPONENTS — per set, before labels, inbound freight and tax</b>
+          <table style={{ width: "100%", marginTop: 6, borderCollapse: "collapse" }}>
+            <tbody>
+              {d.blankComponents.map((c) => (
+                <tr key={c.sku}>
+                  <td style={{ padding: "2px 0", color: "#374151" }}>{c.name} · SKU {c.sku}{c.description ? ` · ${c.description}` : ""}</td>
+                  <td style={{ padding: "2px 8px", color: "#6b7280" }}>
+                    {c.piecesPerPack == null ? "pieces per pack: UNKNOWN" : `${c.piecesPerPack} per pack · est. ${c.estimatedPacks ?? "—"} pack(s)`}
+                  </td>
+                  <td style={{ padding: "2px 0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>${c.unitCost.toFixed(2)}</td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: "1px solid #e5e7eb" }}>
+                <td style={{ padding: "2px 0" }}><b>Jar + lid per set</b></td><td />
+                <td style={{ padding: "2px 0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}><b>${d.blankComponents.reduce((t, c) => t + c.unitCost, 0).toFixed(2)}</b></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {/* ---- 2026-11-17: freight is the only missing input — a known subtotal, never called a landed cost ---- */}
+      {d.landedCost ? (
+        <div style={{ border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 10, padding: "8px 10px", fontSize: 12, color: "#78350f" }}>
+          <div>Known production cost (excludes inbound freight): <b>${d.landedCost.knownProductionCost.toFixed(2)}</b>
+            {d.landedCost.knownCostPerFinishedUnit != null ? <> · <b>${d.landedCost.knownCostPerFinishedUnit.toFixed(4)}</b> per finished unit</> : null}</div>
+          <div>Inbound freight: <b>{d.landedCost.label}</b> (not $0)</div>
+          <div>Final landed cost: <b>PENDING</b></div>
+          <div style={{ color: "#92400e", marginTop: 4 }}>{d.landedCost.freightNote}</div>
+        </div>
+      ) : null}
       {/* ---- Cost breakdown ---- */}
-      <details open={!blocked} style={sectionStyle}>
-        <summary style={summaryStyle}>Cost breakdown{blocked ? " — partial lines only, the job is blocked (not a cost)" : ""}</summary>
+      <details open={!blocked || Boolean(d.landedCost)} style={sectionStyle}>
+        <summary style={summaryStyle}>Cost breakdown{d.landedCost ? " — known costs only; inbound freight is pending (not a landed cost)" : blocked ? " — partial lines only, the job is blocked (not a cost)" : ""}</summary>
         <div style={{ marginTop: 6 }}>
           <b style={{ fontSize: 12 }}>COMPONENT BREAKDOWN</b>
           <table style={{ width: "100%", fontSize: 12, marginTop: 6, borderCollapse: "collapse" }}>

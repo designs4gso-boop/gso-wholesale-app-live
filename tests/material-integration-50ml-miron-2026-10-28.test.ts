@@ -365,6 +365,9 @@ describe("12-22. 50ml Miron jar + top acquisition cost", () => {
       "100ml_wide": [2.9, 2.67, 2.44, 2.26, 2.1],
       "150ml": [3.26, 3.0, 2.76, 2.54, 2.37],
       "250ml": [3.92, 3.6, 3.32, 3.11, 2.92],
+      // 2026-11-17: NEW distinct products (MIRON Ceres jar + Yuha Special lid) — additions, not changes
+      ceres_50ml: [2.74, 2.52, 2.31, 2.12, 1.98],
+      ceres_100ml: [3.51, 3.24, 2.97, 2.77, 2.6],
     });
     expect(CHIRON_SET_COST).toEqual({ "100ml_tall": 1.8, "100ml_wide": 1.8, "150ml": 1.9 });
     expect(STANDARD_SET_COST).toEqual({ "3oz": { clear: 0.5, black_white: 0.62 }, "4oz": { clear: 0.6, black_white: 0.65 } });

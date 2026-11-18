@@ -10,7 +10,7 @@
 // never inferred. Client-safe: pure data + pure functions.
 
 import { ACTIVE_JAR_PROFILES, type ActiveJarProfile } from "./jar-active-scope";
-import { JAR_LABEL_GEOMETRY, JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, jarGeometryAuthorityFor, JAR_LABEL_GEOMETRY_VERSION, formatJarGeometry, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey, type SpecAuthorityStatus } from "./jar-label-geometry";
+import { MIRON_CERES_GEOMETRY_NOTE, JAR_LABEL_GEOMETRY, JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, jarGeometryAuthorityFor, JAR_LABEL_GEOMETRY_VERSION, formatJarGeometry, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey, type SpecAuthorityStatus } from "./jar-label-geometry";
 import { JAR_REFERENCE_GEOMETRY_SOURCE, jarReferenceConflicts, type ReferenceConflict } from "./jar-reference-geometry";
 import { BAG_4X5_ARTBOARD_IN, BAG_4X5_CUTLINE_IN, BAG_ARTBOARD_SOURCE, POUND_BAG_14X16_ARTBOARD_IN, POUND_BAG_14X16_BAG_IN, POUND_BAG_14X16_CUTLINE_IN, POUND_BAG_14X16_GEOMETRY_DECISION, SPLIT_BAG_ARTBOARD_IN, SPLIT_BAG_CUTLINE_IN, SPLIT_BAG_GEOMETRY_DECISION } from "./bag-artboard-geometry";
 
@@ -89,6 +89,7 @@ export type ProductProductionSpec = {
 // cutline 7.0 x 0.375) included, so the option is selectable on all of them.
 const jarTamperAllowed: Record<JarSizeKey, boolean> = {
   "50ml": true, "100ml_tall": true, "100ml_wide": true, "150ml": true, "250ml": true, "3oz": true, "4oz": true,
+  ceres_50ml: true, ceres_100ml: true, // the lid side band is part of the normal Ceres set
 };
 // Mirrors JAR_APPLICATION_SECONDS_BY_SIZE (jar-cost-inputs.server.ts): 3oz/4oz
 // have NO owner band APPLICATION timing. The band's print / media / ink / cut
@@ -96,6 +97,7 @@ const jarTamperAllowed: Record<JarSizeKey, boolean> = {
 // MISSING_APPLICATION_STANDARD until the owner times it. Never borrowed.
 const jarTamperApplicationPending: Record<JarSizeKey, boolean> = {
   "50ml": false, "100ml_tall": false, "100ml_wide": false, "150ml": false, "250ml": false, "3oz": true, "4oz": true,
+  ceres_50ml: false, ceres_100ml: false,
 };
 
 export function jarPiecesFor(geometry: JarLabelGeometry, selection?: JarLabelSelection): SpecPiece[] {
@@ -121,7 +123,10 @@ function jarSpec(profile: ActiveJarProfile): ProductProductionSpec {
     ? confirmed
       ? `Chiron ${profile.size.replace("_", " ")} uses the same owner-confirmed label geometry as the equivalent Miron size (owner confirmation 2026-11-11).`
       : `Chiron ${profile.size.replace("_", " ")} is costed with the shared "${profile.size}" size key; no Chiron-specific label geometry exists in the system. Owner confirmation required.`
-    : null;
+    // 2026-11-17: the MIRON Ceres label sizes are preliminary test-fit dimensions — said on every spec that uses them.
+    : profile.size === "ceres_50ml" || profile.size === "ceres_100ml"
+      ? MIRON_CERES_GEOMETRY_NOTE
+      : null;
   const authorityStatus: SpecAuthorityStatus = geometry ? sizeAuthority.authorityStatus : "UNSUPPORTED";
   return {
     authorityStatus,

@@ -137,7 +137,36 @@ export const CANONICAL_PACKOUT: Record<CanonicalFamily, { unitsPerBox: number | 
  * Result shape (types only — the numbers are produced server-side)
  * ------------------------------------------------------------------ */
 
+/** One supplier component of a jar complete set (2026-11-17: MIRON Ceres jar + Yuha lid). */
+export type CanonicalBlankComponent = {
+  role: "jar" | "lid";
+  name: string;
+  sku: string;
+  description: string | null;
+  unitCost: number;
+  /** Pieces per supplier pack. null = UNKNOWN (never zero). */
+  piecesPerPack: number | null;
+  /** CEILING(order quantity / pieces per pack). null when the pack size is unknown. */
+  estimatedPacks: number | null;
+};
+
+/**
+ * Landed-cost status for a job whose ONLY missing input is inbound freight.
+ * The known subtotal is every other cost line; it is never called a landed cost.
+ */
+export type CanonicalLandedCost = {
+  status: "FREIGHT_PENDING";
+  label: string;
+  knownProductionCost: number;
+  knownCostPerFinishedUnit: number | null;
+  freightNote: string;
+};
+
 export type CanonicalDiagnostics = {
+  /** Supplier components of the blank set, when the set is component-priced. */
+  blankComponents?: CanonicalBlankComponent[];
+  /** Present only when inbound freight is the single thing keeping the job from a landed cost. */
+  landedCost?: CanonicalLandedCost;
   /** Media physically consumed. */
   mediaConsumedSqft: number;
   /** Printer occupancy basis. */

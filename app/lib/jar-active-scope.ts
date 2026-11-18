@@ -33,7 +33,7 @@ export const JAR_ACTIVE_SCOPE_VERSION = "17D.7E-jar-active-scope";
 export type ActiveJarBrand = "miron" | "chiron" | "standard";
 
 /** Repo key. "wide" is the NORMAL 100ml; "tall" is the taller variant. */
-export type ActiveJarSizeKey = "50ml" | "100ml_tall" | "100ml_wide" | "150ml" | "250ml" | "3oz" | "4oz";
+export type ActiveJarSizeKey = "50ml" | "100ml_tall" | "100ml_wide" | "150ml" | "250ml" | "3oz" | "4oz" | "ceres_50ml" | "ceres_100ml";
 
 export type ActiveJarProfile = {
   brand: ActiveJarBrand;
@@ -54,7 +54,7 @@ const profile = (
 ): ActiveJarProfile => ({ brand, size, key: `${brand}/${size}`, label, uiFamily });
 
 /**
- * The ten combinations GSO currently offers.
+ * The combinations GSO currently offers (the ten of 2026-08-24 + the two MIRON Ceres sets of 2026-11-17).
  *
  * Chiron and Miron are the premium line; the plain oz jars are standard.
  */
@@ -64,6 +64,12 @@ export const ACTIVE_JAR_PROFILES: ActiveJarProfile[] = [
   profile("miron", "100ml_tall", "Miron 100ml tall", "premium-jars"),
   profile("miron", "150ml", "Miron 150ml", "premium-jars"),
   profile("miron", "250ml", "Miron 250ml", "premium-jars"),
+  // 2026-11-17 (owner): the MIRON Ceres jar + matching Yuha Special lid sets.
+  // DISTINCT products from the generic "Miron 50ml / 100ml" rows above (those
+  // are jar + normal SAN lid, with different cost, lid and label geometry) —
+  // identified by the word "Ceres", never by the bare size.
+  profile("miron", "ceres_50ml", "MIRON Ceres 50 mL + Yuha 48", "premium-jars"),
+  profile("miron", "ceres_100ml", "MIRON Ceres 100 mL + Yuha 58", "premium-jars"),
   // Chiron quotes as PREMIUM alongside Miron — that is the repo's own family
   // split ("Premium Jars — Chiron & Miron"; Standard Jars is explicitly "Not
   // Chiron"), and blankClassAllowedFor enforces it. Only the plain oz jars are
@@ -99,6 +105,9 @@ export function activeJarProfilesForFamily(uiFamily: string | null | undefined):
 
 /** Order matters: "100ml tall" must be tested before the bare "100ml". */
 const SIZE_PATTERNS: Array<{ size: ActiveJarSizeKey; test: RegExp }> = [
+  // "Ceres" must be tested before the bare sizes: a Ceres record also says "50 mL" / "100 mL".
+  { size: "ceres_50ml", test: /\bceres\b.*\b50\s*ml|\b50\s*ml.*\bceres\b/i },
+  { size: "ceres_100ml", test: /\bceres\b.*\b100\s*ml|\b100\s*ml.*\bceres\b/i },
   { size: "100ml_tall", test: /100\s*ml.*\btall\b|\btall\b.*100\s*ml/i },
   { size: "100ml_wide", test: /100\s*ml/i },
   { size: "50ml", test: /\b50\s*ml/i },

@@ -85,6 +85,8 @@ import {
   jarCutGeometry,
   jarFinishingStages,
   jarFreightPerUnit,
+  estimatedSupplierPacks,
+  JAR_FREIGHT_PENDING_LABEL,
   jarNestingAreas,
   jarPhysicalRuns,
   jarSetupCost,
@@ -1054,6 +1056,14 @@ export function assembleCanonicalJob(
       blank = blankResolution.ok
         ? { ok: true, unitCost: blankResolution.unitCost, label: `${active?.label ?? cfg.brand + " " + cfg.size} complete set`, source: blankResolution.source }
         : { ok: false, reason: blankResolution.reason, message: blankResolution.message };
+      // 2026-11-17: a component-priced set (MIRON Ceres jar + Yuha lid) keeps
+      // its jar and lid visible. Display only — the blank line above is the cost.
+      if (blankResolution.ok && blankResolution.components?.length) {
+        diagnostics.blankComponents = blankResolution.components.map((c: any) => ({
+          ...c,
+          estimatedPacks: estimatedSupplierPacks(finished, c.piecesPerPack),
+        }));
+      }
 
       // ---- areas from the jar adapter's own physical runs ----
       const jarAreas = jarNestingAreas({
@@ -1375,6 +1385,20 @@ export function assembleCanonicalJob(
   }
 
   const allBlockers = Array.from(new Set([...blockers, ...trueCost.blockers]));
+  /* 2026-11-17 LANDED-COST STATUS. When inbound freight is the ONLY thing the
+   * job is missing, every other line is a real, known cost. It is shown as a
+   * "known production cost" subtotal — explicitly NOT a landed cost, and the
+   * unit cost stays withheld exactly as for any other blocked job. */
+  const freightLine = trueCost.lines.find((line) => line.key === "inbound_freight");
+  if (freightLine?.blocker && allBlockers.length === 1 && jarFreightInput?.perUnit == null && String(jarFreightInput?.source || "").startsWith(JAR_FREIGHT_PENDING_LABEL)) {
+    diagnostics.landedCost = {
+      status: "FREIGHT_PENDING",
+      label: JAR_FREIGHT_PENDING_LABEL,
+      knownProductionCost: trueCost.totalCost,
+      knownCostPerFinishedUnit: trueCost.customerFinishedQty > 0 ? trueCost.totalCost / trueCost.customerFinishedQty : null,
+      freightNote: jarFreightInput?.source ?? freightLine.blocker,
+    };
+  }
   const status: TrueCostStatus = allBlockers.length
     ? "DRAFT_ONLY"
     : trueCost.status;

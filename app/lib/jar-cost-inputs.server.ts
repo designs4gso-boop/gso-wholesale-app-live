@@ -187,6 +187,21 @@ export const JAR_APPLICATION_SECONDS_BY_SIZE: Record<JarSizeKey, JarApplicationS
   "250ml": { side: 15, lid: 10, tamper: 12 },
   "3oz": { side: 10, lid: 8, tamper: null },
   "4oz": { side: 10, lid: 8, tamper: null },
+  // 2026-11-17 MIRON Ceres sets: the owner's 50ml and 100ml per-size timings
+  // (body wrap / lid top / lid side band). NOT separately timed on a Ceres jar
+  // — see JAR_APPLICATION_SECONDS_PENDING_TIMING.
+  ceres_50ml: { side: 12, lid: 10, tamper: 12 },
+  ceres_100ml: { side: 12, lid: 10, tamper: 12 },
+};
+
+/**
+ * Sizes whose application seconds are the owner's timing for the same NOMINAL
+ * size (every 50ml / 100ml jar the owner timed is 12 / 10 / 12) and have not
+ * been timed on the physical jar itself. Disclosed, never silent.
+ */
+export const JAR_APPLICATION_SECONDS_PENDING_TIMING: Partial<Record<JarSizeKey, string>> = {
+  ceres_50ml: "PROVISIONAL — NOT PHYSICALLY TIMED ON CERES SAMPLE. Owner 50ml per-size timing (12s body wrap / 10s lid top / 12s lid side band) applied to the Ceres 50 mL set; not yet timed on a Ceres jar.",
+  ceres_100ml: "PROVISIONAL — NOT PHYSICALLY TIMED ON CERES SAMPLE. Owner 100ml per-size timing (12s body wrap / 10s lid top / 12s lid side band) applied to the Ceres 100 mL set; not yet timed on a Ceres jar.",
 };
 
 /** Where each number came from, so a quote can show it without guessing. */
@@ -233,7 +248,7 @@ export function resolveJarApplication(size: JarSizeKey, selection: JarLabelSelec
     ok: true,
     secondsPerJar: seconds,
     costPerFinishedUnit: (seconds / 3600) * APPLICATION_LABOR_RATE_PER_HOUR,
-    detail: `${parts.join(" + ") || "no labels"} = ${seconds}s per jar at ${APPLICATION_LABOR_RATE_PER_HOUR}/hr. ${JAR_APPLICATION_SOURCE}`,
+    detail: `${parts.join(" + ") || "no labels"} = ${seconds}s per jar at ${APPLICATION_LABOR_RATE_PER_HOUR}/hr. ${JAR_APPLICATION_SOURCE}${JAR_APPLICATION_SECONDS_PENDING_TIMING[size] ? ` ${JAR_APPLICATION_SECONDS_PENDING_TIMING[size]}` : ""}`,
   };
 }
 
@@ -315,6 +330,11 @@ export const JAR_UNITS_PER_BOX: Record<JarSizeKey, number> = {
   "250ml": 25,
   "3oz": 150,
   "4oz": 100,
+  // 2026-11-17 MIRON Ceres: the existing 50ml / 100ml outbound box density (100 per box).
+  // PROVISIONAL — NOT VERIFIED ON CERES PACKOUT (owner-approved for preliminary costing, 2026-11-17).
+  // This is GSO's outbound box, not supplier carton data.
+  ceres_50ml: 100,
+  ceres_100ml: 100,
 };
 
 export function packoutFor(size: JarSizeKey, customerFinishedQty: number): { boxes: number; unitsPerBox: number; cost: number } {
@@ -382,6 +402,23 @@ export const DERIVED_STANDARD_PALLET_CAPACITY: Partial<Record<JarSizeKey, number
 
 export type JarBrand = "miron" | "chiron" | "standard";
 
+/** The words the calculator shows when inbound freight cannot be costed yet. */
+export const JAR_FREIGHT_PENDING_LABEL = "FREIGHT PENDING SUPPLIER PACK DATA";
+
+/**
+ * Jars whose inbound freight CANNOT be allocated yet (owner, 2026-11-17).
+ *
+ * The MIRON Ceres sets ship as two supplier items (jar + Yuha lid). Carton
+ * dimensions, packed weights and the lid pieces-per-pack are not confirmed, so
+ * the pallet allocation used for the other Miron jars has nothing to divide
+ * by. No allowance is invented: the freight line stays unknown and the landed
+ * cost stays pending.
+ */
+export const JAR_FREIGHT_PENDING: Partial<Record<JarSizeKey, string>> = {
+  ceres_50ml: `${JAR_FREIGHT_PENDING_LABEL} — MIRON Ceres 50 mL + Yuha 48: carton dimensions, packed weights and the lid pieces-per-pack are not confirmed, so inbound freight cannot be allocated. It is NOT $0 and no allowance is assumed; final landed cost is PENDING.`,
+  ceres_100ml: `${JAR_FREIGHT_PENDING_LABEL} — MIRON Ceres 100 mL + Yuha 58: carton dimensions, packed weights and the lid pieces-per-pack are not confirmed, so inbound freight cannot be allocated. It is NOT $0 and no allowance is assumed; final landed cost is PENDING.`,
+};
+
 /**
  * Freight per unit for a jar family. Applied to PRODUCTION quantity by the
  * engine — never charged twice through a separate overage line.
@@ -389,6 +426,12 @@ export type JarBrand = "miron" | "chiron" | "standard";
 export function jarFreightPerUnit(brand: JarBrand, size: JarSizeKey): JarFreight {
   if (brand === "miron") {
     const capacity = MIRON_PALLET_CAPACITY[size];
+    const pending = JAR_FREIGHT_PENDING[size];
+    if (pending) {
+      // Unknown freight is NEVER $0: perUnit stays null, the freight line blocks,
+      // and the job reports no landed unit cost until the supplier data arrives.
+      return { perUnit: null, basis: "MISSING_FREIGHT_BASIS", provisional: true, source: pending };
+    }
     if (!capacity) {
       return { perUnit: null, basis: "MISSING_FREIGHT_BASIS", provisional: true, source: `No verified Miron pallet capacity for ${size}.` };
     }
@@ -423,6 +466,66 @@ export function jarFreightPerUnit(brand: JarBrand, size: JarSizeKey): JarFreight
 
 export const MIRON_TIER_MIN_QTYS = [1, 250, 500, 1000, 2500];
 
+/* ------------------------------------------------------------------ *
+ * MIRON Ceres sets — SUPPLIER COMPONENTS (owner-provided, 2026-11-17)
+ *
+ * A Ceres set is bought as TWO supplier items: the jar and its matching Yuha
+ * Special lid. Each keeps its own SKU and its own price ladder, indexed to
+ * MIRON_TIER_MIN_QTYS (1-249 / 250-499 / 500-999 / 1,000-2,499 / 2,500+).
+ * Supplier prices are BEFORE labels, inbound freight and tax.
+ *
+ * Pack data: null means the supplier has not told us — it is unknown, never
+ * zero. `supplierQuantity` is the quantity figure on the supplier sheet,
+ * recorded as given (the sheet does not say what unit of packing it counts).
+ * REFERENCE ONLY (owner, 2026-11-17): it is NOT pallet capacity, carton
+ * capacity or pack quantity until MIRON confirms what it represents, and it
+ * must not drive any freight calculation. Nothing reads it for cost.
+ * ------------------------------------------------------------------ */
+export type JarSupplierComponent = {
+  role: "jar" | "lid";
+  name: string;
+  sku: string;
+  description: string | null;
+  /** Unit cost per tier, indexed to MIRON_TIER_MIN_QTYS. */
+  ladder: number[];
+  /** Pieces per supplier pack / bag. null = UNKNOWN (not provided). */
+  piecesPerPack: number | null;
+  /** Quantity figure from the supplier sheet, as given. null = not provided. */
+  supplierQuantity: number | null;
+};
+
+export const MIRON_SET_COMPONENTS: Partial<Record<JarSizeKey, { jar: JarSupplierComponent; lid: JarSupplierComponent }>> = {
+  ceres_50ml: {
+    jar: { role: "jar", name: "MIRON Ceres 50 mL jar", sku: "HF10685-204", description: null, ladder: [1.9, 1.72, 1.55, 1.44, 1.34], piecesPerPack: 39, supplierQuantity: 5616 },
+    lid: { role: "lid", name: "Yuha 48 Special lid", sku: "EGA01A1A021-200", description: "Black UREA, violet Phan inlay", ladder: [0.84, 0.8, 0.76, 0.68, 0.64], piecesPerPack: null, supplierQuantity: 396 },
+  },
+  ceres_100ml: {
+    jar: { role: "jar", name: "MIRON Ceres 100 mL jar", sku: "HF10657-204", description: null, ladder: [2.46, 2.23, 2.02, 1.9, 1.79], piecesPerPack: 28, supplierQuantity: 3584 },
+    lid: { role: "lid", name: "Yuha 58 Special lid", sku: "EGA01A1A022-200", description: "Black UREA, violet Phan inlay", ladder: [1.05, 1.01, 0.95, 0.87, 0.81], piecesPerPack: null, supplierQuantity: 207 },
+  },
+};
+
+export const MIRON_SET_COMPONENTS_RECORD =
+  "Owner-provided supplier prices 2026-11-17 (jar and Yuha Special lid priced separately; before labels, inbound freight and tax)";
+
+const centsRound = (value: number) => Math.round(value * 100) / 100;
+
+/** Complete-set ladder for a component-priced set: jar + lid at each tier, to the cent. */
+function mironSetLadder(size: JarSizeKey): number[] {
+  const set = MIRON_SET_COMPONENTS[size]!;
+  return MIRON_TIER_MIN_QTYS.map((_, index) => centsRound(set.jar.ladder[index] + set.lid.ladder[index]));
+}
+
+/**
+ * Preliminary supplier JAR pack count for an order: CEILING(order quantity /
+ * pieces per pack). Returns null when the pieces-per-pack is unknown — an
+ * unknown pack size never becomes a count.
+ */
+export function estimatedSupplierPacks(orderQuantity: number, piecesPerPack: number | null | undefined): number | null {
+  if (piecesPerPack == null || !(piecesPerPack > 0)) return null;
+  return Math.ceil(Math.max(0, Math.floor(orderQuantity)) / piecesPerPack);
+}
+
 /**
  * Complete-set cost ladders, indexed to MIRON_TIER_MIN_QTYS.
  *
@@ -443,6 +546,11 @@ export const MIRON_SET_COST: Partial<Record<JarSizeKey, number[]>> = {
   "100ml_wide": [2.9, 2.67, 2.44, 2.26, 2.1],
   "150ml": [3.26, 3.0, 2.76, 2.54, 2.37],
   "250ml": [3.92, 3.6, 3.32, 3.11, 2.92],
+  // 2026-11-17 MIRON Ceres sets: jar + matching Yuha Special lid, summed from
+  // the per-component ladders in MIRON_SET_COMPONENTS (the component prices are
+  // the authority; these totals are the owner's validation totals).
+  ceres_50ml: mironSetLadder("ceres_50ml"),
+  ceres_100ml: mironSetLadder("ceres_100ml"),
 };
 
 /**
@@ -473,6 +581,8 @@ export const CHIRON_SET_COST: Partial<Record<JarSizeKey, number>> = {
 /** Per-size provenance for Miron ladders that have a dated owner record. */
 export const MIRON_SET_COST_PROVENANCE: Partial<Record<JarSizeKey, { status: "OWNER_VERIFIED"; record: string }>> = {
   "50ml": { status: "OWNER_VERIFIED", record: "Owner-approved 50ml Miron blank jar + lid acquisition cost ladder, 2026-10-29" },
+  ceres_50ml: { status: "OWNER_VERIFIED", record: `MIRON Ceres 50 mL (HF10685-204) + Yuha 48 Special (EGA01A1A021-200). ${MIRON_SET_COMPONENTS_RECORD}` },
+  ceres_100ml: { status: "OWNER_VERIFIED", record: `MIRON Ceres 100 mL (HF10657-204) + Yuha 58 Special (EGA01A1A022-200). ${MIRON_SET_COMPONENTS_RECORD}` },
 };
 
 /** Per-size provenance for the Chiron flat costs. */
@@ -489,8 +599,11 @@ export const STANDARD_SET_COST: Partial<Record<JarSizeKey, Record<StandardJarVar
   "4oz": { clear: 0.6, black_white: 0.65 },
 };
 
+/** One supplier component of a complete set at the resolved tier. */
+export type BlankCostComponent = { role: "jar" | "lid"; name: string; sku: string; description: string | null; unitCost: number; piecesPerPack: number | null };
+
 export type BlankCostResolution =
-  | { ok: true; unitCost: number; tierMinQty: number | null; source: string }
+  | { ok: true; unitCost: number; tierMinQty: number | null; source: string; components?: BlankCostComponent[] }
   | { ok: false; reason: "MISSING_COST"; message: string };
 
 /**
@@ -510,6 +623,21 @@ export function resolveJarBlankCost(input: {
     if (!ladder) return { ok: false, reason: "MISSING_COST", message: `No verified Miron complete-set cost for ${size}.` };
     let index = 0;
     for (let i = 0; i < MIRON_TIER_MIN_QTYS.length; i += 1) if (quantity >= MIRON_TIER_MIN_QTYS[i]) index = i;
+    const set = MIRON_SET_COMPONENTS[size];
+    if (set) {
+      // Component-priced set: the jar and the lid resolve on the SAME tier and
+      // stay visible; the set cost is their sum, never a separate number.
+      const components: BlankCostComponent[] = [set.jar, set.lid].map((c) => ({
+        role: c.role, name: c.name, sku: c.sku, description: c.description, unitCost: c.ladder[index], piecesPerPack: c.piecesPerPack,
+      }));
+      return {
+        ok: true,
+        unitCost: ladder[index],
+        tierMinQty: MIRON_TIER_MIN_QTYS[index],
+        components,
+        source: `Miron supplier tier ${MIRON_TIER_MIN_QTYS[index]}+: ${components.map((c) => `${c.name} ${c.sku} $${c.unitCost.toFixed(2)}`).join(" + ")} = $${ladder[index].toFixed(2)} per set (before labels, inbound freight and tax). ${MIRON_SET_COMPONENTS_RECORD}.`,
+      };
+    }
     return { ok: true, unitCost: ladder[index], tierMinQty: MIRON_TIER_MIN_QTYS[index], source: `Miron verified complete-set tier ${MIRON_TIER_MIN_QTYS[index]}+.` };
   }
 

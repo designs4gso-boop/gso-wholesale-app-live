@@ -207,8 +207,8 @@ describe("2D-4D B bags", () => {
 const ALL_SIZES = Object.keys(JAR_LABEL_GEOMETRY) as JarSizeKey[];
 
 describe("2D-4D C1 jar cutlines are derived, never the artboard", () => {
-  it("every one of the 7 profiles carries side, tamper and lid artwork", () => {
-    expect(ALL_SIZES).toHaveLength(7);
+  it("every one of the 9 profiles (7 + the two MIRON Ceres sets, 2026-11-17) carries side, tamper and lid artwork", () => {
+    expect(ALL_SIZES).toHaveLength(9);
     for (const size of ALL_SIZES) {
       const g = JAR_LABEL_GEOMETRY[size];
       for (const v of [g.side.widthIn, g.side.heightIn, g.tamper.widthIn, g.tamper.heightIn, g.lid.diameterIn]) {
