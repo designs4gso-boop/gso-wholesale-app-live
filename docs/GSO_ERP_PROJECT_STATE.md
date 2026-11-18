@@ -1,6 +1,22 @@
 # GSO ERP Project State
 
-## CURRENT TASK — 2026-11-18: Print Intake Patch C + Patch B implemented (unmatched files go to review, no job is ever created; press is decided at the job level). E is next; D / A / F / G still pending. Watcher OFF.
+## CURRENT TASK — 2026-11-18: Print Intake Patches C, B and E implemented (unmatched files go to review, no job is ever created; press is decided at the job level; delivered print files attach to the existing job). D is next; A / F / G still pending. Watcher OFF.
+
+### Print Intake Patch E — routed production print file attaches to the existing job (2026-11-18)
+- **What it does:** when the intake agent reports a SUCCESSFUL delivery (`decision: routed`) for a file the server itself matched and routed to a job, the report endpoint records that production-ready file once on the EXISTING job as a `ProductionJobFile` (`recordRoutedPrintFile` in `app/lib/production-job-source.server.ts`, called from `app/routes/api.print-intake.report.tsx`).
+- **Exact record:** `fileType` = `print_file`, `assetRole` = `printFile`, `assetSource` = `nas`, `fileName` = the routed ERP / RIP name (with the original extension), `originalFileName` = the staff file name, `sourceRef` = the full SHA-256 of the staff file, `jobTicket` = the job ticket, `matchedBy` = `print_intake`, `createdBy` = `print-intake-agent`, `notes` = "Sent to Roland|Mimaki as <routed name>" + original file + item ticket. `fileUrl` (a required column) holds the non-fetchable marker `gso:nas-print-file/<hash>` — the same state-marker convention already used for personalization assets — so it is never a link and never a NAS path.
+- **Only after a real delivery.** A route plan alone records nothing. A failed, needs-review or duplicate report records nothing. The record also requires the PrintIntake row for that exact file hash to be linked to the SAME job with a press, so an unmatched, ambiguous, printer-conflict, confirm-print-mode or rejected file can never get one, even if a `routed` report were sent for it.
+- **Idempotent.** Identity is (shop, job, print_file, nas, file hash), serialized by the existing advisory lock. Repeating the same report writes nothing and adds no second `print_file_routed` event (including when the report is no longer the newest outcome in the log). A re-delivery under a new routed name (retry / revision suffix) updates the one row.
+- **Multi-layer jobs may have several production print files.** Each distinct layer file (`_cmyk`, `_g`, `_w` …) has its own hash and its own row on the same job.
+- **Source artwork remains separate.** Recording a print file does not touch `job.artworkUrl`, the job status or the "Artwork received / linked" checklist, and the Production Board's artwork check ignores `print_file` rows. **`job.printFileUrl` is NOT used for NAS files** — it stays for fetchable URLs only, and the page's existing guard refuses to promote a marker into it.
+- **Production UI:** no redesign. The job's existing Files list already shows these rows (routed name, type, role, source "nas", date, hash, and the "Sent to … as …" note); the only display change is that the NAS marker reads "Production print file on the shop NAS (no download link)" in neutral rather than error colour. No download link is offered.
+- **The existing `print_file_routed` production event is kept** — the event says what happened, the file row says what belongs to the job. The PrintIntake row is kept and stays linked to the job.
+- **Side effect to know:** because the staff file name is now stored on the job, a later re-drop of the same file name (changed content) matches that job through the existing stored-file-name rule when the job has one item. That is the existing rule working as designed, not new matching.
+- **No schema change, no migration.** Manual "Add file" on the Production page is unchanged. No job is created on any path.
+- **Tests:** new `tests/print-intake-print-file-record-2026-11-18.test.ts` (21 tests through the real plan, report and Assign actions). Full suite 3,855 passed / the 5 known personalization failures / 2 skipped; typecheck 263 (baseline); production build passed.
+- **Unchanged:** watcher OFF; live Prints For Today folder NOT activated; no hot-folder / RIP / scheduled-task change; agent `-DryRun` still NOT read-only. Until the watcher is turned on (Patch A) no report arrives, so this patch writes no production data yet.
+- **Known unrelated issue, deliberately not fixed here:** the older shared production dispatch / order-to-job logic (`needsGloss` via `decideMachine`) still reads a finish that literally says "No Spot Gloss" as a gloss requirement. Print Intake has its own corrected check.
+- **Print Intake is NOT complete. Next: Patch D** (ticket-folder matching + bulk linking). Then A (watcher configuration) → F (RIP result automation) → G (retire the six test cards).
 
 ### Print Intake Patch B safety follow-up (2026-11-18) — FINAL routing hierarchy. This supersedes the hierarchy list and "Owner should know" items (a), (b) and (d) in the Patch B section below.
 - **SPECIAL PRODUCTION REQUIREMENTS decide the physical press first:**
@@ -18,7 +34,7 @@
 - **Still requires a person:** printer conflicts (above); the confirm-print-mode hold; a sibling arriving after an explicitly-pressed CMYK layer was already delivered; unmatched and ambiguous files (Patch C — review row only, no job, no route).
 - **Scope:** Print Intake only. The shared `decideMachine`, production dispatch, quote and Cost Calculator routing are unchanged. No schema change. No job is created on any path.
 - **Tests:** `tests/print-intake-job-level-routing-2026-11-18.test.ts` now has 43 tests (the 20 owner-listed safety cases added). Full suite 3,834 passed / the 5 known personalization failures / 2 skipped; typecheck 263 (baseline); production build passed.
-- **Watcher remains OFF.** Patch E is next.
+- **Watcher remains OFF.** (Patch E followed — see above.)
 
 ### Print Intake Patch B — job-level press routing (2026-11-18)
 - **Owner routing hierarchy for files arriving through Print Intake** (`decideIntakeMachine` in `app/lib/print-intake-routing.server.ts`):

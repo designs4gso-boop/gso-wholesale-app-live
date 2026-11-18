@@ -1531,3 +1531,73 @@ export async function linkIntakeJobToTarget(dbClient: any, input: {
 // manual workflow; an unmatched file waits in Incoming Print Files for a person
 // to link it (see api.print-intake.route-plan.tsx). Do not reintroduce a
 // print-intake job creator here.
+
+// ---------- Print Intake Patch E (2026-11-18): routed PRODUCTION PRINT FILE record ----------
+// When the intake agent reports that a matched file was actually delivered to
+// a press, the routed production-ready file is recorded ONCE on the EXISTING
+// job as a ProductionJobFile (fileType print_file / assetRole printFile /
+// assetSource nas). It is NOT source artwork: nothing here touches
+// job.artworkUrl, job.printFileUrl, the checklist or the job status. The file
+// lives on the shop NAS, so fileUrl is a non-fetchable state sentinel (same
+// convention as the personalization sentinels — never rendered as a link and
+// never promoted into job.printFileUrl).
+//
+// Identity: (shop, job, print_file, nas, sourceRef = full SHA-256 of the staff
+// file). The same file reported again writes nothing; a different layer file
+// of the same job (another hash) gets its own row; a re-delivery under a new
+// routed name (retry / revision suffix) updates the one row.
+export const NAS_PRINT_FILE_URL_PREFIX = "gso:nas-print-file/";
+
+export type RoutedPrintFileInput = {
+  shop: string;
+  jobId: string;
+  jobTicket: string | null;
+  fileHash: string; // full SHA-256 of the original staff file
+  originalFileName: string;
+  routedFileName: string; // ERP / RIP name, without extension
+  machine: "mimaki" | "roland";
+  itemTicket?: string | null;
+};
+
+export async function recordRoutedPrintFile(dbClient: any, input: RoutedPrintFileInput): Promise<{ result: "created" | "updated" | "unchanged"; fileId: string }> {
+  const fileHash = String(input.fileHash || "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(fileHash)) throw new Error("recordRoutedPrintFile requires a full SHA-256 hash.");
+  const original = String(input.originalFileName || "").slice(0, 200);
+  const extension = (original.match(/\.[A-Za-z0-9]{1,5}$/) || [""])[0];
+  const routedBase = String(input.routedFileName || "").trim().slice(0, 130);
+  if (!routedBase) throw new Error("recordRoutedPrintFile requires the routed file name.");
+  const fileName = routedBase.toLowerCase().endsWith(extension.toLowerCase()) && extension ? routedBase : `${routedBase}${extension}`;
+  const press = input.machine === "roland" ? "Roland" : "Mimaki";
+  const notes = [
+    `Sent to ${press} as ${fileName}.`,
+    `Original file: ${original}`,
+    ...(input.itemTicket ? [`Item: ${input.itemTicket}`] : []),
+    "Production print file on the shop NAS (routed by Print Intake) — not source artwork, no download link.",
+  ].join("\n");
+  const identity = { shop: input.shop, jobId: input.jobId, fileType: "print_file", assetSource: "nas", sourceRef: fileHash };
+  return dbClient.$transaction(async (tx: any) => {
+    // One lock per job + file content: two simultaneous reports serialize here.
+    await acquireSourceLock(tx, input.shop, "print_file", `${input.jobId}:${fileHash}`);
+    const existing = await tx.productionJobFile.findFirst({ where: identity, orderBy: { createdAt: "asc" } });
+    if (existing) {
+      if (existing.fileName === fileName && existing.notes === notes) return { result: "unchanged" as const, fileId: existing.id };
+      await tx.productionJobFile.update({ where: { id: existing.id }, data: { fileName, notes } });
+      return { result: "updated" as const, fileId: existing.id };
+    }
+    const created = await tx.productionJobFile.create({
+      data: {
+        ...identity,
+        fileName,
+        fileUrl: `${NAS_PRINT_FILE_URL_PREFIX}${fileHash}`,
+        assetRole: "printFile",
+        matchedBy: "print_intake",
+        jobTicket: input.jobTicket || null,
+        originalFileName: original,
+        notes,
+        createdBy: "print-intake-agent",
+      },
+    });
+    return { result: "created" as const, fileId: created.id };
+  });
+}
+

@@ -2393,7 +2393,7 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
                           <Text as="p" fontWeight="bold">
                             {isFetchableAssetUrl(file.fileUrl)
                               ? <a href={file.fileUrl} target="_blank" rel="noreferrer">{file.fileName}</a>
-                              : <>{file.fileName} — <Text as="span" tone="critical">{assetStateLabel(file.fileUrl)}</Text></>}
+                              : <>{file.fileName} — <Text as="span" tone={String(file.fileUrl || "").startsWith("gso:nas-print-file/") ? "subdued" : "critical"}>{assetStateLabel(file.fileUrl)}</Text></>}
                           </Text>
                           <Text as="p" tone="subdued">{file.fileType} | {assetRoleLabel(file.assetRole || "reference")} | {sourceLabel(file.assetSource || "manual")} | {new Date(file.createdAt).toLocaleString()}</Text>
                           {file.sourceRef ? <Text as="p" tone="subdued">Source ref: {file.sourceRef}</Text> : null}

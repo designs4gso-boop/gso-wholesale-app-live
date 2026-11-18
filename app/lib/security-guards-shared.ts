@@ -68,6 +68,7 @@ export function assetStateLabel(value: unknown): string {
   if (isFetchableAssetUrl(url)) return "";
   if (url.startsWith("gso:personalization-failed/")) return "Upload failed in Shopify — needs re-upload";
   if (url.startsWith("gso:personalization-pending/")) return "Still processing in Shopify — not yet printable";
+  if (url.startsWith("gso:nas-print-file/")) return "Production print file on the shop NAS (no download link)";
   if (!url) return "No file linked";
   return "Not a linkable file";
 }

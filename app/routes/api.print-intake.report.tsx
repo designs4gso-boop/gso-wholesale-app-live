@@ -7,6 +7,7 @@ import {
 } from "../lib/print-intake-routing.server";
 import { appendIntakeAudit, canonicalReviewReason } from "../lib/print-intake-review.server";
 import { applyRunSuffix } from "../lib/print-intake-routing.server";
+import { recordRoutedPrintFile } from "../lib/production-job-source.server";
 
 // Print Intake outcome recorder (13A.6G): the ONLY mutation in the intake
 // flow, and it is narrow by construction — it appends one outcome record to
@@ -16,6 +17,12 @@ import { applyRunSuffix } from "../lib/print-intake-routing.server";
 // Idempotent: an identical fileName+hash+decision at the head of the log is
 // acknowledged without writing again. Token-authenticated; shop-scoped;
 // basenames only (never full local paths).
+//
+// Patch E (2026-11-18): a SUCCESSFUL routed report for a file the server
+// itself matched and routed to this job also records the routed production
+// print file on the job (one ProductionJobFile per file hash — see
+// recordRoutedPrintFile). A plan alone never creates it, a failed / review /
+// duplicate report never creates it, and it is never source artwork.
 
 const DECISIONS = new Set(["routed", "needs_review", "duplicate", "failed"]);
 
@@ -69,11 +76,40 @@ export async function action({ request }: { request: Request }) {
     fileHash: safeText(body.fileHash, 64) || null, // 15F.0J.4 full SHA-256
   };
 
+  // Patch E: record the routed production print file on the existing job —
+  // only for a delivery the server planned itself (the PrintIntake row for this
+  // exact file is linked to THIS job with a press). Idempotent per job + hash,
+  // so it runs before the duplicate-report shortcut and a repeat report can
+  // only confirm it. Never blocks outcome recording.
+  let printFile: { result: "created" | "updated" | "unchanged" | "failed" } | null = null;
+  const routedHash = String(outcome.fileHash || "").toLowerCase();
+  if (decision === "routed" && job && /^[0-9a-f]{64}$/.test(routedHash)) {
+    try {
+      const routedIntake = await db.printIntake.findUnique({ where: { shop_fileHashSha256: { shop: setting.shop, fileHashSha256: routedHash } } });
+      const press = routedIntake?.printer === "mimaki" || routedIntake?.printer === "roland" ? routedIntake.printer : null;
+      const routedName = String(routedIntake?.routedFilename || "").trim();
+      if (routedIntake && routedIntake.status !== "rejected" && routedIntake.matchedProductionJobId === job.id && press && routedName) {
+        printFile = await recordRoutedPrintFile(db, {
+          shop: setting.shop,
+          jobId: job.id,
+          jobTicket: job.jobTicket,
+          fileHash: routedHash,
+          originalFileName: routedIntake.originalFilename || fileName,
+          routedFileName: routedName,
+          machine: press,
+          itemTicket: routedIntake.authoritativeTicket || outcome.itemTicket,
+        });
+      }
+    } catch {
+      printFile = { result: "failed" };
+    }
+  }
+
   // Idempotency check before writing anything.
   const { outcomes } = decodeIntakeOutcomes(setting.notes);
   const head = outcomes[0];
   if (head && head.fileName === outcome.fileName && head.decision === outcome.decision && String(head.fileHash8 || "") === String(outcome.fileHash8 || "")) {
-    return json({ ok: true, recorded: false, duplicateReport: true });
+    return json({ ok: true, recorded: false, duplicateReport: true, printFile: printFile?.result ?? null });
   }
 
   const writes = [
@@ -82,7 +118,9 @@ export async function action({ request }: { request: Request }) {
       data: { notes: encodeIntakeOutcomes(setting.notes, outcome) },
     }),
   ];
-  if (decision === "routed" && job) {
+  // Patch E: a repeat report for a file already recorded on the job (even one
+  // that is no longer at the head of the log) adds no second "routed" event.
+  if (decision === "routed" && job && printFile?.result !== "unchanged") {
     writes.push(
       db.productionJobEvent.create({
         data: {
@@ -145,7 +183,7 @@ export async function action({ request }: { request: Request }) {
       // disposition sync must never break outcome recording
     }
   }
-  return json({ ok: true, recorded: true });
+  return json({ ok: true, recorded: true, printFile: printFile?.result ?? null });
 }
 
 export const loader = () =>
