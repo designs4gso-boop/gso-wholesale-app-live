@@ -155,7 +155,7 @@ describe("1-5. an unmatched file goes to review and creates nothing", () => {
     expect(NEEDS_LINK_TO_JOB_LABEL).toBe("NEEDS REVIEW — LINK TO JOB");
     expect(reviewReasonLabel(NEEDS_LINK_TO_JOB_REASON)).toContain("No existing production job matches this file");
     const page = src("app/routes/app.erp.print-intake.tsx");
-    expect(page).toContain('needsLinkLabel: row.status === "review" && !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,');
+    expect(page).toContain('!row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,');
     expect(page).toContain("{row.needsLinkLabel ? row.needsLinkLabel : (");
   });
 

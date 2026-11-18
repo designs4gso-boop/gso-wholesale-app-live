@@ -15,7 +15,13 @@ export type IntakeDisposition = "keep_blocked" | "retry_allowed" | "already_rout
 export const NEEDS_LINK_TO_JOB_REASON = "needs_link_to_job";
 export const NEEDS_LINK_TO_JOB_LABEL = "NEEDS REVIEW — LINK TO JOB";
 
+// Patch B (2026-11-18): routing instructions that contradict each other are
+// never auto-routed; the queue shows them as a printer conflict.
+export const PRINTER_CONFLICT_LABEL = "NEEDS REVIEW — PRINTER CONFLICT";
+export const PRINTER_CONFLICT_REASONS = ["printer_token_conflict", "premium_mode_mimaki_contradiction", "printer_assignment_contradiction", "layer_printer_split"];
+
 export const REVIEW_REASON_LABELS: Record<string, string> = {
+  layer_printer_split: "Another layer of this same job was already sent to the other press — one job is never split across presses.",
   needs_link_to_job: "No existing production job matches this file — pick the job with Assign.",
   conflicting_tickets: "Filename carries conflicting GSO tickets.",
   unknown_ticket: "Ticket in the filename is not on any eligible job.",
@@ -23,7 +29,7 @@ export const REVIEW_REASON_LABELS: Record<string, string> = {
   ticket_on_closed_job: "Ticket belongs to a completed/closed job.",
   ambiguous_candidates: "Two or more production jobs/items match.",
   unsupported_file_type: "Not a supported artwork file type.",
-  printer_token_conflict: "Filename names BOTH printers.",
+  printer_token_conflict: "The job's files name BOTH printers.",
   premium_mode_mimaki_contradiction: "Gloss mode with a Mimaki token (gloss is not operational on the Mimaki).",
   printer_assignment_contradiction: "Filename printer tag contradicts the press assigned in the ERP.",
   auto_machine_load_unavailable: "Auto press selection unavailable (machine load incomplete) — assign Mimaki or Roland, or add a MIMAKI / ROLAND filename tag.",
@@ -43,6 +49,7 @@ export function canonicalReviewReason(reasons: string[] | string | null | undefi
   if (/rejected_by_owner/.test(text)) return "rejected_by_owner";
   if (/needs_link_to_job/.test(text)) return NEEDS_LINK_TO_JOB_REASON;
   if (/conflicting_printer_tokens/.test(text)) return "printer_token_conflict";
+  if (/layer_split_sibling_already_routed/.test(text)) return "layer_printer_split";
   // white_gloss_job_but_erp_assigned_mimaki / premium_mode_but_mimaki_token are historical (pre-2026-11-11) codes.
   if (/premium_mode_but_mimaki_token|gloss_mode_but_mimaki_token|white_gloss_job_but_erp_assigned_mimaki|gloss_job_but_mimaki_selected/.test(text)) return "premium_mode_mimaki_contradiction";
   if (/roland_filename_tag_but_erp_assigned_mimaki|mimaki_filename_tag_but_erp_assigned_roland/.test(text)) return "printer_assignment_contradiction";

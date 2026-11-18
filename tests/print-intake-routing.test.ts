@@ -202,10 +202,14 @@ describe("machine routing (owner rules, corrected 2026-11-11)", () => {
     const balanced = decideMachine(unassigned({ selectedFinish: "White ink" }), "", load(6, 2));
     expect(balanced).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" });
     expect(decideMachine(unassigned(), "", load(1, 4)).machine).toBe("mimaki");
+    // Patch B (2026-11-18): the shared decideMachine above is unchanged, but PRINT INTAKE no longer
+    // load-balances — an unassigned, untagged CMYK file routes to the Mimaki with or without load data.
     const routed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [unassigned()] })] });
-    expect(routed.decision).toBe("review");
+    expect(routed).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "default_cmyk" });
     const routedWithLoad = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [unassigned()] })], machineLoad: load(0, 2) });
-    expect(routedWithLoad).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "auto_load_balanced" });
+    expect(routedWithLoad).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "default_cmyk" });
+    const busyMimaki = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [unassigned()] })], machineLoad: load(9, 0) });
+    expect(busyMimaki).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "default_cmyk" }); // load is ignored
   });
 
   it("contradictory data still reviews: gloss vs explicit Mimaki, ROLAND tag vs explicit Mimaki, both-printer summaries", () => {

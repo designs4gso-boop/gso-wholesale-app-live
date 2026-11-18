@@ -113,7 +113,7 @@ describe("15H.3 intake review + retry", () => {
     expect(plan).toContain('existingIntake?.status === "rejected"');
     expect(plan).toContain('"assigned_by_owner"');
     expect(plan).toContain("recordReviewRow");
-    expect(plan).toContain("decideMachine(assignedItem as any, fileName, machineLoad)"); // machine rules stay authoritative even for assignments
+    expect(plan).toContain("decideIntakeMachine(assignedItem as any, fileName, machineContext(assignedJob.id, assignedJob.items.length, assignedItem.itemTicket))"); // machine rules stay authoritative even for assignments (Patch B resolver)
     const ui = readFileSync("app/routes/app.erp.print-intake.tsx", "utf8");
     expect(ui).toContain('intent === "release"');
     expect(ui).toContain('intent === "assign"');

@@ -2,13 +2,14 @@ import db from "../db.server";
 import {
   applyRunSuffix,
   basenameOf,
+  buildIntakeMachineContext,
+  decideIntakeMachine,
   decideIntakeRoute,
-  decideMachine,
   eligibleJobsWhere,
   ripFileBaseName,
   type IntakeJob,
+  type IntakeSiblingRow,
 } from "../lib/print-intake-routing.server";
-import { loadMachineWorkload } from "../lib/machine-load.server";
 import { NEEDS_LINK_TO_JOB_REASON, appendIntakeAudit, canonicalReviewReason, readIntakeMeta } from "../lib/print-intake-review.server";
 
 // Print Intake plan endpoint. 13A.6G behavior preserved for MATCHED files
@@ -20,6 +21,13 @@ import { NEEDS_LINK_TO_JOB_REASON, appendIntakeAudit, canonicalReviewReason, rea
 // route. It waits in Incoming Print Files until a person assigns it to a real
 // job; the assigned branch below then routes it. (The 15F.0J.5 auto-created
 // "Unlinked (print intake)" job is gone.) Token-authenticated; shop-scoped.
+//
+// Patch B (2026-11-18): the press is decided by decideIntakeMachine — explicit
+// ERP press, then explicit filename tag, then gloss / white anywhere on the
+// job -> Roland, otherwise CMYK -> Mimaki. No load balancing. Sibling layer
+// files of the same item / design (`_cmyk`, `_g`, `_w`) are read together so
+// one physical job is never split across presses; conflicts go to review. A
+// file that was already routed keeps the press it was sent to.
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -42,9 +50,21 @@ export async function action({ request }: { request: Request }) {
   const subfolder = basenameOf(String(body.subfolder || "").trim());
   const fileHashEarly = String(body.fileHash || "").trim().toLowerCase();
   const hasFullHashEarly = /^[0-9a-f]{64}$/.test(fileHashEarly);
-  // 2026-11-11: AUTO (no gloss, no explicit press) picks the less busy press
-  // only from complete per-press load; otherwise the file reviews.
-  const machineLoad = await loadMachineWorkload(db, setting.shop);
+  // Patch B: known intake files for this shop, so the press is decided for the
+  // whole job (sibling layers) rather than one file at a time. Read-only.
+  let siblingRows: IntakeSiblingRow[] = [];
+  try {
+    siblingRows = await db.printIntake.findMany({
+      where: { shop: setting.shop, status: { not: "rejected" } },
+      orderBy: { updatedAt: "desc" },
+      take: 500,
+      select: { fileHashSha256: true, originalFilename: true, authoritativeTicket: true, matchedProductionJobId: true, printer: true, status: true },
+    });
+  } catch {
+    siblingRows = []; // sibling lookup must never break the plan response
+  }
+  const machineContext = (jobId: string | null, jobItemCount: number, itemTicket: string | null, jobFileNames: string[] = []) =>
+    buildIntakeMachineContext({ fileName, fileHash: fileHashEarly, jobId, jobItemCount, itemTicket, rows: siblingRows, jobFileNames });
 
   // 15H.3: server-authoritative disposition FIRST. A rejected hash never
   // re-plans; an owner-assigned hash routes deterministically to the exact
@@ -80,7 +100,7 @@ export async function action({ request }: { request: Request }) {
       });
       return json({ ok: true, fileName, plan: { decision: "review", rule: null, reasons: [assignedJob ? "assigned_item_unresolved" : "assigned_job_missing_or_inactive"], candidates: [], autoCreated: false } });
     }
-    const machineDecision = decideMachine(assignedItem as any, fileName, machineLoad);
+    const machineDecision = decideIntakeMachine(assignedItem as any, fileName, machineContext(assignedJob.id, assignedJob.items.length, assignedItem.itemTicket));
     if (!machineDecision.machine) {
       return json({ ok: true, fileName, plan: { decision: "review", rule: null, reasons: ["assigned_but_machine_unresolved", ...machineDecision.reasons], candidates: [], autoCreated: false } });
     }
@@ -150,7 +170,12 @@ export async function action({ request }: { request: Request }) {
     fileNames: job.files.flatMap((file) => [file.fileName, file.originalFileName || ""]).filter(Boolean),
   }));
 
-  const plan = decideIntakeRoute({ fileName, subfolder, jobs: intakeJobs, machineLoad });
+  const plan = decideIntakeRoute({ fileName, subfolder, jobs: intakeJobs, machineContextFor: (job, item) => machineContext(job.id, job.items.length, item.itemTicket, job.fileNames) });
+  // Patch B: a file never alternates presses between polls — once this exact
+  // file was routed against this job, it keeps the press it was sent to.
+  if (plan.decision === "route" && existingIntake?.status === "routed" && existingIntake.matchedProductionJobId === plan.jobId && (existingIntake.printer === "mimaki" || existingIntake.printer === "roland")) {
+    plan.machine = existingIntake.printer;
+  }
   const fileHash = fileHashEarly;
   const fileSize = Math.max(0, Math.floor(Number(body.fileSize || 0)));
   const hasFullHash = hasFullHashEarly;

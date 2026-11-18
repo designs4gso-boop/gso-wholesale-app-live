@@ -262,9 +262,10 @@ describe("15H.4A order convergence foundation", () => {
     };
     expect(payload.items[0].materialSummary).toMatch(/White Layers: 1/);
     const route = decideIntakeRoute({ fileName: `${payload.items[0].itemTicket}.pdf`, jobs: [intakeJob] });
-    // "Gloss Layers: 0X" is a stated zero, never a gloss requirement
-    expect(route.decision).toBe("review");
-    expect(route.reasons.join(" ")).toContain("auto_machine_load_unavailable_select_printer");
+    // "Gloss Layers: 0X" is a stated zero, never a gloss requirement. Patch B (2026-11-18):
+    // for PRINT INTAKE a job that needs WHITE ("White Layers: 1") routes to the Roland.
+    expect(route).toMatchObject({ decision: "route", machine: "roland", machineRule: "white_requires_roland" });
+    expect(route.reasons.join(" ")).not.toContain("gloss");
   });
 
   it("20-23. checkout emitter, RIP matcher, routing rules, and pricing files untouched", () => {

@@ -9,6 +9,8 @@ import { decodeIntakeOutcomes, type IntakeOutcome } from "../lib/print-intake-ro
 import { CREDENTIAL_PLACEHOLDER, credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
 import {
   NEEDS_LINK_TO_JOB_LABEL,
+  PRINTER_CONFLICT_LABEL,
+  PRINTER_CONFLICT_REASONS,
   REVIEW_STATUSES,
   appendIntakeAudit,
   readIntakeMeta,
@@ -92,7 +94,8 @@ export async function loader({ request }: { request: Request }) {
       reviewReason: row.reviewReason,
       reasonLabel: reviewReasonLabel(row.reviewReason),
       // Patch C: a review row with no linked job waits for a person to link it (label resolved server-side).
-      needsLinkLabel: row.status === "review" && !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,
+      // Patch B: contradictory printer instructions read as a printer conflict, not as a missing link.
+      needsLinkLabel: row.status !== "review" ? null : PRINTER_CONFLICT_REASONS.includes(String(row.reviewReason || "")) ? PRINTER_CONFLICT_LABEL : !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,
       ticket: row.authoritativeTicket,
       matchedProductionJobId: row.matchedProductionJobId,
       generatedProductionJobId: row.generatedProductionJobId,
@@ -296,14 +299,15 @@ export default function PrintIntake() {
       </section>
 
       <section style={{ ...card, borderColor: "#fde68a", background: "#fffbeb" }}>
-        <b>Which printer gets the file (finalized rules).</b>
+        <b>Which printer gets the file (owner rules, 2026-11-18).</b>
         <div style={{ fontSize: 13, marginTop: 6 }}>
-          <b>Gloss &rarr; Roland LG-640 (gloss is not operational on the Mimaki).</b> CMYK and White jobs can run on either press: an
-          explicit ERP assignment or a standalone <code>ROLAND</code> / <code>MIMAKI</code> filename tag wins. Otherwise Auto picks the
-          <b>less busy</b> press — but only when every open print-stage item has a press assigned; if the load is incomplete the file goes to
-          Needs review so the operator chooses (there is no permanent Mimaki default). Contradictory data (for example a gloss job
-          assigned to the Mimaki, or conflicting tags) is blocked and goes to Needs review. Roland-bound plans stay in Needs review with the
-          blocking reason until the Roland hot folder is confirmed and enabled in the agent config.
+          In order: (1) the press assigned on the job in the ERP; (2) a standalone <code>ROLAND</code> / <code>MIMAKI</code> tag in the
+          filename; (3) a job that needs <b>gloss / spot gloss or white</b> on any layer &rarr; <b>Roland LG-640</b>; (4) CMYK only &rarr;{" "}
+          <b>Mimaki</b>. There is no load balancing. Layer files of one job (<code>_cmyk</code>, <code>_g</code> gloss, <code>_w</code> white)
+          are read together, so the whole job goes to one press. Contradictory instructions (both printer tags, a tag against the ERP
+          press, gloss sent to the Mimaki, or a layer already sent to the other press) are never routed — they show as{" "}
+          <b>NEEDS REVIEW — PRINTER CONFLICT</b>. Roland-bound plans stay in Needs review with the blocking reason until the Roland hot
+          folder is confirmed and enabled in the agent config.
         </div>
         <details style={{ ...finePrint, color: "#6b7280" }}>
           <summary style={{ cursor: "pointer" }}>Technical detail (config keys)</summary>

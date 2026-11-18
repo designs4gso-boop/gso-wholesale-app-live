@@ -61,7 +61,7 @@ export type IntakeDecision = {
   ripName: string | null; // WITHOUT extension — the agent appends the original extension
   machine: "mimaki" | "roland" | null;
   // "white_or_gloss" / "default_cmyk" remain only so historical PrintIntake rows keep a valid label.
-  machineRule: "gloss_requires_roland" | "white_or_gloss" | "explicit_roland_tag" | "explicit_mimaki_tag" | "explicit_erp_machine" | "auto_load_balanced" | "default_cmyk" | null;
+  machineRule: "gloss_requires_roland" | "white_requires_roland" | "white_or_gloss" | "explicit_roland_tag" | "explicit_mimaki_tag" | "explicit_erp_machine" | "auto_load_balanced" | "default_cmyk" | null;
   reasons: string[];
   candidates: IntakeCandidate[];
 };
@@ -200,6 +200,165 @@ export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: Mac
   return { machine: choice.printer, machineRule: "auto_load_balanced", reasons: [`auto_less_busy_${choice.printer}_by_${choice.metric}`] };
 }
 
+// ---------- Patch B (2026-11-18): PRINT INTAKE press decision ----------
+// Owner-approved rules for files arriving through Print Intake ONLY. This is
+// deliberately a separate resolver: `decideMachine` above is shared with
+// production dispatch and order -> job creation and keeps its 2026-11-11
+// behaviour; the Cost Calculator / quotes use machine-routing.server.ts.
+//
+//   1. explicit ERP assignment on the item (Roland / Mimaki)   -> that press
+//   2. explicit ROLAND / MIMAKI tag on the file or a sibling layer file
+//                                                               -> that press
+//   3. the JOB needs GLOSS / spot gloss (any layer)             -> Roland
+//   4. the JOB needs WHITE (any layer)                          -> Roland
+//   5. CMYK only, nothing explicit                              -> Mimaki
+// No load balancing, no "less busy" AUTO, no review for a plain CMYK file.
+// Requirements are read at the JOB level: the item's ERP metadata first, then
+// every layer file known for the same item / design (so `_cmyk` + `_g` both
+// go to the Roland). Conflicting instructions never route:
+//   - both printer tags on the job's files, or a tag against the ERP press
+//   - gloss work explicitly sent to the Mimaki (no gloss on the Mimaki)
+//   - a sibling layer already delivered to the other press (layer split)
+
+export type IntakeLayer = "cmyk" | "gloss" | "white";
+
+// Staff layer suffixes, confirmed 2026-11-18 from the owner and production RIP
+// logs: `_cmyk` = CMYK layer, `_g` = gloss layer, `_w` = white layer (the
+// `_cmyk` / `_w` files of one design appear as same-day pairs; the `_g` file ran
+// on the Roland RIP). `_F` / `_B` and every other suffix are NOT interpreted.
+const INTAKE_LAYER_BY_TOKEN: Record<string, IntakeLayer> = { cmyk: "cmyk", g: "gloss", w: "white" };
+
+/** Standalone layer tokens in a dropped filename, plus the design stem they belong to. */
+export function parseIntakeLayerTokens(fileName: string | null | undefined): { layers: IntakeLayer[]; stem: string } {
+  const text = basenameOf(String(fileName || "")).replace(/\.[a-z0-9]{1,5}$/i, "").trim();
+  const parts = text.split(/[_\-\s]+/).filter(Boolean);
+  const layers: IntakeLayer[] = [];
+  const stemParts: string[] = [];
+  parts.forEach((part, index) => {
+    const layer = index > 0 ? INTAKE_LAYER_BY_TOKEN[part.toLowerCase()] : undefined; // never the leading (customer) segment
+    if (layer) {
+      if (!layers.includes(layer)) layers.push(layer);
+      return;
+    }
+    if (/^(roland|mimaki|ucjv)$/i.test(part)) return; // a printer tag is not part of the design name
+    stemParts.push(part.toLowerCase());
+  });
+  return { layers, stem: stemParts.join(" ") };
+}
+
+/** True when the item's ERP metadata calls for a white layer (never a bag / jar colour, never a stated zero). */
+export function needsWhiteLayer(item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">): boolean {
+  const text = finishHaystack(item).replace(/\b(?:[a-z]+ )?colou?r:\s*[^|]*/g, " ");
+  if (/\bwhite layers:\s*[1-9]/.test(text)) return true;
+  if (/\bwhite[\s-]*(?:ink|layer|hd|underbase)\b/.test(text)) return true;
+  if (/\+\s*white\b/.test(text) || /\bwhite\s*\+/.test(text)) return true;
+  if (/(?<![a-z0-9])[1-9]\s*x[\s_-]*white\b/.test(text) || /\bwhite-[1-9]x/.test(text)) return true;
+  return String(item.selectedFinish || "").trim().toLowerCase() === "white";
+}
+
+export type IntakeMachineContext = {
+  /** Other files known for the same item / design (their layer suffixes and printer tags count for the whole job). */
+  relatedFileNames?: string[];
+  /** Presses that sibling files of the same item / design were ALREADY routed to. */
+  routedSiblingPrinters?: Array<"mimaki" | "roland">;
+};
+
+export const INTAKE_PRINTER_CONFLICT_PREFIX = "printer_conflict";
+
+export function decideIntakeMachine(item: IntakeItem, fileName = "", context: IntakeMachineContext = {}): MachineDecision {
+  const blocked = (reason: string): MachineDecision => ({ machine: null, machineRule: null, reasons: [reason] });
+  if (needsPrimer(item)) return blocked(PRIMER_NOT_CONFIGURED);
+  const assigned = assignedMachineOf(item);
+  if (String(item.machineSummary || "").trim() && assigned === null) return blocked("machine_summary_contradictory_or_unknown");
+
+  const related = (context.relatedFileNames || []).filter(Boolean);
+  const files = [fileName, ...related].filter(Boolean);
+  if (hasRolandFilenameTag(fileName) && hasMimakiFilenameTag(fileName)) return blocked("conflicting_printer_tokens_in_filename");
+  const rolandTag = files.some(hasRolandFilenameTag);
+  const mimakiTag = files.some(hasMimakiFilenameTag);
+  if (rolandTag && mimakiTag) return blocked("conflicting_printer_tokens_across_job_files");
+  if ((rolandTag && assigned === "mimaki") || (mimakiTag && assigned === "roland")) {
+    return blocked(`${rolandTag ? "roland" : "mimaki"}_filename_tag_but_erp_assigned_${assigned}_contradiction`);
+  }
+
+  // JOB-level requirements: ERP metadata first, layer files supplement it.
+  let gloss = needsGloss(item);
+  let white = needsWhiteLayer(item);
+  for (const name of files) {
+    const hints = parseFilenamePrintHints(name);
+    const layers = parseIntakeLayerTokens(name).layers;
+    if (hints.glossLayers > 0 || layers.includes("gloss")) gloss = true;
+    if (hints.whiteLayers > 0 || layers.includes("white")) white = true;
+  }
+
+  const explicit = assigned || (rolandTag ? "roland" : mimakiTag ? "mimaki" : null);
+  if (gloss && explicit === "mimaki") return blocked("gloss_job_but_mimaki_selected_contradiction");
+
+  let decision: MachineDecision;
+  if (assigned) decision = { machine: assigned, machineRule: "explicit_erp_machine", reasons: [`explicit_erp_${assigned}_assignment`] };
+  else if (rolandTag) decision = { machine: "roland", machineRule: "explicit_roland_tag", reasons: ["standalone_roland_tag_in_filename"] };
+  else if (mimakiTag) decision = { machine: "mimaki", machineRule: "explicit_mimaki_tag", reasons: ["standalone_mimaki_tag_in_filename"] };
+  else if (gloss) decision = { machine: "roland", machineRule: "gloss_requires_roland", reasons: ["gloss_requires_roland"] };
+  else if (white) decision = { machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] };
+  else decision = { machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] };
+
+  // One physical job is never split across presses: if a sibling layer was
+  // already delivered elsewhere, a person decides (nothing is re-sent here).
+  const elsewhere = (context.routedSiblingPrinters || []).find((printer) => printer !== decision.machine);
+  if (elsewhere) return blocked(`layer_split_sibling_already_routed_to_${elsewhere}_this_file_resolves_${decision.machine}`);
+  return decision;
+}
+
+export type IntakeSiblingRow = {
+  fileHashSha256: string | null;
+  originalFilename: string | null;
+  authoritativeTicket: string | null;
+  matchedProductionJobId: string | null;
+  printer: string | null;
+  status: string | null;
+};
+
+// Which known intake files belong to the same physical job as `fileName`:
+// same item ticket, same single-item job, or the exact same design stem with a
+// layer suffix on both files. Exact equality only — never fuzzy. Rejected rows
+// and the file itself are ignored.
+export function buildIntakeMachineContext(params: {
+  fileName: string;
+  fileHash?: string | null;
+  jobId: string | null;
+  jobItemCount: number;
+  itemTicket: string | null;
+  rows: IntakeSiblingRow[];
+  /** File names already stored on the matched job (a sibling layer may be listed there before it is dropped). */
+  jobFileNames?: string[];
+}): IntakeMachineContext {
+  const mine = parseIntakeLayerTokens(params.fileName);
+  const ownHash = String(params.fileHash || "").toLowerCase();
+  const ticket = String(params.itemTicket || "").toUpperCase();
+  const relatedFileNames: string[] = [];
+  const routedSiblingPrinters: Array<"mimaki" | "roland"> = [];
+  const ownIdentity = normalizeFileIdentity(params.fileName);
+  for (const name of params.jobFileNames || []) {
+    if (!name || normalizeFileIdentity(name) === ownIdentity) continue;
+    const theirs = parseIntakeLayerTokens(name);
+    if (mine.layers.length > 0 && theirs.layers.length > 0 && mine.stem.length >= 4 && mine.stem === theirs.stem) relatedFileNames.push(name);
+  }
+  for (const row of params.rows) {
+    if (!row || row.status === "rejected") continue;
+    if (ownHash && String(row.fileHashSha256 || "").toLowerCase() === ownHash) continue;
+    const sameItem = Boolean(ticket) && String(row.authoritativeTicket || "").toUpperCase() === ticket;
+    const sameSingleItemJob = Boolean(params.jobId) && params.jobItemCount === 1 && row.matchedProductionJobId === params.jobId;
+    const theirs = parseIntakeLayerTokens(row.originalFilename);
+    const sameDesign = mine.layers.length > 0 && theirs.layers.length > 0 && mine.stem.length >= 4 && mine.stem === theirs.stem;
+    if (!sameItem && !sameSingleItemJob && !sameDesign) continue;
+    if (row.originalFilename) relatedFileNames.push(row.originalFilename);
+    if (row.status === "routed" && (row.printer === "mimaki" || row.printer === "roland") && !routedSiblingPrinters.includes(row.printer)) {
+      routedSiblingPrinters.push(row.printer);
+    }
+  }
+  return { relatedFileNames, routedSiblingPrinters };
+}
+
 // ---------- RIP name ----------
 
 // Exact ERP-generated RIP name for the routed copy (no extension; the agent
@@ -222,8 +381,11 @@ function review(reasons: string[], candidates: IntakeCandidate[] = []): IntakeDe
   return { decision: "review", rule: null, jobId: null, itemId: null, jobTicket: null, itemTicket: null, ripName: null, machine: null, machineRule: null, reasons, candidates: candidates.slice(0, 5) };
 }
 
-function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDecision["rule"]>, fileName: string, machineLoad?: MachineLoadSnapshot | null): IntakeDecision {
-  const machineDecision = decideMachine(item, fileName, machineLoad);
+type IntakeContextResolver = (job: IntakeJob, item: IntakeItem) => IntakeMachineContext;
+
+function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDecision["rule"]>, fileName: string, contextFor?: IntakeContextResolver): IntakeDecision {
+  // Patch B: Print Intake uses its own owner-approved resolver (no load balancing).
+  const machineDecision = decideIntakeMachine(item, fileName, contextFor ? contextFor(job, item) : {});
   if (!machineDecision.machine) {
     return review([`matched_by_${rule}_but_machine_unresolved`, ...machineDecision.reasons], [candidateOf(job, item, rule)]);
   }
@@ -246,7 +408,10 @@ function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDec
   };
 }
 
-export function decideIntakeRoute(params: { fileName: string; subfolder?: string | null; jobs: IntakeJob[]; machineLoad?: MachineLoadSnapshot | null }): IntakeDecision {
+// `machineLoad` is accepted for backwards compatibility and IGNORED (Patch B:
+// Print Intake never load-balances). `machineContextFor` supplies the sibling
+// layer files of the matched item so the press is decided for the whole job.
+export function decideIntakeRoute(params: { fileName: string; subfolder?: string | null; jobs: IntakeJob[]; machineLoad?: MachineLoadSnapshot | null; machineContextFor?: IntakeContextResolver }): IntakeDecision {
   const fileName = basenameOf(params.fileName);
   if (!isArtworkFileName(fileName)) return review(["not_an_artwork_file_type"]);
   const fileIdentity = normalizeFileIdentity(fileName);
@@ -261,7 +426,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
         if (String(item.itemTicket || "").toUpperCase() === itemTicket) hits.push({ job, item });
       }
     }
-    if (hits.length === 1) return routeItem(hits[0].job, hits[0].item, "item_ticket", fileName, params.machineLoad);
+    if (hits.length === 1) return routeItem(hits[0].job, hits[0].item, "item_ticket", fileName, params.machineContextFor);
     if (hits.length > 1) return review(["item_ticket_matches_multiple_items"], hits.map((hit) => candidateOf(hit.job, hit.item, "item_ticket")));
     return review([`item_ticket_${itemTicket}_not_found_in_eligible_jobs`]);
   }
@@ -273,7 +438,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
     if (jobs.length > 1) return review(["job_ticket_matches_multiple_jobs"], jobs.map((job) => candidateOf(job, null, "job_ticket")));
     if (jobs.length === 1) {
       const job = jobs[0];
-      if (job.items.length === 1) return routeItem(job, job.items[0], "job_ticket_single_item", fileName, params.machineLoad);
+      if (job.items.length === 1) return routeItem(job, job.items[0], "job_ticket_single_item", fileName, params.machineContextFor);
       return review(
         ["job_ticket_matches_job_with_multiple_items_pick_item_in_review"],
         job.items.map((item) => candidateOf(job, item, "job_ticket_multiple_items")),
@@ -296,7 +461,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
       }
     }
     const uniqueNameHits = nameHits.filter((hit, index) => nameHits.findIndex((other) => other.item.id === hit.item.id) === index);
-    if (uniqueNameHits.length === 1) return routeItem(uniqueNameHits[0].job, uniqueNameHits[0].item, "stored_filename", fileName, params.machineLoad);
+    if (uniqueNameHits.length === 1) return routeItem(uniqueNameHits[0].job, uniqueNameHits[0].item, "stored_filename", fileName, params.machineContextFor);
     if (uniqueNameHits.length > 1) return review(["stored_filename_matches_multiple_items"], uniqueNameHits.map((hit) => candidateOf(hit.job, hit.item, "stored_filename")));
 
     // (d) exact match vs stored ProductionJobFile names — job-level identity,
@@ -304,7 +469,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
     const fileJobHits = params.jobs.filter((job) => job.fileNames.some((name) => normalizeFileIdentity(name) === fileIdentity));
     if (fileJobHits.length === 1) {
       const job = fileJobHits[0];
-      if (job.items.length === 1) return routeItem(job, job.items[0], "job_file_name", fileName, params.machineLoad);
+      if (job.items.length === 1) return routeItem(job, job.items[0], "job_file_name", fileName, params.machineContextFor);
       return review(["job_file_matches_job_with_multiple_items"], job.items.map((item) => candidateOf(job, item, "job_file_name")));
     }
     if (fileJobHits.length > 1) return review(["job_file_matches_multiple_jobs"], fileJobHits.map((job) => candidateOf(job, null, "job_file_name")));
@@ -317,7 +482,7 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
       const jobs = params.jobs.filter((job) => String(job.jobTicket || "").toUpperCase() === subTicket);
       if (jobs.length === 1) {
         const job = jobs[0];
-        if (job.items.length === 1) return routeItem(job, job.items[0], "job_subfolder", fileName, params.machineLoad);
+        if (job.items.length === 1) return routeItem(job, job.items[0], "job_subfolder", fileName, params.machineContextFor);
         return review(["subfolder_job_has_multiple_items_pick_item_in_review"], job.items.map((item) => candidateOf(job, item, "job_subfolder")));
       }
       if (jobs.length > 1) return review(["subfolder_ticket_matches_multiple_jobs"], jobs.map((job) => candidateOf(job, null, "job_subfolder")));
@@ -446,8 +611,10 @@ export function parseFilenamePrintHints(fileName: string): FilenamePrintHints {
   };
 }
 
-// Filename-only machine decision for UNMATCHED files (no quote/job required —
-// spec 15F.0J.5-D). Same precedence family as decideMachine: gloss ->
+// Filename-only machine decision. NOT used by Print Intake any more: Patch C
+// (2026-11-18) keeps unmatched files in review with no press, and Patch B
+// routes matched files through decideIntakeMachine. Kept for its tests / any
+// non-intake caller (spec 15F.0J.5-D). Same precedence family as decideMachine: gloss ->
 // Roland; explicit token; otherwise AUTO by complete load data, else review.
 export function decideMachineFromFilename(fileName: string, machineLoad?: MachineLoadSnapshot | null): { machine: "mimaki" | "roland" | null; machineRule: IntakeDecision["machineRule"]; mode: string; reasons: string[] } {
   const hints = parseFilenamePrintHints(fileName);
