@@ -1,6 +1,19 @@
 # GSO ERP Project State
 
-## CURRENT TASK — 2026-11-17: MIRON Ceres 50 mL + 100 mL costing setup — MERGED, PUSHED, DEPLOYED; Vendor Cost Book activation NOT DONE (stopped safely, owner review required)
+## CURRENT TASK — 2026-11-17: MIRON Ceres 50 mL + 100 mL costing setup — MERGED, DEPLOYED AND ACTIVATED 2026-11-18 (both Ceres sets in the production Vendor Cost Book; owner on-screen calculator check still to do)
+
+### FINAL ACTIVATION STATE (2026-11-18) — supersedes the "NOT APPLIED" statements in the two sections below
+- **Applied by the owner in Shopify admin, one at a time, with the per-item control:** `miron-ceres-50ml` (row created 2026-11-18 18:03:59 UTC) and `miron-ceres-100ml` (row created 2026-11-18 18:04:04 UTC). The bulk form was not used.
+- **Production Vendor Cost Book, read-only check after the apply:** 27 vendor products / 90 tier rows (was 25 / 80: exactly +2 products and +10 tiers).
+  - Exactly one "MIRON Ceres 50 mL + Yuha 48 (jar + lid set)", SKU `HF10685-204+EGA01A1A021-200`, tiers $2.74 / $2.52 / $2.31 / $2.12 / $1.98.
+  - Exactly one "MIRON Ceres 100 mL + Yuha 58 (jar + lid set)", SKU `HF10657-204+EGA01A1A022-200`, tiers $3.51 / $3.24 / $2.97 / $2.77 / $2.60.
+  - No duplicate Ceres rows. Both now preview as "already correct" (pressing apply again would write nothing).
+  - Generic Miron rows (50ml, 100ml tall, 100ml wide, 150ml, 250ml) unchanged — values identical and last updated 2026-07-17.
+  - `miron-50ml` is still PENDING and untouched (generic 50ml row still $2.46 / $2.24 / $2.03 / $1.89 / $1.74). `bag-4x6` is still PENDING and untouched. Do not use the BULK form unless both are wanted.
+- **Calculator, verified without a browser:** the two production record names resolve to `miron/ceres_50ml` and `miron/ceres_100ml`, and the generic names still resolve to their own profiles. The deployed code, run read-only against the production calibrations at 128 / 250 / 500 / 1,000 / 2,500, gives output identical to the pre-merge validation: correct supplier tier, 1% overage once (130 / 253 / 505 / 1,010 / 2,525), three labels, 34 s application ($0.1889 per jar, provisional), freight PENDING, final landed cost PENDING, known production cost shown (50 mL $3.3033 → $2.3530 per unit; 100 mL $4.1212 → $3.0134 per unit), no selling price.
+- **NOT done: on-screen check of the live Cost Calculator.** The agent had no authenticated browser. Owner to open the Cost Calculator, select each Ceres set and confirm the supplier-components table and the freight-pending panel display as described.
+- **Still open for these sets:** freight PENDING (supplier carton data); final landed cost PENDING; physical label test-fit of all six labels; application timing provisional; outbound box density provisional; supplier sheet quantities' meaning unconfirmed; no selling-price ladder.
+- **Print Intake remains PARKED, NOT complete.** Next when it resumes: Patch C.
 
 ### Per-item apply on Cost Verification (2026-11-18) — LIVE; the two Ceres updates STILL NOT APPLIED (owner must press the two buttons)
 - **Patch:** commit `3267273` "fix(cost-verification): allow applying approved updates individually" — pushed to `main`, deployed by Render, live (the live site serves the new Cost Verification chunk containing "Apply only this update"; login page 200). Three files: `app/components/ApprovedUpdateApplyOne.tsx` (new), `app/routes/app.erp.cost-verification.tsx`, `tests/cost-verification-apply-one-2026-11-18.test.ts` (new, 16 tests). No cost value, registry entry, schema or migration changed.
