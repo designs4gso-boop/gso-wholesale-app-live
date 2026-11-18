@@ -474,12 +474,16 @@ export const MIRON_TIER_MIN_QTYS = [1, 250, 500, 1000, 2500];
  * MIRON_TIER_MIN_QTYS (1-249 / 250-499 / 500-999 / 1,000-2,499 / 2,500+).
  * Supplier prices are BEFORE labels, inbound freight and tax.
  *
- * Pack data: null means the supplier has not told us — it is unknown, never
- * zero. `supplierQuantity` is the quantity figure on the supplier sheet,
- * recorded as given (the sheet does not say what unit of packing it counts).
- * REFERENCE ONLY (owner, 2026-11-17): it is NOT pallet capacity, carton
- * capacity or pack quantity until MIRON confirms what it represents, and it
- * must not drive any freight calculation. Nothing reads it for cost.
+ * Pack data comes from two separate fields on the MIRON supplier price sheet:
+ *   - "Pcs/Pack/Bag"    -> `piecesPerPack` (jar 39 / 28; not listed for the
+ *                          Yuha lids, so null = unknown, never zero).
+ *   - "Pallet/Box Size" -> `supplierQuantity` (5,616 / 396 / 3,584 / 207).
+ * The SOURCE of `supplierQuantity` is known (owner, 2026-11-18): it is the
+ * supplier's "Pallet/Box Size" value. What is NOT confirmed is how MIRON
+ * defines that field per component (pieces per pallet, per master carton, per
+ * box, or something that varies by product). Keep the supplier's own field
+ * name; do not convert it into a specific freight unit. REFERENCE ONLY: it must
+ * not drive any freight calculation until MIRON confirms. Nothing reads it for cost.
  * ------------------------------------------------------------------ */
 export type JarSupplierComponent = {
   role: "jar" | "lid";
@@ -488,9 +492,9 @@ export type JarSupplierComponent = {
   description: string | null;
   /** Unit cost per tier, indexed to MIRON_TIER_MIN_QTYS. */
   ladder: number[];
-  /** Pieces per supplier pack / bag. null = UNKNOWN (not provided). */
+  /** Supplier sheet "Pcs/Pack/Bag". null = not listed / UNKNOWN. */
   piecesPerPack: number | null;
-  /** Quantity figure from the supplier sheet, as given. null = not provided. */
+  /** Supplier sheet "Pallet/Box Size", as given; interpretation unconfirmed. null = not provided. */
   supplierQuantity: number | null;
 };
 

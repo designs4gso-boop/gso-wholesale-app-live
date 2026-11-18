@@ -1,6 +1,31 @@
 # GSO ERP Project State
 
-## CURRENT TASK — 2026-11-17: MIRON Ceres 50 mL + 100 mL costing setup — MERGED, DEPLOYED AND ACTIVATED 2026-11-18 (both Ceres sets in the production Vendor Cost Book; owner on-screen calculator check still to do)
+## CURRENT TASK — 2026-11-18: Print Intake Patch C implemented (unmatched files go to review; no job is ever created). B / E / D / A / F / G still pending. Watcher OFF.
+
+### Print Intake Patch C — what changed
+- **A dropped print file can no longer create a ProductionJob.** The only auto-create path was `createOrReusePrintIntakeJob` in `app/lib/production-job-source.server.ts`, called only by `app/routes/api.print-intake.route-plan.tsx`. The helper was REMOVED (not just bypassed) and the endpoint no longer imports any job creator. Legitimate job creation (Shopify order, quote, manual job) is untouched — three `productionJob.create` call sites remain in that module, down from four.
+- **Unmatched file behaviour (server-side):** the endpoint keeps/creates one PrintIntake row (unique on shop + file hash), sets status `review` with reason `needs_link_to_job`, and returns a review plan with no job, no item, no printer, no RIP name and no route. Incoming Print Files shows the row as **NEEDS REVIEW — LINK TO JOB**. The file stays where staff put it. Two existing jobs that both match (ambiguous) also stay in review; no "controlled" job is created for them either.
+- **Idempotent:** repeat polls of the same unmatched file write nothing after the first (one row, one audit entry, no job, no event). A rejected file stays rejected; an already-routed row is never downgraded.
+- **Matching to existing jobs is unchanged:** item ticket in filename, job ticket in filename, exact stored RIP name, exact stored job file name, and the job-subfolder rule. No fuzzy / customer-name / product-name / AI matching was added.
+- **Manual linking is unchanged and is now the only way an unmatched file gets a job:** Incoming Print Files → Assign to… (owner / manager / print operator) sets the row to `assigned` against an EXISTING job; the next plan request routes it against that job (`assigned_by_owner`). Verified by test end to end. Assign did not depend on the old fake jobs. No bulk linking or search was added (Patch D).
+- **Routing rules were NOT changed** (that is Patch B). Matched and assigned files still use the existing machine rules.
+- **No schema change, no migration.** Uses the existing `PrintIntake.status` / `reviewReason` columns.
+- **Tests:** new `tests/print-intake-no-auto-create-2026-11-18.test.ts` (21 tests driving the real route-plan and Incoming Print Files actions against an in-memory database); old expectations that required an "Unlinked (print intake)" job were rewritten in `print-intake-auto-create`, `print-intake-review`, `ticket-identity` and `production-runs` to pin that the creator is gone. Full suite 3,791 passed / the 5 known personalization failures / 2 skipped; typecheck 263 (baseline); production build passed.
+- **Still true / still OFF:**
+  - Watcher activation is OFF. The live folder `\\SynologyNAS\GSOP\GSOP\Prints For Today\PRINTS FOR TODAY\` is NOT activated. No scheduled task was created, started or changed.
+  - **The agent's `-DryRun` is still NOT read-only.** It calls the route-plan endpoint. After Patch C that can no longer create a job, but it still writes a PrintIntake review row for an unmatched file. Do not use `-DryRun` as a safe validation until the agent/endpoint get a true read-only mode. The setup text on the Print Intake page now says so.
+  - The six old "Unlinked (print intake)" jobs still exist in production and are untouched (Patch G). The Production Board's link-the-shell control for them is untouched.
+  - RasterLink / VersaWorks configuration and RIP result automation untouched.
+- **Print Intake is NOT complete.** Remaining order: **B** (routing-rule correction — needs separate owner review first: multi-layer jobs such as `*_cmyk.pdf` + `*_g.pdf` can be one physical job and must not split across presses) → **E** (production print-file record) → **D** (ticket-folder matching + bulk linking) → **A** (watcher configuration) → **F** (RIP result automation) → **G** (retire the six test cards).
+
+### MIRON Ceres — packing metadata wording corrected 2026-11-18 (no costing change)
+- MIRON Ceres 50 mL + Yuha 48 and Ceres 100 mL + Yuha 58 remain live and complete for costing (see the sections below). No supplier price, tier, overage, geometry, labor value, freight status, Vendor Cost Book row or selling price changed.
+- The supplier price sheet has two separate fields. **"Pcs/Pack/Bag":** 50 mL jar 39, 100 mL jar 28, not listed for either Yuha lid. **"Pallet/Box Size":** 50 mL jar (HF10685-204) 5,616 · Yuha 48 lid (EGA01A1A021-200) 396 · 100 mL jar (HF10657-204) 3,584 · Yuha 58 lid (EGA01A1A022-200) 207.
+- The SOURCE of 5,616 / 396 / 3,584 / 207 is known — they are the supplier's "Pallet/Box Size" values. What is unconfirmed is how MIRON defines that field per component (pieces per pallet, per master carton, per box, or varying by product). The supplier's field name is kept; it is not converted into a freight unit. Earlier wording that called the quantities' source or unit unknown was corrected here and in the code comments of `app/lib/jar-cost-inputs.server.ts` (comments only).
+- Preliminary jar pack counts: ceiling(quantity ÷ 39) for the 50 mL jar (128 → 4, 250 → 7, 500 → 13) and ceiling(quantity ÷ 28) for the 100 mL jar (128 → 5, 250 → 9, 500 → 18). No lid pack counts are estimated.
+- **Freight remains PENDING and final landed cost remains PENDING.** Still missing: carton dimensions (L × W × H); packed carton weights; Yuha 48 and Yuha 58 pieces per pack/carton if a separate value exists; MIRON's confirmation of what "Pallet/Box Size" means for the four SKUs; physical sample confirmation where relevant to packout. Freight is not calculated from "Pallet/Box Size" and the $315-per-pallet method is not used for Ceres.
+
+## PREVIOUS TASK — 2026-11-17: MIRON Ceres 50 mL + 100 mL costing setup — MERGED, DEPLOYED AND ACTIVATED 2026-11-18 (both Ceres sets in the production Vendor Cost Book; owner on-screen calculator check still to do)
 
 ### FINAL ACTIVATION STATE (2026-11-18) — supersedes the "NOT APPLIED" statements in the two sections below
 - **Applied by the owner in Shopify admin, one at a time, with the per-item control:** `miron-ceres-50ml` (row created 2026-11-18 18:03:59 UTC) and `miron-ceres-100ml` (row created 2026-11-18 18:04:04 UTC). The bulk form was not used.
@@ -12,7 +37,7 @@
   - `miron-50ml` is still PENDING and untouched (generic 50ml row still $2.46 / $2.24 / $2.03 / $1.89 / $1.74). `bag-4x6` is still PENDING and untouched. Do not use the BULK form unless both are wanted.
 - **Calculator, verified without a browser:** the two production record names resolve to `miron/ceres_50ml` and `miron/ceres_100ml`, and the generic names still resolve to their own profiles. The deployed code, run read-only against the production calibrations at 128 / 250 / 500 / 1,000 / 2,500, gives output identical to the pre-merge validation: correct supplier tier, 1% overage once (130 / 253 / 505 / 1,010 / 2,525), three labels, 34 s application ($0.1889 per jar, provisional), freight PENDING, final landed cost PENDING, known production cost shown (50 mL $3.3033 → $2.3530 per unit; 100 mL $4.1212 → $3.0134 per unit), no selling price.
 - **NOT done: on-screen check of the live Cost Calculator.** The agent had no authenticated browser. Owner to open the Cost Calculator, select each Ceres set and confirm the supplier-components table and the freight-pending panel display as described.
-- **Still open for these sets:** freight PENDING (supplier carton data); final landed cost PENDING; physical label test-fit of all six labels; application timing provisional; outbound box density provisional; supplier sheet quantities' meaning unconfirmed; no selling-price ladder.
+- **Still open for these sets:** freight PENDING (supplier carton data); final landed cost PENDING; physical label test-fit of all six labels; application timing provisional; outbound box density provisional; MIRON's definition of its "Pallet/Box Size" field unconfirmed (the values themselves are known supplier data); no selling-price ladder.
 - **Print Intake remains PARKED, NOT complete.** Next when it resumes: Patch C.
 
 ### Per-item apply on Cost Verification (2026-11-18) — LIVE; the two Ceres updates STILL NOT APPLIED (owner must press the two buttons)
@@ -34,7 +59,7 @@
 - **Production Vendor Cost Book (read-only check 2026-11-17):** 25 vendor products, 80 tier rows; five generic Miron rows present and unchanged (last updated 2026-07-17); zero Ceres / Yuha rows; no row matches the Ceres SKUs. The Ceres previews match NO existing row (both are "will create"), so they cannot overwrite a generic Miron record. No production data was written tonight.
 - **Consequence:** the Ceres costing code is live, but the two sets are not selectable in the live Cost Calculator until the two approved updates are applied. Live calculator verification of the Ceres sets is therefore still outstanding.
 - **Owner decision needed to finish activation (pick one):** (a) approve a small patch adding a per-item "apply only this" control to Cost Verification (sends the existing `onlyKey`), then apply the two Ceres items one at a time; (b) press the existing Apply button and accept that `miron-50ml` and `bag-4x6` are applied too; or (c) authorize the agent to run the app's own `applyApprovedCostUpdates` with `onlyKeys` for the two Ceres keys from a script against production.
-- **Unchanged tonight:** freight PENDING, final landed cost PENDING, geometry "PHYSICAL SAMPLE TEST-FIT REQUIRED BEFORE PRODUCTION" for all six labels, application timing provisional, outbound box density provisional, supplier sheet quantities reference-only (meaning unconfirmed), no selling-price ladder. Print Intake remains PARKED, NOT complete.
+- **Unchanged tonight:** freight PENDING, final landed cost PENDING, geometry "PHYSICAL SAMPLE TEST-FIT REQUIRED BEFORE PRODUCTION" for all six labels, application timing provisional, outbound box density provisional, supplier "Pallet/Box Size" values reference-only (MIRON's definition of the field unconfirmed), no selling-price ladder. Print Intake remains PARKED, NOT complete.
 
 ### Print Intake — handoff for when it resumes (nothing implemented)
 Sequence: C (unmatched files → review, never auto-create a job) → B (routing-rule correction) → E (production print-file record) → D (ticket-folder matching + bulk linking) → A (watcher configuration) → F (RIP result automation) → G (retire the six test cards). Findings to keep: real ProductionJobs must exist before intake can auto-link; the ticket-named subfolder is the approved primary deterministic matching workflow; unmatched files wait for human assignment; the Print Intake agent `-DryRun` is NOT safe / read-only today; watcher activation remains OFF; RasterLink result automation remains OFF.
@@ -53,9 +78,9 @@ Two NEW jar products in the one canonical jar cost authority (`app/lib/jar-cost-
 | Jar cost (1–249 / 250–499 / 500–999 / 1,000–2,499 / 2,500+) | $1.90 / $1.72 / $1.55 / $1.44 / $1.34 | $2.46 / $2.23 / $2.02 / $1.90 / $1.79 |
 | Lid cost (same tiers) | $0.84 / $0.80 / $0.76 / $0.68 / $0.64 | $1.05 / $1.01 / $0.95 / $0.87 / $0.81 |
 | Jar + lid (validation totals) | $2.74 / $2.52 / $2.31 / $2.12 / $1.98 | $3.51 / $3.24 / $2.97 / $2.77 / $2.60 |
-| Jar pieces per pack | 39 | 28 |
-| Lid pieces per pack | UNKNOWN (stored as null) | UNKNOWN (stored as null) |
-| Supplier sheet quantity (as given; unit of packing not stated) | jar 5,616 · lid 396 | jar 3,584 · lid 207 |
+| Jar "Pcs/Pack/Bag" (supplier sheet) | 39 | 28 |
+| Lid "Pcs/Pack/Bag" (supplier sheet) | not listed / UNKNOWN (stored as null) | not listed / UNKNOWN (stored as null) |
+| Supplier sheet "Pallet/Box Size" (as given; MIRON's definition of the field not yet confirmed) | jar 5,616 · lid 396 | jar 3,584 · lid 207 |
 | Body wrap — CUT size | 166.5 × 25.3 mm | 198 × 31 mm |
 | Lid top circle — CUT diameter | 45 mm | 50.8 mm |
 | Lid side band — CUT size | 165 × 11 mm | 198 × 10 mm |
@@ -67,7 +92,7 @@ Two NEW jar products in the one canonical jar cost authority (`app/lib/jar-cost-
 - **Supplier tier follows the quantity actually purchased** (finished + 1%), which is the existing behaviour for every Miron jar: 246 finished → 249 → under-250 price; 247 finished → 250 → 250 price.
 - **Application labor:** existing per-label model at $20/hr on finished jars — body wrap 12 s + lid top 10 s + lid side band 12 s = 34 s = $0.1889 per jar. **PROVISIONAL — NOT PHYSICALLY TIMED ON CERES SAMPLE** (owner-approved for preliminary costing 2026-11-17; these are the existing 50ml / 100ml timings and do not block the calculator).
 - **Outbound box density:** 100 finished jars per GSO outbound box. **PROVISIONAL — NOT VERIFIED ON CERES PACKOUT** (owner-approved for preliminary costing 2026-11-17). This is not supplier carton data.
-- **Supplier sheet quantities (5,616 / 396 / 3,584 / 207) are REFERENCE ONLY.** They are not pallet capacity, carton capacity or pack quantity until MIRON confirms what they represent, and nothing reads them for cost or freight. The $315-per-pallet method is NOT used for these sets.
+- **Supplier "Pallet/Box Size" values (5,616 / 396 / 3,584 / 207) are REFERENCE ONLY.** Their source is known: they are the values in the supplier price sheet's "Pallet/Box Size" field (a separate field from "Pcs/Pack/Bag"). What is unconfirmed is how MIRON defines that field for each component — pieces per pallet, per master carton, per box, or something that varies by product — so the supplier's field name is kept as-is, it is not converted into a freight unit, and nothing reads the values for cost or freight. The $315-per-pallet method is NOT used for these sets.
 - **Status:** code merged and deployed (`10b9274`); Vendor Cost Book activation pending (see Release status above). Not production-verified: geometry, application timing, box density and freight are all preliminary or pending as stated here.
 - **Inbound freight is PENDING, never $0.** The freight line is unknown (null); the calculator shows "Known production cost (excludes inbound freight)", "Inbound freight: FREIGHT PENDING SUPPLIER PACK DATA" and "Final landed cost: PENDING", publishes no landed unit cost and generates no selling price. Freight / landed cost is not final until the supplier freight data below is confirmed.
 - **Tax:** supplier purchase tax is not modelled anywhere in ERP product costing; none was added.
@@ -78,8 +103,8 @@ Two NEW jar products in the one canonical jar cost authority (`app/lib/jar-cost-
 ### Still needed from the owner / supplier for these two sets
 1. Carton dimensions (jar and lid).
 2. Packed carton weights.
-3. Lid pieces per pack / carton (Yuha 48 and Yuha 58).
-4. What the supplier sheet quantities (5,616 / 396 / 3,584 / 207) count — pallet, carton or order lot.
+3. Lid pieces per pack / carton (Yuha 48 and Yuha 58), if a separate pack value exists — "Pcs/Pack/Bag" is not listed for the lids.
+4. MIRON's confirmation of what its "Pallet/Box Size" field (5,616 / 396 / 3,584 / 207) specifically means for each of the four SKUs.
 5. Physical label test-fit of all six label sizes, then owner approval as production dielines.
 6. Application timing on a Ceres jar — the 12 / 10 / 12 s used are the owner's existing 50ml / 100ml per-size timings, not timed on a Ceres jar.
 7. Outbound box density — 100 finished jars per box is the existing 50ml / 100ml figure, not measured on a Ceres jar.
