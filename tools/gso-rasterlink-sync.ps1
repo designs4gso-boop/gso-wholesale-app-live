@@ -34,7 +34,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-rasterlink-sync-config.json")
 )
 
-$ScriptVersion = "gso-rasterlink-sync/1.2 (Patch F jobinfo companion)"
+$ScriptVersion = "gso-rasterlink-sync/1.3 (Patch F jobinfo companion + NotBeforeUtc)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -58,6 +58,9 @@ function Read-SyncConfig([string]$Path) {
     ErrorFolder       = [string]$raw.ErrorFolder
     LogFolder         = [string]$raw.LogFolder
     JobsFolder        = if ($raw.JobsFolder) { [string]$raw.JobsFolder } else { "" }
+    # v1.3: go-live cutoff. Result files last written BEFORE this UTC instant are never
+    # uploaded or moved (they stay where they are). Empty = no cutoff.
+    NotBeforeUtc      = if ($raw.NotBeforeUtc) { [string]$raw.NotBeforeUtc } else { "" }
     Source            = if ($raw.Source) { [string]$raw.Source } else { "rasterlink" }
     PollSeconds       = if ($raw.PollSeconds) { [int]$raw.PollSeconds } else { 30 }
     StableFileSeconds = if ($raw.StableFileSeconds) { [int]$raw.StableFileSeconds } else { 20 }
@@ -277,6 +280,18 @@ function Invoke-JobInfoCompanions($Config, $File) {
       Write-SyncLog $Config "jobinfo_upload_failed" $File.Name "row=$($row.FileName) jobFolder=$($folder.JobId) status=$($result.status) exception=$($result.exception) bodySnippet=$(Get-SafeBodySnippet $result.body)"
     }
   }
+}
+
+# v1.3: keep only result files last written at or after the configured UTC cutoff.
+# An unreadable cutoff value keeps NOTHING (fail closed) rather than everything.
+function Select-FilesAfterCutoff($Files, [string]$NotBeforeUtc) {
+  $kept = New-Object System.Collections.ArrayList
+  if ([string]::IsNullOrWhiteSpace($NotBeforeUtc)) { foreach ($f in @($Files)) { [void]$kept.Add($f) }; return ,$kept }
+  $cutoff = [datetime]::MinValue
+  $style = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+  if (-not [datetime]::TryParse($NotBeforeUtc, [System.Globalization.CultureInfo]::InvariantCulture, $style, [ref]$cutoff)) { return ,$kept }
+  foreach ($f in @($Files)) { if ($f.LastWriteTimeUtc -ge $cutoff) { [void]$kept.Add($f) } }
+  return ,$kept
 }
 
 # Cut results first (the arranged count of a composite lives there), then by time.
@@ -534,6 +549,16 @@ function Invoke-SelfTest {
     $ordered = Get-ResultUploadOrder @(Get-ChildItem -Path $resDir -Filter *.csv -File)
     Assert "cut result is uploaded before its print result" ($ordered[0].Name -match '_cut\.csv$' -and $ordered[1].Name -match '_print\.csv$')
     $sub = Join-Path $resDir "GSOP"; New-Item -ItemType Directory -Path $sub | Out-Null; Set-Content -Path (Join-Path $sub "old_1_OK_print.csv") -Value $csvHead
+    # v1.3 cutoff
+    $oldFile = Get-Item $cutCsv; $oldFile.LastWriteTimeUtc = [datetime]::SpecifyKind([datetime]"2026-11-19T01:00:00", [DateTimeKind]::Utc)
+    $newFile = Get-Item $printCsv; $newFile.LastWriteTimeUtc = [datetime]::SpecifyKind([datetime]"2026-11-19T09:00:00", [DateTimeKind]::Utc)
+    $both = @(Get-ChildItem -Path $resDir -Filter *.csv -File)
+    $afterCut = Select-FilesAfterCutoff $both "2026-11-19T04:00:00Z"
+    Assert "cutoff keeps only files written at or after it" ($afterCut.Count -eq 1 -and $afterCut[0].Name -eq $newFile.Name)
+    Assert "no cutoff keeps everything" ((Select-FilesAfterCutoff $both "").Count -eq 2)
+    Assert "unreadable cutoff keeps nothing (fail closed)" ((Select-FilesAfterCutoff $both "not-a-date").Count -eq 0)
+    $noneLeft = @(Select-FilesAfterCutoff $both "2026-12-01T00:00:00Z" | ForEach-Object { $_ })
+    Assert "nothing after the cutoff is zero files in the main loop (not one empty item)" ($noneLeft.Count -eq 0)
     Assert "files in subfolders (historical backlog) are never listed" (@(Get-ChildItem -Path $resDir -Filter *.csv -File).Count -eq 2)
   } finally {
     Remove-Item $temp -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
@@ -550,12 +575,13 @@ $config = Read-SyncConfig $ConfigPath
 if ($Health) { Invoke-HealthCheck $config; exit 0 }
 
 if ((Split-Path -Leaf ($config.IncomingFolder.TrimEnd('\'))) -ieq "GSOP" -and $config.IncomingFolder -match 'rasterlink\\incoming\\GSOP\\?$') { throw "IncomingFolder points at the historical RasterLink backlog (incoming\GSOP). Refusing to run. Use ...\rasterlink\incoming\UCJV-300." }
-Write-SyncLog $config "watcher_started" "-" "version=$ScriptVersion mode=$(if ($DryRun) { 'dry-run' } elseif ($Once) { 'once' } else { 'poll' }) incoming=$($config.IncomingFolder) jobsFolder=$(if ($config.JobsFolder) { $config.JobsFolder } else { '(not set - no JobInfo companion)' }) onlyFile=$($OnlyFile.Count)"
+Write-SyncLog $config "watcher_started" "-" "version=$ScriptVersion mode=$(if ($DryRun) { 'dry-run' } elseif ($Once) { 'once' } else { 'poll' }) incoming=$($config.IncomingFolder) jobsFolder=$(if ($config.JobsFolder) { $config.JobsFolder } else { '(not set - no JobInfo companion)' }) onlyFile=$($OnlyFile.Count) notBeforeUtc=$(if ($config.NotBeforeUtc) { $config.NotBeforeUtc } else { '(none)' })"
 
 while ($true) {
   # Files DIRECTLY in IncomingFolder only (never -Recurse): subfolders such as the
   # historical ...\incoming\GSOP backlog are never read.
   $files = Get-ResultUploadOrder @(Get-ChildItem -Path $config.IncomingFolder -Filter *.csv -File -ErrorAction SilentlyContinue)
+  $files = @(Select-FilesAfterCutoff $files $config.NotBeforeUtc | ForEach-Object { $_ }) # unroll the returned list (an empty list must be zero files, not one empty item)
   if ($OnlyFile.Count -gt 0) { $files = @($files | Where-Object { $OnlyFile -contains $_.Name }) }
   foreach ($file in $files) {
     Write-SyncLog $config "detected" $file.Name "size=$($file.Length)"

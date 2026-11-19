@@ -292,6 +292,9 @@ describe("idempotency and scope (tests 10, 11, 12)", () => {
     const script = read("tools/gso-rasterlink-sync.ps1");
     expect(script).not.toMatch(/Get-ChildItem[^\n]*IncomingFolder[^\n]*-Recurse/);
     expect(script).toContain("Get-ChildItem -Path $config.IncomingFolder -Filter *.csv -File");
+    // v1.3: a go-live cutoff — older result files are never uploaded or moved; an unreadable cutoff keeps nothing.
+    expect(script).toContain("$files = @(Select-FilesAfterCutoff $files $config.NotBeforeUtc | ForEach-Object { $_ })");
+    expect(script).toContain("if ($f.LastWriteTimeUtc -ge $cutoff) { [void]$kept.Add($f) }");
     expect(script).toContain("Refusing to run");
     const config = JSON.parse(read("tools/gso-rasterlink-sync-config.example.json"));
     expect(config.IncomingFolder).toBe("\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\rasterlink\\incoming\\UCJV-300");
