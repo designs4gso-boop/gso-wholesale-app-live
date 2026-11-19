@@ -11,8 +11,10 @@
 // requirement, conflict and layer-split cases below are therefore proven with
 // white. The new gloss rules live in tests/mimaki-gloss-restored-2026-11-18.test.ts.
 //
-// The shared `decideMachine` (production dispatch, order -> job) and the Cost
-// Calculator / quote routing are deliberately NOT changed; section 9 pins that.
+// updated 2026-11-18: Mimaki gloss restored — the shared `decideMachine`
+// (production dispatch, order -> job) now follows the same gloss rule (untagged
+// CMYK / gloss -> Mimaki; white unchanged AUTO); section 9 pins that 2026-11-18
+// behaviour. The Cost Calculator / quote routing is deliberately NOT changed.
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -356,11 +358,13 @@ describe("8. Patch C still holds", () => {
 });
 
 describe("9. nothing outside Print Intake changed", () => {
-  it("the shared decideMachine (production dispatch, order -> job) keeps its 2026-11-11 behaviour", () => {
-    expect(decideMachine(item())).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
-    expect(decideMachine(item(), "", load(1, 4) as any)).toMatchObject({ machine: "mimaki", machineRule: "auto_load_balanced" });
-    expect(decideMachine(item({ selectedFinish: "White ink" }), "", load(6, 2) as any)).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" });
-    expect(decideMachine(item({ selectedFinish: "Gloss" }))).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
+  it("the shared decideMachine (production dispatch, order -> job) has the 2026-11-18 behaviour (updated 2026-11-18: Mimaki gloss restored; white unchanged)", () => {
+    expect(decideMachine(item())).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    expect(decideMachine(item(), "", load(1, 4) as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    expect(decideMachine(item(), "", load(6, 2) as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] }); // load is not consulted for CMYK
+    expect(decideMachine(item({ selectedFinish: "White ink" }), "", load(6, 2) as any)).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" }); // white unchanged
+    expect(decideMachine(item({ selectedFinish: "White ink" }))).toEqual({ machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] }); // white unchanged
+    expect(decideMachine(item({ selectedFinish: "Gloss" }))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
     for (const file of ["app/lib/ops/production-dispatch.server.ts", "app/lib/ops/production-transition-executor.server.ts", "app/lib/production-job-source.server.ts"]) {
       const text = src(file);
       expect(text, file).toMatch(/\bdecideMachine\(/);

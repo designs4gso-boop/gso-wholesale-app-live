@@ -106,19 +106,31 @@ describe("15H.4B manual job creation", () => {
       const verdict = validateManualJobInput({ requestId: "12345678", customerName: "c", items: [{ productTitle: "t", quantity: 1, finish, printer }], machineLoad });
       return verdict.ok ? `${verdict.items[0].resolvedMachine}:${verdict.items[0].machineRule}` : `REJECT:${(verdict as any).reason}`;
     };
-    // 2026-11-11: no permanent Mimaki default — AUTO without complete load asks for a press
-    expect(resolve("CMYK", "auto")).toMatch(/^REJECT:Automatic press selection is unavailable/);
+    // updated 2026-11-18: Mimaki gloss restored — AUTO CMYK (no white layer) is the Mimaki default, with or without load
+    expect(resolve("CMYK", "auto")).toBe("mimaki:default_cmyk");
     const load = { source: "t", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 7, estimatedMinutes: null }, roland: { openItems: 1, estimatedMinutes: null } } };
-    expect(resolve("CMYK", "auto", load)).toBe("roland:auto_load_balanced");
-    expect(resolve("White", "auto", load)).toBe("roland:auto_load_balanced");
+    expect(resolve("CMYK", "auto", load)).toBe("mimaki:default_cmyk"); // load is not consulted for CMYK any more
+    expect(resolve("White", "auto", load)).toBe("roland:auto_load_balanced"); // white unchanged: AUTO by complete load
+    expect(resolve("White", "auto")).toMatch(/^REJECT:Automatic press selection is unavailable/); // white unchanged: no load -> choose a press
     expect(resolve("CMYK", "roland")).toBe("roland:explicit_erp_machine");
     expect(resolve("CMYK", "mimaki")).toBe("mimaki:explicit_erp_machine");
     expect(resolve("White", "mimaki")).toBe("mimaki:explicit_erp_machine"); // the Mimaki prints White
-    expect(resolve("Gloss", "auto")).toBe("roland:gloss_requires_roland");
-    expect(resolve("White + Gloss", "auto")).toBe("roland:gloss_requires_roland");
+    expect(resolve("Gloss", "auto")).toBe("mimaki:default_cmyk"); // updated 2026-11-18: Mimaki gloss restored (was roland:gloss_requires_roland)
+    expect(resolve("Gloss", "auto", load)).toBe("mimaki:default_cmyk");
+    expect(resolve("Gloss", "roland")).toBe("roland:explicit_erp_machine");
     expect(resolve("White", "roland")).toBe("roland:explicit_erp_machine");
-    expect(resolve("Gloss", "mimaki")).toContain("REJECT");
-    expect(resolve("White + Gloss", "mimaki")).toContain("REJECT");
+    // updated 2026-11-18: Mimaki gloss restored — gloss on an explicit Mimaki is a valid route, no longer a rejected contradiction
+    expect(resolve("Gloss", "mimaki")).toBe("mimaki:explicit_erp_machine");
+    expect(resolve("White + Gloss", "mimaki")).toBe("mimaki:explicit_erp_machine");
+  });
+
+  // WHITE IS UNCHANGED (2026-11-18): an untagged WHITE + GLOSS job resolved to the Roland before the
+  // gloss rule was dropped and still does — it is never left to load balancing.
+  it("12-17+E (white + gloss, AUTO). an untagged white + gloss manual job resolves to the Roland", () => {
+    const verdict = validateManualJobInput({ requestId: "12345678", customerName: "c", items: [{ productTitle: "t", quantity: 1, finish: "White + Gloss", printer: "auto" as any }], machineLoad: null });
+    const resolved = verdict.ok ? `${verdict.items[0].resolvedMachine}:${verdict.items[0].machineRule}` : `REJECT:${(verdict as any).reason}`;
+    // 2026-11-18: still the Roland (white is unchanged); only the rule label changed with the gloss rule.
+    expect(resolved).toBe("roland:white_or_gloss");
   });
 
   it("18-20+K. Print Intake resolves the manual job by item ticket, job ticket, and suggested filename", async () => {
@@ -134,7 +146,9 @@ describe("15H.4B manual job creation", () => {
     };
     const byItem = decideIntakeRoute({ fileName: `${item.itemTicket}_final.pdf`, jobs: [intakeJob] });
     expect(byItem.decision).toBe("route");
-    expect(byItem.machine).toBe("roland"); // gloss manual job routes Roland at intake too
+    expect(item.machineSummary).toBe("Mimaki UCJV300-130"); // updated 2026-11-18: Mimaki gloss restored — an AUTO gloss manual job is created on the Mimaki
+    expect(byItem.machine).toBe("mimaki"); // updated 2026-11-18: Mimaki gloss restored — the gloss manual job routes to the Mimaki at intake too
+    expect(byItem.machineRule).toBe("explicit_erp_machine");
     expect(decideIntakeRoute({ fileName: `${data.jobTicket}.pdf`, jobs: [intakeJob] }).decision).toBe("route");
     expect(decideIntakeRoute({ fileName: `${item.suggestedFileName}.pdf`, jobs: [intakeJob] }).decision).toBe("route");
     expect(decideIntakeRoute({ fileName: "artwork.pdf", subfolder: `${data.jobTicket} - WALKIN`, jobs: [intakeJob] }).decision).toBe("route");

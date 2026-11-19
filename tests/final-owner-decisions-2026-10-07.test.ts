@@ -200,14 +200,14 @@ describe("E. production: QC PASS REQUIRED BEFORE COMPLETION", () => {
   });
 });
 
-describe("F. routing (superseded 2026-11-11): gloss -> Roland; the Mimaki prints CMYK + White", () => {
-  it("decideMachine routes gloss to the Roland; White no longer forces a press; the Mimaki white slots stay disabled until calibrated", () => {
+describe("F. routing (superseded 2026-11-11; updated 2026-11-18: Mimaki gloss restored): untagged gloss / CMYK -> Mimaki; the Mimaki prints CMYK + White", () => {
+  it("decideMachine routes untagged gloss and CMYK to the Mimaki (updated 2026-11-18: Mimaki gloss restored); White no longer forces a press; the Mimaki white slots stay disabled until calibrated", () => {
     const white = decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any);
     expect(String(white.machine)).toMatch(/mimaki/i);
     const gloss = decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any);
-    expect(String(gloss.machine)).toMatch(/roland/i);
+    expect(gloss).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] }); // updated 2026-11-18: Mimaki gloss restored
     const cmyk = decideMachine({ selectedFinish: "CMYK", materialSummary: "standard cmyk", machineSummary: null } as any);
-    expect(cmyk.machine).toBeNull(); // no permanent Mimaki default without load data
+    expect(cmyk).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] }); // updated 2026-11-18: plain CMYK defaults to the Mimaki
     const machines = src("app/routes/app.erp.machines.tsx");
     expect(machines).not.toMatch(/inkName: "White", inkType: "white", cartridgeCost: MIMAKI_BOTTLE_COST_ESTIMATE/);
     expect(machines).toContain('inkName: "White (Mimaki calibration pending)", inkType: "white", cartridgeCost: 0, cartridgeMl: 0, mlPerSqft1Pct: 0, enabled: false');

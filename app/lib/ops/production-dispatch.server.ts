@@ -1,9 +1,10 @@
 // GSO Operations Agent Platform — Production Dispatcher (plan only).
 //
 // Machine assignment is decided by the ONE canonical decider the print-intake
-// agent already uses (decideMachine): gloss -> Roland; explicit press wins;
-// otherwise the less busy press from complete load data, else BLOCK (choose a
-// press); explicit Mimaki on gloss = contradiction = BLOCK. This module never
+// agent already uses (decideMachine, updated 2026-11-18): explicit press wins;
+// with nothing explicit CMYK and CMYK + gloss go to the Mimaki; a white layer
+// uses the less busy press from complete load data, else BLOCK (choose a
+// press). This module never
 // copies files or writes hot folders; the PowerShell print-intake agent
 // remains the executor.
 

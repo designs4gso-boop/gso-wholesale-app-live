@@ -82,8 +82,9 @@ describe("15H.3 intake review + retry", () => {
 
   it("M. the three blocked live files classify deterministically under current rules", () => {
     expect(decideMachineFromFilename("BUTTAWAY_bently_ROLAND.pdf")).toMatchObject({ machine: "roland", machineRule: "explicit_roland_tag", mode: "CMYK" });
-    expect(decideMachineFromFilename("GSO PIPELINE TEST_3X SPOT GLOSS_Roland.pdf")).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland", mode: "GLOSS-3X" });
-    expect(decideMachineFromFilename("GSO PIPELINE TEST 2_1X SPOT GLOSS_Roland.pdf")).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland", mode: "GLOSS-1X" });
+    // updated 2026-11-18: Mimaki gloss restored — these still go to the Roland, but because of the Roland token, not because of gloss
+    expect(decideMachineFromFilename("GSO PIPELINE TEST_3X SPOT GLOSS_Roland.pdf")).toMatchObject({ machine: "roland", machineRule: "explicit_roland_tag", mode: "GLOSS-3X", reasons: ["standalone_roland_tag_in_filename"] });
+    expect(decideMachineFromFilename("GSO PIPELINE TEST 2_1X SPOT GLOSS_Roland.pdf")).toMatchObject({ machine: "roland", machineRule: "explicit_roland_tag", mode: "GLOSS-1X", reasons: ["standalone_roland_tag_in_filename"] });
   });
 
   it("G. agent reconciliation pins: routed skips locally; blocked hashes ask the server; fail closed offline", () => {

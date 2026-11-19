@@ -219,19 +219,19 @@ describe("machine routing from jar summaries (canonical authority reuse)", () =>
     return { summary: canonicalJarMaterialSummary(jar), finishLabel: jar.finishLabel };
   }
 
-  // 2026-11-11: no permanent Mimaki default — an unassigned plain item needs complete load or a chosen press.
-  it("plain CMYK (0X + Standard label) is never treated as gloss — even with the Gloss base finish — and has no fixed press", () => {
+  // updated 2026-11-18: Mimaki gloss restored — an unassigned plain (no white layer) item defaults to the Mimaki.
+  it("plain CMYK (0X + Standard label) is never treated as gloss — even with the Gloss base finish — and defaults to the Mimaki (updated 2026-11-18: Mimaki gloss restored)", () => {
     for (const baseFinish of ["Matte", "Gloss"]) {
       const { summary, finishLabel } = summaryFor({ baseFinish });
       const decision = decideMachine({ selectedFinish: finishLabel, materialSummary: summary, machineSummary: null } as any);
-      expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
+      expect(decision).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
     }
   });
 
-  it("specialty layers route Roland", () => {
+  it("specialty (gloss) layers route to the Mimaki by default (updated 2026-11-18: Mimaki gloss restored)", () => {
     const { summary, finishLabel } = summaryFor({ specialty: "Ultra Layered — 5X" });
     const decision = decideMachine({ selectedFinish: finishLabel, materialSummary: summary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
+    expect(decision).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
   });
 
   it("holographic (technical white underbase) no longer forces the Roland — White runs on either press", () => {
@@ -315,7 +315,8 @@ describe("16D.1 — remaining jar family owner launch pricing (authority)", () =
     expect(summary.toLowerCase().includes("clear")).toBe(false);
     expect(/jar color/i.test(summary)).toBe(false);
     const decision = decideMachine({ selectedFinish: jar.finishLabel, materialSummary: summary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
+    // updated 2026-11-18: Mimaki gloss restored — plain CMYK with nothing explicit is the Mimaki default.
+    expect(decision).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
     // invalid colors fail closed
     expect(parseCanonicalJarOrderLine(meta.replace('"White"', '"Chartreuse"'))).toBeNull();
   });
@@ -349,7 +350,8 @@ describe("16D.1 — remaining jar family owner launch pricing (authority)", () =
     expect(item.productionNotes).toContain("Jar Color (customer): Clear");
     expect(/clear/i.test(item.materialSummary)).toBe(false);
     const decision = decideMachine({ selectedFinish: item.selectedFinish, materialSummary: item.materialSummary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
+    // updated 2026-11-18: Mimaki gloss restored — plain CMYK with nothing explicit is the Mimaki default.
+    expect(decision).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
   });
 });
 

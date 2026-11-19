@@ -209,7 +209,10 @@ describe("15H.2 shared strict RIP identity matcher", () => {
   it("19+20. no machine-routing or pricing files were touched by 15H.2", () => {
     const routing = readFileSync("app/lib/print-intake-routing.server.ts", "utf8");
     expect(routing).toContain('if (!choice.ok) return { machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] };');
-    expect(routing).toContain('return { machine: "roland", machineRule: "gloss_requires_roland", mode: hints.mode, reasons: ["gloss_requires_roland"] };');
+    // updated 2026-11-18: Mimaki gloss restored — the routing file legitimately changed (owner rule, not 15H.2): the old
+    // `gloss_requires_roland` return is gone; the pin now holds the current filename-decider default line instead.
+    expect(routing).toContain('return { machine: "mimaki", machineRule: "default_cmyk", mode: hints.mode, reasons: [hints.glossLayers > 0 ? "cmyk_gloss_default_mimaki" : "cmyk_only_default_mimaki"] };');
+    expect(routing).not.toContain('machineRule: "gloss_requires_roland",'); // only the historical type label remains
     const policy = readFileSync("app/lib/commercial-pricing-policy.server.ts", "utf8");
     expect(policy).toContain("BAGS_4X5_FRONT_LADDER");
     // loose matchers are gone from automatic linking

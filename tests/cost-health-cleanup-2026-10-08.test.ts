@@ -89,12 +89,12 @@ describe("ISSUE 2 — 4x5 blank bag live-data authority (resolved by owner decis
   });
 });
 
-describe("ISSUE 3 (corrected 2026-11-11) — the Mimaki prints CMYK + White; only gloss routes away", () => {
-  it("routing authority sends gloss to the Roland; an explicit Mimaki assignment on white is a valid route; on gloss it is a contradiction", () => {
-    expect(decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any).machine).toBe("roland");
+describe("ISSUE 3 (corrected 2026-11-11; updated 2026-11-18: Mimaki gloss restored) — the Mimaki prints CMYK + White + Gloss", () => {
+  it("routing authority (updated 2026-11-18: Mimaki gloss restored) sends untagged gloss to the Mimaki; an explicit Mimaki assignment is a valid route on white AND on gloss", () => {
+    expect(decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
     expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBe("mimaki");
-    expect(decideMachine({ selectedFinish: "Spot Gloss", materialSummary: "spot gloss", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBeNull();
-    expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeCloseTo(0.09, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed (the shared production router above is unchanged)
+    expect(decideMachine({ selectedFinish: "Spot Gloss", materialSummary: "spot gloss", machineSummary: "Mimaki UCJV300-130" } as any)).toEqual({ machine: "mimaki", machineRule: "explicit_erp_machine", reasons: ["explicit_erp_mimaki_assignment"] });
+    expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeCloseTo(0.09, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed (the shared production router above follows the same rule since 2026-11-18)
   });
 
   it("Cost Health treats Mimaki white slots as real capacity (not hardware-only) and still never warns that the Mimaki lacks a gloss channel", () => {

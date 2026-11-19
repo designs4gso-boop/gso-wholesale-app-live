@@ -260,15 +260,16 @@ describe("canonical sticker snapshot + routing", () => {
     expect(parseCanonicalStickerOrderLine(meta.replace('"Matte"', '"Satin"'))).toBeNull();
   });
 
-  it("matte 0X routes Mimaki (token-clean); specialty and holographic route Roland", () => {
+  // updated 2026-11-18: Mimaki gloss restored — matte 0X and specialty (gloss) default to the Mimaki; holographic (white) is unchanged AUTO.
+  it("matte 0X routes Mimaki (token-clean); specialty routes Mimaki (updated 2026-11-18: Mimaki gloss restored); holographic white stays AUTO", () => {
     const plain = parseCanonicalStickerOrderLine(metaFor())!;
     const plainSummary = canonicalStickerMaterialSummary(plain);
     for (const token of ["white", "gloss", "clear", "varnish", "primer", "spot uv"]) {
       expect(plainSummary.toLowerCase().includes(token), token).toBe(false);
     }
-    expect(decideMachine({ selectedFinish: plain.finishLabel, materialSummary: plainSummary, machineSummary: null } as any)).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
+    expect(decideMachine({ selectedFinish: plain.finishLabel, materialSummary: plainSummary, machineSummary: null } as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
     const gloss = parseCanonicalStickerOrderLine(metaFor({ specialty: "Ultra Layered — 5X" }))!;
-    expect(decideMachine({ selectedFinish: gloss.finishLabel, materialSummary: canonicalStickerMaterialSummary(gloss), machineSummary: null } as any)).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
+    expect(decideMachine({ selectedFinish: gloss.finishLabel, materialSummary: canonicalStickerMaterialSummary(gloss), machineSummary: null } as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
     const holo = parseCanonicalStickerOrderLine(metaFor({ material: "Holographic" }))!;
     const holoSummary = canonicalStickerMaterialSummary(holo);
     expect(holoSummary).toContain("White Layers: 1");

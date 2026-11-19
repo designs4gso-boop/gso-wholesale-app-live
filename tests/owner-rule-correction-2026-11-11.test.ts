@@ -240,10 +240,22 @@ describe("C. fixed machine overhead is per physical print run", () => {
   });
 });
 
-describe("D. quote routing and Production routing agree", () => {
+// updated 2026-11-18: Mimaki gloss restored. Production routing (decideMachine) now
+// sends untagged gloss and untagged CMYK to the Mimaki. Quote / Cost Calculator
+// routing (machine-routing.server.ts) is deliberately unchanged: it still estimates
+// gloss on the Roland (no Mimaki gloss calibration exists yet) and still load-balances
+// AUTO CMYK. The two still agree on explicit presses and on AUTO white.
+describe("D. quote routing and Production routing agree (updated 2026-11-18: Mimaki gloss restored — explicit presses and AUTO white agree; untagged gloss / CMYK are pinned separately)", () => {
   const item = (o: Record<string, unknown>) => ({ id: "i", itemTicket: null, ripJobName: null, suggestedFileName: null, productTitle: "x", selectedFinish: null, materialSummary: null, machineSummary: null, ...o }) as any;
+  it("gloss (updated 2026-11-18: Mimaki gloss restored): production sends untagged gloss to the Mimaki; quote / cost estimating still uses the Roland gloss calibration", () => {
+    // production routing: untagged gloss -> Mimaki
+    expect(decideMachine(item({ selectedFinish: "Spot Gloss" }))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
+    // quote / Cost Calculator: still estimated on the Roland, pending a Mimaki gloss calibration
+    const quote = route("auto", { gloss: 1 });
+    expect(quote.effectivePrinter).toBe("roland");
+    expect(quote.autoSelection.status).toBe("gloss_requires_roland");
+  });
   it.each([
-    ["gloss", { selectedFinish: "Spot Gloss" }, { gloss: 1 }],
     ["explicit Mimaki white", { selectedFinish: "White ink", machineSummary: "Mimaki UCJV300-130" }, { white: 1 }, "mimaki"],
     ["explicit Roland CMYK", { machineSummary: "Roland LG-640" }, {}, "roland"],
   ] as const)("%s", (_l, prod, layers, printer: string = "auto") => {
@@ -251,12 +263,22 @@ describe("D. quote routing and Production routing agree", () => {
     const production = decideMachine(item(prod));
     expect(production.machine).toBe(quote.effectivePrinter);
   });
-  it("Auto non-gloss with the same load picks the same press in both; with no load both refuse to guess", () => {
+  it("Auto CMYK (updated 2026-11-18: Mimaki gloss restored): production defaults to the Mimaki with or without load; the quote still load-balances and refuses to guess without load", () => {
     const l = load(6, 1);
-    expect(decideMachine(item({}), "", l).machine).toBe(route("auto", {}, { machineLoad: l }).effectivePrinter);
-    expect(decideMachine(item({})).machine).toBeNull();
+    // production routing: untagged CMYK -> Mimaki, load is not consulted
+    expect(decideMachine(item({}), "", l)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    expect(decideMachine(item({}))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    expect(decideMachineFromFilename("Cust_matte.pdf")).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    // quote / Cost Calculator: unchanged — AUTO CMYK is load-balanced, and unavailable without load
+    expect(route("auto", {}, { machineLoad: l }).effectivePrinter).toBe("roland");
     expect(route("auto").autoSelection.status).toBe("unavailable");
-    expect(decideMachineFromFilename("Cust_matte.pdf").machine).toBeNull();
+  });
+  it("Auto WHITE is unchanged: with the same load both pick the same press; with no load production refuses to guess", () => {
+    const l = load(6, 1);
+    const production = decideMachine(item({ selectedFinish: "White ink" }), "", l);
+    expect(production).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" });
+    expect(production.machine).toBe(route("auto", { white: 1 }, { machineLoad: l }).effectivePrinter);
+    expect(decideMachine(item({ selectedFinish: "White ink" }))).toEqual({ machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
   });
   it("a converted quote carries the press it was COSTED on (historical snapshot authority, not re-routing)", () => {
     // a pre-2026-11-11 snapshot costed AUTO CMYK on the Mimaki keeps the Mimaki
@@ -267,7 +289,10 @@ describe("D. quote routing and Production routing agree", () => {
   });
   it("stated zero layers in a canonical summary are never read as gloss", () => {
     expect(decideMachine(item({ materialSummary: "Gloss Layers: 0X | White Layers: 1" }), "", load(0, 3)).machine).toBe("mimaki");
-    expect(decideMachine(item({ materialSummary: "Gloss Layers: 2X" })).machine).toBe("roland");
+    expect(needsGloss(item({ materialSummary: "Gloss Layers: 0X | White Layers: 1" }))).toBe(false);
+    // updated 2026-11-18: Mimaki gloss restored — a stated 2X IS gloss, and untagged gloss now routes to the Mimaki (was the Roland)
+    expect(needsGloss(item({ materialSummary: "Gloss Layers: 2X" }))).toBe(true);
+    expect(decideMachine(item({ materialSummary: "Gloss Layers: 2X" }))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
   });
 });
 
@@ -406,10 +431,10 @@ describe("Primer is not configured on either press (owner decision 2026-11-11)",
     expect(decideMachine(item({ selectedFinish: "Primer" }), "", MIMAKI_IDLE).machine).toBeNull();
     expect(decideMachine(item({ selectedFinish: "CMYK" }), "", MIMAKI_IDLE).machine).toBe("mimaki"); // same load routes non-Primer work
   });
-  it("Primer is detected but no longer counted as gloss; Gloss alone still forces the Roland", () => {
+  it("Primer is detected but no longer counted as gloss; Gloss alone routes to the Mimaki by default (updated 2026-11-18: Mimaki gloss restored)", () => {
     expect(needsPrimer(item({ selectedFinish: "Primer" }))).toBe(true);
     expect(needsGloss(item({ selectedFinish: "Primer" }))).toBe(false);
-    expect(decideMachine(item({ selectedFinish: "Gloss" }))).toMatchObject({ machine: "roland", machineRule: "gloss_requires_roland" });
+    expect(decideMachine(item({ selectedFinish: "Gloss" }))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
   });
 });
 

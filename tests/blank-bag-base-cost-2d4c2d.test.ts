@@ -227,10 +227,12 @@ describe("4x5 blank bag authority (5) everything else is unchanged", () => {
     expect(STICKER_BAG_MOQ).toBe(50);
   });
 
-  it("routing (corrected 2026-11-11): gloss -> Roland; CMYK / White need an assigned press or complete load", () => {
+  // updated 2026-11-18: Mimaki gloss restored — untagged gloss and untagged CMYK default to the Mimaki; White is unchanged.
+  it("routing (updated 2026-11-18: Mimaki gloss restored): untagged gloss / CMYK -> Mimaki; White needs an assigned press or complete load", () => {
     expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBe("mimaki");
-    expect(decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any).machine).toBe("roland");
-    expect(decideMachine({ selectedFinish: "CMYK", materialSummary: "standard cmyk", machineSummary: null } as any).machine).toBeNull();
+    expect(decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
+    expect(decideMachine({ selectedFinish: "CMYK", materialSummary: "standard cmyk", machineSummary: null } as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: null } as any)).toEqual({ machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] }); // white unchanged
   });
 
   it("machine recovery stays $5/hour (owner_verified)", () => {

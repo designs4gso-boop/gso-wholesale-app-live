@@ -95,9 +95,12 @@ describe("GSO flow: sticker bag order from lead to invoice readiness", () => {
       { id: "i2", itemTicket: "GSO-A-02", productTitle: "gloss", selectedFinish: "spot gloss", materialSummary: "spot gloss", machineSummary: null },
       { id: "i3", itemTicket: "GSO-A-03", productTitle: "white on mimaki", selectedFinish: "white", materialSummary: "white", machineSummary: "mimaki" },
       { id: "i4", itemTicket: "GSO-A-04", productTitle: "gloss on mimaki", selectedFinish: "gloss", materialSummary: "gloss", machineSummary: "mimaki" },
+      { id: "i5", itemTicket: "GSO-A-05", productTitle: "white unassigned", selectedFinish: "White ink", materialSummary: "white ink layer", machineSummary: null },
     ]);
-    // 2026-11-11: no load data -> an unassigned CMYK item blocks for a press choice; white runs on the Mimaki; gloss on the Mimaki blocks
-    expect(dispatch.lines.map((l) => [l.decision, l.machine])).toEqual([["BLOCK", null], ["DISPATCH", "roland"], ["DISPATCH", "mimaki"], ["BLOCK", null]]);
+    // updated 2026-11-18: Mimaki gloss restored — unassigned CMYK and unassigned gloss default to the Mimaki (no load needed);
+    // white runs on the assigned Mimaki; gloss on an assigned Mimaki is a valid route (no longer a contradiction);
+    // an unassigned WHITE item is unchanged: no load data -> blocks for a press choice.
+    expect(dispatch.lines.map((l) => [l.decision, l.machine])).toEqual([["DISPATCH", "mimaki"], ["DISPATCH", "mimaki"], ["DISPATCH", "mimaki"], ["DISPATCH", "mimaki"], ["BLOCK", null]]);
     const load = { source: "t", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 0, estimatedMinutes: 0 }, roland: { openItems: 2, estimatedMinutes: 45 } } };
     expect(planDispatch([{ id: "i1", itemTicket: "GSO-A-01", productTitle: "matte", selectedFinish: "matte", materialSummary: "matte", machineSummary: null }], load).lines[0].machine).toBe("mimaki");
 

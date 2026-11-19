@@ -145,16 +145,18 @@ describe("deterministic mapping hierarchy", () => {
   });
 });
 
-describe("machine routing (owner rules, corrected 2026-11-11)", () => {
+// updated 2026-11-18: Mimaki gloss restored — gloss no longer forces the Roland in the shared decideMachine.
+describe("machine routing (owner rules, corrected 2026-11-11; updated 2026-11-18: Mimaki gloss restored)", () => {
   const unassigned = (o: Partial<IntakeItem> = {}) => makeItem({ machineSummary: null, ...o });
   const load = (m: number, r: number, unattributed = 0) => ({ source: "test", capturedAt: "t", unattributedOpenItems: unattributed, byPrinter: { mimaki: { openItems: m, estimatedMinutes: null }, roland: { openItems: r, estimatedMinutes: null } } });
 
-  it("rule 1: GLOSS routes to Roland (gloss_requires_roland); White alone does not force a press", () => {
+  it("rule 1 (updated 2026-11-18: Mimaki gloss restored): untagged GLOSS routes to the Mimaki (default_cmyk / cmyk_gloss_default_mimaki); White alone does not force a press", () => {
     expect(needsWhiteOrGloss(makeItem({ selectedFinish: "White + Gloss" }))).toBe(true);
     expect(needsGloss(makeItem({ selectedFinish: "White ink" }))).toBe(false);
     const decision = decideMachine(unassigned({ selectedFinish: "Spot Gloss" }));
-    expect(decision.machine).toBe("roland");
-    expect(decision.machineRule).toBe("gloss_requires_roland");
+    expect(decision.machine).toBe("mimaki");
+    expect(decision.machineRule).toBe("default_cmyk");
+    expect(decision.reasons).toEqual(["cmyk_gloss_default_mimaki"]);
     // white on an explicitly assigned Mimaki is a valid route now
     const mimakiWhite = decideMachine(makeItem({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300" }));
     expect(mimakiWhite.machine).toBe("mimaki");
@@ -191,19 +193,28 @@ describe("machine routing (owner rules, corrected 2026-11-11)", () => {
     expect(mimaki).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag" });
   });
 
-  it("rule 4: unassigned, untagged non-gloss work — no permanent Mimaki default; AUTO uses COMPLETE load only", () => {
+  it("rule 4 (updated 2026-11-18: Mimaki gloss restored): unassigned, untagged CMYK defaults to the Mimaki; unassigned WHITE still uses AUTO with COMPLETE load only", () => {
+    // CMYK (no white layer): Mimaki default — load is not consulted, whatever it says
     const noLoad = decideMachine(unassigned());
-    expect(noLoad.machine).toBeNull();
-    expect(noLoad.reasons).toContain("auto_machine_load_unavailable_select_printer");
+    expect(noLoad.machine).toBe("mimaki");
+    expect(noLoad.machineRule).toBe("default_cmyk");
+    expect(noLoad.reasons).toEqual(["cmyk_only_default_mimaki"]);
+    expect(decideMachine(unassigned(), "", load(0, 9, 1))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    expect(decideMachine(unassigned(), "", load(3, 3))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    expect(decideMachine(unassigned(), "", load(1, 4))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    expect(decideMachine(unassigned(), "", load(9, 0))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
+    // WHITE is unchanged: AUTO by complete load, else review
+    const white = () => unassigned({ selectedFinish: "White ink" });
+    expect(decideMachine(white())).toEqual({ machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
     // incomplete attribution is not "less busy"
-    expect(decideMachine(unassigned(), "", load(0, 9, 1)).machine).toBeNull();
+    expect(decideMachine(white(), "", load(0, 9, 1)).machine).toBeNull();
     // a tie is not "less busy" either — never first-in-list
-    expect(decideMachine(unassigned(), "", load(3, 3)).machine).toBeNull();
-    const balanced = decideMachine(unassigned({ selectedFinish: "White ink" }), "", load(6, 2));
+    expect(decideMachine(white(), "", load(3, 3)).machine).toBeNull();
+    const balanced = decideMachine(white(), "", load(6, 2));
     expect(balanced).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" });
-    expect(decideMachine(unassigned(), "", load(1, 4)).machine).toBe("mimaki");
-    // Patch B (2026-11-18): the shared decideMachine above is unchanged, but PRINT INTAKE no longer
-    // load-balances — an unassigned, untagged CMYK file routes to the Mimaki with or without load data.
+    expect(decideMachine(white(), "", load(1, 4))).toMatchObject({ machine: "mimaki", machineRule: "auto_load_balanced" });
+    // Patch B (2026-11-18): PRINT INTAKE never load-balances — an unassigned, untagged CMYK file
+    // routes to the Mimaki with or without load data (the shared decideMachine above now agrees for CMYK).
     const routed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [unassigned()] })] });
     expect(routed).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "default_cmyk" });
     const routedWithLoad = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [unassigned()] })], machineLoad: load(0, 2) });
@@ -212,10 +223,12 @@ describe("machine routing (owner rules, corrected 2026-11-11)", () => {
     expect(busyMimaki).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "default_cmyk" }); // load is ignored
   });
 
-  it("contradictory data still reviews: gloss vs explicit Mimaki, ROLAND tag vs explicit Mimaki, both-printer summaries", () => {
+  it("contradictory data still reviews: ROLAND tag vs explicit Mimaki, both-printer summaries — gloss on an explicit Mimaki is NOT a contradiction any more (updated 2026-11-18: Mimaki gloss restored)", () => {
     const glossMimaki = decideMachine(makeItem({ selectedFinish: "Spot gloss", machineSummary: "Mimaki UCJV300" }));
-    expect(glossMimaki.machine).toBeNull();
-    expect(glossMimaki.reasons).toContain("gloss_job_but_mimaki_selected_contradiction");
+    expect(glossMimaki.machine).toBe("mimaki");
+    expect(glossMimaki.machineRule).toBe("explicit_erp_machine");
+    expect(glossMimaki.reasons).toEqual(["explicit_erp_mimaki_assignment"]);
+    expect(glossMimaki.reasons).not.toContain("gloss_job_but_mimaki_selected_contradiction");
 
     const tagMimaki = decideMachine(makeItem({ machineSummary: "Mimaki UCJV300" }), "GSO-20260718-0001-01_ROLAND.pdf");
     expect(tagMimaki.machine).toBeNull();
@@ -225,7 +238,7 @@ describe("machine routing (owner rules, corrected 2026-11-11)", () => {
     expect(both.machine).toBeNull();
     expect(both.reasons).toContain("machine_summary_contradictory_or_unknown");
 
-    // 2026-11-18: for PRINT INTAKE gloss on the Mimaki is valid again (the shared decideMachine above is unchanged);
+    // 2026-11-18: for PRINT INTAKE gloss on the Mimaki is valid again (and, since the same day, for the shared decideMachine above too);
     // WHITE with an explicit Mimaki is still the contradiction that reviews.
     const glossOnMimaki = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [makeItem({ selectedFinish: "Gloss", machineSummary: "Mimaki UCJV300" })] })] });
     expect(glossOnMimaki).toMatchObject({ decision: "route", machine: "mimaki", machineRule: "explicit_erp_machine" });

@@ -171,7 +171,8 @@ describe("canonical DTP snapshot", () => {
       expect(summary.toLowerCase().includes(token), token).toBe(false);
     }
     const decision = decideMachine({ selectedFinish: dtp.finishLabel, materialSummary: summary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
+    // updated 2026-11-18: Mimaki gloss restored — nothing explicit and no white layer is the plain Mimaki default.
+    expect(decision).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
   });
 });
 

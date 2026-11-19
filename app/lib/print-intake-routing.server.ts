@@ -11,12 +11,12 @@
 //   customer-name matching; two+ candidates at any tier route NOTHING;
 // - the server returns a machine KEY only — hot-folder paths live exclusively
 //   in the local agent config (no local paths cross the wire or reach the UI);
-// - machine routing follows the owner rules (corrected 2026-11-11, see
-//   decideMachine): GLOSS -> Roland LG-640; White alone does NOT force a
-//   press (the Mimaki prints White). Explicit ERP assignment or a standalone
-//   ROLAND / MIMAKI filename tag wins when compatible. Otherwise AUTO picks
-//   the less busy press from complete load data, or reviews — never a
-//   permanent Mimaki default. Contradictory machine data reviews, never guesses.
+// - machine routing follows the owner rules (updated 2026-11-18 — Mimaki
+//   gloss restored, see decideMachine): an explicit ERP assignment or a
+//   standalone ROLAND / MIMAKI filename tag wins; with nothing explicit, CMYK
+//   and CMYK + gloss go to the Mimaki; a WHITE layer keeps its 2026-11-11
+//   handling (AUTO by complete load data, or review). Contradictory machine
+//   data reviews, never guesses.
 import { selectLessBusyPrinter, type MachineLoadSnapshot } from "./machine-load-balancing";
 
 export const INTAKE_OUTCOMES_MARKER = "gso-print-intake-outcomes-v1";
@@ -133,8 +133,16 @@ const finishHaystack = (item: Pick<IntakeItem, "selectedFinish" | "materialSumma
     .join(" ")
     .replace(/\b(gloss|white) layers:\s*0\s*x?\b/g, " ");
 
+// 2026-11-18 (negation fix): a finish that says it has NO gloss ("No Spot Gloss",
+// "No Gloss", "No UV", "No Varnish", "No Specialty", "No Specialty — 0X") is
+// not a gloss requirement. Every real storefront / configurator order line
+// that has no gloss carries exactly that wording, so reading it as gloss sent
+// plain CMYK work to the Roland.
+const NEGATED_GLOSS_RE = /\bno\s+(?:spot\s+)?(?:gloss|uv|varnish|specialty)\b/g;
+const withoutNegatedGloss = (haystack: string) => haystack.replace(NEGATED_GLOSS_RE, " ");
+
 export function needsWhiteOrGloss(item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">): boolean {
-  const haystack = finishHaystack(item);
+  const haystack = withoutNegatedGloss(finishHaystack(item));
   return WHITE_GLOSS_TOKENS.some((token) => haystack.includes(token));
 }
 
@@ -144,9 +152,9 @@ export function needsPrimer(item: Pick<IntakeItem, "selectedFinish" | "materialS
   return PRIMER_TOKENS.some((token) => haystack.includes(token));
 }
 
-/** True when the finish needs a gloss-class layer — the only thing that forces the Roland. */
+/** True when the finish needs a gloss-class layer. Negation-aware. Since 2026-11-18 gloss no longer decides the press. */
 export function needsGloss(item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">): boolean {
-  const haystack = finishHaystack(item);
+  const haystack = withoutNegatedGloss(finishHaystack(item));
   return GLOSS_TOKENS.some((token) => haystack.includes(token));
 }
 
@@ -173,15 +181,19 @@ export type MachineDecision = {
   reasons: string[];
 };
 
-// Owner routing rules (corrected 2026-11-11 — the Mimaki prints White):
+// Shared press decision (production dispatch, manual job entry, the agent
+// transition check). Owner rules, updated 2026-11-18 — MIMAKI GLOSS RESTORED:
 //   0. Primer requested                   -> review PRIMER_NOT_CONFIGURED (no press)
-//   1. gloss required                    -> Roland LG-640 (gloss_requires_roland);
-//                                            explicit Mimaki / MIMAKI tag -> review
-//   2. explicit ERP Roland / Mimaki       -> that press (explicit_erp_machine)
-//   3. standalone ROLAND / MIMAKI tag     -> that press (explicit_*_tag)
-//   4. otherwise (CMYK and/or White)      -> AUTO: the less busy press from
+//   1. explicit ERP Roland / Mimaki       -> that press (explicit_erp_machine)
+//   2. standalone ROLAND / MIMAKI tag     -> that press (explicit_*_tag)
+//   3. nothing explicit, CMYK             -> Mimaki (default_cmyk)
+//   4. nothing explicit, CMYK + gloss     -> Mimaki (default_cmyk) — gloss no
+//      longer forces the Roland, and gloss + an explicit Mimaki is no longer a
+//      contradiction.
+//   5. nothing explicit, WHITE layer      -> UNCHANGED from 2026-11-11: AUTO by
 //      COMPLETE load data (auto_load_balanced), else review — the operator
-//      chooses. Never a permanent Mimaki default, never first-in-list.
+//      chooses. White + gloss untagged -> Roland, as before. White routing was
+//      deliberately not touched here.
 // Contradictory data reviews: a machineSummary naming both printers, a tag
 // that contradicts the ERP assignment, or conflicting tags.
 export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: MachineLoadSnapshot | null): MachineDecision {
@@ -199,19 +211,20 @@ export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: Mac
   if ((rolandTag && assigned === "mimaki") || (mimakiTag && assigned === "roland")) {
     return { machine: null, machineRule: null, reasons: [`${rolandTag ? "roland" : "mimaki"}_filename_tag_but_erp_assigned_${assigned}_contradiction`] };
   }
-  if (gloss) {
-    if (assigned === "mimaki" || mimakiTag) {
-      // Gloss is not operational on the Mimaki — an explicit Mimaki choice on
-      // gloss work is contradictory data, not a routable instruction.
-      return { machine: null, machineRule: null, reasons: ["gloss_job_but_mimaki_selected_contradiction"] };
-    }
-    return { machine: "roland", machineRule: "gloss_requires_roland", reasons: ["gloss_requires_roland"] };
-  }
   if (assigned) {
     return { machine: assigned, machineRule: "explicit_erp_machine", reasons: [`explicit_erp_${assigned}_assignment`] };
   }
   if (rolandTag) return { machine: "roland", machineRule: "explicit_roland_tag", reasons: ["standalone_roland_tag_in_filename"] };
   if (mimakiTag) return { machine: "mimaki", machineRule: "explicit_mimaki_tag", reasons: ["standalone_mimaki_tag_in_filename"] };
+  // 2026-11-18: no explicit press and no white layer -> the Mimaki, with or
+  // without gloss (normal default production).
+  const white = needsWhiteLayer(item);
+  if (!white) {
+    return { machine: "mimaki", machineRule: "default_cmyk", reasons: [gloss ? "cmyk_gloss_default_mimaki" : "cmyk_only_default_mimaki"] };
+  }
+  // WHITE is unchanged. Untagged white + gloss went to the Roland before 2026-11-18 and still does
+  // (dropping the gloss rule must not let a white job reach the Mimaki by load balancing).
+  if (gloss) return { machine: "roland", machineRule: "white_or_gloss", reasons: ["white_plus_gloss_stays_on_roland"] };
   const choice = selectLessBusyPrinter(["mimaki", "roland"], machineLoad);
   if (!choice.ok) return { machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] };
   return { machine: choice.printer, machineRule: "auto_load_balanced", reasons: [`auto_less_busy_${choice.printer}_by_${choice.metric}`] };
@@ -220,8 +233,8 @@ export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: Mac
 // ---------- Patch B (2026-11-18): PRINT INTAKE press decision ----------
 // Owner-approved rules for files arriving through Print Intake ONLY. This is
 // deliberately a separate resolver: `decideMachine` above is shared with
-// production dispatch and order -> job creation and keeps its 2026-11-11
-// behaviour; the Cost Calculator / quotes use machine-routing.server.ts.
+// production dispatch and manual job entry (it follows the same gloss rule
+// since 2026-11-18); the Cost Calculator / quotes use machine-routing.server.ts.
 //
 // (hierarchy corrected by the owner the same day — safety follow-up):
 //
@@ -293,8 +306,7 @@ export function needsWhiteLayer(item: Pick<IntakeItem, "selectedFinish" | "mater
  * requirement. Intake-only: the shared needsGloss is left as it is.
  */
 export function needsGlossLayer(item: Pick<IntakeItem, "selectedFinish" | "materialSummary" | "machineSummary">): boolean {
-  const text = finishHaystack(item).replace(/\bno\s+(?:spot\s+)?(?:gloss|uv|varnish|specialty)\b/g, " ");
-  return GLOSS_TOKENS.some((token) => text.includes(token));
+  return needsGloss(item); // the shared helper is negation-aware since 2026-11-18
 }
 
 export type IntakeMachineContext = {
@@ -673,17 +685,14 @@ export function parseFilenamePrintHints(fileName: string): FilenamePrintHints {
     : whiteLayers > 0 ? `WHITE-${whiteLayers}X`
     : "CMYK";
   const premium = glossLayers > 0 || whiteLayers > 0;
-  // gloss + explicit Mimaki = contradiction (no operational gloss on the Mimaki;
-  // Mimaki White is supported — 2026-11-11)
-  const premiumConflict = glossLayers > 0 && printerToken === "mimaki";
-  if (premiumConflict) reasons.push("gloss_mode_but_mimaki_token_contradiction");
+  // 2026-11-18: gloss + an explicit MIMAKI tag is no longer a contradiction (Mimaki gloss restored).
   return {
     printerToken,
     printerConflict,
     glossLayers,
     whiteLayers,
     mode,
-    deterministic: !printerConflict && !premiumConflict,
+    deterministic: !printerConflict,
     reasons,
   };
 }
@@ -691,16 +700,18 @@ export function parseFilenamePrintHints(fileName: string): FilenamePrintHints {
 // Filename-only machine decision. NOT used by Print Intake any more: Patch C
 // (2026-11-18) keeps unmatched files in review with no press, and Patch B
 // routes matched files through decideIntakeMachine. Kept for its tests / any
-// non-intake caller (spec 15F.0J.5-D). Same precedence family as decideMachine: gloss ->
-// Roland; explicit token; otherwise AUTO by complete load data, else review.
+// non-intake caller (spec 15F.0J.5-D). Same precedence family as decideMachine:
+// explicit token; no white -> Mimaki (with or without gloss, 2026-11-18);
+// white -> AUTO by complete load data, else review.
 export function decideMachineFromFilename(fileName: string, machineLoad?: MachineLoadSnapshot | null): { machine: "mimaki" | "roland" | null; machineRule: IntakeDecision["machineRule"]; mode: string; reasons: string[] } {
   const hints = parseFilenamePrintHints(fileName);
   if (!hints.deterministic) return { machine: null, machineRule: null, mode: hints.mode, reasons: hints.reasons };
-  if (hints.glossLayers > 0) {
-    return { machine: "roland", machineRule: "gloss_requires_roland", mode: hints.mode, reasons: ["gloss_requires_roland"] };
-  }
   if (hints.printerToken === "roland") return { machine: "roland", machineRule: "explicit_roland_tag", mode: hints.mode, reasons: ["standalone_roland_tag_in_filename"] };
   if (hints.printerToken === "mimaki") return { machine: "mimaki", machineRule: "explicit_mimaki_tag", mode: hints.mode, reasons: ["standalone_mimaki_tag_in_filename"] };
+  // 2026-11-18: gloss no longer forces the Roland. No white -> Mimaki; white -> unchanged AUTO.
+  if (hints.whiteLayers <= 0) {
+    return { machine: "mimaki", machineRule: "default_cmyk", mode: hints.mode, reasons: [hints.glossLayers > 0 ? "cmyk_gloss_default_mimaki" : "cmyk_only_default_mimaki"] };
+  }
   const choice = selectLessBusyPrinter(["mimaki", "roland"], machineLoad);
   if (!choice.ok) return { machine: null, machineRule: null, mode: hints.mode, reasons: ["auto_machine_load_unavailable_select_printer"] };
   return { machine: choice.printer, machineRule: "auto_load_balanced", mode: hints.mode, reasons: [`auto_less_busy_${choice.printer}_by_${choice.metric}`] };

@@ -37,40 +37,47 @@ describe("filename print hints (15F.0J.5-D safety)", () => {
     const machine = decideMachineFromFilename(LIVE_FIXTURE);
     expect(machine.machine).toBe("roland");
     expect(machine.mode).toBe("GLOSS-3X");
-    expect(machine.machineRule).toBe("gloss_requires_roland");
+    expect(machine.machineRule).toBe("explicit_roland_tag"); // updated 2026-11-18: Mimaki gloss restored — the Roland token decides the press, gloss no longer does
+    expect(machine.reasons).toEqual(["standalone_roland_tag_in_filename"]);
   });
 
   it("hazard safety: bare '3x' in a product name and 'White Widow' NEVER trigger premium routing", () => {
     const strain = parseFilenamePrintHints("Blue Chip_Rainbow 3x OG_matte.pdf");
     expect(strain.glossLayers).toBe(0);
     expect(strain.mode).toBe("CMYK");
-    // ordinary CMYK: no premium routing — and (2026-11-11) no permanent Mimaki default without load data
-    expect(decideMachineFromFilename("Blue Chip_Rainbow 3x OG_matte.pdf").reasons).toContain("auto_machine_load_unavailable_select_printer");
+    // ordinary CMYK: no premium routing — updated 2026-11-18: Mimaki gloss restored, plain CMYK takes the Mimaki default
+    expect(decideMachineFromFilename("Blue Chip_Rainbow 3x OG_matte.pdf")).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk", mode: "CMYK", reasons: ["cmyk_only_default_mimaki"] });
     const widow = parseFilenamePrintHints("Cust_White Widow_matte.pdf");
     expect(widow.whiteLayers).toBe(0); // no finish adjacency -> not white ink
     expect(parseFilenamePrintHints("Cust_holo white_labels.pdf").whiteLayers).toBe(1); // finish adjacency counts
     expect(parseFilenamePrintHints("Cust_2x white_labels.pdf").whiteLayers).toBe(2);
   });
 
-  it("tests 10/11: conflicting printer tokens and gloss+Mimaki contradictions BLOCK routing; white+Mimaki routes Mimaki", () => {
+  it("tests 10/11 (updated 2026-11-18: Mimaki gloss restored): conflicting printer tokens BLOCK routing; gloss+MIMAKI and white+MIMAKI route to the Mimaki", () => {
     const conflict = decideMachineFromFilename("Cust_Product_Roland_Mimaki.pdf");
     expect(conflict.machine).toBeNull();
     expect(conflict.reasons).toContain("conflicting_printer_tokens_in_filename");
     const premiumMimaki = decideMachineFromFilename("Cust_3x spot gloss_MIMAKI.pdf");
-    expect(premiumMimaki.machine).toBeNull();
-    expect(premiumMimaki.reasons).toContain("gloss_mode_but_mimaki_token_contradiction");
+    // 2026-11-18: gloss + an explicit MIMAKI tag is no longer a contradiction.
+    expect(premiumMimaki).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag", mode: "GLOSS-3X", reasons: ["standalone_mimaki_tag_in_filename"] });
+    expect(parseFilenamePrintHints("Cust_3x spot gloss_MIMAKI.pdf")).toMatchObject({ deterministic: true, printerToken: "mimaki", glossLayers: 3, reasons: [] });
     expect(decideMachineFromFilename("Cust_2x white_MIMAKI.pdf")).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag", mode: "WHITE-2X" });
     expect(hasMimakiFilenameTag("job_MIMAKI_run.pdf")).toBe(true);
     expect(hasMimakiFilenameTag("mimakingtons.pdf")).toBe(false); // word boundary
   });
 
-  it("test 2 (2026-11-11): untagged CMYK picks the less busy press from complete load, otherwise reviews — never a fixed default", () => {
+  it("test 2 (updated 2026-11-18: Mimaki gloss restored): untagged CMYK and untagged gloss default to the Mimaki; untagged WHITE still picks the less busy press from complete load, otherwise reviews", () => {
     const decision = decideMachineFromFilename("Customer_Product_CMYK.pdf");
-    expect(decision.machine).toBeNull();
-    expect(decision.reasons).toContain("auto_machine_load_unavailable_select_printer");
+    expect(decision.machine).toBe("mimaki");
+    expect(decision.machineRule).toBe("default_cmyk");
+    expect(decision.reasons).toEqual(["cmyk_only_default_mimaki"]);
     expect(decision.mode).toBe("CMYK");
     const load = { source: "t", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 4, estimatedMinutes: 120 }, roland: { openItems: 9, estimatedMinutes: 60 } } };
-    expect(decideMachineFromFilename("Customer_Product_CMYK.pdf", load)).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" }); // minutes beat item counts
+    expect(decideMachineFromFilename("Customer_Product_CMYK.pdf", load)).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] }); // load is not consulted for CMYK any more
+    expect(decideMachineFromFilename("Cust_3x spot gloss_labels.pdf")).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk", mode: "GLOSS-3X", reasons: ["cmyk_gloss_default_mimaki"] });
+    // white unchanged: AUTO by complete load, else review
+    expect(decideMachineFromFilename("Cust_2x white_labels.pdf")).toMatchObject({ machine: null, machineRule: null, mode: "WHITE-2X", reasons: ["auto_machine_load_unavailable_select_printer"] });
+    expect(decideMachineFromFilename("Cust_2x white_labels.pdf", load)).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" }); // minutes beat item counts
   });
 
   it("test 13: routed filename is structured, ticket-parseable, safe, capped, attempt-marked", () => {
