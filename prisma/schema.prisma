@@ -220,6 +220,11 @@ model QuoteItem {
   costSnapshot     String?
   priceSnapshot    String?
 
+  // 2026-11-19 (migration 20261119120000) reorder lineage: the prior
+  // ProductionJobItem this line re-orders, chosen explicitly by staff.
+  reorderSourceItemId String?
+  reorderArtworkMode  String? // same_artwork | revision
+
   quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@index([quoteId])
@@ -971,7 +976,12 @@ model ProductionJobItem {
   lastReprintBy     String?
   lastReprintAt     DateTime?
 
+  // 2026-11-19 (migration 20261119120000) reorder lineage: explicit, never inferred.
+  reorderSourceItemId String?
+  reorderArtworkMode  String? // same_artwork | revision
+
   @@unique([shop, itemTicket])
+  @@index([reorderSourceItemId])
   @@index([shop])
   @@index([jobId])
   @@index([quoteItemId])
@@ -998,10 +1008,16 @@ model ProductionJobFile {
   createdBy        String?
   createdAt        DateTime @default(now())
 
+  // 2026-11-19 (migration 20261119120000): exact item link (no FK; null = job-level
+  // file or a row written before this column) and reorder file reuse lineage.
+  productionJobItemId String?
+  reusedFromFileId    String?
+
   job ProductionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([shop])
   @@index([jobId])
+  @@index([productionJobItemId])
   @@index([fileType])
   @@index([assetRole])
   @@index([assetSource])
@@ -1706,12 +1722,79 @@ model PrintIntake {
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
+  // 2026-11-19 (migration 20261119120000): the exact item this file routed for.
+  productionJobItemId String?
+
   @@unique([shop, fileHashSha256])
+  @@index([productionJobItemId])
   @@index([shop])
   @@index([shop, status])
   @@index([authoritativeTicket])
   @@index([matchedProductionJobId])
   @@index([generatedProductionJobId])
+}
+
+// 2026-11-19 (migration 20261119120000): production runs of ONE item.
+// Run 1 is the original production; every reprint / remake is a further row.
+// The ordered quantity and price of the item are never changed by a run:
+// `quantity` here is what THIS run produces. No money lives here. No foreign
+// keys (same convention as the 2026-11-12 operational tables).
+model ProductionRun {
+  id           String    @id @default(cuid())
+  shop         String
+  jobId        String
+  itemId       String
+  runNumber    Int
+  kind         String    @default("original") // original | reprint | remake
+  quantity     Int       @default(0)
+  reasonCode   String?
+  chargeType   String    @default("internal") // internal | warranty | customer_paid
+  printer      String?
+  status       String    @default("open") // open | qc_passed | qc_failed | cancelled
+  requestedBy  String?
+  authorizedBy String?
+  notes        String?
+  runLabel     String? // P1-A1 style token used in routed file names
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  completedAt  DateTime?
+
+  @@unique([itemId, runNumber])
+  @@index([shop])
+  @@index([shop, jobId])
+  @@index([itemId])
+}
+
+// 2026-11-19 (migration 20261119120000): a business transaction STAGED for
+// admin review (QuickBooks invoice / estimate, an agent proposal). A staged
+// row never creates a ProductionJob by itself: an owner / manager releases it,
+// and the release calls the canonical job service. Nothing here writes to
+// QuickBooks.
+model StagedTransaction {
+  id                 String    @id @default(cuid())
+  shop               String
+  source             String // quickbooks_invoice | quickbooks_estimate | agent_proposal
+  externalId         String
+  docNumber          String?
+  externalCustomerId String?
+  customerName       String?
+  txnDate            DateTime?
+  totalAmount        Float?
+  balance            Float?
+  externalStatus     String?
+  status             String    @default("staged") // staged | released | dismissed
+  lines              String? // JSON: staged lines + admin classification
+  reviewNotes        String?
+  releasedJobId      String?
+  releasedBy         String?
+  releasedAt         DateTime?
+  dismissedBy        String?
+  dismissedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([shop, source, externalId])
+  @@index([shop, status])
 }
 
 // Phase 2.5 — durable rate limiting for the Stock Bag personalization upload

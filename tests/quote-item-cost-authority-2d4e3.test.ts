@@ -124,8 +124,9 @@ describe("2D-4E3 the Quotes route save boundary", () => {
   });
 
   it("both write paths persist the PROTECTED items, not the raw posted ones", () => {
-    expect(route).toContain("data: protectedItems.map((item) => quoteItemData(item, quote.id as string)),");
-    expect(route).toContain("create: protectedItems.map((item) => quoteItemData(item)),");
+    // 2026-11-19: each protected item also carries its stored reorder lineage (from the database row, never the browser).
+    expect(route).toContain("data: protectedItems.map((item) => quoteItemData(withStoredReorderLineage(item, existingItemsForAuthority as any), quote.id as string)),");
+    expect(route).toContain("create: protectedItems.map((item) => quoteItemData(withStoredReorderLineage(item, []))),");
     expect(route).not.toContain("data: quote.items.map((item) => quoteItemData(item, quote.id as string)),");
     expect(route).not.toContain("create: quote.items.map((item) => quoteItemData(item)),");
   });

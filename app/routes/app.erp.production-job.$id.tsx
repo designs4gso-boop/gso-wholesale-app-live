@@ -21,7 +21,9 @@ import { REPRINT_REASONS, formatShipDate, savedPickupForJob, savedShipmentForJob
 import { itemReprintSummary } from "../lib/production-qc-display";
 import { showsProductionControl } from "../lib/production-role-access";
 import { PRODUCTION_STATUS_OPTIONS, jobSourceLabel, staffStatusLabel } from "../lib/production-status-vocabulary";
-import { SIMPLE_BOARD_HREF, classicJobHref, jobWorkspaceHref } from "../lib/simple-nav";
+import { REORDER_HREF, SIMPLE_BOARD_HREF, classicJobHref, jobWorkspaceHref } from "../lib/simple-nav";
+import { RUN_CHARGE_TYPES, RUN_KINDS, itemFileState, itemRunSummary, runChargeLabel, runKindLabel } from "../lib/production-run";
+import { reprintReasonLabel } from "../lib/production-fulfillment";
 import { formatDueDate } from "../lib/business-date";
 import { isJobOverdue, jobWorkspaceView, showsMaterialUse, workspaceItemQc, toMaterialOption, type JobStepKey, type WorkspaceStep } from "../lib/simple-production";
 
@@ -146,6 +148,82 @@ function ChecklistButtons({ jobId, items }: { jobId: string; items: any[] }) {
 
 const when = (value: string | null | undefined) => (value ? new Date(value).toLocaleString() : "—");
 
+const RUN_STATUS_LABEL: Record<string, string> = { open: "Waiting for QC", qc_passed: "QC passed", qc_failed: "QC failed", reprinted: "Reprinted", cancelled: "Cancelled" };
+
+/** Every production run of one item: the original and each reprint / remake, with its own quantity. Display only. */
+function ItemRuns({ item }: { item: any }) {
+  const summary = itemRunSummary(item, item.runs || []);
+  if (!summary.reprintCount) return null;
+  return (
+    <div style={{ fontSize: 13, border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 10, padding: "8px 10px", display: "grid", gap: 4 }}>
+      <div style={{ fontWeight: 700 }}>Ordered {summary.orderedQuantity} · Reprinted {summary.reprintQuantity} in {summary.reprintCount} run(s)</div>
+      {summary.runs.map((run) => (
+        <div key={run.runNumber} style={{ color: "#374151", overflowWrap: "anywhere" }}>
+          Run {run.runNumber} — {runKindLabel(run.kind)} · {run.quantity} pcs
+          {run.kind !== "original" ? ` · ${reprintReasonLabel(String(run.reasonCode || ""))} · ${runChargeLabel(run.chargeType)}` : ""}
+          {` · ${RUN_STATUS_LABEL[String(run.status || "")] || String(run.status || "")}`}
+          {run.kind !== "original" && run.requestedBy ? ` · ${run.requestedBy}` : ""}
+          {run.notes && run.kind !== "original" ? ` · ${run.notes}` : ""}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button type="button" onClick={() => { try { void navigator.clipboard?.writeText(text); setCopied(true); } catch { /* copy is a convenience only */ } }} style={{ minHeight: 44, padding: "0 12px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+/** Job-first file prep: the exact folder / ticket names, what each item needs and what has arrived. Display only. */
+function TicketsAndFiles({ job, role }: { job: any; role: string }) {
+  const items = (job.items || []) as any[];
+  if (!job.jobTicket) return null;
+  const canReorder = role === "owner" || role === "manager";
+  return (
+    <div style={{ ...card, display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4 }}>Job folder name</div>
+          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace" }}>{job.jobTicket}</div>
+        </div>
+        <CopyButton text={job.jobTicket} label="Copy job folder name" />
+      </div>
+      <div style={{ fontSize: 13, color: "#6b7280" }}>
+        {items.length > 1
+          ? "Save the print files in a folder with this name inside Prints For Today, and start each file name with its item ticket below."
+          : "Save the print files in a folder with this name inside Prints For Today. They link to this job and go to the right printer automatically."}
+      </div>
+      {items.map((item) => {
+        const state = itemFileState(item, job.files || []);
+        return (
+          <div key={item.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, display: "grid", gap: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, fontFamily: "monospace" }}>{item.itemTicket || "No item ticket"}</div>
+                <div style={{ fontSize: 14 }}>{item.displayTitle || item.productTitle || "Item"} · Qty {item.quantity}</div>
+              </div>
+              {item.itemTicket ? <CopyButton text={item.itemTicket} label="Copy item ticket" /> : null}
+            </div>
+            <div style={{ fontSize: 13, color: "#374151" }}>Finish: {item.selectedFinish || "Not set"} · Printer: {item.machineSummary || "Not assigned"}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: state.awaiting ? "#92400e" : "#166534" }}>{state.label}</div>
+            {item.reorderOf ? (
+              <div style={{ fontSize: 13, color: "#1e3a8a" }}>
+                Reorder of {item.reorderOf.itemTicket || item.reorderOf.productTitle} (earlier quantity {item.reorderOf.quantity}) — {item.reorderOf.artworkMode === "revision" ? "REVISED ARTWORK: a new proof approval is needed; the earlier file is reference only." : "same artwork: reuse the approved file listed under Files."}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+      {canReorder ? <Link to={`${REORDER_HREF}?q=${encodeURIComponent(job.jobTicket)}`} style={{ fontSize: 14, fontWeight: 700 }}>Reorder an item from this job (new quote)</Link> : null}
+    </div>
+  );
+}
+
 /* ---------------- step bodies (only existing actions) ---------------- */
 
 function QcStep({ job, role }: { job: any; role: string }) {
@@ -166,6 +244,7 @@ function QcStep({ job, role }: { job: any; role: string }) {
               </span>
             </div>
             {reprint ? <div style={{ fontSize: 13, color: "#92400e" }}>Reprinted — {reprint.reason} · {reprint.by || "staff"} · {when(reprint.at)}</div> : null}
+            <ItemRuns item={item} />
             <ActionForm jobId={job.id} intent="qcItem" hidden={{ itemId: String(item.id) }}>
               {(busy) => (
                 <div style={{ display: "grid", gap: 8 }}>
@@ -190,8 +269,21 @@ function QcStep({ job, role }: { job: any; role: string }) {
                           {REPRINT_REASONS.map((reason) => <option key={reason.value} value={reason.value}>{reason.label}</option>)}
                         </select>
                       </label>
+                      <label style={{ fontSize: 13, color: "#6b7280" }}>How many pieces to reprint (ordered: {item.quantity})
+                        <input name="reprintQty" type="number" min={1} step={1} required placeholder="For example 25" style={input} />
+                      </label>
+                      <label style={{ fontSize: 13, color: "#6b7280" }}>Type
+                        <select name="runKind" defaultValue="reprint" style={input}>
+                          {RUN_KINDS.map((kind) => <option key={kind.value} value={kind.value}>{kind.label}</option>)}
+                        </select>
+                      </label>
+                      <label style={{ fontSize: 13, color: "#6b7280" }}>Who pays
+                        <select name="chargeType" defaultValue="internal" style={input}>
+                          {RUN_CHARGE_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                        </select>
+                      </label>
                       <input name="reprintNote" placeholder="Note (optional)" style={input} />
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>The reprinted piece needs a new QC PASS before the job can ship or be picked up.</div>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>The ordered quantity and the price do not change. Every layer file of this item is sent back to the press. The reprinted piece needs a new QC PASS before the job can ship or be picked up.</div>
                       <button type="submit" disabled={busy} style={bigButton("danger", busy)}>START REPRINT</button>
                     </div>
                   )}
@@ -761,6 +853,8 @@ export default function JobWorkspace() {
           {tab === "notes" ? <NotesTab job={job} /> : null}
           {tab === "costs" && showFinancials ? <CostsTab job={job} /> : null}
         </div>
+
+        <TicketsAndFiles job={job} role={role} />
 
         <details style={card}>
           <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#6b7280", minHeight: 44 }}>Advanced / details</summary>

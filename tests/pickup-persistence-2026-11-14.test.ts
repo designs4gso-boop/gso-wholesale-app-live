@@ -302,6 +302,7 @@ describe("unchanged behaviour", () => {
     expect(h.state.inventoryTouches).toEqual([]);
     const { readdirSync } = await import("node:fs");
     const names = readdirSync("prisma/migrations").filter((n) => /^\d{14}_/.test(n)).sort();
-    expect(names[names.length - 1]).toBe("20261112090000_add_operational_records");
+    // 2026-11-19: the owner-approved ADDITIVE lineage migration (file -> item link, production runs, reorder lineage, staged transactions) is now the newest.
+    expect(names[names.length - 1]).toBe("20261119120000_add_production_lineage");
   });
 });

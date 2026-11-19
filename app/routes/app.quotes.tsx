@@ -43,6 +43,7 @@ import { QUOTE_OUTCOME_STATUSES, resolveQuoteOutcomeChange } from "../lib/pricin
 import { CUSTOMER_TIERS, customerTierDisplayLabel, isCustomerTier, tierRule } from "../lib/customer-tiers";
 import { enforceQuoteItemUnitCost, quoteItemCostIsProtected } from "../lib/quote-item-cost-authority";
 import { agentConversionCanonicalGate } from "../lib/agent-quote-canonical-gate.server";
+import { buildReorderQuoteDraft, parseReorderRequest, withStoredReorderLineage } from "../lib/reorder";
 
 type QuoteItemInput = {
   id?: string;
@@ -689,6 +690,10 @@ function quoteItemData(item: QuoteItemInput, quoteId?: string) {
     marginPct: item.marginPct ? safeNumber(item.marginPct) : null,
     costSnapshot: item.costSnapshot || null,
     priceSnapshot: item.priceSnapshot || null,
+    // 2026-11-19 reorder lineage. Set by the reorder action or restored from the
+    // database row on save (withStoredReorderLineage) — never taken from the editor.
+    reorderSourceItemId: (item as any).reorderSourceItemId || null,
+    reorderArtworkMode: (item as any).reorderSourceItemId ? ((item as any).reorderArtworkMode === "revision" ? "revision" : "same_artwork") : null,
   };
 }
 
@@ -1679,7 +1684,7 @@ export async function action({ request }: { request: Request }) {
         }),
         db.quoteItem.deleteMany({ where: { quoteId: quote.id, quote: { shop } } }),
         db.quoteItem.createMany({
-          data: protectedItems.map((item) => quoteItemData(item, quote.id as string)),
+          data: protectedItems.map((item) => quoteItemData(withStoredReorderLineage(item, existingItemsForAuthority as any), quote.id as string)),
         }),
       ]);
     } else {
@@ -1695,7 +1700,7 @@ export async function action({ request }: { request: Request }) {
           status: quote.status,
           notes: quote.notes,
           items: {
-            create: protectedItems.map((item) => quoteItemData(item)),
+            create: protectedItems.map((item) => quoteItemData(withStoredReorderLineage(item, []))),
           },
         },
       });
@@ -1705,6 +1710,54 @@ export async function action({ request }: { request: Request }) {
     return Response.json(reconciled.resets.length
       ? { ok: true, quotes, message: `Saved. Owner-approved price reset to PROVISIONAL (${reconciled.resets.map((entry) => entry.item).join(", ")}) — a commercial field changed; the owner must re-approve.` }
       : { ok: true, quotes });
+  }
+
+  /* 2026-11-19 REORDER. A reorder is a NEW sale: this creates a DRAFT quote
+   * from earlier production items with explicit lineage. Recipe lines are
+   * priced again by the current pricing engine for the NEW quantity; a line
+   * the engine cannot price is PROVISIONAL (owner approval required). The
+   * earlier selling price is never copied, the earlier job is never touched,
+   * and no production job is created here — that happens at the normal
+   * production-release step. Needs a selling role (owner, manager, sales). */
+  if (payload.intent === "createReorderQuote") {
+    const reorderAccess = resolveStaffAccess({ session, sessionToken });
+    if (!reorderAccess.can("sendQuote")) {
+      return Response.json({ ok: false, intent: "createReorderQuote", error: `${PERMISSION_DENIED_MESSAGE.sendQuote} ${reorderAccess.reason}`.trim() }, { status: 403 });
+    }
+    const request = parseReorderRequest(payload.lines);
+    if (!request.ok) return Response.json({ ok: false, intent: "createReorderQuote", error: request.reason });
+    const sourceItems = await db.productionJobItem.findMany({ where: { shop, id: { in: request.lines.map((line) => line.itemId) } }, include: { job: true } });
+    const sources = sourceItems.filter((item: any) => item.job && item.job.shop === shop).map((item: any) => ({ item, job: item.job }));
+    const pricedByItemId = new Map<string, any>();
+    for (const line of request.lines) {
+      const source = sources.find((candidate: any) => candidate.item.id === line.itemId);
+      if (!source?.item.recipeId) continue;
+      const priced: any = await priceRecipeLine(shop, { recipeId: source.item.recipeId, quantity: line.quantity, selectedFinish: source.item.selectedFinish || "base", selectedAddOnIds: source.item.selectedAddOns }, admin);
+      if (priced?.ok && priced.line) pricedByItemId.set(line.itemId, priced.line);
+    }
+    const built = buildReorderQuoteDraft(sources as any, request.lines, pricedByItemId, reorderAccess.actor, new Date().toISOString());
+    if (!built.ok) return Response.json({ ok: false, intent: "createReorderQuote", error: built.reason });
+    const created = await db.quote.create({
+      data: {
+        shop,
+        customerName: built.draft.customerName,
+        company: built.draft.company,
+        email: built.draft.email,
+        phone: built.draft.phone,
+        status: "draft",
+        notes: built.draft.notes,
+        items: { create: built.draft.items.map((item) => quoteItemData(item as any)) },
+      },
+    });
+    return Response.json({
+      ok: true,
+      intent: "createReorderQuote",
+      quoteId: created.id,
+      provisionalCount: built.draft.provisionalCount,
+      message: built.draft.provisionalCount
+        ? `Reorder quote created as a draft. ${built.draft.provisionalCount} item(s) need a current price approved by the owner — the earlier price was not copied.`
+        : "Reorder quote created as a draft with current pricing for the new quantity.",
+    });
   }
 
   const quotes = await getQuotes(shop, viewerIsOwner);

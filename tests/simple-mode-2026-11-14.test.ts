@@ -382,7 +382,8 @@ describe("Phase 2 — NEXT STEP", () => {
 });
 
 describe("Phase 2 — slim board (real loader)", () => {
-  const CARD_KEYS = ["assignedTo", "customer", "dueDate", "id", "machine", "next", "nextTone", "overdue", "priority", "product", "quantity", "stage", "status", "statusLabel", "updatedAt"];
+  // 2026-11-19 (shared board): item count, files expected / received, QC, reprint and hold-reason labels were added. Still no money, file URL or ticket.
+  const CARD_KEYS = ["assignedTo", "awaitingFiles", "customer", "dueDate", "filesLabel", "holdReason", "id", "itemCount", "machine", "next", "nextTone", "overdue", "priority", "product", "qcLabel", "quantity", "reprintLabel", "stage", "status", "statusLabel", "updatedAt"];
 
   it("a card carries only the approved fields — never money, files, checklist, events or technical ids", async () => {
     withMoney();
@@ -462,7 +463,7 @@ describe("Phase 2 — Job Workspace reuses the real Production loader and action
 
   it("pickup and reprint go through the unchanged action", async () => {
     for (const itemId of ["i1", "i2"]) await postJob({ intent: "qcItem", itemId, qcResult: "pass", qcNote: "" });
-    expect((await postJob({ intent: "reprintItem", itemId: "i1", reprintReason: "machine_error", reprintNote: "smoke" })).body.ok).toBe(true);
+    expect((await postJob({ intent: "reprintItem", itemId: "i1", reprintReason: "machine_error", reprintNote: "smoke", reprintQty: "1" })).body.ok).toBe(true);
     expect(h.state.items[0]).toMatchObject({ lastReprintReason: "machine_error", qcResult: null });
     // QC is required again after the reprint: pickup is refused, and the workspace says so
     const refused = await postJob({ intent: "recordPickup", pickedUpBy: "Migration QA", pickupNote: "n" });
@@ -517,6 +518,7 @@ describe("Advanced (classic) view is kept", () => {
   it("no schema change", async () => {
     const { readdirSync } = await import("node:fs");
     const names = readdirSync("prisma/migrations").filter((n) => /^\d{14}_/.test(n)).sort();
-    expect(names[names.length - 1]).toBe("20261112090000_add_operational_records");
+    // 2026-11-19: the owner-approved ADDITIVE lineage migration (file -> item link, production runs, reorder lineage, staged transactions) is now the newest.
+    expect(names[names.length - 1]).toBe("20261119120000_add_production_lineage");
   });
 });

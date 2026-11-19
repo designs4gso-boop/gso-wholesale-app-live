@@ -12,6 +12,7 @@ import { itemQcState, type ItemQcState } from "./production-qc-display";
 import { qcEventItemKey, qcResultOf } from "./production-qc-guard";
 import { staffStatusLabel } from "./production-status-vocabulary";
 import { isPastDueDate } from "./business-date";
+import { itemFileState, itemRunSummary } from "./production-run";
 
 /* ---------------- 6 board stages (UI groups of existing statuses) ---------------- */
 
@@ -275,7 +276,31 @@ export type BoardCard = {
   next: string;
   nextTone: NextStep["tone"];
   updatedAt: string | null;
+  // 2026-11-19 shared board visibility (no cost, price or file URL)
+  itemCount: number;
+  filesLabel: string;
+  awaitingFiles: boolean;
+  qcLabel: string;
+  reprintLabel: string;
+  holdReason: string;
 };
+
+/**
+ * Why an On Hold job is held, in the staff's own words: the newest job note
+ * written when the job went On Hold or after it (within the events the board
+ * already receives). Empty when nobody wrote one.
+ */
+export function holdReasonOf(job: any): string {
+  if (norm(job?.status) !== "on_hold") return "";
+  const time = (event: any) => new Date(event?.createdAt || 0).getTime();
+  const events = [...(job?.events || [])].sort((a, b) => time(b) - time(a));
+  const hold = events.find((event) => event?.eventType === "status_change" && norm(event?.newValue) === "on_hold");
+  // a note written up to five minutes before the move counts (note first, then the status tap)
+  if (!hold) return "";
+  const since = time(hold) - 5 * 60 * 1000;
+  const note = events.find((event) => event?.eventType === "note" && time(event) >= since);
+  return String(note?.message || "").trim().slice(0, 140);
+}
 
 const iso = (value: unknown): string | null => {
   if (!value) return null;
@@ -317,6 +342,26 @@ export function toBoardCard(job: any, now: Date = new Date()): BoardCard {
     next: view.next.text,
     nextTone: view.next.tone,
     updatedAt: iso(job.updatedAt),
+    ...boardCardExtras(job, items),
+  };
+}
+
+function boardCardExtras(job: any, items: any[]) {
+  const fileStates = items.map((item: any) => itemFileState(item, job?.files || []));
+  const awaitingCount = fileStates.filter((state) => state.awaiting).length;
+  const qcStates = items.map((item: any) => workspaceItemQc(item, job?.events || []));
+  const passed = qcStates.filter((state: any) => state.status === "pass").length;
+  const reprints = items.map((item: any) => itemRunSummary(item, item?.runs || []));
+  const reprintCount = reprints.reduce((sum, summary) => sum + summary.reprintCount, 0);
+  const reprintQty = reprints.reduce((sum, summary) => sum + summary.reprintQuantity, 0);
+  const legacyReprints = items.filter((item: any) => item?.lastReprintAt && !(item?.runs || []).length).length;
+  return {
+    itemCount: items.length,
+    awaitingFiles: items.length > 0 && awaitingCount > 0,
+    filesLabel: !items.length ? "No items" : awaitingCount === 0 ? "Files received" : awaitingCount === items.length ? "Awaiting files" : `Awaiting files for ${awaitingCount} of ${items.length} items`,
+    qcLabel: !items.length ? "" : passed === items.length ? "QC passed" : qcStates.some((state: any) => state.status === "pending_reprint") ? "QC needed after reprint" : `QC ${passed}/${items.length}`,
+    reprintLabel: reprintCount ? `${reprintCount} reprint(s) · ${reprintQty} pcs` : legacyReprints ? `${legacyReprints} reprint(s)` : "",
+    holdReason: holdReasonOf(job),
   };
 }
 

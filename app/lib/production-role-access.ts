@@ -69,7 +69,49 @@ export const PRODUCTION_INTENT_ROLES: Record<string, readonly string[]> = {
   reopenJobCost: ["owner", "manager"],
   pullPrintLogActuals: ["owner", "manager"],
   adjustInventory: ["owner", "manager"],
+  // 2026-11-19 admin / workflow lane: reviewing a staged business transaction
+  // (QuickBooks invoice / estimate, agent proposal) and releasing it to
+  // production. Production roles receive the resulting job; they do not review
+  // or release accounting transactions.
+  reviewStagedTransaction: ["owner", "manager"],
+  releaseStagedTransaction: ["owner", "manager"],
+  dismissStagedTransaction: ["owner", "manager"],
 };
+
+/**
+ * 2026-11-19 — named capability groups (ROLES, never people). Two lanes work on
+ * the SAME jobs, items, tickets and files:
+ *   ADMIN_WORKFLOW        staged transactions, release to production, due dates,
+ *                         priorities, assignments, holds, reorder approval.
+ *   PRODUCTION_EXECUTION  file prep, incoming print files, routing, reprints,
+ *                         revisions, manual jobs.
+ *   PRODUCTION_SHARED     the board, job / item status, notes, QC, completion,
+ *                         shipment / pickup — every production floor role.
+ *   COMMERCIAL            quotes and reorders (a reorder is a new sale).
+ * An owner / admin who also supports production holds every group; a
+ * production lead holds the production groups and no admin / accounting group.
+ * These groups DESCRIBE the tables above and in staff-roles.server.ts — the
+ * per-action tables stay the authority.
+ */
+export const CAPABILITY_GROUPS = {
+  ADMIN_WORKFLOW: ["owner", "manager"],
+  PRODUCTION_EXECUTION: LEADS,
+  PRODUCTION_SHARED: PRODUCTION_FLOOR_ROLES,
+  COMMERCIAL: ["owner", "manager", "sales"],
+} as const satisfies Record<string, readonly string[]>;
+export type CapabilityGroup = keyof typeof CAPABILITY_GROUPS;
+
+export function roleHasCapabilityGroup(role: unknown, group: CapabilityGroup): boolean {
+  return (CAPABILITY_GROUPS[group] as readonly string[]).includes(norm(role));
+}
+
+/** The work contexts a role is offered (display): the admin / workflow view, the production view, or both. */
+export function workspacesForRole(role: unknown): Array<"admin" | "production"> {
+  return [
+    ...(roleHasCapabilityGroup(role, "ADMIN_WORKFLOW") ? (["admin"] as const) : []),
+    ...(roleHasCapabilityGroup(role, "PRODUCTION_SHARED") ? (["production"] as const) : []),
+  ];
+}
 
 /** An action that is not listed above is refused for EVERY role until it is reviewed and added. */
 const UNLISTED_INTENT_ROLES: readonly string[] = [];

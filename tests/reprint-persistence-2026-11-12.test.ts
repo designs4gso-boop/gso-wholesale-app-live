@@ -90,7 +90,7 @@ const post = async (fields: Record<string, string>) => {
   return { status: res.status, body: await res.json() };
 };
 const qc = (result: string, note = "") => post({ intent: "qcItem", qcResult: result, qcNote: note });
-const reprint = (reason = "machine_error", note = "Migration smoke test - reprint") => post({ intent: "reprintItem", reprintReason: reason, reprintNote: note });
+const reprint = (reason = "machine_error", note = "Migration smoke test - reprint") => post({ intent: "reprintItem", reprintReason: reason, reprintNote: note, reprintQty: "25" }); // 2026-11-19: the reprint quantity is required
 const item = () => h.state.items[0];
 
 import { QC_REQUIRED_AFTER_REPRINT, itemQcState, itemReprintSummary } from "../app/lib/production-qc-display";
@@ -244,7 +244,8 @@ describe("15. schema / migration unchanged", () => {
   it("no new migration; the reprint / QC columns already exist", async () => {
     const { readdirSync } = await import("node:fs");
     const names = readdirSync("prisma/migrations").filter((n) => /^\d{14}_/.test(n)).sort();
-    expect(names[names.length - 1]).toBe("20261112090000_add_operational_records");
+    // 2026-11-19: the owner-approved ADDITIVE lineage migration (file -> item link, production runs, reorder lineage, staged transactions) is now the newest.
+    expect(names[names.length - 1]).toBe("20261119120000_add_production_lineage");
     const schema = readFileSync("prisma/schema.prisma", "utf8");
     for (const field of ["qcResult", "qcBy", "qcAt", "qcNote", "lastReprintReason", "lastReprintBy", "lastReprintAt"]) expect(schema).toContain(`  ${field}`);
   });

@@ -66,6 +66,19 @@ export type ManualJobItemInput = {
   notes?: string;
   unitPrice?: number;
   unitCost?: number;
+  /** 2026-11-19 reorder lineage: the prior ProductionJobItem this item re-orders (explicit staff choice; never inferred). */
+  reorderSourceItemId?: string | null;
+  reorderArtworkMode?: "same_artwork" | "revision" | null;
+};
+
+export type ReleasedJobPayload = {
+  customerName: string;
+  email?: string;
+  phone?: string;
+  notes?: string;
+  reference?: string;
+  dueDate?: string;
+  items: ManualJobItemInput[];
 };
 
 export type ProductionJobSource =
@@ -86,6 +99,18 @@ export type ProductionJobSource =
         dueDate?: string; // ISO date; invalid values are ignored, never guessed
         items: ManualJobItemInput[];
       };
+    }
+  | {
+      // 2026-11-19: a business transaction a PERSON released to production —
+      // a staged QuickBooks invoice / estimate, an agent proposal a human
+      // approved, a reorder. Same validation, machine rules and tickets as
+      // manual_admin; idempotent per released transaction (shop + id), so the
+      // same release retried or double-clicked resolves to the SAME job.
+      type: "released_transaction";
+      authorizedBy: string;
+      transactionId: string;
+      origin: string; // e.g. quickbooks_invoice | quickbooks_estimate | agent_proposal
+      payload: ReleasedJobPayload;
     };
 
 export type CreateJobResult = { job: any; created: boolean; reason: string };
@@ -1096,6 +1121,12 @@ export async function createProductionJobFromSource(
       throw new Error("Paid-order payload has no stable order identity (admin_graphql_api_id/id) — refusing to create a production job from an unidempotent source.");
     }
     sourceKey = `shopify_order_${stableOrderId}`;
+  } else if (source.type === "released_transaction") {
+    // A release is a human decision: no authorizing person = no job.
+    if (!clean(source.authorizedBy)) throw new Error("Releasing a transaction to production requires an authorizing user.");
+    const transactionId = clean(source.transactionId);
+    if (!transactionId || transactionId.length < 8) throw new Error("Releasing a transaction to production requires its stable transaction id.");
+    sourceKey = `released_${transactionId}`;
   } else {
     if (!clean(source.authorizedBy)) throw new Error("Manual production jobs require an authorizing user.");
     // 15H.4B: STABLE idempotency — shop + client requestId (no Date.now).
@@ -1136,6 +1167,7 @@ export async function createProductionJobFromSource(
       const eligibility = quoteConversionEligibility(quote, shop);
       if (!eligibility.ok) throw new Error(eligibility.reason);
       const family = familyFromQuoteItems(quote.items);
+      const validReorderSources = await existingReorderSourceIds(tx, shop, quote.items.map((item: any) => item.reorderSourceItemId));
       const jobTicket = await buildNextJobTicket(tx, shop);
       const job = await tx.productionJob.create({
         data: {
@@ -1183,6 +1215,9 @@ export async function createProductionJobFromSource(
               priceSnapshot: item.priceSnapshot || null,
               productionNotes: item.notes || null,
               sortOrder: index + 1,
+              // 2026-11-19 reorder lineage travels from the quote line (explicit staff choice).
+              reorderSourceItemId: validReorderSources.has(String(item.reorderSourceItemId || "")) ? String(item.reorderSourceItemId) : null,
+              reorderArtworkMode: validReorderSources.has(String(item.reorderSourceItemId || "")) ? (item.reorderArtworkMode === "revision" ? "revision" : "same_artwork") : null,
             })),
           },
           checklistItems: { create: checklistForFamily(family).map((check) => ({ shop, ...check })) },
@@ -1218,6 +1253,7 @@ export async function createProductionJobFromSource(
         where: { shop, id: quote.id },
         data: { notes: `${quote.notes ? `${quote.notes}\n` : ""}[GSO] Production job ${jobTicket} created (${job.id}).` },
       });
+      await applyReorderLineage(tx, shop, job, actor);
       return { job: { ...job, proofUrl }, created: true, reason: "Production job created." };
     }
 
@@ -1306,8 +1342,11 @@ export async function createProductionJobFromSource(
     // work — a real permanent ticket with NO Shopify order, quote, or
     // payment required. Nothing commercial is fabricated (prices default 0
     // = not entered). Validation + canonical machine resolution ran here.
+    const isRelease = source.type === "released_transaction";
+    const manualRequestId = isRelease ? clean((source as any).transactionId) : clean((source as any).requestId);
+    const releaseOrigin = isRelease ? clean((source as any).origin) || "released_transaction" : "";
     const verdict = validateManualJobInput({
-      requestId: clean((source as any).requestId),
+      requestId: manualRequestId,
       customerName: source.payload.customerName,
       items: source.payload.items,
       machineLoad: await loadMachineWorkload(dbClient, input.shop),
@@ -1320,12 +1359,13 @@ export async function createProductionJobFromSource(
       // midnight UTC, which showed as the previous day in Pacific time.
       return parseDueDateInput(clean(source.payload.dueDate));
     })();
+    const validReorderSources = await existingReorderSourceIds(tx, shop, manualItems.map((item) => item.reorderSourceItemId));
     const jobTicket = await buildNextJobTicket(tx, shop);
     const job = await tx.productionJob.create({
       data: {
         shop,
         quoteId: sourceKey,
-        quoteNumber: clean(source.payload.reference) || `MANUAL-${clean((source as any).requestId).slice(0, 8).toUpperCase()}`,
+        quoteNumber: clean(source.payload.reference) || `${isRelease ? "RELEASED" : "MANUAL"}-${manualRequestId.slice(0, 8).toUpperCase()}`,
         jobTicket,
         assetInboxKey: jobTicket,
         customerName: source.payload.customerName || null,
@@ -1335,11 +1375,17 @@ export async function createProductionJobFromSource(
         priority: "normal",
         dueDate,
         customerNotes: source.payload.notes || null,
-        internalNotes: [
-          `Manual production job authorized by ${source.authorizedBy}.`,
-          `Source: manual_admin | Request: ${clean((source as any).requestId)}.`,
-          "No Shopify order / quote / payment — commercial linkage optional.",
-        ].join("\n"),
+        internalNotes: (isRelease
+          ? [
+              `Released to production by ${source.authorizedBy}.`,
+              `Source: released_transaction (${releaseOrigin}) | Transaction: ${manualRequestId}.`,
+              "Created by the canonical job service from a reviewed business transaction.",
+            ]
+          : [
+              `Manual production job authorized by ${source.authorizedBy}.`,
+              `Source: manual_admin | Request: ${manualRequestId}.`,
+              "No Shopify order / quote / payment — commercial linkage optional.",
+            ]).join("\n"),
         items: {
           create: manualItems.map((item, index) => ({
             shop,
@@ -1373,22 +1419,106 @@ export async function createProductionJobFromSource(
               `Machine: ${item.resolvedMachine} (requested ${item.printer || "auto"}, rule ${item.machineRule}).`,
             ].join("\n"),
             sortOrder: index + 1,
+            reorderSourceItemId: validReorderSources.has(String(item.reorderSourceItemId || "")) ? String(item.reorderSourceItemId) : null,
+            reorderArtworkMode: validReorderSources.has(String(item.reorderSourceItemId || "")) ? (item.reorderArtworkMode === "revision" ? "revision" : "same_artwork") : null,
           })),
         },
         checklistItems: { create: checklistForFamily(family).map((check) => ({ shop, ...check })) },
         events: {
           create: [{
             shop,
-            eventType: "created_manual_admin",
-            message: `Manual production job ${jobTicket} created by ${source.authorizedBy} (request ${clean((source as any).requestId)}). ${manualItems.map((item) => `${item.productTitle} x${item.quantity} -> ${item.resolvedMachine} (requested ${item.printer || "auto"})`).join("; ")}.`,
+            eventType: isRelease ? "created_released_transaction" : "created_manual_admin",
+            message: `${isRelease ? `Production job ${jobTicket} released to production by ${source.authorizedBy} (${releaseOrigin}, transaction ${manualRequestId})` : `Manual production job ${jobTicket} created by ${source.authorizedBy} (request ${manualRequestId})`}. ${manualItems.map((item) => `${item.productTitle} x${item.quantity} -> ${item.resolvedMachine} (requested ${item.printer || "auto"})`).join("; ")}.`,
             createdBy: actor,
           }],
         },
       },
       include: { items: true },
     });
-    return { job, created: true, reason: "Manual production job created." };
+    await applyReorderLineage(tx, shop, job, actor);
+    return { job, created: true, reason: isRelease ? "Production job created from the released transaction." : "Manual production job created." };
   }));
+}
+
+// ---------- 2026-11-19: reorder lineage ----------
+// A reorder is a NEW sale: a new job with new item tickets. The new item
+// points at the prior item (reorderSourceItemId) — chosen explicitly by staff,
+// never inferred from customer or product similarity. Nothing on the earlier
+// job or its files is changed; the new item gets its own history.
+export const REORDER_REUSE_SOURCE = "reorder_reuse";
+
+/** The reorder source item ids that really exist in this shop (an unknown id is dropped, not trusted). */
+async function existingReorderSourceIds(tx: any, shop: string, ids: Array<string | null | undefined>): Promise<Set<string>> {
+  const wanted = Array.from(new Set(ids.map((id) => String(id || "").trim()).filter(Boolean)));
+  if (!wanted.length) return new Set();
+  const rows = (await tx.productionJobItem.findMany({ where: { shop, id: { in: wanted } }, select: { id: true } })) || [];
+  return new Set(rows.map((row: any) => String(row.id)));
+}
+
+/** The earlier item's production / artwork files (exact item link first; rows from before the link by routed ticket name). */
+export function priorItemFiles(sourceItem: { id: string; itemTicket?: string | null }, jobFiles: any[]): any[] {
+  const ticket = String(sourceItem.itemTicket || "").toUpperCase();
+  return (jobFiles || []).filter((file) => {
+    if (String(file.assetSource || "") === REORDER_REUSE_SOURCE) return false; // never chain a reference of a reference
+    if (!["print_file", "artwork"].includes(String(file.fileType || ""))) return false;
+    if (file.productionJobItemId) return String(file.productionJobItemId) === String(sourceItem.id);
+    return Boolean(ticket) && String(file.fileName || "").toUpperCase().startsWith(ticket);
+  });
+}
+
+/**
+ * Records the lineage on a job that was just created: one event per reordered
+ * item and reference rows to the earlier item's files on the NEW item.
+ *   same_artwork — the approved earlier files are listed for reuse;
+ *   revision     — the earlier files are listed as REFERENCE ONLY and a new
+ *                  proof approval is required before printing.
+ * Reference rows are never routed, never counted as received print files and
+ * never change the earlier job.
+ */
+async function applyReorderLineage(tx: any, shop: string, job: any, actor: string): Promise<void> {
+  const items = (job?.items || []).filter((item: any) => item.reorderSourceItemId);
+  for (const item of items) {
+    const source = await tx.productionJobItem.findFirst({ where: { shop, id: item.reorderSourceItemId } });
+    if (!source) continue;
+    const revision = item.reorderArtworkMode === "revision";
+    const sourceFiles = priorItemFiles(source, (await tx.productionJobFile.findMany({ where: { shop, jobId: source.jobId }, orderBy: { createdAt: "asc" } })) || []);
+    for (const file of sourceFiles) {
+      await tx.productionJobFile.create({
+        data: {
+          shop,
+          jobId: job.id,
+          fileName: file.fileName,
+          fileType: file.fileType,
+          fileUrl: file.fileUrl,
+          assetRole: "reference",
+          assetSource: REORDER_REUSE_SOURCE,
+          sourceRef: file.sourceRef || null,
+          matchedBy: "reorder_lineage",
+          jobTicket: job.jobTicket || null,
+          originalFileName: file.originalFileName || file.fileName,
+          productionJobItemId: item.id,
+          reusedFromFileId: file.id,
+          createdBy: actor,
+          notes: revision
+            ? `REFERENCE ONLY — earlier file of ${source.itemTicket || "the earlier item"}. This reorder has revised artwork: do not print this file. A new proof approval and a new production file are required.`
+            : `Reuse approved artwork — production file of ${source.itemTicket || "the earlier item"}. Copy it from the routed archive into this job's folder to print it for ${item.itemTicket || "this item"}.`,
+        },
+      });
+    }
+    await tx.productionJobEvent.create({
+      data: {
+        shop,
+        jobId: job.id,
+        eventType: "reorder_lineage_recorded",
+        message: revision
+          ? `${item.itemTicket || item.productTitle} is a REORDER WITH REVISION of ${source.itemTicket || source.productTitle} (earlier quantity ${source.quantity}). New proof approval required; the earlier file${sourceFiles.length === 1 ? " is" : "s are"} listed as reference only (${sourceFiles.length}).`
+          : `${item.itemTicket || item.productTitle} is a REORDER of ${source.itemTicket || source.productTitle} (earlier quantity ${source.quantity}) with the SAME ARTWORK. ${sourceFiles.length} earlier file(s) listed for reuse. The earlier job is unchanged.`,
+        oldValue: String(source.itemTicket || source.id),
+        newValue: String(item.itemTicket || item.id),
+        createdBy: actor,
+      },
+    });
+  }
 }
 
 // ---------- 15H.4C: merge/link convergence ----------
@@ -1400,7 +1530,7 @@ export async function createProductionJobFromSource(
 export function jobSourceType(job: { orderGid?: string | null; quoteId: string | null }): "shopify" | "quote" | "manual" | "intake" | "other" {
   if (job.orderGid || String(job.quoteId || "").startsWith("shopify_order_")) return "shopify";
   const quoteId = String(job.quoteId || "");
-  if (quoteId.startsWith("manual_")) return "manual";
+  if (quoteId.startsWith("manual_") || quoteId.startsWith("released_")) return "manual";
   if (quoteId.startsWith("test_")) return "other";
   if (quoteId) return "quote";
   return "intake";
@@ -1598,7 +1728,29 @@ export type RoutedPrintFileInput = {
   routedFileName: string; // ERP / RIP name, without extension
   machine: "mimaki" | "roland";
   itemTicket?: string | null;
+  /** 2026-11-19: the exact ProductionJobItem (from the routed intake row). When absent it is resolved from itemTicket inside this job. */
+  itemId?: string | null;
 };
+
+/**
+ * The item a routed file belongs to, proven inside ONE job: the given item id
+ * when it is an item of this job, else the item whose ticket equals itemTicket
+ * exactly, else the only item of a single-item job. Anything else is null —
+ * the file stays a job-level file rather than being attached to a guess.
+ */
+export function resolveRoutedFileItemId(items: Array<{ id: string; itemTicket?: string | null }>, input: { itemId?: string | null; itemTicket?: string | null }): string | null {
+  const wanted = String(input.itemId || "").trim();
+  if (wanted) {
+    const byId = items.find((item) => String(item.id) === wanted);
+    if (byId) return String(byId.id);
+  }
+  const ticket = String(input.itemTicket || "").trim().toUpperCase();
+  if (ticket) {
+    const byTicket = items.filter((item) => String(item.itemTicket || "").trim().toUpperCase() === ticket);
+    if (byTicket.length === 1) return String(byTicket[0].id);
+  }
+  return items.length === 1 ? String(items[0].id) : null;
+}
 
 export async function recordRoutedPrintFile(dbClient: any, input: RoutedPrintFileInput): Promise<{ result: "created" | "updated" | "unchanged"; fileId: string }> {
   const fileHash = String(input.fileHash || "").toLowerCase();
@@ -1620,9 +1772,13 @@ export async function recordRoutedPrintFile(dbClient: any, input: RoutedPrintFil
     // One lock per job + file content: two simultaneous reports serialize here.
     await acquireSourceLock(tx, input.shop, "print_file", `${input.jobId}:${fileHash}`);
     const existing = await tx.productionJobFile.findFirst({ where: identity, orderBy: { createdAt: "asc" } });
+    // 2026-11-19: exact item link. Resolved inside this job only; never guessed.
+    const jobItems = (await tx.productionJobItem.findMany({ where: { shop: input.shop, jobId: input.jobId }, select: { id: true, itemTicket: true } })) || [];
+    const productionJobItemId = resolveRoutedFileItemId(jobItems, { itemId: input.itemId, itemTicket: input.itemTicket });
     if (existing) {
-      if (existing.fileName === fileName && existing.notes === notes) return { result: "unchanged" as const, fileId: existing.id };
-      await tx.productionJobFile.update({ where: { id: existing.id }, data: { fileName, notes } });
+      const linkUnchanged = !productionJobItemId || existing.productionJobItemId === productionJobItemId;
+      if (existing.fileName === fileName && existing.notes === notes && linkUnchanged) return { result: "unchanged" as const, fileId: existing.id };
+      await tx.productionJobFile.update({ where: { id: existing.id }, data: { fileName, notes, ...(productionJobItemId ? { productionJobItemId } : {}) } });
       return { result: "updated" as const, fileId: existing.id };
     }
     const created = await tx.productionJobFile.create({
@@ -1636,6 +1792,7 @@ export async function recordRoutedPrintFile(dbClient: any, input: RoutedPrintFil
         originalFileName: original,
         notes,
         createdBy: "print-intake-agent",
+        productionJobItemId,
       },
     });
     return { result: "created" as const, fileId: created.id };

@@ -16,6 +16,8 @@ export type SimpleNavSection = { key: string; label: string; href: string; purpo
 export const SIMPLE_BOARD_HREF = "/app/erp/production-board";
 export const NEW_JOB_HREF = "/app/erp/production-new";
 export const CLASSIC_PRODUCTION_HREF = "/app/erp/production";
+export const REORDER_HREF = "/app/erp/reorder";
+export const RELEASE_QUEUE_HREF = "/app/erp/release-queue";
 export const jobWorkspaceHref = (jobId: string) => `/app/erp/production-job/${jobId}`;
 export const classicJobHref = (jobId: string) => `${CLASSIC_PRODUCTION_HREF}?job=${encodeURIComponent(jobId)}`;
 
@@ -35,6 +37,10 @@ export function navForRole(role: SimpleNavRole | string, options: { viewFinancia
       purpose: "Customers, quotes and orders.",
       links: [
         { label: "Quotes & Customers", href: "/app/quotes" },
+        // 2026-11-19: a reorder is a new sale (new quote -> new job); owner, manager, sales
+        { label: "Reorder a Past Item", href: REORDER_HREF },
+        // staged business transactions waiting for release to production (owner / manager; the server enforces it)
+        ...(isOwner || isManager ? [{ label: "Release to Production", href: RELEASE_QUEUE_HREF }] : []),
         // 2026-11-15: the lead queue is a financial page on the server (owner / financially authorized manager);
         // everyone else was shown a link that always answered "owner only".
         ...(isOwner || (isManager && options.viewFinancials) ? [{ label: "Leads to Review", href: "/app/erp/agent-review-queue" }] : []),

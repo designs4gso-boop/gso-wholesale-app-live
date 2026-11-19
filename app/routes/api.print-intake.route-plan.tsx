@@ -156,6 +156,7 @@ export async function action({ request }: { request: Request }) {
         routingRule: "assigned_by_owner",
         routedFilename: ripName,
         authoritativeTicket: assignedItem.itemTicket || assignedJob.jobTicket,
+        productionJobItemId: assignedItem.id, // 2026-11-19: exact item link
         rawParsedHints: appendIntakeAudit(existingIntake.rawParsedHints, { at: new Date().toISOString(), actor: "route-plan", action: "routed_via_owner_assignment" }),
       },
     });
@@ -285,7 +286,7 @@ export async function action({ request }: { request: Request }) {
       routedRipName = runIsDefault ? plan.ripName : applyRunSuffix(plan.ripName || "", run);
       await db.printIntake.upsert({
         where: { shop_fileHashSha256: { shop: setting.shop, fileHashSha256: fileHash } },
-        update: { matchedProductionJobId: plan.jobId, authoritativeTicket: ticket, printer: plan.machine, routingRule: plan.rule, routedFilename: routedRipName, status: "routed" },
+        update: { matchedProductionJobId: plan.jobId, authoritativeTicket: ticket, printer: plan.machine, routingRule: plan.rule, routedFilename: routedRipName, status: "routed", productionJobItemId: plan.itemId || null },
         create: {
           shop: setting.shop,
           originalFilename: fileName,
@@ -295,6 +296,7 @@ export async function action({ request }: { request: Request }) {
           status: "routed",
           matchedProductionJobId: plan.jobId,
           authoritativeTicket: ticket,
+          productionJobItemId: plan.itemId || null, // 2026-11-19: exact item link
           printer: plan.machine,
           printMode: null,
           routingRule: plan.rule,

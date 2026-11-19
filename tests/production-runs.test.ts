@@ -75,7 +75,7 @@ describe("15H.5 run identity grammar", () => {
     const board = readFileSync("app/routes/app.erp.production.tsx", "utf8");
     // reprint: bumps P, resets A, retry_allowed, audited, reason required, NO job creation
     expect(board).toContain('intent === "reprintItem"');
-    expect(board).toContain("reprintNumber: nextRun.reprint");
+    expect(board).toContain("reprintNumber: plan.run.reprint"); // 2026-11-19: one write per layer file of the item
     expect(board).toContain("attemptNumber: 1");
     expect(board).toContain('status: "retry_allowed"');
     expect(board).toContain('"production_reprint_requested"');

@@ -49,6 +49,8 @@ export default [
     // Production page's loader / action; the page above stays as the Advanced view.
     route("erp/production-board", "routes/app.erp.production-board.tsx"),
     route("erp/production-new", "routes/app.erp.production-new.tsx"),
+    route("erp/reorder", "routes/app.erp.reorder.tsx"),
+    route("erp/release-queue", "routes/app.erp.release-queue.tsx"),
     route("erp/production-job/:id", "routes/app.erp.production-job.$id.tsx"),
     route("erp/production-calendar", "routes/app.erp.production-calendar.tsx"),
     route("erp/print-logs", "routes/app.erp.print-logs.tsx"),

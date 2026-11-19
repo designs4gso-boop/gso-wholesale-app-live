@@ -38,6 +38,7 @@ import {
 } from "../lib/print-log-writeback.server";
 import { resolvePrintDuration } from "../lib/rip-duration.server";
 import { applyRunSuffix } from "../lib/print-intake-routing.server";
+import { isRunChargeType, isRunKind, layersToReroute, nextReprintNumber, openRunOf, parseReprintQuantity, planReprintRuns, runChargeLabel, runKindLabel, runStatusForQc } from "../lib/production-run";
 import { appendIntakeAudit } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
@@ -679,9 +680,19 @@ export async function loader({ request }: { request: Request }) {
   for (const row of intakeProvenance) {
     if (row.authoritativeTicket) runByTicket.set(row.authoritativeTicket, { revision: row.revisionNumber, reprint: row.reprintNumber, attempt: row.attemptNumber });
   }
+  // 2026-11-19: structured production runs per item, and reorder lineage in staff words.
+  const runRows: any[] = provenanceJobIds.length ? ((await db.productionRun.findMany({ where: { shop, jobId: { in: provenanceJobIds } }, orderBy: [{ runNumber: "asc" }] })) || []) : [];
+  const runsByItem = new Map<string, any[]>();
+  for (const run of runRows) runsByItem.set(run.itemId, [...(runsByItem.get(run.itemId) || []), { runNumber: run.runNumber, kind: run.kind, quantity: run.quantity, reasonCode: run.reasonCode, chargeType: run.chargeType, status: run.status, runLabel: run.runLabel, requestedBy: run.requestedBy, notes: run.notes, createdAt: run.createdAt }]);
+  const lineageSourceIds = Array.from(new Set((jobsWithActuals as any[]).flatMap((job) => (job.items || []).map((item: any) => item.reorderSourceItemId).filter(Boolean)))) as string[];
+  const lineageSources: any[] = lineageSourceIds.length ? ((await db.productionJobItem.findMany({ where: { shop, id: { in: lineageSourceIds } }, select: { id: true, itemTicket: true, productTitle: true, quantity: true, jobId: true } })) || []) : [];
+  const lineageById = new Map<string, any>(lineageSources.map((source) => [source.id, source]));
   for (const job of jobsWithActuals as any[]) {
     for (const item of job.items || []) {
       item.runIdentity = runByTicket.get(item.itemTicket) || null;
+      item.runs = runsByItem.get(item.id) || [];
+      const source = item.reorderSourceItemId ? lineageById.get(item.reorderSourceItemId) : null;
+      item.reorderOf = source ? { itemTicket: source.itemTicket, productTitle: source.productTitle, quantity: source.quantity, jobId: source.jobId, artworkMode: item.reorderArtworkMode || null } : null;
     }
   }
   const SOURCE_ORDER: Record<string, number> = { shopify: 0, quote: 1, manual: 2, other: 3, intake: 4 };
@@ -1531,15 +1542,41 @@ Source ref: ${sourceRef}` : ""}`,
     }
     const actor = verifiedActor(resolveActorFromSession(session, shop));
     const note = String(formData.get("reprintNote") || "").slice(0, 200);
+    // 2026-11-19 (production runs): the reprint QUANTITY is required and is kept
+    // apart from the ordered quantity (500 ordered + 25 reprinted is never 525
+    // ordered); kind and charge type are explicit. Nothing here changes the
+    // item's quantity or price, and no money is posted anywhere.
+    const reprintQty = parseReprintQuantity(formData.get("reprintQty"));
+    if (!reprintQty.ok) return Response.json({ ok: false, message: reprintQty.reason }, { status: 400 });
+    const runKindRaw = String(formData.get("runKind") || "reprint");
+    const runKind = isRunKind(runKindRaw) ? runKindRaw : "reprint";
+    const chargeRaw = String(formData.get("chargeType") || "internal");
+    if (!isRunChargeType(chargeRaw)) return Response.json({ ok: false, message: "Pick who pays for this reprint: internal, warranty or customer-paid." }, { status: 400 });
+    const chargeType = chargeRaw;
     const row = item.itemTicket
       ? await db.printIntake.findFirst({
           where: { shop, authoritativeTicket: item.itemTicket, OR: [{ matchedProductionJobId: jobId }, { generatedProductionJobId: jobId }] },
           orderBy: { updatedAt: "desc" },
         })
       : null;
-    const nextRun = row ? { revision: row.revisionNumber, reprint: row.reprintNumber + 1, attempt: 1 } : null;
+    // 2026-11-19: EVERY layer file of the item is re-routed (a CMYK + gloss item
+    // needs both back at the press), not only the most recent file. The newest
+    // row per staff file name is used; all layers share one reprint number.
+    const siblingRows: any[] = item.itemTicket
+      ? ((await db.printIntake.findMany({
+          where: { shop, authoritativeTicket: item.itemTicket, OR: [{ matchedProductionJobId: jobId }, { generatedProductionJobId: jobId }] },
+          orderBy: { updatedAt: "desc" },
+        })) || [])
+      : [];
+    const layerRows: any[] = layersToReroute([...(row ? [row] : []), ...siblingRows.filter((sibling: any) => sibling.id !== row?.id)] as any);
+    const reprintNumber = layerRows.length ? nextReprintNumber(layerRows as any) : row ? row.reprintNumber + 1 : 1;
+    const layerPlans = (layerRows.length ? layerRows : row ? [row] : []).map((layer: any) => {
+      const run = { revision: layer.revisionNumber, reprint: reprintNumber, attempt: 1 };
+      return { layer, run, name: applyRunSuffix(layer.routedFilename || item.ripJobName || item.itemTicket || "", run) };
+    });
+    const nextRun = row ? { revision: row.revisionNumber, reprint: reprintNumber, attempt: 1 } : null;
     const runLabel = nextRun ? `${nextRun.revision > 1 ? `R${nextRun.revision}-` : ""}P${nextRun.reprint}-A1` : "P1-A1";
-    const nextName = row && nextRun ? applyRunSuffix(row.routedFilename || item.ripJobName || item.itemTicket || "", nextRun) : "";
+    const nextName = layerPlans.map((plan: any) => plan.name).join(" and ");
     const reprintAt = new Date();
     // 2026-11-12: ONE transaction — the structured reprint record, the CURRENT QC
     // reset (a new QC PASS is required), the intake re-route and the audit
@@ -1554,20 +1591,32 @@ Source ref: ${sourceRef}` : ""}`,
           data: { lastReprintReason: reasonCode, lastReprintBy: actor, lastReprintAt: reprintAt, qcResult: null, qcBy: null, qcAt: null, qcNote: null },
         });
         if (!claimed.count) throw new Error(REPRINT_ALREADY_RECORDED);
-        if (row && nextRun) {
+        for (const plan of layerPlans) {
           await tx.printIntake.update({
-            where: { id: row.id },
+            where: { id: plan.layer.id },
             data: {
-              reprintNumber: nextRun.reprint,
+              reprintNumber: plan.run.reprint,
               attemptNumber: 1,
-              routedFilename: nextName,
+              routedFilename: plan.name,
               status: "retry_allowed",
-              rawParsedHints: appendIntakeAudit(row.rawParsedHints, { at: reprintAt.toISOString(), actor, action: "reprint_requested", reason }),
+              rawParsedHints: appendIntakeAudit(plan.layer.rawParsedHints, { at: reprintAt.toISOString(), actor, action: "reprint_requested", reason }),
             },
           });
         }
+        // The structured run record: run 1 (original) is written the first time
+        // it is needed; this reprint / remake is the next run of the SAME item.
+        const existingRuns = (await tx.productionRun.findMany({ where: { shop, itemId: item.id } })) || [];
+        const planned = planReprintRuns(existingRuns, item, { kind: runKind, quantity: reprintQty.quantity });
+        if (planned.original) {
+          await tx.productionRun.create({
+            data: { shop, jobId, itemId: item.id, runNumber: planned.original.runNumber, kind: "original", quantity: planned.original.quantity, chargeType: "customer_paid", status: planned.original.status, printer: item.machineSummary || null, requestedBy: "system", notes: "Original production of the ordered quantity (recorded when the first reprint was requested).", runLabel: "A1" },
+          });
+        }
+        await tx.productionRun.create({
+          data: { shop, jobId, itemId: item.id, runNumber: planned.next.runNumber, kind: runKind, quantity: reprintQty.quantity, reasonCode, chargeType, status: "open", printer: item.machineSummary || null, requestedBy: actor, authorizedBy: actor, notes: note || null, runLabel },
+        });
         await tx.productionJobEvent.create({
-          data: { shop, jobId, eventType: "production_reprint_requested", message: `Reprint requested for ${itemLabel} (run ${runLabel}) by ${actor}. Reason: ${reason}.${note ? ` Note: ${note}` : ""}`, oldValue: null, newValue: reasonCode, createdBy: actor },
+          data: { shop, jobId, eventType: "production_reprint_requested", message: `${runKindLabel(runKind)} requested for ${itemLabel} (run ${runLabel}) by ${actor}. Quantity: ${reprintQty.quantity} (ordered quantity stays ${item.quantity}). Charge: ${runChargeLabel(chargeType)}. Reason: ${reason}.${note ? ` Note: ${note}` : ""}`, oldValue: null, newValue: reasonCode, createdBy: actor },
         });
         // 2026-11-11 QC guard: a reprint invalidates this item's earlier QC PASS
         // (production-qc-guard reads the latest qc_result per item).
@@ -1579,10 +1628,11 @@ Source ref: ${sourceRef}` : ""}`,
       if (error?.message === REPRINT_ALREADY_RECORDED) return Response.json({ ok: false, message: `This reprint was already recorded for ${itemLabel} — refresh the page. Nothing was changed.` }, { status: 409 });
       throw error;
     }
-    const instruction = row
-      ? `Place the artwork back into Prints For Today (original is in the routed archive) — the agent will re-route it as ${nextName}.`
+    const instruction = layerPlans.length
+      ? `Place the artwork back into Prints For Today (original is in the routed archive) — the agent will re-route ${layerPlans.length > 1 ? `all ${layerPlans.length} layer files` : "it"} as ${nextName}.`
       : "No routed artwork on record yet — when artwork is dropped it will run normally; use this reprint note for the record.";
-    return Response.json({ ok: true, message: `REPRINT RECORDED for ${itemLabel} (run ${runLabel}) — reason: ${reprintReasonLabel(reasonCode)}, by ${actor}. QC STATUS: ${QC_REQUIRED_AFTER_REPRINT}. ${instruction}` });
+    const chargeNote = chargeType === "customer_paid" ? " CUSTOMER-PAID: nothing was charged here — the owner / admin creates the new sale for it; this job's price is unchanged." : "";
+    return Response.json({ ok: true, message: `REPRINT RECORDED for ${itemLabel} (run ${runLabel}) — ${reprintQty.quantity} piece(s), ${runChargeLabel(chargeType)}, reason: ${reprintReasonLabel(reasonCode)}, by ${actor}. QC STATUS: ${QC_REQUIRED_AFTER_REPRINT}. ${instruction}${chargeNote}` });
   }
 
   if (intent === "revisionItem") {
@@ -1626,6 +1676,13 @@ Source ref: ${sourceRef}` : ""}`,
     // 2026-11-12: structured QC record on the item (migration 20261112090000). The
     // completion guard still reads the qc_result events above.
     await db.productionJobItem.updateMany({ where: { shop, id: item.id }, data: { qcResult: result, qcBy: actor, qcAt: new Date(), qcNote: note || null } });
+    // 2026-11-19 (production runs): the QC result closes the newest open run of
+    // this item (hold leaves it open). Items with no reprint have no run rows.
+    const runStatus = runStatusForQc(result);
+    if (runStatus) {
+      const openRun = openRunOf(((await db.productionRun.findMany({ where: { shop, itemId: item.id } })) || []) as any);
+      if (openRun?.id) await db.productionRun.updateMany({ where: { shop, id: openRun.id, status: "open" }, data: { status: runStatus, completedAt: new Date() } });
+    }
     return Response.json({
       ok: true,
       message: result === "reprint_required"
@@ -2164,6 +2221,12 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
                           <select name="reprintReason" defaultValue="" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }}>
                             <option value="" disabled>Reprint reason…</option>
                             {REPRINT_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                          </select>
+                          <input name="reprintQty" type="number" min={1} step={1} required placeholder="Reprint qty" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb", width: 110 }} />
+                          <select name="chargeType" defaultValue="internal" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }}>
+                            <option value="internal">Internal — no charge</option>
+                            <option value="warranty">Warranty / replacement — no charge</option>
+                            <option value="customer_paid">Customer-paid</option>
                           </select>
                           <input name="reprintNote" placeholder="Note (optional)" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb", minWidth: 160 }} />
                           <Button submit size="micro">Reprint</Button>

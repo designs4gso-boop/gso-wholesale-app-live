@@ -98,6 +98,7 @@ export async function action({ request }: { request: Request }) {
           routedFileName: routedName,
           machine: press,
           itemTicket: routedIntake.authoritativeTicket || outcome.itemTicket,
+          itemId: (routedIntake as any).productionJobItemId || null,
         });
       }
     } catch {
