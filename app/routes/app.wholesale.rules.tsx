@@ -15,6 +15,7 @@ import {
   EmptyState,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import {
   getRules,
   createRule,
@@ -23,7 +24,11 @@ import {
 } from "../lib/wholesale.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // Wholesale discount settings and price rules change what customers pay: owner or authorized manager only.
+  requireFinancialAccess(auth);
+  const { session } = auth;
 
   const [rules, config] = await Promise.all([
     getRules(session.shop),
@@ -34,7 +39,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // Wholesale discount settings and price rules change what customers pay: owner or authorized manager only.
+  requireFinancialAccess(auth);
+  const { session } = auth;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
 

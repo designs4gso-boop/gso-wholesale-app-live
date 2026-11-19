@@ -245,6 +245,14 @@ export async function action({ request }: { request: Request }) {
     const vendorProductId = clean(formData.get("vendorProductId")) || null;
     let itemName = clean(formData.get("itemName"));
 
+    // SECURITY 2026-11-18: a linked material / vendor product must be this shop's own record.
+    if (materialId && !(await db.material.findFirst({ where: { shop, id: materialId }, select: { id: true } }))) {
+      return Response.json({ ok: false, message: "That material was not found." }, { status: 404 });
+    }
+    if (vendorProductId && !(await db.vendorProduct.findFirst({ where: { shop, id: vendorProductId }, select: { id: true } }))) {
+      return Response.json({ ok: false, message: "That vendor product was not found." }, { status: 404 });
+    }
+
     if (!itemName && materialId) {
       const material = await db.material.findFirst({ where: { shop, id: materialId } });
       itemName = material?.name || "";
@@ -349,8 +357,9 @@ export async function action({ request }: { request: Request }) {
     const item = await db.vendorCostBookItem.findFirst({ where: { shop, id } });
     if (!item || !item.materialId) return Response.json({ ok: false, message: "This cost item is not linked to a material." }, { status: 400 });
 
-    await db.material.update({
-      where: { id: item.materialId },
+    // SECURITY 2026-11-18: shop-scoped write (was update-by-id).
+    const appliedMaterial = await db.material.updateMany({
+      where: { id: item.materialId, shop },
       data: {
         primaryVendorId: item.vendorId || null,
         vendor: item.vendorName || null,
@@ -361,6 +370,7 @@ export async function action({ request }: { request: Request }) {
         purchaseCost: item.unitCost,
       },
     });
+    if (!appliedMaterial.count) return Response.json({ ok: false, message: "The linked material was not found." }, { status: 404 });
 
     await db.materialCostHistory.create({
       data: {
@@ -381,6 +391,10 @@ export async function action({ request }: { request: Request }) {
     const item = await db.vendorCostBookItem.findFirst({ where: { shop, id }, include: { tiers: true } });
     if (!item || !item.vendorProductId) return Response.json({ ok: false, message: "This cost item is not linked to a vendor product." }, { status: 400 });
 
+    // SECURITY 2026-11-18: the linked vendor product must be this shop's own record.
+    if (!(await db.vendorProduct.findFirst({ where: { shop, id: item.vendorProductId }, select: { id: true } }))) {
+      return Response.json({ ok: false, message: "The linked vendor product was not found." }, { status: 404 });
+    }
     await db.vendorProduct.update({
       where: { id: item.vendorProductId },
       data: {

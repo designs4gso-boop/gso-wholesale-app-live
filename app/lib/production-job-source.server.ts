@@ -20,6 +20,7 @@
 
 import { parseDueDateInput } from "./business-date";
 import { quotePricingAuthorityState } from "./quote-pricing-authority";
+import { productionSafeQuoteNotes } from "./quote-staff-visibility";
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
 import { decideMachine } from "./print-intake-routing.server";
@@ -410,7 +411,7 @@ export function validateManualJobInput(input: {
         ok: false,
         reason: decision.reasons.includes("auto_machine_load_unavailable_select_printer")
           ? "Automatic press selection is unavailable (machine load is incomplete) — choose Mimaki or Roland for this item."
-          : `Machine selection conflicts with the finish: ${decision.reasons.join("; ")} (gloss runs only on the Roland; the Mimaki prints CMYK and White).`,
+          : `Machine selection could not be resolved: ${decision.reasons.join("; ")} .`,
       };
     }
     resolved.push({ ...item, quantity: Math.floor(quantity), family, finish, printer: printer as any, resolvedMachine: decision.machine, machineRule: String(decision.machineRule || "default_cmyk") });
@@ -1111,7 +1112,9 @@ export async function createProductionJobFromSource(
           phone: quote.phone || null,
           status: "new",
           priority: "normal",
-          customerNotes: quote.notes || null,
+          // 2026-11-18 (launch audit): quote notes carry the low-margin approval line (margin %) and
+          // internal [GSO] audit lines; the raw copy showed them on the work order and proof sheet.
+          customerNotes: productionSafeQuoteNotes(quote.notes) || null,
           internalNotes: `Created from quote via central service (${family} checklist).`,
           productImageUrl: firstImageFromQuoteItem(quote.items[0]) || null,
           proofUrl: null,

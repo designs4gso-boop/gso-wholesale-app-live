@@ -3067,8 +3067,8 @@ export default function ErpCostCalculatorRoute() {
             <div><b>Synced GSOQ results:</b> {rows.length}</div>
             <div><b>Last sync:</b> {lastAutoImportAt ? new Date(lastAutoImportAt).toLocaleString() : "Not synced yet"}</div>
             <div><b>Upload endpoint:</b> <code>{syncEndpoint}</code></div>
-            <div><b>Print Intake Agent Credential:</b> Configured <span style={{ color: "#92400e" }}>(full token never displayed — rotate on Print Log Settings to reveal a new one once)</span></div>
-            <code style={codeStyle}>powershell -ExecutionPolicy Bypass -File .\tools\gso-sync-quote-rip-results-to-app.ps1 -AppUrl "{new URL(syncEndpoint).origin}" -Token "&lt;PRINT_INTAKE_TOKEN&gt;"</code>
+            <div><b>Print Intake Agent Credential:</b> Configured <span style={{ color: "#92400e" }}>(full token never displayed — the owner can rotate it on Print Log Settings; rotating stops every shop-PC agent until their config is updated)</span></div>
+<div style={{ color: "#6b7280" }}>No sync script ships with the app for this endpoint (the old <code>gso-sync-quote-rip-results-to-app.ps1</code> reference was removed 2026-11-18). RIP results are imported through RIP Imports.</div>
           </div>
         ) : (
           <div style={{ fontSize: 13, color: "#92400e" }}>

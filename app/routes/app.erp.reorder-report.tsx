@@ -227,6 +227,7 @@ function MaterialCard({ material, lowStockOnly = false, canSeeCost = false }: { 
 
         <Divider />
 
+        {canSeeCost ? (<>
         <Form method="post">
           <input type="hidden" name="intent" value="updateMaterialInventory" />
           <input type="hidden" name="materialId" value={material.id} />
@@ -247,6 +248,9 @@ function MaterialCard({ material, lowStockOnly = false, canSeeCost = false }: { 
             <Button submit variant={lowStockOnly ? "primary" : "secondary"}>Add received stock</Button>
           </InlineStack>
         </Form>
+        </>) : (
+          <Text as="p" tone="subdued">Stock changes and receiving are recorded by the owner or an authorized manager. Use Request Material to ask for a reorder.</Text>
+        )}
       </BlockStack>
     </Card>
   );

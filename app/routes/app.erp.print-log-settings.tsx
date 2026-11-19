@@ -14,6 +14,7 @@ import { FormTextField } from "../components/FormTextField";
 import { randomBytes } from "crypto";
 import { Form, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
+import { requireFinancialAccess, requireOwner } from "../lib/owner-authorization.server";
 import db from "../db.server";
 import { CREDENTIAL_PLACEHOLDER, credentialStatusLabel, maskCredential } from "../lib/security-guards-shared";
 
@@ -47,7 +48,11 @@ function getBaseUrl(request: Request) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // It shows the intake / RIP upload endpoint and the masked token: owner or authorized manager only.
+  requireFinancialAccess(auth);
+  const { session } = auth;
   const shop = session.shop;
   const setting = await ensureSetting(shop);
   const baseUrl = getBaseUrl(request);
@@ -86,7 +91,12 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // Saving can switch the import off and rotating reveals the upload token (the only credential of the
+  // print-intake and RIP result endpoints): owner only.
+  requireOwner(auth);
+  const { session } = auth;
   const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");

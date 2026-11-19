@@ -274,6 +274,8 @@ export const QUOTE_STATUS_VALUES = ["draft", "sent", "approved", "deposit_paid",
  * staff move — nothing automated sets it and it unlocks nothing.)
  */
 export const OWNER_ONLY_QUOTE_STATUSES = ["deposit_paid", "paid", "production"] as const;
+/** States in which the quoted snapshot is locked (money moved / production started / done). */
+export const MONEY_OR_PRODUCTION_QUOTE_STATUSES = ["deposit_paid", "paid", "production", "completed"] as const;
 
 /** 2026-11-11: server check that a manual status change is a known status and, for payment/production states, made by the owner. */
 export function quoteStatusChangeCheck(input: { currentStatus: string | null | undefined; nextStatus: string; isOwner: boolean }): { ok: true } | { ok: false; message: string } {
@@ -282,6 +284,14 @@ export function quoteStatusChangeCheck(input: { currentStatus: string | null | u
   if (next === String(input.currentStatus || "")) return { ok: true };
   if ((OWNER_ONLY_QUOTE_STATUSES as readonly string[]).includes(next) && !input.isOwner) {
     return { ok: false, message: `Only the owner can set a quote to "${next}" by hand. Payment statuses come from the Shopify payment; production starts from a paid quote.` };
+  }
+  // 2026-11-18 (launch audit): once money has moved or production started, the quote's price / cost
+  // snapshot is locked. A non-owner could still move such a quote BACK (to draft, sent, ...), which
+  // unlocked the editor and let the snapshot be rewritten. Only the owner may move a quote out of a
+  // locked state; the normal forward move production -> completed stays a staff move.
+  const current = String(input.currentStatus || "");
+  if (!input.isOwner && (MONEY_OR_PRODUCTION_QUOTE_STATUSES as readonly string[]).includes(current) && !(current === "production" && next === "completed")) {
+    return { ok: false, message: `This quote is ${current} — only the owner can change its status.` };
   }
   return { ok: true };
 }

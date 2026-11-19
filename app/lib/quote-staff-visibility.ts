@@ -75,6 +75,18 @@ export function stripFinancialAuditLines(notes: string | null | undefined): { vi
   return { visible, financial };
 }
 
+/**
+ * Quote notes as they may be copied onto a PRODUCTION JOB (work order, proof sheet): no low-margin
+ * approval lines (they state margin percentages) and no internal "[GSO] ..." payment / price-audit lines.
+ */
+export function productionSafeQuoteNotes(notes: string | null | undefined): string {
+  return stripFinancialAuditLines(notes).visible
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("[GSO]"))
+    .join("\n")
+    .trim();
+}
+
 /** Staff save: keep the DB's financial audit lines whatever the browser posted. */
 export function mergeStaffNotes(postedNotes: string | null | undefined, dbNotes: string | null | undefined): string {
   const posted = stripFinancialAuditLines(postedNotes).visible;

@@ -3,10 +3,16 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useLoaderData } from "react-router";
 import { Page, Card, BlockStack, Text, Button } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
+import { permissionDeniedResponse, resolveStaffAccess } from "../lib/staff-roles.server";
 import { db } from "../db.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // Applications carry tax / resale numbers and approval grants wholesale pricing: an assigned selling role only.
+  const access = resolveStaffAccess(auth);
+  if (!access.can("sendQuote")) throw permissionDeniedResponse(access, "sendQuote");
+  const { session } = auth;
   const registrations = await db.wholesaleApplication.findMany({
     where: { shop: session.shop },
     orderBy: { createdAt: "desc" },
@@ -15,7 +21,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // Applications carry tax / resale numbers and approval grants wholesale pricing: an assigned selling role only.
+  const access = resolveStaffAccess(auth);
+  if (!access.can("sendQuote")) throw permissionDeniedResponse(access, "sendQuote");
+  const { session } = auth;
   const form = await request.formData();
   const id = Number(form.get("id"));
   const status = String(form.get("status") || "pending");

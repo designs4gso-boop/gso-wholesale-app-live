@@ -545,7 +545,7 @@ export default function PrintIntake() {
         <ol style={{ fontSize: 13, lineHeight: 1.9, margin: 0, paddingLeft: 20 }}>
           <li>On the shop PC: copy <code>tools\gso-print-intake-agent-config.example.json</code> to <code>gso-print-intake-agent-config.json</code> (git-ignored) and set <code>UploadToken</code> (see the credential card below — the token itself is only shown once, at rotation).</li>
           <li>Health check (writes nothing): <code>powershell -ExecutionPolicy Bypass -File tools\gso-print-intake-agent.ps1 -Health</code></li>
-          <li>Dry run (no copies/moves/reports — but NOT read-only: it calls the ERP plan endpoint, which records review rows here): <code>... -DryRun</code>, then one real pass: <code>... -Once</code></li>
+          <li>Dry run (read-only: no copies, moves or reports, and the ERP records nothing — the server confirms the dry run or the agent stops): <code>... -DryRun</code>, then one real pass: <code>... -Once</code></li>
           <li>Enable routing by setting <code>MimakiRoutingEnabled: true</code> in the config after the dry run looks right.</li>
           <li>Install at startup: <code>schtasks /Create /TN &quot;GSO Print Intake Agent&quot; /SC ONSTART /TR &quot;powershell -ExecutionPolicy Bypass -File C:\path\to\tools\gso-print-intake-agent.ps1 -Loop&quot;</code></li>
         </ol>

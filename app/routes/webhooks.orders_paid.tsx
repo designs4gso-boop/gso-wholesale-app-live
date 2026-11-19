@@ -50,7 +50,16 @@ async function applyQuotePaymentFromOrder(
 ) {
   const db = deps.db;
   const quote = await db.quote.findFirst({ where: { id: quoteId, shop } });
-  if (!quote) return "OK no matching quote for Quote ID";
+  if (!quote) {
+    // 2026-11-18 (launch audit): a paid order naming a quote that does not exist used to end here with no
+    // trace at all. It now leaves the same owner review item as any other paid order that produced no job.
+    try {
+      await db.agentReviewQueueItem.create({ data: unrecognizedPaidOrderQueueItem(shop, order) as any });
+    } catch (error) {
+      console.error("orders_paid unknown-quote trail failed", error);
+    }
+    return "OK no matching quote for Quote ID; held for review";
+  }
 
   // 2026-11-11: the note only NAMES the quote. The payment type comes from the
   // quote's own stored draft order that Shopify confirms produced this order,
@@ -72,6 +81,15 @@ async function applyQuotePaymentFromOrder(
   const balanceAlreadyPaid = quote.status === "paid" || existingNotes.includes(BALANCE_PAID_MARKER);
 
   if (paymentType === "full") {
+    // 2026-11-18 (launch audit): a replayed / late full-payment webhook must never pull a quote backward
+    // out of production or completed (the deposit branch below already had this guard).
+    if (["production", "completed"].includes(quote.status)) {
+      await db.quote.updateMany({
+        where: { id: quote.id, shop },
+        data: { notes: appendQuoteNote(quote.notes, `${FULL_PAID_MARKER} (Shopify order ${orderLabel}).`) },
+      });
+      return `OK full payment recorded; status ${quote.status} preserved`;
+    }
     await db.quote.updateMany({
       where: { id: quote.id, shop },
       data: {

@@ -15,6 +15,7 @@ import { Form, useActionData, useLoaderData } from "react-router";
 
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
+import { requireOwner } from "../lib/owner-authorization.server";
 import { AGENT_ERROR_CODE_EXPLANATIONS } from "../lib/agent-security.server";
 
 // Mirrors AGENT_INTAKE_SCOPE in app/lib/agent-security.server.ts. Kept as a
@@ -58,7 +59,11 @@ const inputStyle = {
 } as const;
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // External agent API credentials are minted, listed and revoked here: owner only.
+  requireOwner(auth);
+  const { session } = auth;
 
   const credentials = await db.agentApiCredential.findMany({
     where: { shop: session.shop },
@@ -119,7 +124,11 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // External agent API credentials are minted, listed and revoked here: owner only.
+  requireOwner(auth);
+  const { session } = auth;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
 

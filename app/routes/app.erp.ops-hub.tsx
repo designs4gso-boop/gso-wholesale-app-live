@@ -18,6 +18,7 @@ import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-r
 
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
+import { requireOwner } from "../lib/owner-authorization.server";
 import { auditSummary, isConsequential, type Actor } from "../lib/ops/action-intents";
 import { AGENT_REGISTRY, AGENT_REGISTRY_VERSION, permissionMatrix } from "../lib/ops/agent-registry";
 import { ACTION_TYPES, OPS_PLATFORM_VERSION } from "../lib/ops/autonomy";
@@ -50,7 +51,11 @@ function actorFromSession(session: any): { id: string; name?: string } {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // The Ops Hub is described as owner-only and its Stage 4 action can move a production job: enforce it.
+  requireOwner(auth);
+  const { session } = auth;
   const config = readOpsRuntimeConfig();
   const slackEnv = loadSlackEnv();
   const repos = getOpsRepositories();
@@ -98,7 +103,11 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // The Ops Hub is described as owner-only and its Stage 4 action can move a production job: enforce it.
+  requireOwner(auth);
+  const { session } = auth;
   const formData = await request.formData();
   const intentName = String(formData.get("intent"));
   const config = readOpsRuntimeConfig();

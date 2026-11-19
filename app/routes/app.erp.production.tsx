@@ -454,6 +454,9 @@ function snapshotValue(item: any, key: string) {
 }
 
 async function createEvent(shop: string, jobId: string, eventType: string, message: string, data?: { oldValue?: string; newValue?: string; createdBy?: string }) {
+  // SECURITY 2026-11-18: an event is only ever written onto a job of THIS shop (several intents passed a
+  // posted job id straight through).
+  if (!(await db.productionJob.findFirst({ where: { shop, id: jobId }, select: { id: true } }))) return null;
   return db.productionJobEvent.create({
     data: {
       shop,
@@ -1051,6 +1054,9 @@ export async function action({ request }: { request: Request }) {
     const matchedBy = String(formData.get("matchedBy") || "manual_asset_intake") || null;
     const fileNotes = String(formData.get("fileNotes") || "") || null;
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
+    // SECURITY 2026-11-18: the lookup result was never checked — a file row could be attached to a job id
+    // that is not this shop's (and would then show on that job and its customer proof page).
+    if (!job) return Response.json({ ok: false, message: "Production job not found." }, { status: 404 });
 
     await db.productionJobFile.create({
       data: {

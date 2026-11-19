@@ -34,7 +34,7 @@ import { OWNER_QUOTE_PRICE_KIND, itemPricingAuthority, provisionalQuoteStatusChe
 import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
 import { PRODUCTION_ROLE_DENIED, roleMayRunProductionIntent, roleMayViewProduction } from "../lib/production-role-access";
 import { SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
-import { resolveStaffAccess } from "../lib/staff-roles.server";
+import { PERMISSION_DENIED_MESSAGE, resolveStaffAccess } from "../lib/staff-roles.server";
 import { ownerSetQuoteItemPrice } from "../lib/quote-owner-price-approval.server";
 import { OWN_COST_LADDER_PRICE_KINDS, SPLIT_BAG_LADDER_BADGE, SPLIT_BAG_OWNER_PRICE_LABEL, isSplitBagQuoteItem, ownerPricePreview } from "../lib/split-bag-quote-pricing";
 // 2026-10-19 owner decision: line-level internal cost / margin is OWNER ONLY — redacted server-side for staff.
@@ -733,6 +733,16 @@ export async function action({ request }: { request: Request }) {
   const { session, admin, sessionToken } = await authenticate.admin(request);
   const shop = session.shop;
   const payload = await request.json();
+  // SECURITY 2026-11-18 (launch audit): these intents delete a quote, create a Shopify draft order or email
+  // an invoice to the customer. They had no role check, so an UNASSIGNED staff account could run them.
+  // They now need an assigned selling role (owner, manager, sales — the existing sendQuote permission).
+  // Opening Quotes and saving a draft are unchanged.
+  if (["delete", "approveCreateOrder", "createDepositOrder", "createBalanceOrder", "sendInvoiceEmail"].includes(String(payload?.intent || ""))) {
+    const quoteAccess = resolveStaffAccess({ session, sessionToken });
+    if (!quoteAccess.can("sendQuote")) {
+      return Response.json({ ok: false, intent: payload.intent, error: `${PERMISSION_DENIED_MESSAGE.sendQuote} ${quoteAccess.reason}`.trim() }, { status: 403 });
+    }
+  }
   // Owner-only financial detail in every quotes list this action returns (staff get the redacted view).
   const viewerIsOwner = resolveOwnerAuthorization({ session, sessionToken }).isOwner;
   // 2026-11-15: the low-margin block message names the margin % and the floor. Only the owner
@@ -858,7 +868,9 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payload.intent === "delete") {
-    await db.quote.deleteMany({ where: { id: payload.id, shop, status: { not: "paid" } } });
+    // 2026-11-18: a quote that has taken money or reached production is never deleted (it would orphan
+    // the production job and the Shopify draft orders) — the same locked set the editor already protects.
+    await db.quote.deleteMany({ where: { id: payload.id, shop, status: { notIn: LOCKED_QUOTE_STATUSES } } });
     const quotes = await getQuotes(shop, viewerIsOwner);
     return Response.json({ ok: true, quotes });
   }
@@ -916,6 +928,8 @@ export async function action({ request }: { request: Request }) {
         : {};
 
     await db.quote.updateMany({
+      // 2026-11-18: a non-owner can only move a quote that is not in a locked (money / production) state,
+      // except the normal forward move production -> completed (checked above by quoteStatusChangeCheck).
       where: { id: payload.id, shop, status: { not: "paid" } },
       data: { status: nextStatus, ...outcomeData },
     });
@@ -1635,6 +1649,12 @@ export async function action({ request }: { request: Request }) {
 
     if (quote.id) {
       const existingQuote = await db.quote.findFirst({ where: { id: quote.id, shop } });
+      // SECURITY 2026-11-18: an id that is not this shop's quote writes nothing (the item delete / insert
+      // below ran by quote id alone).
+      if (!existingQuote) {
+        const quotes = await getQuotes(shop, viewerIsOwner);
+        return Response.json({ ok: false, error: "That quote was not found. Reload the page and try again.", quotes }, { status: 404 });
+      }
       // 2026-11-11 owner rule: the quoted cost / price snapshot is immutable once
       // money has moved or production started (deposit paid, paid, in production,
       // completed). Actual cost is recorded separately on the production job.
@@ -1657,7 +1677,7 @@ export async function action({ request }: { request: Request }) {
             notes: quote.notes,
           },
         }),
-        db.quoteItem.deleteMany({ where: { quoteId: quote.id } }),
+        db.quoteItem.deleteMany({ where: { quoteId: quote.id, quote: { shop } } }),
         db.quoteItem.createMany({
           data: protectedItems.map((item) => quoteItemData(item, quote.id as string)),
         }),

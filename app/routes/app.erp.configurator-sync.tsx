@@ -1,5 +1,6 @@
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
+import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { db } from "../db.server";
 import { MIN_QTY, PRODUCT_TYPE, PRODUCT_TYPE_LABEL } from "../lib/configurator-pricing";
 
@@ -405,7 +406,10 @@ async function syncProductsToErp({
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  requireFinancialAccess(auth); // same gate as Configurator Mapping
+  const { session } = auth;
 
   const count = await db.configuratorProduct.count({
     where: {
@@ -423,7 +427,11 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export async function action({ request }: { request: Request }) {
-  const { admin, session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  // SECURITY 2026-11-18 (launch audit): this page had no role gate — any signed-in staff account could use it.
+  // The sync bulk-writes the products the storefront prices and checks out: owner or authorized manager only.
+  requireFinancialAccess(auth);
+  const { admin, session } = auth;
   const formData = await request.formData();
 
   const intent = cleanText(formData.get("intent"));
