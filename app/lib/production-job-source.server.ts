@@ -366,6 +366,43 @@ export const MANUAL_JOB_FINISHES = [
   "Specialty (describe in notes)",
 ] as const;
 
+// 2026-11-19 (order-to-production O3): several items on ONE manual job. An
+// invoice often holds many designs ("20 designs, 128 each") — each design is its
+// own production item with its own item ticket. Item tickets are two digits
+// (-01 .. -99), so a job is capped well below that.
+export const MANUAL_JOB_MAX_ITEMS = 50;
+
+/**
+ * Extra items typed one per line as `name | quantity` (or `name<TAB>quantity`).
+ * A line with no quantity takes the first item's quantity. Every extra item
+ * shares the first item's family, finish, printer and size. Nothing is guessed:
+ * a bad line rejects the whole form with its line number.
+ */
+export function parseAdditionalManualItems(
+  text: string | null | undefined,
+  base: Pick<ManualJobItemInput, "quantity" | "family" | "finish" | "printer" | "size">,
+): { ok: true; items: ManualJobItemInput[] } | { ok: false; reason: string } {
+  const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > MANUAL_JOB_MAX_ITEMS - 1) {
+    return { ok: false, reason: `A job can hold at most ${MANUAL_JOB_MAX_ITEMS} items (${lines.length + 1} entered). Split the work into two jobs.` };
+  }
+  const items: ManualJobItemInput[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const parts = lines[index].split(/\s*[|\t]\s*/);
+    if (parts.length > 2) return { ok: false, reason: `More items, line ${index + 1}: use "name | quantity" (one "|" only).` };
+    const productTitle = clean(parts[0]).slice(0, 200);
+    if (!productTitle) return { ok: false, reason: `More items, line ${index + 1}: the item name is missing.` };
+    let quantity = Number(base.quantity);
+    if (parts.length === 2) {
+      const typed = clean(parts[1]).replace(/,/g, "");
+      if (!/^\d+$/.test(typed) || Number(typed) <= 0) return { ok: false, reason: `More items, line ${index + 1}: quantity must be a whole number greater than zero.` };
+      quantity = Number(typed);
+    }
+    items.push({ productTitle, quantity, family: base.family, finish: base.finish, printer: base.printer, size: base.size });
+  }
+  return { ok: true, items };
+}
+
 export type ManualJobValidation =
   | { ok: true; items: Array<ManualJobItemInput & { resolvedMachine: "mimaki" | "roland"; machineRule: string }> }
   | { ok: false; reason: string };
@@ -380,6 +417,7 @@ export function validateManualJobInput(input: {
   if (!clean(input.requestId) || clean(input.requestId).length < 8) return { ok: false, reason: "Manual jobs require a stable requestId (retry-safe idempotency key)." };
   if (!clean(input.customerName)) return { ok: false, reason: "Job / customer name is required." };
   if (!input.items?.length) return { ok: false, reason: "At least one item is required." };
+  if (input.items.length > MANUAL_JOB_MAX_ITEMS) return { ok: false, reason: `A job can hold at most ${MANUAL_JOB_MAX_ITEMS} items. Split the work into two jobs.` };
   const resolved: Array<ManualJobItemInput & { resolvedMachine: "mimaki" | "roland"; machineRule: string }> = [];
   for (const item of input.items) {
     if (!clean(item.productTitle)) return { ok: false, reason: "Item / product name is required." };

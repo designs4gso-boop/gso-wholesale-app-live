@@ -20,7 +20,7 @@ import { redactJobFinancials } from "../lib/production-financial-redaction";
 import { friendlyMessage } from "../lib/employee-messages";
 import { PRODUCTION_ROLE_DENIED, PRODUCTION_VIEW_DENIED_REDIRECT, advancedProductionRedirect, roleMayRunProductionIntent, roleMayViewProduction } from "../lib/production-role-access";
 import { CLASSIC_PRODUCTION_HREF, SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
-import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, allocateJobTicket, assessLinkSource, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, jobSourceType, linkIntakeJobToTarget, runWithTicketRetry } from "../lib/production-job-source.server";
+import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES, parseAdditionalManualItems, allocateJobTicket, assessLinkSource, createProductionJobFromSource, familyFromQuoteItems, itemTicketFor, jobSourceType, linkIntakeJobToTarget, runWithTicketRetry } from "../lib/production-job-source.server";
 import { REOPEN_PHRASE, assessFinalization, buildActualCostFinalizeSnapshot, estimateExpectations, numberOrNull, resolveActorFromSession } from "../lib/actual-cost-finalize.server";
 import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
@@ -786,6 +786,16 @@ export async function action({ request }: { request: Request }) {
   if (intent === "createManualJob") {
     try {
       const actor = verifiedActor(resolveActorFromSession(session, shop));
+      // 2026-11-19 (order-to-production O3): more items on the same job, one per line.
+      const firstItem = {
+        quantity: Number(formData.get("quantity") || 0),
+        family: String(formData.get("family") || "default"),
+        finish: String(formData.get("finish") || "CMYK"),
+        printer: (staffAccess.can("selectPrinter") ? String(formData.get("printer") || "auto") : "auto") as any,
+        size: String(formData.get("size") || ""),
+      };
+      const moreItems = parseAdditionalManualItems(String(formData.get("moreItems") || ""), firstItem);
+      if (!moreItems.ok) return Response.json({ ok: false, message: moreItems.reason });
       const result = await createProductionJobFromSource(db, {
         shop,
         actor,
@@ -812,7 +822,7 @@ export async function action({ request }: { request: Request }) {
               sku: String(formData.get("sku") || ""),
               size: String(formData.get("size") || ""),
               notes: String(formData.get("itemNotes") || ""),
-            }],
+            }, ...moreItems.items],
           },
         },
       });
@@ -827,6 +837,8 @@ export async function action({ request }: { request: Request }) {
           itemTicket: item?.itemTicket || null,
           suggestedFileName: item?.suggestedFileName || null,
           machine: item?.machineSummary || null,
+          itemCount: result.job?.items?.length || 1,
+          itemTickets: (result.job?.items || []).map((row: any) => `${row.itemTicket} — ${row.productTitle} × ${row.quantity}`),
         },
       });
     } catch (error: any) {
@@ -1697,7 +1709,21 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
               </div>
               <InlineStack gap="150" wrap>
                 <Button onClick={() => copyText(job.jobTicket || job.id)}>Copy Job Ticket</Button>
+                {job.jobTicket ? <Button onClick={() => copyText(folderNameForJob(job))}>Copy Job Folder Name</Button> : null}
               </InlineStack>
+              {/* 2026-11-19 (order-to-production O3): job first, files second. */}
+              {job.jobTicket ? (
+                <BlockStack gap="050">
+                  <Text as="p" tone="subdued">
+                    Job folder: <b>{folderNameForJob(job)}</b> — create it inside Prints For Today and save the print files in it. Files are renamed with the item ticket and sent to the printer automatically; no ticket is needed in the file name.
+                  </Text>
+                  {(job.items?.length || 0) > 1 ? (
+                    <Text as="p" tone="subdued">
+                      This job has {job.items.length} items — start each file name with its item ticket (for example {job.items[0]?.itemTicket || `${job.jobTicket}-01`}) so the file goes to the right item. A file with no item ticket waits in Incoming Print Files to be linked to an item.
+                    </Text>
+                  ) : null}
+                </BlockStack>
+              ) : null}
               <details>
                 <summary style={{ cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Technical identifiers (folder name, RIP name, quote/job ids)</summary>
                 <BlockStack gap="100">
@@ -2581,10 +2607,17 @@ export default function ProductionBoard() {
               {actionData?.manualJob ? (
                 <div style={{ border: "1px solid #86efac", background: "#f0fdf4", borderRadius: 10, padding: 12 }}>
                   <Text as="p" fontWeight="semibold">Manual job ready — name your artwork with the ticket and drop it into Prints For Today:</Text>
+                  <Text as="p" tone="subdued">Or create a folder inside Prints For Today whose name starts with the job ticket and save the files in it — they are renamed with the item ticket and routed automatically.</Text>
                   <p style={{ margin: "6px 0 0", fontFamily: "monospace" }}>
                     Job ticket: <b>{actionData.manualJob.jobTicket}</b> · Item ticket: <b>{actionData.manualJob.itemTicket}</b> · Machine: {actionData.manualJob.machine || "—"}
                   </p>
-                  {actionData.manualJob.suggestedFileName ? (
+                  {(actionData.manualJob.itemCount || 1) > 1 ? (
+                    <div style={{ margin: "6px 0 0", fontFamily: "monospace", fontSize: 12 }}>
+                      <div>{actionData.manualJob.itemCount} items — start each print file name with its item ticket:</div>
+                      {(actionData.manualJob.itemTickets || []).map((line: string) => <div key={line}>{line}</div>)}
+                    </div>
+                  ) : null}
+                  {actionData.manualJob.suggestedFileName && (actionData.manualJob.itemCount || 1) === 1 ? (
                     <p style={{ margin: "6px 0 0", fontFamily: "monospace" }}>
                       {actionData.manualJob.suggestedFileName}{" "}
                       <Button size="micro" onClick={() => copyText(actionData.manualJob.suggestedFileName)}>Copy Print File Name</Button>
@@ -2624,17 +2657,21 @@ export default function ProductionBoard() {
                     <label>SKU (optional)<input name="sku" style={manualInput} /></label>
                     <label>Size (optional)<input name="size" style={manualInput} placeholder='4" x 5"' /></label>
                     <label>Due date (optional)<input name="dueDate" type="date" style={manualInput} /></label>
-                    <label>Reference # (optional)<input name="reference" style={manualInput} /></label>
+                    <label>Reference # (invoice / PO, optional)<input name="reference" style={manualInput} placeholder="QuickBooks invoice 1270" /></label>
                     <label>Customer email (optional)<input name="email" type="email" style={manualInput} /></label>
                     <label>Customer phone (optional)<input name="phone" style={manualInput} /></label>
                   </div>
+                  <label style={{ display: "block", marginTop: 10 }}>More items on this job (optional) — one per line: name | quantity
+                    <textarea name="moreItems" rows={3} style={{ ...manualInput, width: "100%" }} placeholder={"SHORTCAKES pouch | 500\nMIXED BERRIES pouch | 250"} />
+                  </label>
+                  <Text as="p" tone="subdued">Each line becomes its own item ticket on the same job, with the family, finish, printer and size chosen above. Leave the quantity off to use the quantity above. Up to 50 items per job.</Text>
                   <label style={{ display: "block", marginTop: 10 }}>Notes (optional)
                     <textarea name="itemNotes" rows={2} style={{ ...manualInput, width: "100%" }} placeholder="Specialty details, finishing instructions…" />
                   </label>
                   <div style={{ marginTop: 10 }}>
                     <Button submit variant="primary" loading={busy}>Create Manual Job</Button>
                   </div>
-                  <Text as="p" tone="subdued">Gloss on the Mimaki is rejected (gloss → Roland). CMYK and White run on either press; Auto picks the less busy press only when machine load is complete — otherwise choose Mimaki or Roland. No price or cost is fabricated.</Text>
+                  <Text as="p" tone="subdued">Auto sends CMYK and CMYK + Gloss to the Mimaki, and White + Gloss to the Roland. For White alone, Auto picks the less busy press only when machine load is complete — otherwise choose Mimaki or Roland.</Text>
                 </Form>
               </details>
             </BlockStack>

@@ -442,9 +442,43 @@ export function buildIntakeMachineContext(params: {
 // the ITEM TICKET, then suggestedFileName — a ticket-led name is what the
 // RasterLink result watcher extracts tickets from, so results auto-match.
 // Sanitized to safe filename characters; never empty on a routable item.
-export function ripFileBaseName(item: Pick<IntakeItem, "ripJobName" | "suggestedFileName" | "itemTicket">): string {
+//
+// 2026-11-19 (order-to-production O2): when the staff file name is passed and
+// the item's RIP name is its canonical item ticket (every job the central
+// service creates), the routed name is
+//     <ITEM TICKET>__<staff file name>
+// e.g. crud_HEATH_F_CMYK.pdf on item GSO-20261119-0042-01 routes as
+// GSO-20261119-0042-01__crud_HEATH_F_CMYK(.pdf). Staff never type a ticket; the
+// layer suffix and any ROLAND / MIMAKI tag stay readable at the press; two layer
+// files of one item no longer collide on the bare ticket; the RIP result still
+// carries the exact item ticket. Deterministic: same item + same staff name =
+// same routed name. Without a staff name, or with a custom RIP name, the
+// historical bare name is returned unchanged.
+export const ROUTED_NAME_SEPARATOR = "__";
+const ROUTED_STAFF_NAME_MAX = 80;
+const CANONICAL_ITEM_TICKET_ONLY_RE = /^GSO-\d{8}-\d{4}-\d{2}$/i;
+
+/** The staff file name as a safe routed-name segment ("" when nothing usable is left). */
+export function routedStaffNameSegment(originalFileName: string | null | undefined): string {
+  let stem = basenameOf(String(originalFileName || "")).replace(/\.[A-Za-z0-9]{1,5}$/, "");
+  // A ticket the staff already typed is not repeated (the routed name leads with the item ticket).
+  stem = stem.replace(/GSO[-_]\d{8}[-_]\d{4}(?:[-_]\d{2})?(?!\d)/gi, " ");
+  // Windows-safe characters only; "__" is reserved as the segment separator.
+  stem = stem.replace(/[^A-Za-z0-9.-]+/g, "_").replace(/_+/g, "_").replace(/^[_.-]+|[_.-]+$/g, "");
+  if (stem.length > ROUTED_STAFF_NAME_MAX) {
+    // Keep the END (layer suffix / side) as well as the start.
+    stem = `${stem.slice(0, ROUTED_STAFF_NAME_MAX - 26)}_${stem.slice(-25)}`.replace(/_+/g, "_");
+  }
+  return stem;
+}
+
+export function ripFileBaseName(item: Pick<IntakeItem, "ripJobName" | "suggestedFileName" | "itemTicket">, originalFileName?: string | null): string {
   const source = String(item.ripJobName || item.itemTicket || item.suggestedFileName || "").trim();
-  return source.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120);
+  const base = source.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120);
+  const itemTicket = String(item.itemTicket || "").trim().toUpperCase();
+  if (!originalFileName || !CANONICAL_ITEM_TICKET_ONLY_RE.test(itemTicket) || base.toUpperCase() !== itemTicket) return base;
+  const staffName = routedStaffNameSegment(originalFileName);
+  return staffName ? `${itemTicket}${ROUTED_NAME_SEPARATOR}${staffName}` : base;
 }
 
 // ---------- deterministic mapping hierarchy ----------
@@ -465,7 +499,7 @@ function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDec
   if (!machineDecision.machine) {
     return review([`matched_by_${rule}_but_machine_unresolved`, ...machineDecision.reasons], [candidateOf(job, item, rule)]);
   }
-  const ripName = ripFileBaseName(item);
+  const ripName = ripFileBaseName(item, fileName);
   if (!ripName) {
     return review([`matched_by_${rule}_but_no_rip_name_on_item`], [candidateOf(job, item, rule)]);
   }

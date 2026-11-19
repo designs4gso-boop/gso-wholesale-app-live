@@ -146,7 +146,7 @@ export async function action({ request }: { request: Request }) {
     }
     const assignedRun = { revision: existingIntake.revisionNumber, reprint: existingIntake.reprintNumber, attempt: existingIntake.attemptNumber };
     const assignedRunDefault = assignedRun.revision === 1 && assignedRun.reprint === 0 && assignedRun.attempt === 1;
-    const baseRipName = ripFileBaseName(assignedItem as any) || String(existingIntake.authoritativeTicket || assignedJob.jobTicket || "");
+    const baseRipName = ripFileBaseName(assignedItem as any, fileName) || String(existingIntake.authoritativeTicket || assignedJob.jobTicket || "");
     const ripName = assignedRunDefault ? baseRipName : applyRunSuffix(baseRipName, assignedRun);
     await db.printIntake.update({
       where: { id: existingIntake.id },
@@ -265,14 +265,17 @@ export async function action({ request }: { request: Request }) {
       // 15H.5: run identity. Same hash re-planning keeps its stored counters
       // (attempt bumps happen at failed-delivery reports; reprint bumps at
       // the owner action). A NEW hash matching a ticket that already has
-      // routed artwork is a REVISION — corrected artwork, R+1.
+      // routed artwork UNDER THE SAME STAFF FILE NAME is a REVISION — corrected
+      // artwork, R+1. 2026-11-19: a different file name on the same ticket is a
+      // different file of the item (a sibling `_g` / `_w` layer, the other
+      // side), not a revision — it keeps run 1 under its own routed name.
       const ticket = plan.itemTicket || plan.jobTicket;
       let run = { revision: 1, reprint: 0, attempt: 1 };
       if (existingIntake) {
         run = { revision: existingIntake.revisionNumber, reprint: existingIntake.reprintNumber, attempt: existingIntake.attemptNumber };
       } else if (ticket) {
         const prior = await db.printIntake.findFirst({
-          where: { shop: setting.shop, authoritativeTicket: ticket, status: "routed", NOT: { fileHashSha256: fileHash } },
+          where: { shop: setting.shop, authoritativeTicket: ticket, status: "routed", originalFilename: fileName, NOT: { fileHashSha256: fileHash } },
           orderBy: { revisionNumber: "desc" },
           select: { revisionNumber: true },
         });

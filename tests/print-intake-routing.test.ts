@@ -74,7 +74,7 @@ describe("deterministic mapping hierarchy", () => {
     expect(decision.decision).toBe("route");
     expect(decision.rule).toBe("item_ticket");
     expect(decision.itemId).toBe("item1");
-    expect(decision.ripName).toBe("GSO-20260718-0001-01");
+    expect(decision.ripName).toBe("GSO-20260718-0001-01__Jar_FRONT"); // 2026-11-19 (O2): item ticket + the staff file name
   });
 
   it("(a) duplicate item tickets across jobs route nothing — candidates listed", () => {
@@ -112,7 +112,7 @@ describe("deterministic mapping hierarchy", () => {
     expect(decision.decision).toBe("route");
     expect(byName.decision).toBe("route");
     expect(byName.rule).toBe("stored_filename");
-    expect(byName.ripName).toBe("GSO-20260718-0002-01"); // falls back to item ticket when ripJobName is unset
+    expect(byName.ripName).toBe("GSO-20260718-0002-01__front_label_cookies_V3"); // 2026-11-19 (O2): item ticket + the staff file name; // falls back to item ticket when ripJobName is unset
   });
 
   it("(d) exact ProductionJobFile name match routes single-item jobs only", () => {
@@ -171,7 +171,7 @@ describe("machine routing (owner rules, corrected 2026-11-11; updated 2026-11-18
     expect(decision.machine).toBe("roland");
     expect(decision.machineRule).toBe("white_requires_roland"); // 2026-11-18: the WHITE sends it to the Roland; gloss no longer decides the press for Print Intake
     expect(decision.rule).toBe("item_ticket"); // exact item-ticket matching intact
-    expect(decision.ripName).toBe("GSO-20260627-0002-01");
+    expect(decision.ripName).toBe("GSO-20260627-0002-01__TEST"); // 2026-11-19 (O2): the typed ticket is not repeated
   });
 
   it("rule 2: explicit ERP assignment wins for CMYK and White (explicit_erp_machine)", () => {
