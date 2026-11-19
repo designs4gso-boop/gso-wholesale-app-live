@@ -1,7 +1,8 @@
 {
   "ApiBaseUrl": "https://gso-wholesale-app-live.onrender.com",
   "UploadToken": "PASTE_TOKEN_FROM_/app/erp/print-intake_OR_/app/erp/print-log-settings",
-  "IncomingFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\rasterlink\\incoming",
+  "IncomingFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\rasterlink\\incoming\\UCJV-300",
+  "JobsFolder": "C:\\MijCtrl\\Jobs\\1",
   "ProcessedFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\processed",
   "ErrorFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\error",
   "LogFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\sync-logs",

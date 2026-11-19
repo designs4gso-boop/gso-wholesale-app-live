@@ -196,7 +196,8 @@ describe("4-8, 13. the real RasterLink result format: what the RIP reports is st
 describe("15-16. the historical backlog cannot be swept up by the sync", () => {
   const sync = src("tools/gso-rasterlink-sync.ps1");
   it("the sync reads only files directly inside its incoming folder — never subfolders", () => {
-    expect(sync).toContain("$files = @(Get-ChildItem -Path $config.IncomingFolder -Filter *.csv -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)");
+    // 2026-11-18: cut results are now uploaded before print results (same direct-children-only scan).
+    expect(sync).toContain("$files = Get-ResultUploadOrder @(Get-ChildItem -Path $config.IncomingFolder -Filter *.csv -File -ErrorAction SilentlyContinue)");
     const scanLines = sync.split("\n").filter((line) => line.includes("Get-ChildItem") && line.includes("IncomingFolder"));
     expect(scanLines.length).toBe(2);
     for (const line of scanLines) expect(line).not.toContain("-Recurse");

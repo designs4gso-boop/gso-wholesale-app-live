@@ -10,15 +10,31 @@
 #   -DryRun     detect + report only; no uploads, no moves
 #   -Health     config/folders/endpoint/token checks; creates NO imports
 #   -SelfTest   offline unit checks (no config, no network)
+#   -OnlyFile   process ONLY the named result file(s) (exact names) - for a
+#               controlled first verification; every other file is left alone
+#
+# Patch F (2026-11-18):
+#   * RasterLink writes results into a per-printer subfolder
+#     (...\rasterlink\incoming\UCJV-300). IncomingFolder must point AT that
+#     subfolder. Only files directly inside it are read - never subfolders, and
+#     never the historical backlog in ...\incoming\GSOP.
+#   * Composite CMYK + clear jobs carry NO ink in the result CSV. When
+#     JobsFolder is configured (C:\MijCtrl\Jobs\1), the JobInfo.ini of the
+#     EXACT RasterLink job (same file name + same RIP start/end stamps, folder
+#     name = JobID) is uploaded as a read-only companion. JobInfo.ini is only
+#     ever READ. The server links it by exact identity or ignores it.
+#   * "_cut.csv" results are uploaded before "_print.csv" results, because the
+#     arranged copy count of a composite is on the cut result.
 param(
   [switch]$Once,
   [switch]$DryRun,
   [switch]$Health,
   [switch]$SelfTest,
+  [string[]]$OnlyFile = @(),
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-rasterlink-sync-config.json")
 )
 
-$ScriptVersion = "gso-rasterlink-sync/1.1 (13A.6B.1)"
+$ScriptVersion = "gso-rasterlink-sync/1.2 (Patch F jobinfo companion)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -41,6 +57,7 @@ function Read-SyncConfig([string]$Path) {
     ProcessedFolder   = [string]$raw.ProcessedFolder
     ErrorFolder       = [string]$raw.ErrorFolder
     LogFolder         = [string]$raw.LogFolder
+    JobsFolder        = if ($raw.JobsFolder) { [string]$raw.JobsFolder } else { "" }
     Source            = if ($raw.Source) { [string]$raw.Source } else { "rasterlink" }
     PollSeconds       = if ($raw.PollSeconds) { [int]$raw.PollSeconds } else { 30 }
     StableFileSeconds = if ($raw.StableFileSeconds) { [int]$raw.StableFileSeconds } else { 20 }
@@ -157,7 +174,7 @@ function Get-SafeBodySnippet([string]$Body) {
   return $flat.Substring(0, [Math]::Min(180, $flat.Length))
 }
 
-function Invoke-RipUpload($Config, [string]$FilePath, [string]$FileName) {
+function Invoke-RipUpload($Config, [string]$FilePath, [string]$FileName, [System.Collections.IDictionary]$ExtraFields = $null) {
   Add-Type -AssemblyName System.Net.Http | Out-Null
   $client = New-Object System.Net.Http.HttpClient
   $client.Timeout = [TimeSpan]::FromSeconds(120)
@@ -167,6 +184,7 @@ function Invoke-RipUpload($Config, [string]$FilePath, [string]$FileName) {
     $fields = New-Object System.Collections.Specialized.OrderedDictionary
     $fields.Add("token", $Config.UploadToken)
     $fields.Add("source", $Config.Source)
+    if ($null -ne $ExtraFields) { foreach ($extraKey in $ExtraFields.Keys) { $fields.Add($extraKey, [string]$ExtraFields[$extraKey]) } }
     $body = New-GsoMultipartBody $boundary $fields "file" $FileName $fileBytes "text/csv"
     $content = New-Object System.Net.Http.ByteArrayContent(,$body)
     $content.Headers.TryAddWithoutValidation("Content-Type", "multipart/form-data; boundary=$boundary") | Out-Null
@@ -188,6 +206,82 @@ function Test-DuplicateResponse($Json) {
 
 function Test-SuccessResponse($Json) {
   return ($null -ne $Json) -and ($Json.ok -eq $true)
+}
+
+# ---------- JobInfo.ini companion (READ-ONLY; Patch F) ----------
+
+# Rows of a print result that have NO ink but a complete RIP window.
+function Get-BlankInkResultRows([string]$CsvPath) {
+  $found = New-Object System.Collections.ArrayList
+  if ($CsvPath -notmatch '_print\.csv$') { return ,$found }
+  $rows = @()
+  try { $rows = @(Import-Csv -LiteralPath $CsvPath) } catch { return ,$found }
+  foreach ($row in $rows) {
+    $names = @($row.PSObject.Properties.Name)
+    if ($names -notcontains "KEY_FILENAME" -or $names -notcontains "KEY_INKUSE") { continue }
+    $name = [string]$row.KEY_FILENAME
+    $ripStart = [string]$row.KEY_RIP_S_TIME
+    $ripEnd = [string]$row.KEY_RIP_E_TIME
+    if ([string]::IsNullOrWhiteSpace($name)) { continue }
+    if (-not [string]::IsNullOrWhiteSpace([string]$row.KEY_INKUSE)) { continue }
+    if ($ripStart -notmatch '^\d{8}_\d{6}$' -or $ripEnd -notmatch '^\d{8}_\d{6}$') { continue }
+    [void]$found.Add(@{ FileName = $name; RipStart = $ripStart; RipEnd = $ripEnd })
+  }
+  return ,$found
+}
+
+# The job folder(s) whose JobInfo.ini states EXACTLY this file name, this RIP
+# start and this RIP end for its own JobID, and whose folder name IS that JobID.
+# Exact text comparison only. Reads files; never writes into the jobs folder.
+function Find-JobInfoFolders([string]$JobsFolder, $Row) {
+  $matches = New-Object System.Collections.ArrayList
+  if ([string]::IsNullOrWhiteSpace($JobsFolder) -or !(Test-Path -LiteralPath $JobsFolder)) { return ,$matches }
+  foreach ($dir in @(Get-ChildItem -LiteralPath $JobsFolder -Directory -ErrorAction SilentlyContinue)) {
+    $ini = Join-Path $dir.FullName "JobInfo.ini"
+    if (!(Test-Path -LiteralPath $ini)) { continue }
+    $text = ""
+    try { $text = [System.IO.File]::ReadAllText($ini) } catch { continue }
+    $id = $dir.Name
+    if (-not $text.Contains('JobID="' + $id + '"')) { continue }
+    $hasName = $false
+    foreach ($line in ($text -split "`r?`n")) { if ($line -ceq ('jobName="' + $Row.FileName + '"')) { $hasName = $true; break } }
+    if (-not $hasName) { continue }
+    if (-not $text.Contains('"' + $id + '";"KEY_RIP_S_TIME";"' + $Row.RipStart + '"')) { continue }
+    if (-not $text.Contains('"' + $id + '";"KEY_RIP_E_TIME";"' + $Row.RipEnd + '"')) { continue }
+    [void]$matches.Add(@{ JobId = $id; IniPath = $ini })
+  }
+  return ,$matches
+}
+
+function Invoke-JobInfoCompanions($Config, $File) {
+  if ([string]::IsNullOrWhiteSpace($Config.JobsFolder)) { return }
+  $rows = Get-BlankInkResultRows $File.FullName
+  foreach ($row in $rows) {
+    $folders = Find-JobInfoFolders $Config.JobsFolder $row
+    if ($folders.Count -ne 1) {
+      Write-SyncLog $Config "jobinfo_not_linked" $File.Name "row=$($row.FileName) exactJobFolders=$($folders.Count) (ink stays blank; nothing guessed)"
+      continue
+    }
+    $folder = $folders[0]
+    $extra = New-Object System.Collections.Specialized.OrderedDictionary
+    $extra.Add("jobFolder", $folder.JobId)
+    $result = $null
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+      $result = Invoke-RipUpload $Config $folder.IniPath "JobInfo.ini" $extra
+      if ($result.exception -eq $null -and $result.status -ge 200 -and $result.status -lt 300) { break }
+      Start-Sleep -Seconds $Config.RetryDelaySeconds
+    }
+    if ($result.json -ne $null -and $result.json.ok -eq $true) {
+      Write-SyncLog $Config "jobinfo_result" $File.Name "row=$($row.FileName) jobFolder=$($folder.JobId) outcome=$($result.json.outcome) reason=$($result.json.reason) cmykMl=$($result.json.cmykInkMl) clearMl=$($result.json.glossInkMl) updated=$($result.json.updated)"
+    } else {
+      Write-SyncLog $Config "jobinfo_upload_failed" $File.Name "row=$($row.FileName) jobFolder=$($folder.JobId) status=$($result.status) exception=$($result.exception) bodySnippet=$(Get-SafeBodySnippet $result.body)"
+    }
+  }
+}
+
+# Cut results first (the arranged count of a composite lives there), then by time.
+function Get-ResultUploadOrder($Files) {
+  return @($Files | Sort-Object @{ Expression = { if ($_.Name -match '_cut\.csv$') { 0 } else { 1 } } }, LastWriteTime, Name)
 }
 
 # ---------- moves + sidecars ----------
@@ -249,6 +343,9 @@ function Invoke-ProcessFile($Config, $File) {
         } else {
           Write-SyncLog $Config "upload_succeeded" $File.Name ("rows=$($result.json.rows) created=$($result.json.created) dupRowsSkipped=$($result.json.skippedDuplicates) matched=$($result.json.matched) ambiguous=$($result.json.ambiguous)")
         }
+        # Patch F: read-only JobInfo.ini companion for blank-ink composite rows.
+        # Never blocks or fails the result itself.
+        try { Invoke-JobInfoCompanions $Config $File } catch { Write-SyncLog $Config "jobinfo_error" $File.Name "exception=$($_.Exception.Message)" }
         Move-ToFolder $Config $File $Config.ProcessedFolder "moved_to_processed" | Out-Null
         return "processed"
       }
@@ -408,6 +505,36 @@ function Invoke-SelfTest {
     $mpProbeText = [System.Text.Encoding]::GetEncoding("ISO-8859-1").GetString($mpProbe)
     Assert "token probe body has no file part and closes correctly" ((-not $mpProbeText.Contains("filename=")) -and $mpProbeText.EndsWith("--$mpBoundary--`r`n"))
     Assert "body snippet flattens newlines and truncates" ((Get-SafeBodySnippet ("line1`r`nline2 " + ("x" * 500))).Length -le 180)
+
+    # Patch F: blank-ink rows, exact job-folder linkage, cut-first order
+    $resDir = Join-Path $temp "results"; New-Item -ItemType Directory -Path $resDir | Out-Null
+    $printCsv = Join-Path $resDir "20261118_153948_a_F_cmyk.pdf_1_OK_print.csv"
+    $csvHead = "KEY_FILENAME,KEY_RESULT,KEY_INKUSE,KEY_RIP_S_TIME,KEY_RIP_E_TIME,KEY_PRINT_S_TIME,KEY_PRINT_E_TIME,KEY_ARRANGE_CNT,KEY_RESULT_DETAIL"
+    Set-Content -Path $printCsv -Value @($csvHead, '"a_F_cmyk.pdf","OK",,"20261118_095815","20261118_095824",,,"0",', '"a_F_g.pdf","OK",,"20261118_095819","20261118_095824",,,"0",', '"has_ink.pdf","OK","C:0.016cc ","20261118_095819","20261118_095824",,,"0",')
+    $blank = Get-BlankInkResultRows $printCsv
+    Assert "blank-ink rows found, row with ink skipped" ($blank.Count -eq 2 -and $blank[0].FileName -eq "a_F_cmyk.pdf" -and $blank[1].RipStart -eq "20261118_095819")
+    $cutCsv = Join-Path $resDir "20261118_153948_a_F_cmyk.pdf_1_OK_cut.csv"; Set-Content -Path $cutCsv -Value "KEY_FILENAME,KEY_RESULT"
+    Assert "cut results yield no companion rows" ((Get-BlankInkResultRows $cutCsv).Count -eq 0)
+    $jobs = Join-Path $temp "jobs"; New-Item -ItemType Directory -Path $jobs | Out-Null
+    function New-TestJob($id, $name, $s, $e, $statedId) {
+      $d = Join-Path $jobs $id; New-Item -ItemType Directory -Path $d | Out-Null
+      Set-Content -Path (Join-Path $d "JobInfo.ini") -Value @("[Job]", ('JobID="' + $statedId + '"'), ('jobName="' + $name + '"'), ('resultLogResult="' + $statedId + '";"KEY_RIP_E_TIME";"' + $e + '","' + $statedId + '";"KEY_RIP_S_TIME";"' + $s + '"'), "inkUsed=1;4,2;70,3;99,4;7,131;0,133;0,136;0,137;0")
+    }
+    New-TestJob "S01_A" "a_F_cmyk.pdf" "20261118_095815" "20261118_095824" "S01_A"
+    New-TestJob "S01_B" "a_F_cmyk.pdf" "20261117_095815" "20261117_095824" "S01_B"   # same name, another RIP run
+    New-TestJob "S01_C" "a_F_cmyk_v2.pdf" "20261118_095815" "20261118_095824" "S01_C" # similar name
+    New-TestJob "S01_D" "a_F_cmyk.pdf" "20261118_095815" "20261118_095824" "S01_OTHER" # folder is not the stated JobID
+    $linked = Find-JobInfoFolders $jobs $blank[0]
+    Assert "exactly the one job folder with the same name + RIP window + JobID links" ($linked.Count -eq 1 -and $linked[0].JobId -eq "S01_A")
+    Assert "no job folder for a row nothing states" ((Find-JobInfoFolders $jobs @{ FileName = "zzz.pdf"; RipStart = "20261118_095815"; RipEnd = "20261118_095824" }).Count -eq 0)
+    Assert "missing jobs folder links nothing" ((Find-JobInfoFolders (Join-Path $temp "nope") $blank[0]).Count -eq 0)
+    $iniBefore = (Get-FileHash (Join-Path $jobs "S01_A\JobInfo.ini")).Hash
+    [void](Find-JobInfoFolders $jobs $blank[0])
+    Assert "JobInfo.ini is only read" ($iniBefore -eq (Get-FileHash (Join-Path $jobs "S01_A\JobInfo.ini")).Hash)
+    $ordered = Get-ResultUploadOrder @(Get-ChildItem -Path $resDir -Filter *.csv -File)
+    Assert "cut result is uploaded before its print result" ($ordered[0].Name -match '_cut\.csv$' -and $ordered[1].Name -match '_print\.csv$')
+    $sub = Join-Path $resDir "GSOP"; New-Item -ItemType Directory -Path $sub | Out-Null; Set-Content -Path (Join-Path $sub "old_1_OK_print.csv") -Value $csvHead
+    Assert "files in subfolders (historical backlog) are never listed" (@(Get-ChildItem -Path $resDir -Filter *.csv -File).Count -eq 2)
   } finally {
     Remove-Item $temp -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
   }
@@ -422,10 +549,14 @@ if ($SelfTest) { Invoke-SelfTest }
 $config = Read-SyncConfig $ConfigPath
 if ($Health) { Invoke-HealthCheck $config; exit 0 }
 
-Write-SyncLog $config "watcher_started" "-" "version=$ScriptVersion mode=$(if ($DryRun) { 'dry-run' } elseif ($Once) { 'once' } else { 'poll' }) incoming=$($config.IncomingFolder)"
+if ((Split-Path -Leaf ($config.IncomingFolder.TrimEnd('\'))) -ieq "GSOP" -and $config.IncomingFolder -match 'rasterlink\\incoming\\GSOP\\?$') { throw "IncomingFolder points at the historical RasterLink backlog (incoming\GSOP). Refusing to run. Use ...\rasterlink\incoming\UCJV-300." }
+Write-SyncLog $config "watcher_started" "-" "version=$ScriptVersion mode=$(if ($DryRun) { 'dry-run' } elseif ($Once) { 'once' } else { 'poll' }) incoming=$($config.IncomingFolder) jobsFolder=$(if ($config.JobsFolder) { $config.JobsFolder } else { '(not set - no JobInfo companion)' }) onlyFile=$($OnlyFile.Count)"
 
 while ($true) {
-  $files = @(Get-ChildItem -Path $config.IncomingFolder -Filter *.csv -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)
+  # Files DIRECTLY in IncomingFolder only (never -Recurse): subfolders such as the
+  # historical ...\incoming\GSOP backlog are never read.
+  $files = Get-ResultUploadOrder @(Get-ChildItem -Path $config.IncomingFolder -Filter *.csv -File -ErrorAction SilentlyContinue)
+  if ($OnlyFile.Count -gt 0) { $files = @($files | Where-Object { $OnlyFile -contains $_.Name }) }
   foreach ($file in $files) {
     Write-SyncLog $config "detected" $file.Name "size=$($file.Length)"
     if ($DryRun) {

@@ -19,9 +19,12 @@ import {
 } from "../lib/versaworks-parse.server";
 import { loadRipNameIndex, resolveRipIdentity } from "../lib/rip-identity-match.server";
 import {
+  arrangeCountFromCutRows,
+  buildJobFolderEnrichment,
   buildJobInfoEnrichment,
   decideJobInfoPairing,
   jobInfoFallbackEnabled,
+  pairedCutResultFileName,
   parseJobInfoIni,
 } from "../lib/jobinfo-fallback.server";
 
@@ -134,6 +137,47 @@ export async function action({ request }: { request: Request }) {
   // disabled, .ini uploads are rejected cleanly (previously they would have
   // created a junk placeholder row via the legacy non-CSV path).
   if (file.name.toLowerCase().endsWith(".ini")) {
+    const jobFolderRecord = parseJobInfoIni(rawText, cleanText(form.get("jobFolder")) || file.name);
+    // 2026-11-18 (owner, Patch F): a REAL RasterLink job folder is the approved
+    // ink source for composite CMYK + clear jobs whose result CSV has no ink.
+    // Linked by exact JobID + file name + RIP window only; the ONLY write is the
+    // ink columns + rawRow provenance of that one print-log row. No job, cost,
+    // quote or price is touched.
+    if (jobFolderRecord.rasterlinkJob) {
+      const job = jobFolderRecord.rasterlinkJob;
+      const rows = job.fileName ? await db.printLogEntry.findMany({
+        where: { shop: setting.shop, printerSoftware: RASTERLINK_SOURCE, sourceJobName: job.fileName },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+        select: { id: true, sourceJobName: true, startedAt: true, completedAt: true, rawRow: true, ripStartedAt: true, ripCompletedAt: true, status: true },
+      }) : [];
+      const pairing = decideJobInfoPairing(jobFolderRecord, rows);
+      const base = { ok: true, jobInfo: true, jobFolder: true, sourceId: jobFolderRecord.sourceId, jobName: job.fileName };
+      if (pairing.outcome !== "paired" || !pairing.row) {
+        return textResponse({ ...base, outcome: pairing.outcome, candidateRowIds: pairing.candidateRowIds, ineligible: pairing.ineligible, warnings: jobFolderRecord.warnings, updated: 0 });
+      }
+      // The print rows of a composite report an arranged count of 0; the count
+      // is on the cut result of the SAME RasterLink result ("..._cut.csv").
+      let cutArrangeCnt: number | null = null;
+      let pairedRaw: Record<string, unknown> = {};
+      try { pairedRaw = JSON.parse(pairing.row.rawRow || "{}"); } catch { pairedRaw = {}; }
+      const cutFileName = pairedCutResultFileName(pairedRaw.uploadFileName);
+      if (cutFileName) {
+        const cutRows = await db.printLogEntry.findMany({
+          where: { shop: setting.shop, printerSoftware: RASTERLINK_SOURCE, status: { startsWith: "cut:" }, import: { fileName: cutFileName } },
+          take: 20,
+          select: { rawRow: true },
+        });
+        cutArrangeCnt = arrangeCountFromCutRows(cutRows.map((cutRow) => { try { return JSON.parse(cutRow.rawRow || "{}").arrangeCnt; } catch { return null; } }));
+      }
+      const enrichment = buildJobFolderEnrichment(pairing.row, jobFolderRecord, { cutArrangeCnt });
+      if (!enrichment.ok) return textResponse({ ...base, outcome: "rejected", reason: enrichment.reason, updated: 0 });
+      await db.printLogEntry.update({ where: { id: pairing.row.id }, data: enrichment.update });
+      return textResponse({
+        ...base, outcome: "applied", updatedEntryId: pairing.row.id, inkBasis: enrichment.inkBasis,
+        cmykInkMl: enrichment.update.cmykInkMl, glossInkMl: enrichment.update.glossInkMl, estimatedTotalCc: enrichment.estimatedTotalCc, updated: 1,
+      });
+    }
     if (!jobInfoFallbackEnabled()) {
       return textResponse({ ok: false, jobInfo: true, error: "JobInfo fallback is disabled. Set GSO_ENABLE_JOBINFO_FALLBACK=1 only after live validation with a real JobInfo.ini sample (see project state doc)." }, 400);
     }

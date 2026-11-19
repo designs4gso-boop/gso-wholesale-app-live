@@ -270,6 +270,11 @@ function parseStamp(value: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** The stamp reader the result rows use, exposed so a JobInfo.ini result-log stamp is read IDENTICALLY (exact linkage). */
+export function parseRasterlinkStamp(value: unknown): Date | null {
+  return parseStamp(value);
+}
+
 function minutesBetween(start: Date | null, end: Date | null): number {
   if (!start || !end) return 0;
   const ms = end.getTime() - start.getTime();
