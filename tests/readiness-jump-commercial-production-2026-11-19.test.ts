@@ -407,3 +407,17 @@ describe("TRACK D / S — one path to production, safe to replay", () => {
     expect(h.t.stagedTransaction.map((row) => row.shop)).toEqual(["shop-1", "shop-2"]);
   });
 });
+
+describe("operations — build marker", () => {
+  it("answers which build is serving and exposes nothing else", async () => {
+    const health = await import("../app/routes/api.health");
+    process.env.RENDER_GIT_COMMIT = "a2c2bab1234567890";
+    const response = await health.loader();
+    expect(await response.json()).toEqual({ ok: true, commit: "a2c2bab" });
+    delete process.env.RENDER_GIT_COMMIT;
+    expect(await (await health.loader()).json()).toEqual({ ok: true, commit: null });
+    const code = src("app/routes/api.health.tsx");
+    expect(code).not.toMatch(/db\.server|DATABASE_URL|SHOPIFY_API_SECRET|authenticate/);
+    expect((health as any).action).toBeUndefined();
+  });
+});

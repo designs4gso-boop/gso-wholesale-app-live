@@ -145,8 +145,13 @@ Reorders are created by the owner, a manager or sales. Production sees the histo
 
 ## 11. Finishing the job
 
-Cut / laminate / apply → QC → pack → record **shipment** or **pickup** → **Complete Job**.
-The board shows the next step for every job.
+Cut / laminate / apply → QC → pack → **Ready to ship** or **Ready for pickup** → record
+**shipment** or **pickup** → **Complete Job**. The board shows the next step for every job.
+
+- **Ready to ship / Ready for pickup** (job page, last step) means packed and waiting. Every item
+  needs QC PASS first. The board card shows *Packed: Ready to ship*.
+- Recording the shipment or pickup does **not** update Shopify. If the job came from a Shopify
+  order, the job says so: mark the order fulfilled in Shopify by hand.
 
 ## 12. Holds and notes
 
@@ -172,6 +177,8 @@ time by hand.
 | Two files with the same name in one job folder | The second is treated as a revision of the first. Use different names for different layers or sides. |
 | The press did not receive a file the job says was routed | Drop the same file into the job folder again. It is re-sent as the next attempt (`__A2`); it is never duplicated on the job. |
 | NAS or the RIP PC was off | Nothing is lost. Files wait in Prints For Today and are picked up when the watcher is running again. |
+| Red banner on Incoming Print Files: "The print-file watcher has not checked in" | The watcher on the RIP PC has stopped. Sign in to Windows on the RIP PC, or start the task **GSO Print Intake Agent**. Tell the owner. |
+| Board card says *On press now: Run 2 · Reprint · 25 pcs* | A reprint is open on that job. It needs a new QC PASS before the job can ship. |
 | Wrong item on a file | Do not rename it to another ticket. Tell the production lead or owner; the file is re-assigned from Incoming Print Files. |
 
 ## Who does what
@@ -182,7 +189,7 @@ time by hand.
 | Incoming Print Files, assign a file | Yes | Yes | Yes | No | No |
 | New Job | Yes | Yes | Yes | No | No |
 | Choose the printer by hand | Yes | No | Yes | No | No |
-| QC, shipment, pickup, status, notes | Yes | Yes | Yes | Yes | No |
+| QC, ready to ship / pickup, shipment, pickup, status, notes | Yes | Yes | Yes | Yes | No |
 | Reprint / remake, revision | Yes | Yes | Yes | No | No |
 | Reopen a finished job for reprint | Yes | Yes | No | No | No |
 | Due date, priority, assignment | Yes | Yes | No (can see them) | No (can see them) | No |

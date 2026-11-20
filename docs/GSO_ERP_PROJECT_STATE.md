@@ -2,6 +2,21 @@
 
 ## CURRENT TASK — 2026-11-18 (overnight): LAUNCH-READINESS AUDIT COMPLETE. The single authoritative status is `docs/GSO_ERP_LAUNCH_READINESS_AUDIT.md` (overall 60%). Print Intake Patches A–E COMPLETE and live. Patch F code READY (JobInfo clear ink, sync v1.3 with cutoff, runtime prepared) — first ERP-linked Mimaki result still to be verified; Roland MANUAL CSV. Shared press routing now follows restored Mimaki gloss. Security gaps from the audit fixed and deployed. Patch G (retire test jobs) = owner action. Biggest open item is ADOPTION: real work is not being entered as jobs.
 
+### READINESS JUMP 2026-11-19 (late night) — software 76%, live 40%. Authoritative status: first section of `docs/GSO_ERP_LAUNCH_READINESS_AUDIT.md`. Freezes still in force: application timings (owner), QuickBooks business rules (Raquel), agent external actions (approval-only).
+- **Access:** `app/lib/route-access.ts` is the one table of who may open each admin route; `route-access.server.ts` enforces it. Quotes needs owner / manager / sales (loader and every action). A route added to `app/routes.ts` with no table entry fails `tests/readiness-jump-access-crm-approvals-2026-11-19.test.ts`.
+- **CRM:** `CrmAccount`, `CrmLead`, `CrmLeadEvent`; `app/lib/crm.ts` (vocabulary), `crm.server.ts` (service), routes `/app/erp/crm` and `/app/erp/crm/:id`. Sends nothing. Conversions are idempotent.
+- **Approvals:** `app/lib/agent-approvals.server.ts` on the existing action-intent engine (`OpsActionIntent`, now shop-scoped); route `/app/erp/agent-approvals`. Five approval-only action types in `ops/autonomy.ts`. No signed agent endpoint for proposals yet — proposals come from staff (CRM "Ask for approval").
+- **Release:** reorder picker per production item (`reorder_<line>_<item>` fields); `linkStagedCustomer`; provider facts on `StagedTransaction`.
+- **QuickBooks:** `app/lib/quickbooks-adapter.server.ts` — read-only interface, `QUICKBOOKS_NOT_CONNECTED`, `toStageInput`, `syncQuickBooksToStaging`. No credentials, no Intuit call, no write method.
+- **Storefront cost snapshot:** `app/lib/storefront-cost-snapshot.server.ts`, applied once in `createProductionJobFromSource` for `shopify_order`. Bags only; others `not_captured`. Stored under `storefrontCost`-style JSON in `ProductionJobItem.costSnapshot` (source `storefront_cost_snapshot`), not the canonical block.
+- **Fulfilment:** `app/lib/fulfillment-sync.ts`; `ProductionJob.fulfillmentState` and sync fields; intent `markFulfillmentReady`. Shopify sync is disabled by three gates (scope, `GSO_SHOPIFY_FULFILLMENT_SYNC`, adapter) and no adapter is installed.
+- **Runs:** `runCostAccounting` in `production-run.ts`; board card fields `activeRunLabel`, `fulfillmentLabel`.
+- **Privacy:** lifecycle + `ComplianceRequestEvent` history; CRM rows included in an erasure.
+- **Watcher:** v1.10 (crash-safe logging, pass guard, hash cache, heartbeat fields). Installed copy `C:\GSO-Print-Intake-Agent\` matches the repo; v1.9 kept beside it as `gso-print-intake-agent.v1.9-backup-20261119.ps1`. Heartbeat on `PrintLogAutoImportSetting.intakeAgent*`; `app/lib/print-intake-heartbeat.ts`.
+- **Migration:** `20261119230000_add_crm_fulfilment_privacy_history` (additive).
+- **Deploy check:** `GET /api/health` returns the commit Render built.
+- **UI:** new screens are render-tested in `tests/ui-render-smoke-2026-11-19.test.ts` (server render with representative data). Not looked at in a browser.
+
 ### READINESS PUSH 2026-11-19 (night) — authoritative status: `docs/GSO_ERP_LAUNCH_READINESS_AUDIT.md` (overall 64%). Freezes in force: application timings (owner), QuickBooks business rules (Raquel), agent external actions (approval-only).
 - **Privacy webhooks:** recorded in `ComplianceRequest` (migration `20261119200000_add_compliance_requests`, one new table) with a 30-day due date; owner page Admin → Privacy Requests. Nothing is erased by the webhook; the owner applies a customer erasure (blanks contact fields, keeps records); `shop/redact` is recorded only.
 - **Press actuals per run:** derived from the run token in the RIP job name (`actualsByRun` in `production-run.ts`) — no stored link, no column on `PrintLogEntry`. Shown on the job page per run.

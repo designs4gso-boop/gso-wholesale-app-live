@@ -1,8 +1,98 @@
 # GSO ERP — Launch Readiness Audit
 
-**Date:** 2026-11-19 (night) — updates the 2026-11-18 audit. **Code:** `main` at the commit that carries this document (started the day at `2eb6bd6`). **Deployed:** yes — each push today was confirmed live on Render by a new route answering.
+**Date:** 2026-11-19 (late night) — updates the 2026-11-18 audit. **Software readiness 76% · live operational readiness 40%** (see the first section). **Code:** `main` at the commit that carries this document (started the day at `2eb6bd6`). **Deployed:** yes — each push today was confirmed live on Render by a new route answering.
 
 This is the single authoritative readiness report. Everything marked *verified* was checked tonight against production (read-only), the live Shopify store (read-only), this shop PC, or the code. Anything that could not be checked is marked *unverified*. Scores are judgement, not arithmetic — they are deliberately conservative.
+
+---
+
+## Readiness jump — 2026-11-19 late night (read this first)
+
+This section supersedes the scorecard (A) and the P1 list (D) below wherever they differ. Sections B–J are kept as the record of the earlier audit.
+
+**Two numbers, because one number hid the real picture:**
+
+| | Score | Meaning |
+|---|---|---|
+| **SOFTWARE READINESS** | **76%** | How much of the software exists, is tested and is deployed, leaving aside things only a person or an outside provider can do. |
+| **LIVE OPERATIONAL READINESS** | **40%** | How much has been proven by real use: real jobs, real press results, real staff accounts, real settings. |
+
+The earlier single figure (64%) blended the two. They differ because almost everything built this week has never carried a real job: there is still not one real job in the ERP.
+
+**Found and fixed tonight — the print-file watcher was down.** It stopped at 4:47 PM on 2026-11-19 (one failed log write to the NAS ended the script) and nothing restarted it. It was down for about 4 h 50 min; no file was lost, because files wait in Prints For Today. The script (v1.10) now survives a failed log write and a failed pass, it was restarted at 9:39 PM, and the ERP now records a watcher heartbeat: **Incoming Print Files shows a red banner when the watcher stops checking in.**
+
+### Scorecard by area
+
+SOFTWARE COMPLETE = built, tested, deployed. LIVE VALIDATED = proven with real work. The last column is what is still needed and from whom.
+
+| Area | Software | Live | Still needed |
+|---|---|---|---|
+| Core ERP | 88% | 55% | Real jobs entered (James). |
+| Production | 88% | 50% | Real jobs; staff roles set on Render (James). |
+| Print Intake | 92% | 80% | First routed file under the new name; reboot survival (Windows admin). |
+| Reprint / remake | 85% | 30% | First real reprint on the floor. |
+| Reorder | 80% | 25% | First real reorder. Release screen now has the reorder picker. |
+| RIP actuals | 78% | 30% | SOFTWARE READY — LIVE PRESS VALIDATION REQUIRED (one ticketed Mimaki result). Roland stays manual. |
+| Pricing | 72% | 60% | Owner decision on the storefront cost basis (below). Application timings pending shop timing. |
+| Shopify | 65% | 50% | Storefront fixes that touch the live checkout were left for review (below). |
+| Fulfilment | 70% | 30% | Shopify fulfilment permission (external). Until then Shopify is marked by hand and the job says so. |
+| CRM | 70% | 10% | Built tonight; never used. No customer list page yet. |
+| Sales | 65% | 35% | Sales must hold the `sales` role on Render to open Quotes. |
+| Agents | 50% | 10% | Approval queue works for staff-made proposals. No signed agent endpoint for proposals yet; nothing is scheduled. |
+| QuickBooks framework | 72% | 0% | Intuit app + Raquel's consent (external); Raquel's rules. |
+| Raquel admin | 72% | 20% | Her decisions; first real release. |
+| Security | 90% | 65% | Render environment check (James). |
+| Operations / deployment | 82% | 65% | Elevated Windows steps; watcher reboot survival. |
+
+### What was built and deployed tonight
+
+- **One access table for every admin route** (`app/lib/route-access.ts`), enforced on the server. Quotes — the loader and every action — now needs a selling role (owner, manager, sales). Manual lead entry, the agent rule pages and Launch Readiness got a role floor too. A route registered without an entry in the table fails a test.
+- **Internal CRM**: leads with the lifecycle new → qualified → assigned → contact pending → contacted → follow-up due → quote created → won / lost; assignment, follow-up date, notes, full history; conversion to a customer account and to an empty draft quote (both safe to click twice). Sales → Leads. It sends nothing.
+- **Approvals queue** (Sales → Approvals, owner and managers): proposals wait for a person; approve or reject with a reason; every step audited; tenant-scoped. Approving never sends anything. An approved lead assignment or follow-up date is applied to the lead; an approved draft message is sent by a person by hand.
+- **Reorder picker on Release to Production**: per production item, pick the earlier item it re-orders and whether the artwork is the same or revised. Nothing is pre-selected; a stale or unknown pick is refused.
+- **Cost snapshot on storefront orders**: when a paid order becomes a job, each new bag item stores the cost basis in force at that moment (forward only). Families whose storefront engine returns no cost are stored as "not captured" with the reason — never as $0.
+- **Fulfilment**: Ready to ship / Ready for pickup on the job and the board; shipment and pickup record whether Shopify was updated (today: never — the job says to mark Shopify by hand).
+- **QuickBooks read-only boundary**: an adapter interface with no write method, provider facts on staged transactions, a person-set customer link. Not connected; no rule decided.
+- **Run costing**: each run is classified original / shop-absorbed / customer-paid, with its own press ink and time; the board shows the reprint on the press now.
+- **Privacy requests**: received → in progress → completed, working notes, append-only history, overdue flag; CRM contact details are included in an erasure. Nothing is deleted.
+- **RIP results defect fixed**: a result file named after a ticketed layer no longer lends its ticket to an un-ticketed layer inside it.
+- **Sales rules**: Stock Bags (MOQ 50) and die-cut pouches (MOQ 2,500) resolve to their own family.
+- **`/api/health`**: says which build is serving, so a deploy can be verified without signing in.
+
+### P0
+None verified. Unchanged: `GSO_OWNER_ENFORCEMENT=temporary_all_staff` on Render would be P0 if set.
+
+### P1 — closed tonight
+- Quotes page had no role floor → closed.
+- Storefront orders carried no cost snapshot → closed for Stock Bags and Sticker Bags; other families are recorded as not captured.
+- Invoiced reorders had no picker on the Release screen → closed.
+- No lead lifecycle / CRM → foundation built.
+- The watcher could die silently → hardened, and the ERP now shows when it stops.
+
+### P1 — remaining
+1. **No real work is in the ERP.** (James)
+2. **Render environment unverified.** New tonight: an account with **no role can no longer open Quotes**. Anyone who sells needs `sales` (or `manager`) in `GSO_STAFF_ROLES`. (James)
+3. **Patch F not validated on the press.** Software ready; needs one ticketed Mimaki result. (real print job)
+4. **QuickBooks not connected; release rules undecided.** (Intuit + Raquel)
+5. **Storefront cost basis — owner decision.** Stock / sticker bags and stickers are priced on the storefront from an older cost model than the Cost Calculator uses. Both feed the same price policy, so prices differ only where cost controls the price. Worked example (holographic, 3X gloss, 1,000 double-sided sticker bags): the storefront costs application at $156.25, the calculator at $111.11, so the storefront price is about $75 higher. Changing it moves live prices, so it was not changed. (James)
+6. **Watcher starts only at logon.** `tools/register-print-intake-startup-task-ELEVATED.ps1` is ready. (Windows admin)
+7. **Stale Roland task starts on the next reboot.** (Windows admin)
+
+### Deterministic storefront fixes deliberately NOT made tonight
+They are correct by the owner's stated rules but change the live checkout or the live storefront, which this work does not touch unattended:
+- A Zakeke design id is still accepted on a Stock Bag order (rule: Stock Bags have no Zakeke).
+- A jar with no launch size (for example the cost-only 5 oz) is still listed as active by the storefront loader; checkout already refuses it.
+- The configurator sync still writes minimum quantity 64 to Stock Bag rows; the storefront ignores it and enforces 50.
+- A Stock-Bag-only paid order gets the default production checklist.
+- Holographic sticker floor (matte × 1.20) is applied on the storefront but not in the Cost Calculator.
+
+### Owner actions (changes from the lists below)
+- **James:** on Render, give every seller the `sales` role before they next open Quotes. Open Incoming Print Files and confirm the watcher banner is green.
+- **Raquel:** unchanged, plus two small ones — should managers see invoice balances, and how should a QuickBooks customer be linked to an ERP customer.
+- **Windows admin (elevated):**
+  1. `powershell -ExecutionPolicy Bypass -File "C:\GSO-RIP-Result-Sync\disable-old-roland-task-ELEVATED.ps1"`
+  2. `powershell -ExecutionPolicy Bypass -File ".\tools\register-print-intake-startup-task-ELEVATED.ps1" -WhatIf` then the same with `-WatchdogMinutes 5` (run from the repo folder). Without Windows auto sign-in the start-up trigger alone does not start the watcher at the sign-in screen; the script explains both choices.
+- **External:** unchanged.
 
 ---
 

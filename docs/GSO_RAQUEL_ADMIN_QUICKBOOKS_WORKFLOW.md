@@ -1,6 +1,6 @@
 # QuickBooks → ERP: Admin Workflow and Decisions for Raquel
 
-For review with Raquel. No code knowledge needed. Last updated 2026-11-19.
+For review with Raquel. No code knowledge needed. Last updated 2026-11-19 (late night).
 
 ## Where things stand
 
@@ -148,6 +148,8 @@ from you.
 | Reports | Admin → Reports |
 | Who has which role | Admin → Staff Access & Readiness |
 | Customer privacy requests from Shopify | Admin → Privacy Requests |
+| Leads: who we are talking to, follow-ups | Sales → Leads |
+| Approve or reject a proposed message, follow-up or lead assignment | Sales → Approvals |
 
 **Production support**
 
@@ -180,11 +182,37 @@ A reorder is a new sale, not a reprint.
 
 The earlier job is never changed.
 
-Questions for you on reorders:
+**Reorders on an invoice (Release to Production).** After you save the review, each production
+item shows *Is any of these a reorder?* Choose the earlier item from the list, or leave it as
+*Not a reorder*, and say whether the artwork is the same or revised. Earlier jobs of the same
+customer name are offered; if the name is spelled differently in QuickBooks, use *Find earlier
+items*. Nothing is chosen for you.
+
+Question for you on reorders:
 
 - Should a reorder quote need your approval every time, or only when the price needs approving?
-- For invoiced (QuickBooks) reorders: should the reorder be marked on the Release screen, so the
-  new job links to the earlier item? The link is supported; the screen does not ask for it yet.
+
+## Leads and approvals
+
+- **Sales → Leads** is a list of people and companies we are talking to. Each lead has a status,
+  who it is assigned to, a follow-up date and a history. *Make this a customer* and *Create draft
+  quote* turn a lead into real work. **Nothing on these screens sends a message to anyone.**
+- **Sales → Approvals** lists proposals waiting for you or a manager — for example a draft message
+  a salesperson wants checked. Approve or reject (a rejection needs a reason). **Approving never
+  sends it**: the person sends it themselves afterwards.
+
+## Who can open Quotes
+
+From 2026-11-19 an account with no ERP role cannot open Quotes. Quotes are for the owner, managers
+and sales. If someone who sells sees "Quotes, customers and leads are for the owner, managers and
+sales", they need the sales role (Admin → Staff Access & Readiness shows who has which role).
+
+## Privacy requests
+
+Admin → Privacy Requests shows each request with its due date (30 days) and turns red when one is
+overdue. *I am working on this*, working notes and the final step are all kept in the request's
+history. Erasing a customer blanks their name, email and phone; quotes, jobs and their history are
+kept.
 
 ## Reprints that the customer pays for
 

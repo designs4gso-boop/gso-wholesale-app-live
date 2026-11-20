@@ -85,6 +85,7 @@ export default [
   route("api/agent/intake", "routes/api.agent.intake.tsx"),
   route("api/slack/interactions", "routes/api.slack.interactions.tsx"),
   route("api/ops/worker/run", "routes/api.ops.worker.run.tsx"),
+  route("api/health", "routes/api.health.tsx"),
 
   route("apps/wholesale-lite", "routes/apps.wholesale-lite._index.ts"),
   route("apps/wholesale-lite/pricing", "routes/apps.wholesale-lite.pricing.ts"),
