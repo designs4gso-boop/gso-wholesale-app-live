@@ -38,7 +38,7 @@ import {
 } from "../lib/print-log-writeback.server";
 import { resolvePrintDuration } from "../lib/rip-duration.server";
 import { applyRunSuffix } from "../lib/print-intake-routing.server";
-import { isRunChargeType, isRunKind, layersToReroute, nextReprintNumber, openRunOf, parseReprintQuantity, planReprintRuns, runChargeLabel, runKindLabel, runStatusForQc } from "../lib/production-run";
+import { actualsByRun, isRunChargeType, isRunKind, layersToReroute, nextReprintNumber, openRunOf, parseReprintQuantity, planReprintRuns, runChargeLabel, runKindLabel, runStatusForQc } from "../lib/production-run";
 import { appendIntakeAudit } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
@@ -691,6 +691,8 @@ export async function loader({ request }: { request: Request }) {
     for (const item of job.items || []) {
       item.runIdentity = runByTicket.get(item.itemTicket) || null;
       item.runs = runsByItem.get(item.id) || [];
+      // actual ink / time per run, from the press results linked to this exact item (mL and minutes only — no money)
+      item.runActuals = actualsByRun(item.runs, (entriesByJob[job.id] || []).filter((entry: any) => entry.productionJobItemId === item.id));
       const source = item.reorderSourceItemId ? lineageById.get(item.reorderSourceItemId) : null;
       item.reorderOf = source ? { itemTicket: source.itemTicket, productTitle: source.productTitle, quantity: source.quantity, jobId: source.jobId, artworkMode: item.reorderArtworkMode || null } : null;
     }
@@ -1065,6 +1067,15 @@ export async function action({ request }: { request: Request }) {
     return Response.json({ ok: true, message: "Job updated." });
   }
 
+  // 2026-11-19: a hand-added file is attached to an item only when that is
+  // certain: the item chosen on the form (and it belongs to this job) or the
+  // only item of a single-item job. Otherwise it stays a job-level file.
+  const fileItemIdFor = async (jobId: string, wanted: string): Promise<string | null> => {
+    const items: any[] = (await db.productionJobItem.findMany({ where: { shop, jobId }, select: { id: true } })) || [];
+    if (wanted) return items.some((item) => item.id === wanted) ? wanted : null;
+    return items.length === 1 ? items[0].id : null;
+  };
+
   if (intent === "addFile") {
     const jobId = String(formData.get("jobId") || "");
     const fileUrl = String(formData.get("fileUrl") || "").trim();
@@ -1094,6 +1105,7 @@ export async function action({ request }: { request: Request }) {
         matchedBy,
         jobTicket: job?.jobTicket || null,
         originalFileName: fileName,
+        productionJobItemId: await fileItemIdFor(jobId, String(formData.get("fileItemId") || "")),
         notes: fileNotes ? `${fileNotes}
 Asset role: ${assetRole}
 Source: ${sourceLabel(assetSource)}${sourceRef ? `

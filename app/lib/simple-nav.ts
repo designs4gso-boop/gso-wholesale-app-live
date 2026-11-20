@@ -130,6 +130,7 @@ export function navForRole(role: SimpleNavRole | string, options: { viewFinancia
         { label: "Cost Verification", href: "/app/erp/cost-verification" },
         { label: "Operations Hub", href: "/app/erp/ops-hub" },
         { label: "Staff Access & Readiness", href: "/app/erp/owner-readiness" },
+        { label: "Privacy Requests", href: "/app/erp/privacy-requests" },
         { label: "Launch Readiness", href: "/app/erp/setup-wizard" },
         { label: "ERP Walkthrough", href: "/app/erp/walkthrough" },
       ],

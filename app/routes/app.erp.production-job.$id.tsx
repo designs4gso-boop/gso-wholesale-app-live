@@ -153,7 +153,15 @@ const RUN_STATUS_LABEL: Record<string, string> = { open: "Waiting for QC", qc_pa
 /** Every production run of one item: the original and each reprint / remake, with its own quantity. Display only. */
 function ItemRuns({ item }: { item: any }) {
   const summary = itemRunSummary(item, item.runs || []);
-  if (!summary.reprintCount) return null;
+  const actuals = (item.runActuals || []) as any[];
+  if (!summary.reprintCount) {
+    // no reprint: still show what the press reported for this item, when there is anything
+    return actuals.length ? (
+      <div style={{ fontSize: 13, color: "#374151" }}>
+        {actuals.map((row) => <div key={row.label}>Press result — {row.label}: {Number(row.inkMl).toFixed(1)} mL ink · {Number(row.printMinutes).toFixed(1)} min</div>)}
+      </div>
+    ) : null;
+  }
   return (
     <div style={{ fontSize: 13, border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 10, padding: "8px 10px", display: "grid", gap: 4 }}>
       <div style={{ fontWeight: 700 }}>Ordered {summary.orderedQuantity} · Reprinted {summary.reprintQuantity} in {summary.reprintCount} run(s)</div>
@@ -166,6 +174,7 @@ function ItemRuns({ item }: { item: any }) {
           {run.notes && run.kind !== "original" ? ` · ${run.notes}` : ""}
         </div>
       ))}
+      {actuals.map((row) => <div key={row.label} style={{ color: "#374151" }}>Press result — {row.label}: {Number(row.inkMl).toFixed(1)} mL ink · {Number(row.printMinutes).toFixed(1)} min</div>)}
     </div>
   );
 }
@@ -454,6 +463,9 @@ const FILE_KIND: Record<string, string> = { artwork: "Artwork", proof: "Proof", 
 function FilesTab({ job, role }: { job: any; role: string }) {
   const files = (job.files || []) as any[];
   const canRemove = showsProductionControl(role, "deleteFile");
+  const jobItems = (job.items || []) as any[];
+  const itemTicketById: Record<string, string> = Object.fromEntries(jobItems.map((item) => [String(item.id), String(item.itemTicket || item.productTitle || "")]));
+  const isWebLink = (url: unknown) => /^(https?:\/\/|\/)/i.test(String(url || ""));
   return (
     <div style={{ display: "grid", gap: 12 }}>
       {files.length ? files.map((file) => (
@@ -461,9 +473,14 @@ function FilesTab({ job, role }: { job: any; role: string }) {
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 600, overflowWrap: "anywhere" }}>{file.fileName}</div>
-              <div style={{ fontSize: 13, color: "#6b7280" }}>{FILE_KIND[String(file.fileType || "")] || "File"}</div>
+              <div style={{ fontSize: 13, color: "#6b7280" }}>
+                {file.assetSource === "reorder_reuse" ? "Earlier order's file (reorder)" : FILE_KIND[String(file.fileType || "")] || "File"}
+                {itemTicketById[String(file.productionJobItemId || "")] ? ` · item ${itemTicketById[String(file.productionJobItemId)]}` : ""}
+              </div>
+              {/* files on the shop NAS have no web link: say where they are instead of offering a dead button */}
+              {!isWebLink(file.fileUrl) && file.notes ? <div style={{ fontSize: 13, color: "#374151", overflowWrap: "anywhere" }}>{String(file.notes).split(/\r?\n/)[0]}</div> : null}
             </div>
-            <a href={file.fileUrl} target="_blank" rel="noreferrer" style={{ ...bigButton("secondary"), minHeight: 44, display: "inline-flex", alignItems: "center", textDecoration: "none" }}>Open file</a>
+            {isWebLink(file.fileUrl) ? <a href={file.fileUrl} target="_blank" rel="noreferrer" style={{ ...bigButton("secondary"), minHeight: 44, display: "inline-flex", alignItems: "center", textDecoration: "none" }}>Open file</a> : <span style={{ fontSize: 13, color: "#6b7280" }}>On the shop NAS</span>}
           </div>
           {canRemove ? (
             <details>
@@ -494,6 +511,12 @@ function FilesTab({ job, role }: { job: any; role: string }) {
                 <option value="dieline">Dieline</option>
                 <option value="other">Other</option>
               </select>
+              {jobItems.length > 1 ? (
+                <select name="fileItemId" defaultValue="" style={input}>
+                  <option value="">For the whole job</option>
+                  {jobItems.map((item) => <option key={item.id} value={item.id}>{item.itemTicket || item.productTitle} — {item.displayTitle || item.productTitle}</option>)}
+                </select>
+              ) : null}
               <button type="submit" disabled={busy} style={bigButton("primary", busy)}>Add file</button>
             </div>
           )}

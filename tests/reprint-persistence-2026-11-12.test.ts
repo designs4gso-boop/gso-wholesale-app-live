@@ -245,7 +245,7 @@ describe("15. schema / migration unchanged", () => {
     const { readdirSync } = await import("node:fs");
     const names = readdirSync("prisma/migrations").filter((n) => /^\d{14}_/.test(n)).sort();
     // 2026-11-19: the owner-approved ADDITIVE lineage migration (file -> item link, production runs, reorder lineage, staged transactions) is now the newest.
-    expect(names[names.length - 1]).toBe("20261119120000_add_production_lineage");
+    expect(names[names.length - 1]).toBe("20261119200000_add_compliance_requests"); // + the privacy-request table (additive)
     const schema = readFileSync("prisma/schema.prisma", "utf8");
     for (const field of ["qcResult", "qcBy", "qcAt", "qcNote", "lastReprintReason", "lastReprintBy", "lastReprintAt"]) expect(schema).toContain(`  ${field}`);
   });

@@ -1797,6 +1797,30 @@ model StagedTransaction {
   @@index([shop, status])
 }
 
+// 2026-11-19 (migration 20261119200000): Shopify privacy webhooks recorded for
+// the owner. Nothing is erased by the webhook; see privacy-compliance.server.ts.
+model ComplianceRequest {
+  id              String    @id @default(cuid())
+  shop            String
+  topic           String // customers/data_request | customers/redact | shop/redact
+  webhookId       String
+  customerId      String?
+  customerEmail   String?
+  customerPhone   String?
+  ordersRequested String?
+  status          String    @default("received") // received | completed
+  receivedAt      DateTime  @default(now())
+  dueAt           DateTime?
+  completedBy     String?
+  completedAt     DateTime?
+  resultSummary   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([shop, webhookId])
+  @@index([shop, status])
+}
+
 // Phase 2.5 — durable rate limiting for the Stock Bag personalization upload
 // endpoint. Deliberately minimal and ephemeral: one row per upload attempt,
 // pruned opportunistically. identityKey is the bounded value derived in

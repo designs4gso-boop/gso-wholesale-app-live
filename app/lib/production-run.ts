@@ -195,3 +195,54 @@ export function itemFileState(item: { id?: string; itemTicket?: string | null; s
     label: awaiting ? `Awaiting files — ${expected.join(" + ")} expected` : `${received} print file(s) received — ${expected.join(" + ")} expected`,
   };
 }
+
+/* ---------------- RIP actuals per run (derived, no stored link) ---------------- */
+
+const RUN_TOKEN_RE = /__(?:R(\d+)-)?(?:P(\d+)-)?A(\d+)$/i;
+
+/** The reprint number carried at the END of a routed / RIP job name (0 = the original production). */
+export function reprintNumberOfRipName(name: unknown): number {
+  const base = String(name || "").replace(/\.[a-z0-9]{1,5}$/i, "");
+  const match = base.match(RUN_TOKEN_RE);
+  return match && match[2] ? Math.max(0, Number(match[2])) : 0;
+}
+
+/** The reprint number a run was routed under ("P2-A1", "R2-P1-A1" -> 2, 1); null for the original run. */
+export function reprintNumberOfRun(run: RunRow): number | null {
+  if (run.kind === "original") return 0;
+  const match = String(run.runLabel || "").match(/(?:^|-)P(\d+)-A\d+$/i);
+  return match ? Number(match[1]) : null;
+}
+
+export type RunActuals = { runNumber: number | null; kind: string; label: string; entries: number; inkMl: number; printMinutes: number; sqft: number };
+
+/**
+ * Actual ink / time per run of ONE item. The link is the run token in the RIP
+ * job name the press reported (the same token the routed file carried), so it
+ * is exact and works for logs imported before runs existed. Nothing is
+ * guessed: a log whose reprint number matches no recorded run is listed on its
+ * own line ("Reprint P2 — no run recorded") instead of being added to another
+ * run. Logs with no token belong to the original production.
+ */
+export function actualsByRun(runs: RunRow[], entries: Array<{ sourceJobName?: string | null; inkMl?: number | null; printMinutes?: number | null; sqft?: number | null }>): RunActuals[] {
+  const buckets = new Map<number, RunActuals>();
+  for (const entry of entries || []) {
+    const reprint = reprintNumberOfRipName(entry.sourceJobName);
+    const run = runs.find((candidate) => reprintNumberOfRun(candidate) === reprint) || null;
+    const bucket = buckets.get(reprint) || {
+      runNumber: run ? Number(run.runNumber) : reprint === 0 ? 1 : null,
+      kind: run ? run.kind : reprint === 0 ? "original" : "reprint",
+      label: run ? `Run ${run.runNumber} — ${runKindLabel(run.kind)}` : reprint === 0 ? "Run 1 — Original" : `Reprint P${reprint} — no run recorded`,
+      entries: 0,
+      inkMl: 0,
+      printMinutes: 0,
+      sqft: 0,
+    };
+    bucket.entries += 1;
+    bucket.inkMl += Number(entry.inkMl) || 0;
+    bucket.printMinutes += Number(entry.printMinutes) || 0;
+    bucket.sqft += Number(entry.sqft) || 0;
+    buckets.set(reprint, bucket);
+  }
+  return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([, bucket]) => bucket);
+}
