@@ -78,6 +78,8 @@ function JobBoardCard({ card }: { card: BoardCard }) {
         </div>
         {card.qcLabel ? <Field label="QC" value={card.qcLabel} /> : null}
         {card.reprintLabel ? <Field label="Reprints" value={card.reprintLabel} /> : null}
+        {card.activeRunLabel ? <Field label="On press now" value={card.activeRunLabel} /> : null}
+        {card.fulfillmentLabel ? <Field label="Packed" value={card.fulfillmentLabel} /> : null}
       </div>
       {card.holdReason ? <div style={{ fontSize: 13, color: "#991b1b" }}>Hold: {card.holdReason}</div> : null}
       {card.reorder ? <div style={{ fontSize: 13, color: "#1e3a8a", fontWeight: 600 }}>Reorder of an earlier item</div> : null}

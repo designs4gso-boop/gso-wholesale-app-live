@@ -35,6 +35,28 @@ export async function loader({ request }: { request: Request }) {
   const jobIds = rows.map((row: any) => row.releasedJobId).filter(Boolean) as string[];
   const jobs = jobIds.length ? await db.productionJob.findMany({ where: { shop, id: { in: jobIds } }, select: { id: true, jobTicket: true } }) : [];
   const ticketById = new Map(jobs.map((job: any) => [job.id, job.jobTicket]));
+  // 2026-11-19 REORDER PICKER: earlier items a production item may be a reorder of. Offered = earlier jobs
+  // of the SAME customer name (exact, case-insensitive) plus whatever the reviewer searched for. Nothing is
+  // pre-selected and nothing is matched automatically — a person picks, or it is not a reorder.
+  const find = String(new URL(request.url).searchParams.get("find") || "").trim().slice(0, 80);
+  const staged = rows.filter((row: any) => row.status === "staged");
+  const names = Array.from(new Set(staged.map((row: any) => String(row.customerName || "").trim()).filter(Boolean))) as string[];
+  const containsFind = { contains: find, mode: "insensitive" as const };
+  const pastJobs = names.length || find ? await db.productionJob.findMany({
+    where: {
+      shop,
+      status: { not: "cancelled" },
+      OR: [
+        ...names.flatMap((name) => [{ customerName: { equals: name, mode: "insensitive" as const } }, { company: { equals: name, mode: "insensitive" as const } }]),
+        ...(find ? [{ customerName: containsFind }, { company: containsFind }, { jobTicket: containsFind }, { items: { some: { productTitle: containsFind } } }] : []),
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    take: 60,
+    // identity only — no price or cost
+    select: { id: true, jobTicket: true, customerName: true, company: true, items: { orderBy: { sortOrder: "asc" }, select: { id: true, itemTicket: true, productTitle: true, quantity: true, selectedFinish: true } } },
+  }) : [];
+  const reorderOptions = (pastJobs as any[]).flatMap((job) => (job.items || []).map((item: any) => ({ id: item.id, label: `${item.itemTicket || job.jobTicket || "item"} — ${item.productTitle} (${item.quantity})${item.selectedFinish ? ` · ${item.selectedFinish}` : ""} — ${job.company || job.customerName || ""}`.slice(0, 160) })));
   const transactions = rows.map((row: any) => {
     const lines = readStagedLines(row.lines).map((line) => ({ ...line, amount: showAmounts ? line.amount : null }));
     const ready = releaseReadiness(row);
@@ -56,7 +78,7 @@ export async function loader({ request }: { request: Request }) {
       blockers: ready.ok ? [] : ready.reasons,
     };
   });
-  return Response.json({ transactions, showAmounts, families: MANUAL_JOB_FAMILIES, finishes: MANUAL_JOB_FINISHES, canChoosePrinter: staff.can("selectPrinter") });
+  return Response.json({ transactions, showAmounts, families: MANUAL_JOB_FAMILIES, finishes: MANUAL_JOB_FINISHES, canChoosePrinter: staff.can("selectPrinter"), reorderOptions, find });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -97,6 +119,17 @@ export async function action({ request }: { request: Request }) {
     const parsed = parseAdditionalManualItems(String(form.get(`items_${index}`) || ""), { ...base, quantity: Math.max(1, Math.floor(Number(line.quantity) || 1)) });
     if (!parsed.ok) return Response.json({ ok: false, id, message: `Line ${index + 1}: ${parsed.reason}` });
     if (!parsed.items.length) return Response.json({ ok: false, id, message: `Line ${index + 1}: list the production items for this line (one per line: name | quantity).` });
+    // 2026-11-19 REORDER PICKER: a person may mark an item as a reorder of an earlier item. The pick is
+    // tied to the item it was made for; if the item list changed since, the pick is refused (never guessed).
+    for (let itemIndex = 0; itemIndex < parsed.items.length; itemIndex += 1) {
+      const sourceId = String(form.get(`reorder_${index}_${itemIndex}`) || "").trim();
+      if (!sourceId) continue;
+      const pickedFor = String(form.get(`reorderfor_${index}_${itemIndex}`) || "");
+      if (pickedFor !== parsed.items[itemIndex].productTitle) return Response.json({ ok: false, id, message: `Line ${index + 1}: the item list changed after a reorder link was chosen. Save the review, then choose the earlier item again.` });
+      const source = await db.productionJobItem.findFirst({ where: { shop, id: sourceId }, select: { id: true } });
+      if (!source) return Response.json({ ok: false, id, message: `Line ${index + 1}: the earlier item chosen for "${pickedFor}" was not found.` });
+      parsed.items[itemIndex] = { ...parsed.items[itemIndex], reorderSourceItemId: source.id, reorderArtworkMode: String(form.get(`artwork_${index}_${itemIndex}`) || "") === "revision" ? "revision" : "same_artwork" };
+    }
     posted.push({ ...line, classification: "production", productionItems: parsed.items });
   }
   const saved = await saveStagedReview(db, { shop, id, lines: posted, reviewNotes: String(form.get("reviewNotes") || ""), actor: staff.actor });
@@ -110,7 +143,7 @@ const input: CSSProperties = { minHeight: 44, padding: "0 12px", borderRadius: 1
 const label: CSSProperties = { fontSize: 13, color: "#6b7280", display: "grid", gap: 4 };
 const money = (value: number | null | undefined) => (value === null || value === undefined ? "" : `$${Number(value).toFixed(2)}`);
 
-function StagedCard({ txn, families, finishes, canChoosePrinter, showAmounts, result, busy }: { txn: any; families: any[]; finishes: string[]; canChoosePrinter: boolean; showAmounts: boolean; result: any; busy: boolean }) {
+function StagedCard({ txn, families, finishes, canChoosePrinter, showAmounts, result, busy, reorderOptions = [] }: { txn: any; families: any[]; finishes: string[]; canChoosePrinter: boolean; showAmounts: boolean; result: any; busy: boolean; reorderOptions?: Array<{ id: string; label: string }> }) {
   const navigate = useNavigate();
   const mine = result?.id === txn.id ? result : null;
   return (
@@ -150,6 +183,29 @@ function StagedCard({ txn, families, finishes, canChoosePrinter, showAmounts, re
                 <label style={label}>Production items for this line — one per line: name | quantity
                   <textarea name={`items_${index}`} rows={3} defaultValue={(line.productionItems || []).map((item: any) => `${item.productTitle} | ${item.quantity}`).join("\n")} placeholder={"SHORTCAKES pouch | 128\nMIXED BERRIES pouch | 128"} style={{ ...input, minHeight: 84, padding: 12 }} />
                 </label>
+                {(line.productionItems || []).length ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontSize: 13, color: "#6b7280" }}>Is any of these a reorder of something we made before? Choose the earlier item, or leave it as "Not a reorder".</div>
+                    {(line.productionItems as any[]).map((item, itemIndex) => (
+                      <div key={`${line.key}-${itemIndex}`} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, alignItems: "end" }}>
+                        <input type="hidden" name={`reorderfor_${index}_${itemIndex}`} value={item.productTitle} />
+                        <label style={label}>{item.productTitle} · {item.quantity}
+                          <select name={`reorder_${index}_${itemIndex}`} defaultValue={item.reorderSourceItemId || ""} style={input}>
+                            <option value="">Not a reorder</option>
+                            {item.reorderSourceItemId && !reorderOptions.some((option) => option.id === item.reorderSourceItemId) ? <option value={item.reorderSourceItemId}>Earlier item already chosen</option> : null}
+                            {reorderOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                          </select>
+                        </label>
+                        <label style={label}>Artwork
+                          <select name={`artwork_${index}_${itemIndex}`} defaultValue={item.reorderArtworkMode || "same_artwork"} style={input}>
+                            <option value="same_artwork">Same artwork as before</option>
+                            <option value="revision">Revised artwork (new proof needed)</option>
+                          </select>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ))}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
@@ -192,7 +248,7 @@ function StagedCard({ txn, families, finishes, canChoosePrinter, showAmounts, re
 }
 
 export default function ReleaseQueue() {
-  const { transactions, showAmounts, families, finishes, canChoosePrinter } = useLoaderData<any>();
+  const { transactions, showAmounts, families, finishes, canChoosePrinter, reorderOptions, find } = useLoaderData<any>();
   const result = useActionData<any>();
   const navigation = useNavigation();
   const navigate = useNavigate();
@@ -207,7 +263,18 @@ export default function ReleaseQueue() {
             <div style={{ fontWeight: 700 }}>Nothing is waiting for release.</div>
             <div style={{ color: "#6b7280" }}>QuickBooks is not connected to the ERP yet, so invoices do not arrive here on their own. Until it is, start invoiced work with New Job and type the invoice number in the reference field.</div>
           </div>
-        ) : waiting.map((txn) => <StagedCard key={txn.id} txn={txn} families={families} finishes={finishes} canChoosePrinter={canChoosePrinter} showAmounts={showAmounts} result={result} busy={busy} />)}
+        ) : (
+          <>
+            <Form method="get" style={{ ...card, display: "grid", gap: 8 }}>
+              <div style={{ fontSize: 13, color: "#6b7280" }}>Reorders: earlier jobs of the same customer name are offered on each item after you save the review. If the name differs here, search for the earlier job.</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input name="find" defaultValue={find || ""} placeholder="Find earlier items: customer, job ticket or item name" style={input} />
+                <button type="submit" style={{ minHeight: 44, padding: "0 16px", borderRadius: 10, border: "1px solid #d1d5db", background: "white", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Find</button>
+              </div>
+            </Form>
+            {waiting.map((txn) => <StagedCard key={txn.id} txn={txn} families={families} finishes={finishes} canChoosePrinter={canChoosePrinter} showAmounts={showAmounts} result={result} busy={busy} reorderOptions={reorderOptions} />)}
+          </>
+        )}
         {done.length ? (
           <details style={card}>
             <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#6b7280", minHeight: 44 }}>Already handled ({done.length})</summary>

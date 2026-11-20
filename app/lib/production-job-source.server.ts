@@ -54,6 +54,8 @@ import {
   parseCanonicalStickerOrderLine,
 } from "./order-canonical.server";
 import { isStickerBagProductType, isStockBagProfile } from "./product-family";
+import { resolveCanonicalBagInputs, type CanonicalBagInputs } from "./canonical-bag-pricing.server";
+import { applyStorefrontCostSnapshots } from "./storefront-cost-snapshot.server";
 
 export type ManualJobItemInput = {
   productTitle: string;
@@ -1151,6 +1153,18 @@ export async function createProductionJobFromSource(
       personalizationByIndex = undefined;
     }
   }
+  // 2026-11-19 storefront COST SNAPSHOT: read the bag cost inputs in force right now, BEFORE the
+  // transaction (read only). The snapshot is forward-only and optional: if the inputs cannot be read
+  // the job is still created and each item records "not_captured" with the reason.
+  let storefrontBagInputs: CanonicalBagInputs | null = null;
+  if (source.type === "shopify_order") {
+    try {
+      storefrontBagInputs = await resolveCanonicalBagInputs(dbClient, shop);
+    } catch (error) {
+      console.error("[production-job-source] storefront cost inputs unavailable", { shop, error: String(error) });
+      storefrontBagInputs = null;
+    }
+  }
 
   // 15H.1: ticket-constraint P2002 reruns the whole transaction (see helper).
   return await runWithTicketRetry(() => dbClient.$transaction(async (tx: any) => {
@@ -1261,6 +1275,8 @@ export async function createProductionJobFromSource(
       const jobTicket = await buildNextJobTicket(tx, shop);
       const payload = buildShopifyOrderJobPayload(source.order, jobTicket, { personalizationByIndex });
       if (!payload) return { job: null, created: false, reason: "No configurator line items found." };
+      // 2026-11-19: stamp the cost basis in force now on each NEW item (never on an existing job).
+      payload.items = applyStorefrontCostSnapshots(payload.items as any[], storefrontBagInputs) as any;
       // 15H.4A: orderGid is a STAGED column — write it only when the probe
       // says the database actually has it (safe to deploy pre-activation).
       const canWriteOrderGid = await orderGidColumnAvailable(dbClient);

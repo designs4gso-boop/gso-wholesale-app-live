@@ -22,7 +22,7 @@ import { itemReprintSummary } from "../lib/production-qc-display";
 import { showsProductionControl } from "../lib/production-role-access";
 import { PRODUCTION_STATUS_OPTIONS, jobSourceLabel, staffStatusLabel } from "../lib/production-status-vocabulary";
 import { REORDER_HREF, SIMPLE_BOARD_HREF, classicJobHref, jobWorkspaceHref } from "../lib/simple-nav";
-import { RUN_CHARGE_TYPES, RUN_KINDS, itemFileState, itemRunSummary, runChargeLabel, runKindLabel } from "../lib/production-run";
+import { RUN_CHARGE_TYPES, RUN_KINDS, itemFileState, itemRunSummary, runChargeLabel, runKindLabel, runCostAccounting } from "../lib/production-run";
 import { reprintReasonLabel } from "../lib/production-fulfillment";
 import { formatDueDate } from "../lib/business-date";
 import { isJobOverdue, jobWorkspaceView, showsMaterialUse, workspaceItemQc, toMaterialOption, type JobStepKey, type WorkspaceStep } from "../lib/simple-production";
@@ -175,6 +175,16 @@ function ItemRuns({ item }: { item: any }) {
         </div>
       ))}
       {actuals.map((row) => <div key={row.label} style={{ color: "#374151" }}>Press result — {row.label}: {Number(row.inkMl).toFixed(1)} mL ink · {Number(row.printMinutes).toFixed(1)} min</div>)}
+      {(() => {
+        // 2026-11-19: how the extra runs are treated. No dollars here; nothing is charged from this page.
+        const cost = runCostAccounting(item.runs || [], actuals as any);
+        return (
+          <>
+            {cost.internalExtra.runs ? <div style={{ color: "#92400e" }}>Shop-absorbed reprints: {cost.internalExtra.quantity} pcs in {cost.internalExtra.runs} run(s){cost.internalExtra.inkMl ? ` · ${cost.internalExtra.inkMl.toFixed(1)} mL ink` : ""}. The order total does not change.</div> : null}
+            {cost.customerPaidExtra.runs ? <div style={{ color: "#92400e" }}>Customer-paid replacement: {cost.customerPaidExtra.quantity} pcs in {cost.customerPaidExtra.runs} run(s). Nothing was charged — the owner / admin creates the sale.</div> : null}
+          </>
+        );
+      })()}
     </div>
   );
 }
@@ -335,6 +345,22 @@ function FulfillStep({ job, showFinancials }: { job: any; showFinancials: boolea
       ) : null}
 
       {/* a job that left Shipped / Picked Up (reopened for reprint, put on hold) must be shipped or handed over again */}
+      {!["shipped", "picked_up", "completed", "cancelled"].includes(status) ? (
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "grid", gap: 8 }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>Packed and waiting{job.fulfillmentState === "ready_to_ship" ? " — READY TO SHIP" : job.fulfillmentState === "pickup_ready" ? " — READY FOR PICKUP" : ""}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
+            <ActionForm jobId={job.id} intent="markFulfillmentReady" hidden={{ kind: "ship" }}>
+              {(busy) => <button type="submit" disabled={busy || job.fulfillmentState === "ready_to_ship"} style={{ ...input, fontWeight: 700, cursor: "pointer", background: "white" }}>Ready to ship</button>}
+            </ActionForm>
+            <ActionForm jobId={job.id} intent="markFulfillmentReady" hidden={{ kind: "pickup" }}>
+              {(busy) => <button type="submit" disabled={busy || job.fulfillmentState === "pickup_ready"} style={{ ...input, fontWeight: 700, cursor: "pointer", background: "white" }}>Ready for pickup</button>}
+            </ActionForm>
+          </div>
+        </div>
+      ) : null}
+      {["shipped", "picked_up"].includes(status) && job.fulfillmentSyncStatus === "disabled" && job.fulfillmentSyncError ? (
+        <div style={{ fontSize: 14, color: "#92400e" }}>Shopify: {job.fulfillmentSyncError}</div>
+      ) : null}
       {!["shipped", "picked_up", "completed", "cancelled"].includes(status) ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
           <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>

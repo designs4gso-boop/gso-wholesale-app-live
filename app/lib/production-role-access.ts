@@ -65,6 +65,8 @@ export const PRODUCTION_INTENT_ROLES: Record<string, readonly string[]> = {
   reprintItem: LEADS, // same three roles that hold recordReprint
   recordShipment: PRODUCTION_FLOOR_ROLES,
   recordPickup: PRODUCTION_FLOOR_ROLES,
+  // 2026-11-19: packed and waiting (ready to ship / ready for pickup) — a floor step, QC PASS required
+  markFulfillmentReady: PRODUCTION_FLOOR_ROLES,
   saveFinalCosts: ["owner", "manager"],
   reopenJobCost: ["owner", "manager"],
   pullPrintLogActuals: ["owner", "manager"],

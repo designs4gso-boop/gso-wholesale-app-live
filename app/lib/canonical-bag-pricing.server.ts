@@ -88,6 +88,8 @@ export type CanonicalBagJobResult =
       marginPctApplied: number;
       controllingRule: string;
       blockers: string[];
+      /** 2026-11-19: the cost lines behind totalCost (for the storefront cost snapshot). Additive; no price reads it. */
+      costLines?: Array<{ label: string; amount: number }>;
     };
 
 // Same engine call shape the Cost Calculator's product-driven path uses for
@@ -168,5 +170,6 @@ export function canonicalStockBagJob(
     marginPctApplied: commercial.marginPctApplied,
     controllingRule: commercial.controllingRule,
     blockers: run.missing,
+    costLines: run.lines.map((line) => ({ label: line.label, amount: line.amount })),
   };
 }

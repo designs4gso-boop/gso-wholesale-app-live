@@ -43,6 +43,7 @@ import { appendIntakeAudit } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
 import { PRODUCTION_STATUS_OPTIONS, isStaffProductionStatus } from "../lib/production-status-vocabulary";
+import { FULFILLMENT_STATE_LABEL, fulfillmentSyncDecision, fulfillmentSyncNote, readyMarkVerdict } from "../lib/fulfillment-sync";
 import { PICKUP_ALREADY_RECORDED, REPRINT_REASONS, SHIPMENT_ALREADY_RECORDED, formatShipDate, fulfillmentQcGuardApplies, isReprintReason, parsePickupInput, parseShipmentInput, reprintReasonLabel, savedPickupForJob, savedShipmentForJob, shipmentSummary, statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
 import { permissionDeniedResponse, resolveStaffAccess, type StaffPermission } from "../lib/staff-roles.server";
 import { applyStockMovement } from "../lib/inventory-stock.server";
@@ -975,6 +976,28 @@ export async function action({ request }: { request: Request }) {
   // step). Details live in the ProductionJob ship* / pickedUp* columns plus a
   // ProductionJobEvent audit row. Shipping
   // cost is exactly what was entered — never invented.
+  // 2026-11-19: "packed and waiting". Sets only the internal fulfilment state — the job
+  // status, the shipment / pickup record and Shopify are untouched. QC PASS on every
+  // item is required, exactly as for shipping. Marking twice changes nothing.
+  if (intent === "markFulfillmentReady") {
+    const jobId = String(formData.get("jobId") || "");
+    const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
+    if (!job) return Response.json({ ok: false, message: "Job not found." }, { status: 404 });
+    const verdict = readyMarkVerdict(job as any, formData.get("kind"));
+    if (!verdict.ok) return Response.json({ ok: false, message: verdict.message }, { status: 400 });
+    if (verdict.unchanged) return Response.json({ ok: true, message: `Already marked ${FULFILLMENT_STATE_LABEL[verdict.state].toLowerCase()}.` });
+    const [qcItems, qcEvents] = await Promise.all([
+      db.productionJobItem.findMany({ where: { shop, jobId }, select: { id: true, itemTicket: true, productTitle: true } }),
+      db.productionJobEvent.findMany({ where: { shop, jobId, eventType: { in: ["qc_result", "production_run_qc_passed", "production_run_qc_hold", "production_run_qc_failed"] } }, orderBy: { createdAt: "asc" }, select: { eventType: true, message: true, oldValue: true, newValue: true, createdAt: true } }),
+    ]);
+    const qcVerdict = evaluateQcForCompletion(qcItems, qcEvents as any);
+    if (!qcVerdict.ok) return Response.json({ ok: false, message: qcVerdict.message }, { status: 400 });
+    const marked = await db.productionJob.updateMany({ where: { shop, id: jobId, status: job.status }, data: { fulfillmentState: verdict.state, fulfillmentReadyAt: new Date(), fulfillmentReadyBy: staffAccess.actor || null } });
+    if (!marked.count) return Response.json({ ok: false, message: "This job changed while it was being marked. Refresh and try again." }, { status: 409 });
+    await db.productionJobEvent.create({ data: { shop, jobId, eventType: "fulfillment_ready", message: `${FULFILLMENT_STATE_LABEL[verdict.state]}.`, oldValue: (job as any).fulfillmentState || null, newValue: verdict.state, createdBy: staffAccess.actor || null } });
+    return Response.json({ ok: true, message: `Marked ${FULFILLMENT_STATE_LABEL[verdict.state].toLowerCase()}.` });
+  }
+
   if (intent === "recordShipment" || intent === "recordPickup") {
     const jobId = String(formData.get("jobId") || "");
     const job = await db.productionJob.findFirst({ where: { shop, id: jobId } });
@@ -995,6 +1018,10 @@ export async function action({ request }: { request: Request }) {
       if (!verdict.ok) return Response.json({ ok: false, message: verdict.message }, { status: 400 });
     }
     const actor = staffAccess.actor;
+    // 2026-11-19: Shopify is NOT updated from here (the app holds no fulfilment scope). The decision and
+    // its reason are stored on the job so nobody assumes the Shopify order was marked fulfilled.
+    const shopifySync = fulfillmentSyncDecision(job as any, { env: process.env, grantedScopes: (auth.session as any)?.scope || null, adapterInstalled: false });
+    const shopifySyncNote = fulfillmentSyncNote(shopifySync.status, shopifySync.reason);
     if (intent === "recordShipment") {
       const parsed = parseShipmentInput({ carrier: formData.get("carrier"), trackingNumber: formData.get("trackingNumber"), packageCount: formData.get("packageCount"), shipDate: formData.get("shipDate"), actualShippingCost: formData.get("actualShippingCost") });
       if (!parsed.ok) return Response.json({ ok: false, message: parsed.errors.join(" ") }, { status: 400 });
@@ -1014,6 +1041,9 @@ export async function action({ request }: { request: Request }) {
             shipCarrier: record.carrier,
             shipTrackingNumber: record.trackingNumber,
             shipPackageCount: record.packageCount,
+            fulfillmentState: "shipped",
+            fulfillmentSyncStatus: shopifySync.status,
+            fulfillmentSyncError: shopifySync.reason,
             ...(record.actualShippingCost != null && !job.actualCostFinalized ? { actualShippingCost: record.actualShippingCost } : {}),
           },
         });
@@ -1023,7 +1053,7 @@ export async function action({ request }: { request: Request }) {
         return true;
       });
       if (!shippedNow) return Response.json({ ok: false, message: `${SHIPMENT_ALREADY_RECORDED} — this job changed while the shipment was being saved. Refresh to see the saved shipment.` }, { status: 409 });
-      return Response.json({ ok: true, message: `Shipment recorded. ${shipmentSummary(record)} Mark the job Completed when done.` });
+      return Response.json({ ok: true, message: `Shipment recorded. ${shipmentSummary(record)} Mark the job Completed when done.${shopifySyncNote ? ` ${shopifySyncNote}` : ""}` });
     }
     const parsed = parsePickupInput({ pickedUpAt: formData.get("pickedUpAt"), pickedUpBy: formData.get("pickedUpBy"), note: formData.get("pickupNote") });
     if (!parsed.ok) return Response.json({ ok: false, message: parsed.errors.join(" ") }, { status: 400 });
@@ -1033,14 +1063,14 @@ export async function action({ request }: { request: Request }) {
     const pickedUpNow = await db.$transaction(async (tx: any) => {
       const pickupRows = await tx.productionJob.updateMany({
         where: { shop, id: jobId, status: job.status },
-        data: { status: "picked_up", pickedUpAt: new Date(parsed.record.pickedUpAt), pickedUpBy: parsed.record.pickedUpBy },
+        data: { status: "picked_up", pickedUpAt: new Date(parsed.record.pickedUpAt), pickedUpBy: parsed.record.pickedUpBy, fulfillmentState: "picked_up", fulfillmentSyncStatus: shopifySync.status, fulfillmentSyncError: shopifySync.reason },
       });
       if (!pickupRows.count) return false;
       await tx.productionJobEvent.create({ data: { shop, jobId, eventType: "picked_up", message: `Picked up ${parsed.record.pickedUpAt}${parsed.record.pickedUpBy ? ` by ${parsed.record.pickedUpBy}` : ""}.`, oldValue: job.status, newValue: JSON.stringify(parsed.record), createdBy: actor || null } });
       return true;
     });
     if (!pickedUpNow) return Response.json({ ok: false, message: `${PICKUP_ALREADY_RECORDED} — this job changed while the pickup was being saved. Refresh to see the saved pickup.` }, { status: 409 });
-    return Response.json({ ok: true, message: "Pickup recorded. Mark the job Completed when done." });
+    return Response.json({ ok: true, message: `Pickup recorded. Mark the job Completed when done.${shopifySyncNote ? ` ${shopifySyncNote}` : ""}` });
   }
 
   if (intent === "updateJob") {

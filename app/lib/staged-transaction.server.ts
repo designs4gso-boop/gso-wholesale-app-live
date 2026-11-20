@@ -93,6 +93,11 @@ export type StageInput = {
   balance?: number | null;
   externalStatus?: string | null;
   lines: unknown;
+  // 2026-11-19 provider facts (read-only adapter). Optional: an older caller stages without them.
+  provider?: string | null;
+  transactionType?: string | null;
+  rawReference?: string | null;
+  sourceUpdatedAt?: Date | null;
 };
 
 /**
@@ -114,6 +119,10 @@ export async function stageTransaction(dbClient: any, input: StageInput): Promis
     totalAmount: numberOrNull(input.totalAmount),
     balance: numberOrNull(input.balance),
     externalStatus: text(input.externalStatus, 60) || null,
+    ...(input.provider ? { provider: text(input.provider, 40) } : {}),
+    ...(input.transactionType ? { transactionType: text(input.transactionType, 40) } : {}),
+    ...(input.rawReference ? { rawReference: text(input.rawReference, 200) } : {}),
+    ...(input.sourceUpdatedAt ? { sourceUpdatedAt: input.sourceUpdatedAt } : {}),
   };
   const existing = await dbClient.stagedTransaction.findUnique({ where });
   if (existing) {
@@ -206,6 +215,27 @@ export async function releaseStagedTransaction(
   }
   await dbClient.stagedTransaction.update({ where: { id: staged.id }, data: { status: "released", releasedJobId: result.job.id, releasedBy: actor, releasedAt: new Date() } });
   return { ok: true, job: result.job, created: result.created, message: `${label} released to production as ${result.job.jobTicket} (${(result.job.items || []).length} item(s)).` };
+}
+
+/**
+ * A PERSON links the outside customer to a CRM account (or clears the link).
+ * Never automatic and never by a similar name: the account must exist in this
+ * shop. How customers SHOULD be mapped is the admin's rule; this only stores
+ * the choice a person made.
+ */
+export async function linkStagedCustomer(dbClient: any, input: { shop: string; id: string; accountId: string | null; actor: string }): Promise<{ ok: boolean; message: string }> {
+  if (!text(input.actor, 120)) return { ok: false, message: "A signed-in, authorized person is required." };
+  const staged = await dbClient.stagedTransaction.findFirst({ where: { shop: input.shop, id: input.id } });
+  if (!staged) return { ok: false, message: "The transaction was not found." };
+  const accountId = text(input.accountId, 60);
+  if (!accountId) {
+    await dbClient.stagedTransaction.update({ where: { id: staged.id }, data: { accountId: null, mappingState: "unmapped" } });
+    return { ok: true, message: "Customer link cleared." };
+  }
+  const account = await dbClient.crmAccount.findFirst({ where: { shop: input.shop, id: accountId } });
+  if (!account) return { ok: false, message: "The customer account was not found." };
+  await dbClient.stagedTransaction.update({ where: { id: staged.id }, data: { accountId: account.id, mappingState: "customer_mapped" } });
+  return { ok: true, message: "Customer linked." };
 }
 
 /** Mark a staged transaction as not production work. Nothing is deleted; QuickBooks is not touched. */

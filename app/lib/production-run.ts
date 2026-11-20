@@ -246,3 +246,65 @@ export function actualsByRun(runs: RunRow[], entries: Array<{ sourceJobName?: st
   }
   return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([, bucket]) => bucket);
 }
+
+/**
+ * 2026-11-19 (night) — RUN COST ACCOUNTING. What each run cost the shop on the
+ * press, and how it is treated:
+ *   original             the cost of the order itself
+ *   internal_extra       a reprint / remake the shop absorbs (internal or warranty):
+ *                        it adds production cost and never adds revenue
+ *   customer_paid_extra  a replacement the customer pays for: it adds production
+ *                        cost; the sale is created by the owner / admin — NOTHING
+ *                        is charged or invoiced by the ERP
+ * The ordered quantity, the selling price and the original run are never changed
+ * by a later run. Quantities are what the press reported (mL, minutes); dollars
+ * stay in the owner's Actual Costs view. Pure.
+ */
+export type RunCostClass = "original" | "internal_extra" | "customer_paid_extra";
+export type RunCostRow = {
+  runNumber: number | null; label: string; kind: string; quantity: number | null; reasonCode: string | null; chargeType: string | null;
+  costClass: RunCostClass; inkMl: number; printMinutes: number; sqft: number; pressResult: boolean; treatment: string;
+};
+export type RunCostAccounting = {
+  rows: RunCostRow[];
+  original: { inkMl: number; printMinutes: number };
+  internalExtra: { runs: number; quantity: number; inkMl: number; printMinutes: number };
+  customerPaidExtra: { runs: number; quantity: number; inkMl: number; printMinutes: number };
+  /** always "none": no run changes what the customer was charged */
+  revenueChange: "none";
+};
+
+export const RUN_COST_TREATMENT: Record<RunCostClass, string> = {
+  original: "Cost of the order.",
+  internal_extra: "Extra production cost absorbed by the shop. Revenue unchanged.",
+  customer_paid_extra: "Extra production cost. Customer-paid: the owner / admin creates the sale — the ERP charges nothing.",
+};
+
+export function runCostClassOf(run: { kind?: string | null; chargeType?: string | null }): RunCostClass {
+  if (!run.kind || run.kind === "original") return "original";
+  return run.chargeType === "customer_paid" ? "customer_paid_extra" : "internal_extra";
+}
+
+export function runCostAccounting(runs: RunRow[], actuals: RunActuals[]): RunCostAccounting {
+  const rows: RunCostRow[] = [];
+  const seen = new Set<number>();
+  for (const run of [...(runs || [])].sort((a, b) => Number(a.runNumber) - Number(b.runNumber))) {
+    const actual = (actuals || []).find((row) => row.runNumber === Number(run.runNumber)) || null;
+    const costClass = runCostClassOf(run);
+    seen.add(Number(run.runNumber));
+    rows.push({
+      runNumber: Number(run.runNumber), label: `Run ${run.runNumber} — ${runKindLabel(run.kind)}`, kind: run.kind, quantity: Number(run.quantity) || 0,
+      reasonCode: run.reasonCode || null, chargeType: run.kind === "original" ? null : run.chargeType || "internal", costClass,
+      inkMl: actual ? actual.inkMl : 0, printMinutes: actual ? actual.printMinutes : 0, sqft: actual ? actual.sqft : 0, pressResult: Boolean(actual), treatment: RUN_COST_TREATMENT[costClass],
+    });
+  }
+  // press results with no recorded run (the original before any reprint, or an unrecorded reprint) keep their own line
+  for (const actual of actuals || []) {
+    if (actual.runNumber !== null && seen.has(actual.runNumber)) continue;
+    const costClass: RunCostClass = actual.kind === "original" ? "original" : "internal_extra";
+    rows.push({ runNumber: actual.runNumber, label: actual.label, kind: actual.kind, quantity: null, reasonCode: null, chargeType: null, costClass, inkMl: actual.inkMl, printMinutes: actual.printMinutes, sqft: actual.sqft, pressResult: true, treatment: RUN_COST_TREATMENT[costClass] });
+  }
+  const sum = (costClass: RunCostClass) => rows.filter((row) => row.costClass === costClass).reduce((total, row) => ({ runs: total.runs + 1, quantity: total.quantity + (row.quantity || 0), inkMl: total.inkMl + row.inkMl, printMinutes: total.printMinutes + row.printMinutes }), { runs: 0, quantity: 0, inkMl: 0, printMinutes: 0 });
+  const original = sum("original");
+  return { rows, original: { inkMl: original.inkMl, printMinutes: original.printMinutes }, internalExtra: sum("internal_extra"), customerPaidExtra: sum("customer_paid_extra"), revenueChange: "none" };
+}

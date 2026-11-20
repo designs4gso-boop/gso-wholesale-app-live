@@ -52,6 +52,27 @@ export const PRODUCT_FAMILY_SALES_RULES: ProductFamilySalesRule[] = [
       "Allow intake and quote prep only until recipe, margin, and quote-readiness are reviewed.",
   },
   {
+    // 2026-11-19: Stock Bags had no rule, so "Stock Bags" fell through to custom-other (no MOQ, quote prep off).
+    key: "stock-bags",
+    label: "Stock Bags",
+    aliases: ["Stock Bags", "Stock Bag", "stock_bag_4x5"],
+    officialMoq: 50,
+    quotePrepAllowed: true,
+    manualReviewRequired: true,
+    agentFirmPricingAllowed: false,
+    agentSafeStage: "intake_quote_prep",
+    salesRules: [
+      "Official MOQ: 50 (owner rule; matches the canonical adapter STOCK_BAG_MOQ)",
+      "Premade artwork — no design tool; an optional logo / QR upload only",
+      "Quote prep allowed",
+      "Staff review required before firm quote/order",
+    ],
+    customerSafeSummary:
+      "Stock bag orders start at 50 units. Stock bags use our premade artwork; you can add your logo or QR code.",
+    staffNotes:
+      "Premade artwork only. Custom artwork is a Sticker Bag or a DTP pouch, not a Stock Bag.",
+  },
+  {
     key: "dtp-pouches",
     label: "DTP Pouches",
     aliases: ["DTP Pouches", "DTP Bags", "Direct To Pouch", "Custom Mylar"],
@@ -222,6 +243,9 @@ export function productFamilySalesRuleFor(value: string): ProductFamilySalesRule
 
   if (text.includes("jar")) return PRODUCT_FAMILY_SALES_RULES.find((rule) => rule.key === "jars")!;
   if (text.includes("sticker") && text.includes("bag")) return PRODUCT_FAMILY_SALES_RULES.find((rule) => rule.key === "sticker-bags")!;
+  if (text.includes("stock") && text.includes("bag")) return PRODUCT_FAMILY_SALES_RULES.find((rule) => rule.key === "stock-bags")!;
+  // 2026-11-19: a die-cut / shaped pouch is its own family (MOQ 2,500). It used to match "pouch" first and get the 1,000 MOQ.
+  if ((text.includes("die") || text.includes("shape")) && (text.includes("pouch") || text.includes("bag"))) return PRODUCT_FAMILY_SALES_RULES.find((rule) => rule.key === "die-cut-shaped-bags")!;
   if (text.includes("dtp") || text.includes("pouch")) return PRODUCT_FAMILY_SALES_RULES.find((rule) => rule.key === "dtp-pouches")!;
   if (text.includes("box")) return PRODUCT_FAMILY_SALES_RULES.find((rule) => rule.key === "boxes")!;
   if (text.includes("label") || text.includes("sticker")) return PRODUCT_FAMILY_SALES_RULES.find((rule) => rule.key === "labels-stickers")!;

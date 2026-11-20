@@ -285,6 +285,9 @@ export type BoardCard = {
   holdReason: string;
   finish: string;
   reorder: boolean;
+  // 2026-11-19 (night): the run on the press right now, and packed-and-waiting
+  activeRunLabel: string;
+  fulfillmentLabel: string;
 };
 
 /**
@@ -366,7 +369,21 @@ function boardCardExtras(job: any, items: any[]) {
     holdReason: holdReasonOf(job),
     finish: (Array.from(new Set(items.map((item: any) => String(item?.selectedFinish || "").trim()).filter(Boolean))) as string[]).slice(0, 3).join(", "),
     reorder: items.some((item: any) => Boolean(item?.reorderSourceItemId)),
+    activeRunLabel: activeRunLabelOf(items),
+    fulfillmentLabel: job?.fulfillmentState === "ready_to_ship" ? "Ready to ship" : job?.fulfillmentState === "pickup_ready" ? "Ready for pickup" : "",
   };
+}
+
+/**
+ * The reprint / remake that is open right now, in floor words:
+ * "Run 2 · Reprint · 25 pcs". Empty while only the original run exists.
+ */
+export function activeRunLabelOf(items: any[]): string {
+  const open = (items || []).flatMap((item: any) => ((item?.runs || []) as any[]).filter((run) => run?.status === "open" && run?.kind && run.kind !== "original"));
+  if (!open.length) return "";
+  const first = open[0];
+  const kind = first.kind === "remake" ? "Remake" : "Reprint";
+  return `Run ${first.runNumber} · ${kind} · ${Number(first.quantity) || 0} pcs${open.length > 1 ? ` (+${open.length - 1} more)` : ""}`;
 }
 
 export type SimpleBoard = {
