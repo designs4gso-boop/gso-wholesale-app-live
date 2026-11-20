@@ -48,7 +48,9 @@ describe("AGENT_ERROR_CODE_EXPLANATIONS", () => {
   });
 
   it("documents exactly the known codes (no stale or undocumented entries)", () => {
-    expect(Object.keys(AGENT_ERROR_CODE_EXPLANATIONS).sort()).toEqual([...INTAKE_ERROR_CODES].sort());
+    // 2026-11-20: + the four codes written by the signed proposal endpoint (/api/agent/proposals)
+    const PROPOSAL_ERROR_CODES = ["missing_proposal_scope", "invalid_proposal", "agent_not_permitted", "entity_not_found"];
+    expect(Object.keys(AGENT_ERROR_CODE_EXPLANATIONS).sort()).toEqual([...INTAKE_ERROR_CODES, ...PROPOSAL_ERROR_CODES].sort());
   });
 });
 

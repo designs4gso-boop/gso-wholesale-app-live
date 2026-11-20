@@ -111,6 +111,12 @@ export default function NewProductionJob() {
               </label>
             ) : null}
           </div>
+          {/* 2026-11-20: the server always accepted more items; this simple form never offered the box, so a
+              production lead could not start a multi-item job. One line = one item ticket on the same job. */}
+          <label style={label}>More items on this job (optional) — one per line: name | quantity
+            <textarea name="moreItems" rows={3} placeholder={"SHORTCAKES pouch | 128\nMIXED BERRIES pouch | 128"} style={{ ...input, minHeight: 84, padding: 12 }} />
+          </label>
+          <div style={{ fontSize: 13, color: "#6b7280" }}>Each line gets its own item ticket, with the product type, finish and printer chosen above. Leave the quantity off to use the quantity above. Up to 50 items.</div>
           <label style={label}>Notes for production (optional)<textarea name="itemNotes" rows={2} style={{ ...input, minHeight: 72, padding: 12 }} /></label>
           <details>
             <summary style={{ cursor: "pointer", fontSize: 13, color: "#6b7280", minHeight: 32 }}>More details (size, SKU, reference, contact)</summary>

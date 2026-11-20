@@ -1872,6 +1872,7 @@ model CrmAccount {
   phone              String?
   shopifyCustomerId  String?
   externalCustomerId String? // QuickBooks customer id — set only by a person
+  source             String? // 2026-11-20: where the customer came from (lead source, quote, job, manual)
   notes              String?
   active             Boolean  @default(true)
   createdBy          String?
@@ -1917,6 +1918,19 @@ model CrmLead {
   @@index([shop, accountId])
   @@index([shop, quoteId])
   @@index([shop, email])
+}
+
+/// Append-only customer history and notes (2026-11-20, migration 20261120090000).
+model CrmAccountEvent {
+  id        String   @id @default(cuid())
+  shop      String
+  accountId String
+  event     String
+  detail    String?
+  actor     String?
+  createdAt DateTime @default(now())
+
+  @@index([shop, accountId, createdAt])
 }
 
 /// Append-only lead history.

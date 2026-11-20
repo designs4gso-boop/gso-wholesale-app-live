@@ -20,7 +20,7 @@ export function redactJobFinancials(job: any) {
     actuals: job.actuals ? { entryCount: job.actuals.entryCount, actualSqft: job.actuals.actualSqft, actualInkMl: job.actuals.actualInkMl, actualPrintMinutes: job.actuals.actualPrintMinutes } : null,
     writebackPreview: null, printLogApplied: null,
     finalizeGate: job.finalizeGate ? { ...job.finalizeGate, varianceDollars: null, variancePct: null, estimatedTotalCost: null } : null,
-    items: (job.items || []).map((item: any) => ({ ...item, unitPrice: null, unitCost: null, costSnapshot: null, priceSnapshot: null })),
+    items: (job.items || []).map((item: any) => ({ ...item, unitPrice: null, unitCost: null, costSnapshot: null, priceSnapshot: null, runCosts: null })), // runCosts: 2026-11-20 dollars per run
     // 2026-11-15: an imported print-log row keeps its provenance in `notes` (ink $ / mL, machine $ / hour) — never sent to staff.
     materialUsages: (job.materialUsages || []).map((usage: any) => ({ ...usage, costPerUnit: null, totalCost: null, ...(String(usage.source || "") === "print_log" ? { notes: null } : {}) })),
     inventoryMovements: (job.inventoryMovements || []).map((movement: any) => ({ ...movement, costPerUnit: null, costImpact: null })),

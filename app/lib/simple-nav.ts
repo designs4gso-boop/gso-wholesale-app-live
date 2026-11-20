@@ -19,6 +19,8 @@ export const CLASSIC_PRODUCTION_HREF = "/app/erp/production";
 export const REORDER_HREF = "/app/erp/reorder";
 export const RELEASE_QUEUE_HREF = "/app/erp/release-queue";
 export const CRM_HREF = "/app/erp/crm";
+export const CUSTOMERS_HREF = "/app/erp/customers";
+export const customerHref = (accountId: string) => `${CUSTOMERS_HREF}/${encodeURIComponent(accountId)}`;
 export const AGENT_APPROVALS_HREF = "/app/erp/agent-approvals";
 export const crmLeadHref = (leadId: string) => `${CRM_HREF}/${encodeURIComponent(leadId)}`;
 export const jobWorkspaceHref = (jobId: string) => `/app/erp/production-job/${jobId}`;
@@ -42,6 +44,8 @@ export function navForRole(role: SimpleNavRole | string, options: { viewFinancia
         { label: "Quotes & Customers", href: "/app/quotes" },
         // 2026-11-19: internal CRM — leads, follow-ups, conversion to a customer / draft quote (owner, manager, sales)
         { label: "Leads", href: CRM_HREF },
+        // 2026-11-20: customer accounts with their leads, quotes, jobs and reorders (owner, manager, sales)
+        { label: "Customers", href: CUSTOMERS_HREF },
         // 2026-11-19: a reorder is a new sale (new quote -> new job); owner, manager, sales
         { label: "Reorder a Past Item", href: REORDER_HREF },
         // staged business transactions waiting for release to production (owner / manager; the server enforces it)

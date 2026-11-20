@@ -2,6 +2,19 @@
 
 ## CURRENT TASK — 2026-11-18 (overnight): LAUNCH-READINESS AUDIT COMPLETE. The single authoritative status is `docs/GSO_ERP_LAUNCH_READINESS_AUDIT.md` (overall 60%). Print Intake Patches A–E COMPLETE and live. Patch F code READY (JobInfo clear ink, sync v1.3 with cutoff, runtime prepared) — first ERP-linked Mimaki result still to be verified; Roland MANUAL CSV. Shared press routing now follows restored Mimaki gloss. Security gaps from the audit fixed and deployed. Patch G (retire test jobs) = owner action. Biggest open item is ADOPTION: real work is not being entered as jobs.
 
+### SOFTWARE PUSH 2026-11-20 — software 81%, live 40%. Authoritative status: first section of `docs/GSO_ERP_LAUNCH_READINESS_AUDIT.md`. Freezes unchanged (application timings, QuickBooks rules, agent external actions).
+- **Customers:** `app/lib/crm-accounts.server.ts`; routes `/app/erp/customers`, `/app/erp/customers/:id`; `CrmAccount.source`, `CrmAccountEvent` (migration `20261120090000_add_crm_account_history`, additive). Quotes / jobs are matched to a customer at read time by exact e-mail or exact company (`accountMatchConditions`) — nothing is stored on them.
+- **Agent proposals:** `POST /api/agent/proposals` (`app/routes/api.agent.proposals.tsx`). Scope `proposal:create` is explicit (`credentialAllowsProposals`); Agent Security has a checkbox when creating a credential. `agentMayPropose` / `agentProposalProfiles` in `ops/agent-registry.ts` are the rule for who may propose what.
+- **Idempotency fixes:** reorder quote keyed on `requestId` (`reorderRequestKey`, marker in quote notes, advisory lock); `claimForExecution` makes APPROVED → EXECUTING a compare-and-set.
+- **New Job** (`app.erp.production-new.tsx`) now posts `moreItems`.
+- **Storefront:** `zakekeDesignForProductType` (Stock Bags never carry a design); non-launch jars return `active: false`; configurator sync writes `STOCK_BAG_MOQ`.
+- **Cost snapshot:** stickers captured via `stickerCostOf` (cost kept off the price result object); `NOT_CAPTURED_REASON` for jars / DTP.
+- **Run cost dollars:** `app/lib/run-cost-dollars.server.ts` — ink + press time only, attached to items only when `financials.show`.
+- **Release:** missing quantity is refused, never defaulted to 1.
+- **Assist:** `jobAssistLine` in `simple-production.ts`.
+- **Docs:** `docs/GSO_FIRST_REAL_JOB_CHECKLIST.md`, `docs/GSO_PRICING_ENGINE_DECISION.md`.
+- **Tests added:** `customers-agent-proposals`, `retry-idempotency`, `ui-and-permission-smoke`, `storefront-reviewed-fixes`, `pricing-engine-comparison` (all `-2026-11-20`).
+
 ### READINESS JUMP 2026-11-19 (late night) — software 76%, live 40%. Authoritative status: first section of `docs/GSO_ERP_LAUNCH_READINESS_AUDIT.md`. Freezes still in force: application timings (owner), QuickBooks business rules (Raquel), agent external actions (approval-only).
 - **Access:** `app/lib/route-access.ts` is the one table of who may open each admin route; `route-access.server.ts` enforces it. Quotes needs owner / manager / sales (loader and every action). A route added to `app/routes.ts` with no table entry fails `tests/readiness-jump-access-crm-approvals-2026-11-19.test.ts`.
 - **CRM:** `CrmAccount`, `CrmLead`, `CrmLeadEvent`; `app/lib/crm.ts` (vocabulary), `crm.server.ts` (service), routes `/app/erp/crm` and `/app/erp/crm/:id`. Sends nothing. Conversions are idempotent.

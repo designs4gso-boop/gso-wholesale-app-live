@@ -116,8 +116,13 @@ export async function action({ request }: { request: Request }) {
       posted.push({ ...line, classification: classification === "non_production" ? "non_production" : "needs_review", productionItems: [] });
       continue;
     }
-    const parsed = parseAdditionalManualItems(String(form.get(`items_${index}`) || ""), { ...base, quantity: Math.max(1, Math.floor(Number(line.quantity) || 1)) });
+    // 2026-11-20: a missing quantity is never guessed. An item with no typed quantity takes the invoice
+    // line's quantity ONLY when that line has a whole quantity of its own; otherwise the reviewer must type it.
+    const lineQuantity = Number.isInteger(Number(line.quantity)) && Number(line.quantity) > 0 ? Number(line.quantity) : 0;
+    const parsed = parseAdditionalManualItems(String(form.get(`items_${index}`) || ""), { ...base, quantity: lineQuantity });
     if (!parsed.ok) return Response.json({ ok: false, id, message: `Line ${index + 1}: ${parsed.reason}` });
+    const noQuantity = parsed.items.find((item) => !(Number(item.quantity) > 0));
+    if (noQuantity) return Response.json({ ok: false, id, message: `Line ${index + 1}: type a quantity for "${noQuantity.productTitle}" (name | quantity). The invoice line has no whole quantity to use.` });
     if (!parsed.items.length) return Response.json({ ok: false, id, message: `Line ${index + 1}: list the production items for this line (one per line: name | quantity).` });
     // 2026-11-19 REORDER PICKER: a person may mark an item as a reorder of an earlier item. The pick is
     // tied to the item it was made for; if the item list changed since, the pick is refused (never guessed).

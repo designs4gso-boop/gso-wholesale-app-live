@@ -23,6 +23,10 @@ Every job has one **job ticket** and one **item ticket** for each thing being ma
 
 The tickets never change — not for a revision, a reprint or a remake.
 
+To start a job yourself: **Production → New Job**. More than one thing to make? List the others under
+*More items on this job*, one per line as `name | quantity` — each line gets its own item ticket.
+For the very first real job, follow `docs/GSO_FIRST_REAL_JOB_CHECKLIST.md`.
+
 Open the job from the **Production Board**. The job page shows the **job folder name**, every item
 ticket, the finish and printer each item needs, and whether its files have arrived. Each one has a
 **Copy** button.

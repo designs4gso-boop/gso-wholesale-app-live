@@ -152,6 +152,10 @@ export function releaseReadiness(staged: { status: string; customerName?: string
   const productionWithoutItems = lines.filter((line) => line.classification === "production" && !(line.productionItems || []).length);
   if (productionWithoutItems.length) reasons.push(`${productionWithoutItems.length} production line(s) have no production items listed.`);
   if (!inReview.length && !items.length) reasons.push("No line is marked as production work.");
+  // 2026-11-20: nothing ambiguous reaches production — every item needs a name and a whole quantity above zero
+  const badQuantity = items.filter((item: any) => !(Number.isInteger(Number(item?.quantity)) && Number(item.quantity) > 0));
+  if (badQuantity.length) reasons.push(`${badQuantity.length} production item(s) have no quantity.`);
+  if (items.some((item: any) => !text(item?.productTitle))) reasons.push("A production item has no name.");
   if (items.length > MANUAL_JOB_MAX_ITEMS) reasons.push(`A job can hold at most ${MANUAL_JOB_MAX_ITEMS} items — split the release.`);
   return reasons.length ? { ok: false, reasons } : { ok: true, items };
 }

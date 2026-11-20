@@ -73,6 +73,10 @@ export class PrismaActionIntentRepository implements ActionIntentRepository {
       executionResult: e.executionResult, externalReference: e.externalReference, error: e.error, detail: e.detail, payloadKeys: e.payloadKeys as any, at: new Date(e.at),
     } });
   }
+  async claimForExecution(id: string) {
+    const claimed = await this.model.updateMany({ where: { id, status: "APPROVED" }, data: { status: "EXECUTING" } });
+    return Number(claimed?.count) > 0;
+  }
   async listAudit(intentId: string) {
     const rows = await this.auditModel.findMany({ where: { intentId }, orderBy: { at: "asc" } });
     return rows.map(auditFromRow);

@@ -25,7 +25,7 @@ import { REORDER_HREF, SIMPLE_BOARD_HREF, classicJobHref, jobWorkspaceHref } fro
 import { RUN_CHARGE_TYPES, RUN_KINDS, itemFileState, itemRunSummary, runChargeLabel, runKindLabel, runCostAccounting } from "../lib/production-run";
 import { reprintReasonLabel } from "../lib/production-fulfillment";
 import { formatDueDate } from "../lib/business-date";
-import { isJobOverdue, jobWorkspaceView, showsMaterialUse, workspaceItemQc, toMaterialOption, type JobStepKey, type WorkspaceStep } from "../lib/simple-production";
+import { isJobOverdue, jobWorkspaceView, showsMaterialUse, workspaceItemQc, toMaterialOption, type JobStepKey, type WorkspaceStep, jobAssistLine } from "../lib/simple-production";
 
 export async function loader(args: { request: Request; params: { id?: string } }) {
   const raw: any = await productionLoader({ request: args.request });
@@ -175,6 +175,16 @@ function ItemRuns({ item }: { item: any }) {
         </div>
       ))}
       {actuals.map((row) => <div key={row.label} style={{ color: "#374151" }}>Press result — {row.label}: {Number(row.inkMl).toFixed(1)} mL ink · {Number(row.printMinutes).toFixed(1)} min</div>)}
+      {item.runCosts?.runs?.length ? (
+        <div style={{ borderTop: "1px solid #fde68a", paddingTop: 4, display: "grid", gap: 2 }}>
+          {(item.runCosts.runs as any[]).map((row) => (
+            <div key={row.label} style={{ color: "#374151" }}>Press cost — {row.label}: ${Number(row.knownCost).toFixed(2)} (ink {row.inkCost === null ? "not known" : `$${Number(row.inkCost).toFixed(2)}`}{row.inkIncomplete && row.inkCost !== null ? ", incomplete" : ""} · press time ${Number(row.pressCost).toFixed(2)})</div>
+          ))}
+          {item.runCosts.shopAbsorbed ? <div style={{ fontWeight: 700 }}>Reprints absorbed by the shop: ${Number(item.runCosts.shopAbsorbed).toFixed(2)} press cost. No revenue.</div> : null}
+          {item.runCosts.customerPaid ? <div style={{ fontWeight: 700 }}>Customer-paid replacement: ${Number(item.runCosts.customerPaid).toFixed(2)} press cost. Nothing was charged.</div> : null}
+          <div style={{ fontSize: 12, color: "#6b7280" }}>Partial cost: ink and press time only. Material, labour and finishing are not included.</div>
+        </div>
+      ) : null}
       {(() => {
         // 2026-11-19: how the extra runs are treated. No dollars here; nothing is charged from this page.
         const cost = runCostAccounting(item.runs || [], actuals as any);
@@ -851,6 +861,7 @@ export default function JobWorkspace() {
           <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1 }}>{view.next.tone === "done" ? "STATUS" : "NEXT STEP"}</div>
           <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.2 }}>{view.next.text}</div>
           {view.next.detail ? <div style={{ fontSize: 15, marginTop: 4 }}>{view.next.detail}</div> : null}
+          {jobAssistLine(job) ? <div style={{ fontSize: 14, marginTop: 6, opacity: 0.9 }}>{jobAssistLine(job)}</div> : null}
         </div>
 
         <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8 }}>

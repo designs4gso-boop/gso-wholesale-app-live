@@ -109,7 +109,7 @@ export async function convertLeadToAccount(dbClient: any, input: { shop: string;
   if (lead.accountId) return { ok: true, message: "This lead already has a customer account.", accountId: lead.accountId, created: false };
   const existing = lead.email ? await dbClient.crmAccount.findFirst({ where: { shop: input.shop, email: lead.email, active: true } }) : null;
   const account = existing || await dbClient.crmAccount.create({
-    data: { shop: input.shop, company: lead.company, contactName: lead.contactName, email: lead.email, phone: lead.phone, active: true, createdBy: text(input.actor, 120) || null },
+    data: { shop: input.shop, company: lead.company, contactName: lead.contactName, email: lead.email, phone: lead.phone, active: true, source: lead.source || "lead", createdBy: text(input.actor, 120) || null },
   });
   await dbClient.crmLead.update({ where: { id: lead.id }, data: { accountId: account.id } });
   await logEvent(dbClient, lead, "account_linked", input.actor, { detail: existing ? "Linked to the existing account with the same email." : "Customer account created." });

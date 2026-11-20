@@ -248,7 +248,7 @@ describe("TRACK F — storefront orders keep the cost basis in force when the jo
     // only job CREATION stamps: there is no code that re-stamps an existing item
     const service = src("app/lib/production-job-source.server.ts");
     expect(service.split("applyStorefrontCostSnapshots(").length - 1).toBe(1);
-    expect(service).toContain("payload.items = applyStorefrontCostSnapshots(payload.items as any[], storefrontBagInputs) as any;");
+    expect(service).toContain("payload.items = applyStorefrontCostSnapshots(payload.items as any[], storefrontBagInputs, new Date(), storefrontStickerInputs) as any;"); // 2026-11-20: + sticker inputs
     expect(service.indexOf("storefrontBagInputs = await resolveCanonicalBagInputs(dbClient, shop);")).toBeLessThan(service.indexOf("dbClient.$transaction"));
   });
 

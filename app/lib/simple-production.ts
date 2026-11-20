@@ -386,6 +386,32 @@ export function activeRunLabelOf(items: any[]): string {
   return `Run ${first.runNumber} · ${kind} · ${Number(first.quantity) || 0} pcs${open.length > 1 ? ` (+${open.length - 1} more)` : ""}`;
 }
 
+/**
+ * 2026-11-20 — FIRST REAL JOB ASSIST. One short line under the next step that
+ * says what the system is waiting for and what will happen by itself. It never
+ * replaces the next step and it never changes anything. Empty when there is
+ * nothing useful to add.
+ */
+export function jobAssistLine(job: any): string {
+  const status = norm(job?.status);
+  if (["cancelled", "completed"].includes(status)) return "";
+  if (status === "shipped" || status === "picked_up") return "Recorded. Mark the job Completed when everything is done.";
+  const card = toBoardCard(job);
+  const ticket = String(job?.jobTicket || "").trim();
+  if (job?.fulfillmentState === "ready_to_ship") return "Packed and waiting to ship. Record the shipment when it leaves.";
+  if (job?.fulfillmentState === "pickup_ready") return "Packed and waiting for the customer. Record the pickup when they collect it.";
+  if (card.activeRunLabel) return `Reprint open: ${card.activeRunLabel}. It needs a new QC PASS before the job can ship.`;
+  if (card.awaitingFiles) {
+    return ticket
+      ? `${card.filesLabel}. In Prints For Today, make a folder named ${ticket} and save the print files in it. They show up here on their own and go to the right printer.`
+      : `${card.filesLabel}.`;
+  }
+  if (card.itemCount && ["new", "artwork", "proof_sent", "approved", "scheduled"].includes(status)) return "Print files received and sent to the printer. Print them, then mark the job printed.";
+  if (card.qcLabel && card.qcLabel !== "QC passed" && ["printed", "finishing", "qc"].includes(status)) return `${card.qcLabel}. Every item needs QC PASS before it can be packed and shipped.`;
+  if (card.qcLabel === "QC passed") return "QC passed. Pack it, then mark it Ready to ship or Ready for pickup.";
+  return "";
+}
+
 export type SimpleBoard = {
   columns: { key: SimpleStageKey; label: string; cards: BoardCard[]; hiddenCount: number }[];
   attention: { onHold: BoardCard[]; reprintNeeded: BoardCard[]; overdue: BoardCard[] };

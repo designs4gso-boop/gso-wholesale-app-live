@@ -56,6 +56,7 @@ import {
 import { isStickerBagProductType, isStockBagProfile } from "./product-family";
 import { resolveCanonicalBagInputs, type CanonicalBagInputs } from "./canonical-bag-pricing.server";
 import { applyStorefrontCostSnapshots } from "./storefront-cost-snapshot.server";
+import { resolveCanonicalStickerInputs, type CanonicalStickerInputs } from "./canonical-sticker-pricing.server";
 
 export type ManualJobItemInput = {
   productTitle: string;
@@ -132,7 +133,7 @@ export function advisoryLockKeys(shop: string, sourceType: string, sourceId: str
   return [fnv1a32(composite, 0x811c9dc5), fnv1a32(composite, 0x01234567)];
 }
 
-async function acquireSourceLock(tx: any, shop: string, sourceType: string, sourceId: string) {
+export async function acquireSourceLock(tx: any, shop: string, sourceType: string, sourceId: string) {
   const [keyA, keyB] = advisoryLockKeys(shop, sourceType, sourceId);
   try {
     // numeric parameters only — no string interpolation into SQL.
@@ -1165,6 +1166,16 @@ export async function createProductionJobFromSource(
       storefrontBagInputs = null;
     }
   }
+  // 2026-11-20: the same for stickers (read only, before the transaction, optional).
+  let storefrontStickerInputs: CanonicalStickerInputs | null = null;
+  if (source.type === "shopify_order") {
+    try {
+      storefrontStickerInputs = await resolveCanonicalStickerInputs(dbClient, shop);
+    } catch (error) {
+      console.error("[production-job-source] storefront sticker cost inputs unavailable", { shop, error: String(error) });
+      storefrontStickerInputs = null;
+    }
+  }
 
   // 15H.1: ticket-constraint P2002 reruns the whole transaction (see helper).
   return await runWithTicketRetry(() => dbClient.$transaction(async (tx: any) => {
@@ -1276,7 +1287,7 @@ export async function createProductionJobFromSource(
       const payload = buildShopifyOrderJobPayload(source.order, jobTicket, { personalizationByIndex });
       if (!payload) return { job: null, created: false, reason: "No configurator line items found." };
       // 2026-11-19: stamp the cost basis in force now on each NEW item (never on an existing job).
-      payload.items = applyStorefrontCostSnapshots(payload.items as any[], storefrontBagInputs) as any;
+      payload.items = applyStorefrontCostSnapshots(payload.items as any[], storefrontBagInputs, new Date(), storefrontStickerInputs) as any;
       // 15H.4A: orderGid is a STAGED column — write it only when the probe
       // says the database actually has it (safe to deploy pre-activation).
       const canWriteOrderGid = await orderGidColumnAvailable(dbClient);

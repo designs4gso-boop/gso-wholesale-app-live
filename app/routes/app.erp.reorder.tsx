@@ -10,7 +10,7 @@
 // this page for any role.
 
 import { isRouteErrorResponse, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "react-router";
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, useMemo } from "react";
 import { Page } from "@shopify/polaris";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
@@ -58,6 +58,8 @@ export default function ReorderPage() {
   const busy = fetcher.state !== "idle";
   const result = fetcher.data;
   const pickedIds = Object.keys(picked);
+  // changes only when the selection changes, so the same submission always sends the same id
+  const requestId = useMemo(() => `ro-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`, [JSON.stringify(picked)]);
 
   const toggle = (itemId: string) => setPicked((current) => {
     const next = { ...current };
@@ -68,7 +70,8 @@ export default function ReorderPage() {
   const update = (itemId: string, change: Partial<Picked>) => setPicked((current) => ({ ...current, [itemId]: { ...current[itemId], ...change } }));
   const submit = () => {
     const lines = pickedIds.map((itemId) => ({ itemId, quantity: picked[itemId].quantity, artworkMode: picked[itemId].artworkMode }));
-    fetcher.submit({ intent: "createReorderQuote", lines } as any, { method: "post", action: "/app/quotes", encType: "application/json" });
+    // one id per form: a retry or a second tap carries the same id and gets the same quote back
+    fetcher.submit({ intent: "createReorderQuote", lines, requestId } as any, { method: "post", action: "/app/quotes", encType: "application/json" });
   };
 
   return (

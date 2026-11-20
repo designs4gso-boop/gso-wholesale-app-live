@@ -175,3 +175,27 @@ export function withStoredReorderLineage<T extends { id?: string | null }>(item:
   const row = item.id ? stored.find((candidate) => candidate.id === item.id) : undefined;
   return { ...item, reorderSourceItemId: row?.reorderSourceItemId || null, reorderArtworkMode: row?.reorderSourceItemId ? row.reorderArtworkMode || "same_artwork" : null };
 }
+
+/**
+ * 2026-11-20 — ONE reorder request -> ONE draft quote. The reorder form sends a
+ * requestId; a retry, a double click or a replay after a timeout carries the
+ * same id and resolves to the quote that was already created. A request with no
+ * id (an older open page) is keyed on who asked for what, and only matches a
+ * quote made in the last few minutes.
+ */
+export const REORDER_REQUEST_MARKER = "[GSO] Reorder request";
+export const REORDER_AUTO_KEY_WINDOW_MINUTES = 5;
+
+export function reorderRequestKey(requestId: unknown, fallbackParts: unknown[]): { key: string; explicit: boolean } {
+  const id = String(requestId ?? "").trim().replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+  if (id.length >= 8) return { key: id, explicit: true };
+  // small stable hash (FNV-1a) of actor + lines; display-safe, not a secret
+  const text = JSON.stringify(fallbackParts);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) { hash ^= text.charCodeAt(index); hash = Math.imul(hash, 0x01000193) >>> 0; }
+  return { key: `auto-${hash.toString(16).padStart(8, "0")}-${text.length}`, explicit: false };
+}
+
+export function reorderRequestMarker(key: string): string {
+  return `${REORDER_REQUEST_MARKER} ${key}`;
+}

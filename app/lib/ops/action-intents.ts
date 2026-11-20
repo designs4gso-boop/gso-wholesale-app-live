@@ -308,6 +308,13 @@ export async function executeIntent<T>(
     await record(repo, intent, { at: now.toISOString(), actor, event: "execution_blocked_kill_switch", from: intent.status, to: intent.status, detail: "GSO_AGENT_EXECUTION_ENABLED is false" });
     return { ok: false, reason: "Consequential execution is disabled (GSO_AGENT_EXECUTION_ENABLED=false). Intent stays APPROVED.", intent, blockedByKillSwitch: true };
   }
+  // 2026-11-20: claim the intent atomically. A second, simultaneous execution loses the claim and
+  // runs nothing (it reports the current state instead).
+  if (repo.claimForExecution && !(await repo.claimForExecution(intent.id))) {
+    const current = await repo.getById(intent.id);
+    if (current?.status === "COMPLETED") return { ok: true, intent: current, duplicate: true };
+    return { ok: false, reason: "This is already being applied.", intent: current ?? intent };
+  }
   let from: IntentStatus = intent.status; setStatus(intent, "EXECUTING");
   await record(repo, intent, { at: now.toISOString(), actor, event: "executing", from, to: "EXECUTING" });
   try {

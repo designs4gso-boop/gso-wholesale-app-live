@@ -11,7 +11,8 @@ import { Page } from "@shopify/polaris";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { approvalView, decideApproval, listApprovals } from "../lib/agent-approvals.server";
+import { APPROVAL_ACTION_INFO, approvalView, decideApproval, listApprovals } from "../lib/agent-approvals.server";
+import { agentProposalProfiles } from "../lib/ops/agent-registry";
 import { PrismaActionIntentRepository } from "../lib/ops/prisma-repositories.server";
 import { requireRouteAccess, routeAccessDecision } from "../lib/route-access.server";
 import { crmLeadHref } from "../lib/simple-nav";
@@ -20,7 +21,9 @@ export async function loader({ request }: { request: Request }) {
   const auth = await authenticate.admin(request);
   requireRouteAccess(auth, "erp/agent-approvals");
   const approvals = (await listApprovals(new PrismaActionIntentRepository(), auth.session.shop)).map(approvalView);
-  return Response.json({ approvals });
+  // 2026-11-20: which registered agent may propose what. Display only; the registry is the rule.
+  const agents = agentProposalProfiles().map((agent) => ({ key: agent.agentKey, name: agent.name, purpose: agent.purpose, proposes: agent.permittedProposalTypes.map((action) => APPROVAL_ACTION_INFO[action]?.label || action) }));
+  return Response.json({ approvals, agents });
 }
 
 export async function action({ request }: { request: Request }) {
@@ -83,7 +86,7 @@ function ApprovalCard({ item, result, busy }: { item: any; result: any; busy: bo
 }
 
 export default function AgentApprovals() {
-  const { approvals } = useLoaderData<any>();
+  const { approvals, agents = [] } = useLoaderData<any>();
   const result = useActionData<any>();
   const navigation = useNavigation();
   const navigate = useNavigate();
@@ -98,6 +101,17 @@ export default function AgentApprovals() {
           <details style={card}>
             <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#6b7280", minHeight: 44 }}>Already decided ({done.length})</summary>
             <div style={{ display: "grid", gap: 12 }}>{done.map((item) => <ApprovalCard key={item.id} item={item} result={result} busy={busy} />)}</div>
+          </details>
+        ) : null}
+        {(agents as any[]).length ? (
+          <details style={card}>
+            <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#6b7280", minHeight: 44 }}>Which agents can propose what ({agents.length})</summary>
+            <div style={{ fontSize: 13, color: "#6b7280" }}>Every proposal needs a person. No agent can send, post, order or charge.</div>
+            {(agents as any[]).map((agent) => (
+              <div key={agent.key} style={{ fontSize: 14, borderTop: "1px solid #f3f4f6", paddingTop: 8 }}>
+                <b>{agent.name}</b> — {agent.proposes.join(", ")}
+              </div>
+            ))}
           </details>
         ) : null}
       </div>

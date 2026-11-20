@@ -41,6 +41,8 @@ export const ROUTE_ACCESS: Record<string, RouteAccessLevel> = {
   "erp/reorder": "commercial",
   "erp/crm": "commercial",
   "erp/crm/:id": "commercial",
+  "erp/customers": "commercial",
+  "erp/customers/:id": "commercial",
   "wholesale/customers": "commercial",
   "erp/agent-product-rules": "commercial",
   "erp/agent-intake-rules": "commercial",

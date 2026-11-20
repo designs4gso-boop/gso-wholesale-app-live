@@ -15,10 +15,18 @@
 # The action (script path, config path, arguments), the user and the run level are NOT changed.
 # The watcher is never started or stopped by this script.
 #
-# Before changing anything the current task definition is exported next to this file as
+# It only ever UPDATES the one existing task. It refuses to run when the task is missing, when
+# more than one task has that name, or when the task does not run from the stable install
+# folder C:\GSO-Print-Intake-Agent (-InstallPath) - it never registers a new task.
+#
+# Before changing anything the current task definition is exported into the install folder
+# (C:\GSO-Print-Intake-Agent, not this repository) as
 #   print-intake-task-backup-<yyyyMMdd-HHmmss>.xml
-# Undo:
-#   Register-ScheduledTask -TaskName "GSO Print Intake Agent" -Xml (Get-Content "<backup file>" -Raw) -Force
+# Undo (the script prints this line with the real file name):
+#   Register-ScheduledTask -TaskName "GSO Print Intake Agent" -TaskPath "\" -Xml (Get-Content -LiteralPath "<backup file>" -Raw) -Force
+#
+# Without -WhatIf the script lists the changes and then asks "Are you sure?" before the backup
+# and the update (add -Confirm:$false to skip the question).
 #
 # Safe to run twice: when the task already has everything, it says so and changes nothing
 # (no backup file is written either).
@@ -43,6 +51,7 @@
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$TaskName = "GSO Print Intake Agent",
+  [string]$InstallPath = "C:\GSO-Print-Intake-Agent",
   [ValidateRange(1, 100)][int]$RestartCount = 3,
   [ValidateRange(1, 60)][int]$RestartIntervalMinutes = 1,
   [ValidateRange(0, 30)][int]$StartupDelayMinutes = 2,
@@ -104,12 +113,15 @@ function Get-DesiredIntakeTaskXml {
   }
   # An existing restart policy that is at least as strong is kept as it is.
   if ($haveCount -lt $WantRestartCount -or $haveInterval -eq "(not set)") {
-    if ($null -ne $restart) { [void]$settings.RemoveChild($restart) }
-    $restart = $doc.CreateElement("RestartOnFailure", $TaskNs)
-    $intervalNode = $doc.CreateElement("Interval", $TaskNs); $intervalNode.InnerText = "PT${WantRestartIntervalMinutes}M"
-    $countNode = $doc.CreateElement("Count", $TaskNs); $countNode.InnerText = [string]([Math]::Max($haveCount, $WantRestartCount))
-    [void]$restart.AppendChild($intervalNode); [void]$restart.AppendChild($countNode)
-    [void]$settings.AppendChild($restart)
+    # Edited in place: nodes Windows already wrote keep their position and order
+    # (this PC exports <Count> before <Interval>); only missing nodes are added.
+    if ($null -eq $restart) { $restart = $doc.CreateElement("RestartOnFailure", $TaskNs); [void]$settings.AppendChild($restart) }
+    $countNode = $restart.SelectSingleNode("t:Count", $nsm)
+    if ($null -eq $countNode) { $countNode = $doc.CreateElement("Count", $TaskNs); [void]$restart.AppendChild($countNode) }
+    $countNode.InnerText = [string]([Math]::Max($haveCount, $WantRestartCount))
+    $intervalNode = $restart.SelectSingleNode("t:Interval", $nsm)
+    if ($null -eq $intervalNode) { $intervalNode = $doc.CreateElement("Interval", $TaskNs); [void]$restart.AppendChild($intervalNode) }
+    $intervalNode.InnerText = "PT${WantRestartIntervalMinutes}M"
     $changes.Add("Settings.RestartOnFailure : count=$haveCount interval=$haveInterval -> count=$($countNode.InnerText) interval=PT${WantRestartIntervalMinutes}M")
   }
 
@@ -201,11 +213,30 @@ if ($null -eq $task) { Write-Host "Scheduled task '$TaskName' was not found. Not
 if (@($task).Count -ne 1) { Write-Host "More than one task matches '$TaskName'. Nothing was changed."; exit 1 }
 $taskPath = $task.TaskPath
 
-$currentXml = [string](Export-ScheduledTask -TaskName $TaskName -TaskPath $taskPath)
+# Stable install path: this script only hardens the task that runs the installed watcher.
+# A task that still points somewhere else (an old clone, a repository folder) is left alone.
+$actionNow = @($task.Actions)[0]
+if ($null -eq $actionNow) { Write-Host "Scheduled task '$TaskName' has no action. Nothing was changed."; exit 1 }
+$actionText = [string]$actionNow.Execute + " " + [string]$actionNow.Arguments
+if ($actionText.IndexOf($InstallPath.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+  Write-Host "Scheduled task '$TaskName' does not run from $InstallPath :"
+  Write-Host ("  " + $actionText)
+  Write-Host "Point the task at the installed watcher first (see $InstallPath\switch-task-to-runtime-ELEVATED.ps1), then run this again. Nothing was changed."
+  exit 1
+}
+
+try {
+  $currentXml = [string](Export-ScheduledTask -TaskName $TaskName -TaskPath $taskPath)
+} catch {
+  Write-Host ("Could not read the definition of '$TaskName': " + $_.Exception.Message)
+  Write-Host "Nothing was changed. If this was a -WhatIf preview without elevation, run it again in an elevated PowerShell."
+  exit 1
+}
+if ($currentXml -notmatch "<Task ") { Write-Host "The exported definition of '$TaskName' is empty or not a task. Nothing was changed."; exit 1 }
 $plan = Get-DesiredIntakeTaskXml -CurrentXml $currentXml -WantRestartCount $RestartCount -WantRestartIntervalMinutes $RestartIntervalMinutes -WantStartupDelayMinutes $StartupDelayMinutes -WantWatchdogMinutes $WatchdogMinutes -WantPasswordLogon ([bool]$RunWhetherLoggedOn)
 
 Write-Host ("Task: " + $taskPath + $TaskName + "   state now: " + $task.State)
-Write-Host ("Action (NOT changed): " + $task.Actions[0].Execute + " " + $task.Actions[0].Arguments)
+Write-Host ("Action (NOT changed): " + $actionText)
 foreach ($warning in $plan.Warnings) { Write-Host ("NOTE: " + $warning) }
 
 if ($plan.Changes.Count -eq 0) {
@@ -215,7 +246,9 @@ if ($plan.Changes.Count -eq 0) {
 Write-Host "Changes this script will make:"
 foreach ($change in $plan.Changes) { Write-Host ("  - " + $change) }
 
-$backupPath = Join-Path $PSScriptRoot ("print-intake-task-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".xml")
+$backupDirectory = if (Test-Path -LiteralPath $InstallPath -PathType Container) { $InstallPath } else { $PSScriptRoot }
+$backupPath = Join-Path $backupDirectory ("print-intake-task-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".xml")
+$undoCommand = "Register-ScheduledTask -TaskName `"$TaskName`" -TaskPath `"$taskPath`" -Xml (Get-Content -LiteralPath `"$backupPath`" -Raw) -Force"
 if (-not $PSCmdlet.ShouldProcess("scheduled task '$TaskName'", "back up the definition to $backupPath, then apply the $($plan.Changes.Count) change(s) listed above")) {
   Write-Host "No backup written. Nothing was changed."
   exit 0
@@ -225,16 +258,32 @@ if (-not $PSCmdlet.ShouldProcess("scheduled task '$TaskName'", "back up the defi
 # logon type changes, and it lives in memory just long enough to hand it to Task Scheduler.
 $credential = $null
 if ($plan.NeedsPassword) {
+  # PowerShell module logging (a group policy, off by default) records cmdlet parameter values in
+  # the Windows event log - that would include the password handed to Register-ScheduledTask.
+  $moduleLogging = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging" -ErrorAction SilentlyContinue
+  if ($null -ne $moduleLogging -and $moduleLogging.EnableModuleLogging -eq 1) {
+    Write-Host "PowerShell module logging is ON on this PC: a password given here would be written to the Windows event log."
+    Write-Host "Not asking for it. Set 'Run whether user is logged on or not' in Task Scheduler (taskschd.msc) instead, or run this again without -RunWhetherLoggedOn. Nothing was changed."
+    exit 1
+  }
   $account = Resolve-TaskAccountName $plan.UserId
   $credential = Get-Credential -UserName $account -Message "Password for the account that runs '$TaskName'. It goes straight to Windows Task Scheduler and is not saved by this script."
   if ($null -eq $credential -or $credential.Password.Length -eq 0) { Write-Host "No password entered. Nothing was changed."; exit 1 }
 }
 
 # Backup first. If the backup cannot be written and read back, stop before touching the task.
-Set-Content -LiteralPath $backupPath -Value $currentXml -Encoding Unicode
-$backupItem = Get-Item -LiteralPath $backupPath
-if ($backupItem.Length -lt 200 -or ((Get-Content -LiteralPath $backupPath -Raw) -notmatch "<Task ")) {
-  Write-Host "The backup at $backupPath could not be verified. Nothing was changed."
+$backupOk = $false
+try {
+  Set-Content -LiteralPath $backupPath -Value $currentXml -Encoding Unicode
+  $backupText = [string](Get-Content -LiteralPath $backupPath -Raw)
+  $backupOk = ($backupText.Trim() -eq $currentXml.Trim()) -and ($backupText -match "<Task ")
+} catch {
+  Write-Host ("Could not write the backup to " + $backupPath + ": " + $_.Exception.Message)
+}
+if (-not $backupOk) {
+  Write-Host "The backup at $backupPath could not be written and verified, so the task was NOT touched. Nothing was changed."
+  Write-Host "Check that the folder exists and is writable, then run this again."
+  $credential = $null
   exit 1
 }
 Write-Host ("Backup written: " + $backupPath)
@@ -254,7 +303,7 @@ try {
 } catch {
   Write-Host ("Task Scheduler refused the update: " + $_.Exception.Message)
   Write-Host "The task keeps its previous definition. To be certain, restore the backup:"
-  Write-Host ("  Register-ScheduledTask -TaskName `"$TaskName`" -Xml (Get-Content `"$backupPath`" -Raw) -Force")
+  Write-Host ("  " + $undoCommand)
   exit 1
 }
 
@@ -265,14 +314,16 @@ $recheck = Get-DesiredIntakeTaskXml -CurrentXml $afterXml -WantRestartCount $Res
 if ($recheck.Changes.Count -gt 0) {
   Write-Host "The task was updated but these settings did not stick - review in Task Scheduler:"
   foreach ($change in $recheck.Changes) { Write-Host ("  - " + $change) }
-  Write-Host ("Undo: Register-ScheduledTask -TaskName `"$TaskName`" -Xml (Get-Content `"$backupPath`" -Raw) -Force")
+  Write-Host ("Undo: " + $undoCommand)
   exit 1
 }
-if ($after.Actions[0].Arguments -ne $task.Actions[0].Arguments) {
-  Write-Host "WARNING: the task action differs from before - review in Task Scheduler, or restore the backup."
+$actionAfter = @($after.Actions)[0]
+if ($null -eq $actionAfter -or @($after.Actions).Count -ne @($task.Actions).Count -or $actionAfter.Execute -ne $actionNow.Execute -or $actionAfter.Arguments -ne $actionNow.Arguments -or $actionAfter.WorkingDirectory -ne $actionNow.WorkingDirectory) {
+  Write-Host "WARNING: the task action differs from before - review in Task Scheduler, or restore the backup:"
+  Write-Host ("  " + $undoCommand)
   exit 1
 }
 Write-Host ("Done. Task state: " + $after.State + ". Triggers now: " + ((@($after.Triggers) | ForEach-Object { $_.CimClass.CimClassName -replace '^MSFT_Task', '' }) -join ", "))
 Write-Host "The watcher was not started or stopped by this script. If the state is not 'Running', start it with:"
 Write-Host ("  Start-ScheduledTask -TaskName `"$TaskName`"")
-Write-Host ("Undo: Register-ScheduledTask -TaskName `"$TaskName`" -Xml (Get-Content `"$backupPath`" -Raw) -Force")
+Write-Host ("Undo: " + $undoCommand)

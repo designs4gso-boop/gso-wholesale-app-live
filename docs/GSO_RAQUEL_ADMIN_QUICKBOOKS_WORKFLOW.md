@@ -61,6 +61,7 @@ Then choose the product type and finish, add a due date and notes if you want, a
 **not production work** with a reason.
 
 Clicking Release twice, or retrying after a timeout, gives the same job — never a duplicate.
+An item with no quantity is refused: type `name | quantity` for each one.
 
 ## What production receives
 
@@ -73,8 +74,8 @@ It appears on the Production Board in **New**, showing **Awaiting files**.
 
 ## Until QuickBooks is connected
 
-Use **Production → New Job**. Put the invoice number in **Reference #** and list several items
-with the "More items" box. This creates exactly the same kind of job.
+Use **Production → New Job**. Put the invoice number in **Reference #** (under *More details*) and
+list several items with the *More items on this job* box (added to this form on 2026-11-20). This creates exactly the same kind of job.
 
 ## Decisions for you
 
@@ -149,6 +150,7 @@ from you.
 | Who has which role | Admin → Staff Access & Readiness |
 | Customer privacy requests from Shopify | Admin → Privacy Requests |
 | Leads: who we are talking to, follow-ups | Sales → Leads |
+| Customers: contact details, their quotes, jobs and reorders | Sales → Customers |
 | Approve or reject a proposed message, follow-up or lead assignment | Sales → Approvals |
 
 **Production support**

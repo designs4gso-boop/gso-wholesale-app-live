@@ -16,6 +16,7 @@ import { decideIntent, executeIntent, proposeIntent, validateIntent, type Action
 import { INTERNAL_APPROVAL_ACTIONS, type ActionType } from "./ops/autonomy";
 import type { ActionIntentRepository } from "./ops/repositories";
 import { assignLead, setLeadFollowUp } from "./crm.server";
+import { agentMayPropose } from "./ops/agent-registry";
 
 export const APPROVAL_ACTION_INFO: Record<string, { label: string; agentId: string; onApprove: string }> = {
   submit_outreach_draft: { label: "Draft message to a customer", agentId: "customer_followup", onApprove: "Approved for a person to send by hand. The ERP sends nothing." },
@@ -59,6 +60,8 @@ export async function submitApproval(repo: ActionIntentRepository, input: Submit
   const payload = input.payload || {};
   if (JSON.stringify(payload).length > APPROVAL_PAYLOAD_MAX_BYTES) return { ok: false, message: "The proposal is too long." };
   const info = APPROVAL_ACTION_INFO[input.actionType];
+  // 2026-11-20: the registry decides which agent may propose what (staff proposals use the default agent of the action)
+  if (input.agentId && !agentMayPropose(input.agentId, input.actionType)) return { ok: false, message: "This agent may not propose that action." };
   const proposed = await proposeIntent(repo, {
     shop,
     actionType: input.actionType,
@@ -118,6 +121,8 @@ export async function decideApproval(
   if (!approved.ok) return { ok: false, message: approved.reason };
   // Record the outcome. The executor only ever touches ERP records of this shop.
   const run = await executeIntent(repo, intent.id, async (current) => applyApprovedProposal(dbClient, input.shop, current, input.approver.actor), { actor: human });
+  // a simultaneous second approval lost the claim: the first one is applying it — same answer, applied once
+  if (!run.ok && (run.intent?.status === "EXECUTING" || run.intent?.status === "COMPLETED")) return { ok: true, message: APPROVAL_ACTION_INFO[intent.actionType]?.onApprove || "Approved.", status: run.intent.status };
   if (!run.ok) return { ok: false, message: `Approved, but it could not be applied: ${run.reason}`, status: run.intent?.status };
   return { ok: true, message: APPROVAL_ACTION_INFO[intent.actionType]?.onApprove || "Approved.", status: run.intent.status };
 }

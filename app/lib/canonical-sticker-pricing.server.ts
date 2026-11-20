@@ -299,7 +299,7 @@ export function priceStickerConfiguration(inputs: CanonicalStickerInputs, select
     }
   }
 
-  return {
+  const priced: StickerPriceResult = {
     ok: true,
     stickerType: info.stickerType,
     widthIn,
@@ -321,6 +321,17 @@ export function priceStickerConfiguration(inputs: CanonicalStickerInputs, select
     version: STICKER_PRICING_VERSION,
     engine: STICKER_PRICING_ENGINE,
   };
+  // 2026-11-20: the cost behind this price, kept OFF the result object so it can never ride
+  // along in a storefront response. Read it with stickerCostOf (internal cost snapshot only).
+  STICKER_RUN_COSTS.set(priced, { totalCost: run.totalCost, unitCost: run.unitCost, costLines: run.lines.map((line) => ({ label: line.label, amount: line.amount })) });
+  return priced;
+}
+
+export type StickerRunCost = { totalCost: number; unitCost: number; costLines: Array<{ label: string; amount: number }> };
+const STICKER_RUN_COSTS = new WeakMap<object, StickerRunCost>();
+/** INTERNAL: the cost the engine computed for a priced sticker configuration. Never sent to the storefront. */
+export function stickerCostOf(priced: StickerPriceResult): StickerRunCost | null {
+  return (priced && typeof priced === "object" ? STICKER_RUN_COSTS.get(priced) : null) || null;
 }
 
 export function stickerPriceBreaks(

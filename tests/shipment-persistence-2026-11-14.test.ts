@@ -319,7 +319,7 @@ describe("unchanged behaviour", () => {
     const { readdirSync } = await import("node:fs");
     const names = readdirSync("prisma/migrations").filter((n) => /^\d{14}_/.test(n)).sort();
     // 2026-11-19: the owner-approved ADDITIVE lineage migration (file -> item link, production runs, reorder lineage, staged transactions) is now the newest.
-    expect(names[names.length - 1]).toBe("20261119230000_add_crm_fulfilment_privacy_history"); // 2026-11-19 night: + CRM / fulfilment / privacy-history (additive)
+    expect(names[names.length - 1]).toBe("20261120090000_add_crm_account_history"); // 2026-11-20: + customer source / history (additive); // 2026-11-19 night: + CRM / fulfilment / privacy-history (additive)
     const schema = readFileSync("prisma/schema.prisma", "utf8");
     for (const field of ["shippedAt", "shipCarrier", "shipTrackingNumber", "shipPackageCount"]) expect(schema).toContain(`  ${field}`);
   });

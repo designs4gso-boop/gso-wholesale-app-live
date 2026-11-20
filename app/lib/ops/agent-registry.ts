@@ -20,7 +20,7 @@
 // re-specified here as repo-owned contracts so it can be recreated
 // consistently; the external agents remain EXTERNAL ONLY.
 
-import { ACTION_TYPES, type ActionType, type AutonomyLevel, type Permission, AUTONOMY_TO_PERMISSION, effectiveAutonomy } from "./autonomy";
+import { ACTION_TYPES, INTERNAL_APPROVAL_ACTIONS, type ActionType, type AutonomyLevel, type Permission, AUTONOMY_TO_PERMISSION, effectiveAutonomy } from "./autonomy";
 
 export const AGENT_REGISTRY_VERSION = "agent-registry/2.0.0-2026-10-04";
 
@@ -459,6 +459,42 @@ export const AGENT_IDS: AgentId[] = AGENT_REGISTRY.map((a) => a.id);
 
 export function agentById(id: string): AgentDefinition | null {
   return AGENT_REGISTRY.find((a) => a.id === id) ?? null;
+}
+
+/**
+ * 2026-11-20 — REGISTRY -> APPROVAL QUEUE. For every agent that may propose
+ * something a person approves: what it may propose, where its input comes from,
+ * and the fact that nothing it proposes executes outside the ERP. This is the
+ * single answer to "may agent X propose action Y" for the signed proposal
+ * endpoint and the Approvals screen.
+ */
+export type AgentProposalProfile = {
+  agentKey: AgentId; name: string; purpose: string; status: AgentStatus;
+  permittedProposalTypes: ActionType[]; inputSource: string[];
+  approvalRequirement: "a person approves every proposal";
+  externalExecution: "disabled";
+  auditSource: string;
+};
+
+export function agentProposalProfiles(): AgentProposalProfile[] {
+  return AGENT_REGISTRY.map((agent) => ({
+    agentKey: agent.id,
+    name: agent.name,
+    purpose: agent.purpose,
+    status: agent.status,
+    permittedProposalTypes: INTERNAL_APPROVAL_ACTIONS.filter((action) => effectiveAutonomy(agent.autonomy[action], action) === "APPROVAL_REQUIRED"),
+    inputSource: agent.inputs,
+    approvalRequirement: "a person approves every proposal" as const,
+    externalExecution: "disabled" as const,
+    auditSource: "OpsActionIntent + OpsActionAuditEvent (append-only); AgentSubmissionLog for signed submissions",
+  })).filter((profile) => profile.permittedProposalTypes.length > 0);
+}
+
+/** May this registry agent propose this action for human approval? Unknown agent or action -> no. */
+export function agentMayPropose(agentKey: unknown, actionType: unknown): boolean {
+  const agent = agentById(String(agentKey ?? ""));
+  if (!agent || !(INTERNAL_APPROVAL_ACTIONS as string[]).includes(String(actionType ?? ""))) return false;
+  return effectiveAutonomy(agent.autonomy[actionType as ActionType], actionType as ActionType) === "APPROVAL_REQUIRED";
 }
 
 /** agent x action permission matrix (effective, ceiling-capped). */

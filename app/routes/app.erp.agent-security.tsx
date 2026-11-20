@@ -22,6 +22,8 @@ import { AGENT_ERROR_CODE_EXPLANATIONS } from "../lib/agent-security.server";
 // literal here because this route's component renders it, and client code
 // must not import from a .server module.
 const INTAKE_SCOPE = "intake:create";
+// 2026-11-20: mirrors AGENT_PROPOSAL_SCOPE. Granted only when the owner ticks the box; never implied.
+const PROPOSAL_SCOPE = "proposal:create";
 
 const FAMILY_OPTIONS = ["jars", "banners", "labels-stickers", "custom-other"] as const;
 
@@ -164,7 +166,7 @@ export async function action({ request }: { request: Request }) {
           sourceChannel,
           tokenId,
           tokenHash: sha256Hex(tokenSecret),
-          scopes: [INTAKE_SCOPE],
+          scopes: formData.get("allowProposals") === "on" ? [INTAKE_SCOPE, PROPOSAL_SCOPE] : [INTAKE_SCOPE],
           allowedProductFamilies: allowedProductFamilies ?? undefined,
           isActive: true,
           createdBy: actorLabel(session),
@@ -341,6 +343,12 @@ export default function AgentSecurityPage() {
                     ))}
                   </InlineStack>
                 </BlockStack>
+                <label style={{ alignItems: "center", display: "flex", gap: 6 }}>
+                  <input type="checkbox" name="allowProposals" />
+                  <Text as="span" variant="bodySm">
+                    May also submit proposals for approval (drafts, follow-ups, quote and reorder suggestions). A person approves each one; nothing is sent.
+                  </Text>
+                </label>
                 <InlineStack gap="200">
                   <Button submit variant="primary">
                     Create credential

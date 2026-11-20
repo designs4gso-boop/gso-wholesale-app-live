@@ -351,7 +351,7 @@ describe("FINANCIAL REDACTION — server payloads, before any rendering", () => 
       events: [{ message: "Actual cost FINALIZED by x. Total: $330.00" }, { message: "Status changed from Printing to Cutting." }],
     });
     expect(job).toMatchObject({ actualTotalCost: null, quotedTrueCost: null, actualVarianceAmount: null, actualVariancePct: null, actualFinalProfit: null, actualFinalMargin: null });
-    expect(job.items[0]).toEqual({ id: "i1", quantity: 1000, unitPrice: null, unitCost: null, costSnapshot: null, priceSnapshot: null });
+    expect(job.items[0]).toEqual({ id: "i1", quantity: 1000, unitPrice: null, unitCost: null, costSnapshot: null, priceSnapshot: null, runCosts: null }); // runCosts (dollars per run, 2026-11-20) is nulled too
     expect(job.materialUsages).toEqual([
       { id: "u1", usedQty: 50, costPerUnit: null, totalCost: null, source: "manual", notes: "second roll" },
       { id: "u2", usedQty: 2, costPerUnit: null, totalCost: null, source: "print_log", notes: null },

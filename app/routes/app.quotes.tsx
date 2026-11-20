@@ -44,7 +44,8 @@ import { QUOTE_OUTCOME_STATUSES, resolveQuoteOutcomeChange } from "../lib/pricin
 import { CUSTOMER_TIERS, customerTierDisplayLabel, isCustomerTier, tierRule } from "../lib/customer-tiers";
 import { enforceQuoteItemUnitCost, quoteItemCostIsProtected } from "../lib/quote-item-cost-authority";
 import { agentConversionCanonicalGate } from "../lib/agent-quote-canonical-gate.server";
-import { buildReorderQuoteDraft, parseReorderRequest, withStoredReorderLineage } from "../lib/reorder";
+import { buildReorderQuoteDraft, parseReorderRequest, withStoredReorderLineage, REORDER_AUTO_KEY_WINDOW_MINUTES, reorderRequestKey, reorderRequestMarker } from "../lib/reorder";
+import { acquireSourceLock } from "../lib/production-job-source.server";
 
 type QuoteItemInput = {
   id?: string;
@@ -1745,18 +1746,32 @@ export async function action({ request }: { request: Request }) {
     }
     const built = buildReorderQuoteDraft(sources as any, request.lines, pricedByItemId, reorderAccess.actor, new Date().toISOString());
     if (!built.ok) return Response.json({ ok: false, intent: "createReorderQuote", error: built.reason });
-    const created = await db.quote.create({
-      data: {
-        shop,
-        customerName: built.draft.customerName,
-        company: built.draft.company,
-        email: built.draft.email,
-        phone: built.draft.phone,
-        status: "draft",
-        notes: built.draft.notes,
-        items: { create: built.draft.items.map((item) => quoteItemData(item as any)) },
-      },
+    // 2026-11-20 IDEMPOTENCY: the same reorder request (retry, double click, replay) is ONE draft quote.
+    // The check and the create run under one per-request lock, so two simultaneous posts cannot both create.
+    const reorderKey = reorderRequestKey(payload.requestId, [reorderAccess.actor, request.lines]);
+    const reorderMarker = reorderRequestMarker(reorderKey.key);
+    const { created, duplicate } = await db.$transaction(async (tx: any) => {
+      await acquireSourceLock(tx, shop, "reorder_quote", reorderKey.key);
+      const existing = await tx.quote.findFirst({
+        where: { shop, notes: { contains: reorderMarker }, ...(reorderKey.explicit ? {} : { createdAt: { gte: new Date(Date.now() - REORDER_AUTO_KEY_WINDOW_MINUTES * 60 * 1000) } }) },
+        orderBy: { createdAt: "desc" },
+      });
+      if (existing) return { created: existing, duplicate: true };
+      const quote = await tx.quote.create({
+        data: {
+          shop,
+          customerName: built.draft.customerName,
+          company: built.draft.company,
+          email: built.draft.email,
+          phone: built.draft.phone,
+          status: "draft",
+          notes: `${built.draft.notes || ""}\n${reorderMarker}`.trim(),
+          items: { create: built.draft.items.map((item) => quoteItemData(item as any)) },
+        },
+      });
+      return { created: quote, duplicate: false };
     });
+    if (duplicate) return Response.json({ ok: true, intent: "createReorderQuote", quoteId: created.id, duplicate: true, provisionalCount: built.draft.provisionalCount, message: "This reorder quote was already created. Open Quotes to continue." });
     return Response.json({
       ok: true,
       intent: "createReorderQuote",
@@ -2345,7 +2360,7 @@ export default function QuotesPage() {
         <Layout.Section>
           <Card>
             <details>
-              <summary style={{ cursor: "pointer", fontWeight: 600 }}>Advanced: look up a Shopify product (identity only — never sets cost or price)</summary>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>{ownerAccess.isOwner ? "Advanced: look up a Shopify product (identity only — never sets cost or price)" : "Advanced: look up a Shopify product (identity only — never sets the price)"}</summary>
               <BlockStack gap="300">
                 <InlineStack gap="300" blockAlign="end">
                   <TextField
@@ -2370,8 +2385,8 @@ export default function QuotesPage() {
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
                 <BlockStack gap="100">
-                  <Text as="h2" variant="headingMd">2–7 · Items: product, quantity, material / finish, cost, price, margin</Text>
-                  <Text as="p" tone="subdued">One card per line. Cost comes before price; the margin badge tells you whether the line needs owner approval.</Text>
+                  <Text as="h2" variant="headingMd">{ownerAccess.isOwner ? "2–7 · Items: product, quantity, material / finish, cost, price, margin" : "2–7 · Items: product, quantity, material / finish, price"}</Text>
+                  <Text as="p" tone="subdued">{ownerAccess.isOwner ? "One card per line. Cost comes before price; the margin badge tells you whether the line needs owner approval." : "One card per line. The badge tells you whether the line needs owner approval."}</Text>
                 </BlockStack>
                 <Button onClick={addItem}>Add Item</Button>
               </InlineStack>
@@ -2412,7 +2427,7 @@ export default function QuotesPage() {
                             <BlockStack gap="100">
                               <Text as="h3" variant="headingSm">2 · Product → 3 · Quantity → 4 · Material / finish</Text>
                               <Text as="p" tone="subdued">
-                                A Product Setup recipe pulls saved costs, margins, tiers, finishes, and vendor add-ons automatically.
+                                {ownerAccess.isOwner ? "A Product Setup recipe pulls saved costs, margins, tiers, finishes, and vendor add-ons automatically." : "A Product Setup recipe fills in the price, finishes and add-ons automatically."}
                               </Text>
                             </BlockStack>
                             <InlineStack gap="200">

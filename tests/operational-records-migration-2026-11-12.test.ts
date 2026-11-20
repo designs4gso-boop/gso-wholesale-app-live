@@ -73,7 +73,7 @@ describe("1-3, 22. migration is ACTIVE, additive and needs no backfill", () => {
     expect(readdirSync("prisma/migrations-pending")).not.toContain("20261112090000_add_operational_records");
     // it sorts after every earlier migration, so the chain stays linear
     // 2026-11-19: later additive migrations exist now; only the EARLIER ones are compared.
-    const LATER = ["20261119120000_add_production_lineage", "20261119200000_add_compliance_requests", "20261119230000_add_crm_fulfilment_privacy_history"];
+    const LATER = ["20261119120000_add_production_lineage", "20261119200000_add_compliance_requests", "20261119230000_add_crm_fulfilment_privacy_history", "20261120090000_add_crm_account_history"];
     const earlier = readdirSync("prisma/migrations").filter((name) => /^\d/.test(name) && name !== "20261112090000_add_operational_records" && !LATER.includes(name));
     expect(earlier.length).toBeGreaterThan(0);
     for (const name of earlier) expect(name < "20261112090000_add_operational_records", name).toBe(true);

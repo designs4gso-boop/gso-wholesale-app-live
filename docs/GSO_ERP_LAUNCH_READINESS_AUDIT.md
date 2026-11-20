@@ -1,8 +1,91 @@
 # GSO ERP — Launch Readiness Audit
 
-**Date:** 2026-11-19 (late night) — updates the 2026-11-18 audit. **Software readiness 76% · live operational readiness 40%** (see the first section). **Code:** `main` at the commit that carries this document (started the day at `2eb6bd6`). **Deployed:** yes — each push today was confirmed live on Render by a new route answering.
+**Date:** 2026-11-19 (late night) — updates the 2026-11-18 audit. **Software readiness 81% · live operational readiness 40%** as of 2026-11-20 (see the first section). **Code:** `main` at the commit that carries this document (started the day at `2eb6bd6`). **Deployed:** yes — each push today was confirmed live on Render by a new route answering.
 
 This is the single authoritative readiness report. Everything marked *verified* was checked tonight against production (read-only), the live Shopify store (read-only), this shop PC, or the code. Anything that could not be checked is marked *unverified*. Scores are judgement, not arithmetic — they are deliberately conservative.
+
+---
+
+## Software push — 2026-11-20 (read this first)
+
+**SOFTWARE READINESS: 81%** (was 76%) · **LIVE OPERATIONAL READINESS: 40%** (unchanged — nothing was proven with real work today).
+
+Five kinds of status are kept apart below: **software complete**, **live validated**, **owner decision**, **external authorization**, **Windows admin**. A finished piece of software is not marked down because someone has not yet signed in to a provider or printed a job; it is also not called operational until that proof exists.
+
+| Area | Software | Live | What it is waiting for |
+|---|---|---|---|
+| Core ERP | 90% | 55% | Live: real jobs. |
+| Production | 90% | 50% | Live: real jobs; staff roles on Render (owner). |
+| Print Intake | 92% | 80% | Live: first routed file. Windows admin: reboot survival. |
+| Reprint / remake | 87% | 30% | Live: first real reprint. |
+| Reorder | 85% | 25% | Live: first real reorder. |
+| RIP actuals | 80% | 30% | Live: one ticketed Mimaki job (`docs/GSO_FIRST_REAL_JOB_CHECKLIST.md`). |
+| Pricing | 75% | 60% | Owner decision: cost basis (`docs/GSO_PRICING_ENGINE_DECISION.md`). Shop timings. |
+| Shopify | 72% | 50% | Owner decision: Stock Bag checklist wording; holographic sticker floor in the calculator. |
+| Fulfilment | 70% | 30% | External: Shopify fulfilment permission. |
+| CRM | 85% | 10% | Live: first real customer and lead. |
+| Sales | 75% | 35% | Owner: `sales` role on Render. |
+| Agents | 72% | 10% | External: one credential with proposals allowed. Software: no scheduler / internal runtime. |
+| QuickBooks framework | 74% | 0% | External: Intuit app + consent. Raquel: release rules. |
+| Raquel admin | 76% | 20% | Raquel's decisions; first real release. |
+| Security | 92% | 65% | Owner: Render environment check. |
+| Operations / deployment | 84% | 65% | Windows admin: two elevated scripts. |
+
+### What was built on 2026-11-20
+- **Customers** (Sales → Customers): one customer record with its leads, quotes, jobs, everything made for them, reorders, notes and history. Quotes and jobs are matched by exact e-mail or exact company name only. People who are on quotes or jobs but are not customers yet are offered — never added automatically.
+- **Signed agent proposal endpoint** (`POST /api/agent/proposals`): an outside agent can submit a draft message, follow-up, lead assignment, quote proposal or reorder recommendation. Every one lands in Sales → Approvals and waits for a person. It needs a credential the owner created with *proposals allowed* ticked; older credentials are refused. It cannot send, order or charge.
+- **Agent registry → approvals**: the registry decides which agent may propose what; Approvals shows the list.
+- **New Job now has the More items box.** The simple New Job form could only create single-item jobs; multi-item entry existed only on the owner's advanced page. Fixed — this mattered for the first real job.
+- **Reorder is safe to double click**: one request makes one draft quote.
+- **Two approvals at the same moment apply once.**
+- **Storefront fixes (owner rules, no price change):** a Stock Bag order no longer carries a Zakeke design; a jar with no launch size (the cost-only 5 oz) is no longer listed as active; configurator sync writes minimum 50 for Stock Bags instead of 64.
+- **Cost snapshot now covers stickers.** Jars and DTP pouches stay "not captured", each with its exact reason (below).
+- **Run cost in dollars** on the job page for the owner / authorized managers: ink and press time per run, marked partial. Material, labour and finishing are not included because nothing records them per run.
+- **Release to Production** no longer assumes quantity 1 when a quantity is missing; an item with no quantity or no name blocks release.
+- **First-job guidance**: one line under the next step on the job page says what the system is waiting for.
+- **Quotes** no longer mentions cost or margin in headings shown to sales.
+
+### Correction to last night's audit
+The worked example in the 2026-11-19 section below ("the storefront price is about $75 higher") compared application labour only and pointed the wrong way. On the full engines, for 1,000 holographic 3X double-sided sticker bags the storefront cost basis is **lower**: the live price is $2,200 and the same price rules on the Cost Calculator's cost basis give $2,850. Plain matte bags are identical on both. The full comparison and the one decision are in `docs/GSO_PRICING_ENGINE_DECISION.md`. Nothing was changed.
+
+### Cost snapshot coverage
+| Family | Captured | Why not |
+|---|---|---|
+| Stock Bags, Sticker Bags | Yes | |
+| Stickers | Yes (new) | |
+| Jars | No | The checkout does not record which labels (side / lid / band) were ordered or the white coverage; the cost engine needs both. |
+| DTP pouches | No | Inbound freight is not verified; vendor configuration and design count are not in the checkout record. |
+
+### Storefront fixes reviewed
+| # | Product | Safe without owner | Done |
+|---|---|---|---|
+| 1 | Stock Bag carrying a Zakeke design | Yes | Fixed — the id is dropped, never rejected; checkout cannot fail because of it. |
+| 2 | Jar with no launch size listed as active | Yes | Fixed — all nine launch jars unchanged. |
+| 3 | Configurator sync writes minimum 64 for Stock Bags | Yes | Fixed — writes 50. |
+| 4 | Stock-Bag-only order gets the default production checklist | **No** | Not changed. The label checklist's "Artwork received" and "Proof approved" steps assume customer artwork; premade art needs your wording. |
+| 5 | Holographic sticker floor (matte × 1.20) not in the Cost Calculator | **No** | Not changed. It would raise quoted prices. |
+
+### Known limits found by today's tests (not defects in normal use)
+- A background-worker message that is not tied to an approval can run twice if the worker dies after doing the work and before marking it done. Nothing uses that path in production today.
+- A reprint posted again **after** QC was recorded is a new reprint (there is no request id on the reprint form). A replay before QC is refused.
+- If the production-alert message fails on the first delivery of a paid order, it is not re-sent on the retry.
+
+### P1 — remaining
+1. No real work is in the ERP. *(live — James)*
+2. Render environment unverified; sellers need the `sales` role. *(owner)*
+3. Patch F not validated on the press. *(live — one Mimaki job)*
+4. QuickBooks not connected; release rules undecided. *(external + Raquel)*
+5. Storefront cost basis. *(owner decision)*
+6. Watcher starts only at logon; stale Roland task starts on the next reboot. *(Windows admin)*
+
+### Windows admin — exact commands (elevated PowerShell)
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\GSO-RIP-Result-Sync\disable-old-roland-task-ELEVATED.ps1"
+cd C:\Users\golde\GSO-ERP-WORKSPACE\wholesale-lite-mvp-release-20261017
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\register-print-intake-startup-task-ELEVATED.ps1" -WatchdogMinutes 5 -WhatIf
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\register-print-intake-startup-task-ELEVATED.ps1" -WatchdogMinutes 5
+```
+Neither script has ever been run; both were reviewed and parse-checked. The watcher task still needs someone signed in to Windows, so an unattended reboot also needs Windows automatic sign-in.
 
 ---
 
@@ -74,7 +157,7 @@ None verified. Unchanged: `GSO_OWNER_ENFORCEMENT=temporary_all_staff` on Render 
 2. **Render environment unverified.** New tonight: an account with **no role can no longer open Quotes**. Anyone who sells needs `sales` (or `manager`) in `GSO_STAFF_ROLES`. (James)
 3. **Patch F not validated on the press.** Software ready; needs one ticketed Mimaki result. (real print job)
 4. **QuickBooks not connected; release rules undecided.** (Intuit + Raquel)
-5. **Storefront cost basis — owner decision.** Stock / sticker bags and stickers are priced on the storefront from an older cost model than the Cost Calculator uses. Both feed the same price policy, so prices differ only where cost controls the price. Worked example (holographic, 3X gloss, 1,000 double-sided sticker bags): the storefront costs application at $156.25, the calculator at $111.11, so the storefront price is about $75 higher. Changing it moves live prices, so it was not changed. (James)
+5. **Storefront cost basis — owner decision.** Stock / sticker bags and stickers are priced on the storefront from an older cost model than the Cost Calculator uses. Both feed the same price policy, so prices differ only where cost controls the price. (The worked example that stood here was wrong — see the correction in the 2026-11-20 section above and `docs/GSO_PRICING_ENGINE_DECISION.md`.) Changing it moves live prices, so it was not changed. (James)
 6. **Watcher starts only at logon.** `tools/register-print-intake-startup-task-ELEVATED.ps1` is ready. (Windows admin)
 7. **Stale Roland task starts on the next reboot.** (Windows admin)
 

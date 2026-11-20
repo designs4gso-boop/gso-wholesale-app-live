@@ -43,6 +43,7 @@ import { appendIntakeAudit } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
 import { PRODUCTION_STATUS_OPTIONS, isStaffProductionStatus } from "../lib/production-status-vocabulary";
+import { runCostDollars } from "../lib/run-cost-dollars.server";
 import { FULFILLMENT_STATE_LABEL, fulfillmentSyncDecision, fulfillmentSyncNote, readyMarkVerdict } from "../lib/fulfillment-sync";
 import { PICKUP_ALREADY_RECORDED, REPRINT_REASONS, SHIPMENT_ALREADY_RECORDED, formatShipDate, fulfillmentQcGuardApplies, isReprintReason, parsePickupInput, parseShipmentInput, reprintReasonLabel, savedPickupForJob, savedShipmentForJob, shipmentSummary, statusChangeFulfillmentVerdict } from "../lib/production-fulfillment";
 import { permissionDeniedResponse, resolveStaffAccess, type StaffPermission } from "../lib/staff-roles.server";
@@ -694,6 +695,8 @@ export async function loader({ request }: { request: Request }) {
       item.runs = runsByItem.get(item.id) || [];
       // actual ink / time per run, from the press results linked to this exact item (mL and minutes only — no money)
       item.runActuals = actualsByRun(item.runs, (entriesByJob[job.id] || []).filter((entry: any) => entry.productionJobItemId === item.id));
+      // 2026-11-20: dollars per run (ink + press time only) — attached ONLY for the owner / financially authorized managers
+      if (financials.show) item.runCosts = runCostDollars(item.runs, (entriesByJob[job.id] || []).filter((entry: any) => entry.productionJobItemId === item.id), rates, ratePerHour);
       const source = item.reorderSourceItemId ? lineageById.get(item.reorderSourceItemId) : null;
       item.reorderOf = source ? { itemTicket: source.itemTicket, productTitle: source.productTitle, quantity: source.quantity, jobId: source.jobId, artworkMode: item.reorderArtworkMode || null } : null;
     }

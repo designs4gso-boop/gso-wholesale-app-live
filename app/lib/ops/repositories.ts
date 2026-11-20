@@ -23,6 +23,12 @@ export interface ActionIntentRepository {
   appendAudit(event: AuditEvent): Promise<void>;
   listAudit(intentId: string): Promise<AuditEvent[]>;
   list(filter?: IntentFilter): Promise<ActionIntent[]>;
+  /**
+   * 2026-11-20: atomically move APPROVED -> EXECUTING. Returns false when another
+   * request already took it, so one approval is applied once even when two
+   * people (or two tabs) approve at the same moment.
+   */
+  claimForExecution?(id: string): Promise<boolean>;
 }
 
 /* ------------------------------------------------------------------ *

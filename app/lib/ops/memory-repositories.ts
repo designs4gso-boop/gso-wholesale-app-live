@@ -20,6 +20,12 @@ export class MemoryActionIntentRepository implements ActionIntentRepository {
   async getByIdempotencyKey(key: string) { const id = this.byKey.get(key); return id ? this.getById(id) : null; }
   async save(intent: ActionIntent) { this.byId.set(intent.id, clone(intent)); this.byKey.set(intent.idempotencyKey, intent.id); }
   async appendAudit(event: AuditEvent) { this.audit.push(clone(event)); }
+  async claimForExecution(id: string) {
+    const stored = this.byId.get(id);
+    if (!stored || stored.status !== "APPROVED") return false;
+    (stored as { status: string }).status = "EXECUTING"; // synchronous check-and-set
+    return true;
+  }
   async listAudit(intentId: string) { return this.audit.filter((a) => a.intentId === intentId).map(clone); }
   async list(filter: IntentFilter = {}) {
     const statuses = filter.status ? (Array.isArray(filter.status) ? filter.status : [filter.status]) : null;

@@ -28,6 +28,16 @@ export function credentialAllowsIntake(scopes: unknown): boolean {
   return list.includes(AGENT_INTAKE_SCOPE);
 }
 
+// 2026-11-20 — proposals. The scope is EXPLICIT: a legacy credential (null
+// scopes) or an intake-only credential can never submit a proposal.
+export const AGENT_PROPOSAL_SCOPE = "proposal:create";
+export function credentialAllowsProposals(scopes: unknown): boolean {
+  const list = stringList(scopes);
+  return list !== null && list.includes(AGENT_PROPOSAL_SCOPE);
+}
+/** What a proposal may be about. The record must exist in the credential's own shop. */
+export const AGENT_PROPOSAL_ENTITY_TYPES = ["crm_lead", "crm_account", "quote", "production_job_item", "none"] as const;
+
 // null allowedProductFamilies = all families allowed (legacy / unrestricted).
 // A non-null list must contain the normalized submitted family key.
 export function familyAllowed(allowedProductFamilies: unknown, normalizedFamily: string): boolean {
@@ -54,6 +64,11 @@ export const AGENT_ERROR_CODE_EXPLANATIONS: Record<string, string> = {
   missing_required_fields: "Required intake fields missing (product family, quantity, or customer identifier).",
   family_not_allowed: "Submitted product family is outside this credential's allowed families.",
   internal_error: "Intake endpoint failed unexpectedly; check server logs.",
+  // 2026-11-20 — /api/agent/proposals
+  missing_proposal_scope: "Credential lacks the proposal:create scope (issue a new credential with proposals allowed).",
+  invalid_proposal: "Proposal was malformed (action type, idempotency key, reason or subject).",
+  agent_not_permitted: "The named agent is not allowed to propose that action (see the agent registry).",
+  entity_not_found: "The lead / customer / quote / item the proposal is about does not exist in this shop.",
 };
 
 export function sha256Hex(value: string) {
