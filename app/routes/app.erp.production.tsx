@@ -1593,9 +1593,12 @@ Source ref: ${sourceRef}` : ""}`,
     // item's quantity or price, and no money is posted anywhere.
     const reprintQty = parseReprintQuantity(formData.get("reprintQty"));
     if (!reprintQty.ok) return Response.json({ ok: false, message: reprintQty.reason }, { status: 400 });
+    // 2026-11-20: who pays is never assumed (a missing value is refused), and an unknown kind is refused
+    // instead of being recorded as a reprint. A form that sends no kind at all is the plain "reprint" button.
     const runKindRaw = String(formData.get("runKind") || "reprint");
-    const runKind = isRunKind(runKindRaw) ? runKindRaw : "reprint";
-    const chargeRaw = String(formData.get("chargeType") || "internal");
+    if (!isRunKind(runKindRaw)) return Response.json({ ok: false, message: "Choose reprint (print again) or remake (redo the piece)." }, { status: 400 });
+    const runKind = runKindRaw;
+    const chargeRaw = String(formData.get("chargeType") || "");
     if (!isRunChargeType(chargeRaw)) return Response.json({ ok: false, message: "Pick who pays for this reprint: internal, warranty or customer-paid." }, { status: 400 });
     const chargeType = chargeRaw;
     const row = item.itemTicket

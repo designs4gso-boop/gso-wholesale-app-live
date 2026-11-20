@@ -466,10 +466,22 @@ export function routedStaffNameSegment(originalFileName: string | null | undefin
   // Windows-safe characters only; "__" is reserved as the segment separator.
   stem = stem.replace(/[^A-Za-z0-9.-]+/g, "_").replace(/_+/g, "_").replace(/^[_.-]+|[_.-]+$/g, "");
   if (stem.length > ROUTED_STAFF_NAME_MAX) {
-    // Keep the END (layer suffix / side) as well as the start.
-    stem = `${stem.slice(0, ROUTED_STAFF_NAME_MAX - 26)}_${stem.slice(-25)}`.replace(/_+/g, "_");
+    // Keep the END (layer suffix / side) as well as the start. 2026-11-20: a short digest of the WHOLE
+    // name sits in the middle, so two long names that differ only in the part cut out can never
+    // collapse into the same routed name.
+    stem = `${stem.slice(0, ROUTED_STAFF_NAME_MAX - 34)}_${routedNameDigest(stem)}_${stem.slice(-25)}`.replace(/_+/g, "_");
   }
+  // 2026-11-20: a staff file whose whole name looks like a run mark ("A2", "P1-A1", "R2-A1") would be
+  // read as a run token at the end of the routed name. It keeps its name behind a plain prefix.
+  if (/^(?:[RPA]\d+)(?:-[RPA]\d+)*$/i.test(stem)) stem = `file_${stem}`;
   return stem;
+}
+
+/** Deterministic 6-hex digest (FNV-1a) of a cleaned staff name. Not a secret; only keeps long names apart. */
+function routedNameDigest(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) { hash ^= value.charCodeAt(index); hash = Math.imul(hash, 0x01000193) >>> 0; }
+  return hash.toString(16).padStart(8, "0").slice(0, 6);
 }
 
 export function ripFileBaseName(item: Pick<IntakeItem, "ripJobName" | "suggestedFileName" | "itemTicket">, originalFileName?: string | null): string {
@@ -543,6 +555,11 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
       for (const item of job.items) {
         if (String(item.itemTicket || "").toUpperCase() === itemTicket) hits.push({ job, item });
       }
+    }
+    // 2026-11-20: a finished or cancelled job takes no new file by ticket — same rule as the job-folder
+    // match and the manual Assign. A reprint on a finished job is reopened first (owner / manager).
+    if (hits.length === 1 && INTAKE_CLOSED_JOB_STATUSES.has(String(hits[0].job.status || "").toLowerCase())) {
+      return review([`item_ticket_${itemTicket}_on_closed_job`], [candidateOf(hits[0].job, hits[0].item, "item_ticket")]);
     }
     if (hits.length === 1) return routeItem(hits[0].job, hits[0].item, "item_ticket", fileName, params.machineContextFor);
     if (hits.length > 1) return review(["item_ticket_matches_multiple_items"], hits.map((hit) => candidateOf(hit.job, hit.item, "item_ticket")));

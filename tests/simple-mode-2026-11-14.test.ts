@@ -464,7 +464,7 @@ describe("Phase 2 — Job Workspace reuses the real Production loader and action
 
   it("pickup and reprint go through the unchanged action", async () => {
     for (const itemId of ["i1", "i2"]) await postJob({ intent: "qcItem", itemId, qcResult: "pass", qcNote: "" });
-    expect((await postJob({ intent: "reprintItem", itemId: "i1", reprintReason: "machine_error", reprintNote: "smoke", reprintQty: "1" })).body.ok).toBe(true);
+    expect((await postJob({ intent: "reprintItem", itemId: "i1", reprintReason: "machine_error", reprintNote: "smoke", reprintQty: "1", chargeType: "internal" })).body.ok).toBe(true);
     expect(h.state.items[0]).toMatchObject({ lastReprintReason: "machine_error", qcResult: null });
     // QC is required again after the reprint: pickup is refused, and the workspace says so
     const refused = await postJob({ intent: "recordPickup", pickedUpBy: "Migration QA", pickupNote: "n" });

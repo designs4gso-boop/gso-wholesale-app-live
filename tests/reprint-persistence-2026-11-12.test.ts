@@ -90,7 +90,7 @@ const post = async (fields: Record<string, string>) => {
   return { status: res.status, body: await res.json() };
 };
 const qc = (result: string, note = "") => post({ intent: "qcItem", qcResult: result, qcNote: note });
-const reprint = (reason = "machine_error", note = "Migration smoke test - reprint") => post({ intent: "reprintItem", reprintReason: reason, reprintNote: note, reprintQty: "25" }); // 2026-11-19: the reprint quantity is required
+const reprint = (reason = "machine_error", note = "Migration smoke test - reprint") => post({ intent: "reprintItem", reprintReason: reason, reprintNote: note, reprintQty: "25", chargeType: "internal" /* 2026-11-20: who pays is required, as the form always sends it */ }); // 2026-11-19: the reprint quantity is required
 const item = () => h.state.items[0];
 
 import { QC_REQUIRED_AFTER_REPRINT, itemQcState, itemReprintSummary } from "../app/lib/production-qc-display";

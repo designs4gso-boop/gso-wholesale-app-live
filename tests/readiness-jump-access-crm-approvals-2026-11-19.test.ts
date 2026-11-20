@@ -459,16 +459,16 @@ describe("TRACK N — the ERP can see whether the print-file watcher is alive", 
   it("the watcher's own status call stamps the heartbeat and never fails because of it", async () => {
     h.t.printLogAutoImportSetting = [{ id: "s1", shop: "shop-1", enabled: true, uploadToken: "tok" }];
     const status = await import("../app/routes/api.print-intake.status");
-    const call = () => status.action({ request: new Request("https://erp.test/api/print-intake/status", { method: "POST", body: JSON.stringify({ token: "tok", pending: true, agentVersion: "gso-print-intake-agent/1.10", agentHost: "RIP-PC" }) }) });
+    const call = () => status.action({ request: new Request("https://erp.test/api/print-intake/status", { method: "POST", body: JSON.stringify({ token: "tok", pending: true, agentVersion: "gso-print-intake-agent/1.11", agentHost: "RIP-PC" }) }) });
     expect((await call()).status).toBe(200);
-    expect(h.t.printLogAutoImportSetting[0]).toMatchObject({ intakeAgentVersion: "gso-print-intake-agent/1.10", intakeAgentHost: "RIP-PC" });
+    expect(h.t.printLogAutoImportSetting[0]).toMatchObject({ intakeAgentVersion: "gso-print-intake-agent/1.11", intakeAgentHost: "RIP-PC" });
     expect(h.t.printLogAutoImportSetting[0].intakeAgentLastSeenAt).toBeInstanceOf(Date);
     const bad = await status.action({ request: new Request("https://erp.test/x", { method: "POST", body: JSON.stringify({ token: "wrong", pending: true }) }) });
     expect(bad.status).toBe(403);
   });
   it("the watcher script cannot be ended by one failed log write or one failed pass", () => {
     const agent = src("tools/gso-print-intake-agent.ps1");
-    expect(agent).toContain("gso-print-intake-agent/1.10");
+    expect(agent).toContain("gso-print-intake-agent/1.11");
     expect(agent).toContain('"pass_error"');
     expect(agent).toContain("gso-print-intake-local-");
     expect(agent).toContain("agentVersion = $ScriptVersion");

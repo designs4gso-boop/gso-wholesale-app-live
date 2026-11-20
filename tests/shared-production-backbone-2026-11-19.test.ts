@@ -293,7 +293,7 @@ describe("REPRINTS — production runs on the same item", () => {
   });
 
   it("a two-layer item re-routes BOTH layers under one reprint number, run token at the end", async () => {
-    await post({ intent: "reprintItem", reprintReason: "machine_error", reprintQty: "10" });
+    await post({ intent: "reprintItem", reprintReason: "machine_error", reprintQty: "10", chargeType: "internal" });
     expect(h.t.printIntake.map((row) => [row.routedFilename, row.reprintNumber, row.attemptNumber, row.status])).toEqual([
       [`${JOB}-01__crud_HEATH_F_CMYK__P1-A1`, 1, 1, "retry_allowed"],
       [`${JOB}-01__crud_HEATH_F_g__P1-A1`, 1, 1, "retry_allowed"],
@@ -312,8 +312,8 @@ describe("REPRINTS — production runs on the same item", () => {
   });
 
   it("several runs: QC closes the open run, then a second reprint is run 3; a reprint awaiting QC is not doubled", async () => {
-    await post({ intent: "reprintItem", reprintReason: "machine_error", reprintQty: "25" });
-    expect((await post({ intent: "reprintItem", reprintReason: "machine_error", reprintQty: "5" })).status).toBe(409);
+    await post({ intent: "reprintItem", reprintReason: "machine_error", reprintQty: "25", chargeType: "internal" });
+    expect((await post({ intent: "reprintItem", reprintReason: "machine_error", reprintQty: "5", chargeType: "internal" })).status).toBe(409);
     expect((await post({ intent: "qcItem", qcResult: "pass", qcNote: "" })).body.ok).toBe(true);
     expect(h.t.productionRun[1]).toMatchObject({ runNumber: 2, status: "qc_passed" });
     expect((await post({ intent: "reprintItem", reprintReason: "shipping_damage", reprintQty: "5", runKind: "remake", chargeType: "customer_paid" })).body.ok).toBe(true);
@@ -335,7 +335,7 @@ describe("REPRINTS — production runs on the same item", () => {
   it("roles: the production lead and the owner may reprint; bagger and sales may not", async () => {
     for (const [role, ok] of [["print_operator", true], ["bagger", false], ["sales", false]] as const) {
       h.sub = SUB[role];
-      const res = await post({ intent: "reprintItem", itemId: "i2", reprintReason: "machine_error", reprintQty: "3" });
+      const res = await post({ intent: "reprintItem", itemId: "i2", reprintReason: "machine_error", reprintQty: "3", chargeType: "internal" });
       expect(res.status === 200 && res.body.ok, role).toBe(ok);
     }
   });

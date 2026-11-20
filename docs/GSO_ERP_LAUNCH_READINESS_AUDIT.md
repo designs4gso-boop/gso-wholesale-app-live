@@ -6,6 +6,40 @@ This is the single authoritative readiness report. Everything marked *verified* 
 
 ---
 
+## James production-side closeout — 2026-11-20 afternoon (read this first)
+
+Live facts, checked on the RIP PC today (they supersede anything older in this document):
+
+| Item | State |
+|---|---|
+| **GSO Roland Result Sync** task | **DISABLED.** Roland actuals: manual CSV. Not to be re-enabled. |
+| **GSO Print Intake Agent** task | **RUNNING**, watcher **v1.11**, starts at logon of `golde`. |
+| Mimaki result sync task | **Does not exist.** READY TO ENABLE AFTER LIVE PATCH F VALIDATION (`docs/GSO_MIMAKI_RESULT_SYNC_ENABLEMENT.md`). |
+| Reboot survival | Not yet. Recommendation: keep the logon task, add the watchdog, and let Windows sign in by itself (`docs/GSO_PRINT_INTAKE_RUNTIME.md`). James's step. |
+| Print Intake token | Exposed during troubleshooting; **not rotated yet**. Owner-only button exists; runbook in `docs/GSO_PRINT_INTAKE_RUNTIME.md` section 6. James's step. |
+| Render roles | UNKNOWN from the code. One-minute check: `docs/GSO_STAFF_ROLE_SETUP.md`. |
+
+**Fixed today (production side):**
+- Watcher v1.11: a file can no longer be copied to the press a second time when the archive move fails; one watcher per PC; an unreadable ledger skips the pass instead of re-routing; the "routed" report is retried.
+- A reprint with no "who pays", or with an unknown kind, is refused (it used to be recorded as internal / reprint).
+- Two long file names that differ only in the middle no longer get the same routed name.
+- A file literally named like a run mark (`A2.pdf`, `P1-A1.pdf`) is no longer read as one.
+- A file saved with a finished or cancelled job's item ticket is held until the job is reopened.
+
+**Known and NOT fixed (each is rare, each has a floor workaround in the SOP):**
+1. Two files on one item whose names differ only by spaces / punctuation (`HEATH F.pdf`, `HEATH_F.pdf`) get the same routed name. Use names that really differ.
+2. Corrected artwork saved **during** an open reprint is treated as a revision of the original and its press result counts on the original run.
+3. A reorder with the **same artwork file**: the earlier job's file-history line in Incoming Print Files moves to the new job (the earlier job, its items, runs and press results are not changed).
+4. "Revised artwork — new proof required" on a reorder is a label. Nothing stops the file from routing before the proof is approved.
+5. A very long custom RIP name can lose its run mark.
+6. The watcher banner is only on Incoming Print Files; nothing notifies anyone when it turns red.
+
+**Decisions waiting for James** (`docs/GSO_JAMES_DECISIONS.md`): Stock Bag checklist wording; the bag / sticker cost basis (seven small questions, two answerable today); Mimaki white (the code still allows a white-only job with no printer chosen to be balanced onto the Mimaki — nothing was changed); and the employee timing study (`docs/GSO_APPLICATION_TIMING_WORKSHEET.md`).
+
+**Handoff:** `docs/GSO_JAMES_TO_RAQUEL_HANDOFF.md`. Production checklist for the first job: `docs/GSO_FIRST_REAL_JOB_CHECKLIST.md`.
+
+---
+
 ## Software push — 2026-11-20 (read this first)
 
 **SOFTWARE READINESS: 81%** (was 76%) · **LIVE OPERATIONAL READINESS: 40%** (unchanged — nothing was proven with real work today).
@@ -76,7 +110,7 @@ The worked example in the 2026-11-19 section below ("the storefront price is abo
 3. Patch F not validated on the press. *(live — one Mimaki job)*
 4. QuickBooks not connected; release rules undecided. *(external + Raquel)*
 5. Storefront cost basis. *(owner decision)*
-6. Watcher starts only at logon; stale Roland task starts on the next reboot. *(Windows admin)*
+6. Watcher starts only at logon. *(Windows admin)* The stale Roland task is now disabled.
 
 ### Windows admin — exact commands (elevated PowerShell)
 ```

@@ -24,6 +24,10 @@
 # eligible files it processes NONE of them and exits for human review.
 #   -Health     config/folders/endpoint/token checks; writes nothing
 #   -SelfTest   offline unit checks (no config, no network, no NAS)
+#
+# Exit codes: 0 finished | 1 config could not be loaded (see the local log beside
+# this script) | 2 token rejected | 3 flood cap | 4 no cutoff | 5 dry run not
+# honoured | 6 another -Loop watcher is already running on this PC (v1.11).
 param(
   [switch]$Loop,
   [switch]$Once,
@@ -33,8 +37,16 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.10 (crash-safe logging + pass guard + heartbeat; Patch A read-only dry run + flood cap + mandatory cutoff; Patch D ticket job folders)"
+$ScriptVersion = "gso-print-intake-agent/1.11 (ledger before archive + fail-closed ledger + single instance; crash-safe logging + pass guard + heartbeat; Patch A read-only dry run + flood cap + mandatory cutoff; Patch D ticket job folders)"
 $ErrorActionPreference = "Stop"
+
+# v1.11 process memory (never persisted, never sent anywhere):
+#   RoutedThisRun    hash -> file name of every file THIS process copied into a hot folder
+#   LedgerUnsaved    hash -> file name of "routed" ledger lines that could not be written yet
+#   UnreleasedClaims claim-file owners whose .gsoclaim could not be removed (NAS dropped)
+$script:RoutedThisRun = @{}
+$script:LedgerUnsaved = @{}
+$script:UnreleasedClaims = @{}
 
 # ---------- config ----------
 
@@ -132,9 +144,60 @@ function Write-IntakeLog($Config, [string]$EventName, [string]$File, [string]$De
   }
 }
 
+# v1.11: one line in the LOCAL log beside the script, for the moment before a
+# config exists (the NAS log folder is not known yet). Never throws.
+function Write-IntakeLocalLog([string]$EventName, [string]$Detail) {
+  $line = "{0} [{1}] file=- {2}" -f (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"), $EventName, $Detail
+  Write-Host $line
+  try { Add-Content -Path (Join-Path $PSScriptRoot ("gso-print-intake-local-" + (Get-Date -Format "yyyyMMdd") + ".log")) -Value $line } catch { }
+}
+
+# v1.11: what may be written about a config that would not load. The agent's own
+# messages (they name a path or a key, never a value) pass through; anything else
+# - a JSON parser error can quote a piece of the file, and the file holds the
+# token - is reduced to its exception type.
+function Get-IntakeConfigErrorText([string]$Message, [string]$TypeName) {
+  if ($Message -match '^Config (not found|missing required value)' -or $Message -match '^Config ProcessFilesModifiedAfterUtc is not a valid') { return $Message }
+  return "the config file could not be read as JSON ($TypeName)"
+}
+
+# v1.11: only ONE -Loop watcher per PC. The scheduled task already refuses a
+# second copy of itself (IgnoreNew), but a watcher started by hand beside it was
+# a second, uncoordinated poller. Returns state = acquired | held | unavailable
+# (unavailable = the lock itself failed; the agent then runs as 1.10 did).
+function Enter-IntakeSingleInstance {
+  param([string]$Name)
+  try {
+    $mutex = New-Object System.Threading.Mutex($false, $Name)
+    $got = $false
+    try { $got = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+    if ($got) { return @{ state = "acquired"; mutex = $mutex } }
+    $mutex.Dispose()
+    return @{ state = "held"; mutex = $null }
+  } catch [System.UnauthorizedAccessException] {
+    # the lock exists and belongs to a watcher running with higher rights
+    return @{ state = "held"; mutex = $null }
+  } catch {
+    return @{ state = "unavailable"; mutex = $null }
+  }
+}
+
 # ---------- claim files (same pattern as the RasterLink watcher) ----------
 
 function Get-IntakeClaimPath([string]$FilePath) { return "$FilePath.gsoclaim" }
+
+# v1.11: a claim written by THIS PC for a process that no longer exists (the
+# watcher crashed or was stopped mid-file) is orphaned - nobody is working on
+# that file, so it is reclaimed now instead of after ClaimStaleMinutes. A claim
+# from another PC, from a live process, or one that cannot be read is never
+# touched here (the age rule below still applies to those).
+function Test-IntakeClaimOrphaned([string]$ClaimText) {
+  if ([string]$ClaimText -notmatch '^(\S+) pid=(\d+) at=') { return $false }
+  $claimHost = $Matches[1]; $claimPid = [int]$Matches[2]
+  if ($claimHost -ne $env:COMPUTERNAME) { return $false }
+  if ($claimPid -eq $PID) { return $false }
+  return ($null -eq (Get-Process -Id $claimPid -ErrorAction SilentlyContinue))
+}
 
 function New-IntakeClaim([string]$FilePath, [int]$ClaimStaleMinutes) {
   $claimPath = Get-IntakeClaimPath $FilePath
@@ -148,6 +211,9 @@ function New-IntakeClaim([string]$FilePath, [int]$ClaimStaleMinutes) {
       if (Test-Path $claimPath) {
         $age = (Get-Date) - (Get-Item $claimPath).LastWriteTime
         if ($age.TotalMinutes -gt $ClaimStaleMinutes) { Remove-Item $claimPath -Force -Confirm:$false; continue }
+        $claimText = ""
+        try { $claimText = [System.IO.File]::ReadAllText($claimPath) } catch { $claimText = "" }
+        if (Test-IntakeClaimOrphaned $claimText) { Remove-Item $claimPath -Force -Confirm:$false; continue }
       }
       return $false
     }
@@ -176,9 +242,15 @@ function Get-LedgerPath($Config) { return (Join-Path $Config.LogFolder "gso-prin
 
 function Read-IntakeLedger($Config) {
   $ledger = @{}
+  # v1.11: FAIL CLOSED. In 1.10 an unreachable log folder or a failed read gave
+  # an EMPTY ledger without a word, and with an empty ledger a file that was
+  # already routed looks new. Now the pass is skipped (the loop's pass guard
+  # logs it and retries); only a reachable folder with no ledger file yet means
+  # "nothing routed so far".
+  if (!(Test-Path -LiteralPath $Config.LogFolder)) { throw "ledger_unavailable: the log folder is not reachable - nothing is processed until it is" }
   $path = Get-LedgerPath $Config
-  if (Test-Path $path) {
-    foreach ($line in (Get-Content $path -ErrorAction SilentlyContinue)) {
+  if (Test-Path -LiteralPath $path) {
+    foreach ($line in @(Get-Content -LiteralPath $path -ErrorAction Stop)) {
       try {
         $entry = $line | ConvertFrom-Json
         if ($entry.hash) { $ledger[[string]$entry.hash] = [string]$entry.decision }
@@ -192,6 +264,32 @@ function Add-IntakeLedgerEntry($Config, [string]$Hash, [string]$FileName, [strin
   if (!(Test-Path $Config.LogFolder)) { New-Item -ItemType Directory -Path $Config.LogFolder -Force | Out-Null }
   $entry = @{ hash = $Hash; fileName = $FileName; decision = $Decision; at = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json -Compress
   Add-Content -Path (Get-LedgerPath $Config) -Value $entry
+}
+
+# v1.11: a file this process already copied into a hot folder stays "routed"
+# for the rest of the run even when its ledger line could not be written. An
+# entry already in the ledger (including a later needs_review) is left alone.
+function Merge-RoutedThisRun($Ledger) {
+  foreach ($routedHash in @($script:RoutedThisRun.Keys)) {
+    if (-not $Ledger.ContainsKey($routedHash)) { $Ledger[$routedHash] = "routed" }
+  }
+}
+
+# v1.11: write the "routed" ledger lines that failed earlier (once per pass).
+function Save-UnsavedLedgerEntries($Config) {
+  foreach ($unsavedHash in @($script:LedgerUnsaved.Keys)) {
+    try {
+      Add-IntakeLedgerEntry $Config $unsavedHash ([string]$script:LedgerUnsaved[$unsavedHash]) "routed"
+      $script:LedgerUnsaved.Remove($unsavedHash)
+    } catch { }
+  }
+}
+
+# v1.11: remove claim files whose release failed on an earlier pass.
+function Clear-UnreleasedClaims {
+  foreach ($claimOwner in @($script:UnreleasedClaims.Keys)) {
+    try { Remove-IntakeClaim $claimOwner; $script:UnreleasedClaims.Remove($claimOwner) } catch { }
+  }
 }
 
 # ---------- ERP JSON calls ----------
@@ -238,6 +336,27 @@ function Get-RoutePlan($Config, [string]$FileName, [string]$Subfolder, [string]$
 function Send-IntakeReport($Config, [hashtable]$Outcome) {
   $payload = @{ token = $Config.UploadToken } + $Outcome
   return Invoke-IntakeJsonPost $Config $Config.ReportUrl $payload 60
+}
+
+# v1.11: the "routed" report is what records the print file on the job in the
+# ERP. 1.10 sent it once and ignored the answer, so one dropped request lost it.
+# Transient failures (no answer, 5xx) are retried; the endpoint is idempotent.
+function Send-IntakeReportWithRetry($Config, [hashtable]$Outcome, [int]$Attempts = 3, [int]$DelaySeconds = 3) {
+  $result = $null
+  for ($reportTry = 1; $reportTry -le $Attempts; $reportTry++) {
+    $result = Send-IntakeReport $Config $Outcome
+    if (-not $result.exception -and $result.status -ne 0 -and $result.status -lt 500) { break }
+    if ($reportTry -lt $Attempts) { Start-Sleep -Seconds $DelaySeconds }
+  }
+  return $result
+}
+
+# v1.11: the ERP's OWN "token not accepted" answer (HTTP 401 / 403 with its
+# JSON error naming the upload token) - not any 403 a proxy might return.
+function Test-TokenRejected($Result) {
+  if ($null -eq $Result) { return $false }
+  if ($Result.status -ne 401 -and $Result.status -ne 403) { return $false }
+  return ($null -ne $Result.json) -and ($Result.json.ok -eq $false) -and ([string]$Result.json.error -match 'upload token')
 }
 
 # ---------- go-live cutoff + reserved-folder scanning (pure, self-testable) ----------
@@ -516,15 +635,33 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
         Send-IntakeReport $Config @{ fileName = $File.Name; decision = "failed"; reason = "copy_length_mismatch"; fileHash8 = $sha8 } | Out-Null
         return
       }
-      Write-IntakeLog $Config "routed_to_hot_folder" $File.Name "as=$([System.IO.Path]::GetFileName($dest)) machine=$($plan.machine) rule=$($plan.machineRule) matchedBy=$($plan.rule)"
-      Send-IntakeReport $Config @{ fileName = $File.Name; decision = "routed"; rule = [string]$plan.rule; jobId = [string]$plan.jobId; jobTicket = [string]$plan.jobTicket; itemTicket = [string]$plan.itemTicket; ripName = [string]$plan.ripName; machine = [string]$plan.machine; fileHash8 = $sha8; fileHash = $hash } | Out-Null
-      # Preserve the original: move (never delete) into the routed archive.
-      if (!(Test-Path $Config.RoutedArchiveFolder)) { New-Item -ItemType Directory -Path $Config.RoutedArchiveFolder -Force | Out-Null }
-      $archiveDest = Get-CollisionSafeIntakeDestination $Config.RoutedArchiveFolder $File.Name $sha8
-      Move-Item -LiteralPath $File.FullName -Destination $archiveDest -Force -Confirm:$false
-      Write-IntakeLog $Config "original_archived" $File.Name "dest=$([System.IO.Path]::GetFileName($archiveDest))"
-      Add-IntakeLedgerEntry $Config $hash $File.Name "routed"
+      # v1.11 (G4): the copy IS in the hot folder. Record that FIRST - in memory
+      # (holds for the rest of this run whatever fails next) and in the ledger -
+      # BEFORE the report and the archive move. In 1.10 the ledger line came
+      # last, so a failed archive move left none and the next pass copied the
+      # same file into the hot folder again.
+      $script:RoutedThisRun[$hash] = $File.Name
       $Ledger[$hash] = "routed"
+      try {
+        Add-IntakeLedgerEntry $Config $hash $File.Name "routed"
+      } catch {
+        $script:LedgerUnsaved[$hash] = $File.Name
+        Write-IntakeLog $Config "ledger_write_failed" $File.Name "routed line not written yet ($($_.Exception.Message)); held in memory and retried next pass (sha8=$sha8)"
+      }
+      Write-IntakeLog $Config "routed_to_hot_folder" $File.Name "as=$([System.IO.Path]::GetFileName($dest)) machine=$($plan.machine) rule=$($plan.machineRule) matchedBy=$($plan.rule)"
+      $routedReport = Send-IntakeReportWithRetry $Config @{ fileName = $File.Name; decision = "routed"; rule = [string]$plan.rule; jobId = [string]$plan.jobId; jobTicket = [string]$plan.jobTicket; itemTicket = [string]$plan.itemTicket; ripName = [string]$plan.ripName; machine = [string]$plan.machine; fileHash8 = $sha8; fileHash = $hash }
+      if ($routedReport.exception -or $routedReport.status -ne 200) {
+        Write-IntakeLog $Config "report_failed" $File.Name "routed report not accepted (status=$($routedReport.status) exception=$($routedReport.exception)); the file IS in the hot folder and will not be routed again (sha8=$sha8)"
+      }
+      # Preserve the original: move (never delete) into the routed archive.
+      try {
+        if (!(Test-Path $Config.RoutedArchiveFolder)) { New-Item -ItemType Directory -Path $Config.RoutedArchiveFolder -Force | Out-Null }
+        $archiveDest = Get-CollisionSafeIntakeDestination $Config.RoutedArchiveFolder $File.Name $sha8
+        Move-Item -LiteralPath $File.FullName -Destination $archiveDest -Force -Confirm:$false
+        Write-IntakeLog $Config "original_archived" $File.Name "dest=$([System.IO.Path]::GetFileName($archiveDest))"
+      } catch {
+        Write-IntakeLog $Config "archive_move_failed" $File.Name "original left in Prints For Today ($($_.Exception.Message)); it is already routed and in the ledger, so it is NOT sent to the press again - move it by hand (sha8=$sha8)"
+      }
       return
     }
 
@@ -535,7 +672,9 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
     Add-IntakeLedgerEntry $Config $hash $File.Name "needs_review"
     $Ledger[$hash] = "needs_review"
   } finally {
-    if ($claimed) { Remove-IntakeClaim $File.FullName }
+    # v1.11: a claim that cannot be released (NAS dropped mid-file) is retried at
+    # the start of the next pass instead of blocking the file for ClaimStaleMinutes.
+    if ($claimed) { try { Remove-IntakeClaim $File.FullName } catch { $script:UnreleasedClaims[$File.FullName] = $true } }
   }
 }
 
@@ -760,6 +899,60 @@ function Invoke-IntakeSelfTest {
     Assert "plan payload carries dryRun as a JSON boolean" ($dryPayload -match '"dryRun":true')
     $planPayload = @{ token = "t"; fileName = "a.pdf"; subfolder = "GSO-20260718-0001 FLAVAZ"; fileHash = "h"; fileSize = 1; folderFiles = @("flavaz_og_3oz_F_g.pdf") } | ConvertTo-Json -Compress
     Assert "plan payload carries sibling names as a JSON array (even a single one)" ($planPayload -match '"folderFiles":\["flavaz_og_3oz_F_g\.pdf"\]')
+
+    # ---- v1.11: recovery (ledger fail-closed, routed-this-run, orphan claims, single instance) ----
+    $ledgerGone = $false; try { Read-IntakeLedger @{ LogFolder = (Join-Path $temp "no-such-log-folder") } | Out-Null } catch { $ledgerGone = ($_.Exception.Message -match '^ledger_unavailable') }
+    Assert "ledger read FAILS CLOSED when the log folder is unreachable (never an empty ledger)" $ledgerGone
+    $emptyLogs = Join-Path $temp "empty-logs"; New-Item -ItemType Directory -Path $emptyLogs | Out-Null
+    Assert "a reachable log folder with no ledger file yet is an empty ledger" ((Read-IntakeLedger @{ LogFolder = $emptyLogs }).Count -eq 0)
+
+    $script:RoutedThisRun = @{ "hash-run" = "run.pdf"; "hash-b" = "two with spaces.pdf" }
+    $merged = Read-IntakeLedger $ledgerConfig
+    Merge-RoutedThisRun $merged
+    Assert "a file routed in this run stays routed without a ledger line; an existing ledger entry is not overwritten" (($merged["hash-run"] -eq "routed") -and ($merged["hash-b"] -eq "needs_review") -and ($merged["hash-a"] -eq "routed"))
+    $script:RoutedThisRun = @{}
+
+    $script:LedgerUnsaved = @{ "hash-late" = "late.pdf" }
+    Save-UnsavedLedgerEntries @{ LogFolder = (Join-Path $temp "no-such-log-folder\x:y") }
+    Assert "an unsaved routed line survives a failed retry" ($script:LedgerUnsaved.ContainsKey("hash-late"))
+    Save-UnsavedLedgerEntries $ledgerConfig
+    Assert "an unsaved routed line is written on a later pass and then forgotten" (($script:LedgerUnsaved.Count -eq 0) -and ((Read-IntakeLedger $ledgerConfig)["hash-late"] -eq "routed"))
+
+    $deadProc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c exit" -PassThru -WindowStyle Hidden
+    $deadProc.WaitForExit(); $deadPid = $deadProc.Id
+    Assert "claim of a dead process on this PC is orphaned" (Test-IntakeClaimOrphaned "$env:COMPUTERNAME pid=$deadPid at=2026-11-20T00:00:00Z")
+    Assert "claim of this process, of another PC, or unreadable is NOT orphaned" ((-not (Test-IntakeClaimOrphaned "$env:COMPUTERNAME pid=$PID at=x")) -and (-not (Test-IntakeClaimOrphaned "OTHER-PC pid=$deadPid at=x")) -and (-not (Test-IntakeClaimOrphaned "")) -and (-not (Test-IntakeClaimOrphaned "garbage")))
+    $orphanTarget = Join-Path $temp "orphan.pdf"; Set-Content -Path $orphanTarget -Value "x"
+    [System.IO.File]::WriteAllText((Get-IntakeClaimPath $orphanTarget), "$env:COMPUTERNAME pid=$deadPid at=2026-11-20T00:00:00Z")
+    Assert "a fresh claim left by a dead process is reclaimed at once" (New-IntakeClaim $orphanTarget 30)
+    Remove-IntakeClaim $orphanTarget
+    [System.IO.File]::WriteAllText((Get-IntakeClaimPath $orphanTarget), "OTHER-PC pid=$deadPid at=2026-11-20T00:00:00Z")
+    Assert "a fresh claim from another PC is still respected" (-not (New-IntakeClaim $orphanTarget 30))
+    Remove-IntakeClaim $orphanTarget
+
+    Assert "config error text: the agent's own messages pass, a parser message is reduced to its type" (((Get-IntakeConfigErrorText "Config missing required value: UploadToken" "RuntimeException") -eq "Config missing required value: UploadToken") -and ((Get-IntakeConfigErrorText 'Invalid JSON primitive: gso_plog_secretvalue' "ArgumentException") -eq "the config file could not be read as JSON (ArgumentException)"))
+
+    $rejected = @{ status = 403; json = ('{"ok":false,"error":"Invalid or disabled upload token."}' | ConvertFrom-Json) }
+    $missing = @{ status = 401; json = ('{"ok":false,"error":"Missing upload token."}' | ConvertFrom-Json) }
+    Assert "token rejected = the ERP's own 401 / 403 answer" ((Test-TokenRejected $rejected) -and (Test-TokenRejected $missing))
+    Assert "a proxy 403, a 5xx, no answer or a 200 is NOT a token rejection" ((-not (Test-TokenRejected @{ status = 403; json = $null })) -and (-not (Test-TokenRejected @{ status = 403; json = ('{"ok":false,"error":"Forbidden"}' | ConvertFrom-Json) })) -and (-not (Test-TokenRejected @{ status = 503; json = $null })) -and (-not (Test-TokenRejected @{ status = 0; json = $null })) -and (-not (Test-TokenRejected @{ status = 200; json = ('{"ok":true}' | ConvertFrom-Json) })) -and (-not (Test-TokenRejected $null)))
+
+    $lockName = "Local\gso-intake-selftest-" + [guid]::NewGuid().ToString("N")
+    $lockA = Enter-IntakeSingleInstance $lockName
+    $otherShell = [powershell]::Create()
+    [void]$otherShell.AddScript("function Enter-IntakeSingleInstance { " + ${function:Enter-IntakeSingleInstance}.ToString() + " }; (Enter-IntakeSingleInstance '" + $lockName + "').state")
+    $otherState = [string](@($otherShell.Invoke())[0]); $otherShell.Dispose()
+    Assert "single instance: the first watcher gets the lock, a second one is refused" (($lockA.state -eq "acquired") -and ($otherState -eq "held"))
+    if ($lockA.mutex) { $lockA.mutex.ReleaseMutex(); $lockA.mutex.Dispose() }
+
+    $script:reportCalls = 0
+    function Send-IntakeReport($Config, [hashtable]$Outcome) { $script:reportCalls++; if ($script:reportCalls -lt 3) { return @{ status = 0; exception = "no route" } } else { return @{ status = 200; exception = $null } } }
+    $retried = Send-IntakeReportWithRetry @{} @{ fileName = "a.pdf" } 3 0
+    Assert "routed report is retried on a transient failure and stops at the first answer" (($retried.status -eq 200) -and ($script:reportCalls -eq 3))
+    $script:reportCalls = 0
+    function Send-IntakeReport($Config, [hashtable]$Outcome) { $script:reportCalls++; return @{ status = 403; exception = $null } }
+    $refused = Send-IntakeReportWithRetry @{} @{ fileName = "a.pdf" } 3 0
+    Assert "a refused report (4xx) is not retried" (($refused.status -eq 403) -and ($script:reportCalls -eq 1))
   } finally {
     Remove-Item $temp -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
   }
@@ -771,7 +964,14 @@ function Invoke-IntakeSelfTest {
 
 if ($SelfTest) { Invoke-IntakeSelfTest }
 
-$config = Read-IntakeConfig $ConfigPath
+# v1.11: a missing / broken config used to end the hidden process with nothing
+# written anywhere. It still stops (exit 1), but says why in the local log.
+try {
+  $config = Read-IntakeConfig $ConfigPath
+} catch {
+  Write-IntakeLocalLog "config_error" ("agent did not start: " + (Get-IntakeConfigErrorText ([string]$_.Exception.Message) $_.Exception.GetType().Name))
+  exit 1
+}
 if ($Health) { Invoke-IntakeHealth $config; exit 0 }
 
 # Patch A: NO CUTOFF = NO PROCESSING. The agent never falls back to "every file
@@ -783,14 +983,31 @@ if ($null -eq $config.CutoffUtc) {
 }
 
 $modeLabel = if ($DryRun) { "dry-run" } elseif ($Loop) { "loop" } else { "once" }
+
+# v1.11: one -Loop watcher per PC (exit 6). -Once / -DryRun / -Health / -SelfTest
+# never take the lock, so a person can still run a check beside the watcher.
+if ($Loop -and -not $Once -and -not $DryRun) {
+  $script:InstanceLock = Enter-IntakeSingleInstance "Global\GsoPrintIntakeAgentLoop"
+  if ($script:InstanceLock.state -eq "held") {
+    Write-IntakeLog $config "duplicate_instance" "-" "another -Loop watcher is already running on this PC; this one stops (exit 6)"
+    exit 6
+  }
+  if ($script:InstanceLock.state -ne "acquired") { Write-IntakeLog $config "instance_lock_unavailable" "-" "single-instance lock could not be created; continuing without it" }
+}
+
 Write-IntakeLog $config "agent_started" "-" "version=$ScriptVersion mode=$modeLabel source=$($config.PrintsForTodayFolder)"
 
 $lastScanSummary = ""
+$lastPassError = ""
+$passErrorRepeats = 0
 while ($true) {
   # v1.10: nothing thrown during a pass ends the loop (exit 2 / 3 / 5 are not
   # exceptions and still stop the agent on purpose). The next pass retries.
   try {
+  if (-not $DryRun) { Clear-UnreleasedClaims }
   $ledger = Read-IntakeLedger $config
+  if (-not $DryRun) { Save-UnsavedLedgerEntries $config }
+  Merge-RoutedThisRun $ledger
   # 15H.5: ONE bounded pending-retries call per pass. Hashes the server says
   # to re-process (owner Reprint / release / assignment) override the local
   # ledger cache so an already-routed file can be re-delivered when staff
@@ -798,6 +1015,13 @@ while ($true) {
   # (fail closed - normal processing continues, nothing re-routes).
   if (-not $DryRun) {
     $pendingResult = Invoke-IntakeJsonPost $config $config.StatusUrl @{ token = $config.UploadToken; pending = $true; agentVersion = $ScriptVersion; agentHost = $env:COMPUTERNAME } 20
+    # v1.11: a rotated / disabled token used to stop the agent only when a NEW
+    # file needed a plan; until then it looped with a dead token and no word in
+    # the log. The same exit 2 now happens on the first pass after the change.
+    if (Test-TokenRejected $pendingResult) {
+      Write-IntakeLog $config "agent_stopped" "-" "HTTP $($pendingResult.status) upload token not accepted by the ERP (rotated or disabled); fix the config token and restart. Nothing was processed; files wait where they are."
+      exit 2
+    }
     if (-not $pendingResult.exception -and $pendingResult.status -eq 200 -and $pendingResult.json -and $pendingResult.json.ok) {
       foreach ($pendingRow in @($pendingResult.json.pending)) {
         if ($pendingRow -and $pendingRow.hash -and $ledger.ContainsKey([string]$pendingRow.hash)) {
@@ -834,8 +1058,16 @@ while ($true) {
       Write-IntakeLog $config "file_error" $file.Name "unexpected: $($_.Exception.Message); file left in place"
     }
   }
+  $lastPassError = ""
   } catch {
-    Write-IntakeLog $config "pass_error" "-" "unexpected: $($_.Exception.Message); retrying next pass"
+    # v1.11: the same failure on every pass (NAS down overnight) is logged the
+    # first time and then on every 20th repeat, not every PollSeconds.
+    $passError = [string]$_.Exception.Message
+    if ($passError -ne $lastPassError -or $passErrorRepeats -ge 20) {
+      Write-IntakeLog $config "pass_error" "-" "unexpected: $passError; retrying next pass"
+      $passErrorRepeats = 0
+    } else { $passErrorRepeats++ }
+    $lastPassError = $passError
   }
   if (-not $Loop -or $Once -or $DryRun) { break }
   Start-Sleep -Seconds $config.PollSeconds

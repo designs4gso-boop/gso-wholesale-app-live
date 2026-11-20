@@ -3,6 +3,24 @@
 How a job moves through the shop. Written for production staff; no code knowledge needed.
 Last updated 2026-11-19.
 
+## The whole flow on one line
+
+**JOB EXISTS → ITEM TICKET → FILE PREP → PRINT INTAKE → ROUTING → RIP → PRINT → QC → COMPLETE**
+
+| Step | Who / what | Where you see it |
+|---|---|---|
+| Job exists | Admin creates it (or a paid web order does) | Production Board, column **New** |
+| Item ticket | The ERP gives every item its own ticket | Job page, **Copy item ticket** |
+| File prep | You | Your design software |
+| Print Intake | You save the file in the job's folder; the watcher picks it up | Job page: *Awaiting files* → *print file(s) received* |
+| Routing | The watcher sends it to the right printer | The printer's hot folder |
+| RIP / Print | You | RasterLink / VersaWorks |
+| QC | You | Job page, QC step |
+| Complete | Pack → Ready → shipment or pickup → Complete Job | Job leaves the board |
+
+Before the first file of the day, glance at **Incoming Print Files**: a green line means the
+watcher is running. Red means new files are **not** being picked up (see section 14).
+
 ## The one rule
 
 **The job comes first. Files never create a job.**
@@ -69,6 +87,10 @@ Both layers of an item must be in the same job folder. They are sent to the same
 | White + Gloss | Roland |
 | White only | Auto picks the less busy press when machine load is known; otherwise the job says which |
 
+**White today:** White + Gloss always goes to the Roland. A file with a white layer (`_w`) on a
+Mimaki item is held for review, not sent. Printing white on the Mimaki is an open owner decision —
+do not send white work to the Mimaki by choosing it on a job until James says so.
+
 You do not choose the printer by where you save the file. The job decides. If a file cannot be
 routed safely it waits in Incoming Print Files with the reason.
 
@@ -117,7 +139,7 @@ You enter:
 - **Reason** (pick from the list).
 - **How many pieces** to reprint. This is required. The ordered quantity does not change:
   500 ordered and 25 reprinted stays an order of 500.
-- **Type:** reprint (print again) or remake (redo the piece).
+- **Type:** reprint (print again) or remake (redo the piece). Use *remake* when the whole piece is made again from the start, *reprint* when only the print is run again.
 - **Who pays:** internal — no charge, warranty / replacement — no charge, or customer-paid.
   Nothing is charged from this screen. For a customer-paid replacement the owner / admin creates
   the sale.
@@ -133,7 +155,11 @@ What happens next:
   first.
 
 A finished job that needs a reprint is reopened by the owner or a manager (**More tools → Reopen
-for reprint**).
+for reprint**). A file saved with a finished job's ticket is held until the job is reopened.
+
+Corrected artwork **during** a reprint: finish or cancel the reprint first, then save the corrected
+file. Saved in the middle of an open reprint it is treated as a new revision of the original, and
+its press result is counted on the original run.
 
 ## 10. Reorders
 
@@ -168,8 +194,9 @@ shown on every board card.
 The RIP results come back by item ticket — which is why the ticket is in the routed file name.
 A reprint's result comes back with its run mark (`__P1-A1`), so the job page shows ink and time
 for the original and for each reprint separately ("Press result — Run 2 — Reprint: …").
-Mimaki results are collected automatically once the sync is switched on; Roland results are
-imported from its CSV export by the owner or a manager. Production does not need to enter ink or
+Mimaki results are collected automatically once the sync is switched on (after the first real job
+proves it); Roland results are imported by hand from its CSV export by the owner or a manager —
+the old automatic Roland task is disabled and stays off. Production does not need to enter ink or
 time by hand.
 
 ## 14. If something goes wrong
@@ -184,6 +211,9 @@ time by hand.
 | Red banner on Incoming Print Files: "The print-file watcher has not checked in" | The watcher on the RIP PC has stopped. Sign in to Windows on the RIP PC, or start the task **GSO Print Intake Agent**. Tell the owner. |
 | Board card says *On press now: Run 2 · Reprint · 25 pcs* | A reprint is open on that job. It needs a new QC PASS before the job can ship. |
 | Wrong item on a file | Do not rename it to another ticket. Tell the production lead or owner; the file is re-assigned from Incoming Print Files. |
+| File held with "…on closed job" | The job is finished or cancelled. A reprint needs the job reopened first (owner or manager). |
+| Two different files came out with the same name at the press | Their names differed only by spaces or punctuation (`HEATH F.pdf` and `HEATH_F.pdf`). Rename one so the names really differ, and save it again. |
+| A reorder with the same artwork | Copy the approved file from the routed archive into the **new** job's folder. The earlier job's file history line moves to the new job; the earlier job itself is not changed. |
 
 ## Who does what
 
