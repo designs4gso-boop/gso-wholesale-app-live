@@ -51,6 +51,50 @@ export function parseReprintQuantity(raw: unknown): { ok: true; quantity: number
   return { ok: true, quantity };
 }
 
+/* ---------------- reprint request identity (2026-11-20) ---------------- */
+
+// One id per rendered reprint form. The server keeps it with the run it created
+// (in the reprint event, no new column), so the SAME form sent twice — double
+// tap, retry, a replay after QC — is answered "already recorded" and never
+// creates a second run. A later reprint is a new form and a new id.
+
+const REPRINT_REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,120}$/;
+
+export function isReprintRequestId(value: unknown): value is string {
+  return typeof value === "string" && REPRINT_REQUEST_ID_RE.test(value);
+}
+
+/** A fresh request id (browser or server). Not a secret: it only tells two sends of one form from two forms. */
+export function newReprintRequestId(): string {
+  const cryptoApi: any = (globalThis as any).crypto;
+  if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
+  return `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}${Math.random().toString(36).slice(2, 12)}`;
+}
+
+export type ReprintRequestRecord = { requestId: string; itemId: string; runNumber: number; runLabel: string | null };
+
+/** What the reprint event stores (its oldValue) so the request can be recognised again. */
+export function reprintRequestRecord(record: ReprintRequestRecord): string {
+  return JSON.stringify({ requestId: record.requestId, itemId: record.itemId, runNumber: record.runNumber, runLabel: record.runLabel });
+}
+
+/** The reprint this exact request already created for this exact item, or null. Exact match only. */
+export function findReprintRequest(events: Array<{ eventType?: string | null; oldValue?: string | null }>, requestId: string, itemId: string): ReprintRequestRecord | null {
+  if (!isReprintRequestId(requestId)) return null;
+  for (const event of events || []) {
+    if (event?.eventType && event.eventType !== "production_reprint_requested") continue;
+    const text = String(event?.oldValue || "");
+    if (!text.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.requestId === requestId && String(parsed?.itemId) === String(itemId)) {
+        return { requestId, itemId: String(itemId), runNumber: Number(parsed.runNumber) || 0, runLabel: parsed.runLabel ? String(parsed.runLabel) : null };
+      }
+    } catch { /* not a request record */ }
+  }
+  return null;
+}
+
 export type RunRow = {
   id?: string;
   itemId: string;

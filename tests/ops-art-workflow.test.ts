@@ -33,7 +33,8 @@ describe("art preflight", () => {
   it("warns on RGB, rotation, fonts, missing cutline and white coverage; NEEDS_DESIGNER on unknowns", () => {
     const w = runArtPreflight({ family: "stickers-labels", widthIn: 5, heightIn: 4, cutType: "contour", whiteLayers: 1 }, [{ ...clean, colorSpace: "RGB", fontsOutlined: false, hasCutlineLayer: false }]);
     expect(w.status).toBe("WARN");
-    expect(w.routing?.printer).toBe("unassigned"); // White alone no longer forces the Roland
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    expect(w.routing?.printer).toBe("roland"); // was "unassigned" (AUTO + white needed load data)
     expect(w.findings.map((f) => f.code)).toEqual(expect.arrayContaining(["COLOR_SPACE", "ARTBOARD_ROTATED", "FONTS_NOT_OUTLINED", "CUTLINE_MISSING", "WHITE_COVERAGE_REQUIRED"]));
     const u = runArtPreflight({ family: "stickers-labels", widthIn: 4, heightIn: 5, cutType: "contour" }, [{ fileName: "a.ai" }]);
     expect(u.status).toBe("NEEDS_DESIGNER");

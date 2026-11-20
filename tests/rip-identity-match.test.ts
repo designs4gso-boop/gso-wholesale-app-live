@@ -208,7 +208,9 @@ describe("15H.2 shared strict RIP identity matcher", () => {
 
   it("19+20. no machine-routing or pricing files were touched by 15H.2", () => {
     const routing = readFileSync("app/lib/print-intake-routing.server.ts", "utf8");
-    expect(routing).toContain('if (!choice.ok) return { machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] };');
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    // The pinned load-balancing line is gone with it (owner rule, not 15H.2); the pin now holds the white rule line.
+    expect(routing).toContain('return { machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] };');
     // updated 2026-11-18: Mimaki gloss restored — the routing file legitimately changed (owner rule, not 15H.2): the old
     // `gloss_requires_roland` return is gone; the pin now holds the current filename-decider default line instead.
     expect(routing).toContain('return { machine: "mimaki", machineRule: "default_cmyk", mode: hints.mode, reasons: [hints.glossLayers > 0 ? "cmyk_gloss_default_mimaki" : "cmyk_only_default_mimaki"] };');

@@ -162,48 +162,54 @@ describe("(f) contradictory data still reviews", () => {
   });
 });
 
-describe("(g) WHITE is unchanged: nothing explicit -> AUTO by complete load, else review", () => {
+// PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+// The (g) block pinned "WHITE is unchanged: nothing explicit -> AUTO by complete load, else review". Each test below keeps
+// its inputs; only the expected result changed.
+const WHITE_TO_ROLAND = { machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] };
+describe("(g) WHITE (updated 2026-11-20: Mimaki white not approved): nothing explicit -> the Roland, never load-balanced", () => {
   const whiteItems: Array<[string, Partial<IntakeItem>]> = [
     ["selectedFinish White + CMYK", { selectedFinish: "White + CMYK" }],
     ["materialSummary White Layers: 1X", { selectedFinish: "Matte", materialSummary: "Material: Holographic | Gloss Layers: 0X | White Layers: 1X" }],
   ];
 
-  it.each(whiteItems)("%s: no load -> no press (auto_machine_load_unavailable_select_printer)", (_label, overrides) => {
+  it.each(whiteItems)("%s: no load -> the Roland (was: no press, auto_machine_load_unavailable_select_printer)", (_label, overrides) => {
     const it_ = item(overrides);
     expect(needsWhiteLayer(it_)).toBe(true);
     expect(needsGloss(it_)).toBe(false);
-    expect(decideMachine(it_)).toEqual(AUTO_UNAVAILABLE);
-    expect(decideMachine(it_, "", null)).toEqual(AUTO_UNAVAILABLE);
+    expect(decideMachine(it_)).toEqual(WHITE_TO_ROLAND);
+    expect(decideMachine(it_, "", null)).toEqual(WHITE_TO_ROLAND);
   });
 
-  it.each(whiteItems)("%s: complete load -> the less busy press (auto_load_balanced)", (_label, overrides) => {
+  it.each(whiteItems)("%s: complete load -> still the Roland, even when the Mimaki is less busy (was: auto_load_balanced)", (_label, overrides) => {
     const it_ = item(overrides);
-    expect(decideMachine(it_, "", load(7, 1))).toEqual({ machine: "roland", machineRule: "auto_load_balanced", reasons: ["auto_less_busy_roland_by_open_workload"] });
-    expect(decideMachine(it_, "", load(1, 7))).toEqual({ machine: "mimaki", machineRule: "auto_load_balanced", reasons: ["auto_less_busy_mimaki_by_open_workload"] });
+    expect(decideMachine(it_, "", load(7, 1))).toEqual(WHITE_TO_ROLAND);
+    expect(decideMachine(it_, "", load(1, 7))).toEqual(WHITE_TO_ROLAND); // was mimaki / auto_less_busy_mimaki_by_open_workload
   });
 
-  it.each(whiteItems)("%s: incomplete or tied load is not 'less busy' -> review", (_label, overrides) => {
+  it.each(whiteItems)("%s: incomplete or tied load -> the Roland (load is not consulted for white; was: review)", (_label, overrides) => {
     const it_ = item(overrides);
-    expect(decideMachine(it_, "", load(0, 9, 1))).toEqual(AUTO_UNAVAILABLE); // unattributed open items
-    expect(decideMachine(it_, "", load(3, 3))).toEqual(AUTO_UNAVAILABLE); // tie
+    expect(decideMachine(it_, "", load(0, 9, 1))).toEqual(WHITE_TO_ROLAND); // unattributed open items
+    expect(decideMachine(it_, "", load(3, 3))).toEqual(WHITE_TO_ROLAND); // tie
   });
 
   it("white never takes the CMYK Mimaki default", () => {
     for (const [, overrides] of whiteItems) {
       const decision = decideMachine(item(overrides));
       expect(decision.machineRule).not.toBe("default_cmyk");
-      expect(decision.machine).toBeNull();
+      expect(decision.machine).not.toBe("mimaki");
+      expect(decision.machine).toBe("roland"); // 2026-11-20: was null (review)
     }
   });
 
-  it("an explicit press still routes white (unchanged)", () => {
-    expect(decideMachine(item({ selectedFinish: "White + CMYK", machineSummary: "Mimaki UCJV300-130" }))).toEqual({ machine: "mimaki", machineRule: "explicit_erp_machine", reasons: ["explicit_erp_mimaki_assignment"] });
+  it("an explicit ROLAND still routes white; an explicit MIMAKI on white is held (2026-11-20; was: routed to the Mimaki)", () => {
+    expect(decideMachine(item({ selectedFinish: "White + CMYK", machineSummary: "Mimaki UCJV300-130" }))).toEqual({ machine: null, machineRule: null, reasons: ["white_job_but_mimaki_selected_contradiction"] });
     expect(decideMachine(item({ selectedFinish: "White + CMYK", machineSummary: "Roland LG-640" }))).toEqual({ machine: "roland", machineRule: "explicit_erp_machine", reasons: ["explicit_erp_roland_assignment"] });
   });
 
-  it("decideMachineFromFilename: white layers keep AUTO", () => {
-    expect(decideMachineFromFilename("Cust_2x white_labels.pdf")).toMatchObject({ machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
-    expect(decideMachineFromFilename("Cust_2x white_labels.pdf", load(7, 1))).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" });
+  it("decideMachineFromFilename: white layers go to the Roland (was: AUTO by load, else review)", () => {
+    expect(decideMachineFromFilename("Cust_2x white_labels.pdf")).toMatchObject(WHITE_TO_ROLAND);
+    expect(decideMachineFromFilename("Cust_2x white_labels.pdf", load(7, 1))).toMatchObject(WHITE_TO_ROLAND);
+    expect(decideMachineFromFilename("Cust_2x white_labels.pdf", load(1, 7))).toMatchObject(WHITE_TO_ROLAND);
   });
 });
 

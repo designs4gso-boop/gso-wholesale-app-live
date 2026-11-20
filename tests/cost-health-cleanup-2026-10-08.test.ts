@@ -92,7 +92,8 @@ describe("ISSUE 2 — 4x5 blank bag live-data authority (resolved by owner decis
 describe("ISSUE 3 (corrected 2026-11-11; updated 2026-11-18: Mimaki gloss restored) — the Mimaki prints CMYK + White + Gloss", () => {
   it("routing authority (updated 2026-11-18: Mimaki gloss restored) sends untagged gloss to the Mimaki; an explicit Mimaki assignment is a valid route on white AND on gloss", () => {
     expect(decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
-    expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any).machine).toBe("mimaki");
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    expect(decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any)).toEqual({ machine: null, machineRule: null, reasons: ["white_job_but_mimaki_selected_contradiction"] }); // was machine "mimaki"
     expect(decideMachine({ selectedFinish: "Spot Gloss", materialSummary: "spot gloss", machineSummary: "Mimaki UCJV300-130" } as any)).toEqual({ machine: "mimaki", machineRule: "explicit_erp_machine", reasons: ["explicit_erp_mimaki_assignment"] });
     expect(CANONICAL_INK_RATES.mimakiGlossPerMl).toBeCloseTo(0.09, 12); // 2026-11-18: Mimaki clear / gloss restored — $90 per 1000 ml landed (the shared production router above follows the same rule since 2026-11-18)
   });

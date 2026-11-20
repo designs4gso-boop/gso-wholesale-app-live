@@ -17,6 +17,15 @@
 // GLOSS is what forces the Roland; White alone does not. The Mimaki has no
 // gloss channel (CANONICAL_INK_RATES.mimakiGlossPerMl is deliberately null).
 //
+// 2026-11-20 — OWNER RULE, SUPERSEDES THE WHITE ROWS ABOVE (routing only):
+// "Mimaki white is NOT re-approved." ONE rule everywhere in the ERP:
+//   WHITE + explicit MIMAKI  -> BLOCK (MIMAKI_WHITE_NOT_APPROVED), clear reason.
+//   WHITE + AUTO             -> the Roland. Never defaulted or load-balanced
+//                               onto the Mimaki.
+// Roland white is unchanged. MACHINE_CAPABILITIES (what a press can physically
+// print), every calibration identity, every rate and every cost figure are
+// unchanged — this is the press choice only.
+//
 // Compatibility and COST calibration are separate: Mimaki White is supported
 // operationally but is costed only from its OWN approved calibration
 // ("mimaki-white") — never from the Roland's. Missing that row is
@@ -215,6 +224,8 @@ export const ROUTING_REASONS = {
   mimakiGlossUnsupported: "MIMAKI_GLOSS_UNSUPPORTED",
   /** Mimaki White is supported, but no approved Mimaki White cost calibration exists. */
   mimakiWhiteCalibrationRequired: "MIMAKI_WHITE_CALIBRATION_REQUIRED",
+  /** 2026-11-20 (owner): white ink is not approved on the Mimaki — an explicit Mimaki on a white job is blocked. */
+  mimakiWhiteNotApproved: "MIMAKI_WHITE_NOT_APPROVED",
   /** AUTO with two eligible presses and no defensible load answer. */
   autoMachineLoadUnavailable: AUTO_MACHINE_LOAD_UNAVAILABLE,
   /** White selected with no coverage supplied. Never defaulted. */
@@ -340,8 +351,17 @@ export function resolveCanonicalMachineRouting(input: MachineRoutingInput): Mach
     overrideApplied = true;
     routingBasis = `${parts} job explicitly routed to the ${printerSelection === "mimaki" ? "Mimaki UCJV300-130" : "Roland LG-640"}.`;
     autoSelection = { status: "explicit", detail: "Operator-selected press." };
+    if (printerSelection === "mimaki" && whiteLayers > 0) {
+      // 2026-11-20 (owner): Mimaki white is NOT approved. The selection is kept as entered and the job
+      // is blocked with a clear reason; nothing is costed differently (the calibration block below stands).
+      reasons.push(ROUTING_REASONS.mimakiWhiteNotApproved);
+      blockers.push(
+        `${ROUTING_REASONS.mimakiWhiteNotApproved}: white ink is not approved on the Mimaki UCJV300-130. Route this job to the Roland (or Auto), or remove the white layer(s).`,
+      );
+    }
   } else {
-    const compatible = compatiblePrinters({ whiteLayers, glossLayers });
+    // 2026-11-20 (owner): AUTO never puts a white job on the Mimaki (not by default, not by load).
+    const compatible = compatiblePrinters({ whiteLayers, glossLayers }).filter((printer) => whiteLayers === 0 || printer !== "mimaki");
     const ready = input.costReadyPrinters ? compatible.filter((p) => input.costReadyPrinters!.includes(p)) : compatible;
     // No press is cost-ready: balance among the compatible ones; calibration then blocks.
     const candidates = ready.length ? ready : compatible;

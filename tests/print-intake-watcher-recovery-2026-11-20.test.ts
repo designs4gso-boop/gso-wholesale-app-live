@@ -220,8 +220,15 @@ describe("6. token rotation exists server-side and is owner-only", () => {
     // the only thing ever printed about a token is its length
     expect(helper).not.toMatch(/Write-(Host|Output)[^\n]*\$(first|second|newToken)\b(?!\.Length)/);
     expect(helper).not.toMatch(/Write-(Host|Output)[^\n]*\.current\b(?!\.Length)/);
-    expect(helper).not.toContain("Start-ScheduledTask");
-    expect(helper).not.toContain("Stop-ScheduledTask");
+    // 2026-11-20 (afternoon): the helper gained an OPT-IN -RestartWatcher that stops + starts the EXISTING task, so
+    // "contains no Stop/Start-ScheduledTask" went stale. "By itself" still holds and is pinned more exactly: outside
+    // the -RestartWatcher block no line runs a Stop/Start, the block acts on the one named task, and nothing is killed.
+    const restartBlock = helper.slice(helper.indexOf("if ($RestartWatcher) {\n  # Only the EXISTING"), helper.indexOf('Write-Host "VERIFY'));
+    expect(restartBlock.length).toBeGreaterThan(200);
+    expect(restartBlock).toContain("Stop-ScheduledTask -TaskName $WatcherTaskName -ErrorAction Stop");
+    expect(restartBlock).toContain("Start-ScheduledTask -TaskName $WatcherTaskName -ErrorAction Stop");
+    expect(helper.replace(restartBlock, "")).not.toMatch(/^\s*(Start|Stop)-ScheduledTask /m);
+    expect(helper).toContain("[switch]$RestartWatcher,");
     expect(helper).not.toContain("Stop-Process");
   });
 });

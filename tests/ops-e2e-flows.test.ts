@@ -100,7 +100,10 @@ describe("GSO flow: sticker bag order from lead to invoice readiness", () => {
     // updated 2026-11-18: Mimaki gloss restored — unassigned CMYK and unassigned gloss default to the Mimaki (no load needed);
     // white runs on the assigned Mimaki; gloss on an assigned Mimaki is a valid route (no longer a contradiction);
     // an unassigned WHITE item is unchanged: no load data -> blocks for a press choice.
-    expect(dispatch.lines.map((l) => [l.decision, l.machine])).toEqual([["DISPATCH", "mimaki"], ["DISPATCH", "mimaki"], ["DISPATCH", "mimaki"], ["DISPATCH", "mimaki"], ["BLOCK", null]]);
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    // (was: i3 white on the Mimaki DISPATCH mimaki; i5 unassigned white BLOCK for a press choice)
+    expect(dispatch.lines.map((l) => [l.decision, l.machine])).toEqual([["DISPATCH", "mimaki"], ["DISPATCH", "mimaki"], ["BLOCK", null], ["DISPATCH", "mimaki"], ["DISPATCH", "roland"]]);
+    expect(dispatch.lines[2].reasons).toEqual(["white_job_but_mimaki_selected_contradiction"]);
     const load = { source: "t", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 0, estimatedMinutes: 0 }, roland: { openItems: 2, estimatedMinutes: 45 } } };
     expect(planDispatch([{ id: "i1", itemTicket: "GSO-A-01", productTitle: "matte", selectedFinish: "matte", materialSummary: "matte", machineSummary: null }], load).lines[0].machine).toBe("mimaki");
 

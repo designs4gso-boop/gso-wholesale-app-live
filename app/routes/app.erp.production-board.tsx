@@ -15,7 +15,7 @@ import { Link, useLoaderData, useNavigate, useRouteLoaderData, useSearchParams }
 import type { CSSProperties } from "react";
 import { Page } from "@shopify/polaris";
 import { loader as productionLoader } from "./app.erp.production";
-import { ROLE_STAGE_FOCUS, buildSimpleBoard, toBoardCard, type BoardCard, type SimpleStageKey } from "../lib/simple-production";
+import { ROLE_STAGE_FOCUS, boardCardDisplay, buildSimpleBoard, toBoardCard, type BoardCard, type SimpleStageKey } from "../lib/simple-production";
 import { CLASSIC_PRODUCTION_HREF, NEW_JOB_HREF, jobWorkspaceHref } from "../lib/simple-nav";
 import { showsProductionControl } from "../lib/production-role-access";
 
@@ -40,11 +40,11 @@ function formatDue(card: BoardCard) {
   return formatDueDate(card.dueDate, { month: "short", day: "numeric" });
 }
 
-function Field({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+function Field({ label, value, strong, wrap }: { label: string; value: string; strong?: boolean; wrap?: boolean }) {
   return (
-    <div style={{ minWidth: 0 }}>
+    <div style={{ minWidth: 0, ...(wrap ? { gridColumn: "1 / -1" } : {}) }}>
       <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</div>
-      <div style={{ fontSize: 14, fontWeight: strong ? 700 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
+      <div style={{ fontSize: 14, fontWeight: strong ? 700 : 500, ...(wrap ? { overflowWrap: "anywhere" as const } : { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }) }}>{value}</div>
     </div>
   );
 }
@@ -52,6 +52,7 @@ function Field({ label, value, strong }: { label: string; value: string; strong?
 function JobBoardCard({ card }: { card: BoardCard }) {
   const tone = TONE[card.nextTone] || TONE.action;
   const priority = PRIORITY_LABEL[card.priority];
+  const show = boardCardDisplay(card);
   return (
     <div style={{ border: `1px solid ${card.overdue ? "#fca5a5" : "#e5e7eb"}`, borderRadius: 12, background: "white", padding: 12, display: "grid", gap: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "start" }}>
@@ -63,25 +64,25 @@ function JobBoardCard({ card }: { card: BoardCard }) {
         NEXT: {card.next}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <Field label="Quantity" value={card.quantity > 0 ? card.quantity.toLocaleString() : "Not set"} />
+        <Field label={show.quantityLabel} value={show.quantityValue} />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4 }}>Due</div>
           <div style={{ fontSize: 14, fontWeight: 700, color: card.overdue ? "#b91c1c" : "#111827" }}>{formatDue(card)}{card.overdue ? " · LATE" : ""}</div>
         </div>
-        <Field label="Machine" value={card.machine || "Not assigned"} />
         <Field label="Assigned to" value={card.assignedTo || "Nobody yet"} />
         <Field label="Items" value={String(card.itemCount)} />
-        <Field label="Finish" value={card.finish || "Not set"} />
+        <Field label={show.machineLabel} value={show.machineValue} wrap={show.machineWrap} />
+        <Field label={show.finishLabel} value={show.finishValue} wrap={show.finishWrap} />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4 }}>Files</div>
-          <div style={{ fontSize: 14, fontWeight: card.awaitingFiles ? 700 : 500, color: card.awaitingFiles ? "#92400e" : "#111827" }}>{card.filesLabel}</div>
+          <div style={{ fontSize: 14, fontWeight: card.awaitingFiles || / held$/.test(card.filesLabel) ? 700 : 500, color: / held$/.test(card.filesLabel) ? "#b91c1c" : card.awaitingFiles ? "#92400e" : "#111827" }}>{card.filesLabel}</div>
         </div>
         {card.qcLabel ? <Field label="QC" value={card.qcLabel} /> : null}
         {card.reprintLabel ? <Field label="Reprints" value={card.reprintLabel} /> : null}
         {card.activeRunLabel ? <Field label="On press now" value={card.activeRunLabel} /> : null}
         {card.fulfillmentLabel ? <Field label="Packed" value={card.fulfillmentLabel} /> : null}
       </div>
-      {card.holdReason ? <div style={{ fontSize: 13, color: "#991b1b" }}>Hold: {card.holdReason}</div> : null}
+      {show.holdLine ? <div style={{ fontSize: 13, color: "#991b1b", overflowWrap: "anywhere" }}>{show.holdLine}</div> : null}
       {card.reorder ? <div style={{ fontSize: 13, color: "#1e3a8a", fontWeight: 600 }}>Reorder of an earlier item</div> : null}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 12, color: "#6b7280" }}>{card.statusLabel}</span>
@@ -96,6 +97,13 @@ function JobBoardCard({ card }: { card: BoardCard }) {
   );
 }
 
+/** What an attention-strip row adds under the customer: why it is held, or the reprint that is open. */
+function attentionLine(card: BoardCard): string {
+  if (card.status === "on_hold") return boardCardDisplay(card).holdLine;
+  if (card.status === "reprint_needed") return card.activeRunLabel ? `On press now: ${card.activeRunLabel}` : "No reprint started yet — open the job";
+  return "";
+}
+
 function AttentionGroup({ title, cards, color }: { title: string; cards: BoardCard[]; color: string }) {
   return (
     <details style={{ flex: "1 1 220px", minWidth: 0, border: `1px solid ${cards.length ? color : "#e5e7eb"}`, borderRadius: 12, background: "white", padding: "10px 12px" }}>
@@ -106,9 +114,13 @@ function AttentionGroup({ title, cards, color }: { title: string; cards: BoardCa
       {cards.length ? (
         <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
           {cards.map((card) => (
-            <Link key={card.id} to={jobWorkspaceHref(card.id)} style={{ display: "flex", justifyContent: "space-between", gap: 8, minHeight: 40, alignItems: "center", padding: "4px 8px", borderRadius: 8, background: "#f9fafb", color: "#111827", textDecoration: "none", fontSize: 13 }}>
-              <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>{card.customer} — {card.product}</span>
-              <span style={{ color: "#6b7280", whiteSpace: "nowrap" }}>{card.dueDate ? formatDue(card) : ""}</span>
+            <Link key={card.id} to={jobWorkspaceHref(card.id)} style={{ display: "grid", gap: 2, minHeight: 40, alignContent: "center", padding: "4px 8px", borderRadius: 8, background: "#f9fafb", color: "#111827", textDecoration: "none", fontSize: 13 }}>
+              <span style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>{card.customer} — {card.product}</span>
+                <span style={{ color: "#6b7280", whiteSpace: "nowrap" }}>{card.dueDate ? formatDue(card) : ""}</span>
+              </span>
+              {/* 2026-11-20: an On Hold / Reprint Needed job is not in a column, so its reason and its open run were not on the board at all */}
+              {attentionLine(card) ? <span style={{ color: "#991b1b", overflowWrap: "anywhere" }}>{attentionLine(card)}</span> : null}
             </Link>
           ))}
         </div>

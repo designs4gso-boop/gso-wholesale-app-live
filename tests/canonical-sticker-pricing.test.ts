@@ -273,7 +273,8 @@ describe("canonical sticker snapshot + routing", () => {
     const holo = parseCanonicalStickerOrderLine(metaFor({ material: "Holographic" }))!;
     const holoSummary = canonicalStickerMaterialSummary(holo);
     expect(holoSummary).toContain("White Layers: 1");
-    expect(decideMachine({ selectedFinish: holo.finishLabel, materialSummary: holoSummary, machineSummary: null } as any)).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] }); // White alone never forces the Roland
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    expect(decideMachine({ selectedFinish: holo.finishLabel, materialSummary: holoSummary, machineSummary: null } as any)).toEqual({ machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] }); // was review (auto_machine_load_unavailable_select_printer)
   });
 });
 

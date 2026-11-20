@@ -17,7 +17,7 @@ import { action as productionAction } from "./app.erp.production";
 import { friendlyMessage } from "../lib/employee-messages";
 import { MANUAL_JOB_FAMILIES, MANUAL_JOB_FINISHES } from "../lib/production-job-source.server";
 import { PRODUCTION_ROLE_DENIED, roleMayRunProductionIntent } from "../lib/production-role-access";
-import { SIMPLE_BOARD_HREF } from "../lib/simple-nav";
+import { SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
 import { resolveStaffAccess } from "../lib/staff-roles.server";
 
 export async function loader({ request }: { request: Request }) {
@@ -73,8 +73,17 @@ export default function NewProductionJob() {
             {result.ok && result.manualJob ? (
               <>
                 <div style={{ fontSize: 15 }}>Job ticket: <b>{result.manualJob.jobTicket}</b>{result.manualJob.machine ? ` · Machine: ${result.manualJob.machine}` : ""}</div>
-                {result.manualJob.suggestedFileName ? <div style={{ fontSize: 14 }}>Name the print file: <b>{result.manualJob.suggestedFileName}</b></div> : null}
-                <button type="button" onClick={() => navigate(SIMPLE_BOARD_HREF)} style={{ minHeight: 48, borderRadius: 12, border: "1px solid #166534", background: "#166534", color: "white", fontSize: 16, fontWeight: 700, cursor: "pointer", marginTop: 4 }}>Go to the Production Board</button>
+                {/* 2026-11-20: a multi-item job listed only its first item here, and the only way on was the board.
+                    Every item ticket is listed, the folder to make is named, and the job opens in one tap. */}
+                {(result.manualJob.itemTickets || []).length > 1 ? (
+                  <div style={{ fontSize: 14 }}>
+                    <div style={{ fontWeight: 700 }}>{result.manualJob.itemTickets.length} items — start each print file name with its item ticket:</div>
+                    {(result.manualJob.itemTickets as string[]).map((line) => <div key={line} style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>{line}</div>)}
+                  </div>
+                ) : result.manualJob.suggestedFileName ? <div style={{ fontSize: 14 }}>Name the print file: <b>{result.manualJob.suggestedFileName}</b></div> : null}
+                <div style={{ fontSize: 14 }}>Next: in Prints For Today, make a folder named <b>{result.manualJob.jobTicket}</b> and save the print files in it. They link to the job and go to the right printer on their own.</div>
+                {result.manualJob.jobId ? <button type="button" onClick={() => navigate(jobWorkspaceHref(result.manualJob.jobId))} style={{ minHeight: 48, borderRadius: 12, border: "1px solid #166534", background: "#166534", color: "white", fontSize: 16, fontWeight: 700, cursor: "pointer", marginTop: 4 }}>OPEN THIS JOB</button> : null}
+                <button type="button" onClick={() => navigate(SIMPLE_BOARD_HREF)} style={{ minHeight: 48, borderRadius: 12, border: "1px solid #166534", background: result.manualJob.jobId ? "white" : "#166534", color: result.manualJob.jobId ? "#166534" : "white", fontSize: 16, fontWeight: 700, cursor: "pointer", marginTop: 4 }}>Go to the Production Board</button>
               </>
             ) : null}
             {!result.ok && friendly.detail ? <details><summary style={{ cursor: "pointer", fontSize: 12 }}>Details</summary><div style={{ fontSize: 12 }}>{friendly.detail}</div></details> : null}

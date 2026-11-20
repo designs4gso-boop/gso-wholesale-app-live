@@ -354,6 +354,7 @@ export function toBoardCard(job: any, now: Date = new Date()): BoardCard {
 function boardCardExtras(job: any, items: any[]) {
   const fileStates = items.map((item: any) => itemFileState(item, job?.files || []));
   const awaitingCount = fileStates.filter((state) => state.awaiting).length;
+  const heldCount = heldIntakeFiles(job).length;
   const qcStates = items.map((item: any) => workspaceItemQc(item, job?.events || []));
   const passed = qcStates.filter((state: any) => state.status === "pass").length;
   const reprints = items.map((item: any) => itemRunSummary(item, item?.runs || []));
@@ -363,7 +364,8 @@ function boardCardExtras(job: any, items: any[]) {
   return {
     itemCount: items.length,
     awaitingFiles: items.length > 0 && awaitingCount > 0,
-    filesLabel: !items.length ? "No items" : awaitingCount === 0 ? "Files received" : awaitingCount === items.length ? "Awaiting files" : `Awaiting files for ${awaitingCount} of ${items.length} items`,
+    // 2026-11-20: a file the intake is holding is named on the card (the count only — the why is on the job page)
+    filesLabel: `${!items.length ? "No items" : awaitingCount === 0 ? "Files received" : awaitingCount === items.length ? "Awaiting files" : `Awaiting files for ${awaitingCount} of ${items.length} items`}${heldCount ? ` · ${heldCount} file(s) held` : ""}`,
     qcLabel: !items.length ? "" : passed === items.length ? "QC passed" : qcStates.some((state: any) => state.status === "pending_reprint") ? "QC needed after reprint" : `QC ${passed}/${items.length}`,
     reprintLabel: reprintCount ? `${reprintCount} reprint(s) · ${reprintQty} pcs` : legacyReprints ? `${legacyReprints} reprint(s)` : "",
     holdReason: holdReasonOf(job),
@@ -398,16 +400,25 @@ export function jobAssistLine(job: any): string {
   if (status === "shipped" || status === "picked_up") return "Recorded. Mark the job Completed when everything is done.";
   const card = toBoardCard(job);
   const ticket = String(job?.jobTicket || "").trim();
+  // 2026-11-20: a held job says why (or that nobody wrote why) before anything else
+  if (status === "on_hold") return card.holdReason ? `Hold reason: ${card.holdReason}` : "No hold reason was written. Add a note saying why, so the next person knows.";
   if (job?.fulfillmentState === "ready_to_ship") return "Packed and waiting to ship. Record the shipment when it leaves.";
   if (job?.fulfillmentState === "pickup_ready") return "Packed and waiting for the customer. Record the pickup when they collect it.";
   if (card.activeRunLabel) return `Reprint open: ${card.activeRunLabel}. It needs a new QC PASS before the job can ship.`;
+  // a job sent back for a reprint with no reprint started yet: say where the reprint is started
+  if (status === "reprint_needed") return "Start the reprint under NEEDS REPRINT in the QC step: it sends the item's files back to the printer and asks for a new QC PASS.";
+  const held = heldIntakeFiles(job);
+  if (held.length) return `File held: ${held[0].fileName} — ${held[0].heldReason || "needs review"}${held.length > 1 ? ` (+${held.length - 1} more)` : ""}. It is not at the printer. A manager or print operator clears it in Print Intake.`;
   if (card.awaitingFiles) {
     return ticket
       ? `${card.filesLabel}. In Prints For Today, make a folder named ${ticket} and save the print files in it. They show up here on their own and go to the right printer.`
       : `${card.filesLabel}.`;
   }
-  if (card.itemCount && ["new", "artwork", "proof_sent", "approved", "scheduled"].includes(status)) return "Print files received and sent to the printer. Print them, then mark the job printed.";
-  if (card.qcLabel && card.qcLabel !== "QC passed" && ["printed", "finishing", "qc"].includes(status)) return `${card.qcLabel}. Every item needs QC PASS before it can be packed and shipped.`;
+  // 2026-11-20: these two lines named statuses that do not exist (artwork / approved / scheduled / printed /
+  // finishing), so they never showed between Prepress and QC. They now use the real statuses.
+  if (card.itemCount && ["proof_needed", "proof_sent"].includes(status)) return "Print files received and sent to the printer. Wait for the proof approval before printing.";
+  if (card.itemCount && ["new", "prepress", "proof_approved", "ready_to_print"].includes(status)) return "Print files received and sent to the printer. Print them, then mark the job printed.";
+  if (card.qcLabel && card.qcLabel !== "QC passed" && ["printing", "cutting", "laminating", "qc", "packing"].includes(status)) return `${card.qcLabel}. Every item needs QC PASS before it can be packed and shipped.`;
   if (card.qcLabel === "QC passed") return "QC passed. Pack it, then mark it Ready to ship or Ready for pickup.";
   return "";
 }
@@ -444,5 +455,207 @@ export function buildSimpleBoard(cards: BoardCard[]): SimpleBoard {
       overdue: cards.filter((card) => card.overdue).sort(byUrgency),
     },
     cancelled: cards.filter((card) => card.stage === "hidden"),
+  };
+}
+
+/* ---------------- 2026-11-20: print files as the intake sees them, and the per-item stage trail ---------------- */
+
+/** Where a routed file lands, in the shop's words. Empty when the press is not known. */
+export function printerDestination(printer: unknown): string {
+  const text = String(printer || "").toLowerCase();
+  if (/mimaki|ucjv|rasterlink/.test(text)) return "Mimaki hot folder";
+  if (/roland|versaworks|lg-?640/.test(text)) return "Roland VersaWorks input";
+  return "";
+}
+
+const baseName = (value: unknown) => String(value || "").split(/[\\/]/).pop() || "";
+
+/** The ink layer a print file carries, from its name (the same tokens the intake reads: _CMYK, _g / _gloss, _w / _white). */
+export function fileLayerOf(fileName: unknown): "CMYK" | "Gloss" | "White" | "" {
+  const parts = baseName(fileName).replace(/\.[a-z0-9]{1,5}$/i, "").split(/[_\-\s]+/).filter(Boolean).slice(1).map((part) => part.toLowerCase());
+  if (parts.includes("g") || parts.includes("gloss")) return "Gloss";
+  if (parts.includes("w") || parts.includes("white")) return "White";
+  if (parts.includes("cmyk")) return "CMYK";
+  return "";
+}
+
+export type IntakeFileState = "routed" | "resending" | "matched" | "held" | "rejected";
+export type IntakeFileView = {
+  itemId: string | null;
+  fileName: string;
+  layer: string;
+  state: IntakeFileState;
+  stateLabel: string;
+  routedName: string;
+  printer: string;
+  destination: string;
+  heldReason: string;
+  runLabel: string;
+  /** first 8 characters of the file fingerprint: enough to tell two files apart, nothing more */
+  sha8: string;
+  receivedAt: string | null;
+};
+
+const INTAKE_STATE: Record<string, { state: IntakeFileState; label: string }> = {
+  routed: { state: "routed", label: "Routed to the printer" },
+  retry_allowed: { state: "resending", label: "Going back to the printer" },
+  assigned: { state: "matched", label: "Matched to this job — not at the printer yet" },
+  review: { state: "held", label: "Held for review" },
+  failed: { state: "held", label: "Held — routing failed" },
+  rejected: { state: "rejected", label: "Rejected — will not be printed" },
+};
+
+/**
+ * One print-intake row as the job page shows it. Built on the server from a
+ * read-only select; carries no path, no token, no parsed hints and no money.
+ * `reasonLabel` turns the intake's review code into its sentence (server side).
+ */
+export function toIntakeFileView(row: any, itemIdByTicket: Map<string, string>, reasonLabel: (code: string | null | undefined) => string = (code) => String(code || "")): IntakeFileView {
+  const known = INTAKE_STATE[norm(row?.status)] || { state: "held" as IntakeFileState, label: "Held for review" };
+  const holding = known.state === "held" || known.state === "rejected" || known.state === "matched";
+  const revision = Number(row?.revisionNumber) || 1;
+  const reprint = Number(row?.reprintNumber) || 0;
+  const attempt = Number(row?.attemptNumber) || 1;
+  const printer = String(row?.printer || "").trim();
+  return {
+    itemId: row?.productionJobItemId ? String(row.productionJobItemId) : itemIdByTicket.get(String(row?.authoritativeTicket || "")) || null,
+    fileName: baseName(row?.originalFilename) || "File",
+    layer: fileLayerOf(row?.originalFilename),
+    state: known.state,
+    stateLabel: known.label,
+    routedName: known.state === "routed" || known.state === "resending" ? baseName(row?.routedFilename).trim() : "",
+    printer,
+    destination: printerDestination(printer),
+    heldReason: holding && row?.reviewReason ? String(reasonLabel(row.reviewReason) || "").slice(0, 240) : "",
+    runLabel: `${revision > 1 ? `Revision ${revision} · ` : ""}${reprint > 0 ? `Reprint ${reprint} · ` : ""}Attempt ${attempt}`,
+    sha8: String(row?.fileHashSha256 || "").slice(0, 8),
+    receivedAt: iso(row?.receivedAt),
+  };
+}
+
+/** Files the intake is holding for this job (not at the printer). */
+export function heldIntakeFiles(job: any): IntakeFileView[] {
+  return ((job?.intakeFiles || []) as IntakeFileView[]).filter((file) => file?.state === "held");
+}
+
+/** The intake rows of one item, and the ones that name the job but no item. */
+export function intakeFilesOfItem(job: any, item: any): IntakeFileView[] {
+  return ((job?.intakeFiles || []) as IntakeFileView[]).filter((file) => file?.itemId && String(file.itemId) === String(item?.id || ""));
+}
+export function jobLevelIntakeFiles(job: any): IntakeFileView[] {
+  const ids = new Set(((job?.items || []) as any[]).map((item) => String(item.id)));
+  return ((job?.intakeFiles || []) as IntakeFileView[]).filter((file) => !file?.itemId || !ids.has(String(file.itemId)));
+}
+
+/** The files attached to one item, and the files that belong to the whole job. */
+export function filesOfItem(job: any, item: any): any[] {
+  const ticket = String(item?.itemTicket || "").toUpperCase();
+  return ((job?.files || []) as any[]).filter((file) => {
+    if (file?.productionJobItemId) return String(file.productionJobItemId) === String(item?.id || "");
+    // rows written before the item link existed carry the item ticket at the start of the routed name
+    return Boolean(ticket) && String(file?.fileType || "") === "print_file" && String(file?.fileName || "").toUpperCase().startsWith(ticket);
+  });
+}
+export function jobLevelFiles(job: any): any[] {
+  const owned = new Set(((job?.items || []) as any[]).flatMap((item) => filesOfItem(job, item)));
+  return ((job?.files || []) as any[]).filter((file) => !owned.has(file));
+}
+
+export type TrailState = "done" | "waiting" | "problem" | "upcoming";
+export type TrailStage = { key: "files" | "routed" | "press" | "qc" | "ready" | "complete"; label: string; state: TrailState; text: string; details: string[] };
+
+const mlMin = (row: any) => `${Number(row?.inkMl || 0).toFixed(1)} mL · ${Number(row?.printMinutes || 0).toFixed(1)} min`;
+
+/**
+ * 2026-11-20 — FIRST REAL JOB OBSERVABILITY. Where ONE item stands, stage by
+ * stage, in floor words: waiting for files / file matched / file held (and why)
+ * -> routed (routed name + where it landed) -> press result (mL and minutes per
+ * run) -> QC -> ready -> complete. Reads only what the page already has; it
+ * changes nothing and carries no money.
+ */
+export function itemStageTrail(job: any, item: any): TrailStage[] {
+  const status = norm(job?.status);
+  const files = itemFileState(item, job?.files || []);
+  const intake = intakeFilesOfItem(job, item);
+  const held = intake.filter((file) => file.state === "held");
+  const rejected = intake.filter((file) => file.state === "rejected");
+  const matched = intake.filter((file) => file.state === "matched");
+  // a file "going back to the printer" is only being waited on while a reprint / remake of this item is open;
+  // once that run is closed by QC (or there never was one) the row is simply a routed file
+  const reprintOpen = ((item?.runs || []) as any[]).some((run) => run?.status === "open" && run?.kind && run.kind !== "original") || (!(item?.runs || []).length && itemQcState(item, job?.events || []).status === "pending_reprint");
+  const routed = intake.filter((file) => file.state === "routed" || (file.state === "resending" && !reprintOpen));
+  const resending = intake.filter((file) => file.state === "resending" && reprintOpen);
+  const printFiles = filesOfItem(job, item).filter((file) => String(file?.fileType || "") === "print_file");
+  const stages: TrailStage[] = [];
+
+  // 1. files
+  const expected = files.expected.join(" + ");
+  const haveLayers = new Set<string>([...printFiles.map((file) => fileLayerOf(file.fileName)), ...intake.filter((file) => file.state !== "rejected").map((file) => file.layer)]);
+  const missingSpecial = files.expected.filter((layer) => layer !== "CMYK" && !haveLayers.has(layer));
+  const rejectedLines = rejected.map((file) => `${file.fileName}: rejected${file.heldReason ? ` — ${file.heldReason}` : ""}`);
+  if (held.length) stages.push({ key: "files", label: "Files", state: "problem", text: `File held — not at the printer (${held.length})`, details: held.map((file) => `${file.fileName}: ${file.heldReason || "needs review"}`) });
+  else if (!files.awaiting || routed.length || resending.length) stages.push({ key: "files", label: "Files", state: "done", text: `File matched — ${Math.max(files.received, routed.length + resending.length)} print file(s)`, details: [`Expected: ${expected}`, ...(missingSpecial.length ? [`No ${missingSpecial.join(" / ")} file seen yet`] : []), ...rejectedLines] });
+  else if (matched.length) stages.push({ key: "files", label: "Files", state: "waiting", text: "File matched — not at the printer yet", details: matched.map((file) => `${file.fileName}${file.heldReason ? `: ${file.heldReason}` : ""}`) });
+  else stages.push({ key: "files", label: "Files", state: "waiting", text: `Waiting for files — ${expected} expected`, details: rejectedLines });
+
+  // 2. routed
+  const fallbackDestination = printerDestination(item?.machineSummary);
+  const landing = (file: IntakeFileView) => file.destination || fallbackDestination || file.printer || "printer";
+  if (resending.length) stages.push({ key: "routed", label: "Routed", state: "waiting", text: "Going back to the printer", details: resending.map((file) => `${file.routedName || file.fileName} → ${landing(file)} (${file.runLabel})`) });
+  else if (routed.length) stages.push({ key: "routed", label: "Routed", state: "done", text: `Routed — ${Array.from(new Set(routed.map(landing))).join(" + ")}`, details: routed.map((file) => `${file.routedName || file.fileName} → ${landing(file)}`) });
+  else if (!files.awaiting) stages.push({ key: "routed", label: "Routed", state: "done", text: `Routed — ${fallbackDestination || item?.machineSummary || "printer"}`, details: printFiles.map((file) => String(file.fileName || "")) });
+  else stages.push({ key: "routed", label: "Routed", state: "upcoming", text: item?.machineSummary ? `Will go to: ${fallbackDestination || item.machineSummary}` : "No printer assigned yet", details: [] });
+
+  // 3. press result (per run)
+  const actuals = (item?.runActuals || []) as any[];
+  const openRun = ((item?.runs || []) as any[]).filter((run) => run?.status === "open" && run?.kind && run.kind !== "original").sort((a, b) => Number(b.runNumber) - Number(a.runNumber))[0] || null;
+  const openRunHasResult = openRun ? actuals.some((row) => row.runNumber === Number(openRun.runNumber)) : true;
+  const resultLines = actuals.map((row) => `${row.label}: ${mlMin(row)}`);
+  if (actuals.length && openRunHasResult) stages.push({ key: "press", label: "Press result", state: "done", text: `Result received — ${actuals.length} run(s)`, details: resultLines });
+  else if (actuals.length) stages.push({ key: "press", label: "Press result", state: "waiting", text: `Waiting for the press result of run ${openRun.runNumber}`, details: resultLines });
+  else stages.push({ key: "press", label: "Press result", state: "upcoming", text: "No press result yet", details: ["It arrives on its own after the print log is read."] });
+
+  // 4. QC
+  const qc = workspaceItemQc(item, job?.events || []);
+  if (qc.status === "pass") stages.push({ key: "qc", label: "QC", state: "done", text: "QC PASS", details: [] });
+  else if (qc.status === "none") stages.push({ key: "qc", label: "QC", state: "upcoming", text: "Not checked yet", details: [] });
+  else stages.push({ key: "qc", label: "QC", state: qc.status === "pending_reprint" ? "waiting" : "problem", text: qc.label, details: [] });
+
+  // 5. ready (packed and waiting, shipped or picked up) — a job-level fact
+  const gone = status === "shipped" ? "Shipped" : status === "picked_up" ? "Picked up" : status === "completed" ? "Shipped / picked up" : "";
+  const ready = job?.fulfillmentState === "ready_to_ship" ? "Ready to ship" : job?.fulfillmentState === "pickup_ready" || status === "ready_for_pickup" ? "Ready for pickup" : "";
+  stages.push({ key: "ready", label: "Ready", state: gone || ready ? "done" : "upcoming", text: gone || ready || "Not packed yet", details: [] });
+
+  // 6. complete
+  stages.push({ key: "complete", label: "Complete", state: status === "completed" ? "done" : "upcoming", text: status === "completed" ? "Completed" : "Not completed", details: [] });
+
+  // the first stage that is not behind the item is the one being waited on
+  const firstOpen = stages.findIndex((stage) => stage.state !== "done");
+  if (firstOpen !== -1 && stages[firstOpen].state === "upcoming" && !["cancelled", "on_hold"].includes(status)) stages[firstOpen].state = "waiting";
+  return stages;
+}
+
+/**
+ * 2026-11-20 (board polish, display only — the card's fields are unchanged). On a multi-item job the card's
+ * quantity is the sum of its items and its machine / finish are lists, one entry per different item value.
+ * In a half-width cell a two-press job was cut off ("Mimaki UCJV300, Rol…") and a summed quantity read as one
+ * print run. A list now gets a full-width line that wraps and says it is per item; the sum says it is a sum.
+ */
+export function boardCardDisplay(card: Pick<BoardCard, "quantity" | "itemCount" | "machine" | "finish" | "status" | "holdReason">) {
+  const many = card.itemCount > 1;
+  const listed = (value: string) => value.split(", ").filter(Boolean);
+  const machines = listed(card.machine || "");
+  const finishes = listed(card.finish || "");
+  return {
+    quantityLabel: many ? "Quantity (all items)" : "Quantity",
+    quantityValue: card.quantity > 0 ? `${card.quantity.toLocaleString()}${many ? ` across ${card.itemCount} items` : ""}` : "Not set",
+    machineLabel: machines.length > 1 ? `Printers (${machines.length} — differs by item)` : "Machine",
+    machineValue: machines.length > 1 ? machines.join(" + ") : card.machine || "Not assigned",
+    machineWrap: machines.length > 1,
+    finishLabel: finishes.length > 1 ? "Finishes (differs by item)" : "Finish",
+    finishValue: finishes.length > 1 ? finishes.join(" · ") : card.finish || "Not set",
+    finishWrap: finishes.length > 1,
+    // a held job with no written reason still says it is held, and that the reason is missing
+    holdLine: card.holdReason ? `Hold: ${card.holdReason}` : card.status === "on_hold" ? "Hold: no reason written — open the job and add a note" : "",
   };
 }

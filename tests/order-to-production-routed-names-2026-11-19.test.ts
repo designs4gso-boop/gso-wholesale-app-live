@@ -226,7 +226,12 @@ describe("routed-name rules", () => {
   it("12. source pins: both route-plan branches pass the staff name; revision lookup is per staff file name; no job creation", () => {
     const routePlanSource = src("app/routes/api.print-intake.route-plan.tsx");
     expect(routePlanSource).toContain("ripFileBaseName(assignedItem as any, fileName)");
-    expect(routePlanSource).toContain('authoritativeTicket: ticket, status: "routed", originalFilename: fileName, NOT: { fileHashSha256: fileHash }');
+    // PIN UPDATED 2026-11-20: the inline revision query moved into nameRoutedFile (route-plan). The revision lookup is
+    // still per staff file name on the same ticket — now by staffFileKey (letter case and a typed ticket ignored), over
+    // routed / retry_allowed / assigned rows, and it carries an open reprint run's number (closeout defects B2, D3).
+    expect(routePlanSource).toContain("staffFileKey(row.originalFilename) === myKey");
+    expect(routePlanSource).toContain("where: { shop: namingShop, authoritativeTicket: ticket }");
+    expect(routePlanSource).toContain("const run = { revision: prior.revisionNumber + 1, reprint: openReprint, attempt };");
     expect(routePlanSource).not.toContain("productionJob.create");
     expect(src("app/lib/print-intake-routing.server.ts")).toContain("const ripName = ripFileBaseName(item, fileName);");
   });

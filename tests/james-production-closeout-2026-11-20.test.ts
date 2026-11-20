@@ -780,14 +780,18 @@ describe("B · routed filename — DEFECTS (two different files, one routed name
   //   fix (route-plan.tsx, before the upsert): look for another routed row with the same authoritativeTicket and the
   //        same routedFilename base but a different hash; if found treat it as the next revision (R+1) —
   //        i.e. key the revision lookup on the ROUTED name, not on the raw staff name.
-  it.fails.each([
+  // FIXED 2026-11-20 (api.print-intake.route-plan.tsx nameRoutedFile): a DIFFERENT staff file whose sanitized name is
+  // already held on the item gets a deterministic `-x<digest>` mark; the SAME staff file saved again (a typed ticket in
+  // front does not make it another file) is revision 2. Detail: tests/intake-lineage-fixes-2026-11-20.test.ts.
+  it.each([
     ["a space vs an underscore", "HEATH F.pdf", "HEATH_F.pdf"],
     ["brackets", "art (1).pdf", "art_1.pdf"],
     ["corrected artwork re-saved with the ticket typed in front", "crud_HEATH_F_CMYK.pdf", `${SOLO}-01 crud_HEATH_F_CMYK.pdf`],
     ["two names with no ASCII letters at all (both fall back to the bare ticket)", "日本語.pdf", "한국어.pdf"],
-  ])("B2: %s — %s / %s do not end up as one routed name at revision 1", async (_label, first, second) => {
+  ])("FIXED 2026-11-20 — B2: %s — %s / %s do not end up as one routed name at revision 1", async (_label, first, second) => {
     const [a, b, revisions] = await both(first, second);
     expect(a === b && revisions === "1,1").toBe(false);
+    expect(a).not.toBe(b); // never the same routed name, whatever the revision
   }, 120_000);
 
   // DEFECT B3 — a staff name that IS a run token.
@@ -812,7 +816,7 @@ describe("B · routed filename — DEFECTS (two different files, one routed name
   //   expected: the name still ends in __P1-A1
   //   actual: the token is cut ("…__"), so the reprint's press result is counted as the original run
   //   fix: cut the BASE, not the result — `${stripped.slice(0, 120 - suffix.length)}${suffix}`
-  it.fails("B4: the run token survives on a long custom RIP name", () => {
+  it("FIXED 2026-11-20 — B4: the run token survives on a long custom RIP name", () => {
     const routed = ripFileBaseName({ itemTicket: `${SOLO}-01`, ripJobName: `${SOLO}-01_${"X".repeat(98)}`, suggestedFileName: null }, "art.pdf");
     expect(reprintNumberOfRipName(applyRunSuffix(routed, { reprint: 1 }))).toBe(1);
   });
@@ -1032,29 +1036,36 @@ describe("D · reprint / remake — as the production lead, test doubles only", 
       expect((await post({ ...REPRINT, jobId: "j2", itemId: "s1", reprintReason: "artwork_prepress_error" })).body.ok).toBe(true);
       expect(runsOf("s1").map((row) => [row.runNumber, row.kind, row.status, row.runLabel])).toEqual([[1, "original", "reprinted", "A1"], [2, "reprint", "open", "P1-A1"]]);
     };
-    it.fails("D3a: corrected artwork saved AFTER the old layer was re-routed keeps the reprint's run token", async () => {
+    it("FIXED 2026-11-20 — D3a: corrected artwork saved AFTER the old layer was re-routed keeps the reprint's run token", async () => {
       await openReprintOnSolo();
       expect((await plan({ fileName: CMYK, fileHash: HASH("a"), subfolder: SOLO })).ripName).toBe(`${SOLO}-01__crud_HEATH_F_CMYK__P1-A1`);
       const corrected = await plan({ fileName: CMYK, fileHash: HASH("c"), subfolder: SOLO });
       expect(corrected.decision).toBe("route");
       expect(corrected.ripName).toBe(`${SOLO}-01__crud_HEATH_F_CMYK__R2-P1-A1`);
     }, 120_000);
-    it.fails("D3b: corrected artwork saved BEFORE the agent's next pass is a revision of the open reprint, not the original name again", async () => {
+    it("FIXED 2026-11-20 — D3b: corrected artwork saved BEFORE the agent's next pass is a revision of the open reprint, not the original name again", async () => {
       await openReprintOnSolo();
       const corrected = await plan({ fileName: CMYK, fileHash: HASH("c"), subfolder: SOLO });
       expect(corrected.decision).toBe("route");
       expect(corrected.ripName).toBe(`${SOLO}-01__crud_HEATH_F_CMYK__R2-P1-A1`);
     }, 120_000);
-    it("what happens today (pinned so a fix shows up here): (a) R2 with reprint 0, (b) the bare original name at revision 1", async () => {
+    // 2026-11-20: this test pinned the DEFECT ("what happens today": (a) …__R2-A1 with reprint 0, (b) the bare original
+    // name at revision 1). The fix landed, so it now pins the corrected behaviour for both orders and shows that the
+    // original run's own record is not rewritten by the corrected file.
+    it("after the fix: both orders give …__R2-P1-A1 on the SAME item, counted on the open reprint run; the old layer keeps its own row", async () => {
       await openReprintOnSolo();
       const early = await plan({ fileName: CMYK, fileHash: HASH("c"), subfolder: SOLO });
-      expect([early.decision, early.ripName]).toEqual(["route", `${SOLO}-01__crud_HEATH_F_CMYK`]);
-      expect(reprintNumberOfRipName(early.ripName)).toBe(0);
+      expect([early.decision, early.itemId, early.ripName]).toEqual(["route", "s1", `${SOLO}-01__crud_HEATH_F_CMYK__R2-P1-A1`]);
+      expect(reprintNumberOfRipName(early.ripName)).toBe(1);
+      expect(intakeOf(HASH("c"))).toMatchObject({ productionJobItemId: "s1", revisionNumber: 2, reprintNumber: 1, attemptNumber: 1, status: "routed" });
+      expect(intakeOf(HASH("a"))).toMatchObject({ id: "sp1", routedFilename: `${SOLO}-01__crud_HEATH_F_CMYK__P1-A1`, revisionNumber: 1, reprintNumber: 1 }); // as the reprint action left it
       seed(); seedLayers(); as("print_operator");
       await openReprintOnSolo();
       await plan({ fileName: CMYK, fileHash: HASH("a"), subfolder: SOLO });
       const late = await plan({ fileName: CMYK, fileHash: HASH("d"), subfolder: SOLO });
-      expect([late.decision, late.ripName]).toEqual(["route", `${SOLO}-01__crud_HEATH_F_CMYK__R2-A1`]);
+      expect([late.decision, late.ripName]).toEqual(["route", `${SOLO}-01__crud_HEATH_F_CMYK__R2-P1-A1`]);
+      const actuals = actualsByRun(runsOf("s1"), [{ sourceJobName: `${SOLO}-01__crud_HEATH_F_CMYK`, inkMl: 10, printMinutes: 20 }, { sourceJobName: late.ripName, inkMl: 2, printMinutes: 4 }]);
+      expect(actuals.map((row) => [row.runNumber, row.kind, row.inkMl])).toEqual([[1, "original", 10], [2, "reprint", 2]]);
     }, 120_000);
   });
 });
@@ -1124,7 +1135,7 @@ describe("E · reorder — a new job beside an untouched old one", () => {
     expect(oldSide()).toBe(before);
   }, 120_000);
 
-  it("revision: the old file is REFERENCE ONLY on the new item — and that is a label (see E1 for what enforces it)", async () => {
+  it("revision: the old file is REFERENCE ONLY on the new item (E1 below is what enforces the new proof)", async () => {
     const { job, items } = await release();
     const ref = table("productionJobFile").find((row) => row.jobId === job.id && row.productionJobItemId === items[1].id);
     expect(ref).toMatchObject({ assetSource: REORDER_REUSE_SOURCE, assetRole: "reference" });
@@ -1134,8 +1145,12 @@ describe("E · reorder — a new job beside an untouched old one", () => {
     expect(event.message).toContain("New proof approval required");
     expect(job.proofStatus ?? "draft").toBe("draft"); // nothing is pre-approved
     // SOURCE PIN — where reorderArtworkMode is read: creation (the note + event above), the job page payload, the two
-    // forms. Neither Print Intake nor the status action reads it or the proof state.
-    for (const file of ["app/routes/api.print-intake.route-plan.tsx", "app/lib/print-intake-routing.server.ts", "app/lib/production-fulfillment.ts", "app/lib/production-qc-guard.ts"]) expect(src(file), file).not.toMatch(/reorderArtworkMode|proofStatus|proofApprovedAt/);
+    // forms. 2026-11-20 (E1 fixed): Print Intake now reads it together with the job's proofStatus and HOLDS the file,
+    // so the two intake files left this "does not read it" list and are pinned as readers instead. The status action
+    // still does not read it.
+    for (const file of ["app/lib/production-fulfillment.ts", "app/lib/production-qc-guard.ts"]) expect(src(file), file).not.toMatch(/reorderArtworkMode|proofStatus|proofApprovedAt/);
+    for (const file of ["app/routes/api.print-intake.route-plan.tsx", "app/lib/print-intake-routing.server.ts"]) expect(src(file), file).toMatch(/reorderArtworkMode/);
+    expect(src("app/lib/print-intake-routing.server.ts")).toContain("export function revisionReorderProofHold(");
   }, 120_000);
 
   // FINDING E1 — "new proof required before printing" is a LABEL, nothing enforces it.
@@ -1146,10 +1161,12 @@ describe("E · reorder — a new job beside an untouched old one", () => {
   //   actual: decision "route" to the Mimaki; changeStatus "printing" is also accepted
   //   fix: in api.print-intake.route-plan.tsx, select items.reorderArtworkMode + job.proofStatus and return a review
   //        (canonical reason e.g. "revision_needs_proof_approval") when the item is a revision and proofStatus !== "approved"
-  it.fails("E1: a file for a revision reorder item is held until the new proof is approved", async () => {
+  it("FIXED 2026-11-20 — E1: a file for a revision reorder item is held until the new proof is approved", async () => {
     const { job, items } = await release();
     const planned = await plan({ fileName: `${items[1].itemTicket} crud_SHORTCAKES_v2_F_CMYK.pdf`, fileHash: HASH("9"), subfolder: job.jobTicket });
     expect(planned.decision).toBe("review");
+    expect(planned.reasons).toContain("revision_reorder_needs_new_proof_approval");
+    expect(intakeOf(HASH("9"))).toMatchObject({ status: "review", reviewReason: "revision_needs_proof_approval" });
   }, 120_000);
 
   it("the new job's press results resolve to the NEW item; nothing is added to the old job", async () => {
@@ -1183,12 +1200,15 @@ describe("E · reorder — a new job beside an untouched old one", () => {
   //           (a later reprint of the old item re-routes nothing; its run identity is gone from the job page)
   //   fix: when existingIntake.matchedProductionJobId is another job, do not overwrite — hold for review
   //        ("file already routed for <old ticket>") or record the reuse on a second row (needs the unique key widened to include the job)
-  it.fails("E2: routing the identical approved file for the reorder leaves the old job's intake row as it was", async () => {
+  it("FIXED 2026-11-20 — E2: routing the identical approved file for the reorder leaves the old job's intake row as it was", async () => {
     const before = oldIntake();
     const { job, items } = await release();
     const planned = await plan({ fileName: `${items[0].itemTicket} crud_HEATH_F_CMYK.pdf`, fileHash: HASH("7"), subfolder: job.jobTicket });
     expect(planned.decision).toBe("route");
+    expect(planned).toMatchObject({ jobId: job.id, itemId: items[0].id, ripName: `${items[0].itemTicket}__crud_HEATH_F_CMYK` });
     expect(oldIntake()).toBe(before);
+    // the new item has its OWN record of the same file
+    expect(table("printIntake").filter((row) => row.matchedProductionJobId === job.id).map((row) => [row.fileHashSha256, row.productionJobItemId, row.status])).toEqual([[`${HASH("7")}#${items[0].id}`, items[0].id, "routed"]]);
   }, 120_000);
 
   // DEFECT E3 — a completed job still accepts files by a ticket in the FILE NAME.

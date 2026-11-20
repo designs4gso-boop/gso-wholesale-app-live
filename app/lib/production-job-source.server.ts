@@ -23,7 +23,7 @@ import { quotePricingAuthorityState } from "./quote-pricing-authority";
 import { productionSafeQuoteNotes } from "./quote-staff-visibility";
 import { OVERRIDE_PHRASE } from "./calculator-emergency.server";
 import { cleanCommercialName, safeNameToken } from "./commercial-name-resolver.server";
-import { decideMachine } from "./print-intake-routing.server";
+import { WHITE_ON_MIMAKI_MESSAGE, WHITE_ON_MIMAKI_REASON, decideMachine } from "./print-intake-routing.server";
 import { loadMachineWorkload } from "./machine-load.server";
 import type { MachineLoadSnapshot } from "./machine-load-balancing";
 import { ZAKEKE_ASSET_SOURCE, readZakekeDesignFromLine, zakekeSnapshot } from "./zakeke-design.server";
@@ -270,7 +270,27 @@ export function suggestedFileNameForQuoteItem(jobTicket: string, item: any, inde
 }
 
 // ---------- family checklist templates (15D.1-G) ----------
+// 2026-11-20 — STOCK BAGS. A Stock Bag is GSO's own premade artwork printed as a
+// label and applied to a blank bag (optional customer logo / QR, no Zakeke, MOQ 50).
+// There is no customer artwork to receive, so it has its own checklist instead of the
+// generic one. Used for NEW jobs only — the checklist of an existing job is never rewritten.
+// JAMES DECISION REQUIRED: whether a customer proof is required when a logo / QR was
+// uploaded is an open owner decision. Until it is answered there is deliberately NO
+// mandatory proof step here.
+export const STOCK_BAG_CHECKLIST_FAMILY = "stock-bags";
+
 export const FAMILY_CHECKLISTS: Record<string, Array<{ section: string; label: string; sortOrder: number }>> = {
+  [STOCK_BAG_CHECKLIST_FAMILY]: [
+    { section: "prepress", label: "Stock design, bag colour, sides and quantity checked against the order", sortOrder: 10 },
+    { section: "prepress", label: "Customer logo / QR placed on the design (only if one was uploaded)", sortOrder: 20 },
+    { section: "production", label: "Blank bags pulled and counted", sortOrder: 30 },
+    { section: "production", label: "Labels printed", sortOrder: 40 },
+    { section: "production", label: "Labels cut", sortOrder: 50 },
+    { section: "production", label: "Weeded (if required)", sortOrder: 60 },
+    { section: "production", label: "Labels applied to bags", sortOrder: 70 },
+    { section: "qc", label: "QC passed", sortOrder: 80 },
+    { section: "packing", label: "Packed and labeled", sortOrder: 90 },
+  ],
   "sticker-bags": [
     { section: "prepress", label: "Artwork received / linked", sortOrder: 10 },
     { section: "prepress", label: "Proof approved", sortOrder: 20 },
@@ -368,6 +388,17 @@ export function familyFromQuoteItems(items: any[]): string {
 
 export function checklistForFamily(family: string) {
   return FAMILY_CHECKLISTS[family] || FAMILY_CHECKLISTS.default;
+}
+
+/**
+ * 2026-11-20: the checklist of a MANUAL / released job. The New Job choice labelled
+ * "Stock Bags" carries the value "sticker-bags" (kept, so saved forms and item
+ * records do not change) and used to get the Sticker Bag checklist, which starts
+ * with "Artwork received" and "Proof approved". It now gets the Stock Bag checklist.
+ * Quote and paid-order jobs are not affected (they do not come through here).
+ */
+export function checklistForManualFamily(family: string) {
+  return checklistForFamily(family === "sticker-bags" ? STOCK_BAG_CHECKLIST_FAMILY : family);
 }
 
 // ---------- 15H.4B: manual job validation + machine resolution ----------
@@ -477,6 +508,8 @@ export function validateManualJobInput(input: {
         ok: false,
         reason: decision.reasons.includes("auto_machine_load_unavailable_select_printer")
           ? "Automatic press selection is unavailable (machine load is incomplete) — choose Mimaki or Roland for this item."
+          : decision.reasons.includes(WHITE_ON_MIMAKI_REASON)
+            ? WHITE_ON_MIMAKI_MESSAGE // 2026-11-20 (owner): Mimaki white is NOT approved
           : `Machine selection could not be resolved: ${decision.reasons.join("; ")} .`,
       };
     }
@@ -1010,7 +1043,9 @@ export function buildShopifyOrderJobPayload(
   // `sticker_` test, which would otherwise file them as flat stickers and
   // build the stickers-labels checklist (Printed / Cut / Weeded / Finish),
   // losing the decisive "Labels applied to bags" step.
-  const lineFamilyOf = (line: any): "jar" | "dtp" | "sticker-bag" | "sticker" | "other" => {
+  // 2026-11-20: a STOCK BAG line (premade GSO artwork) is its own family. Only a profile the
+  // classifier recognises as a Stock Bag counts (allowlist) — an unknown bag profile stays "other".
+  const lineFamilyOf = (line: any): "jar" | "dtp" | "sticker-bag" | "stock-bag" | "sticker" | "other" => {
     const raw = getLineProperty(line, "_GSO Canonical");
     if (parseCanonicalJarOrderLine(raw)) return "jar";
     if (parseCanonicalDtpOrderLine(raw)) return "dtp";
@@ -1019,11 +1054,13 @@ export function buildShopifyOrderJobPayload(
     // visible-property fallbacks so a stripped line still classifies.
     const bagCanonical = parseCanonicalOrderLine(raw);
     if (bagCanonical && clean(bagCanonical.profile).startsWith("sticker_bag_")) return "sticker-bag";
+    if (bagCanonical && isStockBagProfile(bagCanonical.profile)) return "stock-bag";
     const family = getLineProperty(line, "Product Family");
     const type = getLineProperty(line, "Product Type");
     if (isJarFamily(family) || type.startsWith("jar_")) return "jar";
     if (isDtpFamily(family) || type.startsWith("dtp_")) return "dtp";
     if (clean(family).toLowerCase() === "sticker bags" || type.startsWith("sticker_bag_")) return "sticker-bag";
+    if (isStockBagProfile(type) || (clean(family).toLowerCase() === "stock bags" && !type)) return "stock-bag";
     if (clean(family).toLowerCase() === "stickers" || type.startsWith("sticker_")) return "sticker";
     return "other";
   };
@@ -1038,9 +1075,12 @@ export function buildShopifyOrderJobPayload(
             // "Labels applied to bags". Previously reachable ONLY from the
             // quote path (familyFromQuoteItems), never from a paid order.
             "sticker-bags"
-          : lineFamilies.size === 1 && lineFamilies.has("sticker")
-            ? "stickers-labels"
-            : "default";
+          : lineFamilies.size === 1 && lineFamilies.has("stock-bag")
+            ? // 2026-11-20: a Stock-Bag-ONLY order. A mixed order keeps the default checklist.
+              STOCK_BAG_CHECKLIST_FAMILY
+            : lineFamilies.size === 1 && lineFamilies.has("sticker")
+              ? "stickers-labels"
+              : "default";
 
   const firstLine = configuredLines[0];
   const firstImage =
@@ -1450,7 +1490,7 @@ export async function createProductionJobFromSource(
             reorderArtworkMode: validReorderSources.has(String(item.reorderSourceItemId || "")) ? (item.reorderArtworkMode === "revision" ? "revision" : "same_artwork") : null,
           })),
         },
-        checklistItems: { create: checklistForFamily(family).map((check) => ({ shop, ...check })) },
+        checklistItems: { create: checklistForManualFamily(family).map((check) => ({ shop, ...check })) },
         events: {
           create: [{
             shop,

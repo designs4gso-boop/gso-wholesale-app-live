@@ -1,5 +1,14 @@
 # Decisions for James
 
+> **UPDATE 2026-11-20 (evening) — two sections below now describe the past:**
+> - **Section 1 (Stock Bag checklist):** the proposed nine-step Stock Bag checklist is now what a
+>   Stock-Bag-only order gets (new jobs only). The one open question is unchanged: **should a proof
+>   step be required when the customer uploads a logo or QR?** Today there is none.
+> - **Section 4 (Mimaki white):** your rule "Mimaki white is not re-approved" is now enforced
+>   everywhere. White + Mimaki is refused or held with the reason; white with no printer chosen goes
+>   to the Roland. Gloss / clear on the Mimaki is unchanged. Approving Mimaki white later is still
+>   your decision (options B / C in section 4).
+
 **Date:** 2026-11-20. **Nothing was changed** to write this: no code, no price, no timing, no setting.
 Every "current" statement was checked in the code; the file and line are in the *Evidence* line under each section.
 Jar and bag application timings are frozen. Wherever one appears below it is the value in force today, labelled **PENDING REAL SHOP TIMING VALIDATION**. No new timing is proposed anywhere.

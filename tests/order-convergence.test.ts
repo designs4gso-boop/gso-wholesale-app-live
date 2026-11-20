@@ -277,7 +277,7 @@ describe("15H.4A order convergence foundation", () => {
     const matcher = readFileSync("app/lib/rip-identity-match.server.ts", "utf8");
     expect(matcher).toContain("exact_item_ticket");
     const routing = readFileSync("app/lib/print-intake-routing.server.ts", "utf8");
-    expect(routing).toContain('reasons: ["auto_machine_load_unavailable_select_printer"]');
+    expect(routing).toContain('reasons: ["white_requires_roland"]'); // PIN UPDATED 2026-11-20: the shared press decision no longer load-balances white (owner: "Mimaki white is NOT re-approved" — white with no press goes to the Roland), so the old "auto_machine_load_unavailable_select_printer" line is gone
   });
 
   it("capability probe caches and resets cleanly", async () => {

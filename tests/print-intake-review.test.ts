@@ -128,7 +128,11 @@ describe("15H.3 intake review + retry", () => {
 
   it("R. routing/ticket/RIP authorities untouched", () => {
     const routing = readFileSync("app/lib/print-intake-routing.server.ts", "utf8");
-    expect(routing).toContain('if (!choice.ok) return { machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] };');
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    // The shared decision no longer load-balances at all, so the pinned "load unavailable" line is gone; the pin is now the white rule itself.
+    expect(routing).not.toContain("selectLessBusyPrinter(");
+    expect(routing).toContain('return { machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] };');
+    expect(routing).toContain("return { machine: null, machineRule: null, reasons: [WHITE_ON_MIMAKI_REASON] };");
     const source = readFileSync("app/lib/production-job-source.server.ts", "utf8");
     expect(source).toContain("allocateJobTicket");
     expect(source).toContain("GSO-${stamp}");

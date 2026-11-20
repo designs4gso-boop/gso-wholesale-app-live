@@ -74,8 +74,6 @@ describe("A. capability matrix + explicit routing", () => {
 
   it.each([
     ["Mimaki CMYK", "mimaki", {}, "mimaki"],
-    ["Mimaki White", "mimaki", { white: 1 }, "mimaki"],
-    ["Mimaki CMYK + White", "mimaki", { white: 2 }, "mimaki"],
     ["Roland CMYK", "roland", {}, "roland"],
     ["Roland White", "roland", { white: 1 }, "roland"],
     ["Roland Gloss", "roland", { gloss: 1 }, "roland"],
@@ -85,6 +83,18 @@ describe("A. capability matrix + explicit routing", () => {
     expect(r.blockers).toEqual([]);
     expect(r.effectivePrinter).toBe(expected);
     expect(r.overrideApplied).toBe(true);
+  });
+
+  // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+  // (these two rows were in the "is allowed" table above with blockers [])
+  it.each([
+    ["Mimaki White", "mimaki", { white: 1 }],
+    ["Mimaki CMYK + White", "mimaki", { white: 2 }],
+  ] as const)("%s is BLOCKED by routing since 2026-11-20 (MIMAKI_WHITE_NOT_APPROVED)", (_label, printer, layers) => {
+    const r = route(printer, layers);
+    expect(r.reasons).toContain("MIMAKI_WHITE_NOT_APPROVED");
+    expect(r.blockers.join(" ")).toContain("white ink is not approved on the Mimaki");
+    expect(r.effectivePrinter).toBe("mimaki"); // the selection is kept as entered; nothing is silently moved or costed on the Roland
   });
 
   it.each([
@@ -204,7 +214,11 @@ describe("B. costing vs routing", () => {
     const withMimakiWhite: CalibrationCache = { ...PROD_CACHE, "mimaki-white": approved("mimaki-white", 1.36, 3.24) };
     const mimaki = cost(LABEL("mimaki"), withMimakiWhite);
     const roland = cost(LABEL("roland"), withMimakiWhite);
-    expect(mimaki.status).not.toBe("DRAFT_ONLY");
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    // (was: status not DRAFT_ONLY.) Even with an approved Mimaki White row the job stays blocked by ROUTING; the
+    // machine-specific numbers are still the Mimaki's own — nothing is borrowed from the Roland.
+    expect(mimaki.status).toBe("DRAFT_ONLY");
+    expect(mimaki.blockers.join(" ")).toContain("MIMAKI_WHITE_NOT_APPROVED");
     expect(mimaki.inkChannels.find((c) => c.kind === "white")!.mlPerSqftPerPass).toBe(1.36);
     expect(roland.inkChannels.find((c) => c.kind === "white")!.mlPerSqftPerPass).toBe(6.0);
     expect(mimaki.totalCost).not.toBeCloseTo(roland.totalCost, 2);
@@ -256,12 +270,17 @@ describe("D. quote routing and Production routing agree (updated 2026-11-18: Mim
     expect(quote.autoSelection.status).toBe("gloss_requires_roland");
   });
   it.each([
-    ["explicit Mimaki white", { selectedFinish: "White ink", machineSummary: "Mimaki UCJV300-130" }, { white: 1 }, "mimaki"],
     ["explicit Roland CMYK", { machineSummary: "Roland LG-640" }, {}, "roland"],
   ] as const)("%s", (_l, prod, layers, printer: string = "auto") => {
     const quote = route(printer, layers);
     const production = decideMachine(item(prod));
     expect(production.machine).toBe(quote.effectivePrinter);
+  });
+  // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+  // (was a row of the table above: "explicit Mimaki white" -> both sides "mimaki")
+  it("explicit Mimaki white: BOTH sides refuse it — production holds it, the quote is blocked", () => {
+    expect(decideMachine(item({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300-130" }))).toEqual({ machine: null, machineRule: null, reasons: ["white_job_but_mimaki_selected_contradiction"] });
+    expect(route("mimaki", { white: 1 }).reasons).toContain("MIMAKI_WHITE_NOT_APPROVED");
   });
   it("Auto CMYK (updated 2026-11-18: Mimaki gloss restored): production defaults to the Mimaki with or without load; the quote still load-balances and refuses to guess without load", () => {
     const l = load(6, 1);
@@ -273,12 +292,16 @@ describe("D. quote routing and Production routing agree (updated 2026-11-18: Mim
     expect(route("auto", {}, { machineLoad: l }).effectivePrinter).toBe("roland");
     expect(route("auto").autoSelection.status).toBe("unavailable");
   });
-  it("Auto WHITE is unchanged: with the same load both pick the same press; with no load production refuses to guess", () => {
-    const l = load(6, 1);
-    const production = decideMachine(item({ selectedFinish: "White ink" }), "", l);
-    expect(production).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" });
-    expect(production.machine).toBe(route("auto", { white: 1 }, { machineLoad: l }).effectivePrinter);
-    expect(decideMachine(item({ selectedFinish: "White ink" }))).toEqual({ machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
+  // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+  // (was: "Auto WHITE is unchanged" -> auto_load_balanced with load, review without)
+  it("Auto WHITE: production and the quote both pick the ROLAND, with any load and with none", () => {
+    for (const l of [load(6, 1), load(1, 6), load(3, 3)]) {
+      const production = decideMachine(item({ selectedFinish: "White ink" }), "", l);
+      expect(production).toEqual({ machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] });
+      expect(production.machine).toBe(route("auto", { white: 1 }, { machineLoad: l }).effectivePrinter);
+    }
+    expect(decideMachine(item({ selectedFinish: "White ink" }))).toEqual({ machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] });
+    expect(route("auto", { white: 1 }).effectivePrinter).toBe("roland");
   });
   it("a converted quote carries the press it was COSTED on (historical snapshot authority, not re-routing)", () => {
     // a pre-2026-11-11 snapshot costed AUTO CMYK on the Mimaki keeps the Mimaki
@@ -288,7 +311,10 @@ describe("D. quote routing and Production routing agree (updated 2026-11-18: Mim
     expect(costedMachineSummary(null)).toBeNull();
   });
   it("stated zero layers in a canonical summary are never read as gloss", () => {
-    expect(decideMachine(item({ materialSummary: "Gloss Layers: 0X | White Layers: 1" }), "", load(0, 3)).machine).toBe("mimaki");
+    // PIN UPDATED 2026-11-20 (Mimaki white is NOT approved): this summary states White Layers: 1, so the idle Mimaki no
+    // longer takes it by load — it goes to the Roland by the WHITE rule. The point of this test (a stated 0X is not gloss) stands.
+    expect(decideMachine(item({ materialSummary: "Gloss Layers: 0X | White Layers: 1" }), "", load(0, 3))).toEqual({ machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] });
+    expect(decideMachine(item({ materialSummary: "Gloss Layers: 0X | White Layers: 0X" }), "", load(0, 3))).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk" });
     expect(needsGloss(item({ materialSummary: "Gloss Layers: 0X | White Layers: 1" }))).toBe(false);
     // updated 2026-11-18: Mimaki gloss restored — a stated 2X IS gloss, and untagged gloss now routes to the Mimaki (was the Roland)
     expect(needsGloss(item({ materialSummary: "Gloss Layers: 2X" }))).toBe(true);

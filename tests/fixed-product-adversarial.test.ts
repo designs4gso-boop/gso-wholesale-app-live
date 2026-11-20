@@ -117,10 +117,13 @@ describe("fixed-product adversarial cases", () => {
     blocked("pfamily=standard-jars&pjarmat=matte&pqty=100&pjar=standard/3oz&pjarvariant=black_white&pjarside=1&pjarlid=1&pjartamper=1&pcmykcoverage=40", CANONICAL_REASONS.applicationStandardRequired);
   });
 
-  it("Mimaki + white is ROUTABLE (the Mimaki prints White) but blocks on the missing Mimaki White COST calibration — never Roland's", () => {
+  // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+  // (was: "Mimaki + white is ROUTABLE", routing.blockers []). The cost side is unchanged: still the Mimaki's own identity, still blocked.
+  it("Mimaki + white is BLOCKED by routing (MIMAKI_WHITE_NOT_APPROVED) and still blocks on the missing Mimaki White COST calibration — never Roland's", () => {
     const input = normalizeCanonicalInput(new URLSearchParams(GOOD + "&pprinter=mimaki&pwhitelayers=1&pwhitecoverage=50"))!;
     const routing = routingFor(input);
-    expect(routing.blockers).toEqual([]);
+    expect(routing.blockers).toHaveLength(1);
+    expect(routing.blockers[0]).toMatch(/^MIMAKI_WHITE_NOT_APPROVED/);
     const white = routing.channels.find((c) => c.kind === "white")!;
     expect(white.calibrationKey).toBe("mimaki-white");
     const r = assembleCanonicalJob(input, {
@@ -139,11 +142,16 @@ describe("fixed-product adversarial cases", () => {
     expect(r.blockers.join("\n")).toMatch(/MIMAKI_GLOSS_UNSUPPORTED/);
   });
 
-  it("a white job on AUTO with no load data and no calibration knowledge never prices silently", () => {
+  // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+  // (was: AUTO + white with no load data -> DRAFT_ONLY, AUTO_MACHINE_LOAD_UNAVAILABLE.) AUTO no longer needs load data for a
+  // white job because only one press may take it: it resolves to the Roland and is costed on the Roland's own calibration.
+  it("a white job on AUTO never lands on the Mimaki: with no load data it resolves to the Roland", () => {
     const input = normalizeCanonicalInput(new URLSearchParams(GOOD + "&pprinter=auto&pwhitelayers=1&pwhitecoverage=50"))!;
     const r = assembleCanonicalJob(input, CAL);
-    expect(r.status).toBe("DRAFT_ONLY");
-    expect(r.blockers.join("\n")).toMatch(/AUTO_MACHINE_LOAD_UNAVAILABLE/);
+    expect(routingFor(input).effectivePrinter).toBe("roland");
+    expect(routingFor(input).channels.find((c) => c.kind === "white")!.calibrationKey).toBe("roland-white");
+    expect(r.blockers.join("\n")).not.toMatch(/AUTO_MACHINE_LOAD_UNAVAILABLE|MIMAKI/);
+    expect(r.status).toBe("PROVISIONAL");
     // with only the Roland cost-ready for white, AUTO resolves to it
     expect(routingFor({ ...input, costReadyPrinters: ["roland"] }).effectivePrinter).toBe("roland");
   });

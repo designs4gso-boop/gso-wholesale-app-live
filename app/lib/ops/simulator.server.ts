@@ -208,7 +208,8 @@ export async function runCompanyFlowSimulation(now = new Date("2026-10-04T06:00:
     { id: "i2", itemTicket: "T-02", productTitle: "white", selectedFinish: "white", materialSummary: "white", machineSummary: "mimaki" },
     { id: "i3", itemTicket: "T-03", productTitle: "gloss", selectedFinish: "spot gloss", materialSummary: "spot gloss", machineSummary: "mimaki" },
   ]);
-  check("CMYK + Mimaki -> Mimaki, white + Mimaki -> Mimaki, gloss + Mimaki -> Mimaki", dispatch.lines[0].machine === "mimaki" && dispatch.lines[1].machine === "mimaki" && dispatch.lines[2].decision === "DISPATCH" && dispatch.lines[2].machine === "mimaki", "");
+  // 2026-11-20 owner rule: Mimaki white is NOT re-approved — white + Mimaki is blocked; CMYK and gloss on the Mimaki are unchanged.
+  check("CMYK + Mimaki -> Mimaki, white + Mimaki -> BLOCK, gloss + Mimaki -> Mimaki", dispatch.lines[0].machine === "mimaki" && dispatch.lines[1].decision === "BLOCK" && dispatch.lines[2].decision === "DISPATCH" && dispatch.lines[2].machine === "mimaki", "");
   check("transition guard: new job may not print", !evaluateTransition("new", "printing", {}).allowed, "");
   const po = preparePurchaseOrder({ materialName: "4x5 blank", quantity: 520, unit: "each", neededBy: "2026-10-15", source: "production" }, { vendor: "BagCo", moq: 500, defaultUnitCost: 0.11, leadTimeDays: 7 }, now);
   check("purchasing: PO_READY_FOR_APPROVAL, freight null", po.status === "PO_READY_FOR_APPROVAL" && po.draft?.freight === null, po.approvalSummary);

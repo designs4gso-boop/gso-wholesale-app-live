@@ -22,10 +22,10 @@ import { itemReprintSummary } from "../lib/production-qc-display";
 import { showsProductionControl } from "../lib/production-role-access";
 import { PRODUCTION_STATUS_OPTIONS, jobSourceLabel, staffStatusLabel } from "../lib/production-status-vocabulary";
 import { REORDER_HREF, SIMPLE_BOARD_HREF, classicJobHref, jobWorkspaceHref } from "../lib/simple-nav";
-import { RUN_CHARGE_TYPES, RUN_KINDS, itemFileState, itemRunSummary, runChargeLabel, runKindLabel, runCostAccounting } from "../lib/production-run";
+import { RUN_CHARGE_TYPES, RUN_KINDS, itemFileState, itemRunSummary, newReprintRequestId, runChargeLabel, runKindLabel, runCostAccounting } from "../lib/production-run";
 import { reprintReasonLabel } from "../lib/production-fulfillment";
 import { formatDueDate } from "../lib/business-date";
-import { isJobOverdue, jobWorkspaceView, showsMaterialUse, workspaceItemQc, toMaterialOption, type JobStepKey, type WorkspaceStep, jobAssistLine } from "../lib/simple-production";
+import { fileLayerOf, filesOfItem, holdReasonOf, intakeFilesOfItem, isJobOverdue, itemStageTrail, jobLevelFiles, jobLevelIntakeFiles, jobWorkspaceView, showsMaterialUse, workspaceItemQc, toMaterialOption, type IntakeFileView, type JobStepKey, type TrailStage, type WorkspaceStep, jobAssistLine } from "../lib/simple-production";
 
 export async function loader(args: { request: Request; params: { id?: string } }) {
   const raw: any = await productionLoader({ request: args.request });
@@ -94,18 +94,27 @@ function Feedback({ data }: { data: any }) {
 }
 
 /** One form = one existing Production action intent. Its result appears inside the form (not in a page banner). */
-function ActionForm({ jobId, intent, hidden, children }: { jobId: string; intent: string; hidden?: Record<string, string>; children: (busy: boolean) => ReactNode }) {
+function ActionForm({ jobId, intent, hidden, idempotent, children }: { jobId: string; intent: string; hidden?: Record<string, string>; idempotent?: boolean; children: (busy: boolean) => ReactNode }) {
   const fetcher = useFetcher<any>();
   const busy = fetcher.state !== "idle";
   // clear what was typed once it is saved, so a second tap cannot record the same entry twice
   const formRef = useRef<HTMLFormElement>(null);
+  // 2026-11-20 (idempotent forms): one request id per form instance, made in the browser, and a NEW one after
+  // every successful submit. The same form sent twice carries the same id (the server answers "already
+  // recorded"); the next entry carries a new id. Empty in the server render = the server's earlier behaviour.
+  const [requestId, setRequestId] = useState("");
+  useEffect(() => {
+    if (idempotent) setRequestId(newReprintRequestId());
+  }, [idempotent]);
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data?.ok) formRef.current?.reset();
+    if (fetcher.state === "idle" && fetcher.data?.ok && idempotent) setRequestId(newReprintRequestId());
   }, [fetcher.state, fetcher.data]);
   return (
     <fetcher.Form method="post" ref={formRef}>
       <input type="hidden" name="intent" value={intent} />
       <input type="hidden" name="jobId" value={jobId} />
+      {idempotent ? <input type="hidden" name="requestId" value={requestId} /> : null}
       {Object.entries(hidden || {}).map(([name, value]) => <input key={name} type="hidden" name={name} value={value} />)}
       {children(busy)}
       <Feedback data={fetcher.data} />
@@ -150,15 +159,60 @@ const when = (value: string | null | undefined) => (value ? new Date(value).toLo
 
 const RUN_STATUS_LABEL: Record<string, string> = { open: "Waiting for QC", qc_passed: "QC passed", qc_failed: "QC failed", reprinted: "Reprinted", cancelled: "Cancelled" };
 
+const dollars = (value: unknown) => `$${Number(value || 0).toFixed(2)}`;
+const BASIS_WORD: Record<string, string> = { actual: "actual", estimate: "QUOTED ESTIMATE — not an actual", not_recorded: "not recorded" };
+
+/**
+ * 2026-11-20 — run cost in dollars. Rendered ONLY when the server attached `runCosts` (owner / financially
+ * authorized managers; it is null for everyone else). Each run shows its four components with their basis;
+ * a component with no approved data says "not recorded" and the run is marked PARTIAL COST. A quoted estimate
+ * is labelled as one and never added to the actual totals. Nothing here charges anyone.
+ */
+function RunCostPanel({ item }: { item: any }) {
+  const cost = item.runCosts;
+  if (!cost?.runs?.length) return null;
+  const part = (name: string, component: any) => (
+    <div style={{ color: component?.basis === "not_recorded" ? "#92400e" : "#374151", overflowWrap: "anywhere" }}>
+      {name}: {component?.amount == null ? "not recorded" : `${dollars(component.amount)} (${BASIS_WORD[String(component.basis)] || component.basis})`}{component?.note ? ` — ${component.note}` : ""}
+    </div>
+  );
+  return (
+    <div style={{ fontSize: 13, border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 10, padding: "8px 10px", display: "grid", gap: 6 }}>
+      <div style={{ fontWeight: 800 }}>RUN COST — {cost.costLabel} <span style={{ fontWeight: 400, color: "#6b7280" }}>(owner view)</span></div>
+      {(cost.runs as any[]).map((row) => (
+        <div key={row.label} style={{ display: "grid", gap: 1 }}>
+          <div style={{ fontWeight: 700 }}>{row.label} — {row.costLabel} · actual so far {dollars(row.knownCost)}</div>
+          {part("Ink", row.components?.ink)}
+          {part("Press time", row.components?.pressTime)}
+          {part("Material", row.components?.material)}
+          {part("Finishing", row.components?.finishing)}
+        </div>
+      ))}
+      <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: 4, display: "grid", gap: 2 }}>
+        <div>Original run, actual: {dollars(cost.original)}</div>
+        <div style={{ fontWeight: cost.shopAbsorbed ? 700 : 400 }}>Reprints absorbed by the shop (internal + warranty), actual: {dollars(cost.shopAbsorbed)}{cost.shopAbsorbed ? ` (internal ${dollars(cost.shopAbsorbedInternal)} · warranty ${dollars(cost.shopAbsorbedWarranty)})` : ""}. No revenue.</div>
+        <div style={{ fontWeight: cost.customerPaid ? 700 : 400 }}>Customer-paid replacement, actual: {dollars(cost.customerPaid)}. Nothing was charged and no revenue is added here.</div>
+        {cost.originalEstimate != null ? <div>Quoted estimate for the original run (material + finishing): {dollars(cost.originalEstimate)} — an estimate, not in the actual totals above.</div> : null}
+        <div style={{ fontSize: 12, color: "#6b7280" }}>Labour is not included in any line.</div>
+      </div>
+    </div>
+  );
+}
+
 /** Every production run of one item: the original and each reprint / remake, with its own quantity. Display only. */
 function ItemRuns({ item }: { item: any }) {
   const summary = itemRunSummary(item, item.runs || []);
   const actuals = (item.runActuals || []) as any[];
   if (!summary.reprintCount) {
-    // no reprint: still show what the press reported for this item, when there is anything
-    return actuals.length ? (
-      <div style={{ fontSize: 13, color: "#374151" }}>
-        {actuals.map((row) => <div key={row.label}>Press result — {row.label}: {Number(row.inkMl).toFixed(1)} mL ink · {Number(row.printMinutes).toFixed(1)} min</div>)}
+    // no reprint: still show what the press reported for this item — and, for a financial viewer, what the run cost
+    return actuals.length || item.runCosts ? (
+      <div style={{ display: "grid", gap: 6 }}>
+        {actuals.length ? (
+          <div style={{ fontSize: 13, color: "#374151" }}>
+            {actuals.map((row) => <div key={row.label}>Press result — {row.label}: {Number(row.inkMl).toFixed(1)} mL ink · {Number(row.printMinutes).toFixed(1)} min</div>)}
+          </div>
+        ) : null}
+        <RunCostPanel item={item} />
       </div>
     ) : null;
   }
@@ -175,16 +229,7 @@ function ItemRuns({ item }: { item: any }) {
         </div>
       ))}
       {actuals.map((row) => <div key={row.label} style={{ color: "#374151" }}>Press result — {row.label}: {Number(row.inkMl).toFixed(1)} mL ink · {Number(row.printMinutes).toFixed(1)} min</div>)}
-      {item.runCosts?.runs?.length ? (
-        <div style={{ borderTop: "1px solid #fde68a", paddingTop: 4, display: "grid", gap: 2 }}>
-          {(item.runCosts.runs as any[]).map((row) => (
-            <div key={row.label} style={{ color: "#374151" }}>Press cost — {row.label}: ${Number(row.knownCost).toFixed(2)} (ink {row.inkCost === null ? "not known" : `$${Number(row.inkCost).toFixed(2)}`}{row.inkIncomplete && row.inkCost !== null ? ", incomplete" : ""} · press time ${Number(row.pressCost).toFixed(2)})</div>
-          ))}
-          {item.runCosts.shopAbsorbed ? <div style={{ fontWeight: 700 }}>Reprints absorbed by the shop: ${Number(item.runCosts.shopAbsorbed).toFixed(2)} press cost. No revenue.</div> : null}
-          {item.runCosts.customerPaid ? <div style={{ fontWeight: 700 }}>Customer-paid replacement: ${Number(item.runCosts.customerPaid).toFixed(2)} press cost. Nothing was charged.</div> : null}
-          <div style={{ fontSize: 12, color: "#6b7280" }}>Partial cost: ink and press time only. Material, labour and finishing are not included.</div>
-        </div>
-      ) : null}
+      <RunCostPanel item={item} />
       {(() => {
         // 2026-11-19: how the extra runs are treated. No dollars here; nothing is charged from this page.
         const cost = runCostAccounting(item.runs || [], actuals as any);
@@ -208,11 +253,72 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-/** Job-first file prep: the exact folder / ticket names, what each item needs and what has arrived. Display only. */
+const TRAIL_MARK: Record<string, { mark: string; color: string; word: string }> = {
+  done: { mark: "✓", color: "#166534", word: "done" },
+  waiting: { mark: "…", color: "#92400e", word: "waiting" },
+  problem: { mark: "!", color: "#b91c1c", word: "needs attention" },
+  upcoming: { mark: "○", color: "#9ca3af", word: "later" },
+};
+
+/** Where one item stands, stage by stage (itemStageTrail). Display only; no money. */
+function ItemTrail({ stages }: { stages: TrailStage[] }) {
+  return (
+    <ol aria-label="Where this item stands" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 2 }}>
+      {stages.map((stage) => {
+        const mark = TRAIL_MARK[stage.state] || TRAIL_MARK.upcoming;
+        return (
+          <li key={stage.key} style={{ fontSize: 13, color: stage.state === "upcoming" ? "#6b7280" : "#111827", overflowWrap: "anywhere" }}>
+            <span title={mark.word} style={{ display: "inline-block", width: 18, fontWeight: 800, color: mark.color }}>{mark.mark}</span>
+            <b>{stage.label}:</b> {stage.text}
+            {stage.details.map((detail) => <div key={detail} style={{ paddingLeft: 18, color: stage.state === "problem" ? "#991b1b" : "#6b7280" }}>{detail}</div>)}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+const isWebFileLink = (url: unknown) => /^(https?:\/\/|\/(?!\/))/i.test(String(url || ""));
+
+/** One attached file: its name, kind and ink layer. A file on the shop NAS is named, never offered as a link. */
+function FileLine({ file }: { file: any }) {
+  const layer = String(file.fileType || "") === "print_file" ? fileLayerOf(file.fileName) : "";
+  const kind = file.assetSource === "reorder_reuse" ? "Earlier order's file (reorder)" : FILE_KIND[String(file.fileType || "")] || "File";
+  return (
+    <div style={{ fontSize: 13, color: "#374151", overflowWrap: "anywhere" }}>
+      {isWebFileLink(file.fileUrl) ? <a href={file.fileUrl} target="_blank" rel="noreferrer">{file.fileName}</a> : <span style={{ fontFamily: "monospace" }}>{file.fileName}</span>}
+      {` · ${kind}`}{layer ? ` · ${layer} layer` : ""}{isWebFileLink(file.fileUrl) ? "" : " · on the shop NAS"}
+    </div>
+  );
+}
+
+/** One file as the print intake sees it: matched / held (why) / routed (routed name and where it landed). */
+function IntakeLine({ file }: { file: IntakeFileView }) {
+  const bad = file.state === "held" || file.state === "rejected";
+  return (
+    <div style={{ fontSize: 13, color: bad ? "#991b1b" : "#374151", overflowWrap: "anywhere" }}>
+      <span style={{ fontFamily: "monospace" }}>{file.fileName}</span>{file.layer ? ` · ${file.layer} layer` : ""} · <b>{file.stateLabel}</b>
+      {file.routedName ? <> · routed name <span style={{ fontFamily: "monospace" }}>{file.routedName}</span></> : null}
+      {file.routedName && (file.destination || file.printer) ? ` → ${file.destination || file.printer}` : ""}
+      {file.heldReason ? ` · ${file.heldReason}` : ""}
+      {` · ${file.runLabel}`}{file.sha8 ? ` · file id ${file.sha8}` : ""}
+    </div>
+  );
+}
+
+/**
+ * Job-first file prep AND per-item production readiness: the exact folder / ticket names, what each item
+ * needs, which files belong to which item (and which to the whole job), where each file stands at the
+ * print intake, the current run, and the stage trail. Display only.
+ */
 function TicketsAndFiles({ job, role }: { job: any; role: string }) {
   const items = (job.items || []) as any[];
   if (!job.jobTicket) return null;
   const canReorder = role === "owner" || role === "manager";
+  const holdReason = String(job.status || "") === "on_hold" ? holdReasonOf(job) : "";
+  const wholeJobFiles = jobLevelFiles(job);
+  const wholeJobIntake = jobLevelIntakeFiles(job);
+  const sub: CSSProperties = { fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4, marginTop: 2 };
   return (
     <div style={{ ...card, display: "grid", gap: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -227,8 +333,14 @@ function TicketsAndFiles({ job, role }: { job: any; role: string }) {
           ? "Save the print files in a folder with this name inside Prints For Today, and start each file name with its item ticket below."
           : "Save the print files in a folder with this name inside Prints For Today. They link to this job and go to the right printer automatically."}
       </div>
+      {String(job.status || "") === "on_hold" ? (
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#991b1b" }}>ON HOLD — {holdReason || "no reason was written. Add a note saying why."}</div>
+      ) : null}
       {items.map((item) => {
         const state = itemFileState(item, job.files || []);
+        const itemFiles = filesOfItem(job, item);
+        const intake = intakeFilesOfItem(job, item);
+        const openRun = ((item.runs || []) as any[]).filter((run) => run.status === "open" && run.kind !== "original").sort((a, b) => Number(b.runNumber) - Number(a.runNumber))[0];
         return (
           <div key={item.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, display: "grid", gap: 6 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -238,16 +350,40 @@ function TicketsAndFiles({ job, role }: { job: any; role: string }) {
               </div>
               {item.itemTicket ? <CopyButton text={item.itemTicket} label="Copy item ticket" /> : null}
             </div>
-            <div style={{ fontSize: 13, color: "#374151" }}>Finish: {item.selectedFinish || "Not set"} · Printer: {item.machineSummary || "Not assigned"}</div>
+            <div style={{ fontSize: 13, color: "#374151" }}>Finish: {item.selectedFinish || "Not set"} · Printer: {item.machineSummary || "Not assigned"} · Layers needed: {state.expected.join(" + ")}</div>
+            <div style={{ fontSize: 13, color: "#374151" }}>
+              Current run: {openRun ? `Run ${openRun.runNumber} — ${runKindLabel(openRun.kind)} · ${openRun.quantity} pcs · waiting for QC` : "Run 1 — Original"}
+            </div>
             <div style={{ fontSize: 13, fontWeight: 700, color: state.awaiting ? "#92400e" : "#166534" }}>{state.label}</div>
+            <ItemTrail stages={itemStageTrail(job, item)} />
+            {itemFiles.length ? (
+              <div>
+                <div style={sub}>Files for this item ({itemFiles.length})</div>
+                {itemFiles.map((file) => <FileLine key={file.id} file={file} />)}
+              </div>
+            ) : null}
+            {intake.length ? (
+              <div>
+                <div style={sub}>At the print intake</div>
+                {intake.map((file, index) => <IntakeLine key={`${file.fileName}-${file.sha8}-${index}`} file={file} />)}
+              </div>
+            ) : null}
             {item.reorderOf ? (
               <div style={{ fontSize: 13, color: "#1e3a8a" }}>
-                Reorder of {item.reorderOf.itemTicket || item.reorderOf.productTitle} (earlier quantity {item.reorderOf.quantity}) — {item.reorderOf.artworkMode === "revision" ? "REVISED ARTWORK: a new proof approval is needed; the earlier file is reference only." : "same artwork: reuse the approved file listed under Files."}
+                Reorder of {item.reorderOf.jobId ? <Link to={jobWorkspaceHref(item.reorderOf.jobId)} style={{ fontWeight: 700 }}>{item.reorderOf.itemTicket || item.reorderOf.productTitle}</Link> : item.reorderOf.itemTicket || item.reorderOf.productTitle} (earlier quantity {item.reorderOf.quantity}) — {item.reorderOf.artworkMode === "revision" ? "REVISED ARTWORK: a new proof approval is needed; the earlier file is reference only." : "same artwork: reuse the approved file listed under Files."}
               </div>
             ) : null}
           </div>
         );
       })}
+      {wholeJobFiles.length || wholeJobIntake.length ? (
+        <div style={{ border: "1px dashed #d1d5db", borderRadius: 10, padding: 10, display: "grid", gap: 4 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>Whole job — not tied to one item</div>
+          {wholeJobFiles.map((file) => <FileLine key={file.id} file={file} />)}
+          {wholeJobIntake.map((file, index) => <IntakeLine key={`${file.fileName}-${file.sha8}-${index}`} file={file} />)}
+        </div>
+      ) : null}
+      <div style={{ fontSize: 12, color: "#6b7280" }}>QC, reprint / remake and each item's run history are in step 4 (QC). Adding or removing a file link is under Files.</div>
       {canReorder ? <Link to={`${REORDER_HREF}?q=${encodeURIComponent(job.jobTicket)}`} style={{ fontSize: 14, fontWeight: 700 }}>Reorder an item from this job (new quote)</Link> : null}
     </div>
   );
@@ -289,7 +425,7 @@ function QcStep({ job, role }: { job: any; role: string }) {
             {showsProductionControl(role, "reprintItem") ? (
               <details>
                 <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#b91c1c", minHeight: 44 }}>NEEDS REPRINT</summary>
-                <ActionForm jobId={job.id} intent="reprintItem" hidden={{ itemId: String(item.id) }}>
+                <ActionForm jobId={job.id} intent="reprintItem" hidden={{ itemId: String(item.id) }} idempotent>
                   {(busy) => (
                     <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
                       <label style={{ fontSize: 13, color: "#6b7280" }}>Reason
@@ -307,7 +443,8 @@ function QcStep({ job, role }: { job: any; role: string }) {
                         </select>
                       </label>
                       <label style={{ fontSize: 13, color: "#6b7280" }}>Who pays
-                        <select name="chargeType" defaultValue="internal" style={input}>
+                        <select name="chargeType" defaultValue="" required style={input}>
+                          <option value="" disabled>Choose who pays</option>
                           {RUN_CHARGE_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
                         </select>
                       </label>
@@ -501,7 +638,8 @@ function FilesTab({ job, role }: { job: any; role: string }) {
   const canRemove = showsProductionControl(role, "deleteFile");
   const jobItems = (job.items || []) as any[];
   const itemTicketById: Record<string, string> = Object.fromEntries(jobItems.map((item) => [String(item.id), String(item.itemTicket || item.productTitle || "")]));
-  const isWebLink = (url: unknown) => /^(https?:\/\/|\/)/i.test(String(url || ""));
+  // 2026-11-20: a path on the shop NAS (\\\\NAS\\…, //NAS/…, Z:\\…) is not a link — only http(s) and in-app paths are
+  const isWebLink = isWebFileLink;
   return (
     <div style={{ display: "grid", gap: 12 }}>
       {files.length ? files.map((file) => (
@@ -850,7 +988,7 @@ export default function JobWorkspace() {
         <div style={{ ...card, display: "flex", gap: 24, flexWrap: "wrap" }}>
           <Fact label="Customer" value={job.company || job.customerName || "Not set"} />
           <Fact label="Product" value={product} />
-          <Fact label="Quantity" value={quantity > 0 ? quantity.toLocaleString() : "Not set"} />
+          <Fact label={items.length > 1 ? "Quantity (all items)" : "Quantity"} value={quantity > 0 ? quantity.toLocaleString() : "Not set"} />
           <Fact label="Due" value={job.dueDate ? `${formatDueDate(job.dueDate)}${overdue ? " · LATE" : ""}` : "Not set"} alert={overdue} />
           <Fact label="Priority" value={String(job.priority || "normal").toUpperCase()} alert={["rush", "critical"].includes(String(job.priority))} />
           <Fact label="Assigned to" value={job.assignedTo || "Nobody yet"} />
@@ -873,6 +1011,8 @@ export default function JobWorkspace() {
         </ol>
 
         <LinkIntakeJob job={job} role={role} linkTargets={linkTargets} />
+
+        <TicketsAndFiles job={job} role={role} />
 
         {view.suggestedStatus ? (
           <ActionForm jobId={job.id} intent="changeStatus" hidden={{ status: view.suggestedStatus }}>
@@ -913,8 +1053,6 @@ export default function JobWorkspace() {
           {tab === "notes" ? <NotesTab job={job} /> : null}
           {tab === "costs" && showFinancials ? <CostsTab job={job} /> : null}
         </div>
-
-        <TicketsAndFiles job={job} role={role} />
 
         <details style={card}>
           <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#6b7280", minHeight: 44 }}>Advanced / details</summary>

@@ -157,10 +157,12 @@ describe("machine routing (owner rules, corrected 2026-11-11; updated 2026-11-18
     expect(decision.machine).toBe("mimaki");
     expect(decision.machineRule).toBe("default_cmyk");
     expect(decision.reasons).toEqual(["cmyk_gloss_default_mimaki"]);
-    // white on an explicitly assigned Mimaki is a valid route now
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    // (was: "white on an explicitly assigned Mimaki is a valid route now" -> mimaki / explicit_erp_machine)
     const mimakiWhite = decideMachine(makeItem({ selectedFinish: "White ink", machineSummary: "Mimaki UCJV300" }));
-    expect(mimakiWhite.machine).toBe("mimaki");
-    expect(mimakiWhite.machineRule).toBe("explicit_erp_machine");
+    expect(mimakiWhite).toEqual({ machine: null, machineRule: null, reasons: ["white_job_but_mimaki_selected_contradiction"] });
+    // Roland white is unchanged
+    expect(decideMachine(makeItem({ selectedFinish: "White ink", machineSummary: "Roland LG-640" }))).toMatchObject({ machine: "roland", machineRule: "explicit_erp_machine" });
   });
 
   it("the previously-reviewed case routes: GSO-20260627-0002-01_TEST.pdf on a white + gloss job -> Roland", () => {
@@ -189,8 +191,11 @@ describe("machine routing (owner rules, corrected 2026-11-11; updated 2026-11-18
     expect(decision.decision).toBe("route");
     expect(decision.machine).toBe("roland");
     expect(decision.machineRule).toBe("explicit_roland_tag");
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    // (was: a MIMAKI tag on a White ink item -> mimaki / explicit_mimaki_tag)
     const mimaki = decideMachine(unassigned({ selectedFinish: "White ink" }), "GSO-20260718-0001-01_MIMAKI.pdf");
-    expect(mimaki).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag" });
+    expect(mimaki).toEqual({ machine: null, machineRule: null, reasons: ["white_job_but_mimaki_selected_contradiction"] });
+    expect(decideMachine(unassigned(), "GSO-20260718-0001-01_MIMAKI.pdf")).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag" }); // the tag itself still works for CMYK
   });
 
   it("rule 4 (updated 2026-11-18: Mimaki gloss restored): unassigned, untagged CMYK defaults to the Mimaki; unassigned WHITE still uses AUTO with COMPLETE load only", () => {
@@ -203,16 +208,15 @@ describe("machine routing (owner rules, corrected 2026-11-11; updated 2026-11-18
     expect(decideMachine(unassigned(), "", load(3, 3))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
     expect(decideMachine(unassigned(), "", load(1, 4))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
     expect(decideMachine(unassigned(), "", load(9, 0))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
-    // WHITE is unchanged: AUTO by complete load, else review
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    // (was: WHITE = AUTO by complete load, else review; load(1, 4) put white on the Mimaki)
     const white = () => unassigned({ selectedFinish: "White ink" });
-    expect(decideMachine(white())).toEqual({ machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
-    // incomplete attribution is not "less busy"
-    expect(decideMachine(white(), "", load(0, 9, 1)).machine).toBeNull();
-    // a tie is not "less busy" either — never first-in-list
-    expect(decideMachine(white(), "", load(3, 3)).machine).toBeNull();
-    const balanced = decideMachine(white(), "", load(6, 2));
-    expect(balanced).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" });
-    expect(decideMachine(white(), "", load(1, 4))).toMatchObject({ machine: "mimaki", machineRule: "auto_load_balanced" });
+    const toRoland = { machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] };
+    expect(decideMachine(white())).toEqual(toRoland);
+    expect(decideMachine(white(), "", load(0, 9, 1))).toEqual(toRoland);
+    expect(decideMachine(white(), "", load(3, 3))).toEqual(toRoland);
+    expect(decideMachine(white(), "", load(6, 2))).toEqual(toRoland);
+    expect(decideMachine(white(), "", load(1, 4))).toEqual(toRoland); // the less busy Mimaki never takes white
     // Patch B (2026-11-18): PRINT INTAKE never load-balances — an unassigned, untagged CMYK file
     // routes to the Mimaki with or without load data (the shared decideMachine above now agrees for CMYK).
     const routed = decideIntakeRoute({ fileName: "GSO-20260718-0001-01.pdf", jobs: [makeJob({ items: [unassigned()] })] });

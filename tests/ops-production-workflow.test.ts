@@ -70,7 +70,10 @@ describe("planner, dispatch, QC, shipping, status", () => {
     // updated 2026-11-18: Mimaki gloss restored — unassigned CMYK -> Mimaki (default, no load needed); unassigned gloss -> Mimaki;
     // gloss + assigned Mimaki -> Mimaki (no longer a contradiction); white + Mimaki -> Mimaki (unchanged);
     // unassigned WHITE without load data -> BLOCK (unchanged); a summary naming both presses -> BLOCK (unchanged).
-    expect(plan.lines.map((l) => [l.decision, l.machineKey])).toEqual([["DISPATCH", "mimaki-ucjv300-130"], ["DISPATCH", "mimaki-ucjv300-130"], ["DISPATCH", "mimaki-ucjv300-130"], ["OUTSOURCED", null], ["DISPATCH", "mimaki-ucjv300-130"], ["BLOCK", null], ["BLOCK", null]]);
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    // (was: item 5 white + Mimaki DISPATCH mimaki; item 6 unassigned white BLOCK without load data)
+    expect(plan.lines.map((l) => [l.decision, l.machineKey])).toEqual([["DISPATCH", "mimaki-ucjv300-130"], ["DISPATCH", "mimaki-ucjv300-130"], ["DISPATCH", "mimaki-ucjv300-130"], ["OUTSOURCED", null], ["BLOCK", null], ["DISPATCH", "roland-lg-640"], ["BLOCK", null]]);
+    expect(plan.lines[4].reasons).toEqual(["white_job_but_mimaki_selected_contradiction"]);
     expect(plan.blocked).toBe(2);
   });
 

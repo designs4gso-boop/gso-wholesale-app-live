@@ -4,6 +4,7 @@
   "IncomingFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\rasterlink\\incoming\\UCJV-300",
   "JobsFolder": "C:\\MijCtrl\\Jobs\\1",
   "NotBeforeUtc": "",
+  "ActivationUtc": "",
   "ProcessedFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\processed",
   "ErrorFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\error",
   "LogFolder": "\\\\SynologyNAS\\GSOP\\GSOP\\rip-logs\\sync-logs",

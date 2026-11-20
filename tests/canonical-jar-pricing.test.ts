@@ -234,11 +234,13 @@ describe("machine routing from jar summaries (canonical authority reuse)", () =>
     expect(decision).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
   });
 
-  it("holographic (technical white underbase) no longer forces the Roland — White runs on either press", () => {
+  // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+  // (was: "no longer forces the Roland — White runs on either press" -> review, auto_machine_load_unavailable_select_printer)
+  it("holographic (technical white underbase) with no press chosen goes to the Roland (2026-11-20: Mimaki white is not approved)", () => {
     const { summary, finishLabel } = summaryFor({ labelMaterial: "Holographic" });
     expect(summary).toContain("White Layers: 1");
     const decision = decideMachine({ selectedFinish: finishLabel, materialSummary: summary, machineSummary: null } as any);
-    expect(decision).toMatchObject({ machine: null, reasons: ["auto_machine_load_unavailable_select_printer"] });
+    expect(decision).toEqual({ machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] });
   });
 });
 
@@ -464,7 +466,8 @@ describe("paid jar order -> ProductionJob payload", () => {
       }],
     };
     const payload = buildShopifyOrderJobPayload(order, "GSO-20260812-9005")!;
-    expect(payload.checklistFamily).toBe("default");
+    // PIN UPDATED 2026-11-20 — Stock Bag checklist (docs/GSO_JAMES_DECISIONS.md section 1): a Stock-Bag-ONLY paid order now gets its own "stock-bags" checklist instead of "default". Mixed orders and every other family are unchanged.
+    expect(payload.checklistFamily).toBe("stock-bags");
     expect(payload.items[0].unitPrice).toBe(1.8);
     expect(payload.items[0].materialSummary).toBe(
       "Profile: stock_bag_4x5 | Material: Matte | Finish: No Specialty — 0X | Gloss Layers: 0X | White Layers: 0 | Holographic: no | Bag Color: White | Sides: Double Sided",

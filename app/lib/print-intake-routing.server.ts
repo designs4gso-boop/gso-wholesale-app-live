@@ -14,10 +14,11 @@
 // - machine routing follows the owner rules (updated 2026-11-18 — Mimaki
 //   gloss restored, see decideMachine): an explicit ERP assignment or a
 //   standalone ROLAND / MIMAKI filename tag wins; with nothing explicit, CMYK
-//   and CMYK + gloss go to the Mimaki; a WHITE layer keeps its 2026-11-11
-//   handling (AUTO by complete load data, or review). Contradictory machine
-//   data reviews, never guesses.
-import { selectLessBusyPrinter, type MachineLoadSnapshot } from "./machine-load-balancing";
+//   and CMYK + gloss go to the Mimaki. WHITE (owner rule, 2026-11-20): Mimaki
+//   white is NOT approved — white + Mimaki is held with a clear reason, white
+//   with no press goes to the Roland and is never load-balanced onto the
+//   Mimaki. Contradictory machine data reviews, never guesses.
+import type { MachineLoadSnapshot } from "./machine-load-balancing";
 
 export const INTAKE_OUTCOMES_MARKER = "gso-print-intake-outcomes-v1";
 export const MAX_INTAKE_OUTCOMES = 50;
@@ -37,6 +38,8 @@ export type IntakeJob = {
   printFileUrl: string | null;
   items: IntakeItem[];
   fileNames: string[]; // ProductionJobFile fileName + originalFileName values
+  /** 2026-11-20: the job's proof state (existing ProductionJob.proofStatus). Only read for a revision-reorder item. */
+  proofStatus?: string | null;
 };
 
 export type IntakeItem = {
@@ -48,6 +51,8 @@ export type IntakeItem = {
   selectedFinish: string | null;
   materialSummary: string | null;
   machineSummary: string | null;
+  /** 2026-11-20: "revision" = a reorder with REVISED artwork (a new proof approval is required before its file prints). */
+  reorderArtworkMode?: string | null;
 };
 
 export type IntakeCandidate = { jobTicket: string | null; itemTicket: string | null; productTitle: string | null; reason: string };
@@ -182,21 +187,34 @@ export type MachineDecision = {
 };
 
 // Shared press decision (production dispatch, manual job entry, the agent
-// transition check). Owner rules, updated 2026-11-18 — MIMAKI GLOSS RESTORED:
+// transition check). Owner rules, updated 2026-11-18 — MIMAKI GLOSS RESTORED —
+// and 2026-11-20 — MIMAKI WHITE IS NOT APPROVED (owner: "Mimaki white is NOT
+// re-approved"). This supersedes the 2026-11-11 "the Mimaki does print White"
+// routing correction and makes this decision agree with Print Intake:
 //   0. Primer requested                   -> review PRIMER_NOT_CONFIGURED (no press)
-//   1. explicit ERP Roland / Mimaki       -> that press (explicit_erp_machine)
-//   2. standalone ROLAND / MIMAKI tag     -> that press (explicit_*_tag)
-//   3. nothing explicit, CMYK             -> Mimaki (default_cmyk)
-//   4. nothing explicit, CMYK + gloss     -> Mimaki (default_cmyk) — gloss no
-//      longer forces the Roland, and gloss + an explicit Mimaki is no longer a
-//      contradiction.
-//   5. nothing explicit, WHITE layer      -> UNCHANGED from 2026-11-11: AUTO by
-//      COMPLETE load data (auto_load_balanced), else review — the operator
-//      chooses. White + gloss untagged -> Roland, as before. White routing was
-//      deliberately not touched here.
+//   1. WHITE + an explicit Mimaki (ERP press or MIMAKI tag)
+//                                          -> HELD, WHITE_ON_MIMAKI_REASON (never Mimaki)
+//   2. explicit ERP Roland / Mimaki       -> that press (explicit_erp_machine)
+//   3. standalone ROLAND / MIMAKI tag     -> that press (explicit_*_tag)
+//   4. nothing explicit, CMYK             -> Mimaki (default_cmyk)
+//   5. nothing explicit, CMYK + gloss     -> Mimaki (default_cmyk) — gloss does
+//      not force the Roland, and gloss + an explicit Mimaki is not a contradiction.
+//   6. nothing explicit, WHITE (with or without gloss) -> Roland. Never
+//      load-balanced, never the Mimaki by default.
+// White is read from the job record and from the file name passed in (a `_w`
+// layer / "white ink" wording), exactly as Print Intake reads it.
 // Contradictory data reviews: a machineSummary naming both printers, a tag
 // that contradicts the ERP assignment, or conflicting tags.
-export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: MachineLoadSnapshot | null): MachineDecision {
+// `machineLoad` is accepted for backwards compatibility and no longer read.
+export const WHITE_ON_MIMAKI_REASON = "white_job_but_mimaki_selected_contradiction";
+export const WHITE_ON_MIMAKI_MESSAGE = "White ink is not approved on the Mimaki — a white job runs on the Roland. Choose the Roland (or Auto) for this item.";
+
+function fileNameSaysWhite(fileName: string): boolean {
+  if (!fileName) return false;
+  return parseFilenamePrintHints(fileName).whiteLayers > 0 || parseIntakeLayerTokens(fileName).layers.includes("white");
+}
+
+export function decideMachine(item: IntakeItem, fileName = "", _machineLoad?: MachineLoadSnapshot | null): MachineDecision {
   if (needsPrimer(item)) return { machine: null, machineRule: null, reasons: [PRIMER_NOT_CONFIGURED] };
   const gloss = needsGloss(item);
   const assigned = assignedMachineOf(item);
@@ -211,6 +229,11 @@ export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: Mac
   if ((rolandTag && assigned === "mimaki") || (mimakiTag && assigned === "roland")) {
     return { machine: null, machineRule: null, reasons: [`${rolandTag ? "roland" : "mimaki"}_filename_tag_but_erp_assigned_${assigned}_contradiction`] };
   }
+  // 2026-11-20 (owner): Mimaki white is NOT approved. White with the Mimaki chosen is held for a person.
+  const white = needsWhiteLayer(item) || fileNameSaysWhite(fileName);
+  if (white && (assigned === "mimaki" || mimakiTag)) {
+    return { machine: null, machineRule: null, reasons: [WHITE_ON_MIMAKI_REASON] };
+  }
   if (assigned) {
     return { machine: assigned, machineRule: "explicit_erp_machine", reasons: [`explicit_erp_${assigned}_assignment`] };
   }
@@ -218,16 +241,12 @@ export function decideMachine(item: IntakeItem, fileName = "", machineLoad?: Mac
   if (mimakiTag) return { machine: "mimaki", machineRule: "explicit_mimaki_tag", reasons: ["standalone_mimaki_tag_in_filename"] };
   // 2026-11-18: no explicit press and no white layer -> the Mimaki, with or
   // without gloss (normal default production).
-  const white = needsWhiteLayer(item);
   if (!white) {
     return { machine: "mimaki", machineRule: "default_cmyk", reasons: [gloss ? "cmyk_gloss_default_mimaki" : "cmyk_only_default_mimaki"] };
   }
-  // WHITE is unchanged. Untagged white + gloss went to the Roland before 2026-11-18 and still does
-  // (dropping the gloss rule must not let a white job reach the Mimaki by load balancing).
+  // WHITE with no press chosen: the Roland. Never load-balanced (2026-11-20).
   if (gloss) return { machine: "roland", machineRule: "white_or_gloss", reasons: ["white_plus_gloss_stays_on_roland"] };
-  const choice = selectLessBusyPrinter(["mimaki", "roland"], machineLoad);
-  if (!choice.ok) return { machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] };
-  return { machine: choice.printer, machineRule: "auto_load_balanced", reasons: [`auto_less_busy_${choice.printer}_by_${choice.metric}`] };
+  return { machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] };
 }
 
 // ---------- Patch B (2026-11-18): PRINT INTAKE press decision ----------
@@ -421,7 +440,8 @@ export function buildIntakeMachineContext(params: {
   }
   for (const row of params.rows) {
     if (!row || row.status === "rejected") continue;
-    if (ownHash && String(row.fileHashSha256 || "").toLowerCase() === ownHash) continue;
+    // 2026-11-20: a reuse row (same file routed again for a reorder) is keyed "<sha256>#<item>" — still this file.
+    if (ownHash && String(row.fileHashSha256 || "").toLowerCase().slice(0, 64) === ownHash) continue;
     const sameItem = Boolean(ticket) && String(row.authoritativeTicket || "").toUpperCase() === ticket;
     const sameSingleItemJob = Boolean(params.jobId) && params.jobItemCount === 1 && row.matchedProductionJobId === params.jobId;
     const theirs = parseIntakeLayerTokens(row.originalFilename);
@@ -484,9 +504,56 @@ function routedNameDigest(value: string): string {
   return hash.toString(16).padStart(8, "0").slice(0, 6);
 }
 
+// ---------- 2026-11-20: two different staff files never share one routed name ----------
+// The sanitized segment maps spaces / punctuation / non-ASCII text to "_", so
+// `HEATH F.pdf` and `HEATH_F.pdf` (or `art (1).pdf` and `art_1.pdf`, or two
+// names with no ASCII letters) come out identical. The route-plan endpoint
+// therefore checks the names already issued on the item:
+//   - the SAME staff file saved again (same name, ignoring letter case and a
+//     ticket the staff typed in front) is a true revision -> R+1 on the same base;
+//   - a DIFFERENT staff file whose sanitized name is already held gets a short
+//     deterministic mark (`-x<6 hex>` of its own original name) in front of the
+//     layer suffix. Nothing is added when there is no collision.
+const TYPED_TICKET_RE = /GSO[-_]\d{8}[-_]\d{4}(?:[-_]\d{2})?(?!\d)/gi;
+const ROUTED_LAYER_TAIL_RE = /[_-](?:cmyk|g|gloss|w)$/i;
+
+/** Identity of a staff file for REVISION purposes: its own name, minus a typed ticket, letter case ignored. */
+export function staffFileKey(originalFileName: string | null | undefined): string {
+  return basenameOf(String(originalFileName || ""))
+    .replace(TYPED_TICKET_RE, " ")
+    .replace(/^[\s_.-]+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** A routed name without its trailing run segment (`__A2`, `__R2-P1-A1`). */
+export function stripRunSuffix(name: string | null | undefined): string {
+  return String(name || "").replace(RUN_SEGMENT_RE, "");
+}
+
+/**
+ * The routed base name with a deterministic disambiguator for THIS staff file.
+ * Item ticket (or custom RIP name) first, readable staff name, `-x<digest>`,
+ * then the layer suffix. Same original name + same salt = same result.
+ */
+export function disambiguatedRoutedName(routedBase: string, originalFileName: string, salt = 0): string {
+  const mark = `-x${routedNameDigest(`${basenameOf(String(originalFileName || ""))}${salt ? `#${salt}` : ""}`)}`;
+  const base = String(routedBase || "");
+  const at = base.indexOf(ROUTED_NAME_SEPARATOR);
+  const lead = at === -1 ? base : base.slice(0, at);
+  const segment = at === -1 ? routedStaffNameSegment(originalFileName) : base.slice(at + ROUTED_NAME_SEPARATOR.length);
+  const tail = (segment.match(ROUTED_LAYER_TAIL_RE) || [""])[0];
+  const head = (tail ? segment.slice(0, -tail.length) : segment)
+    .slice(0, Math.max(1, ROUTED_STAFF_NAME_MAX - tail.length - mark.length))
+    .replace(/[_.-]+$/, "") || "file";
+  return `${lead}${ROUTED_NAME_SEPARATOR}${head}${mark}${tail}`;
+}
+
 export function ripFileBaseName(item: Pick<IntakeItem, "ripJobName" | "suggestedFileName" | "itemTicket">, originalFileName?: string | null): string {
   const source = String(item.ripJobName || item.itemTicket || item.suggestedFileName || "").trim();
-  const base = source.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120);
+  // 2026-11-20: an over-long custom RIP name is cut in the middle, so a layer suffix at its end survives.
+  const base = fitRoutedBase(source.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, ""), ROUTED_NAME_MAX);
   const itemTicket = String(item.itemTicket || "").trim().toUpperCase();
   if (!originalFileName || !CANONICAL_ITEM_TICKET_ONLY_RE.test(itemTicket) || base.toUpperCase() !== itemTicket) return base;
   const staffName = routedStaffNameSegment(originalFileName);
@@ -505,7 +572,32 @@ function review(reasons: string[], candidates: IntakeCandidate[] = []): IntakeDe
 
 type IntakeContextResolver = (job: IntakeJob, item: IntakeItem) => IntakeMachineContext;
 
+// 2026-11-20 (reorder E1): a reorder with REVISED artwork needs a NEW proof
+// approval before its file prints. The existing ProductionJob.proofStatus is the
+// only approval read here — no new approval channel. A same-artwork reorder
+// (and every job that is not a reorder) is never held by this.
+export const REVISION_PROOF_HOLD_REASON = "revision_reorder_needs_new_proof_approval";
+
+export function revisionReorderProofHold(job: { proofStatus?: string | null }, item: { reorderArtworkMode?: string | null }): string | null {
+  if (String(item.reorderArtworkMode || "").toLowerCase() !== "revision") return null;
+  return String(job.proofStatus || "").toLowerCase() === "approved" ? null : REVISION_PROOF_HOLD_REASON;
+}
+
+/** True for a job no file is attached to automatically (completed / cancelled / archived). */
+export function isClosedIntakeJobStatus(status: string | null | undefined): boolean {
+  return INTAKE_CLOSED_JOB_STATUSES.has(String(status || "").toLowerCase());
+}
+
 function routeItem(job: IntakeJob, item: IntakeItem, rule: NonNullable<IntakeDecision["rule"]>, fileName: string, contextFor?: IntakeContextResolver): IntakeDecision {
+  // 2026-11-20: EVERY matching rule (ticket in the file name, folder ticket, stored name, job file name)
+  // stops at a finished or cancelled job. A reprint on a finished job is reopened first (owner / manager).
+  if (isClosedIntakeJobStatus(job.status)) {
+    return review([`matched_by_${rule}_but_job_closed`, `${rule}_match_on_closed_job`], [candidateOf(job, item, rule)]);
+  }
+  const proofHold = revisionReorderProofHold(job, item);
+  if (proofHold) {
+    return review([`matched_by_${rule}_but_held_for_proof`, proofHold], [candidateOf(job, item, rule)]);
+  }
   // Patch B: Print Intake uses its own owner-approved resolver (no load balancing).
   const machineDecision = decideIntakeMachine(item, fileName, contextFor ? contextFor(job, item) : {});
   if (!machineDecision.machine) {
@@ -573,6 +665,10 @@ export function decideIntakeRoute(params: { fileName: string; subfolder?: string
     if (jobs.length > 1) return review(["job_ticket_matches_multiple_jobs"], jobs.map((job) => candidateOf(job, null, "job_ticket")));
     if (jobs.length === 1) {
       const job = jobs[0];
+      // 2026-11-20: same closed-job rule as the item ticket (a) and the folder ticket (c).
+      if (isClosedIntakeJobStatus(job.status)) {
+        return review([`job_ticket_${jobTicket}_on_closed_job`], [candidateOf(job, null, "job_ticket")]);
+      }
       if (job.items.length === 1) return routeItem(job, job.items[0], "job_ticket_single_item", fileName, params.machineContextFor);
       return review(
         ["job_ticket_matches_job_with_multiple_items_pick_item_in_review"],
@@ -753,19 +849,20 @@ export function parseFilenamePrintHints(fileName: string): FilenamePrintHints {
 // routes matched files through decideIntakeMachine. Kept for its tests / any
 // non-intake caller (spec 15F.0J.5-D). Same precedence family as decideMachine:
 // explicit token; no white -> Mimaki (with or without gloss, 2026-11-18);
-// white -> AUTO by complete load data, else review.
-export function decideMachineFromFilename(fileName: string, machineLoad?: MachineLoadSnapshot | null): { machine: "mimaki" | "roland" | null; machineRule: IntakeDecision["machineRule"]; mode: string; reasons: string[] } {
+// white -> Roland, white + MIMAKI tag -> held (2026-11-20, Mimaki white not approved).
+export function decideMachineFromFilename(fileName: string, _machineLoad?: MachineLoadSnapshot | null): { machine: "mimaki" | "roland" | null; machineRule: IntakeDecision["machineRule"]; mode: string; reasons: string[] } {
   const hints = parseFilenamePrintHints(fileName);
   if (!hints.deterministic) return { machine: null, machineRule: null, mode: hints.mode, reasons: hints.reasons };
   if (hints.printerToken === "roland") return { machine: "roland", machineRule: "explicit_roland_tag", mode: hints.mode, reasons: ["standalone_roland_tag_in_filename"] };
+  // 2026-11-20 (owner): Mimaki white is NOT approved — a MIMAKI tag on a white file is held, never routed.
+  if (hints.printerToken === "mimaki" && hints.whiteLayers > 0) return { machine: null, machineRule: null, mode: hints.mode, reasons: [WHITE_ON_MIMAKI_REASON] };
   if (hints.printerToken === "mimaki") return { machine: "mimaki", machineRule: "explicit_mimaki_tag", mode: hints.mode, reasons: ["standalone_mimaki_tag_in_filename"] };
-  // 2026-11-18: gloss no longer forces the Roland. No white -> Mimaki; white -> unchanged AUTO.
+  // 2026-11-18: gloss no longer forces the Roland. No white -> Mimaki.
   if (hints.whiteLayers <= 0) {
     return { machine: "mimaki", machineRule: "default_cmyk", mode: hints.mode, reasons: [hints.glossLayers > 0 ? "cmyk_gloss_default_mimaki" : "cmyk_only_default_mimaki"] };
   }
-  const choice = selectLessBusyPrinter(["mimaki", "roland"], machineLoad);
-  if (!choice.ok) return { machine: null, machineRule: null, mode: hints.mode, reasons: ["auto_machine_load_unavailable_select_printer"] };
-  return { machine: choice.printer, machineRule: "auto_load_balanced", mode: hints.mode, reasons: [`auto_less_busy_${choice.printer}_by_${choice.metric}`] };
+  // 2026-11-20 (owner): white with no press named -> the Roland, never load-balanced onto the Mimaki.
+  return { machine: "roland", machineRule: "white_requires_roland", mode: hints.mode, reasons: ["white_requires_roland"] };
 }
 
 // ---------- 15H.5: run identity (attempt / revision / reprint) ----------
@@ -810,9 +907,22 @@ export function buildRunSuffix(run: Partial<RunIdentity> = {}): string {
 }
 
 // Replace (or append) the trailing run segment of an existing routed name.
+// 2026-11-20 (B4): when the result would pass 120 characters only the readable
+// middle of the BASE is cut. The start (item ticket), a collision mark, the
+// layer suffix (`_CMYK` / `_g` / `_w`) and the whole run segment always survive
+// (the agent appends the extension afterwards).
+export const ROUTED_NAME_MAX = 120;
+
+function fitRoutedBase(base: string, max: number): string {
+  if (base.length <= max) return base;
+  const tail = (base.match(/(?:-x[0-9a-f]{6})?(?:[_-](?:cmyk|g|gloss|w))?$/i) || [""])[0];
+  return `${base.slice(0, Math.max(0, max - tail.length)).replace(/[_.-]+$/, "")}${tail}`;
+}
+
 export function applyRunSuffix(baseName: string, run: Partial<RunIdentity>): string {
   const stripped = String(baseName || "").replace(RUN_SEGMENT_RE, "");
-  return `${stripped}${buildRunSuffix(run)}`.slice(0, 120);
+  const suffix = buildRunSuffix(run);
+  return `${fitRoutedBase(stripped, ROUTED_NAME_MAX - suffix.length)}${suffix}`;
 }
 
 // Structured routed RIP name for auto-created intake jobs (contract F/E):

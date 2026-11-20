@@ -372,7 +372,9 @@ describe("18-20. unchanged: DTP ladders, printer routing, canonical cost formula
     expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 1, glossLayers: 0, costReadyPrinters: ["roland"] }).effectivePrinter).toBe("roland");
     expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 0, glossLayers: 2 }).effectivePrinter).toBe("roland");
     expect(resolveCanonicalMachineRouting({ printerSelection: "roland", whiteLayers: 0, glossLayers: 0 }).blockers).toEqual([]);
-    expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 1, whiteCoveragePct: 40, glossLayers: 0 }).blockers).toEqual([]);
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 1, whiteCoveragePct: 40, glossLayers: 0 }).blockers.join(" ")).toContain("MIMAKI_WHITE_NOT_APPROVED"); // was blockers [] ("Mimaki + white allowed")
+    expect(resolveCanonicalMachineRouting({ printerSelection: "roland", whiteLayers: 1, whiteCoveragePct: 40, glossLayers: 0 }).blockers).toEqual([]); // Roland white unchanged
     for (const layers of [{ whiteLayers: 0, glossLayers: 1 }, { whiteLayers: 1, whiteCoveragePct: 40, glossLayers: 1 }]) {
       const routed = resolveCanonicalMachineRouting({ printerSelection: "mimaki", ...layers });
       expect(routed.blockers.join(" ")).toContain("MIMAKI_GLOSS_UNSUPPORTED");

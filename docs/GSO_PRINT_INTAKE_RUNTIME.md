@@ -7,6 +7,14 @@
 > version", read it as history: sections 3 and 4 now describe the previous and the current version.
 > Roll back: stop the task, copy the v1.10 backup over the script, start the task.
 
+> **UPDATE 2026-11-20, afternoon (repository only — nothing live was changed):** the helper scripts were
+> reworked and this document's commands match them exactly. `register-print-intake-startup-task-ELEVATED.ps1`
+> no longer adds a "relaunch" trigger and refuses `-RunWhetherLoggedOn`; a separate **health watchdog**
+> (`tools/print-intake-watchdog.ps1`, section 7) restarts the existing task only when the watcher is stale;
+> `rotate-print-intake-token.ps1` gained `-RestartWatcher` (section 6). Section 8 lists the remaining
+> logging-only weaknesses found in watcher v1.11 with the exact lines to change. None of these files has
+> been copied to `C:\GSO-Print-Intake-Agent` and no task was started, stopped, registered or edited.
+
 Audited 2026-11-20 on the live RIP PC (`DESKTOP-KD7NQTS`), read-only. Nothing on the live system was
 changed by this audit: no task was started, stopped or edited, nothing in `C:\GSO-Print-Intake-Agent` or
 `C:\GSO-RIP-Result-Sync` was written, and no token value appears anywhere in this document.
@@ -19,6 +27,8 @@ Contents
 4. Watcher v1.11 — in the repository, NOT installed
 5. Heartbeat and the ERP banner
 6. Token rotation runbook
+7. The health watchdog
+8. Watcher v1.11 — remaining logging-only weaknesses (audit, not applied)
 
 ---
 
@@ -73,7 +83,7 @@ comes back", not "the watcher runs without a session".
 | Hot folders (local disk) | Yes | Yes, but no RIP is running to read them until someone signs in | Yes | Yes, same caveat as B |
 | RasterLink / VersaWorks | Back after the reboot (session exists) | **Not running** until a person signs in | Only once someone has signed in | Not running until a person signs in |
 | Credentials | The Microsoft-account password is stored on the PC by the sign-in tool (LSA secret). A passwordless account cannot do this | The Microsoft-account password is stored by Task Scheduler. The account must be given as `MicrosoftAccount\<email>` — the local alias `DESKTOP-KD7NQTS\golde` is what failed before. PIN does not work | None | Password stored by the service manager (as the user), or none (LocalSystem, no NAS) |
-| Restart behaviour | Logon trigger + restart 10 × 1 min (unchanged) | Startup trigger + restart on failure | Adds: relaunch within N minutes whenever the watcher is not running, for as long as the user is signed in | Service recovery actions; needs a third-party wrapper to run a PowerShell script as a service |
+| Restart behaviour | Logon trigger + restart 10 × 1 min (unchanged) | Startup trigger + restart on failure | Adds a health check every N minutes for as long as the user is signed in: the existing task is started when it is down, and stopped + started when the watcher is stale (section 7) | Service recovery actions; needs a third-party wrapper to run a PowerShell script as a service |
 | Duplicate watchers | No — one task, `IgnoreNew` | Risk if the old logon task is left beside a new one | No — same task, `IgnoreNew` | Risk: service and task could both run |
 | What James does | Run one command (below) + set up sign-in once | Enter the Microsoft-account password into Task Scheduler and prove the NAS works in the background session | Run one command | Install a wrapper, create a service, enter a password |
 | Risk | Anyone at the PC after a reboot has a signed-in admin session. A changed account password silently breaks the sign-in | Already failed once on this PC. Breaks silently on a password change. Files queue in hot folders with no RIP | Does not help while nobody is signed in | Most moving parts, new software on the live RIP PC, same credential problem |
@@ -81,32 +91,57 @@ comes back", not "the watcher runs without a session".
 ### Recommendation: **A** — keep the logon-triggered task and have Windows sign in by itself
 
 It is the only option that brings back the whole print station (session, NAS credential, both RIPs and the
-watcher) and it leaves the working task exactly as it is. The watchdog trigger from option C goes onto the
-same task as part of the one command below — it is what would have restarted the watcher after it stopped
-at 4:47 PM on 2026-11-19, and it costs nothing while the watcher is running.
+watcher) and it leaves the working task exactly as it is. The health watchdog from option C is installed
+beside it by the one command below — it is what would have restarted the watcher after it stopped at
+4:47 PM on 2026-11-19, and it does nothing while the watcher is healthy.
 
 B and D are not recommended: they need the Microsoft-account password in a place that already failed, and
 even when they work the RIPs are still not running. Do not retry the credential route.
 
 ### What James does
 
-**Step 1 — add the watchdog (today, 2 minutes).** In an **elevated** PowerShell (Run as administrator), from the repository folder:
+**Step 1 — install the health watchdog (2 minutes).** In an **elevated** PowerShell (Run as
+administrator), signed in as `golde`, from the repository folder:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File ".\tools\register-print-intake-startup-task-ELEVATED.ps1" -WatchdogMinutes 5 -WhatIf
-powershell -ExecutionPolicy Bypass -File ".\tools\register-print-intake-startup-task-ELEVATED.ps1" -WatchdogMinutes 5
+# a. put the watchdog script into the install folder (a copy; nothing is started)
+Copy-Item ".\tools\print-intake-watchdog.ps1" "C:\GSO-Print-Intake-Agent\print-intake-watchdog.ps1" -Force
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\GSO-Print-Intake-Agent\print-intake-watchdog.ps1" -SelfTest
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\GSO-Print-Intake-Agent\print-intake-watchdog.ps1" -Once -WhatIf
+
+# b. preview, then apply
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\register-print-intake-startup-task-ELEVATED.ps1" -WatchdogMinutes 5 -WhatIf
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\register-print-intake-startup-task-ELEVATED.ps1" -WatchdogMinutes 5
 ```
 
-The first line is a preview. On 2026-11-20 it reported exactly two changes and nothing else:
+- `-SelfTest` ends with `self-test failures: 0`. `-Once -WhatIf` prints one line with what the watchdog
+  sees right now and what it would do (expected today: `health_healthy … last sign of life N min ago`); it
+  stops, starts and writes nothing.
+- The `-WhatIf` preview of the register script reads the tasks and changes nothing. With the task as it
+  is today (IgnoreNew, no time limit, restart 10 × 1 min) it lists **one** change:
+  ```
+  - watchdog: register the task 'GSO Print Intake Watchdog' (same user / logon type / run level as the watcher; at logon; IgnoreNew): powershell.exe … -File "C:\GSO-Print-Intake-Agent\print-intake-watchdog.ps1" -Loop -TaskName "GSO Print Intake Agent" -InstallPath "C:\GSO-Print-Intake-Agent" -CheckMinutes 5 -StaleMinutes 15
+  ```
+  and no change to the watcher task.
+- The second line asks "Are you sure?", registers the watchdog task, starts **the watchdog** (never the
+  watcher) and prints how to pause and remove it. Run it twice: the second run says
+  `Already configured - nothing to change. No backup written.`
+- Other switches: `-StaleMinutes N` (default 15) — how long the watcher may show no sign of life;
+  `-NoStart` — register the watchdog but start it at the next sign-in; `-AddStartupTrigger` — also add an
+  "At startup" trigger to the watcher task (off by default: nearly useless on an interactive task).
+- **`-RunWhetherLoggedOn` is refused**: the script explains why and exits without changing anything.
 
-```
-- Triggers : add 'At startup' trigger (delay 2 min); existing triggers kept
-- Triggers : watchdog repeat (none) -> every 5 min (no effect while the watcher is running: IgnoreNew)
-```
+Check / pause / remove the watchdog:
 
-The second line asks "Are you sure?", writes a backup of the task into `C:\GSO-Print-Intake-Agent`, applies
-the two triggers and prints the undo line. If it ends with a state other than `Running`, start the task
-with the line it prints. **Never add `-RunWhetherLoggedOn`** (see the review below).
+```powershell
+Get-ScheduledTask -TaskName "GSO Print Intake Watchdog" | Select-Object TaskName, State
+Get-Content "C:\GSO-Print-Intake-Agent\print-intake-watchdog-$(Get-Date -Format yyyyMMdd).log" -Tail 10
+# pause (before maintenance) / resume
+New-Item -ItemType File -Path "C:\GSO-Print-Intake-Agent\print-intake-watchdog-hold.txt"
+Remove-Item "C:\GSO-Print-Intake-Agent\print-intake-watchdog-hold.txt"
+# remove it completely (elevated)
+Stop-ScheduledTask -TaskName "GSO Print Intake Watchdog"; Unregister-ScheduledTask -TaskName "GSO Print Intake Watchdog" -Confirm:$false
+```
 
 **Step 2 — Windows signs in by itself after a reboot (James's decision, once).** This stores the
 Microsoft-account password on the PC, so it is his call:
@@ -123,25 +158,30 @@ signs in. Restarts caused by Windows Update normally sign back in by themselves 
 "use my sign-in info to finish setting up after an update" is not switched off on this PC); a power cut
 does not.
 
-### Review of `tools/register-print-intake-startup-task-ELEVATED.ps1`
+### What `tools/register-print-intake-startup-task-ELEVATED.ps1` does and does not do
 
-- Safe for the recommendation when run as shown. It only updates the one existing task, refuses if the
-  task does not run from `C:\GSO-Print-Intake-Agent`, keeps the logon trigger, the action, the user, the
-  run level and the stronger existing restart policy (10 × 1 min is kept; its default of 3 is not applied),
-  writes and verifies a backup first, and never starts or stops the watcher.
-- `-WatchdogMinutes 5`: a repeating trigger. While the watcher runs it does nothing (`IgnoreNew`). When
-  the watcher has exited it starts it again within 5 minutes — well inside the 15 minutes after which the
-  ERP banner turns red. It only fires while `golde` is signed in.
-- Side effect to know: after a deliberate safety stop (flood cap, exit 3) the watchdog starts the watcher
-  again every 5 minutes. Each start re-scans, processes **nothing** while the count is above the cap, and
-  stops again — but once the folder is back under the cap the watcher resumes without a person restarting
-  it. Today's restart-on-failure setting already does the same for the first 10 minutes.
-- The "At startup" trigger it also adds is harmless and nearly useless on this task: the task can only
-  start when the user is signed in, and by then the logon trigger has already started it.
-- **Do not use `-RunWhetherLoggedOn`.** That is option B. On this PC the script pre-fills the account as
-  the local alias (`DESKTOP-KD7NQTS\golde`, resolved from the task's SID), which is the exact form that
-  already failed for this Microsoft-account profile.
+- **Watcher task — settings only.** No time limit, `IgnoreNew`, restart on failure at least 3 × 1 minute
+  (the existing 10 × 1 minute is kept). The action, the user, the logon type (`InteractiveToken`), the run
+  level, the logon trigger and every other trigger stay as they are; the script refuses to apply a plan in
+  which the principal or the action would differ. On this PC today that means **no change at all** to the
+  watcher task.
+- **It removes the old "relaunch" trigger** (`GsoPrintIntakeWatchdog`) if an earlier version of the script
+  added it. That trigger only checked "is the task running" and re-launched the watcher every few minutes
+  after a deliberate safety stop. (It was never applied on this PC.)
+- **Health watchdog task** `GSO Print Intake Watchdog` (with `-WatchdogMinutes N`): same user, same logon
+  type, same run level as the watcher task, starting 3 minutes after logon, `IgnoreNew`. Section 7.
+- **Never:** starts or stops the watcher; registers a second watcher task (it refuses when another enabled
+  task runs the watcher script); converts the logon mode; asks for, stores, prints or passes a password;
+  touches Windows automatic sign-in. `-RunWhetherLoggedOn` is refused with an explanation — that was
+  option B, and it pre-filled the local alias (`DESKTOP-KD7NQTS\golde`) that already failed for this
+  Microsoft-account profile.
+- **Backups and undo.** A task is exported into `C:\GSO-Print-Intake-Agent` before it is changed
+  (`print-intake-task-backup-<stamp>.xml`, `print-intake-watchdog-task-backup-<stamp>.xml`) and the exact
+  undo line is printed. Nothing to change = no backup written.
 - It does not change the two battery settings (see section 1).
+- **Not run yet.** Checked with the Windows PowerShell 5.1 and PowerShell 7 parsers; its planning functions
+  were exercised in memory against the live task's exported definition (read-only), and the task XML it
+  would register was validated by Task Scheduler in memory without registering it.
 
 ---
 
@@ -324,67 +364,247 @@ What happens to files in that window (v1.10, from the code):
 
 ### Steps, in order
 
-Do it at the RIP PC, with the ERP open in a browser **on that PC**, so the token is pasted and never retyped.
+Do it at the RIP PC, with the ERP open in a browser **on that PC**, so the token is pasted and never
+retyped. One **elevated** PowerShell window in the repository folder is used for every command.
 
-1. **Prepare.** Open an elevated PowerShell in the repository folder. Preview the local half:
+1. **Preview the local half.** Nothing is asked or changed:
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\rotate-print-intake-token.ps1" -WhatIf
+   powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\rotate-print-intake-token.ps1" -RestartWatcher -WhatIf
    ```
-   Expected: two `FOUND UploadToken (set, 57 chars)` lines and "PREVIEW ONLY". Nothing is asked or changed.
+   Expected: two `FOUND UploadToken (set, 57 chars)` lines and two `PREVIEW ONLY` lines.
 2. **Check the inbox is quiet.** The last lines of today's log must be `detected` / `ledger_skip` only:
    ```powershell
    Get-Content "\\SynologyNAS\GSOP\GSOP\print-intake\agent-logs\gso-print-intake-$(Get-Date -Format yyyyMMdd).log" -Tail 12
    ```
-3. **Generate the new token (owner, in the ERP).** Embedded admin → Print Log Settings
+3. **Pause the watchdog** (only if it is installed — section 7), so it does not act in the middle:
+   ```powershell
+   New-Item -ItemType File -Path "C:\GSO-Print-Intake-Agent\print-intake-watchdog-hold.txt"
+   ```
+4. **Generate the new token (owner, in the ERP).** Embedded admin → Print Log Settings
    (`/app/erp/print-log-settings`) → **Rotate token**. Copy the value from the yellow "New token — shown
-   ONCE" box. Do not reload the page, do not paste it into a document, chat or e-mail. *The window starts here.*
-4. **Write it into the two runtime configs.**
+   ONCE" box. Do not reload the page, do not paste it into a document, chat or e-mail. *The window starts
+   here: from this click the running watcher's token is dead.*
+5. **Write it into the two runtime configs and restart the watcher** — one command:
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\rotate-print-intake-token.ps1" -ClearClipboard
+   powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\rotate-print-intake-token.ps1" -RestartWatcher -ClearClipboard
    ```
-   Paste the token at both hidden prompts. Expected: two `UPDATED UploadToken (set, 57 chars)` lines, each
-   with its backup file, and "2 updated, 0 already current, 0 failed". The script backs up each config
-   first (timestamped copy beside it), changes only the token value, reads the file back, never prints a
-   token, and restarts nothing.
-5. **Restart the watcher** (same elevated window):
-   ```powershell
-   Stop-ScheduledTask  -TaskName "GSO Print Intake Agent"
-   Start-ScheduledTask -TaskName "GSO Print Intake Agent"
-   (Get-ScheduledTask  -TaskName "GSO Print Intake Agent").State    # Running
-   ```
-   *The window ends here.*
-6. **Verify an authorised request** (writes nothing):
+   Paste the token at both hidden prompts (`Read-Host -AsSecureString`; nothing is shown). The script:
+   backs up each config beside itself (`….before-token-rotation-<stamp>.json`), changes only the
+   `UploadToken` value in `C:\GSO-Print-Intake-Agent\gso-print-intake-agent-config.json` and
+   `C:\GSO-RIP-Result-Sync\gso-mimaki-result-sync-config.json` (any other path is refused), reads each
+   file back and checks it is valid JSON with only the token changed, then stops and starts the
+   **existing** task `GSO Print Intake Agent` and waits for a fresh log line.
+   Expected: two `UPDATED UploadToken (set, 57 chars)` lines, `2 updated, 0 already current, 0 failed`,
+   then `Fresh log line: [agent_started], no [agent_stopped] after it; task state: Running. The watcher
+   runs with the new token.` *The window ends here.* It never prints a token and writes no log file.
+   If it says it could not restart the task (window not elevated), run the two lines it prints.
+6. **Verify the new token** (writes nothing) — the script prints this line too:
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File "C:\GSO-Print-Intake-Agent\gso-print-intake-agent.ps1" -ConfigPath "C:\GSO-Print-Intake-Agent\gso-print-intake-agent-config.json" -Health
    ```
    Expected line: `token accepted: OK (400 missing-fileName as expected, nothing written)`.
-7. **Verify the heartbeat.** Open Incoming Print Files (`/app/erp/print-intake`): the banner is green and
-   says "checked in just now" / "N min ago" with N small. The NAS log has a fresh `agent_started` line and
-   no `fatal_config`.
-8. **Prove the old token is rejected.** Use the backup written in step 4 (replace the stamp); only the
-   status code is printed:
+7. **Verify the heartbeat.** Open Incoming Print Files (`/app/erp/print-intake`): the banner is **green**
+   and says "checked in just now" / "N min ago" with N small. The NAS log has a fresh `agent_started` line
+   and no `agent_stopped` / `fatal_config` after it.
+8. **Prove the old token is rejected.** Copy the three lines the script printed under "VERIFY … 3." (they
+   read the old token from the backup written in step 5 and print only a status code):
    ```powershell
    $old = (Get-Content -LiteralPath "C:\GSO-Print-Intake-Agent\gso-print-intake-agent-config.before-token-rotation-<stamp>.json" -Raw | ConvertFrom-Json).UploadToken
-   try { Invoke-WebRequest -Uri "https://gso-wholesale-app-live.onrender.com/api/print-intake/route-plan" -Method POST -ContentType "application/json" -Body (@{ token = $old } | ConvertTo-Json) -UseBasicParsing | Out-Null; "UNEXPECTED: the old token was accepted" } catch { "old token -> HTTP " + [int]$_.Exception.Response.StatusCode }
+   $api = (Get-Content -LiteralPath "C:\GSO-Print-Intake-Agent\gso-print-intake-agent-config.json" -Raw | ConvertFrom-Json).ApiBaseUrl
+   try { Invoke-WebRequest -Uri ($api.TrimEnd('/') + '/api/print-intake/route-plan') -Method POST -ContentType 'application/json' -Body (@{ token = $old } | ConvertTo-Json) -UseBasicParsing | Out-Null; 'UNEXPECTED: the old token was accepted' } catch { 'old token -> HTTP ' + [int]$_.Exception.Response.StatusCode }
    $old = $null
    ```
    Expected: `old token -> HTTP 403`. (A token that is accepted answers 400 here, because no file name was sent.)
 9. **Tidy up.** Delete the two `*.before-token-rotation-*.json` backups (they hold the old, now dead,
-   token). Close the browser tab that showed the new token.
+   token). Remove the watchdog hold file from step 3
+   (`Remove-Item "C:\GSO-Print-Intake-Agent\print-intake-watchdog-hold.txt"`). Close the browser tab that
+   showed the new token.
+
+What the server does at step 4 (checked through the real action and endpoints in
+`tests/mimaki-sync-and-watchdog-2026-11-20.test.ts`): only the owner can rotate (a manager, a print
+operator and an unknown user get 403 and nothing changes); the new token is 24 random bytes from Node's
+`crypto.randomBytes` and is returned once, in `rotatedTokenOnce`, and nowhere else; nothing is logged; from
+that moment the old token is answered 401 / 403 by `api.print-intake.route-plan`, `.report`, `.status`,
+`api.rip-imports.upload`, `api.print-logs.upload` and `api.quote-rip-results.sync`, and the new one is
+accepted by all six. No defect was found in the rotate action; it was not changed. (The settings page
+keeps showing the last four characters of the current token as `****abcd`; that is by design.)
 
 ### If something goes wrong
 
 - **There is no way back to the old token.** Rotation overwrites it; no action sets a chosen value. The
   backup files restore a config file, not the token's validity.
-- Step 4 or 6 fails (wrong paste, `token accepted: REJECTED`): repeat steps 3 to 6 — rotate again and
-  paste again. Files keep waiting in Prints For Today meanwhile; nothing is lost.
+- Step 5 or 6 fails (wrong paste, `THE WATCHER STARTED AND STOPPED AGAIN`, `token accepted: REJECTED`):
+  repeat steps 4 to 6 — rotate again and paste again. Files keep waiting in Prints For Today meanwhile;
+  nothing is lost.
 - The watcher will not start after step 5: read the last lines of the NAS log and of
   `C:\GSO-Print-Intake-Agent\gso-print-intake-local-YYYYMMDD.log`. If the helper reported a failure for a
-  file, it has already put that file back from its backup; run step 4 again.
-- The ERP is unreachable at step 3: do not start; the old token stays valid until Rotate succeeds.
+  file, it has already put that file back from its backup; run step 5 again.
+- The ERP is unreachable at step 4: do not start; the old token stays valid until Rotate succeeds.
 
 ### Can it be done today?
 
 Yes. The server action exists and needs no deploy. It must be done by the **owner** (the Rotate button is
 refused for anyone else), at the RIP PC, with an elevated PowerShell for step 5. Nothing else blocks it.
 Until it is done, the exposed token still authorises every agent endpoint listed above.
+
+---
+
+## 7. The health watchdog (`tools/print-intake-watchdog.ps1`)
+
+Not installed. Install = section 2, step 1. It needs no token and talks to no server.
+
+**What it reads (all local, read-only):**
+
+1. The task: state, last start time, last exit code.
+2. A heartbeat file, `C:\GSO-Print-Intake-Agent\gso-print-intake-heartbeat.txt`, if the watcher writes one.
+   **Watcher v1.11 as installed does not** (the change is in section 8, item 6).
+3. The newest line of the watcher's own log — the NAS log and the local fallback log
+   (`gso-print-intake-local-YYYYMMDD.log`), whichever is newer. The log is opened shared, so the watcher's
+   own writes are never blocked.
+
+**What v1.11 lets it conclude today (log only):** v1.11 writes at least one line per waiting file per pass,
+and nothing at all while the inbox is empty.
+
+| Watcher log | Verdict | Action |
+|---|---|---|
+| a line within `-StaleMinutes` (15) | healthy | none |
+| files were being processed, then silence for more than 15 minutes | **stale** | stop + start the existing task |
+| last line is `scan_summary … eligible=0` (empty inbox) and old | cannot tell | **none** — logged as `health_idle_unknown` |
+| last line is `pass_error` (alive, a pass keeps failing — NAS?) | degraded | none until 45 minutes of silence (repeats are logged only every 20th pass) |
+| nothing readable (NAS log and local log) | unknown | none |
+
+With the heartbeat file the watchdog can always tell: a file from the current run older than 15 minutes is
+stale, whatever the log says.
+
+**Threshold.** A pass takes about 2 minutes with 31 held 200 MB files, plus 30 s between passes. 15 minutes
+is seven passes of margin and equals the limit after which the ERP banner turns red. After a start the
+first pass re-hashes every held file (about 5 minutes for 31, about 10 at the flood cap of 60), so no
+verdict is given for the first 15 minutes (`-StartupGraceMinutes`). Both are parameters.
+
+**When the task is not running:**
+
+| Situation | Action |
+|---|---|
+| a watcher process exists anyway (started by hand) | none — never a second watcher (v1.11 would exit 6 as well) |
+| last exit 2 (token), 3 (flood cap), 4 (no cutoff), 5, 6, 1 (config), or stopped by a person | **deliberate stop**: nothing for 60 minutes (`-SafetyStopDelayMinutes`), then one start, then back off |
+| anything else (crash) | start the existing task |
+| the task is disabled, or the hold file exists | none |
+
+**Back-off.** Every stop/start is counted. After an action that did not make the watcher healthy the next
+one waits 30 minutes (`-BackoffMinutes`), then 60, 120 … at most once a day. The count resets when the
+watcher is seen healthy. So a watcher that stops again on its flood cap or its dead token is retried a few
+times a day, not every five minutes.
+
+**It never:** registers a task, launches the watcher script, starts the task while a watcher is still
+running (a restart is abandoned if the old watcher has not gone after 60 s), or touches a config.
+
+**Log:** `C:\GSO-Print-Intake-Agent\print-intake-watchdog-YYYYMMDD.log` — one line when the verdict
+changes and one for everything it does (`restart_begin`, `restart_done`, `start_done`, `restart_aborted`,
+`*_failed`). State for the back-off: `print-intake-watchdog-state.json` beside it.
+
+**Checked:** parser (5.1 and 7), `-SelfTest` 36 PASS / 0 FAIL (the decision table), and its signal reader
+exercised in memory against the live task and log (read-only): verdict `healthy`, no action. **Not checked:**
+a real stop + start by the watchdog, and whether Windows shows a console flash when the watchdog task
+starts at logon (it runs as one long hidden process, like the watcher, so at most once per sign-in).
+
+---
+
+## 8. Watcher v1.11 — remaining logging-only weaknesses (audit 2026-11-20, NOT applied)
+
+Read-only audit of `tools/gso-print-intake-agent.ps1` v1.11 (= the installed file, byte for byte). The
+watcher was not edited. Line numbers are for that file. Items 1–3 are worth applying with the next watcher
+change; 4–5 are low; 6 is the heartbeat file for the watchdog.
+
+**1. `Write-Host` is outside every guard — lines 130 and 151.** `Write-IntakeLog` guards the file write but
+not the console write. If the console write ever throws (no usable output handle), then: the `exit 2` at
+1022–1023, the `exit 3` at 1046–1048 and the `exit 2` at 1056 are **never reached** (the pass guard catches
+the exception and the loop carries on with a dead token / over the flood cap — nothing is processed, but it
+never stops and never says why); and the same call inside the pass guard's own `catch` (1067), at start-up
+(992, 995, 998) or at the end (1075) **ends the process**. Low probability under Task Scheduler, high
+consequence.
+
+```diff
+@@ line 130 (Write-IntakeLog) and line 151 (Write-IntakeLocalLog)
+-  Write-Host $line
++  try { Write-Host $line } catch { }
+```
+
+The bare `Write-Host` calls at 607–608, 981, 1047, 1050 and 1057 have the same weakness; 981 / 1047 / 1057
+sit directly before an `exit`, so a throw there changes the exit code to 1. Same one-word fix
+(`try { … } catch { }`) on each.
+
+**2. The local fallback drops the line silently when the script folder is not writable — lines 143 and 152.**
+`$PSScriptRoot` is tried once and the failure is swallowed (`catch { }`): with the NAS log down *and*
+`C:\GSO-Print-Intake-Agent` not writable, every line — including `config_error`, `pass_error` and
+`agent_stopped` — is lost and the failure is invisible. (Today the folder is writable by every signed-in
+user, so this does not happen now.)
+
+```diff
+@@ line 143 (same change at line 152)
+-    try { Add-Content -Path (Join-Path $PSScriptRoot ("gso-print-intake-local-" + (Get-Date -Format "yyyyMMdd") + ".log")) -Value $line } catch { }
++    foreach ($localDir in @($PSScriptRoot, (Join-Path $env:LOCALAPPDATA "GSO-Print-Intake-Agent"), $env:TEMP)) {
++      try { if (!(Test-Path -LiteralPath $localDir)) { New-Item -ItemType Directory -Path $localDir -Force | Out-Null }; Add-Content -Path (Join-Path $localDir ("gso-print-intake-local-" + (Get-Date -Format "yyyyMMdd") + ".log")) -Value $line; break } catch { }
++    }
+```
+
+**3. The heartbeat is sent while the inbox is unreadable — line 1017 (before the scan at 1034; listing at 430).**
+v1.11 skips the pass (and the heartbeat) when the *log* folder is unreachable (line 250), but the inbox is
+a different folder. `Get-ChildItem … -ErrorAction SilentlyContinue` (430, also 405 and 432) turns an
+unreachable or renamed `Prints For Today` into "0 files": the log says `scan_summary eligible=0`, the
+heartbeat is stamped, **the banner stays green and nothing is picked up.**
+
+```diff
+@@ after line 1010 (Merge-RoutedThisRun $ledger), before the heartbeat call
++  if (!(Test-Path -LiteralPath $config.PrintsForTodayFolder)) { throw "inbox_unavailable: Prints For Today is not reachable - nothing is processed and no heartbeat is sent until it is" }
+```
+
+The pass guard logs it as `pass_error` (once, then every 20th pass) and the banner turns red after 15
+minutes. Still not covered: an unreachable hot folder (logged per file as `hot_folder_unreachable`, banner
+green).
+
+**4. A log expression can abort the whole pass — line 1028.** `([string]$pendingRow.hash).Substring(0,8)`
+exists only to print `sha8=`; a pending row with a hash shorter than 8 characters throws inside the pass,
+every pass, and nothing is processed while the server returns that row. (The server sends full SHA-256
+hashes today.)
+
+```diff
+@@ line 1028
+-          Write-IntakeLog $config "pending_retry" ([string]$pendingRow.fileName) "server requests re-processing (sha8=$(([string]$pendingRow.hash).Substring(0,8))) - ledger cache overridden"
++          Write-IntakeLog $config "pending_retry" ([string]$pendingRow.fileName) "server requests re-processing (sha8=$(([string]$pendingRow.hash + '00000000').Substring(0,8))) - ledger cache overridden"
+```
+
+**5. A failed ledger write after a review report — lines 621–622 and 672–673 (also 556–557, 561–562).** The
+`needs_review` report has already been sent; if the ledger line then cannot be written the exception
+becomes `file_error` (1058) and the in-memory ledger is not updated, so the file is planned and reported
+again every pass until the ledger is writable. Not fatal, and visible as `file_error`; noisy.
+
+```diff
+@@ lines 621-622 (same at 672-673)
+-        Add-IntakeLedgerEntry $Config $hash $File.Name "needs_review"
+-        $Ledger[$hash] = "needs_review"
++        $Ledger[$hash] = "needs_review"
++        try { Add-IntakeLedgerEntry $Config $hash $File.Name "needs_review" } catch { Write-IntakeLog $Config "ledger_write_failed" $File.Name "needs_review line not written ($($_.Exception.Message)); checked again next pass (sha8=$sha8)" }
+```
+
+**6. Heartbeat file for the watchdog (new; closes the "empty inbox = cannot tell" gap of section 7).**
+
+```diff
+@@ after line 153 (end of Write-IntakeLocalLog)
++# Local sign of life for print-intake-watchdog.ps1 (no token, no network). Never throws.
++function Write-IntakeHeartbeat([string]$State) {
++  try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "gso-print-intake-heartbeat.txt"), ($State + " " + (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))) } catch { }
++}
+@@ line 1061
+   $lastPassError = ""
++  if ($Loop -and -not $DryRun) { Write-IntakeHeartbeat "ok" }
+@@ line 1070
+     $lastPassError = $passError
++    if ($Loop -and -not $DryRun) { Write-IntakeHeartbeat "pass_error" }
+```
+
+The watchdog works without it (section 7) and uses it automatically once the running watcher writes it.
+
+Checked and found sound: start-up before the loop (config errors go to the local log and exit 1, lines
+969–974; no cutoff exits 4; a second instance exits 6); the NAS log write (three tries, then local, inside
+`try`); the ledger read (fails closed, line 250); the `routed` ledger line (guarded, 645–650); the archive
+move (guarded, 657–664); claim release (guarded, 677).

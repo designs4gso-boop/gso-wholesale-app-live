@@ -141,7 +141,7 @@ describe("15H.5 run identity grammar", () => {
 
   it("24-30+32. neighbors untouched: intake review, routing, order convergence, manual, merge/link, pricing, actuals trust", () => {
     expect(readFileSync("app/lib/print-intake-review.server.ts", "utf8")).toContain("keep_blocked");
-    expect(readFileSync("app/lib/print-intake-routing.server.ts", "utf8")).toContain('reasons: ["auto_machine_load_unavailable_select_printer"]');
+    expect(readFileSync("app/lib/print-intake-routing.server.ts", "utf8")).toContain('reasons: ["white_requires_roland"]'); // PIN UPDATED 2026-11-20: the shared press decision no longer load-balances white (owner: "Mimaki white is NOT re-approved" — white with no press goes to the Roland), so the old "auto_machine_load_unavailable_select_printer" line is gone
     const source = readFileSync("app/lib/production-job-source.server.ts", "utf8");
     expect(source).toContain("parseCanonicalOrderLine");
     expect(source).toContain("sourceKey = `manual_${requestId}`");

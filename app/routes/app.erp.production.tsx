@@ -13,6 +13,7 @@ import {
   Checkbox,
 } from "@shopify/polaris";
 import { FormTextField } from "../components/FormTextField";
+import { useEffect, useState } from "react";
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation, useNavigate, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
 import { productionFinancialVisibility } from "../lib/owner-authorization.server";
@@ -26,7 +27,7 @@ import { cleanCommercialName } from "../lib/commercial-name-resolver.server";
 import db from "../db.server";
 import { formatDueDate } from "../lib/business-date";
 import { jobSourceLabel } from "../lib/production-status-vocabulary";
-import { isJobOverdue } from "../lib/simple-production";
+import { isJobOverdue, toIntakeFileView } from "../lib/simple-production";
 import { MATERIAL_USAGE_REPLAY_WINDOW_MS, isMaterialUsageReplay, manualUsageSource } from "../lib/material-usage-guard";
 import { buildBrandRates, computeEntryCosts, machineRatePerHour, type BrandInkRates } from "../lib/rip-actual-costs.server";
 import { PRINT_LOG_USAGE_SOURCE } from "../lib/print-log-writeback-shared";
@@ -38,8 +39,8 @@ import {
 } from "../lib/print-log-writeback.server";
 import { resolvePrintDuration } from "../lib/rip-duration.server";
 import { applyRunSuffix } from "../lib/print-intake-routing.server";
-import { actualsByRun, isRunChargeType, isRunKind, layersToReroute, nextReprintNumber, openRunOf, parseReprintQuantity, planReprintRuns, runChargeLabel, runKindLabel, runStatusForQc } from "../lib/production-run";
-import { appendIntakeAudit } from "../lib/print-intake-review.server";
+import { actualsByRun, newReprintRequestId, findReprintRequest, isReprintRequestId, reprintRequestRecord, isRunChargeType, isRunKind, layersToReroute, nextReprintNumber, openRunOf, parseReprintQuantity, planReprintRuns, runChargeLabel, runKindLabel, runStatusForQc } from "../lib/production-run";
+import { appendIntakeAudit, reviewReasonLabel } from "../lib/print-intake-review.server";
 import crypto from "node:crypto";
 
 import { PRODUCTION_STATUS_OPTIONS, isStaffProductionStatus } from "../lib/production-status-vocabulary";
@@ -673,7 +674,9 @@ export async function loader({ request }: { request: Request }) {
   const provenanceJobIds = jobs.map((job: any) => job.id);
   const intakeProvenance = await db.printIntake.findMany({
     where: { shop, OR: [{ generatedProductionJobId: { in: provenanceJobIds } }, { matchedProductionJobId: { in: provenanceJobIds } }] },
-    select: { generatedProductionJobId: true, matchedProductionJobId: true, authoritativeTicket: true, attemptNumber: true, revisionNumber: true, reprintNumber: true, updatedAt: true },
+    // 2026-11-20 (first-real-job observability): + the read-only facts the job page shows per file — its name, where it
+    // stands (matched / held and why / routed), the routed name and the press. No path, no token, no parsed hints.
+    select: { generatedProductionJobId: true, matchedProductionJobId: true, authoritativeTicket: true, attemptNumber: true, revisionNumber: true, reprintNumber: true, updatedAt: true, originalFilename: true, status: true, reviewReason: true, routedFilename: true, printer: true, productionJobItemId: true, fileHashSha256: true, receivedAt: true },
     orderBy: { updatedAt: "asc" },
   });
   const provenanceIds = new Set(intakeProvenance.map((row) => row.generatedProductionJobId).filter(Boolean));
@@ -696,10 +699,20 @@ export async function loader({ request }: { request: Request }) {
       // actual ink / time per run, from the press results linked to this exact item (mL and minutes only — no money)
       item.runActuals = actualsByRun(item.runs, (entriesByJob[job.id] || []).filter((entry: any) => entry.productionJobItemId === item.id));
       // 2026-11-20: dollars per run (ink + press time only) — attached ONLY for the owner / financially authorized managers
-      if (financials.show) item.runCosts = runCostDollars(item.runs, (entriesByJob[job.id] || []).filter((entry: any) => entry.productionJobItemId === item.id), rates, ratePerHour);
+      if (financials.show) item.runCosts = runCostDollars(item.runs, (entriesByJob[job.id] || []).filter((entry: any) => entry.productionJobItemId === item.id), rates, ratePerHour, {
+        costSnapshot: item.costSnapshot, // the ORIGINAL run's quoted estimate only — labelled as an estimate, never an actual
+        jobMaterialRows: (job.materialUsages || []).filter((usage: any) => String(usage.source || "") !== PRINT_LOG_USAGE_SOURCE).length,
+      });
       const source = item.reorderSourceItemId ? lineageById.get(item.reorderSourceItemId) : null;
       item.reorderOf = source ? { itemTicket: source.itemTicket, productTitle: source.productTitle, quantity: source.quantity, jobId: source.jobId, artworkMode: item.reorderArtworkMode || null } : null;
     }
+  }
+  // 2026-11-20: the print files the intake has seen for each job, in floor words (no money, no path, no secret).
+  for (const job of jobsWithActuals as any[]) {
+    const itemIdByTicket = new Map<string, string>((job.items || []).filter((item: any) => item.itemTicket).map((item: any) => [String(item.itemTicket), String(item.id)]));
+    job.intakeFiles = intakeProvenance
+      .filter((row: any) => row.generatedProductionJobId === job.id || row.matchedProductionJobId === job.id)
+      .map((row: any) => toIntakeFileView(row, itemIdByTicket, reviewReasonLabel));
   }
   const SOURCE_ORDER: Record<string, number> = { shopify: 0, quote: 1, manual: 2, other: 3, intake: 4 };
   for (const job of jobsWithActuals as any[]) {
@@ -850,6 +863,7 @@ export async function action({ request }: { request: Request }) {
           ? `Manual job ${result.job.jobTicket} created.`
           : `Already created as ${result.job.jobTicket} (same request).`,
         manualJob: {
+          jobId: result.job.id, // 2026-11-20: so the New Job page can open the job it just created
           jobTicket: result.job.jobTicket,
           itemTicket: item?.itemTicket || null,
           suggestedFileName: item?.suggestedFileName || null,
@@ -1580,6 +1594,22 @@ Source ref: ${sourceRef}` : ""}`,
     const item = job?.items.find((row: any) => row.id === itemId);
     if (!job || !item) return Response.json({ ok: false, message: "Job/item not found." }, { status: 404 });
     const itemLabel = item.itemTicket || item.productTitle;
+    // 2026-11-20 (reprint request identity): the form sends one requestId per rendered form. A POST whose
+    // requestId already created a run for THIS item is the same request again (double tap, retry, replay
+    // after QC) and gets the same answer: 200, already recorded, nothing written. A later reprint is a new
+    // form and carries a new id. No requestId = the earlier behaviour, unchanged.
+    const requestIdRaw = String(formData.get("requestId") || "").trim();
+    if (requestIdRaw && !isReprintRequestId(requestIdRaw)) return Response.json({ ok: false, message: "This reprint form is out of date — refresh the page and try again. Nothing was changed." }, { status: 400 });
+    const requestId = requestIdRaw || null;
+    const alreadyRecorded = async () => {
+      if (!requestId) return null;
+      const events = (await db.productionJobEvent.findMany({ where: { shop, jobId, eventType: "production_reprint_requested", oldValue: { contains: requestId } } })) || [];
+      const prior = findReprintRequest(events as any, requestId, item.id);
+      if (!prior) return null;
+      return Response.json({ ok: true, alreadyRecorded: true, message: `ALREADY RECORDED — this reprint of ${itemLabel} (run ${prior.runLabel || `#${prior.runNumber}`}) was recorded the first time this form was sent. No second run was created; QC and routing were not touched.` });
+    };
+    const replay = await alreadyRecorded();
+    if (replay) return replay;
     // 2026-11-12: a reprint that has not been QC'd yet is not recorded twice
     // (double click / resubmitted form). Record QC on the reprinted piece first.
     if (awaitingQcAfterReprint(item)) {
@@ -1664,7 +1694,7 @@ Source ref: ${sourceRef}` : ""}`,
           data: { shop, jobId, itemId: item.id, runNumber: planned.next.runNumber, kind: runKind, quantity: reprintQty.quantity, reasonCode, chargeType, status: "open", printer: item.machineSummary || null, requestedBy: actor, authorizedBy: actor, notes: note || null, runLabel },
         });
         await tx.productionJobEvent.create({
-          data: { shop, jobId, eventType: "production_reprint_requested", message: `${runKindLabel(runKind)} requested for ${itemLabel} (run ${runLabel}) by ${actor}. Quantity: ${reprintQty.quantity} (ordered quantity stays ${item.quantity}). Charge: ${runChargeLabel(chargeType)}. Reason: ${reason}.${note ? ` Note: ${note}` : ""}`, oldValue: null, newValue: reasonCode, createdBy: actor },
+          data: { shop, jobId, eventType: "production_reprint_requested", message: `${runKindLabel(runKind)} requested for ${itemLabel} (run ${runLabel}) by ${actor}. Quantity: ${reprintQty.quantity} (ordered quantity stays ${item.quantity}). Charge: ${runChargeLabel(chargeType)}. Reason: ${reason}.${note ? ` Note: ${note}` : ""}`, oldValue: requestId ? reprintRequestRecord({ requestId, itemId: item.id, runNumber: planned.next.runNumber, runLabel }) : null, newValue: reasonCode, createdBy: actor },
         });
         // 2026-11-11 QC guard: a reprint invalidates this item's earlier QC PASS
         // (production-qc-guard reads the latest qc_result per item).
@@ -1673,7 +1703,11 @@ Source ref: ${sourceRef}` : ""}`,
         });
       });
     } catch (error: any) {
-      if (error?.message === REPRINT_ALREADY_RECORDED) return Response.json({ ok: false, message: `This reprint was already recorded for ${itemLabel} — refresh the page. Nothing was changed.` }, { status: 409 });
+      if (error?.message === REPRINT_ALREADY_RECORDED) {
+        const same = await alreadyRecorded(); // the same request, sent twice at once: the other copy recorded it
+        if (same) return same;
+        return Response.json({ ok: false, message: `This reprint was already recorded for ${itemLabel} — refresh the page. Nothing was changed.` }, { status: 409 });
+      }
       throw error;
     }
     const instruction = layerPlans.length
@@ -1734,7 +1768,7 @@ Source ref: ${sourceRef}` : ""}`,
     return Response.json({
       ok: true,
       message: result === "reprint_required"
-        ? `QC recorded (run ${runLabel}) — use the Reprint button to start the replacement run. Prior history is preserved.`
+        ? `QC recorded (run ${runLabel}) — this item needs a reprint. A print operator, a manager or the owner starts it under NEEDS REPRINT on this item. Prior history is preserved.`
         : `QC ${result} recorded for ${item.itemTicket || item.productTitle} (run ${runLabel}).`,
     });
   }
@@ -1769,6 +1803,20 @@ Source ref: ${sourceRef}` : ""}`,
   }
 
   return Response.json({ ok: false, message: "Unknown production action." }, { status: 400 });
+}
+
+/**
+ * 2026-11-20: one request identity per rendered reprint form. A new id is made each time the page
+ * settles after a submit, so a double click sends the same id twice (one run) and the next reprint
+ * sends a new one. Made in the browser only (empty in the server render = the earlier behaviour).
+ */
+function ReprintRequestId() {
+  const navigation = useNavigation();
+  const [requestId, setRequestId] = useState("");
+  useEffect(() => {
+    if (navigation.state === "idle") setRequestId(newReprintRequestId());
+  }, [navigation.state]);
+  return <input type="hidden" name="requestId" value={requestId} />;
 }
 
 function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: any; materials: any[]; linkTargets?: any[]; showFinancials?: boolean }) {
@@ -2265,6 +2313,7 @@ function JobCard({ job, materials, linkTargets, showFinancials = true }: { job: 
                         <input type="hidden" name="intent" value="reprintItem" />
                         <input type="hidden" name="jobId" value={job.id} />
                         <input type="hidden" name="itemId" value={item.id} />
+                        <ReprintRequestId />
                         <InlineStack gap="150" blockAlign="center" wrap>
                           <select name="reprintReason" defaultValue="" style={{ padding: 6, borderRadius: 6, border: "1px solid #bbb" }}>
                             <option value="" disabled>Reprint reason…</option>

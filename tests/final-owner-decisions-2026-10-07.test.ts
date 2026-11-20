@@ -202,8 +202,9 @@ describe("E. production: QC PASS REQUIRED BEFORE COMPLETION", () => {
 
 describe("F. routing (superseded 2026-11-11; updated 2026-11-18: Mimaki gloss restored): untagged gloss / CMYK -> Mimaki; the Mimaki prints CMYK + White", () => {
   it("decideMachine routes untagged gloss and CMYK to the Mimaki (updated 2026-11-18: Mimaki gloss restored); White no longer forces a press; the Mimaki white slots stay disabled until calibrated", () => {
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
     const white = decideMachine({ selectedFinish: "White + CMYK", materialSummary: "white ink layer", machineSummary: "Mimaki UCJV300-130" } as any);
-    expect(String(white.machine)).toMatch(/mimaki/i);
+    expect(white).toEqual({ machine: null, machineRule: null, reasons: ["white_job_but_mimaki_selected_contradiction"] }); // was machine "mimaki"
     const gloss = decideMachine({ selectedFinish: "Gloss", materialSummary: "spot gloss", machineSummary: null } as any);
     expect(gloss).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] }); // updated 2026-11-18: Mimaki gloss restored
     const cmyk = decideMachine({ selectedFinish: "CMYK", materialSummary: "standard cmyk", machineSummary: null } as any);

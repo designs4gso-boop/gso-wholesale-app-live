@@ -18,6 +18,9 @@ import {
   parseBulkIntakeIds,
   NEEDS_LINK_TO_JOB_LABEL,
   PRINTER_CONFLICT_LABEL,
+  REVISION_NEEDS_PROOF_LABEL,
+  REVISION_NEEDS_PROOF_REASON,
+  intakeContentHash,
   PRINTER_CONFLICT_REASONS,
   REVIEW_STATUSES,
   appendIntakeAudit,
@@ -115,7 +118,11 @@ export async function loader({ request }: { request: Request }) {
           ? CONFIRM_PRINT_MODE_LABEL
           : row.status === "review" && row.reviewReason === NEEDS_LINK_TO_ITEM_REASON
             ? NEEDS_LINK_TO_ITEM_LABEL
-            : row.status === "review" && !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,
+            // 2026-11-20: a revision-reorder file waiting for its proof is not "missing a job" — it shows
+            // its own label instead of LINK TO JOB.
+            : (row.status === "review" || row.status === "assigned") && row.reviewReason === REVISION_NEEDS_PROOF_REASON
+              ? REVISION_NEEDS_PROOF_LABEL
+              : row.status === "review" && !row.matchedProductionJobId ? NEEDS_LINK_TO_JOB_LABEL : null,
       ticket: row.authoritativeTicket,
       matchedProductionJobId: row.matchedProductionJobId,
       generatedProductionJobId: row.generatedProductionJobId,
@@ -156,6 +163,10 @@ export async function action({ request }: { request: Request }) {
     });
     const bulkVerdict = validateIntakeAssignment({ shop, job: bulkJob as any, itemId: bulkItemIdRaw || null });
     if (!bulkVerdict.ok) return { ok: false, message: `${bulkVerdict.reason} Nothing was assigned.` };
+    for (const candidate of rows) {
+      const moved = await deliveredElsewhere(shop, candidate, bulkJob!.id);
+      if (moved) return { ok: false, message: `${moved} Nothing was assigned.` };
+    }
     const now = new Date().toISOString();
     await db.$transaction([
       ...rows.map((candidate) => db.printIntake.update({ where: { id: candidate.id }, data: intakeAssignmentData(candidate, bulkJob!, bulkVerdict.item, actor, now) })),
@@ -194,6 +205,8 @@ export async function action({ request }: { request: Request }) {
     });
     const verdict = validateIntakeAssignment({ shop, job: job as any, itemId });
     if (!verdict.ok) return { ok: false, message: verdict.reason };
+    const moved = await deliveredElsewhere(shop, row, job!.id);
+    if (moved) return { ok: false, message: moved };
     await db.printIntake.update({ where: { id: row.id }, data: intakeAssignmentData(row, job!, verdict.item, actor, new Date().toISOString()) });
     await db.productionJobEvent.create({ data: intakeAssignmentEvent(shop, row, job!, verdict.item, actor) });
     return { ok: true, message: `${row.originalFilename} assigned to ${job!.jobTicket || job!.id} — the agent will route it on its next pass.` };
@@ -215,6 +228,22 @@ export async function action({ request }: { request: Request }) {
   }
 
   return { ok: false, message: "Unknown action." };
+}
+
+// 2026-11-20 (file history is not moved between jobs): an intake row whose file was already DELIVERED
+// to a press for one job (a routed print file is on record there) is that job's history. Assigning the
+// row to a different job would re-point it, so it is refused; the same file can still be printed for
+// another job by saving it into that job's folder (it then gets its own record). Re-linking to another
+// item of the SAME job stays allowed.
+async function deliveredElsewhere(shop: string, row: { originalFilename: string; fileHashSha256: string; matchedProductionJobId: string | null }, targetJobId: string): Promise<string | null> {
+  const currentJobId = row.matchedProductionJobId;
+  if (!currentJobId || currentJobId === targetJobId) return null;
+  const delivered = await db.productionJobFile.findFirst({
+    where: { shop, jobId: currentJobId, fileType: "print_file", assetSource: "nas", sourceRef: intakeContentHash(row.fileHashSha256) },
+    select: { id: true, jobTicket: true },
+  });
+  if (!delivered) return null;
+  return `${row.originalFilename} was already sent to a press for ${delivered.jobTicket || "another job"} — that record stays on that job. To print the same file for this job, save it into this job's folder in Prints For Today.`;
 }
 
 // One assignment write, shared by the single and the bulk Assign so the two can

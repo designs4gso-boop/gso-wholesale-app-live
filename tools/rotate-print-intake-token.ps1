@@ -6,21 +6,28 @@
 #
 # Preview (reads the files, asks for nothing, changes nothing):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\rotate-print-intake-token.ps1" -WhatIf
-# Apply (normal PowerShell window - no "Run as administrator" needed):
-#   powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\rotate-print-intake-token.ps1"
+# Apply (ELEVATED PowerShell when -RestartWatcher is used; a normal window is enough without it):
+#   powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\rotate-print-intake-token.ps1" -RestartWatcher -ClearClipboard
 #
 # What it does:
-#   - asks for the new token TWICE with hidden input (nothing typed or pasted is shown)
-#   - for every config file in -ConfigPath that exists and has an "UploadToken" value:
+#   - asks for the new token TWICE with hidden input (Read-Host -AsSecureString: nothing
+#     typed or pasted is shown)
+#   - ONLY the two runtime configs can be updated (C:\GSO-Print-Intake-Agent\... and
+#     C:\GSO-RIP-Result-Sync\...); any other path given in -ConfigPath is refused
+#   - for each of them that exists and has an "UploadToken" value:
 #       1. copies the file beside itself as  <name>.before-token-rotation-<yyyyMMdd-HHmmss>.json
 #       2. replaces ONLY the UploadToken value (every other character of the file is kept)
 #       3. reads the file back and checks it is valid JSON, holds the new token, and
 #          that nothing else changed
 #   - prints key names and lengths only - never a token, old or new
+#   - with -RestartWatcher (and only then): stops and starts the EXISTING scheduled task
+#     "GSO Print Intake Agent" and waits for a fresh line in the watcher's log. It never
+#     launches the watcher script itself and never starts a second watcher.
+#   - prints the exact verification steps (banner green; old token rejected)
 #
 # What it does NOT do:
 #   - it does not talk to the ERP, and it does not create or check a token
-#   - it does not start, stop or restart any watcher or scheduled task. The running
+#   - without -RestartWatcher it does not start, stop or restart anything. The running
 #     watcher keeps the OLD token in memory until it is restarted (see the runbook).
 #   - it does not delete anything. The backup copies still hold the OLD token; once
 #     the old token is rotated away it is worthless, but delete the backups when the
@@ -41,10 +48,21 @@ param(
   # (a half-pasted token would lock the watcher out) unless this switch is given.
   [switch]$AllowAnyFormat,
   # Empty the Windows clipboard at the end (the token was probably pasted from it).
-  [switch]$ClearClipboard
+  [switch]$ClearClipboard,
+  # After the configs are updated: stop + start the EXISTING watcher task and wait for a
+  # fresh log line. Needs an elevated PowerShell (the task runs with highest privileges).
+  [switch]$RestartWatcher,
+  [string]$WatcherTaskName = "GSO Print Intake Agent",
+  [ValidateRange(30, 900)][int]$RestartWaitSeconds = 240
 )
 
 $ErrorActionPreference = "Stop"
+# The ONLY files this script may write a token into.
+$RuntimeConfigs = @(
+  "C:\GSO-Print-Intake-Agent\gso-print-intake-agent-config.json",
+  "C:\GSO-RIP-Result-Sync\gso-mimaki-result-sync-config.json"
+)
+$WatcherConfig = $RuntimeConfigs[0]
 $TokenPattern = '^gso_plog_[0-9a-f]{48}$'
 # "UploadToken" : "<value>"  - the value is captured so it can be swapped in place.
 $TokenFieldPattern = '("UploadToken"\s*:\s*")((?:[^"\\]|\\.)*)(")'
@@ -72,11 +90,49 @@ function Get-ConfigTokenState([string]$Path) {
   return @{ path = $Path; state = "ok"; text = $text; hasBom = $hasBom; current = [string]$json.UploadToken }
 }
 
+# Is this one of the two runtime configs? (full path, case-insensitive)
+function Test-IsRuntimeConfig([string]$Path) {
+  $full = ""
+  try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return $false }
+  foreach ($allowed in $RuntimeConfigs) { if ($full -ieq $allowed) { return $true } }
+  return $false
+}
+
+# "yyyy-MM-ddTHH:mm:ssZ [event] ..." lines at or after $SinceUtc in a block of log text:
+# returns the EVENT NAMES only (never a whole line).
+function Get-LogEventsSince([string]$Text, [datetime]$SinceUtc) {
+  $events = New-Object System.Collections.ArrayList
+  $style = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+  foreach ($line in ([string]$Text -split "`r?`n")) {
+    if ($line -match '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) \[([A-Za-z_]+)\] ') {
+      $at = [datetime]::MinValue
+      if ([datetime]::TryParse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture, $style, [ref]$at) -and $at -ge $SinceUtc) { [void]$events.Add($Matches[2]) }
+    }
+  }
+  return ,$events
+}
+
+# The last bytes of a log, opened so that the watcher can keep writing to it.
+function Read-LogTail([string]$Path, [int]$MaxBytes = 65536) {
+  $stream = $null
+  try {
+    if (-not (Test-Path -LiteralPath $Path)) { return "" }
+    $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+    $take = [int][Math]::Min([long]$MaxBytes, $stream.Length)
+    [void]$stream.Seek(-$take, [System.IO.SeekOrigin]::End)
+    $buffer = New-Object byte[] $take
+    $read = 0
+    while ($read -lt $take) { $n = $stream.Read($buffer, $read, $take - $read); if ($n -le 0) { break }; $read += $n }
+    return [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+  } catch { return "" } finally { if ($null -ne $stream) { $stream.Dispose() } }
+}
+
 Write-Host "GSO Print Intake - local token update. No token is ever shown by this script."
 Write-Host ""
 
 $targets = New-Object System.Collections.ArrayList
 foreach ($path in $ConfigPath) {
+  if (-not (Test-IsRuntimeConfig $path)) { Write-Host ("REFUSED (not one of the two runtime configs): " + $path); continue }
   $state = Get-ConfigTokenState $path
   switch ($state.state) {
     "missing"               { Write-Host ("SKIP (file not found)                : " + $path) }
@@ -93,6 +149,7 @@ if ($targets.Count -eq 0) { Write-Host ""; Write-Host "No config file to update.
 if ($WhatIfPreference) {
   Write-Host ""
   Write-Host ("PREVIEW ONLY: " + $targets.Count + " file(s) above would be backed up and get the new token. Nothing was asked, nothing was changed.")
+  if ($RestartWatcher) { Write-Host ("PREVIEW ONLY: the task '" + $WatcherTaskName + "' would then be stopped and started (it was NOT touched).") }
   exit 0
 }
 
@@ -114,6 +171,7 @@ if ($newToken -match '["\\]') { $newToken = $null; Write-Host "The token contain
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $updated = 0; $unchanged = 0; $failed = 0
+$backups = New-Object System.Collections.ArrayList
 foreach ($target in $targets) {
   $path = [string]$target.path
   if ($target.current -ceq $newToken) { Write-Host ("ALREADY HAS THIS TOKEN (not touched)   : " + $path); $unchanged++; continue }
@@ -132,6 +190,7 @@ foreach ($target in $targets) {
     if ((Get-TextWithoutToken $after.text) -cne (Get-TextWithoutToken $target.text)) { throw "something other than the token changed" }
     Write-Host ("UPDATED UploadToken (set, " + $after.current.Length + " chars)    : " + $path)
     Write-Host ("  backup : " + $backup)
+    [void]$backups.Add($backup)
     Write-Host ("  undo   : Copy-Item -LiteralPath `"" + $backup + "`" -Destination `"" + $path + "`" -Force")
     $updated++
   } catch {
@@ -150,6 +209,76 @@ if ($ClearClipboard) { try { Set-Clipboard -Value " "; Write-Host "Clipboard emp
 
 Write-Host ""
 Write-Host ("Done: " + $updated + " updated, " + $unchanged + " already current, " + $failed + " failed.")
-Write-Host "Nothing was restarted. The running watcher still uses the token it loaded at start:"
-Write-Host "restart it now (docs/GSO_PRINT_INTAKE_RUNTIME.md, Token rotation, step 5)."
-if ($failed -gt 0) { exit 1 } else { exit 0 }
+
+$restartLines = @("Stop-ScheduledTask  -TaskName `"$WatcherTaskName`"", "Start-ScheduledTask -TaskName `"$WatcherTaskName`"")
+$restartOk = $false
+if ($RestartWatcher) {
+  # Only the EXISTING scheduled task is stopped and started. The watcher script is never
+  # launched from here, so there can be no second watcher.
+  if ($failed -gt 0) {
+    Write-Host "NOT restarting the watcher: a config file failed above. Fix that first."
+  } elseif ($null -eq (Get-ScheduledTask -TaskName $WatcherTaskName -ErrorAction SilentlyContinue)) {
+    Write-Host ("NOT restarting: the scheduled task '" + $WatcherTaskName + "' was not found.")
+  } else {
+    $restartAtUtc = (Get-Date).ToUniversalTime().AddSeconds(-1)
+    try {
+      Stop-ScheduledTask -TaskName $WatcherTaskName -ErrorAction Stop
+      for ($wait = 0; $wait -lt 15; $wait++) { if ([string](Get-ScheduledTask -TaskName $WatcherTaskName).State -ne "Running") { break }; Start-Sleep -Seconds 2 }
+      if ([string](Get-ScheduledTask -TaskName $WatcherTaskName).State -eq "Running") { throw "the task is still running 30 s after Stop-ScheduledTask" }
+      Start-ScheduledTask -TaskName $WatcherTaskName -ErrorAction Stop
+      Write-Host ("Watcher task stopped and started. Waiting up to " + $RestartWaitSeconds + " s for a fresh log line...")
+      # where the watcher logs: the NAS log folder from its config, and the local log beside it
+      $logFolder = ""
+      try {
+        $found = [regex]::Match([System.IO.File]::ReadAllText($WatcherConfig), '"LogFolder"\s*:\s*("(?:[^"\\]|\\.)*")')
+        if ($found.Success) { $logFolder = [string]($found.Groups[1].Value | ConvertFrom-Json) }
+      } catch { $logFolder = "" }
+      $day = Get-Date -Format "yyyyMMdd"
+      $logFiles = @((Join-Path (Split-Path -Parent $WatcherConfig) ("gso-print-intake-local-" + $day + ".log")))
+      if ($logFolder) { $logFiles += (Join-Path $logFolder ("gso-print-intake-" + $day + ".log")) }
+      $deadline = (Get-Date).AddSeconds($RestartWaitSeconds)
+      $seen = @()
+      $startedSeenAt = $null
+      while ((Get-Date) -lt $deadline) {
+        $seen = @(); foreach ($logFile in $logFiles) { $seen += @(Get-LogEventsSince (Read-LogTail $logFile) $restartAtUtc | ForEach-Object { $_ }) }
+        if ($seen -contains "agent_stopped" -or $seen -contains "config_error" -or $seen -contains "refused_no_cutoff" -or $seen -contains "duplicate_instance") { break }
+        # after agent_started the first pass checks the token within seconds: give it 20 s to object
+        if ($seen -contains "agent_started") { if ($null -eq $startedSeenAt) { $startedSeenAt = Get-Date } elseif (((Get-Date) - $startedSeenAt).TotalSeconds -ge 20) { break } }
+        Start-Sleep -Seconds 5
+      }
+      $state = [string](Get-ScheduledTask -TaskName $WatcherTaskName).State
+      if ($seen -contains "agent_stopped" -or $seen -contains "config_error") {
+        Write-Host "THE WATCHER STARTED AND STOPPED AGAIN (its log says agent_stopped / config_error): the ERP did not accept the token in the config, or the config did not load. Repeat the rotation (runbook, 'If something goes wrong')."
+      } elseif ($seen -contains "agent_started" -and $state -eq "Running") {
+        Write-Host ("Fresh log line: [agent_started], no [agent_stopped] after it; task state: " + $state + ". The watcher runs with the new token.")
+        $restartOk = $true
+      } else {
+        Write-Host ("No fresh [agent_started] line was seen within " + $RestartWaitSeconds + " s (task state: " + $state + "; events since the restart: " + $(if ($seen.Count) { ($seen | Select-Object -Unique) -join ", " } else { "none" }) + "). Check the log by hand before going on.")
+      }
+    } catch {
+      Write-Host ("Could not restart the watcher task: " + $_.Exception.Message)
+      Write-Host "Run these two lines in an ELEVATED PowerShell now:"
+      foreach ($line in $restartLines) { Write-Host ("  " + $line) }
+    }
+  }
+} else {
+  Write-Host "Nothing was restarted. The running watcher still uses the token it loaded at start."
+  Write-Host "Restart it now, in an ELEVATED PowerShell (or run this script with -RestartWatcher next time):"
+  foreach ($line in $restartLines) { Write-Host ("  " + $line) }
+}
+
+Write-Host ""
+Write-Host "VERIFY (docs/GSO_PRINT_INTAKE_RUNTIME.md, Token rotation, steps 5-8):"
+Write-Host "  1. The new token is accepted (writes nothing; expected: 'token accepted: OK'):"
+Write-Host ("       powershell -NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path (Split-Path -Parent $WatcherConfig) "gso-print-intake-agent.ps1") + "`" -ConfigPath `"" + $WatcherConfig + "`" -Health")
+Write-Host "  2. ERP -> Incoming Print Files: the banner is GREEN and says the watcher checked in a few minutes ago at most."
+Write-Host "  3. The OLD token is rejected (prints a status code only; expected: 'old token -> HTTP 403'):"
+$oldBackup = if ($backups.Count -gt 0) { [string]$backups[0] } else { "<a ...before-token-rotation-<stamp>.json backup of the watcher config>" }
+Write-Host ("       `$old = (Get-Content -LiteralPath `"" + $oldBackup + "`" -Raw | ConvertFrom-Json).UploadToken")
+Write-Host ("       `$api = (Get-Content -LiteralPath `"" + $WatcherConfig + "`" -Raw | ConvertFrom-Json).ApiBaseUrl")
+Write-Host "       try { Invoke-WebRequest -Uri (`$api.TrimEnd('/') + '/api/print-intake/route-plan') -Method POST -ContentType 'application/json' -Body (@{ token = `$old } | ConvertTo-Json) -UseBasicParsing | Out-Null; 'UNEXPECTED: the old token was accepted' } catch { 'old token -> HTTP ' + [int]`$_.Exception.Response.StatusCode }"
+Write-Host "       `$old = `$null"
+Write-Host "  4. When 1-3 are good, delete the backup file(s) listed above: they hold the OLD token."
+if ($failed -gt 0) { exit 1 }
+if ($RestartWatcher -and -not $restartOk) { exit 1 }
+exit 0

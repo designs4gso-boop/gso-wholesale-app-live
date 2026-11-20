@@ -29,7 +29,17 @@ export const NEEDS_LINK_TO_ITEM_LABEL = "NEEDS REVIEW — LINK TO ITEM";
 export const CONFIRM_PRINT_MODE_REASON = "confirm_print_mode";
 export const CONFIRM_PRINT_MODE_LABEL = "NEEDS REVIEW — CONFIRM PRINT MODE";
 
+// 2026-11-20 (reorder E1): a reorder with REVISED artwork — its print file waits
+// until the job's proof is approved (ProductionJob.proofStatus = "approved").
+export const REVISION_NEEDS_PROOF_REASON = "revision_needs_proof_approval";
+export const REVISION_NEEDS_PROOF_LABEL = "HELD — NEW PROOF APPROVAL REQUIRED";
+
+// 2026-11-20 (B2): the routed name could not be made unique for this item.
+export const ROUTED_NAME_COLLISION_REASON = "routed_name_collision";
+
 export const REVIEW_REASON_LABELS: Record<string, string> = {
+  revision_needs_proof_approval: "This item is a reorder with REVISED artwork and the job's new proof is not approved yet. Nothing prints until the proof is approved on the job — then Release / Retry this file.",
+  routed_name_collision: "Another file of this item already uses the same press file name — rename this file, then Release / Retry.",
   needs_link_to_item: "The folder names the job, but the job has several items and nothing certain says which one — pick the item with Assign.",
   confirm_print_mode: "This is a CMYK layer file and the job does not say whether a gloss or white layer is coming. Set the finish or press on the job, add a ROLAND / MIMAKI tag to the filename, or drop the other layer — then Release / Retry.",
   layer_printer_split: "Another layer of this same job was already sent to the other press — one job is never split across presses.",
@@ -41,7 +51,7 @@ export const REVIEW_REASON_LABELS: Record<string, string> = {
   ambiguous_candidates: "Two or more production jobs/items match.",
   unsupported_file_type: "Not a supported artwork file type.",
   printer_token_conflict: "The job's files name BOTH printers.",
-  premium_mode_mimaki_contradiction: "White work with the Mimaki selected — white runs on the Roland.",
+  premium_mode_mimaki_contradiction: "White work with the Mimaki selected — white ink is not approved on the Mimaki; white runs on the Roland.",
   printer_assignment_contradiction: "Filename printer tag contradicts the press assigned in the ERP.",
   auto_machine_load_unavailable: "Auto press selection unavailable (machine load incomplete) — assign Mimaki or Roland, or add a MIMAKI / ROLAND filename tag.",
   unknown_production_requirements: "No deterministic printer/mode could be derived.",
@@ -58,6 +68,8 @@ export function canonicalReviewReason(reasons: string[] | string | null | undefi
   const list = (Array.isArray(reasons) ? reasons : [String(reasons || "")]).map((reason) => String(reason || ""));
   const text = list.join(" | ");
   if (/rejected_by_owner/.test(text)) return "rejected_by_owner";
+  if (/revision_reorder_needs_new_proof_approval|revision_needs_proof_approval/.test(text)) return REVISION_NEEDS_PROOF_REASON;
+  if (/routed_name_collision/.test(text)) return ROUTED_NAME_COLLISION_REASON;
   if (/needs_link_to_item/.test(text)) return NEEDS_LINK_TO_ITEM_REASON;
   if (/_and_folder_ticket_.*_disagree/.test(text)) return "ticket_folder_mismatch";
   if (/_on_closed_job/.test(text)) return "ticket_on_closed_job";
@@ -96,6 +108,35 @@ export function dispositionOf(row: { status: string | null; matchedProductionJob
   if (status === "assigned") return { disposition: "assigned", retryAllowed: true };
   if (status === "rejected") return { disposition: "rejected", retryAllowed: false };
   return { disposition: "keep_blocked", retryAllowed: false }; // review, failed, anything else
+}
+
+// ---------- 2026-11-20 (reorder E2): one file, more than one job ----------
+// PrintIntake is unique on (shop, fileHashSha256). The FIRST job a file is
+// routed for owns the row keyed by the plain SHA-256, and that row is never
+// re-pointed at another job or item. When the identical file is legitimately
+// routed again (a same-artwork reorder: staff copy the approved file into the
+// new job's folder) the new item gets its OWN row, keyed
+//     <sha256>#<production job item id>
+// so both histories exist side by side and no schema change is needed. The
+// content hash of any row is the first 64 characters of its key.
+export const INTAKE_REUSE_KEY_SEPARATOR = "#";
+
+export function intakeReuseKey(contentHash: string, scopeId: string): string {
+  return `${String(contentHash || "").toLowerCase()}${INTAKE_REUSE_KEY_SEPARATOR}${String(scopeId || "")}`;
+}
+
+/** The SHA-256 of the file a PrintIntake row is about (plain rows and reuse rows alike). */
+export function intakeContentHash(key: string | null | undefined): string {
+  return String(key || "").slice(0, 64).toLowerCase();
+}
+
+export function isIntakeReuseKey(key: string | null | undefined): boolean {
+  return String(key || "").charAt(64) === INTAKE_REUSE_KEY_SEPARATOR;
+}
+
+/** The job a PrintIntake row belongs to (null for a row that was never linked). */
+export function intakeRowJobId(row: { matchedProductionJobId?: string | null; generatedProductionJobId?: string | null } | null | undefined): string | null {
+  return row ? row.matchedProductionJobId || row.generatedProductionJobId || null : null;
 }
 
 // ---------- audit trail inside rawParsedHints JSON (no schema change) ----------

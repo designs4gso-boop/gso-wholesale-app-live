@@ -491,7 +491,9 @@ describe("unchanged (tests 22-29)", () => {
   it("27. machine routing follows the corrected owner rule (2026-11-11)", () => {
     expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 0, glossLayers: 0 }).blockers.join(" ")).toContain("AUTO_MACHINE_LOAD_UNAVAILABLE");
     expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 1, glossLayers: 0, costReadyPrinters: ["roland"] }).effectivePrinter).toBe("roland");
-    expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 1, whiteCoveragePct: 50, glossLayers: 0 }).blockers).toEqual([]);
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 1, whiteCoveragePct: 50, glossLayers: 0 }).blockers.join(" ")).toContain("MIMAKI_WHITE_NOT_APPROVED"); // was blockers []
+    expect(resolveCanonicalMachineRouting({ printerSelection: "auto", whiteLayers: 1, whiteCoveragePct: 50, glossLayers: 0 }).effectivePrinter).toBe("roland");
     expect(resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 0, glossLayers: 1 }).blockers.join(" ")).toContain("MIMAKI_GLOSS_UNSUPPORTED");
   });
 

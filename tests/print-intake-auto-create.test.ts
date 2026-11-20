@@ -53,7 +53,8 @@ describe("filename print hints (15F.0J.5-D safety)", () => {
     expect(parseFilenamePrintHints("Cust_2x white_labels.pdf").whiteLayers).toBe(2);
   });
 
-  it("tests 10/11 (updated 2026-11-18: Mimaki gloss restored): conflicting printer tokens BLOCK routing; gloss+MIMAKI and white+MIMAKI route to the Mimaki", () => {
+  // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+  it("tests 10/11 (updated 2026-11-18: Mimaki gloss restored; 2026-11-20: Mimaki white not approved): conflicting printer tokens BLOCK routing; gloss+MIMAKI routes to the Mimaki; white+MIMAKI is HELD", () => {
     const conflict = decideMachineFromFilename("Cust_Product_Roland_Mimaki.pdf");
     expect(conflict.machine).toBeNull();
     expect(conflict.reasons).toContain("conflicting_printer_tokens_in_filename");
@@ -61,12 +62,13 @@ describe("filename print hints (15F.0J.5-D safety)", () => {
     // 2026-11-18: gloss + an explicit MIMAKI tag is no longer a contradiction.
     expect(premiumMimaki).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag", mode: "GLOSS-3X", reasons: ["standalone_mimaki_tag_in_filename"] });
     expect(parseFilenamePrintHints("Cust_3x spot gloss_MIMAKI.pdf")).toMatchObject({ deterministic: true, printerToken: "mimaki", glossLayers: 3, reasons: [] });
-    expect(decideMachineFromFilename("Cust_2x white_MIMAKI.pdf")).toMatchObject({ machine: "mimaki", machineRule: "explicit_mimaki_tag", mode: "WHITE-2X" });
+    expect(decideMachineFromFilename("Cust_2x white_MIMAKI.pdf")).toMatchObject({ machine: null, machineRule: null, mode: "WHITE-2X", reasons: ["white_job_but_mimaki_selected_contradiction"] }); // 2026-11-20: was mimaki / explicit_mimaki_tag
+    expect(decideMachineFromFilename("Cust_2x white_ROLAND.pdf")).toMatchObject({ machine: "roland", machineRule: "explicit_roland_tag", mode: "WHITE-2X" }); // Roland white unchanged
     expect(hasMimakiFilenameTag("job_MIMAKI_run.pdf")).toBe(true);
     expect(hasMimakiFilenameTag("mimakingtons.pdf")).toBe(false); // word boundary
   });
 
-  it("test 2 (updated 2026-11-18: Mimaki gloss restored): untagged CMYK and untagged gloss default to the Mimaki; untagged WHITE still picks the less busy press from complete load, otherwise reviews", () => {
+  it("test 2 (updated 2026-11-18: Mimaki gloss restored; 2026-11-20: Mimaki white not approved): untagged CMYK and untagged gloss default to the Mimaki; untagged WHITE goes to the Roland whatever the load says", () => {
     const decision = decideMachineFromFilename("Customer_Product_CMYK.pdf");
     expect(decision.machine).toBe("mimaki");
     expect(decision.machineRule).toBe("default_cmyk");
@@ -75,9 +77,11 @@ describe("filename print hints (15F.0J.5-D safety)", () => {
     const load = { source: "t", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 4, estimatedMinutes: 120 }, roland: { openItems: 9, estimatedMinutes: 60 } } };
     expect(decideMachineFromFilename("Customer_Product_CMYK.pdf", load)).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] }); // load is not consulted for CMYK any more
     expect(decideMachineFromFilename("Cust_3x spot gloss_labels.pdf")).toMatchObject({ machine: "mimaki", machineRule: "default_cmyk", mode: "GLOSS-3X", reasons: ["cmyk_gloss_default_mimaki"] });
-    // white unchanged: AUTO by complete load, else review
-    expect(decideMachineFromFilename("Cust_2x white_labels.pdf")).toMatchObject({ machine: null, machineRule: null, mode: "WHITE-2X", reasons: ["auto_machine_load_unavailable_select_printer"] });
-    expect(decideMachineFromFilename("Cust_2x white_labels.pdf", load)).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" }); // minutes beat item counts
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    expect(decideMachineFromFilename("Cust_2x white_labels.pdf")).toMatchObject({ machine: "roland", machineRule: "white_requires_roland", mode: "WHITE-2X", reasons: ["white_requires_roland"] }); // was review: auto_machine_load_unavailable_select_printer
+    expect(decideMachineFromFilename("Cust_2x white_labels.pdf", load)).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" }); // was auto_load_balanced
+    const mimakiIdle = { ...load, byPrinter: { mimaki: { openItems: 0, estimatedMinutes: 0 }, roland: { openItems: 9, estimatedMinutes: 600 } } };
+    expect(decideMachineFromFilename("Cust_2x white_labels.pdf", mimakiIdle)).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" }); // an idle Mimaki never takes white
   });
 
   it("test 13: routed filename is structured, ticket-parseable, safe, capped, attempt-marked", () => {

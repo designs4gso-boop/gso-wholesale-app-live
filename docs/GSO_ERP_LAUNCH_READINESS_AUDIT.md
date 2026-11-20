@@ -1,8 +1,40 @@
 # GSO ERP — Launch Readiness Audit
 
-**Date:** 2026-11-19 (late night) — updates the 2026-11-18 audit. **Software readiness 81% · live operational readiness 40%** as of 2026-11-20 (see the first section). **Code:** `main` at the commit that carries this document (started the day at `2eb6bd6`). **Deployed:** yes — each push today was confirmed live on Render by a new route answering.
+**Date:** 2026-11-19 (late night) — updates the 2026-11-18 audit. **Software readiness 84% · live operational readiness 40%** as of 2026-11-20 evening (see the first section). **Code:** `main` at the commit that carries this document (started the day at `2eb6bd6`). **Deployed:** yes — each push today was confirmed live on Render by a new route answering.
 
 This is the single authoritative readiness report. Everything marked *verified* was checked tonight against production (read-only), the live Shopify store (read-only), this shop PC, or the code. Anything that could not be checked is marked *unverified*. Scores are judgement, not arithmetic — they are deliberately conservative.
+
+---
+
+## James software gap closure — 2026-11-20 evening (read this first)
+
+**SOFTWARE READINESS: 84%** · **LIVE OPERATIONAL READINESS: 40%** (nothing new was proven with real work).
+
+Every production-side defect listed in the afternoon section below as "known and NOT fixed" is now fixed, except where noted here.
+
+**Fixed and deployed**
+- **File names:** two different files whose names differ only by spaces or punctuation no longer get the same routed name (the second gets a short mark); a long name keeps its ticket, layer and run mark.
+- **Corrected artwork during an open reprint** now belongs to that reprint (it carries the reprint's run mark), not to the original.
+- **Same-artwork reorder:** the earlier job's file history is never moved; the new job gets its own record.
+- **Revised reorder:** the file is held ("new proof approval required") until the job's proof is approved. Same-artwork reorders are not held.
+- **Mimaki white:** one rule everywhere — white + Mimaki is refused or held; white with no printer goes to the Roland. In the Cost Calculator, a white job on Auto now resolves to the Roland (provisional) instead of stopping for missing load data. No price, rate or calibration changed.
+- **Stock Bag orders** get their own nine-step checklist (no artwork / proof steps). New jobs only.
+- **Reprint:** a repeated submission of the same request is recorded once, including after QC; a later, separate reprint still works. "Who pays" must be chosen — it is no longer pre-selected.
+- **Finished jobs:** a file with a finished or cancelled job's ticket (item, job or folder form) is held; a late "routed" report cannot write to a closed job.
+- **Run cost** (owner / authorized managers): ink and press time as actuals; material and finishing shown only as the quoted estimate for the original run, labelled as such; everything else "not recorded"; marked PARTIAL COST.
+- **Job page:** per item — ticket, files by layer, routed name and printer destination, a six-step trail (waiting for files → matched → routed → result → QC → ready), held-file reasons in plain words, reorder link. New Job shows every item ticket and an "open this job" button.
+- **Board:** quantity reads "750 across 2 items"; mixed printers / finishes say "differs by item"; held and reprint rows show why.
+
+**Prepared, not switched on (James / Windows)**
+- **Mimaki result sync v1.4** — READY TO ENABLE AFTER LIVE PATCH F VALIDATION. It refuses to run without an activation time, ignores everything older than activation (the 40 files in the folder today can never upload), uploads only ticketed results, and survives log and server failures. Installed in `C:\GSO-RIP-Result-Sync\`; no task registered. `docs/GSO_MIMAKI_RESULT_SYNC_ENABLEMENT.md`.
+- **Print Intake watchdog** — a separate small task that restarts the existing watcher task only when it has gone quiet. Script ready, never run. `docs/GSO_PRINT_INTAKE_RUNTIME.md`.
+- **Token rotation** — owner-only button verified by tests (old token refused on every endpoint); helper script updates the two local configs without showing the token. Not rotated.
+
+**Still open on the software side (small)**
+1. Watcher v1.11: a failed console write could still stop it in a rare case; the local fallback log has one location only; the banner can stay green while the Prints For Today folder is unreadable. Fixes are written up, not installed.
+2. The watchdog cannot judge an idle watcher (empty inbox writes no log lines) until the watcher writes a small heartbeat file — it does nothing in that case, by design.
+3. A reorder that reuses the **identical** file: the server now handles it correctly, but the watcher skips a file it has already delivered once. Re-export the file (or use Release on Incoming Print Files) for the reorder.
+4. On a reprint, a revision that was saved with the ticket typed in front can be counted as a second layer.
 
 ---
 

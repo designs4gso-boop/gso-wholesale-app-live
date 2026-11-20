@@ -55,7 +55,7 @@ export async function action({ request }: { request: Request }) {
       orderBy: { updatedAt: "desc" },
       take: 50,
     });
-    return json({ ok: true, pending: rows.map((row) => ({ hash: row.fileHashSha256, fileName: row.originalFilename, status: row.status })) });
+    return json({ ok: true, pending: rows.map((row) => ({ hash: String(row.fileHashSha256).slice(0, 64) /* 2026-11-20: a reuse row is keyed <sha256>#<itemId>; the watcher knows the file by its sha256 */, fileName: row.originalFilename, status: row.status })) });
   }
 
   const rawItems = Array.isArray(body.items)

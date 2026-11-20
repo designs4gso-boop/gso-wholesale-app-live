@@ -362,8 +362,10 @@ describe("9. nothing outside Print Intake changed", () => {
     expect(decideMachine(item())).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
     expect(decideMachine(item(), "", load(1, 4) as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] });
     expect(decideMachine(item(), "", load(6, 2) as any)).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_only_default_mimaki"] }); // load is not consulted for CMYK
-    expect(decideMachine(item({ selectedFinish: "White ink" }), "", load(6, 2) as any)).toMatchObject({ machine: "roland", machineRule: "auto_load_balanced" }); // white unchanged
-    expect(decideMachine(item({ selectedFinish: "White ink" }))).toEqual({ machine: null, machineRule: null, reasons: ["auto_machine_load_unavailable_select_printer"] }); // white unchanged
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    expect(decideMachine(item({ selectedFinish: "White ink" }), "", load(6, 2) as any)).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" }); // was auto_load_balanced
+    expect(decideMachine(item({ selectedFinish: "White ink" }), "", load(1, 9) as any)).toMatchObject({ machine: "roland", machineRule: "white_requires_roland" }); // a less busy Mimaki never takes white
+    expect(decideMachine(item({ selectedFinish: "White ink" }))).toEqual({ machine: "roland", machineRule: "white_requires_roland", reasons: ["white_requires_roland"] }); // was review: auto_machine_load_unavailable_select_printer
     expect(decideMachine(item({ selectedFinish: "Gloss" }))).toEqual({ machine: "mimaki", machineRule: "default_cmyk", reasons: ["cmyk_gloss_default_mimaki"] });
     for (const file of ["app/lib/ops/production-dispatch.server.ts", "app/lib/ops/production-transition-executor.server.ts", "app/lib/production-job-source.server.ts"]) {
       const text = src(file);

@@ -5,8 +5,8 @@ import {
   encodeIntakeOutcomes,
   type IntakeOutcome,
 } from "../lib/print-intake-routing.server";
-import { appendIntakeAudit, canonicalReviewReason } from "../lib/print-intake-review.server";
-import { applyRunSuffix } from "../lib/print-intake-routing.server";
+import { INTAKE_REUSE_KEY_SEPARATOR, appendIntakeAudit, canonicalReviewReason, intakeRowJobId } from "../lib/print-intake-review.server";
+import { applyRunSuffix, isClosedIntakeJobStatus } from "../lib/print-intake-routing.server";
 import { recordRoutedPrintFile } from "../lib/production-job-source.server";
 
 // Print Intake outcome recorder (13A.6G): the ONLY mutation in the intake
@@ -28,6 +28,27 @@ const DECISIONS = new Set(["routed", "needs_review", "duplicate", "failed"]);
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+}
+
+// 2026-11-20 (reorder E2): the PrintIntake row a report is about. A file routed for one job and then
+// again for a reorder item has two rows — the plain "<sha256>" row of the first job and a
+// "<sha256>#<item id>" row per further item. A routed report names its job, so the row of THAT job is
+// used (the item ticket breaks a tie inside one job); with no job the plain row is used, as before.
+async function intakeRowForReport(shop: string, hash: string, jobId: string | null, itemTicket: string | null): Promise<any | null> {
+  const plain = await db.printIntake.findUnique({ where: { shop_fileHashSha256: { shop, fileHashSha256: hash } } });
+  if (!plain || !jobId) return plain;
+  const wanted = String(itemTicket || "").toUpperCase();
+  const ticketOk = (row: any) => !wanted || String(row.authoritativeTicket || "").toUpperCase() === wanted;
+  if (intakeRowJobId(plain) === jobId && ticketOk(plain)) return plain;
+  let reuse: any[] = [];
+  try {
+    const prefix = `${hash}${INTAKE_REUSE_KEY_SEPARATOR}`;
+    const found = await db.printIntake.findMany({ where: { shop, fileHashSha256: { startsWith: prefix } }, orderBy: { updatedAt: "desc" }, take: 50 });
+    reuse = (Array.isArray(found) ? found : []).filter((row: any) => String(row?.fileHashSha256 || "").startsWith(prefix) && intakeRowJobId(row) === jobId);
+  } catch {
+    reuse = [];
+  }
+  return reuse.find(ticketOk) || reuse[0] || plain;
 }
 
 function safeText(value: unknown, max = 160): string | null {
@@ -53,12 +74,12 @@ export async function action({ request }: { request: Request }) {
   if (!DECISIONS.has(decision)) return json({ ok: false, error: "decision must be routed|needs_review|duplicate|failed." }, 400);
 
   const jobId = safeText(body.jobId, 40);
-  let job: { id: string; jobTicket: string | null } | null = null;
+  let job: { id: string; jobTicket: string | null; status?: string | null } | null = null;
   if (decision === "routed") {
     // Routed outcomes must reference a shop-verified job — a stale or
     // cross-shop jobId rejects the report outright (no partial writes).
     if (!jobId) return json({ ok: false, error: "routed outcome requires jobId." }, 400);
-    job = await db.productionJob.findFirst({ where: { id: jobId, shop: setting.shop }, select: { id: true, jobTicket: true } });
+    job = await db.productionJob.findFirst({ where: { id: jobId, shop: setting.shop }, select: { id: true, jobTicket: true, status: true } });
     if (!job) return json({ ok: false, error: "Production job not found in this shop — nothing recorded." }, 400);
   }
 
@@ -82,13 +103,16 @@ export async function action({ request }: { request: Request }) {
   // so it runs before the duplicate-report shortcut and a repeat report can
   // only confirm it. Never blocks outcome recording.
   let printFile: { result: "created" | "updated" | "unchanged" | "failed" } | null = null;
+  // 2026-11-20: true only when the server's own PrintIntake row links this exact file to this job.
+  let serverPlanned = false;
   const routedHash = String(outcome.fileHash || "").toLowerCase();
   if (decision === "routed" && job && /^[0-9a-f]{64}$/.test(routedHash)) {
     try {
-      const routedIntake = await db.printIntake.findUnique({ where: { shop_fileHashSha256: { shop: setting.shop, fileHashSha256: routedHash } } });
+      const routedIntake = await intakeRowForReport(setting.shop, routedHash, job.id, outcome.itemTicket);
       const press = routedIntake?.printer === "mimaki" || routedIntake?.printer === "roland" ? routedIntake.printer : null;
       const routedName = String(routedIntake?.routedFilename || "").trim();
       if (routedIntake && routedIntake.status !== "rejected" && routedIntake.matchedProductionJobId === job.id && press && routedName) {
+        serverPlanned = true;
         printFile = await recordRoutedPrintFile(db, {
           shop: setting.shop,
           jobId: job.id,
@@ -121,7 +145,10 @@ export async function action({ request }: { request: Request }) {
   ];
   // Patch E: a repeat report for a file already recorded on the job (even one
   // that is no longer at the head of the log) adds no second "routed" event.
-  if (decision === "routed" && job && printFile?.result !== "unchanged") {
+  // 2026-11-20: a finished / cancelled job is never written to by a report the server did not plan
+  // itself (a stale or mistaken jobId). The outcome is still logged above; the job gets no event.
+  const closedAndUnplanned = Boolean(job) && isClosedIntakeJobStatus(job?.status) && !serverPlanned;
+  if (decision === "routed" && job && printFile?.result !== "unchanged" && !closedAndUnplanned) {
     writes.push(
       db.productionJobEvent.create({
         data: {
@@ -143,9 +170,10 @@ export async function action({ request }: { request: Request }) {
   const fullHash = String(outcome.fileHash || "").toLowerCase();
   if (/^[0-9a-f]{64}$/.test(fullHash)) {
     try {
-      const row = await db.printIntake.findUnique({ where: { shop_fileHashSha256: { shop: setting.shop, fileHashSha256: fullHash } } });
+      const row = await intakeRowForReport(setting.shop, fullHash, decision === "routed" && job ? job.id : null, outcome.itemTicket);
       const audit = { at: new Date().toISOString(), actor: "print-intake-agent", action: `reported_${decision}`, reason: outcome.reason || null };
-      if (decision === "routed" && row && row.status !== "routed") {
+      // a routed report only ever confirms the row of ITS job (never another job's row of the same file)
+      if (decision === "routed" && row && row.status !== "routed" && (!job || !intakeRowJobId(row) || intakeRowJobId(row) === job.id)) {
         await db.printIntake.update({ where: { id: row.id }, data: { status: "routed", rawParsedHints: appendIntakeAudit(row.rawParsedHints, audit) } });
       } else if ((decision === "needs_review" || decision === "failed") && row?.status !== "routed" && row?.status !== "rejected") {
         const reasonCode = canonicalReviewReason([outcome.reason || "", outcome.rule || ""]);

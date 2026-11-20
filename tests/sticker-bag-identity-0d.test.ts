@@ -416,8 +416,9 @@ describe("0D paid-order handoff for the sticker bag", () => {
         { name: "_GSO Canonical", value: canonical("stock_bag_4x5") },
       ],
     };
-    // stock bags kept their pre-0D "default" checklist
-    expect((buildShopifyOrderJobPayload(paidOrder(stockBag), "GSO-1105") as any).checklistFamily).toBe("default");
+    // PIN UPDATED 2026-11-20 — Stock Bag checklist (docs/GSO_JAMES_DECISIONS.md section 1): a Stock-Bag-ONLY paid order now gets its own "stock-bags" checklist instead of "default". Mixed orders and every other family are unchanged.
+    // (was: stock bags kept their pre-0D "default" checklist)
+    expect((buildShopifyOrderJobPayload(paidOrder(stockBag), "GSO-1105") as any).checklistFamily).toBe("stock-bags");
   });
 });
 

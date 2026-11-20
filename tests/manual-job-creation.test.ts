@@ -110,18 +110,21 @@ describe("15H.4B manual job creation", () => {
     expect(resolve("CMYK", "auto")).toBe("mimaki:default_cmyk");
     const load = { source: "t", capturedAt: "t", unattributedOpenItems: 0, byPrinter: { mimaki: { openItems: 7, estimatedMinutes: null }, roland: { openItems: 1, estimatedMinutes: null } } };
     expect(resolve("CMYK", "auto", load)).toBe("mimaki:default_cmyk"); // load is not consulted for CMYK any more
-    expect(resolve("White", "auto", load)).toBe("roland:auto_load_balanced"); // white unchanged: AUTO by complete load
-    expect(resolve("White", "auto")).toMatch(/^REJECT:Automatic press selection is unavailable/); // white unchanged: no load -> choose a press
+    // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+    expect(resolve("White", "auto", load)).toBe("roland:white_requires_roland"); // was roland:auto_load_balanced
+    expect(resolve("White", "auto", { ...load, byPrinter: { mimaki: { openItems: 0, estimatedMinutes: null }, roland: { openItems: 9, estimatedMinutes: null } } })).toBe("roland:white_requires_roland"); // a free Mimaki never takes white
+    expect(resolve("White", "auto")).toBe("roland:white_requires_roland"); // was REJECT: no load -> choose a press
     expect(resolve("CMYK", "roland")).toBe("roland:explicit_erp_machine");
     expect(resolve("CMYK", "mimaki")).toBe("mimaki:explicit_erp_machine");
-    expect(resolve("White", "mimaki")).toBe("mimaki:explicit_erp_machine"); // the Mimaki prints White
+    expect(resolve("White", "mimaki")).toBe("REJECT:White ink is not approved on the Mimaki — a white job runs on the Roland. Choose the Roland (or Auto) for this item."); // 2026-11-20: was mimaki:explicit_erp_machine
     expect(resolve("Gloss", "auto")).toBe("mimaki:default_cmyk"); // updated 2026-11-18: Mimaki gloss restored (was roland:gloss_requires_roland)
     expect(resolve("Gloss", "auto", load)).toBe("mimaki:default_cmyk");
     expect(resolve("Gloss", "roland")).toBe("roland:explicit_erp_machine");
     expect(resolve("White", "roland")).toBe("roland:explicit_erp_machine");
     // updated 2026-11-18: Mimaki gloss restored — gloss on an explicit Mimaki is a valid route, no longer a rejected contradiction
     expect(resolve("Gloss", "mimaki")).toBe("mimaki:explicit_erp_machine");
-    expect(resolve("White + Gloss", "mimaki")).toBe("mimaki:explicit_erp_machine");
+    expect(resolve("White + Gloss", "mimaki")).toMatch(/^REJECT:White ink is not approved on the Mimaki/); // 2026-11-20: was mimaki:explicit_erp_machine
+    expect(resolve("White + Gloss", "roland")).toBe("roland:explicit_erp_machine");
   });
 
   // WHITE IS UNCHANGED (2026-11-18): an untagged WHITE + GLOSS job resolved to the Roland before the

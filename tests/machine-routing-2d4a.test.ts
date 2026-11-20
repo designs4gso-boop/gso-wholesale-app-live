@@ -188,10 +188,14 @@ describe("2D-4A canonical machine routing", () => {
     expect(r.blockers).toHaveLength(0);
   });
 
-  it("5. explicit Mimaki + white is ALLOWED by routing and uses the Mimaki's OWN white calibration identity", () => {
+  // PIN UPDATED 2026-11-20 — owner rule supersedes the 2026-11-11 "the Mimaki prints White" correction: "Mimaki white is NOT re-approved." White + Mimaki is held with a clear reason; white with no press goes to the Roland and is never load-balanced onto the Mimaki.
+  // (was: "explicit Mimaki + white is ALLOWED by routing", blockers 0). The calibration identity it would need is unchanged.
+  it("5. explicit Mimaki + white is BLOCKED by routing (MIMAKI_WHITE_NOT_APPROVED); the Mimaki's OWN white calibration identity is still the one named", () => {
     const r = resolveCanonicalMachineRouting({ printerSelection: "mimaki", whiteLayers: 1, whiteCoveragePct: 60 });
     expect(r.effectivePrinter).toBe("mimaki");
-    expect(r.blockers).toHaveLength(0);
+    expect(r.reasons).toContain(ROUTING_REASONS.mimakiWhiteNotApproved);
+    expect(r.blockers).toHaveLength(1);
+    expect(r.blockers[0]).toMatch(/^MIMAKI_WHITE_NOT_APPROVED: white ink is not approved on the Mimaki/);
     const white = r.channels.find((c) => c.kind === "white")!;
     expect(white.calibrationKey).toBe("mimaki-white");
     expect(white.identity.machineKey).toBe(MACHINE_KEYS.mimaki);
