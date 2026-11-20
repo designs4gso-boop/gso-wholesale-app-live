@@ -33,7 +33,7 @@ param(
   [string]$ConfigPath = (Join-Path $PSScriptRoot "gso-print-intake-agent-config.json")
 )
 
-$ScriptVersion = "gso-print-intake-agent/1.9 (Patch A read-only dry run + flood cap + mandatory cutoff; Patch D ticket job folders)"
+$ScriptVersion = "gso-print-intake-agent/1.10 (crash-safe logging + pass guard + heartbeat; Patch A read-only dry run + flood cap + mandatory cutoff; Patch D ticket job folders)"
 $ErrorActionPreference = "Stop"
 
 # ---------- config ----------
@@ -117,9 +117,18 @@ function Write-IntakeLog($Config, [string]$EventName, [string]$File, [string]$De
   $line = "{0} [{1}] file={2} {3}" -f (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"), $EventName, $File, $Detail
   Write-Host $line
   if ($Config -and $Config.LogFolder) {
-    if (!(Test-Path $Config.LogFolder)) { New-Item -ItemType Directory -Path $Config.LogFolder -Force | Out-Null }
-    $logPath = Join-Path $Config.LogFolder ("gso-print-intake-" + (Get-Date -Format "yyyyMMdd") + ".log")
-    Add-Content -Path $logPath -Value $line
+    # v1.10 (2026-11-19): one failed write to the NAS log ended the whole agent
+    # (it stopped at 16:47 and stayed down). Logging now retries and then falls
+    # back to a local file; it never throws.
+    for ($logTry = 1; $logTry -le 3; $logTry++) {
+      try {
+        if (!(Test-Path $Config.LogFolder)) { New-Item -ItemType Directory -Path $Config.LogFolder -Force | Out-Null }
+        $logPath = Join-Path $Config.LogFolder ("gso-print-intake-" + (Get-Date -Format "yyyyMMdd") + ".log")
+        Add-Content -Path $logPath -Value $line
+        return
+      } catch { Start-Sleep -Milliseconds 400 }
+    }
+    try { Add-Content -Path (Join-Path $PSScriptRoot ("gso-print-intake-local-" + (Get-Date -Format "yyyyMMdd") + ".log")) -Value $line } catch { }
   }
 }
 
@@ -392,7 +401,11 @@ function Invoke-ProcessIntakeFile($Config, $File, $Ledger) {
       Write-IntakeLog $Config "waiting_for_stability" $File.Name "younger than $($Config.StableFileSeconds)s or still changing"
       return
     }
-    $hash = (Get-FileHash -LiteralPath $File.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    # v1.10: a file whose path, size and modified time are unchanged has the same content hash.
+    $hashKey = "$($File.FullName)|$($File.Length)|$($File.LastWriteTimeUtc.Ticks)"
+    if (-not $script:HashCache) { $script:HashCache = @{} }
+    if (-not $script:HashCache.ContainsKey($hashKey)) { $script:HashCache[$hashKey] = (Get-FileHash -LiteralPath $File.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+    $hash = $script:HashCache[$hashKey]
     $sha8 = $hash.Substring(0, 8)
 
     if ($Ledger.ContainsKey($hash)) {
@@ -774,6 +787,9 @@ Write-IntakeLog $config "agent_started" "-" "version=$ScriptVersion mode=$modeLa
 
 $lastScanSummary = ""
 while ($true) {
+  # v1.10: nothing thrown during a pass ends the loop (exit 2 / 3 / 5 are not
+  # exceptions and still stop the agent on purpose). The next pass retries.
+  try {
   $ledger = Read-IntakeLedger $config
   # 15H.5: ONE bounded pending-retries call per pass. Hashes the server says
   # to re-process (owner Reprint / release / assignment) override the local
@@ -781,7 +797,7 @@ while ($true) {
   # place it back into Prints For Today. Server unreachable = skip quietly
   # (fail closed - normal processing continues, nothing re-routes).
   if (-not $DryRun) {
-    $pendingResult = Invoke-IntakeJsonPost $config $config.StatusUrl @{ token = $config.UploadToken; pending = $true } 20
+    $pendingResult = Invoke-IntakeJsonPost $config $config.StatusUrl @{ token = $config.UploadToken; pending = $true; agentVersion = $ScriptVersion; agentHost = $env:COMPUTERNAME } 20
     if (-not $pendingResult.exception -and $pendingResult.status -eq 200 -and $pendingResult.json -and $pendingResult.json.ok) {
       foreach ($pendingRow in @($pendingResult.json.pending)) {
         if ($pendingRow -and $pendingRow.hash -and $ledger.ContainsKey([string]$pendingRow.hash)) {
@@ -817,6 +833,9 @@ while ($true) {
       if ($_.Exception.Message -eq "fatal_dry_run") { Write-Host "DRY RUN STOPPED - the server did not confirm a read-only plan."; exit 5 }
       Write-IntakeLog $config "file_error" $file.Name "unexpected: $($_.Exception.Message); file left in place"
     }
+  }
+  } catch {
+    Write-IntakeLog $config "pass_error" "-" "unexpected: $($_.Exception.Message); retrying next pass"
   }
   if (-not $Loop -or $Once -or $DryRun) { break }
   Start-Sleep -Seconds $config.PollSeconds

@@ -35,6 +35,20 @@ export async function action({ request }: { request: Request }) {
   // assignment), so a ledger-"routed" hash can be re-delivered without the
   // agent ever polling per-file. Minimal payload; no job/cost data.
   if (body.pending === true) {
+    // 2026-11-19 heartbeat: the watcher makes this call once per pass, so it is the
+    // proof that the watcher is alive. A failed stamp never fails the watcher's call.
+    try {
+      await db.printLogAutoImportSetting.updateMany({
+        where: { id: setting.id },
+        data: {
+          intakeAgentLastSeenAt: new Date(),
+          ...(body.agentVersion ? { intakeAgentVersion: String(body.agentVersion).slice(0, 160) } : {}),
+          ...(body.agentHost ? { intakeAgentHost: String(body.agentHost).slice(0, 80) } : {}),
+        },
+      });
+    } catch {
+      // heartbeat is best effort
+    }
     const rows = await db.printIntake.findMany({
       where: { shop: setting.shop, status: { in: ["retry_allowed", "assigned"] } },
       select: { fileHashSha256: true, originalFilename: true, status: true },

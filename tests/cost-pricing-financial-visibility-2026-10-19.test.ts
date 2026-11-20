@@ -46,7 +46,8 @@ import { prepareQuote } from "../app/lib/ops/quote-prep.server";
 const QUOTES = "app/routes/app.quotes.tsx";
 const src = (path: string) => readFileSync(path, "utf8");
 const asOwner = () => { process.env[OWNER_USER_IDS_ENV] = "9001"; authState.sessionToken = { sub: "9001" }; };
-const asStaff = () => { process.env[OWNER_USER_IDS_ENV] = "9001"; authState.sessionToken = { sub: "1234" }; };
+// 2026-11-19: Quotes needs a selling role (route-access.ts), so "staff" is a Sales account — not an account with no role.
+const asStaff = () => { process.env[OWNER_USER_IDS_ENV] = "9001"; process.env.GSO_STAFF_ROLES = "1234:sales"; authState.sessionToken = { sub: "1234" }; };
 const post = (payload: unknown) => new Request("https://app.test/app/quotes", { method: "POST", body: JSON.stringify(payload), headers: { "Content-Type": "application/json" } });
 
 afterEach(() => {

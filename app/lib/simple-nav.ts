@@ -18,6 +18,9 @@ export const NEW_JOB_HREF = "/app/erp/production-new";
 export const CLASSIC_PRODUCTION_HREF = "/app/erp/production";
 export const REORDER_HREF = "/app/erp/reorder";
 export const RELEASE_QUEUE_HREF = "/app/erp/release-queue";
+export const CRM_HREF = "/app/erp/crm";
+export const AGENT_APPROVALS_HREF = "/app/erp/agent-approvals";
+export const crmLeadHref = (leadId: string) => `${CRM_HREF}/${encodeURIComponent(leadId)}`;
 export const jobWorkspaceHref = (jobId: string) => `/app/erp/production-job/${jobId}`;
 export const classicJobHref = (jobId: string) => `${CLASSIC_PRODUCTION_HREF}?job=${encodeURIComponent(jobId)}`;
 
@@ -37,10 +40,14 @@ export function navForRole(role: SimpleNavRole | string, options: { viewFinancia
       purpose: "Customers, quotes and orders.",
       links: [
         { label: "Quotes & Customers", href: "/app/quotes" },
+        // 2026-11-19: internal CRM — leads, follow-ups, conversion to a customer / draft quote (owner, manager, sales)
+        { label: "Leads", href: CRM_HREF },
         // 2026-11-19: a reorder is a new sale (new quote -> new job); owner, manager, sales
         { label: "Reorder a Past Item", href: REORDER_HREF },
         // staged business transactions waiting for release to production (owner / manager; the server enforces it)
         ...(isOwner || isManager ? [{ label: "Release to Production", href: RELEASE_QUEUE_HREF }] : []),
+        // proposals from agents and staff that wait for a person (owner / manager); approving never sends anything
+        ...(isOwner || isManager ? [{ label: "Approvals", href: AGENT_APPROVALS_HREF }] : []),
         // 2026-11-15: the lead queue is a financial page on the server (owner / financially authorized manager);
         // everyone else was shown a link that always answered "owner only".
         ...(isOwner || (isManager && options.viewFinancials) ? [{ label: "Leads to Review", href: "/app/erp/agent-review-queue" }] : []),

@@ -49,8 +49,13 @@ afterEach(() => { for (const key of Object.keys(ENV)) delete process.env[key]; }
 describe("Quotes — after a production job is created from a quote", () => {
   it.each(Object.keys(ROLES) as Role[])("%s: the page is told whether this viewer may open Production (display only)", async (role) => {
     h.sub = ROLES[role];
+    // 2026-11-19: Quotes is for the owner, managers and sales — production and unassigned accounts are refused by the loader.
+    if (!["owner", "manager", "sales"].includes(role)) {
+      await expect(quotes.loader({ request: new Request("https://app.test/app/quotes") })).rejects.toMatchObject({ status: 403 });
+      return;
+    }
     const data = await (await quotes.loader({ request: new Request("https://app.test/app/quotes") })).json();
-    expect(data.canOpenProduction).toBe(["owner", "manager", "print_operator", "bagger"].includes(role));
+    expect(data.canOpenProduction).toBe(["owner", "manager"].includes(role));
     expect(data.productionJobs).toEqual([expect.objectContaining({ id: "j1", quoteId: "q1", jobTicket: "GSO-20261114-0007" })]);
   });
 

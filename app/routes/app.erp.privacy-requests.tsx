@@ -12,7 +12,7 @@ import { Page } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { requireOwner } from "../lib/owner-authorization.server";
-import { applyCustomerRedaction, closeComplianceRequest, planCustomerRedaction } from "../lib/privacy-compliance.server";
+import { addComplianceNote, applyCustomerRedaction, closeComplianceRequest, planCustomerRedaction, startComplianceRequest } from "../lib/privacy-compliance.server";
 
 const TOPIC_LABEL: Record<string, string> = {
   "customers/data_request": "Customer asked for their data",
@@ -26,6 +26,7 @@ export async function loader({ request }: { request: Request }) {
   const shop = auth.session.shop;
   const rows = await db.complianceRequest.findMany({ where: { shop }, orderBy: { receivedAt: "desc" }, take: 100 });
   const requests = [];
+  const history = rows.length ? await db.complianceRequestEvent.findMany({ where: { shop, requestId: { in: (rows as any[]).map((row) => row.id) } }, orderBy: { createdAt: "asc" }, take: 1000 }) : [];
   for (const row of rows as any[]) {
     const plan = row.status !== "completed" && row.topic !== "shop/redact" ? await planCustomerRedaction(db, shop, row) : null;
     requests.push({
@@ -38,6 +39,11 @@ export async function loader({ request }: { request: Request }) {
       receivedAt: row.receivedAt ? new Date(row.receivedAt).toISOString() : null,
       dueAt: row.dueAt ? new Date(row.dueAt).toISOString() : null,
       completedBy: row.completedBy,
+      completedAt: row.completedAt ? new Date(row.completedAt).toISOString() : null,
+      startedBy: row.startedBy,
+      notes: row.notes,
+      overdue: row.status !== "completed" && row.dueAt ? new Date(row.dueAt).getTime() < Date.now() : false,
+      history: (history as any[]).filter((event) => event.requestId === row.id).map((event) => ({ id: event.id, event: event.event, detail: event.detail, actor: event.actor, at: new Date(event.createdAt).toISOString() })),
       resultSummary: row.resultSummary,
       plan,
     });
@@ -56,6 +62,8 @@ export async function action({ request }: { request: Request }) {
     if (String(form.get("confirm") || "").trim().toUpperCase() !== "ERASE") return Response.json({ ok: false, id: requestId, message: "Type ERASE to confirm. Nothing was changed." });
     return Response.json({ ...(await applyCustomerRedaction(db, { shop, requestId, actor: owner.actor })), id: requestId });
   }
+  if (intent === "start") return Response.json({ ...(await startComplianceRequest(db, { shop, requestId, actor: owner.actor })), id: requestId });
+  if (intent === "note") return Response.json({ ...(await addComplianceNote(db, { shop, requestId, actor: owner.actor, note: String(form.get("note") || "") })), id: requestId });
   if (intent === "close") return Response.json({ ...(await closeComplianceRequest(db, { shop, requestId, actor: owner.actor, note: String(form.get("note") || "") })), id: requestId });
   return Response.json({ ok: false, id: requestId, message: "Unknown action." }, { status: 400 });
 }
@@ -77,7 +85,7 @@ export default function PrivacyRequests() {
           <div key={row.id} style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
               <div style={{ fontSize: 16, fontWeight: 700 }}>{row.topicLabel}</div>
-              <div style={{ fontSize: 13, color: row.status === "completed" ? "#166534" : "#92400e", fontWeight: 700 }}>{row.status === "completed" ? "Completed" : `Open — due ${day(row.dueAt)}`}</div>
+              <div style={{ fontSize: 13, color: row.status === "completed" ? "#166534" : "#92400e", fontWeight: 700 }}>{row.status === "completed" ? `Completed ${day(row.completedAt)}` : `${row.overdue ? "OVERDUE" : row.status === "in_progress" ? "In progress" : "Open"} — due ${day(row.dueAt)}`}</div>
             </div>
             <div style={{ fontSize: 13, color: "#6b7280" }}>Received {day(row.receivedAt)}{row.customerEmail ? ` · ${row.customerEmail}` : ""}{row.customerId ? ` · customer ${row.customerId}` : ""}</div>
             {result?.id === row.id && result?.message ? <div role="status" style={{ padding: "8px 10px", borderRadius: 8, background: result.ok ? "#f0fdf4" : "#fef2f2", color: result.ok ? "#166534" : "#991b1b", fontWeight: 600 }}>{result.message}</div> : null}
@@ -86,7 +94,7 @@ export default function PrivacyRequests() {
                 {row.plan ? (
                   <div style={{ fontSize: 14 }}>
                     {row.plan.matchable
-                      ? `Records holding this customer's contact details: ${row.plan.quotes} quote(s), ${row.plan.productionJobs} production job(s), ${row.plan.wholesaleApplications} wholesale application(s), ${row.plan.leads} lead(s).`
+                      ? `Records holding this customer's contact details: ${row.plan.quotes} quote(s), ${row.plan.productionJobs} production job(s), ${row.plan.wholesaleApplications} wholesale application(s), ${row.plan.leads} queued lead(s), ${row.plan.crmRecords} CRM record(s).`
                       : "This request carries no e-mail address or customer id, so no record can be matched."}
                   </div>
                 ) : <div style={{ fontSize: 14 }}>Sent 48 hours after the app is uninstalled. Nothing is erased automatically.</div>}
@@ -98,6 +106,15 @@ export default function PrivacyRequests() {
                     <button type="submit" name="intent" value="applyRedaction" disabled={busy} style={{ minHeight: 48, borderRadius: 10, border: "1px solid #b91c1c", background: "white", color: "#b91c1c", fontSize: 15, fontWeight: 700, cursor: "pointer" }}>Erase this customer's contact details</button>
                   </Form>
                 ) : null}
+                <Form method="post" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                  <input type="hidden" name="id" value={row.id} />
+                  {row.status === "received" ? <button type="submit" name="intent" value="start" disabled={busy} style={{ minHeight: 44, borderRadius: 10, border: "1px solid #d1d5db", background: "white", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>I am working on this</button> : null}
+                </Form>
+                <Form method="post" style={{ display: "grid", gap: 8 }}>
+                  <input type="hidden" name="id" value={row.id} />
+                  <input name="note" placeholder="Working note (kept in the history)" style={input} />
+                  <button type="submit" name="intent" value="note" disabled={busy} style={{ minHeight: 44, borderRadius: 10, border: "1px solid #d1d5db", background: "white", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Add note</button>
+                </Form>
                 <Form method="post" style={{ display: "grid", gap: 8 }}>
                   <input type="hidden" name="id" value={row.id} />
                   <input name="note" placeholder="What was done (for example: data sent to the customer on …)" style={input} />
@@ -105,6 +122,14 @@ export default function PrivacyRequests() {
                 </Form>
               </>
             )}
+            {(row.history as any[]).length ? (
+              <details>
+                <summary style={{ cursor: "pointer", fontSize: 13, color: "#6b7280", minHeight: 32 }}>History ({row.history.length})</summary>
+                {(row.history as any[]).map((event) => (
+                  <div key={event.id} style={{ fontSize: 13, paddingTop: 6 }}>{new Date(event.at).toLocaleString()} · {String(event.event).replace(/_/g, " ")}{event.actor ? ` · ${event.actor}` : ""}{event.detail ? ` — ${event.detail}` : ""}</div>
+                ))}
+              </details>
+            ) : null}
           </div>
         ))}
       </div>

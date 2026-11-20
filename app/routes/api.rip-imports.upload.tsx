@@ -252,7 +252,10 @@ export async function action({ request }: { request: Request }) {
       const existing = await db.printLogEntry.findFirst({ where: rowDedupeWhere(setting.shop, entry, importRecord.id) as any });
       if (existing) { skippedDuplicates += 1; continue; }
 
-      const identity = await resolveRipIdentity(db, setting.shop, { jobName: entry.fileName, fileName: file.name }, { ripNameIndex });
+      // 2026-11-19: the result FILE is a container (RasterLink names a composite after its first job). Its name
+      // identifies a row only when the row carries no name of its own — otherwise an un-ticketed layer inside a
+      // ticketed composite was linked to that ticket and its ink counted on the wrong item.
+      const identity = await resolveRipIdentity(db, setting.shop, { jobName: entry.fileName, fileName: String(entry.fileName || "").trim() ? null : file.name }, { ripNameIndex });
       if (identity.status === "matched") matchedCount += 1;
       if (identity.status === "ambiguous") ambiguousCount += 1;
       const matchFlag = identity.status === "ambiguous" ? "ambiguous_ticket_needs_review" : null;
@@ -369,7 +372,7 @@ export async function action({ request }: { request: Request }) {
       const existing = await db.printLogEntry.findFirst({ where: versaworksRowDedupeWhere(setting.shop, entry) as any });
       if (existing) { skippedDuplicates += 1; continue; }
 
-      const identity = await resolveRipIdentity(db, setting.shop, { jobName: entry.jobName, fileName: file.name }, { ripNameIndex });
+      const identity = await resolveRipIdentity(db, setting.shop, { jobName: entry.jobName, fileName: String(entry.jobName || "").trim() ? null : file.name }, { ripNameIndex }); // container name only for a nameless row (2026-11-19)
       if (identity.status === "matched") matchedCount += 1;
       if (identity.status === "ambiguous") ambiguousCount += 1;
       const decision = {
@@ -443,7 +446,7 @@ export async function action({ request }: { request: Request }) {
   const importRecord = await db.printLogImport.create({ data: { shop: setting.shop, source, fileName: file.name, rawText: rawText.slice(0, 250000), rowCount: rows.length, totalSqft: rows.reduce((s, r) => s + r.sqft, 0), totalInkMl: rows.reduce((s, r) => s + r.inkMl, 0), status: "auto_imported" } });
   const legacyRipNameIndex = await loadRipNameIndex(db, setting.shop);
   for (const row of rows) {
-    const identity = await resolveRipIdentity(db, setting.shop, { jobName: row.jobName, fileName: file.name }, { ripNameIndex: legacyRipNameIndex });
+    const identity = await resolveRipIdentity(db, setting.shop, { jobName: row.jobName, fileName: String(row.jobName || "").trim() ? null : file.name }, { ripNameIndex: legacyRipNameIndex }); // container name only for a nameless row (2026-11-19)
     if (identity.status === "matched") matchedCount += 1;
     const matchFlag = identity.status === "ambiguous" ? "ambiguous_ticket_needs_review" : null;
     await db.printLogEntry.create({ data: { shop: setting.shop, importId: importRecord.id, productionJobId: identity.productionJobId || undefined, productionJobItemId: identity.productionJobItemId || undefined, jobTicket: identity.itemTicket || identity.jobTicket || row.jobTicket || null, sourceJobName: row.jobName, printerSoftware: source, machineName: row.machineName, mediaName: row.mediaName, status: row.event, sqft: row.sqft, inkMl: row.inkMl, cmykInkMl: row.cmykInkMl, whiteInkMl: row.whiteInkMl, glossInkMl: row.glossInkMl, startedAt: row.startedAt || null, completedAt: row.completedAt || null, rawRow: JSON.stringify({ ...row.raw, ...(matchFlag ? { matchFlag } : {}), matchMethod: identity.matchMethod, matchReasons: identity.reasons }).slice(0, 12000) } });

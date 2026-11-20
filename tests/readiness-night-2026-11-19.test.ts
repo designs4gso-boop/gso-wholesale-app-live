@@ -71,7 +71,7 @@ describe("privacy webhooks — recorded for the owner, nothing erased automatica
     expect(t.complianceRequest).toHaveLength(1);
     expect(t.complianceRequest[0]).toMatchObject({ topic: "customers/redact", customerId: "12", customerEmail: "jane@example.com", status: "received", ordersRequested: '["1001","1002"]' });
     expect((t.complianceRequest[0].dueAt.getTime() - now.getTime()) / 86_400_000).toBe(COMPLIANCE_DUE_DAYS);
-    expect(writes).toEqual(["complianceRequest.create"]);
+    expect(writes).toEqual(["complianceRequest.create", "complianceRequestEvent.create"]); // + the append-only history row (2026-11-19 night)
     expect(JSON.stringify([t.quote, t.productionJob, t.wholesaleApplication, t.agentReviewQueueItem])).toBe(before);
     expect((await recordComplianceRequest(db, { shop: "s", topic: "ORDERS_PAID", webhookId: "wh-2", payload: {} })).result).toBe("ignored");
   });
@@ -79,7 +79,7 @@ describe("privacy webhooks — recorded for the owner, nothing erased automatica
   it("a shop erasure request is only recorded — an uninstall never wipes the ERP", async () => {
     const { db, t, writes } = memoryDb(seedCustomer());
     await recordComplianceRequest(db, { shop: "s", topic: "SHOP_REDACT", webhookId: "wh-9", payload: { shop_id: 1, shop_domain: "s" } });
-    expect(writes).toEqual(["complianceRequest.create"]);
+    expect(writes).toEqual(["complianceRequest.create", "complianceRequestEvent.create"]); // + the append-only history row (2026-11-19 night)
     expect(t.quote).toHaveLength(2);
     const applied = await applyCustomerRedaction(db, { shop: "s", requestId: t.complianceRequest[0].id, actor: "owner@gso.test" });
     expect(applied.ok).toBe(false);
@@ -88,7 +88,7 @@ describe("privacy webhooks — recorded for the owner, nothing erased automatica
   it("the preview matches by exact e-mail (any case) and exact customer id — never a partial id", async () => {
     const { db } = memoryDb(seedCustomer());
     expect(customerIdForms("12")).toEqual(["12", "gid://shopify/Customer/12"]);
-    expect(await planCustomerRedaction(db, "s", { customerId: "12", customerEmail: "JANE@example.com" })).toEqual({ quotes: 1, productionJobs: 1, wholesaleApplications: 1, leads: 1, total: 4, matchable: true });
+    expect(await planCustomerRedaction(db, "s", { customerId: "12", customerEmail: "JANE@example.com" })).toEqual({ quotes: 1, productionJobs: 1, wholesaleApplications: 1, leads: 1, crmRecords: 0, total: 4, matchable: true }); // crmRecords added 2026-11-19 (CRM leads + accounts)
     expect(await planCustomerRedaction(db, "s", { customerId: "12", customerEmail: null })).toMatchObject({ wholesaleApplications: 1, total: 1 }); // not customer 123
     expect(await planCustomerRedaction(db, "s", {})).toMatchObject({ matchable: false, total: 0 });
     expect(complianceFacts({})).toEqual({ customerId: null, customerEmail: null, customerPhone: null, ordersRequested: [] });

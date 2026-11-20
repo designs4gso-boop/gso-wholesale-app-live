@@ -1,8 +1,11 @@
 import { allProductFamilySalesRules } from "../lib/product-family-sales-rules";
 import { authenticate } from "../shopify.server";
+import { requireRouteAccess } from "../lib/route-access.server";
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  requireRouteAccess(auth, "erp/agent-product-rules"); // 2026-11-19: owner, manager, sales
+  const { session } = auth;
   const url = new URL(request.url);
   const pretty = url.searchParams.get("pretty") === "1";
 

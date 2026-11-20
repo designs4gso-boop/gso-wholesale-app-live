@@ -12,7 +12,7 @@ import type { ActionIntent, AuditEvent, IntentStatus } from "./action-intents";
  * Action intents + append-only audit
  * ------------------------------------------------------------------ */
 
-export type IntentFilter = { status?: IntentStatus | IntentStatus[]; agentId?: string; entityType?: string; entityId?: string; limit?: number };
+export type IntentFilter = { status?: IntentStatus | IntentStatus[]; agentId?: string; entityType?: string; entityId?: string; limit?: number; shop?: string };
 
 export interface ActionIntentRepository {
   getById(id: string): Promise<ActionIntent | null>;

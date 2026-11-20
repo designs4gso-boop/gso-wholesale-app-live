@@ -43,6 +43,18 @@ export function complianceFacts(payload: any): ComplianceFacts {
   };
 }
 
+/**
+ * 2026-11-19 — append-only history of a request (who did what, when). Best
+ * effort: a failed history write never fails the step it describes.
+ */
+export async function logComplianceEvent(dbClient: any, input: { shop: string; requestId: string; event: string; actor?: string | null; detail?: string | null }): Promise<void> {
+  try {
+    await dbClient.complianceRequestEvent.create({ data: { shop: input.shop, requestId: input.requestId, event: text(input.event, 40), actor: text(input.actor, 120) || null, detail: text(input.detail, 600) || null } });
+  } catch {
+    // history is best effort
+  }
+}
+
 /** Record one webhook. The same Shopify webhook id delivered again writes nothing. */
 export async function recordComplianceRequest(
   dbClient: any,
@@ -70,7 +82,32 @@ export async function recordComplianceRequest(
       dueAt: new Date(now.getTime() + COMPLIANCE_DUE_DAYS * 24 * 60 * 60 * 1000),
     },
   });
+  await logComplianceEvent(dbClient, { shop: input.shop, requestId: created.id, event: "received", actor: "shopify", detail: topic });
   return { result: "recorded", id: created.id };
+}
+
+/** OWNER ACTION: take a request in hand (received -> in_progress). Idempotent. */
+export async function startComplianceRequest(dbClient: any, input: { shop: string; requestId: string; actor: string; now?: Date }): Promise<{ ok: boolean; message: string }> {
+  const actor = text(input.actor, 120);
+  if (!actor) return { ok: false, message: "A signed-in owner is required." };
+  const request = await dbClient.complianceRequest.findFirst({ where: { shop: input.shop, id: input.requestId } });
+  if (!request) return { ok: false, message: "The request was not found." };
+  if (request.status === "completed") return { ok: false, message: "This request was already completed." };
+  if (request.status === "in_progress") return { ok: true, message: "Already in progress." };
+  await dbClient.complianceRequest.update({ where: { id: request.id }, data: { status: "in_progress", startedBy: actor, startedAt: input.now || new Date() } });
+  await logComplianceEvent(dbClient, { shop: input.shop, requestId: request.id, event: "started", actor });
+  return { ok: true, message: "Marked as in progress." };
+}
+
+/** OWNER ACTION: add a working note. The note is kept on the request and in its history. */
+export async function addComplianceNote(dbClient: any, input: { shop: string; requestId: string; actor: string; note: string }): Promise<{ ok: boolean; message: string }> {
+  const note = text(input.note, 600);
+  if (!note) return { ok: false, message: "Write the note first." };
+  const request = await dbClient.complianceRequest.findFirst({ where: { shop: input.shop, id: input.requestId } });
+  if (!request) return { ok: false, message: "The request was not found." };
+  await dbClient.complianceRequest.update({ where: { id: request.id }, data: { notes: [text(request.notes, 3000), note].filter(Boolean).join("\n").slice(-3000) } });
+  await logComplianceEvent(dbClient, { shop: input.shop, requestId: request.id, event: "note", actor: input.actor, detail: note });
+  return { ok: true, message: "Note added." };
 }
 
 /** A Shopify customer id as it may be stored: the bare number or the GraphQL gid. Exact match only. */
@@ -79,7 +116,7 @@ export function customerIdForms(customerId: string): string[] {
   return [bare, `gid://shopify/Customer/${bare}`];
 }
 
-export type RedactionPlan = { quotes: number; productionJobs: number; wholesaleApplications: number; leads: number; total: number; matchable: boolean };
+export type RedactionPlan = { quotes: number; productionJobs: number; wholesaleApplications: number; leads: number; crmRecords: number; total: number; matchable: boolean };
 
 const emailMatch = (email: string) => ({ equals: email, mode: "insensitive" as const });
 
@@ -87,7 +124,7 @@ const emailMatch = (email: string) => ({ equals: email, mode: "insensitive" as c
 export async function planCustomerRedaction(dbClient: any, shop: string, facts: { customerId?: string | null; customerEmail?: string | null }): Promise<RedactionPlan> {
   const email = text(facts.customerEmail).toLowerCase();
   const customerId = text(facts.customerId);
-  if (!email && !customerId) return { quotes: 0, productionJobs: 0, wholesaleApplications: 0, leads: 0, total: 0, matchable: false };
+  if (!email && !customerId) return { quotes: 0, productionJobs: 0, wholesaleApplications: 0, leads: 0, crmRecords: 0, total: 0, matchable: false };
   const wholesaleWhere = { shop, OR: [...(customerId ? [{ customerId: { in: customerIdForms(customerId) } }] : []), ...(email ? [{ email: emailMatch(email) }] : [])] };
   const [quotes, productionJobs, wholesaleApplications, leads] = await Promise.all([
     email ? dbClient.quote.count({ where: { shop, email: emailMatch(email) } }) : 0,
@@ -95,7 +132,9 @@ export async function planCustomerRedaction(dbClient: any, shop: string, facts: 
     dbClient.wholesaleApplication.count({ where: wholesaleWhere }),
     email ? dbClient.agentReviewQueueItem.count({ where: { shop, email: emailMatch(email) } }) : 0,
   ]);
-  return { quotes, productionJobs, wholesaleApplications, leads, total: quotes + productionJobs + wholesaleApplications + leads, matchable: true };
+  // 2026-11-19: the CRM holds contact details too (leads and customer accounts)
+  const crmRecords = email ? (await dbClient.crmLead.count({ where: { shop, email: emailMatch(email) } })) + (await dbClient.crmAccount.count({ where: { shop, email: emailMatch(email) } })) : 0;
+  return { quotes, productionJobs, wholesaleApplications, leads, crmRecords, total: quotes + productionJobs + wholesaleApplications + leads + crmRecords, matchable: true };
 }
 
 /**
@@ -122,6 +161,9 @@ export async function applyCustomerRedaction(dbClient: any, input: { shop: strin
       await tx.productionJob.updateMany({ where: { shop: input.shop, email: emailMatch(email) }, data: { customerName: REDACTED_TEXT, email: null, phone: null } });
       await tx.productionJob.updateMany({ where: { shop: input.shop, proofCustomerEmail: emailMatch(email) }, data: { proofCustomerName: null, proofCustomerEmail: null } });
       await tx.agentReviewQueueItem.updateMany({ where: { shop: input.shop, email: emailMatch(email) }, data: { customerName: REDACTED_TEXT, email: null, phone: null } });
+      // CRM: the lead / account row and its history are kept; only the person's details are blanked
+      await tx.crmLead.updateMany({ where: { shop: input.shop, email: emailMatch(email) }, data: { contactName: REDACTED_TEXT, email: null, phone: null } });
+      await tx.crmAccount.updateMany({ where: { shop: input.shop, email: emailMatch(email) }, data: { contactName: REDACTED_TEXT, email: null, phone: null } });
     }
     await tx.wholesaleApplication.updateMany({
       where: { shop: input.shop, OR: [...(customerId ? [{ customerId: { in: customerIdForms(customerId) } }] : []), ...(email ? [{ email: emailMatch(email) }] : [])] },
@@ -133,13 +175,15 @@ export async function applyCustomerRedaction(dbClient: any, input: { shop: strin
         status: "completed",
         completedBy: actor,
         completedAt: now,
-        resultSummary: `Contact details blanked on ${plan.quotes} quote(s), ${plan.productionJobs} production job(s), ${plan.wholesaleApplications} wholesale application(s), ${plan.leads} lead(s). Records kept.`,
+        resultSummary: `Contact details blanked on ${plan.quotes} quote(s), ${plan.productionJobs} production job(s), ${plan.wholesaleApplications} wholesale application(s), ${plan.leads} lead(s), ${plan.crmRecords} CRM record(s). Records kept.`,
         // the request no longer needs the address once it has been applied
         customerEmail: null,
         customerPhone: null,
       },
     });
   });
+  await logComplianceEvent(dbClient, { shop: input.shop, requestId: request.id, event: "redaction_applied", actor, detail: `${plan.total} record(s): contact details blanked, records kept` });
+  await logComplianceEvent(dbClient, { shop: input.shop, requestId: request.id, event: "completed", actor });
   return { ok: true, message: `Contact details blanked on ${plan.total} record(s). The records themselves were kept.`, plan };
 }
 
@@ -151,5 +195,6 @@ export async function closeComplianceRequest(dbClient: any, input: { shop: strin
   if (!request) return { ok: false, message: "The request was not found." };
   if (request.status === "completed") return { ok: false, message: "This request was already completed." };
   await dbClient.complianceRequest.update({ where: { id: request.id }, data: { status: "completed", completedBy: text(input.actor, 120), completedAt: input.now || new Date(), resultSummary: note } });
+  await logComplianceEvent(dbClient, { shop: input.shop, requestId: request.id, event: "completed", actor: input.actor, detail: note });
   return { ok: true, message: "Request closed." };
 }

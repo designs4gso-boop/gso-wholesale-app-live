@@ -22,7 +22,7 @@ function actorFrom(type: string | null, id: string | null, name?: string | null,
 
 function intentFromRow(row: any, audit: AuditEvent[]): ActionIntent {
   return {
-    id: row.id, actionType: row.actionType, agentId: row.agentId, agentVersion: row.agentVersion, provider: row.provider, model: row.model,
+    id: row.id, shop: row.shop ?? null, actionType: row.actionType, agentId: row.agentId, agentVersion: row.agentVersion, provider: row.provider, model: row.model,
     entityType: row.entityType, entityId: row.entityId, payload: (row.payload as Record<string, unknown>) ?? {}, reason: row.reason,
     autonomyLevel: row.autonomyLevel, approvalPolicy: row.approvalPolicy, idempotencyKey: row.idempotencyKey, status: row.status as IntentStatus,
     createdAt: row.createdAt.toISOString(), createdBy: actorFrom(row.createdByType, row.createdById, null, row.createdBySource)!,
@@ -55,6 +55,7 @@ export class PrismaActionIntentRepository implements ActionIntentRepository {
   }
   async save(i: ActionIntent) {
     const data = {
+      shop: i.shop ?? null,
       actionType: i.actionType, agentId: i.agentId, agentVersion: i.agentVersion, provider: i.provider, model: i.model, entityType: i.entityType, entityId: i.entityId,
       payload: i.payload as any, reason: i.reason, autonomyLevel: i.autonomyLevel, approvalPolicy: i.approvalPolicy, status: i.status,
       createdByType: i.createdBy.type, createdById: i.createdBy.id, createdBySource: i.createdBy.source ?? null,
@@ -78,7 +79,7 @@ export class PrismaActionIntentRepository implements ActionIntentRepository {
   }
   async list(filter: IntentFilter = {}) {
     const rows = await this.model.findMany({
-      where: { ...(filter.status ? { status: Array.isArray(filter.status) ? { in: filter.status } : filter.status } : {}), ...(filter.agentId ? { agentId: filter.agentId } : {}), ...(filter.entityType ? { entityType: filter.entityType } : {}), ...(filter.entityId ? { entityId: filter.entityId } : {}) },
+      where: { ...(filter.status ? { status: Array.isArray(filter.status) ? { in: filter.status } : filter.status } : {}), ...(filter.agentId ? { agentId: filter.agentId } : {}), ...(filter.entityType ? { entityType: filter.entityType } : {}), ...(filter.entityId ? { entityId: filter.entityId } : {}), ...(filter.shop ? { shop: filter.shop } : {}) },
       orderBy: { createdAt: "asc" }, take: filter.limit ?? 200,
     });
     return rows.map((r: any) => intentFromRow(r, []));

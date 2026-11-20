@@ -303,6 +303,6 @@ describe("unchanged behaviour", () => {
     const { readdirSync } = await import("node:fs");
     const names = readdirSync("prisma/migrations").filter((n) => /^\d{14}_/.test(n)).sort();
     // 2026-11-19: the owner-approved ADDITIVE lineage migration (file -> item link, production runs, reorder lineage, staged transactions) is now the newest.
-    expect(names[names.length - 1]).toBe("20261119200000_add_compliance_requests"); // + the privacy-request table (additive)
+    expect(names[names.length - 1]).toBe("20261119230000_add_crm_fulfilment_privacy_history"); // 2026-11-19 night: + CRM / fulfilment / privacy-history (additive)
   });
 });

@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../app/shopify.server", () => ({
-  authenticate: { admin: async () => ({ session: { shop: "942075-2.myshopify.com" }, admin: {} }) },
+  authenticate: { admin: async () => ({ session: { shop: "942075-2.myshopify.com", isOnline: true, accountOwner: true }, admin: {} }) }, // 2026-11-19: owner / manager page
 }));
 
 const LIVE_RECIPES = [

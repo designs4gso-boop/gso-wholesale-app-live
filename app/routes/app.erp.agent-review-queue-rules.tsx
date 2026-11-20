@@ -1,8 +1,11 @@
 import { allAgentReviewQueueRules } from "../lib/agent-review-queue-rules";
 import { authenticate } from "../shopify.server";
+import { requireRouteAccess } from "../lib/route-access.server";
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  requireRouteAccess(auth, "erp/agent-review-queue-rules"); // 2026-11-19: owner, manager, sales
+  const { session } = auth;
   const rules = allAgentReviewQueueRules();
   const url = new URL(request.url);
   const pretty = url.searchParams.get("pretty") === "1";

@@ -25,7 +25,7 @@ export class MemoryActionIntentRepository implements ActionIntentRepository {
     const statuses = filter.status ? (Array.isArray(filter.status) ? filter.status : [filter.status]) : null;
     const out = Array.from(this.byId.values()).filter((i) =>
       (!statuses || statuses.includes(i.status)) && (!filter.agentId || i.agentId === filter.agentId) &&
-      (!filter.entityType || i.entityType === filter.entityType) && (!filter.entityId || i.entityId === filter.entityId));
+      (!filter.entityType || i.entityType === filter.entityType) && (!filter.entityId || i.entityId === filter.entityId) && (!filter.shop || i.shop === filter.shop));
     out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     return (filter.limit ? out.slice(0, filter.limit) : out).map(clone);
   }

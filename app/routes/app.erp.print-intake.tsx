@@ -1,6 +1,7 @@
 import { PERMISSION_DENIED_MESSAGE, resolveStaffAccess } from "../lib/staff-roles.server";
 import type React from "react";
 import { Form, Link, useActionData, useLoaderData, redirect } from "react-router";
+import { watcherHealth } from "../lib/print-intake-heartbeat";
 import crypto from "crypto";
 import { authenticate } from "../shopify.server";
 import { PRODUCTION_VIEW_DENIED_REDIRECT, roleMayViewProduction } from "../lib/production-role-access";
@@ -91,6 +92,8 @@ export async function loader({ request }: { request: Request }) {
   // 15G.1A: the raw upload token never leaves the server — the browser gets
   // only the masked configured/not-configured status.
   return {
+    // 2026-11-19: is the watcher on the RIP PC alive? (stamped by its own status call)
+    watcher: watcherHealth((setting as any).intakeAgentLastSeenAt),
     incomingFolder: setting.incomingFolder,
     jobQuery,
     credential: maskCredential(setting.uploadToken),
@@ -319,7 +322,7 @@ const STATUS_STYLE: Record<string, React.CSSProperties> = {
 };
 
 export default function PrintIntake() {
-  const { incomingFolder, jobQuery, credential, outcomes, reviewRows, assignableJobs } = useLoaderData<typeof loader>();
+  const { incomingFolder, jobQuery, credential, outcomes, reviewRows, assignableJobs, watcher } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const counts = {
     routed: outcomes.filter((outcome) => outcome.decision === "routed").length,
@@ -338,6 +341,11 @@ export default function PrintIntake() {
           and logs the outcome below. Files it cannot match stay where staff put them and show up as Needs review.
         </p>
       </section>
+      {watcher ? (
+        <div role="status" style={{ marginTop: 12, padding: "12px 14px", borderRadius: 10, fontSize: 15, fontWeight: 600, background: watcher.state === "ok" ? "#f0fdf4" : watcher.state === "stale" ? "#fef2f2" : "#fffbeb", color: watcher.state === "ok" ? "#166534" : watcher.state === "stale" ? "#991b1b" : "#92400e" }}>
+          {watcher.message}
+        </div>
+      ) : null}
 
       <PrintFlowStrip current="/app/erp/print-intake" />
 

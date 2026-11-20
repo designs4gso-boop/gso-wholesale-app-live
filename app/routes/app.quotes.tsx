@@ -35,6 +35,7 @@ import { resolveOwnerAuthorization } from "../lib/owner-authorization.server";
 import { PRODUCTION_ROLE_DENIED, roleMayRunProductionIntent, roleMayViewProduction } from "../lib/production-role-access";
 import { SIMPLE_BOARD_HREF, jobWorkspaceHref } from "../lib/simple-nav";
 import { PERMISSION_DENIED_MESSAGE, resolveStaffAccess } from "../lib/staff-roles.server";
+import { requireRouteAccess, routeAccessDecision } from "../lib/route-access.server";
 import { ownerSetQuoteItemPrice } from "../lib/quote-owner-price-approval.server";
 import { OWN_COST_LADDER_PRICE_KINDS, SPLIT_BAG_LADDER_BADGE, SPLIT_BAG_OWNER_PRICE_LABEL, isSplitBagQuoteItem, ownerPricePreview } from "../lib/split-bag-quote-pricing";
 // 2026-10-19 owner decision: line-level internal cost / margin is OWNER ONLY — redacted server-side for staff.
@@ -704,6 +705,9 @@ const LOCKED_QUOTE_STATUSES = ["deposit_paid", "paid", "production", "completed"
 
 export async function loader({ request }: { request: Request }) {
   const { session, sessionToken } = await authenticate.admin(request);
+  // SECURITY 2026-11-19: Quotes had no role floor — production and unassigned accounts could read every
+  // quote and customer. Quotes are for the owner, managers and sales (route-access.ts); refused before any read.
+  requireRouteAccess({ session, sessionToken }, "quotes");
   const ownerAuth = resolveOwnerAuthorization({ session, sessionToken });
 
   const quotes = await getQuotes(session.shop, ownerAuth.isOwner);
@@ -738,6 +742,10 @@ export async function action({ request }: { request: Request }) {
   const { session, admin, sessionToken } = await authenticate.admin(request);
   const shop = session.shop;
   const payload = await request.json();
+  // SECURITY 2026-11-19: every Quotes action (save, status, price lookup, product search, orders) needs a
+  // selling role. Refused before any read or write; the per-action checks below stay as they were.
+  const quotesRoute = routeAccessDecision({ session, sessionToken }, "quotes");
+  if (!quotesRoute.allowed) return Response.json({ ok: false, intent: payload?.intent, error: quotesRoute.message, message: quotesRoute.message }, { status: 403 });
   // SECURITY 2026-11-18 (launch audit): these intents delete a quote, create a Shopify draft order or email
   // an invoice to the customer. They had no role check, so an UNASSIGNED staff account could run them.
   // They now need an assigned selling role (owner, manager, sales — the existing sendQuote permission).

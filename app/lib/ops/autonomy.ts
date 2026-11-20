@@ -47,7 +47,15 @@ export type ActionType =
   | "change_cost_or_price"
   | "override_canonical_blocker"
   | "post_slack_internal"
-  | "post_slack_external";
+  | "post_slack_external"
+  // 2026-11-19 — INTERNAL approval queue. A person approves or rejects the
+  // proposal inside the ERP. Approval never sends anything: an approved draft
+  // is sent by a person, by hand, outside the ERP.
+  | "submit_outreach_draft"
+  | "propose_followup"
+  | "propose_quote"
+  | "propose_reorder"
+  | "suggest_lead_assignment";
 
 export const ACTION_TYPES: ActionType[] = [
   "read_production_status", "read_report", "draft_customer_reply", "draft_followup", "draft_marketing_brief",
@@ -56,7 +64,11 @@ export const ACTION_TYPES: ActionType[] = [
   "prepare_purchase_order", "send_purchase_order", "prepare_invoice", "send_invoice",
   "move_production_job", "dispatch_to_machine", "record_qc_result", "mark_shipped", "send_customer_notification",
   "refund_or_void", "change_cost_or_price", "override_canonical_blocker", "post_slack_internal", "post_slack_external",
+  "submit_outreach_draft", "propose_followup", "propose_quote", "propose_reorder", "suggest_lead_assignment",
 ];
+
+/** 2026-11-19: proposals a person approves in the ERP approval queue. None of them sends, charges or orders anything. */
+export const INTERNAL_APPROVAL_ACTIONS: ActionType[] = ["submit_outreach_draft", "propose_followup", "propose_quote", "propose_reorder", "suggest_lead_assignment"];
 
 /**
  * The PLATFORM ceiling for each action tonight. An agent can never be more
@@ -93,6 +105,12 @@ export const ACTION_AUTONOMY_CEILING: Record<ActionType, AutonomyLevel> = {
   override_canonical_blocker: "DISABLED",         // never — a canonical blocker is not overridable
   post_slack_internal: "AUTO_INTERNAL",           // sandbox only tonight (see slack-config)
   post_slack_external: "DISABLED",
+  // always a human decision; never automatic, whatever an agent definition says
+  submit_outreach_draft: "APPROVAL_REQUIRED",
+  propose_followup: "APPROVAL_REQUIRED",
+  propose_quote: "APPROVAL_REQUIRED",
+  propose_reorder: "APPROVAL_REQUIRED",
+  suggest_lead_assignment: "APPROVAL_REQUIRED",
 };
 
 /** Permission matrix values (agent x action). */

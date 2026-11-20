@@ -438,7 +438,7 @@ describe("18-23. earlier patches still hold inside ticket folders", () => {
 describe("24-26. the agent scans the root plus ONE level of ticket folders, and the cutoff is intact", () => {
   const agent = src("tools/gso-print-intake-agent.ps1");
   it("root + one level of ticket-named folders, by an exact-ticket-at-the-start pattern", () => {
-    expect(agent).toContain("gso-print-intake-agent/1.9");
+    expect(agent).toContain("gso-print-intake-agent/1.10");
     expect(agent).toContain("$TicketJobFolderPattern = '^GSO[-_]\\d{8}[-_]\\d{4}(?!\\d)(?![-_]\\d)'");
     expect(agent).toContain("$all = @(Get-ChildItem -LiteralPath $Config.PrintsForTodayFolder -File -ErrorAction SilentlyContinue)"); // root files, unchanged
     expect(agent).toContain("foreach ($dir in @(Get-ChildItem -LiteralPath $Config.PrintsForTodayFolder -Directory -ErrorAction SilentlyContinue)) {"); // direct child folders only

@@ -1,8 +1,11 @@
 import { allAgentQuotePrepDraftShape } from "../lib/agent-quote-prep-draft";
 import { authenticate } from "../shopify.server";
+import { requireRouteAccess } from "../lib/route-access.server";
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  requireRouteAccess(auth, "erp/agent-quote-prep-draft-shape"); // 2026-11-19: owner, manager, sales
+  const { session } = auth;
   const shape = allAgentQuotePrepDraftShape();
   const url = new URL(request.url);
   const pretty = url.searchParams.get("pretty") === "1";

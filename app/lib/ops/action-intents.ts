@@ -34,6 +34,8 @@ export type Actor = { type: "agent" | "staff" | "owner" | "system" | "customer" 
 
 export type ActionIntent = {
   id: string;
+  /** Tenant. Set for intents created through the ERP approval queue (2026-11-19); older intents have none. */
+  shop?: string | null;
   actionType: ActionType;
   agentId: string;
   agentVersion: string;
@@ -155,6 +157,7 @@ export type ProposeInput = {
   provider?: string | null;
   model?: string | null;
   now?: Date;
+  shop?: string | null;
 };
 
 export type ProposeResult = { ok: true; intent: ActionIntent; duplicate: boolean } | { ok: false; reason: string };
@@ -172,6 +175,7 @@ export async function proposeIntent(repo: ActionIntentRepository, input: Propose
   const actor: Actor = input.actor ?? { type: "agent", id: agent.id, name: agent.name };
   const intent: ActionIntent = {
     id: intentIdFor(key),
+    shop: input.shop ?? null,
     actionType: input.actionType,
     agentId: agent.id,
     agentVersion: agent.promptVersion === "n/a" ? agent.modelVersion : `${agent.promptVersion} / ${agent.modelVersion}`,

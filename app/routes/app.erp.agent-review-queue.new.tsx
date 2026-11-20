@@ -10,6 +10,7 @@ import {
 import { Form, redirect, useActionData, useNavigation, useNavigate } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
+import { requireRouteAccess } from "../lib/route-access.server";
 
 type FieldValues = Record<string, string>;
 type ActionData = {
@@ -101,12 +102,15 @@ function Field({
 }
 
 export async function loader({ request }: { request: Request }) {
-  await authenticate.admin(request);
+  // 2026-11-19: adding a lead by hand had no role check. Same floor as the queue it feeds.
+  requireRouteAccess(await authenticate.admin(request), "erp/agent-review-queue/new");
   return null;
 }
 
 export async function action({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  requireRouteAccess(auth, "erp/agent-review-queue/new");
+  const { session } = auth;
   const formData = await request.formData();
   const values = valuesFromForm(formData);
   const errors: string[] = [];

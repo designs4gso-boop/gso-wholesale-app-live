@@ -15,7 +15,7 @@ import en from "@shopify/polaris/locales/en.json";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("../app/shopify.server", () => ({
-  authenticate: { admin: async () => ({ session: { shop: "942075-2.myshopify.com" }, admin: {} }) },
+  authenticate: { admin: async () => ({ session: { shop: "942075-2.myshopify.com", isOnline: true, accountOwner: true }, admin: {} }) }, // 2026-11-19: owner / manager page
 }));
 
 // 2026-11-12: jar recipes with OWNER-CONFIRMED canonical geometry (e.g. 4oz)

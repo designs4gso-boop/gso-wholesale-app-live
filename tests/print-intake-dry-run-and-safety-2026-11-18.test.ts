@@ -222,7 +222,7 @@ describe("3. the agent's -DryRun is read-only end to end", () => {
   const agent = src("tools/gso-print-intake-agent.ps1");
   const dryBlock = agent.slice(agent.indexOf("    if ($DryRun) {\n      # Patch A: the SERVER must confirm"), agent.indexOf("    $plan = $planResult.json.plan\n    if ($plan.decision -eq \"route\") {\n      $hot = Get-HotFolderFor"));
   it("sends dryRun to the server and stops unless the server confirms dryRun=true and wrote=false", () => {
-    expect(agent).toContain("gso-print-intake-agent/1.9");
+    expect(agent).toContain("gso-print-intake-agent/1.10");
     expect(agent).toContain("folderFiles = @($FolderFiles); dryRun = $IsDryRun } 60");
     expect(agent).toContain("$planResult = Get-RoutePlan $Config $File.Name $subfolder $hash $File.Length $folderFiles ([bool]$DryRun)");
     expect(agent).toContain("return ($null -ne $Json) -and ($Json.ok -eq $true) -and ($Json.dryRun -eq $true) -and ($Json.wrote -eq $false)");

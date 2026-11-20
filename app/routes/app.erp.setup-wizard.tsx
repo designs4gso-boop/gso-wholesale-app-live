@@ -12,6 +12,7 @@ import {
 import { useState, type ReactNode } from "react";
 import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
+import { requireRouteAccess } from "../lib/route-access.server";
 import db from "../db.server";
 import { classifyRecipeReadiness } from "../lib/jar-quote-readiness.server";
 import {
@@ -117,7 +118,9 @@ function suggestedNextAction(nextStep: Step | null) {
 }
 
 export async function loader({ request }: { request: Request }) {
-  const { session } = await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  requireRouteAccess(auth, "erp/setup-wizard"); // 2026-11-19: owner, manager (was any signed-in account)
+  const { session } = auth;
   const shop = session.shop;
   const recentStart = new Date();
   recentStart.setDate(recentStart.getDate() - 30);

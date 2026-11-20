@@ -914,6 +914,16 @@ model ProductionJob {
   actualVarianceAmount Float?
   actualVariancePct    Float?
 
+  // 2026-11-19 (migration 20261119230000) internal fulfilment state. The Shopify
+  // sync fields stay "disabled" until the app holds a fulfilment scope.
+  fulfillmentState      String? // ready_to_ship | shipped | pickup_ready | picked_up
+  fulfillmentReadyAt    DateTime?
+  fulfillmentReadyBy    String?
+  fulfillmentSyncStatus String? // not_applicable | disabled | pending | synced | failed
+  fulfillmentSyncError  String?
+  fulfillmentSyncedAt   DateTime?
+  shopifyFulfillmentId  String?
+
   @@unique([shop, jobTicket])
   @@index([shop])
   @@index([shop, status])
@@ -1210,6 +1220,10 @@ model PrintLogAutoImportSetting {
   notes                 String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
+  // 2026-11-19 (migration 20261119230000) Print Intake watcher heartbeat: stamped on every watcher pass.
+  intakeAgentLastSeenAt DateTime?
+  intakeAgentVersion    String?
+  intakeAgentHost       String?
 
   @@index([enabled])
   @@index([lastAutoImportAt])
@@ -1793,8 +1807,17 @@ model StagedTransaction {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
+  // 2026-11-19 (migration 20261119230000) provider facts for a read-only adapter.
+  provider        String? // quickbooks | agent | manual
+  transactionType String? // invoice | estimate | proposal
+  rawReference    String? // the provider's own pointer (id / sync token), never the full document
+  sourceUpdatedAt DateTime?
+  mappingState    String    @default("unmapped") // unmapped | customer_mapped (set by a person, never automatic)
+  accountId       String? // CrmAccount a person linked this customer to
+
   @@unique([shop, source, externalId])
   @@index([shop, status])
+  @@index([shop, accountId])
 }
 
 // 2026-11-19 (migration 20261119200000): Shopify privacy webhooks recorded for
@@ -1816,9 +1839,99 @@ model ComplianceRequest {
   resultSummary   String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  // 2026-11-19 (migration 20261119230000) lifecycle: received | in_progress | completed
+  startedBy       String?
+  startedAt       DateTime?
+  notes           String?
 
   @@unique([shop, webhookId])
   @@index([shop, status])
+}
+
+/// Append-only history of a privacy request (who did what, when). Rows are never updated or deleted.
+model ComplianceRequestEvent {
+  id        String   @id @default(cuid())
+  shop      String
+  requestId String
+  event     String // received | started | note | redaction_applied | completed
+  detail    String?
+  actor     String?
+  createdAt DateTime @default(now())
+
+  @@index([shop, requestId, createdAt])
+}
+
+// 2026-11-19 (migration 20261119230000) — internal CRM. Nothing here sends a message.
+/// A customer / account the shop sells to. Created by a person (or by converting a lead).
+model CrmAccount {
+  id                 String   @id @default(cuid())
+  shop               String
+  company            String?
+  contactName        String?
+  email              String?
+  phone              String?
+  shopifyCustomerId  String?
+  externalCustomerId String? // QuickBooks customer id — set only by a person
+  notes              String?
+  active             Boolean  @default(true)
+  createdBy          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @default(now()) @updatedAt
+
+  @@index([shop])
+  @@index([shop, email])
+  @@index([shop, company])
+  @@index([shop, externalCustomerId])
+}
+
+/// A lead / opportunity. status: new | qualified | assigned | contact_pending | contacted | follow_up_due | quote_created | won | lost
+model CrmLead {
+  id                String    @id @default(cuid())
+  shop              String
+  company           String?
+  contactName       String?
+  email             String?
+  phone             String?
+  source            String    @default("manual")
+  status            String    @default("new")
+  productInterest   String?
+  notes             String?
+  assignedStaffId   String?
+  assignedStaffName String?
+  nextFollowUpAt    DateTime?
+  lastContactedAt   DateTime?
+  accountId         String?
+  quoteId           String?
+  sourceQueueItemId String?
+  outcomeReason     String?
+  wonAt             DateTime?
+  lostAt            DateTime?
+  createdBy         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
+
+  @@unique([shop, sourceQueueItemId])
+  @@index([shop, status])
+  @@index([shop, nextFollowUpAt])
+  @@index([shop, assignedStaffId])
+  @@index([shop, accountId])
+  @@index([shop, quoteId])
+  @@index([shop, email])
+}
+
+/// Append-only lead history.
+model CrmLeadEvent {
+  id         String   @id @default(cuid())
+  shop       String
+  leadId     String
+  event      String
+  fromStatus String?
+  toStatus   String?
+  detail     String?
+  actor      String?
+  createdAt  DateTime @default(now())
+
+  @@index([shop, leadId, createdAt])
 }
 
 // Phase 2.5 — durable rate limiting for the Stock Bag personalization upload
