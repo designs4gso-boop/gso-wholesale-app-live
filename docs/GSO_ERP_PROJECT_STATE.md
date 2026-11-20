@@ -2,6 +2,15 @@
 
 ## CURRENT TASK — 2026-11-18 (overnight): LAUNCH-READINESS AUDIT COMPLETE. The single authoritative status is `docs/GSO_ERP_LAUNCH_READINESS_AUDIT.md` (overall 60%). Print Intake Patches A–E COMPLETE and live. Patch F code READY (JobInfo clear ink, sync v1.3 with cutoff, runtime prepared) — first ERP-linked Mimaki result still to be verified; Roland MANUAL CSV. Shared press routing now follows restored Mimaki gloss. Security gaps from the audit fixed and deployed. Patch G (retire test jobs) = owner action. Biggest open item is ADOPTION: real work is not being entered as jobs.
 
+### READINESS PUSH 2026-11-19 (night) — authoritative status: `docs/GSO_ERP_LAUNCH_READINESS_AUDIT.md` (overall 64%). Freezes in force: application timings (owner), QuickBooks business rules (Raquel), agent external actions (approval-only).
+- **Privacy webhooks:** recorded in `ComplianceRequest` (migration `20261119200000_add_compliance_requests`, one new table) with a 30-day due date; owner page Admin → Privacy Requests. Nothing is erased by the webhook; the owner applies a customer erasure (blanks contact fields, keeps records); `shop/redact` is recorded only.
+- **Press actuals per run:** derived from the run token in the RIP job name (`actualsByRun` in `production-run.ts`) — no stored link, no column on `PrintLogEntry`. Shown on the job page per run.
+- **Hand-added files** take an item only when certain (chosen item of that job, or a single-item job).
+- **Board cards** add finish and a reorder marker.
+- **The five long-standing personalization test failures** read `shopify-theme/templates/product.configurator-pilot.json`, a local export never committed; they now skip when it is absent. Suite: 0 failures.
+- **Verified on the RIP PC (read-only):** Print Intake watcher Running, log clean after today's deploys, logon trigger only; `GSO Roland Result Sync` still Ready with a BOOT trigger on the old clone (elevated disable script prepared, not run); no Mimaki sync task; 0 press results carry a ticket, so Patch F live verification is still pending.
+- **Not built tonight (documented in the audit):** QuickBooks ingestion, Shopify fulfilment sync (the app has no fulfilment scope), lead lifecycle / CRM, agent scheduler, stored print-log → run link.
+
 ### APPLICATION TIMINGS 2026-11-19 — OWNER INSTRUCTION: LEAVE EVERY JAR AND BAG APPLICATION TIMING UNCHANGED. Audit only; no code, formula, timing or price was changed.
 - **Status of every timing below: IN FORCE, PENDING REAL SHOP TIMING VALIDATION.** The owner will supply measured application times by product / size / application type after employees time themselves. Until then do not replace, recalibrate or standardize any of them (a proposed jar baseline of body 45 s / lid 22 s / band 45 s was discussed the same day and NOT applied).
 - **Formula in use everywhere canonical:** physical applications x seconds per application / 3600 x $20/hr. Jars charge it on FINISHED jars only (never on the 1% overage) — `resolveJarApplication`. Bags and custom items go through `computeLabelApplication` (events = items x labels per item).

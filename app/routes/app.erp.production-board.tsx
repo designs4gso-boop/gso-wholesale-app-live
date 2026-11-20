@@ -71,6 +71,7 @@ function JobBoardCard({ card }: { card: BoardCard }) {
         <Field label="Machine" value={card.machine || "Not assigned"} />
         <Field label="Assigned to" value={card.assignedTo || "Nobody yet"} />
         <Field label="Items" value={String(card.itemCount)} />
+        <Field label="Finish" value={card.finish || "Not set"} />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4 }}>Files</div>
           <div style={{ fontSize: 14, fontWeight: card.awaitingFiles ? 700 : 500, color: card.awaitingFiles ? "#92400e" : "#111827" }}>{card.filesLabel}</div>
@@ -79,6 +80,7 @@ function JobBoardCard({ card }: { card: BoardCard }) {
         {card.reprintLabel ? <Field label="Reprints" value={card.reprintLabel} /> : null}
       </div>
       {card.holdReason ? <div style={{ fontSize: 13, color: "#991b1b" }}>Hold: {card.holdReason}</div> : null}
+      {card.reorder ? <div style={{ fontSize: 13, color: "#1e3a8a", fontWeight: 600 }}>Reorder of an earlier item</div> : null}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 12, color: "#6b7280" }}>{card.statusLabel}</span>
         <Link

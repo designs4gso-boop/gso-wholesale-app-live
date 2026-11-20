@@ -1,6 +1,6 @@
 # GSO ERP — Launch Readiness Audit
 
-**Date:** 2026-11-18 (overnight). **Code:** `main` at `4c37645` (started at `a1f7282`). **Deployed:** yes — Render is serving the build of `48c5046` / `4c37645` (the last commit changes only a shop-PC script).
+**Date:** 2026-11-19 (night) — updates the 2026-11-18 audit. **Code:** `main` at the commit that carries this document (started the day at `2eb6bd6`). **Deployed:** yes — each push today was confirmed live on Render by a new route answering.
 
 This is the single authoritative readiness report. Everything marked *verified* was checked tonight against production (read-only), the live Shopify store (read-only), this shop PC, or the code. Anything that could not be checked is marked *unverified*. Scores are judgement, not arithmetic — they are deliberately conservative.
 
@@ -21,22 +21,30 @@ So the remaining launch work is mostly **adoption**: real work has to be entered
 
 ## A. Executive scorecard
 
-| Area | Score | Why |
-|---|---|---|
-| Core ERP (quotes, product setup, cost engine, jobs) | **75%** | Built, tested (4,028 tests) and deployed. Never exercised by real orders. |
-| Shopify / storefront | **55%** | Configurator → paid order → job works for stock bags, sticker bags, jars, DTP pouches, stickers. Store is not yet taking real orders; storefront bag/sticker prices come from an older cost engine than the ERP; no fulfilment sync back to Shopify. |
-| Pricing / costing | **70%** | Canonical engine blocks on missing inputs. Pending: bag inbound freight, MIRON Ceres freight and price ladder, Mimaki gloss estimating, several families with no selling ladder. |
-| Production (board, QC, shipping record) | **75%** | Complete and role-gated. Real jobs are not in it yet. |
-| Print Intake | **90%** | Live, safe, verified end to end with one real file. Blocked only by jobs not existing. |
-| RIP actuals | **55%** | Parser and JobInfo clear-ink reader deployed. No ERP-linked result verified yet; no Mimaki sync task; Roland manual; history uncorrected. |
-| Shipping / fulfilment | **40%** | Shipment and pickup are recorded on the job. Nothing is sent to Shopify (no fulfilment scope), no labels, no tracking sync. |
-| CRM / sales | **35%** | Quote → Shopify draft order → payment → job works. No lead, customer, follow-up or reorder records a salesperson can use. |
-| Agents | **20%** | One real integration (signed lead-intake API + staff review queue). The 21 registry "agents" are library functions nothing in production calls. No LLM call path is live. |
-| Marketing automation | **5%** | A draft scaffold only. Nothing can send. |
-| Security / permissions | **80%** | Seven ungated pages and three cross-shop write paths fixed tonight. Open items below. |
-| Deployment / operations | **70%** | Auto-deploy works and was verified three times today. Render settings and environment values cannot be seen from the repo. No health check, no background worker. |
+Scores are judgement, deliberately conservative. "Tested" means automated tests and a passing build; nothing below was exercised with a real customer job yet.
 
-**OVERALL LAUNCH READINESS: 60%** — the software is further along than the business's use of it.
+| Area | Score | Change | Why |
+|---|---|---|---|
+| Core ERP (quotes, product setup, cost engine, jobs) | **78%** | +3 | One job service now covers every source, including a reviewed release. Still never run by real orders. |
+| Production Board | **85%** | new | Shared by owner, manager, production lead and finisher. Cards show items, quantity, due date, priority, assignment, printer, finish, files awaiting / received, QC, reprints, hold note and reorder marker. Not yet used on a real job. |
+| Job / item backbone | **85%** | new | Master job, item tickets, exact file-to-item link, production runs and reorder lineage are in the schema and deployed. |
+| Print Intake | **90%** | = | Live and healthy after today's deploys (watcher log clean). Routed names now carry item ticket + staff name; first real routed file not yet seen. |
+| Reprints / remakes | **80%** | new | Quantity, type and who-pays are required; every layer is re-routed; each reprint is its own run; QC closes the run. Run actuals appear per run. Untested on the floor. |
+| Reorders | **65%** | new | Reorder → draft quote with lineage and current pricing works. Most real jobs are manual, so their reorders arrive needing an owner price. Invoiced (QuickBooks) reorders have no screen yet. |
+| RIP actuals | **58%** | +3 | Results are now attributed to the exact run. Still no ERP-linked Mimaki result to verify (all of today's results are un-ticketed CRUD files), so the sync task stays off. Roland manual. |
+| Pricing / costing | **70%** | = | Unchanged. Application timings are frozen pending real shop timing. Two storefront price engines still disagree. |
+| Product readiness | **60%** | new | Not re-audited tonight; carries last night's findings (below). |
+| Shopify / storefront | **55%** | = | Unchanged. |
+| Fulfilment | **40%** | = | Recorded on the job only. The app has no Shopify fulfilment permission, so nothing can be sent to Shopify without a scope change. |
+| CRM | **30%** | new | A lead record exists (review queue) with assignment and conversion to a quote. No contacted / follow-up / won-lost lifecycle, no customer record. |
+| Sales | **45%** | +10 | Quotes work; reorder is now a real action for sales. Sales still cannot price core families or see the lead queue. |
+| Agents | **22%** | +2 | Agent-approved work now has a defined route into the one job service. Nothing new runs in production. |
+| Marketing automation | **5%** | = | Draft scaffold. Nothing can send. |
+| Admin workflow (Raquel) | **55%** | new | Release to Production screen, role lane and plain-language guide are ready. No QuickBooks connection; every business rule is still open. |
+| Security / permissions | **85%** | +5 | Role lanes pinned by tests; privacy webhooks are now recorded. Render environment still unverified. |
+| Deployment / operations | **72%** | +2 | Three additive deploys today, each confirmed live. Watcher still starts only at logon. |
+
+**OVERALL LAUNCH READINESS: 64%** (was 60%). The software moved; the business's use of it did not — there is still not one real job in the system.
 
 ---
 
@@ -62,49 +70,67 @@ So the remaining launch work is mostly **adoption**: real work has to be entered
 
 ## D. Blockers
 
-### P0 — cannot launch safely
-None verified. **One unverified item would be P0 if true:** if Render has `GSO_OWNER_ENFORCEMENT=temporary_all_staff`, every signed-in staff account is treated as the owner and every role gate is void. The repo cannot see Render's environment. Check it first (E1).
+### P0 — unsafe to launch
+None verified. **One unverified item would be P0 if true:** `GSO_OWNER_ENFORCEMENT=temporary_all_staff` on Render makes every signed-in staff account an owner and voids every role gate. It cannot be seen from the repo. Check it first (Owner actions, James 1).
 
-### P1 — should fix before launch
-1. **Real work is not being entered as jobs** (see the top of this document). Workaround available today (E2).
-2. **Render environment unverified**: `GSO_OWNER_SHOPIFY_USER_IDS`, `GSO_STAFF_ROLES` (without it every non-owner sees only Home), `GSO_MANAGER_AUTHORIZED_USER_IDS`, `GSO_OPS_REPOSITORY=prisma`, Pre-Deploy `prisma migrate deploy`.
-3. **Patch F live verification** and the Mimaki result-sync task.
-4. **Quotes page has no role floor for viewing and saving.** Any signed-in account, including one with no ERP role, can open Quotes (customer email / phone) and save or re-status drafts. Tonight's fix covers deleting, creating Shopify draft orders and emailing invoices. The rest is pinned by existing tests as intended behaviour, so it needs the owner's decision.
-5. **Storefront price authority** (two engines) before the storefront takes real orders at volume.
-6. **Compliance webhooks do nothing.** `customers/redact`, `shop/redact` and `customers/data_request` are acknowledged but no customer data is removed.
-7. **Storefront orders carry no cost snapshot** (unit cost 0, "pending cost book mapping"), so online orders have no cost basis for margin reporting.
-8. **Print Intake watcher starts only when the user `golde` logs on** (logon trigger). After a reboot with nobody logged in, it is off.
+### P1 — fix before broad rollout
+1. **No real work is in the ERP.** Workaround exists today: New Job (now multi-item) with the invoice number as the reference.
+2. **Render environment unverified:** `GSO_OWNER_SHOPIFY_USER_IDS`, `GSO_STAFF_ROLES` (without it the production lead sees only Home), `GSO_MANAGER_AUTHORIZED_USER_IDS`, `GSO_OPS_REPOSITORY`.
+3. **Patch F not verified live.** No press result carries a ticket yet, so the Mimaki result sync stays unregistered.
+4. **QuickBooks is not connected** and no release rule is decided (Raquel).
+5. **Quotes page has no role floor for viewing and saving** — owner decision, unchanged.
+6. **Storefront price authority** — two engines disagree for stock / sticker bags and stickers; unchanged.
+7. **Storefront orders carry no cost snapshot** — unchanged.
+8. **Print Intake watcher starts only when `golde` logs on.** After a reboot with nobody logged in it is off (Windows action 2).
+9. **Stale "GSO Roland Result Sync" task has a boot trigger** and points at the old clone. It is Ready, so it will start on the next reboot (Windows action 1).
 
-### P2 — can launch with a workaround
-- No Shopify fulfilment / tracking sync (record on the job; fulfil in Shopify by hand).
-- New Job form is single-item (one job per order with a ticket-named folder works; multi-item needs item linking).
-- Sales has no lead inbox (the lead queue is owner / authorized-manager only).
-- Paid quotes waiting for *Create Production Job* are not surfaced on Home; deposit-only quotes cannot start production.
-- A double click can create two Shopify draft orders for one quote; saving a new quote twice can duplicate it.
-- Public quote link `/quote/:id` is protected only by the record id; the wholesale pricing app-proxy trusts an email in the query string.
-- Roland RIP actuals by manual CSV; old "GSO Roland Result Sync" task still points at the old clone (E5).
-- Bag inbound freight $0 (not modelled), MIRON Ceres freight pending, banner finishing options unverified.
-- Jar MOQ: sales rules say 128, storefront enforces 50 — owner to pick one.
-- The five known failing tests read a theme export file that is not in the repository; the live theme no longer contains the "fake legacy uploader" they guard against (verified). Not a launch risk.
-- Live theme, stock-bag pilot template: the Zakeke *Customize* block is enabled and the deprecated minimum is 64. The server enforces 50 and the app's script hides Zakeke for Stock Bags, but the template should be cleaned (theme edit — not done).
+**Closed tonight:** compliance webhooks (were acknowledged and dropped; now recorded with a due date, owner-applied erasure); New Job single-item limit; reprint re-routing only the newest layer; file with no item link.
+
+### P2 — launch with a workaround
+- No Shopify fulfilment / tracking sync (fulfil in Shopify by hand). Needs a new app permission.
+- Reorders of manual jobs need an owner price each time; invoiced reorders are entered through New Job without a lineage picker.
+- Customer-paid reprints are only recorded; the invoice is made by hand.
+- Press results are attributed to runs by name token, not stored as a link; fine for reading, not yet used in job costing.
+- Erasure requests are applied by the owner by hand (by design); shop erasure after an uninstall is recorded only.
+- Application timings (jars, bags) are in force but **pending real shop timing validation** — owner will supply measured times.
+- Sales has no lead inbox; paid quotes waiting for *Create Production Job* are not on Home; deposit-only quotes cannot start production.
+- A double click can create two Shopify draft orders for one quote.
+- Public quote link `/quote/:id` is protected only by its id; the wholesale pricing app-proxy trusts an e-mail in the query string.
+- Roland actuals by manual CSV. Bag inbound freight not modelled; MIRON Ceres freight pending.
+- Jar MOQ: sales rules say 128, storefront enforces 50.
+- Live theme pilot template still has the Zakeke block enabled and a minimum of 64 (the server enforces 50).
+- The watcher re-reads each held 200 MB CRUD file every 30 seconds until those files are linked or moved.
 
 ### P3 — after launch
-Customer / lead / follow-up / reorder records; a real agent runtime with a scheduler; Mimaki gloss and white calibration; pallet freight allocator; Southwest Cargo freight for DTP and boxes; boxes and apparel in the canonical engine; health endpoint with a database check; pin Node; turn off Prisma query logging in production; remove the hard-coded developer path in the Slack client; stale docs listed in H.
+Lead lifecycle (contacted, follow-up due, won / lost) and a customer record; agent runtime with a scheduler; stored run link on print logs and run cost in job costing; Mimaki gloss and white calibration; pallet freight allocator; Southwest Cargo freight; boxes and apparel in the canonical engine; health endpoint with a database check.
 
 ## E. Owner actions
 
-1. **Check Render → Environment (2 minutes).** Confirm `GSO_OWNER_ENFORCEMENT` is absent or `enforced`; `GSO_OWNER_SHOPIFY_USER_IDS` holds your Shopify user id; `GSO_STAFF_ROLES` lists each employee as `id:role`; `GSO_OPS_REPOSITORY=prisma`. The **Owner Readiness** page in the app shows what the server sees.
-2. **Put the CRUD work into the ERP (first thing tomorrow, ~5 minutes).**
-   1. Production → **New Job**: customer `CRUD`, one item (e.g. "Mashups 21–30, 4x5"), quantity, finish, printer **Auto**. Note the ticket, e.g. `GSO-20261119-0001`.
-   2. **Incoming Print Files** → search that ticket → select the held `CRUD_MASHUPS` files → **Assign** (up to 50 at a time). The watcher delivers them to the Mimaki on its next pass.
-   3. From now on, for work that did not come from the storefront or a quote: create the job first, then have staff save print files into a folder named with the ticket inside *PRINTS FOR TODAY* (e.g. `GSO-20261119-0001 CRUD`). Those route with no review.
-3. **Patch F verification.** When the first result for a file routed that way appears in `...\rasterlink\incoming\UCJV-300`, tell Claude; it imports that one result, checks CMYK + both clear slots + cost, and replays it. Then run, as the shop user:
+### James / production
+1. **Check Render → Environment (2 minutes).** `GSO_OWNER_ENFORCEMENT` absent or `enforced`; your Shopify user id in `GSO_OWNER_SHOPIFY_USER_IDS`; each employee in `GSO_STAFF_ROLES` as `id:role` (production lead = `print_operator`). **Admin → Staff Access & Readiness** shows what the server sees.
+2. **Put the CRUD work into the ERP.** Production → New Job: customer, invoice number as reference, first item, the rest under *More items* (`name | quantity`). Then Incoming Print Files → select the held CRUD files → Assign to the job and item.
+3. **From then on: job first, files second** (`docs/GSO_PRODUCTION_WORKFLOW.md`). Watch the first routed file arrive at the press as `<item ticket>__<file name>`.
+4. **Tell Claude when the first ticketed result appears** in `...\rasterlink\incoming\UCJV-300` so Patch F can be verified and the sync switched on.
+5. **Time the application steps** (jars: body, lid, band, per size; bags: 4x5, split, 14x16) and send the measured seconds. Nothing changes until you do.
+6. **Decide:** storefront price authority; jar MOQ 128 vs 50; whether Mimaki white is approved; who may open and edit Quotes; whether Sales gets the lead queue; the six test jobs (Patch G below); the 155 + 128 historical RIP rows.
+
+### Raquel / admin
+Everything is written out in `docs/GSO_RAQUEL_ADMIN_QUICKBOOKS_WORKFLOW.md`. In short: which invoice state releases work and what balance is acceptable; whether release is ever automatic; what a void or refund does to a job; which lines are never production; customer and product mapping; who else may release and see balances; whether a deposit-only or fully paid quote should start production by itself; how a customer-paid reprint is invoiced.
+
+### Windows admin (elevated PowerShell on the RIP PC)
+1. Disable the stale Roland task (disables only, deletes nothing):
+   `powershell -ExecutionPolicy Bypass -File "C:\GSO-RIP-Result-Sync\disable-old-roland-task-ELEVATED.ps1"`
+2. Make the Print Intake watcher survive a reboot. Either sign `golde` in automatically at start-up, or add a start-up trigger that runs as `golde` with the saved password (the NAS needs that account):
+   `$t = Get-ScheduledTask 'GSO Print Intake Agent'; $t.Triggers += New-ScheduledTaskTrigger -AtStartup; Set-ScheduledTask -TaskName $t.TaskName -Trigger $t.Triggers -User "$env:COMPUTERNAME\golde" -Password (Read-Host 'Password for golde')`
+   Not run: it needs the account password.
+3. After Patch F is verified, as the shop user:
    `powershell -ExecutionPolicy Bypass -File "C:\GSO-RIP-Result-Sync\register-mimaki-result-sync-task.ps1"`
-   (prepared, not run; it dry-runs first and asks for YES. The config's cutoff excludes every result written before 2026-11-19 02:45 UTC.)
-4. **Decide** (each is a business choice, none was made for you): who may open and edit Quotes; whether Sales gets the lead queue and the calculator; whether paid quotes should create jobs automatically; whether a deposit can start production; storefront price authority; jar MOQ 128 vs 50; whether Mimaki white is approved; the 155 + 128 historical RIP rows (F below).
-5. **Disable the stale Roland task** (elevated PowerShell): `powershell -ExecutionPolicy Bypass -File "C:\GSO-RIP-Result-Sync\disable-old-roland-task-ELEVATED.ps1"`. It only disables; nothing is deleted.
-6. **Retire the test jobs** (Patch G, below) from the Production page, or approve Claude doing it through the app.
-7. **Agents:** create one real credential on **Agent Security** for the external lead agents and revoke the nine test credentials from July; nothing else is needed for approval-only intake.
+
+### External providers
+- **Intuit / QuickBooks:** a developer app and Raquel's consent for read-only access (invoices, estimates, customers). Nothing is built against it until then.
+- **Shopify:** fulfilment sync needs the fulfilment permissions added to the app, which means a reviewed `shopify app deploy` and re-approval in the store.
+- **Agents:** one real credential on Agent Security for the outside lead agents; revoke the nine July test credentials. An LLM provider key only if the internal reasoning runtime is ever switched on.
+- **Slack:** confirm the production-alert webhook URL is set if those alerts are wanted.
 
 ### Patch G — the six "Unlinked (print intake)" jobs
 `GSO-20260726-0001` (GSO PIPELINE TEST 3), `GSO-20260811-0001` (BUTTAWAY_bently_ROLAND), `GSO-20260811-0002` (PIPELINE TEST 3X), `GSO-20260811-0003` (PIPELINE TEST 2), `GSO-20260825-0001` (Pre roll … _TEST_ROLAND), `GSO-20261107-0001` (Neon Horror Glow Print Test Sheet).
@@ -149,20 +175,40 @@ Item 3.989 × 5.000 in = 0.1385 sq ft; 65 copies = 9.00 sq ft of page area (not 
 
 | Handoff | Status | Note |
 |---|---|---|
-| Lead → review queue | YELLOW | Works through the signed intake API; Sales cannot see the queue; no customer record. |
-| Lead → quote | YELLOW | Owner / authorized manager converts; core families must be re-entered in the calculator. |
-| Quote → Shopify draft order → payment | GREEN | Verified against the quote's own draft order and subtotal. |
-| Paid quote → ProductionJob | YELLOW | Manual click; full payment required; not surfaced on Home. |
-| Storefront order → ProductionJob | GREEN | Automatic and idempotent for configurator lines. Other lines go to an owner-only review item. |
-| Off-system order → ProductionJob | **RED** | Nobody enters it. New Job form is the path (E2). |
-| ProductionJob → Print Intake | GREEN | Ticket in the file or folder name, or manual assign. |
-| Print Intake → RIP | GREEN | Verified with one real file. |
-| RIP → actuals | YELLOW | Code deployed; waiting for the first ERP-linked result; no sync task yet. |
-| Actuals → job cost | YELLOW | Print-log actuals can be applied to a job by the owner; never automatic. |
-| Production → fulfilment | YELLOW | Recorded on the job; Shopify not updated. |
-| Fulfilment → reorder | RED | No customer reorder mechanism. |
+| **Commercial** | | |
+| Lead → review queue | YELLOW | Signed intake API works; Sales cannot see the queue; no follow-up lifecycle. |
+| Lead → quote | YELLOW | Owner / authorized manager converts; core families are priced in the calculator. |
+| Quote → approval → payment | GREEN | Verified against the quote's own draft order. |
+| Paid quote → production release | YELLOW | Manual click; full payment required. |
+| QuickBooks invoice → production release | **RED** | Review and release are built; no connection brings invoices in. Workaround: New Job. |
+| Storefront order → job | GREEN | Automatic and idempotent for configurator lines. |
+| **Production** | | |
+| Master job → items → tickets | GREEN | One service, every source; multi-item. |
+| Job → artwork / files | GREEN | Job folder name and item tickets on the job page; files awaiting / received shown. |
+| Files → printer | GREEN | Verified with one real file before the routed-name change; first file under the new name not yet seen. |
+| Printer → RIP result | YELLOW | Results arrive; none carries a ticket yet. |
+| RIP → actuals | YELLOW | Reader deployed; sync task off until one ERP-linked result is verified; Roland manual. |
+| Actuals → run | YELLOW | Attributed per run by name token; not yet in job costing. |
+| QC → complete | GREEN | Guards unchanged; QC now also closes the open run. |
+| **After production** | | |
+| Complete → fulfilment | YELLOW | Recorded on the job; Shopify not updated. |
+| Fulfilment → reorder | YELLOW | Reorder action creates a new quote with lineage (was RED). |
+| Reprint / remake | GREEN | Runs, quantity, all layers. Not yet used on a real job. |
 
-## I. What changed overnight
+## I0. What changed on 2026-11-19
+
+**Deployed (all additive, all confirmed live):**
+- Routed print-file name `<item ticket>__<staff file name>[__run]`; multi-item New Job.
+- Shared backbone: exact file-to-item link, production runs, reprint quantity / type / who-pays, every layer re-routed, reorder with lineage and current pricing, staged transactions with Release to Production, role lanes described as capability groups.
+- Privacy webhooks recorded for the owner (Admin → Privacy Requests); press results attributed per run; hand-added files linked to an item when certain; board cards show finish and a reorder marker.
+
+**Migrations (both additive, applied by the deploy):** `20261119120000_add_production_lineage` and `20261119200000_add_compliance_requests`.
+
+**Not changed:** application timings (frozen by the owner), selling prices, QuickBooks (no connection, no rule), agents' external actions (still none), the watcher script on the RIP PC, historical RIP data.
+
+**Tests:** 4,092+ passed, 0 failed. The five long-standing failures read a local theme export that was never committed; they now skip when it is absent and run when it is present.
+
+## I. What changed on 2026-11-18 (previous night)
 
 **Commits (all on `main`, pushed, deployed):**
 - `49fedaa` — shared press routing follows restored Mimaki gloss; negated gloss wording is not gloss; *Auto* for non-white work resolves to the Mimaki; white unchanged.

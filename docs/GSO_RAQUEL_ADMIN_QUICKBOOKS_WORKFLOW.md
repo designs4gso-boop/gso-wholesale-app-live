@@ -131,6 +131,39 @@ and balances, or only the lines?
 The connection needs an Intuit developer app and your consent for the ERP to **read** invoices,
 estimates and customers. Read-only. Your approval is needed before this is set up.
 
+## Your day-to-day in the ERP (available now, no QuickBooks needed)
+
+You have both the admin side and the production side. Nothing on the production side is hidden
+from you.
+
+**Admin**
+
+| Task | Where |
+|---|---|
+| Quotes and customers | Sales → Quotes & Customers |
+| Start a job for an invoiced order | Production → New Job (invoice number in *Reference #*, extra items under *More items*) |
+| Due date, priority, who it is assigned to | Open the job → Job settings. Production sees these on every board card but cannot change them. |
+| Put a job on hold / take it off | Open the job → status. Write a note saying why; the board shows the note. |
+| Reorder | Sales → Reorder a Past Item |
+| Reports | Admin → Reports |
+| Who has which role | Admin → Staff Access & Readiness |
+| Customer privacy requests from Shopify | Admin → Privacy Requests |
+
+**Production support**
+
+| Task | Where |
+|---|---|
+| See every job and its next step | Production → Production Board |
+| QC pass / fail / hold | Open the job → QC step |
+| Reprint or remake (with quantity and who pays) | Open the job → QC step → NEEDS REPRINT |
+| Reopen a finished job for a reprint | Open the job → More tools |
+| Record shipment or pickup, complete the job | Open the job → last steps |
+| Link a print file that arrived with no job | Production → Incoming Print Files → Assign to… |
+| Job history, every reprint run, reorder history | Open the job |
+
+The Production Lead has the production side and none of the admin side: no quotes, no release
+screen, no costs, and cannot change due dates, priorities or assignments.
+
 ## Reorders
 
 A reorder is a new sale, not a reprint.

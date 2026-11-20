@@ -283,6 +283,8 @@ export type BoardCard = {
   qcLabel: string;
   reprintLabel: string;
   holdReason: string;
+  finish: string;
+  reorder: boolean;
 };
 
 /**
@@ -362,6 +364,8 @@ function boardCardExtras(job: any, items: any[]) {
     qcLabel: !items.length ? "" : passed === items.length ? "QC passed" : qcStates.some((state: any) => state.status === "pending_reprint") ? "QC needed after reprint" : `QC ${passed}/${items.length}`,
     reprintLabel: reprintCount ? `${reprintCount} reprint(s) · ${reprintQty} pcs` : legacyReprints ? `${legacyReprints} reprint(s)` : "",
     holdReason: holdReasonOf(job),
+    finish: (Array.from(new Set(items.map((item: any) => String(item?.selectedFinish || "").trim()).filter(Boolean))) as string[]).slice(0, 3).join(", "),
+    reorder: items.some((item: any) => Boolean(item?.reorderSourceItemId)),
   };
 }
 

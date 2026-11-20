@@ -38,6 +38,11 @@ ticket, the finish and printer each item needs, and whether its files have arriv
 3. That's it. The watcher links the file to the job and item and sends it to the right printer.
 
 The job page changes from **Awaiting files** to **print file(s) received** when a file is routed.
+The board card shows the same thing, so you can see from the board which jobs are still waiting
+for files.
+
+Adding a file link by hand (job page → Files → *Add a file link*): on a job with more than one
+item, pick the item the file is for, or leave it as *For the whole job*.
 
 ## 3. Layers (CMYK, gloss, white)
 
@@ -152,9 +157,22 @@ shown on every board card.
 ## 13. Printer results (ink and time)
 
 The RIP results come back by item ticket — which is why the ticket is in the routed file name.
+A reprint's result comes back with its run mark (`__P1-A1`), so the job page shows ink and time
+for the original and for each reprint separately ("Press result — Run 2 — Reprint: …").
 Mimaki results are collected automatically once the sync is switched on; Roland results are
 imported from its CSV export by the owner or a manager. Production does not need to enter ink or
 time by hand.
+
+## 14. If something goes wrong
+
+| What you see | What to do |
+|---|---|
+| File sits in Incoming Print Files as *Needs review — link to job* | The job does not exist yet or the folder / file name has no ticket. Create or find the job, then **Assign to…**. |
+| File is assigned but not routed | The printer could not be decided (for example white only with no printer chosen). The reason is shown; the owner or production lead picks the printer on the job. |
+| Two files with the same name in one job folder | The second is treated as a revision of the first. Use different names for different layers or sides. |
+| The press did not receive a file the job says was routed | Drop the same file into the job folder again. It is re-sent as the next attempt (`__A2`); it is never duplicated on the job. |
+| NAS or the RIP PC was off | Nothing is lost. Files wait in Prints For Today and are picked up when the watcher is running again. |
+| Wrong item on a file | Do not rename it to another ticket. Tell the production lead or owner; the file is re-assigned from Incoming Print Files. |
 
 ## Who does what
 

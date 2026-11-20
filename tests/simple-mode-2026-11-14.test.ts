@@ -383,7 +383,7 @@ describe("Phase 2 — NEXT STEP", () => {
 
 describe("Phase 2 — slim board (real loader)", () => {
   // 2026-11-19 (shared board): item count, files expected / received, QC, reprint and hold-reason labels were added. Still no money, file URL or ticket.
-  const CARD_KEYS = ["assignedTo", "awaitingFiles", "customer", "dueDate", "filesLabel", "holdReason", "id", "itemCount", "machine", "next", "nextTone", "overdue", "priority", "product", "qcLabel", "quantity", "reprintLabel", "stage", "status", "statusLabel", "updatedAt"];
+  const CARD_KEYS = ["assignedTo", "awaitingFiles", "customer", "dueDate", "filesLabel", "finish", "holdReason", "id", "itemCount", "machine", "next", "nextTone", "overdue", "priority", "product", "qcLabel", "quantity", "reorder", "reprintLabel", "stage", "status", "statusLabel", "updatedAt"];
 
   it("a card carries only the approved fields — never money, files, checklist, events or technical ids", async () => {
     withMoney();
