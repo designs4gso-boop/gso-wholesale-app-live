@@ -217,7 +217,11 @@ describe("draft order carries what ERP production needs", () => {
     expect(a.Finish).toBe("No Spot Gloss");
     expect(a["Bag Color"]).toBe("Black");
     expect(a.Sides).toBe("Double Sided");
-    expect(Object.values(a)).toContain("design-42"); // art/customization identity
+    // 2026-11-20: pin updated — a Stock Bag is premade artwork and never carries a Zakeke design (owner rule), so the
+    // posted id is dropped at checkout. The design identity surviving on a Zakeke product (Sticker Bag) is asserted in
+    // tests/storefront-reviewed-fixes-2026-11-20.test.ts.
+    expect(Object.values(a)).not.toContain("design-42");
+    expect(Object.keys(a).some((key) => /zakeke/i.test(key))).toBe(false);
     const canonical: any = parseCanonicalOrderLine(a["_GSO Canonical"]);
     expect(canonical).not.toBeNull();
     expect(canonical).toMatchObject({ profile: "stock_bag_4x5", qty: 50, faces: 2, material: "Matte", bagColor: "Black", glossX: 0, unitPrice: 2.7 });

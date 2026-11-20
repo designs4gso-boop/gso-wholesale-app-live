@@ -2,7 +2,11 @@ import { Form, useActionData, useLoaderData, useNavigation } from "react-router"
 import { authenticate } from "../shopify.server";
 import { requireFinancialAccess } from "../lib/owner-authorization.server";
 import { db } from "../db.server";
-import { MIN_QTY, PRODUCT_TYPE, PRODUCT_TYPE_LABEL } from "../lib/configurator-pricing";
+import { PRODUCT_TYPE, PRODUCT_TYPE_LABEL } from "../lib/configurator-pricing";
+// 2026-11-20: this page syncs Stock Bags only (PRODUCT_TYPE = stock_bag_4x5). The owner-approved Stock Bag MOQ is 50
+// — the retired pilot value 64 (configurator-pricing MIN_QTY) made every synced row fail Configurator Audit ("Wrong Min Qty").
+// Server-only constant: read in the loader/action and handed to the page as loader data.
+import { STOCK_BAG_MOQ } from "../lib/bag-cost-inputs.server";
 
 type ShopifyProductPreview = {
   id: string;
@@ -373,7 +377,7 @@ async function syncProductsToErp({
       sku: product.baseVariantSku,
       productType: PRODUCT_TYPE,
       defaultSides: "Double Sided",
-      minQuantity: MIN_QTY,
+      minQuantity: STOCK_BAG_MOQ,
       pilot: requiredTag === "configurator-pilot" || product.tags.includes("configurator-pilot"),
       active: true,
       notes,
@@ -422,6 +426,7 @@ export async function loader({ request }: { request: Request }) {
     shop: session.shop,
     productType: PRODUCT_TYPE,
     productTypeLabel: PRODUCT_TYPE_LABEL,
+    minQuantity: STOCK_BAG_MOQ,
     currentConfiguratorProducts: count,
   };
 }
@@ -553,7 +558,7 @@ export default function ConfiguratorSync() {
         <div className="hero-card">
           <strong>Sync Target</strong>
           <span>ERP Type: {data.productTypeLabel}</span>
-          <span>Min Qty: {MIN_QTY}</span>
+          <span>Min Qty: {data.minQuantity}</span>
           <span>Sides: Double Sided</span>
           <span>Current ERP products: {data.currentConfiguratorProducts}</span>
         </div>

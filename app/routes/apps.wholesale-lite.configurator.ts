@@ -253,6 +253,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // 16D: owner-approved launch jars (100ml/150ml Miron) start at 50.
   // 16E: outsourced DTP pouches floor at the Spektra vendor MOQ (1,000).
   const jarLaunchSize = isJar ? jarLaunchSizeForType(productType) : null;
+  // 2026-11-20: a jar with no launch size (e.g. the cost-only jar_5oz_clear)
+  // has no pricing authority and checkout refuses it with NO_PRICING_AUTHORITY
+  // — so it is not offered as an active configurator product at all, and its
+  // legacy ConfiguratorPricingRule rows are never sent to the storefront.
+  if (isJar && !jarLaunchSize) {
+    return jsonResponse({
+      ok: true,
+      active: false,
+      code: "NO_PRICING_AUTHORITY",
+      message: "This product is not available for online pricing yet.",
+    });
+  }
   const dtpLaunch = dtpLaunchInfoForType(productType);
   // 16F: dimension-driven stickers (regular square/rect + kiss-cut die-cut).
   const stickerLaunch = stickerLaunchInfoForType(productType);

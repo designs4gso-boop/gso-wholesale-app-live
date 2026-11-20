@@ -109,6 +109,28 @@ export function productTypeRequiresZakekeDesign(productType: unknown): boolean {
   return ZAKEKE_REQUIRED_PRODUCT_TYPES.includes(type);
 }
 
+/**
+ * 2026-11-20 — product types that must NEVER carry a Zakeke design.
+ *
+ * Stock Bags are premade GSO artwork (owner rule: no Zakeke; an optional
+ * logo / QR upload only). The storefront bridge already refuses to attach a
+ * design on a Stock Bag (ZAKEKE_EXEMPT_TYPES), but a hand-posted or stale
+ * cart item could still carry an id — and the checkout wrote it onto the
+ * order line, where production would read it as the customer's artwork.
+ */
+export function productTypeForbidsZakekeDesign(productType: unknown): boolean {
+  return String(productType ?? "").trim().startsWith("stock_bag_");
+}
+
+/**
+ * The design a line of this product type is allowed to carry. A forbidden type
+ * gets null — the id is DROPPED, never rejected, so a paying Stock Bag customer
+ * can never be blocked by it. Every other type gets the design back unchanged.
+ */
+export function zakekeDesignForProductType(productType: unknown, design: ZakekeDesign | null): ZakekeDesign | null {
+  return productTypeForbidsZakekeDesign(productType) ? null : design;
+}
+
 export type ZakekeDesignGate = { ok: true } | { ok: false; code: "ZAKEKE_DESIGN_REQUIRED" };
 
 /**

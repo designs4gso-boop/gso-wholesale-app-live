@@ -9,7 +9,7 @@ import {
 } from "../lib/security-guards-shared";
 import { resolveCanonicalBagInputs } from "../lib/canonical-bag-pricing.server";
 import { configuratorProductGate } from "../lib/product-family";
-import { resolveZakekeDesign, zakekeDesignGate, zakekeLineAttributes } from "../lib/zakeke-design.server";
+import { resolveZakekeDesign, zakekeDesignForProductType, zakekeDesignGate, zakekeLineAttributes } from "../lib/zakeke-design.server";
 import { createAdminGraphql } from "../lib/personalization-assets.server";
 import { getPersonalizationClaimSecret, personalizationLineAttributes } from "../lib/personalization-claim.server";
 import { resolvePersonalizationForLine } from "../lib/personalization-checkout.server";
@@ -209,7 +209,7 @@ export async function action({ request }: ActionFunctionArgs) {
       const productImageUrl = clean(rawItem.image || rawItem.productImageUrl || rawItem.imageUrl);
       // 17C.1: artwork identity only — never an input to pricing. The preview URL is
       // derived from the sanitized id server-side, so a posted URL is never persisted.
-      const zakekeDesign = resolveZakekeDesign(rawItem.zakekeDesignId || rawItem.zakeke_design_id);
+      const postedZakekeDesign = resolveZakekeDesign(rawItem.zakekeDesignId || rawItem.zakeke_design_id);
 
       if (!handle && !productGid) {
         return jsonResponse(
@@ -334,6 +334,11 @@ export async function action({ request }: ActionFunctionArgs) {
       //     a server-to-server API call this phase does not make.
       //   - It is NOT the native Shopify cart containment mechanism; nothing
       //     here protects the native /cart/add path.
+      // 2026-11-20: a Stock Bag is premade artwork and never carries a Zakeke
+      // design. A posted id is silently DROPPED for that type (never a
+      // rejection — it cannot block a paying customer); every other product
+      // type keeps its design exactly as before.
+      const zakekeDesign = zakekeDesignForProductType(productType, postedZakekeDesign);
       const designGate = zakekeDesignGate(productType, zakekeDesign);
       if (!designGate.ok) {
         return jsonResponse(
