@@ -29,7 +29,8 @@ import { CUT_TYPES, DOCUMENTED_PRINTER_SQFT_PER_HOUR, DTP_ENGINE_VERSION, DTP_TI
 import { COMMERCIAL_PRICING_VERSION, buildStickerLines, computeCommercialPrice, designSplit, marginCurveConfigFor, marginCurveKeyFor, normalizeAdditionalLineCount, resolveMarginPctForQuantity, specialtyFinishReasons, validateStickerLine } from "../lib/commercial-pricing-policy.server";
 import { resolvePricingPolicyConfig } from "../lib/owner-config.server";
 import { SPECIALTY_FILE_PREP_FEE, SPECIALTY_FILE_PREP_LABEL, specialtyFilePrepFee } from "../lib/calculator-fee-standards";
-import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, canonicalFamilyFromMarginFamilyKey, type CanonicalApplicationBreakdown, type CanonicalCalculatorView } from "../lib/canonical-calculator-shared";
+import { CANONICAL_COMPONENT_ORDER, CANONICAL_DISPATCH, canonicalComponentRows, canonicalFamilyFromMarginFamilyKey, type CanonicalApplicationBreakdown, type CanonicalCalculatorView } from "../lib/canonical-calculator-shared";
+import { CostOnlyJarPanel } from "../components/CostOnlyJarPanel";
 import { resolveMultiLineLabelQuote, type MultiLineCanonicalQuote } from "../lib/multi-line-label-authority.server";
 import { assembleCanonicalJob, canonicalInputForQuantity, canonicalSupportsTierLadder, canonicalViewOf, computeCanonicalJob, normalizeCanonicalInput, resolveCanonicalMachineInputs } from "../lib/canonical-calculator.server";
 import { resolveCanonicalMachineRouting } from "../lib/machine-routing.server";
@@ -42,7 +43,7 @@ import { SPLIT_BAG_BLANK_UNIT_COST, applyOwnerMaterialOverride } from "../lib/ca
 import { attachPoundBagBlank, type BagBlankAuthority } from "../lib/pound-bag-blank.server";
 import { POUND_BAG_DISPLAY_LADDER, POUND_BAG_MARGIN_RULE, POUND_BAG_PRICE_LADDER_SOURCE, poundBagMarginPctForQuantity, poundBagPolicyValues } from "../lib/pound-bag-pricing";
 import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
-import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
+import { COST_ONLY_JAR_PICKER_GROUP, COST_ONLY_JAR_PICKER_GROUP_LABEL, resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
 import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE, costOnlyJarCalculatorOptions } from "../lib/jar-cost-inputs.server";
 // 2026-10-05 fixed-product spec layer (client-safe): standard jar dimensions are RESOLVED, never typed.
 import { JAR_LABEL_GEOMETRY, formatJarCutline, formatJarGeometry, type JarSizeKey } from "../lib/jar-label-geometry";
@@ -3734,7 +3735,9 @@ function ProductDrivenForm() {
   const chironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "CHIRON");
   const mironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "MIRON");
   // 2026-11-20: cost-calculator-only jars (Eris) — supplier cost only, never a sellable product.
-  const erisOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "ERIS");
+  // Listed under their own brand group in EVERY Jar picker — navigation only, no family classification.
+  const erisOptions = (pm?.blankOptions || []).filter((option: any) => option.group === COST_ONLY_JAR_PICKER_GROUP);
+  const recordOptions = (pm?.blankOptions || []).filter((option: any) => option.group !== COST_ONLY_JAR_PICKER_GROUP);
   const jarCostOnly = jars ? (jarBlankOption?.costOnly ?? null) : null;
 
   /* ---- 2026-10-19 OWNER UX: family choice + pre-calculation check -------
@@ -3873,7 +3876,7 @@ function ProductDrivenForm() {
         </p>
       ) : null}
       {loadingFamily ? <p style={{ ...smallHelp, gridColumn: "1 / -1", fontWeight: 700 }}>Loading products…</p> : null}
-      {family && (isBags || jars || isCustom) && !(pm.blankOptions || []).length ? (
+      {family && (isBags || jars || isCustom) && !recordOptions.length ? (
         <p style={{ ...smallHelp, gridColumn: "1 / -1", color: "#92400e", fontWeight: 700 }}>No active products are configured for this family — pick No Blank Item or Custom Item, or add records in the Vendor Cost Book.</p>
       ) : null}
       {isBags && pm?.autoBag ? (<>
@@ -3890,17 +3893,17 @@ function ProductDrivenForm() {
             {isPremium ? (<>
               {chironOptions.length ? <optgroup label="CHIRON">{chironOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
               {mironOptions.length ? <optgroup label="MIRON">{mironOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
-              {erisOptions.length ? <optgroup label="ERIS — cost only, not for sale">{erisOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
-            </>) : (pm.blankOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </>) : recordOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            {erisOptions.length ? <optgroup label={COST_ONLY_JAR_PICKER_GROUP_LABEL}>{erisOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
             <option value="none">No Blank Item (Advanced)</option>
             <option value="custom">Custom Item (Advanced — enter below)</option>
           </select>
         </label>
       ) : null}
-      {isStandardJars && family && !(pm?.blankOptions || []).length ? (
+      {isStandardJars && family && !recordOptions.length ? (
         <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No active standard jar products are configured.</p>
       ) : null}
-      {isPremium && family && !(pm?.blankOptions || []).length ? (
+      {isPremium && family && !recordOptions.length ? (
         <p style={{ fontSize: 12, gridColumn: "1 / -1", color: "#991b1b", fontWeight: 700 }}>No active Chiron or Miron jar sizes are configured.</p>
       ) : null}
       {topRequired ? (
@@ -3974,6 +3977,8 @@ function ProductDrivenForm() {
               conflict for the selected pieces. Unknown = RED, fail closed. */}
           {(() => {
             const confirmed = jarSpec?.authorityStatus === "OWNER_CONFIRMED";
+            // 2026-11-20: a cost-only jar is a valid product with partial cost data — its own neutral panel, not the red error box.
+            if (jarCostOnly) return <CostOnlyJarPanel summary={jarCostOnly} style={{ gridColumn: "1 / -1" }} />;
             const tone = !(jarSpec && jarStandard)
               ? { border: "#fecaca", bg: "#fef2f2" }
               : confirmed ? { border: "#bbf7d0", bg: "#f0fdf4" } : { border: "#fde68a", bg: "#fffbeb" };
@@ -3999,23 +4004,12 @@ function ProductDrivenForm() {
               {jarSpec.sharedSizeKeyNote ? <div style={{ color: "#78350f" }}>{jarSpec.sharedSizeKeyNote}</div> : null}
               <div style={{ color: confirmed ? "#166534" : "#92400e" }}>{jarPieceRows.length} printed label piece(s) per jar · {jarSpec.routing}</div>
             </>) : (<>
-              {jarCostOnly ? (<>
-                <b style={{ color: "#991b1b" }}>{jarCostOnly.productName} — COST ONLY, NOT FOR SALE · landed cost PENDING</b>
-                <div>{jarCostOnly.costLabel}: <b>${jarCostOnly.supplierUnitCost.toFixed(2)}</b> each (before inbound freight — not a landed cost)</div>
-                <div>Known supplier tier: <b>{jarCostOnly.supplierQuantity.toLocaleString("en-US")}</b> ({jarCostOnly.supplierQuantity.toLocaleString("en-US")} × ${jarCostOnly.supplierUnitCost.toFixed(2)} = ${jarCostOnly.supplierTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) · lower supplier tiers: <b>{jarCostOnly.lowerSupplierTiers}</b></div>
-                <div>Inbound freight: <b>PENDING</b> (not $0) · Landed unit cost: <b>PENDING</b></div>
-                <div style={{ color: "#7f1d1d" }}>{jarCostOnly.inboundFreight.note}</div>
-                <div style={{ color: "#7f1d1d" }}>{jarCostOnly.labelGeometry.note}</div>
-                <div style={{ color: "#7f1d1d" }}>{jarCostOnly.applicationTiming.note}</div>
-                <div style={{ color: "#7f1d1d" }}>{jarCostOnly.outboundPackout.note}</div>
-              </>) : (<>
               <b style={{ color: "#991b1b" }}>STANDARD PRODUCTION DIMENSIONS NOT CONFIRMED</b>
               <div style={{ color: "#7f1d1d" }}>
                 {jarBlankOption
                   ? "This product has no costing geometry, so it cannot be quoted. Owner must supply confirmed dimensions (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md)."
                   : "Select an exact jar product above to load its standard label dimensions."}
               </div>
-              </>)}
             </>)}
           </div>
             );
@@ -4512,6 +4506,7 @@ function OwnerResultCard() {
     splitBag: Boolean(pm.splitBag),
     poundBag: Boolean(pm.poundBag),
     canonical: canonical ? { status: canonical.status, totalCost: canonical.totalCost, unitCost: canonical.unitCost, blockers: canonical.blockers } : null,
+    costOnlyJar: canonical?.diagnostics?.costOnlyJar ?? null,
     requestedRow,
     multiLine: pm.multiLine,
     marginRuleKey: pm.marginFamily?.key || null,
@@ -4525,8 +4520,11 @@ function OwnerResultCard() {
     PRICE_NOT_AVAILABLE: { bg: "#fffbeb", fg: "#92400e", border: "#fde68a" },
     NEEDS_INFORMATION: { bg: "#fffbeb", fg: "#92400e", border: "#fde68a" },
     PRICING_BLOCKED: { bg: "#fef2f2", fg: "#991b1b", border: "#fecaca" },
+    // 2026-11-20: informational — a valid product with incomplete costing inputs, not an error.
+    COST_DATA_PARTIAL: { bg: "#eff6ff", fg: "#1e40af", border: "#bfdbfe" },
   };
   const tone = tones[result.state] || tones.PRICING_BLOCKED;
+  const costOnlyJar = result.state === "COST_DATA_PARTIAL" ? canonical?.diagnostics?.costOnlyJar ?? null : null;
   const money2 = (value: number) => `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const notAvailable = <span style={{ color: "#991b1b" }}>Not available</span>;
   const familyLabel = pm.stockBag ? STOCK_BAG_CALCULATOR_OPTION.label : pm.splitBag ? SPLIT_BAG_CALCULATOR_OPTION.label : pm.poundBag ? POUND_BAG_CALCULATOR_OPTION.label : calculatorFamilies().find((entry) => entry.key === pm.canonicalFamily)?.label || "";
@@ -4551,7 +4549,7 @@ function OwnerResultCard() {
         <b style={{ fontSize: 15, color: tone.fg }}>COST &amp; PRICING RESULT</b>
         <span style={{ fontSize: 12, padding: "2px 10px", borderRadius: 999, border: `1px solid ${tone.border}`, color: tone.fg, background: "white", fontWeight: 800 }}>{result.badge}</span>
         <span style={{ fontSize: 12, color: "#374151" }}>
-          {familyLabel}{result.quantity ? ` · ${result.quantity.toLocaleString()} units` : ""}
+          {costOnlyJar ? costOnlyJar.productName : familyLabel}{result.quantity ? ` · ${result.quantity.toLocaleString()} units` : costOnlyJar?.finishedQuantity ? ` · ${costOnlyJar.finishedQuantity.toLocaleString()} units` : ""}
         </span>
       </div>
 
@@ -4567,7 +4565,9 @@ function OwnerResultCard() {
         {stat("MARGIN", result.marginPct == null ? notAvailable : `${result.marginPct.toFixed(1)}%`)}
       </div>
 
-      {costBlocked ? (
+      {costOnlyJar ? (
+        <CostOnlyJarPanel summary={costOnlyJar} style={{ marginTop: 10, background: "white" }} />
+      ) : costBlocked ? (
         <div style={{ marginTop: 10, fontSize: 12, color: "#991b1b" }}>Missing cost is never $0 — this job has no cost until the items below are resolved.</div>
       ) : null}
 
@@ -4618,9 +4618,11 @@ function CanonicalTrueCost() {
     PROVISIONAL: { bg: "#fffbeb", fg: "#92400e", border: "#fde68a" },
     DRAFT_ONLY: { bg: "#fef2f2", fg: "#991b1b", border: "#fecaca" },
   };
-  const tone = statusTone[canonical.status] || statusTone.DRAFT_ONLY;
   const blocked = canonical.status === "DRAFT_ONLY";
   const d = canonical.diagnostics;
+  // 2026-11-20: a cost-only jar with partial cost data is informational, not an error (the engine status stays DRAFT_ONLY).
+  const costDataPartial = d.costOnlyJar?.status === "COST_DATA_PARTIAL";
+  const tone = costDataPartial ? { bg: "#eff6ff", fg: "#1e40af", border: "#bfdbfe" } : statusTone[canonical.status] || statusTone.DRAFT_ONLY;
   const cat = canonical.totals as Record<string, number>;
   const plainBlockers = summarizeCalculatorBlockers(canonical.blockers);
 
@@ -4629,7 +4631,8 @@ function CanonicalTrueCost() {
   const numeric = (value: number | null | undefined, digits = 2) =>
     value == null ? "—" : Number(value).toFixed(digits);
 
-  const componentRows = CANONICAL_COMPONENT_ORDER.map(({ key, label }) => [label, cat[key] ?? null] as [string, number | null]);
+  // 2026-11-20: a category whose input was never provided shows PENDING, never "0.0000".
+  const componentRows = canonicalComponentRows({ totals: cat as any, lines: canonical.lines });
   const sectionStyle: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 10, padding: "6px 10px", background: "white" };
   const summaryStyle: React.CSSProperties = { cursor: "pointer", fontSize: 13, fontWeight: 700 };
 
@@ -4658,23 +4661,7 @@ function CanonicalTrueCost() {
           </table>
         </div>
       ) : null}
-      {/* ---- 2026-11-20: cost-calculator-only jar (Eris) — supplier cost basis shown, everything not provided is PENDING ---- */}
-      {d.costOnlyJar ? (
-        <div style={{ border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 10, padding: "8px 10px", fontSize: 12, color: "#78350f" }}>
-          <div><b>{d.costOnlyJar.productName} — INCOMPLETE COST · NOT FOR SALE · no price is suggested</b></div>
-          <div>{d.costOnlyJar.costLabel}: <b>${d.costOnlyJar.supplierUnitCost.toFixed(2)}</b> each (before inbound freight — not a landed cost)</div>
-          <div>Known supplier tier: <b>{d.costOnlyJar.supplierQuantity.toLocaleString("en-US")}</b> ({d.costOnlyJar.supplierQuantity.toLocaleString("en-US")} × ${d.costOnlyJar.supplierUnitCost.toFixed(2)} = ${d.costOnlyJar.supplierTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) · lower supplier tiers: <b>{d.costOnlyJar.lowerSupplierTiers}</b></div>
-          {d.costOnlyJar.plannedBlankQuantity != null && d.costOnlyJar.baseBlankCost != null ? (
-            <div>Blank jars for this job: {(d.costOnlyJar.finishedQuantity ?? 0).toLocaleString("en-US")} finished + {d.costOnlyJar.overagePct}% planned overage = <b>{d.costOnlyJar.plannedBlankQuantity.toLocaleString("en-US")}</b> × ${d.costOnlyJar.supplierUnitCost.toFixed(2)} = <b>${d.costOnlyJar.baseBlankCost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b> base blank cost only (before inbound freight — not a job total)</div>
-          ) : null}
-          <div>Inbound freight: <b>PENDING</b> (not $0)</div>
-          <div>Landed unit cost: <b>PENDING</b></div>
-          <div style={{ color: "#92400e", marginTop: 4 }}>{d.costOnlyJar.inboundFreight.note}</div>
-          <div style={{ color: "#92400e" }}>{d.costOnlyJar.labelGeometry.note}</div>
-          <div style={{ color: "#92400e" }}>{d.costOnlyJar.applicationTiming.note}</div>
-          <div style={{ color: "#92400e" }}>{d.costOnlyJar.outboundPackout.note}</div>
-        </div>
-      ) : null}
+      {/* ---- 2026-11-20: cost-only jar (Eris) — the Known / Pending panel is in the result card above; nothing is repeated here ---- */}
       {/* ---- 2026-11-17: freight is the only missing input — a known subtotal, never called a landed cost ---- */}
       {d.landedCost ? (
         <div style={{ border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 10, padding: "8px 10px", fontSize: 12, color: "#78350f" }}>
@@ -4687,21 +4674,23 @@ function CanonicalTrueCost() {
       ) : null}
       {/* ---- Cost breakdown ---- */}
       <details open={!blocked || Boolean(d.landedCost)} style={sectionStyle}>
-        <summary style={summaryStyle}>Cost breakdown{d.landedCost ? " — known costs only; inbound freight is pending (not a landed cost)" : blocked ? " — partial lines only, the job is blocked (not a cost)" : ""}</summary>
+        <summary style={summaryStyle}>Cost breakdown{costDataPartial ? " — known figures only; cost data is partial (not a job total)" : d.landedCost ? " — known costs only; inbound freight is pending (not a landed cost)" : blocked ? " — partial lines only, the job is blocked (not a cost)" : ""}</summary>
         <div style={{ marginTop: 6 }}>
           <b style={{ fontSize: 12 }}>COMPONENT BREAKDOWN</b>
           <table style={{ width: "100%", fontSize: 12, marginTop: 6, borderCollapse: "collapse" }}>
             <tbody>
-              {componentRows.map(([label, amount]) => (
+              {componentRows.map(({ label, amount, pending }) => (
                 <tr key={label}>
                   <td style={{ padding: "2px 0", color: "#374151" }}>{label}</td>
-                  <td style={{ padding: "2px 0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{dollars(amount)}</td>
+                  <td style={{ padding: "2px 0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                    {pending ? (amount ? <>{dollars(amount)} <span style={{ color: "#1e40af", fontWeight: 700 }}>+ {pending}</span></> : <span style={{ color: "#1e40af", fontWeight: 700 }}>{pending}</span>) : dollars(amount)}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        {d.finishingBreakdown ? (
+        {d.finishingBreakdown && !costDataPartial ? (
           <div style={{ marginTop: 10, fontSize: 12 }}>
             <b>FINISHING DECOMPOSITION</b> <span style={{ color: "#6b7280" }}>(sums of the engine lines above; nothing re-estimated)</span>
             <div style={{ marginTop: 4, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "2px 16px" }}>
@@ -4745,7 +4734,11 @@ function CanonicalTrueCost() {
       </details>
 
       {/* ---- Production details ---- */}
-      <details style={sectionStyle}>
+      {/* 2026-11-20: with no label geometry there are no production measurements to show — never a row of 0.000 values */}
+      {d.costOnlyJar?.labelGeometry.status === "PENDING" ? (
+        <div style={{ ...sectionStyle, fontSize: 12, color: "#1e3a8a" }}><b>Production details:</b> LABEL GEOMETRY PENDING (owner measurement) — label media, ink, print time and cutting are calculated once the label sizes are provided.</div>
+      ) : null}
+      <details style={{ ...sectionStyle, display: d.costOnlyJar?.labelGeometry.status === "PENDING" ? "none" : undefined }}>
         <summary style={summaryStyle}>Production details</summary>
         <div style={{ fontSize: 12, color: "#374151", marginTop: 6, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "2px 16px" }}>
           <div>Media consumed: <b>{numeric(d.mediaConsumedSqft, 3)} sqft</b></div>
@@ -4805,9 +4798,9 @@ function CanonicalTrueCost() {
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
           <b style={{ fontSize: 12, color: tone.fg }}>CANONICAL TRUE COST</b>
           <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 999, border: `1px solid ${tone.border}`, color: tone.fg, background: tone.bg, fontWeight: 700 }}>
-            {canonical.status}
+            {costDataPartial ? `${d.costOnlyJar!.statusLabel} (engine status ${canonical.status})` : canonical.status}
           </span>
-          <span style={{ fontSize: 12, color: "#374151" }}>{canonical.family}</span>
+          <span style={{ fontSize: 12, color: "#374151" }}>{costDataPartial ? d.costOnlyJar!.productName : canonical.family}</span>
           <span style={{ fontSize: 11, color: "#6b7280" }}>{canonical.version}</span>
         </div>
         <div style={{ fontSize: 12, marginTop: 4 }}>
@@ -4844,6 +4837,9 @@ function ProductBreakdown() {
   // The canonical panel renders separately and above this one, so a blocked
   // canonical job stays visible even when the legacy engine produced nothing.
   if (!result) return null;
+  // 2026-11-20: the legacy engine knows nothing about a cost-only jar (Eris); its family-default
+  // packing / label lines would read as real values, so they are not shown.
+  if (emergency.productMode?.canonical?.diagnostics?.costOnlyJar?.status === "COST_DATA_PARTIAL") return null;
   const derived = result.derived;
   // ONE AUTHORITATIVE CALCULATION (2026-10-04): for canonical families the job
   // cost shown here is the canonical 17D.7 true cost; the legacy 14C.2 lines
@@ -5001,6 +4997,9 @@ function ProductTiers() {
   const tiers: any[] | null = pm?.tiers || null;
   const multiLine = pm?.multiLine || null; // 15F.0-K
   if ((!tiers || !tiers.length) && !multiLine) return null;
+  // 2026-11-20: a cost-only jar (Eris) with partial cost data gets NO price table at all — no tier
+  // rows, no family margin rule, no family minimum. Its picker family is navigation only.
+  if (pm?.canonical?.diagnostics?.costOnlyJar?.status === "COST_DATA_PARTIAL") return null;
   // 2026-10-19: a missing amount renders "—", never $0.00 (missing cost/price is never zero).
   const money2 = (value: number | null | undefined) => (value == null || !Number.isFinite(Number(value)) ? "—" : `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
   const pct1 = (value: number | null | undefined) => (value == null || !Number.isFinite(Number(value)) ? "—" : `${Number(value).toFixed(1)}%`);

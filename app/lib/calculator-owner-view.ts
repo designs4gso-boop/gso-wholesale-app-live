@@ -321,6 +321,11 @@ const BLOCKER_PLAIN: Record<string, { kind: BlockerKind; text: string }> = {
   CANONICAL_FAMILY_FAIL_CLOSED: { kind: "blocked", text: "This product's costing is not approved yet" },
   FAMILY_NOT_CANONICAL: { kind: "blocked", text: "This product has no canonical costing yet" },
   OWNER_PRICING_REVIEW_REQUIRED: { kind: "blocked", text: "Owner pricing review (manual / vendor quote)" },
+  // 2026-11-20: inputs that were never PROVIDED — named rows, never "Other production data" and never a zero.
+  MISSING_FREIGHT_BASIS: { kind: "blocked", text: "Inbound freight: PENDING" },
+  OUTBOUND_PACKOUT_PENDING: { kind: "blocked", text: "Outbound packout: PENDING" },
+  LABEL_GEOMETRY_PENDING: { kind: "blocked", text: "Label geometry: PENDING" },
+  APPLICATION_TIMING_PENDING: { kind: "blocked", text: "Application timing: PENDING REAL SHOP TIMING VALIDATION" },
 };
 // Wrapper / informational codes that never name the missing thing themselves.
 const BLOCKER_WRAPPERS = new Set(["CANONICAL_TRUE_COST_REQUIRED", "DRAFT_ONLY"]);
@@ -541,7 +546,9 @@ export type OwnerResultState =
   | "OVERRIDE_REQUIRED"
   | "PRICE_NOT_AVAILABLE"
   | "NEEDS_INFORMATION"
-  | "PRICING_BLOCKED";
+  | "PRICING_BLOCKED"
+  /** 2026-11-20: a valid product whose costing inputs are incomplete (cost-only jar). Informational, not an error. */
+  | "COST_DATA_PARTIAL";
 
 export type OwnerResult = {
   state: OwnerResultState;
@@ -577,6 +584,12 @@ export type OwnerResultInput = {
   /** pfamily=sticker-bags + ppoundbag=1 (QP / P Bag (14x16)). */
   poundBag?: boolean;
   canonical: { status: string; totalCost: number; unitCost: number | null; blockers: string[] } | null;
+  /**
+   * 2026-11-20: canonical.diagnostics.costOnlyJar, when the job is a cost-only jar (Eris). While its
+   * cost data is partial the card shows COST DATA PARTIAL with Known / Pending rows — never a cost,
+   * never a price, and not the red PRICING BLOCKED treatment.
+   */
+  costOnlyJar?: { status: string; statusLabel: string; productName: string; known: Array<{ label: string; value: string }>; pending: Array<{ label: string; value: string }> } | null;
   /** The server tier row for the requested quantity (loader productMode.tiers). */
   requestedRow: any | null;
   /** loader productMode.multiLine (multi-line sticker jobs). */
@@ -622,6 +635,24 @@ export function resolveOwnerResult(input: OwnerResultInput): OwnerResult | null 
   const costMissing = combined
     ? combined.blockers?.length > 0 || trueJobCost == null
     : trueJobCost == null || !row || row.draftOnly || row.jobCost == null;
+
+  // 0. A cost-only product with partial cost data: a valid product, incomplete inputs. Checked before
+  //    anything else so no cost and no price of any kind can be shown for it.
+  if (input.costOnlyJar && input.costOnlyJar.status === "COST_DATA_PARTIAL") {
+    return {
+      ...base,
+      trueJobCost: null,
+      trueUnitCost: null,
+      provisionalCost: false,
+      ...noPrice,
+      state: "COST_DATA_PARTIAL",
+      badge: input.costOnlyJar.statusLabel,
+      priceAuthority: null,
+      missingAuthority: null,
+      reasons: input.costOnlyJar.pending.map((row) => `${row.label}: ${row.value}`),
+      authority: null,
+    };
+  }
 
   // 1. No usable cost -> no price. Plain reasons; raw codes stay collapsed.
   if (costMissing) {

@@ -117,6 +117,9 @@ export const JAR_GEOMETRY_PENDING: Record<JarGeometryPendingSizeKey, string> = {
 /** The pending-measurement note for a size with no label geometry, or null for every other size. */
 export function jarGeometryPendingNote(size: string | null | undefined): string | null {
   const key = String(size ?? "");
+  // Geometry KNOWN always wins: the day a size gets an entry in JAR_LABEL_GEOMETRY it stops being pending,
+  // and every label-area calculation resumes with no other change.
+  if (Object.prototype.hasOwnProperty.call(JAR_LABEL_GEOMETRY, key)) return null;
   return Object.prototype.hasOwnProperty.call(JAR_GEOMETRY_PENDING, key) ? JAR_GEOMETRY_PENDING[key as JarGeometryPendingSizeKey] : null;
 }
 

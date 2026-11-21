@@ -127,7 +127,25 @@ export type TrueCostLine = {
   blocker?: string;
   /** Set when computed but resting on a provisional basis. */
   provisional?: string;
+  /**
+   * 2026-11-20: set when the INPUT this line needs was never provided (no
+   * outbound box quantity, no inbound freight, no label geometry). The amount
+   * is 0 only because nothing can be computed — a screen must show this text
+   * ("PENDING ...") and never the 0 as if it were a value.
+   */
+  pending?: string;
 };
+
+/** What a line shows when the product has no approved label geometry. */
+export const LABEL_GEOMETRY_PENDING_CODE = "LABEL_GEOMETRY_PENDING";
+export const LABEL_GEOMETRY_PENDING_DISPLAY = "PENDING — LABEL GEOMETRY PENDING (owner measurement)";
+/** What the packout line shows when no outbound box quantity exists. */
+export const OUTBOUND_PACKOUT_PENDING_CODE = "OUTBOUND_PACKOUT_PENDING";
+export const OUTBOUND_PACKOUT_PENDING_DISPLAY = "PACKOUT PENDING — OUTBOUND PACKOUT NOT PROVIDED";
+/** A family with no owner box standard at all (PACKOUT_NOT_MODELED): contributes nothing and does not block. */
+export const PACKOUT_NOT_MODELLED_DISPLAY = "PACKOUT PENDING — NO BOX STANDARD RECORDED";
+/** What the inbound-freight line shows when no freight basis exists. */
+export const INBOUND_FREIGHT_PENDING_DISPLAY = "PENDING — INBOUND FREIGHT NOT PROVIDED";
 
 export type TrueCostAreas = {
   inkableArtworkSqft: number;
@@ -191,8 +209,9 @@ export type TrueCostInput = {
    * seconds are FOR.
    */
   application:
-    | { secondsPerFinishedUnit: number; laborRatePerHour: number; note?: string }
-    | { costPerFinishedUnit: number; note?: string };
+    | { secondsPerFinishedUnit: number; laborRatePerHour: number; note?: string; pending?: string }
+    /** `pending` (2026-11-20): the product has never been timed — the line shows this text, never $0 as a value. */
+    | { costPerFinishedUnit: number; note?: string; pending?: string };
 
   /**
    * Setup. The adapter decides how many setup groups a job has — one design,
@@ -246,7 +265,24 @@ export type TrueCostInput = {
    */
   packout:
     | { unitsPerBox: number; laborPerBox: number; consumablesPerBox: number }
-    | { boxes: number; unitsPerBox: number; cost: number };
+    | { boxes: number; unitsPerBox: number; cost: number }
+    /**
+     * 2026-11-20: NO outbound box quantity exists for this product. Never a
+     * box count and never a "0 box(es)" line. `blocking: true` when the product
+     * cannot be costed without it (a jar with no units-per-box); `false` keeps
+     * the long-standing behaviour of families whose packout is simply not
+     * modelled (the line contributes $0 and the job still costs).
+     */
+    | { pending: string; blocking: boolean };
+
+  /**
+   * 2026-11-20: set (to the plain-language note) when the product has NO
+   * approved label geometry. Nothing label-area-driven is then attempted: the
+   * print-media line carries the ONE blocker, and ink, operator attention and
+   * machine recovery are shown as pending instead of each failing with its own
+   * area / nesting error. Leave unset for every product that has geometry.
+   */
+  labelGeometryPending?: string | null;
 
   /** Applied to PRODUCTION qty. Never charged twice via a separate overage line. */
   freight: { perUnit: number | null; basis: string; provisional: boolean; source: string };
@@ -313,7 +349,19 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   }
 
   /* ---- 2. Materials: print media (material footprint) ---- */
-  if (input.material && input.material.costPerSqft != null && input.material.costPerSqft > 0) {
+  const geometryPending = input.labelGeometryPending ? String(input.labelGeometryPending) : null;
+  if (geometryPending) {
+    // No label geometry: nothing to measure. ONE blocker, here; the ink and
+    // machine lines below are pending, not separate calculation failures.
+    lines.push({
+      key: "print_media",
+      category: "materials",
+      label: "Label media — LABEL GEOMETRY PENDING (owner measurement)",
+      amount: 0,
+      pending: LABEL_GEOMETRY_PENDING_DISPLAY,
+      blocker: `${LABEL_GEOMETRY_PENDING_CODE}: ${geometryPending}`,
+    });
+  } else if (input.material && input.material.costPerSqft != null && input.material.costPerSqft > 0) {
     lines.push({
       key: "print_media",
       category: "materials",
@@ -334,7 +382,9 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   }
 
   /* ---- 3. Ink (inkable artwork area x calibration x $/mL) ---- */
-  if (!input.calibration) {
+  if (geometryPending) {
+    lines.push({ key: "ink", category: "ink", label: "Ink — LABEL GEOMETRY PENDING (owner measurement)", amount: 0, pending: LABEL_GEOMETRY_PENDING_DISPLAY });
+  } else if (!input.calibration) {
     lines.push({
       key: "ink",
       category: "ink",
@@ -381,16 +431,18 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
     key: "art_setup",
     category: "setup_labor",
     basis: input.setup.artBasis ?? SETUP_BASIS,
-    label: `Art setup — ${input.setup.groups} setup group(s)`,
+    label: geometryPending ? "Art setup — LABEL GEOMETRY PENDING (owner measurement)" : `Art setup — ${input.setup.groups} setup group(s)`,
     amount: input.setup.art,
     note: input.setup.note,
+    ...(geometryPending ? { pending: LABEL_GEOMETRY_PENDING_DISPLAY } : {}),
   });
   lines.push({
     key: "print_setup",
     category: "setup_labor",
     basis: input.setup.printBasis ?? SETUP_BASIS,
-    label: "Print setup",
+    label: geometryPending ? "Print setup — LABEL GEOMETRY PENDING (owner measurement)" : "Print setup",
     amount: input.setup.print,
+    ...(geometryPending ? { pending: LABEL_GEOMETRY_PENDING_DISPLAY } : {}),
   });
   if (input.setup.specialty != null && input.setup.specialty > 0) {
     lines.push({
@@ -410,7 +462,9 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   let occupancyBlocker: string | null = null;
   let occupancyDetail: { areaSqft: number; areaBasis: string; minutesPerSqft: number; passCount: number } | null = null;
 
-  if (!input.calibration) {
+  if (geometryPending) {
+    // not attempted — see the print-media line
+  } else if (!input.calibration) {
     occupancyBlocker = "MISSING_CALIBRATION.";
   } else if (input.areas.ripLayoutSqft == null || !(input.areas.ripLayoutSqft > 0)) {
     occupancyBlocker = "MISSING_NESTING_MODEL: ripLayoutSqft is required and no nesting model produced one.";
@@ -445,7 +499,9 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
     const pct = rl.attentionPct ?? DEFAULT_OPERATOR_ATTENTION_PCT;
     const rate = rl.laborRatePerHour ?? DEFAULT_OPERATOR_LABOR_RATE_PER_HOUR;
     const classification = rl.classification ?? OPERATOR_ATTENTION_CLASSIFICATION;
-    if (occupancyHours == null) {
+    if (geometryPending) {
+      lines.push({ key: "run_labor", category: "run_labor", label: "Operator attention labor — LABEL GEOMETRY PENDING (owner measurement)", amount: 0, pending: LABEL_GEOMETRY_PENDING_DISPLAY });
+    } else if (occupancyHours == null) {
       lines.push({
         key: "run_labor",
         category: "run_labor",
@@ -488,10 +544,11 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
     key: "application",
     category: "finishing_application",
     basis: "PER_APPLICATION",
-    label: `Application labor — ${finished} finished unit(s)`,
-    amount: appPerUnit * finished,
-    formula: appFormula,
+    label: app.pending ? `Application labor — ${app.pending}` : `Application labor — ${finished} finished unit(s)`,
+    amount: app.pending ? 0 : appPerUnit * finished,
+    formula: app.pending ? undefined : appFormula,
     note: `${app.note || ""} Charged on customer finished quantity only — never on the overage.`.trim(),
+    ...(app.pending ? { pending: app.pending } : {}),
   });
 
   /* ---- 6b. Additional finishing stages (cutting, weeding, hemming, …) ---- */
@@ -512,7 +569,9 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
   /* ---- 7. Machine / equipment recovery (RIP layout area) ----
    * Equipment recovery only. Operator attention is a SEPARATE run-labor
    * component (5) so the two burdens stay independently adjustable. */
-  if (occupancyMinutes == null || occupancyDetail == null) {
+  if (geometryPending) {
+    lines.push({ key: "machine", category: "machine_recovery", label: "Machine recovery — LABEL GEOMETRY PENDING (owner measurement)", amount: 0, pending: LABEL_GEOMETRY_PENDING_DISPLAY });
+  } else if (occupancyMinutes == null || occupancyDetail == null) {
     lines.push({
       key: "machine",
       category: "machine_recovery",
@@ -547,6 +606,18 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
 
   /* ---- 9. Packout (FINISHED qty) ---- */
   const pk = input.packout;
+  if ("pending" in pk) {
+    // No box quantity exists: no box count, no rate, no "0 box(es)".
+    lines.push({
+      key: "packout",
+      category: "packout",
+      label: pk.blocking ? OUTBOUND_PACKOUT_PENDING_DISPLAY : PACKOUT_NOT_MODELLED_DISPLAY,
+      amount: 0,
+      pending: pk.blocking ? OUTBOUND_PACKOUT_PENDING_DISPLAY : PACKOUT_NOT_MODELLED_DISPLAY,
+      note: pk.pending,
+      blocker: pk.blocking ? `${OUTBOUND_PACKOUT_PENDING_CODE}: ${pk.pending}` : undefined,
+    });
+  } else {
   const packBoxes = "boxes" in pk ? pk.boxes : Math.ceil(finished / Math.max(1, pk.unitsPerBox));
   const packPerBox = "cost" in pk ? pk.cost / Math.max(1, packBoxes) : pk.laborPerBox + pk.consumablesPerBox;
   const packCost = "cost" in pk ? pk.cost : packBoxes * packPerBox;
@@ -559,6 +630,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
     formula: `ceil(${finished} / ${pk.unitsPerBox}) x $${packPerBox.toFixed(2)}/box`,
     note: "cost" in pk ? undefined : `$${pk.laborPerBox.toFixed(2)} labor + $${pk.consumablesPerBox.toFixed(2)} consumables per box.`,
   });
+  }
 
   /* ---- 10. Inbound freight (PRODUCTION qty) ---- */
   if (input.freight.perUnit == null) {
@@ -567,6 +639,7 @@ export function computeTrueJobCost(input: TrueCostInput): TrueCostResult {
       category: "inbound_freight",
       label: "Inbound freight",
       amount: 0,
+      pending: INBOUND_FREIGHT_PENDING_DISPLAY,
       blocker: `${input.freight.basis}: ${input.freight.source}`,
     });
   } else {

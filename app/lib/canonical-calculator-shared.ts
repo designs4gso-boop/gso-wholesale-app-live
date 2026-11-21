@@ -103,6 +103,12 @@ export const CANONICAL_REASONS = {
   customSizeConflict: "CUSTOM_SIZE_CONFLICT",
   /** 2026-10-05: no authoritative standard dimensions exist for the selected fixed product. */
   standardDimensionsNotConfirmed: "STANDARD_PRODUCTION_DIMENSIONS_NOT_CONFIRMED",
+  /** 2026-11-20: the product has NO approved label geometry yet (owner measurement pending). */
+  labelGeometryPending: "LABEL_GEOMETRY_PENDING",
+  /** 2026-11-20: the jar has never been timed — no application seconds exist for it at all. */
+  applicationTimingPending: "APPLICATION_TIMING_PENDING",
+  /** 2026-11-20: no outbound box quantity exists for the product. */
+  outboundPackoutPending: "OUTBOUND_PACKOUT_PENDING",
 } as const;
 
 /* ------------------------------------------------------------------ *
@@ -178,13 +184,18 @@ export type CanonicalCostOnlyJar = {
   supplierQuantity: number;
   supplierTotal: number;
   lowerSupplierTiers: string;
-  inboundFreight: { perUnit: number | null; status: "PENDING"; label: string; note: string };
+  inboundFreight: { perUnit: number | null; status: "PENDING" | "PROVIDED"; label: string; note: string };
   landedUnitCost: number | null;
-  landedUnitCostStatus: "PENDING";
-  labelGeometry: { status: "PENDING"; label: string; note: string };
-  applicationTiming: { status: "PENDING"; label: string; note: string };
-  outboundPackout: { status: "PENDING"; label: string; note: string };
+  landedUnitCostStatus: "PENDING" | "PROVIDED";
+  labelGeometry: { status: "PENDING" | "PROVIDED"; label: string; note: string };
+  applicationTiming: { status: "PENDING" | "PROVIDED"; label: string; note: string };
+  outboundPackout: { status: "PENDING" | "PROVIDED"; label: string; note: string };
   notForSale: true;
+  /** A valid product with incomplete costing inputs — an informational state, not an error. */
+  status: "COST_DATA_PARTIAL" | "COST_DATA_COMPLETE";
+  statusLabel: string;
+  known: Array<{ label: string; value: string }>;
+  pending: Array<{ label: string; value: string }>;
   finishedQuantity: number | null;
   plannedBlankQuantity: number | null;
   overagePct: number;
@@ -353,6 +364,23 @@ export type CanonicalCalculatorView = {
   reasons: string[];
   blockers: string[];
 };
+
+/**
+ * 2026-11-20 — the COMPONENT BREAKDOWN rows. A category whose input was never
+ * provided (a line carrying `pending`) displays that text, never "$0.0000":
+ * a zero there would read as a real value. When a category has BOTH a known
+ * amount and a pending part (materials: the blank is known, the label media
+ * is not), the known amount is shown and the pending part is named beside it.
+ * Categories with no pending line are returned exactly as before.
+ */
+export type CanonicalComponentRow = { key: CostCategory; label: string; amount: number | null; pending: string | null };
+
+export function canonicalComponentRows(view: { totals: Partial<Record<CostCategory, number>>; lines: Array<{ category: CostCategory; amount: number; pending?: string }> }): CanonicalComponentRow[] {
+  return CANONICAL_COMPONENT_ORDER.map(({ key, label }) => {
+    const pendingTexts = Array.from(new Set(view.lines.filter((line) => line.category === key && line.pending).map((line) => String(line.pending))));
+    return { key, label, amount: view.totals[key] ?? null, pending: pendingTexts.length ? pendingTexts.join("; ") : null };
+  });
+}
 
 /** Component labels, in the order the breakdown displays them. */
 export const CANONICAL_COMPONENT_ORDER: Array<{ key: CostCategory; label: string }> = [

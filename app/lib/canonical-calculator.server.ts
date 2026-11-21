@@ -88,7 +88,8 @@ import {
   estimatedSupplierPacks,
   JAR_FREIGHT_PENDING_LABEL,
   costOnlyJarSummary,
-  jarPackoutPendingNote,
+  JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL as APPLICATION_TIMING_PENDING_DISPLAY,
+  jarPackoutPendingNote as jarPackoutPendingNoteFor,
   jarNestingAreas,
   jarPhysicalRuns,
   jarSetupCost,
@@ -662,6 +663,10 @@ export function assembleCanonicalJob(
   let unitsPerBox = CANONICAL_PACKOUT[input.family].unitsPerBox;
   /** Jars bring their own verified packout and freight. */
   let jarPackout: { boxes: number; unitsPerBox: number; cost: number } | null = null;
+  /** 2026-11-20: set when the jar has NO outbound box quantity — the packout line is PENDING, never "0 box(es)". */
+  let jarPackoutPendingNote: string | null = null;
+  /** 2026-11-20: set when the product has NO approved label geometry — label-area maths is not attempted. */
+  let labelGeometryPendingNote: string | null = null;
   let jarFreightInput: TrueCostInput["freight"] | null = null;
   /** 2026-11-12: the Split Bag lot's own inbound-freight allocation ($0.024 / bag). */
   let bagFreightInput: TrueCostInput["freight"] | null = null;
@@ -942,12 +947,8 @@ export function assembleCanonicalJob(
       // fail closed, and a crashed loader is not a refusal.
       const geometryKnown = Object.prototype.hasOwnProperty.call(JAR_LABEL_GEOMETRY, cfg.size);
       if (costOnly) {
-        if (costOnly.uiFamily !== input.family) {
-          reasons.push(CANONICAL_REASONS.familyUnsupported);
-          blockers.push(
-            `${CANONICAL_REASONS.familyUnsupported}: ${costOnly.label} is costed under "${costOnly.uiFamily}", not "${input.family}".`,
-          );
-        }
+        // No family check: a cost-only jar belongs to NO jar family. Whichever
+        // Jar picker it was chosen from is navigation only and changes nothing.
       } else if (!active) {
         reasons.push(CANONICAL_REASONS.familyUnsupported);
         blockers.push(
@@ -1018,32 +1019,31 @@ export function assembleCanonicalJob(
         ? { ok: true, unitCost: blankResolution.unitCost, label: `${costOnlyJar.label} — supplier unit cost, before inbound freight`, source: blankResolution.source }
         : { ok: false, reason: blankResolution.reason, message: blankResolution.message };
 
-      // ---- label geometry: none provided, so nothing printed can be measured ----
+      // ---- label geometry: none provided, so NOTHING label-area-driven is attempted ----
+      // No media resolution, no nesting, no ink, no machine time: the engine
+      // posts ONE blocker (LABEL_GEOMETRY_PENDING) and shows those lines as
+      // pending instead of each failing with its own area / nesting error.
       const geometryNote = jarGeometryPendingNote(costOnlyJar.size) ?? `${costOnlyJar.label}: no label geometry exists.`;
-      reasons.push(CANONICAL_REASONS.standardDimensionsNotConfirmed);
-      blockers.push(`${CANONICAL_REASONS.standardDimensionsNotConfirmed}: ${geometryNote}`);
+      labelGeometryPendingNote = geometryNote;
+      reasons.push(CANONICAL_REASONS.labelGeometryPending);
       areas = { ...areas, ripLayoutBasis: geometryNote };
-      const { media: jarMedia, blocker: jarMediaBlocker } = resolveSelectedLabelMedia(cfg, "jar");
-      if (jarMediaBlocker) blockers.push(jarMediaBlocker);
-      materialName = jarMedia ? `${jarMedia.label} (jar label media)` : "Jar label media — not selected / not calculator-ready";
-      materialCostPerSqft = jarMedia ? jarMedia.costPerSqft : null;
-      materialSource = jarMedia ? `No label area can be measured — ${geometryNote}` : "No calculator-ready jar label media selected.";
+      materialName = "Jar label media";
+      materialSource = geometryNote;
 
       // ---- application: no timing exists for this jar (owner freeze 2026-11-19) ----
       const jarApplication = resolveJarApplication(costOnlyJar.size, selection);
       if (jarApplication.ok) {
         applicationCost = { costPerFinishedUnit: jarApplication.costPerFinishedUnit, note: jarApplication.detail };
       } else {
-        applicationCost = { costPerFinishedUnit: 0, note: jarApplication.message };
-        reasons.push(CANONICAL_REASONS.applicationStandardRequired);
-        blockers.push(`${CANONICAL_REASONS.applicationStandardRequired}: ${jarApplication.message}`);
+        const code = jarApplication.timingNeverRecorded ? CANONICAL_REASONS.applicationTimingPending : CANONICAL_REASONS.applicationStandardRequired;
+        applicationCost = { costPerFinishedUnit: 0, note: jarApplication.message, ...(jarApplication.timingNeverRecorded ? { pending: APPLICATION_TIMING_PENDING_DISPLAY } : {}) };
+        reasons.push(code);
+        blockers.push(`${code}: ${jarApplication.message}`);
       }
 
-      // ---- packout: no outbound box quantity was provided ----
-      const packoutNote = jarPackoutPendingNote(costOnlyJar.size) ?? `${costOnlyJar.label}: no outbound box quantity exists.`;
-      jarPackout = { boxes: 0, unitsPerBox: 0, cost: 0 };
-      reasons.push(CANONICAL_REASONS.packoutNotModeled);
-      blockers.push(`${CANONICAL_REASONS.packoutNotModeled}: ${packoutNote}`);
+      // ---- packout: no outbound box quantity was provided — the engine posts the pending line + blocker ----
+      jarPackoutPendingNote = jarPackoutPendingNoteFor(costOnlyJar.size) ?? `${costOnlyJar.label}: no outbound box quantity exists.`;
+      reasons.push(CANONICAL_REASONS.outboundPackoutPending);
 
       // ---- inbound freight: not provided, so perUnit is null and the freight line blocks ----
       const jarFreight = jarFreightPerUnit(cfg.brand, costOnlyJar.size);
@@ -1129,7 +1129,7 @@ export function assembleCanonicalJob(
         brand: cfg.brand, size: cfg.size, quantity: production, variant: cfg.variant,
       });
       blank = blankResolution.ok
-        ? { ok: true, unitCost: blankResolution.unitCost, label: `${active?.label ?? cfg.brand + " " + cfg.size} complete set`, source: blankResolution.source }
+        ? { ok: true, unitCost: blankResolution.unitCost, label: active || !costOnlyJarProfile(cfg.brand, cfg.size) ? `${active?.label ?? cfg.brand + " " + cfg.size} complete set` : `${costOnlyJarProfile(cfg.brand, cfg.size)!.label} — supplier unit cost, before inbound freight`, source: blankResolution.source }
         : { ok: false, reason: blankResolution.reason, message: blankResolution.message };
       // 2026-11-17: a component-priced set (MIRON Ceres jar + Yuha lid) keeps
       // its jar and lid visible. Display only — the blank line above is the cost.
@@ -1201,9 +1201,12 @@ export function assembleCanonicalJob(
           note: jarApplication.detail,
         };
       } else {
-        applicationCost = { costPerFinishedUnit: 0, note: jarApplication.message };
-        reasons.push(CANONICAL_REASONS.applicationStandardRequired);
-        blockers.push(`${CANONICAL_REASONS.applicationStandardRequired}: ${jarApplication.message}`);
+        // 2026-11-20: a jar that has NEVER been timed reports APPLICATION_TIMING_PENDING; every existing
+        // size keeps MISSING_APPLICATION_STANDARD (timingNeverRecorded is only set for a size with no table entry).
+        const applicationCode = jarApplication.timingNeverRecorded ? CANONICAL_REASONS.applicationTimingPending : CANONICAL_REASONS.applicationStandardRequired;
+        applicationCost = { costPerFinishedUnit: 0, note: jarApplication.message, ...(jarApplication.timingNeverRecorded ? { pending: APPLICATION_TIMING_PENDING_DISPLAY } : {}) };
+        reasons.push(applicationCode);
+        blockers.push(`${applicationCode}: ${jarApplication.message}`);
       }
       const labelsPerJar = (selection.side ? 1 : 0) + (selection.lid ? 1 : 0) + (selection.tamper ? 1 : 0);
       diagnostics.applicationEvents = finished * labelsPerJar;
@@ -1238,7 +1241,22 @@ export function assembleCanonicalJob(
       diagnostics.printSetupEvents = 1;
 
       // ---- packout + freight come from the jar adapter's verified tables ----
-      jarPackout = packoutFor(cfg.size, finished);
+      // 2026-11-20: a size with no JAR_UNITS_PER_BOX entry has PENDING packout (never a NaN / 0 box count).
+      // Every existing size has an entry, so this is packoutFor exactly as before for all of them.
+      const measuredPackoutPending = jarPackoutPendingNoteFor(cfg.size);
+      if (measuredPackoutPending) {
+        jarPackoutPendingNote = measuredPackoutPending;
+        reasons.push(CANONICAL_REASONS.outboundPackoutPending);
+      } else {
+        jarPackout = packoutFor(cfg.size, finished);
+      }
+      // A cost-only jar whose label geometry has since been entered: the normal label
+      // calculations above ran; its supplier-cost summary still rides along.
+      const measuredCostOnly = costOnlyJarProfile(cfg.brand, cfg.size);
+      if (measuredCostOnly) {
+        const measuredSummary = costOnlyJarSummary(measuredCostOnly, finished);
+        if (measuredSummary) diagnostics.costOnlyJar = measuredSummary;
+      }
       /* The 1% planned overage is OWNER-VERIFIED as of 2D-4D3
        * (OWNER_STANDARDS.jarPlannedOveragePct), so it carries no disclosure —
        * 2D-4D2's warning existed only because the figure had no owner record,
@@ -1260,27 +1278,33 @@ export function assembleCanonicalJob(
   diagnostics.inkableArtworkSqft = areas.inkableArtworkSqft;
 
   /* ---------------- material / packout / freight ---------------- */
-  if (materialCostPerSqft == null || !(materialCostPerSqft > 0)) {
+  if (!labelGeometryPendingNote && (materialCostPerSqft == null || !(materialCostPerSqft > 0))) {
     reasons.push(CANONICAL_REASONS.materialCostRequired);
   }
 
   // Jars supply their own verified per-size box counts and consumables rate, so
   // the shared table's "null" for them means "the adapter owns this", not "no
   // packout standard exists".
-  if (unitsPerBox == null && !jarPackout) {
+  if (unitsPerBox == null && !jarPackout && !jarPackoutPendingNote) {
     reasons.push(CANONICAL_REASONS.packoutNotModeled);
   }
-  const packout: TrueCostInput["packout"] = jarPackout
-    ? jarPackout
-    : unitsPerBox == null
-      ? { boxes: 0, unitsPerBox: 1, cost: 0 }
-      : { unitsPerBox, laborPerBox: OWNER_STANDARDS.packoutPerBox.value, consumablesPerBox: 0 };
+  const packout: TrueCostInput["packout"] = jarPackoutPendingNote
+    // A jar with no box quantity cannot be costed: PENDING and blocking.
+    ? { pending: jarPackoutPendingNote, blocking: true }
+    : jarPackout
+      ? jarPackout
+      : unitsPerBox == null
+        // 2026-11-20: a family with no owner box standard (PACKOUT_NOT_MODELED). Still $0 and
+        // still non-blocking exactly as before — only the line no longer reads "0 box(es) @ 1/box".
+        ? { pending: CANONICAL_PACKOUT[input.family].source, blocking: false }
+        : { unitsPerBox, laborPerBox: OWNER_STANDARDS.packoutPerBox.value, consumablesPerBox: 0 };
 
   if (!jarFreightInput && !bagFreightInput) reasons.push(CANONICAL_REASONS.freightNotModeled);
 
   /* ---------------- calibration / ink ---------------- */
-  if (!machine.calibration) reasons.push(CANONICAL_REASONS.calibrationRequired);
-  if (machine.inkCostPerMl == null) reasons.push(CANONICAL_REASONS.inkPriceRequired);
+  // With no label geometry there is no ink or press calculation to be missing an input for.
+  if (!labelGeometryPendingNote && !machine.calibration) reasons.push(CANONICAL_REASONS.calibrationRequired);
+  if (!labelGeometryPendingNote && machine.inkCostPerMl == null) reasons.push(CANONICAL_REASONS.inkPriceRequired);
 
   /* ---- ink channels — CMYK, WHITE and GLOSS priced SEPARATELY ----
    * The engine prices the BASE colour channel itself (one calibration, one
@@ -1321,6 +1345,12 @@ export function assembleCanonicalJob(
       equipmentRecovery: null,
       operatorAttention: null,
     };
+
+    if (labelGeometryPendingNote) {
+      // No label geometry: no channel is computed and none reports an area / calibration failure.
+      inkChannels.push(entry);
+      continue;
+    }
 
     if (!channel.calibration) {
       entry.blocker = channel.calibrationKey === "mimaki-white"
@@ -1415,6 +1445,7 @@ export function assembleCanonicalJob(
     // The BASE colour channel only. Specialty channels are priced above.
     coveragePct: resolvedChannels.find((channel) => channel.isBase)?.coveragePct ?? input.cmykCoveragePct ?? null,
     passCount: 1,
+    labelGeometryPending: labelGeometryPendingNote,
     application: applicationCost,
     setup,
     runLabor: { mode: "operator_attention" },

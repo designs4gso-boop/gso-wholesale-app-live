@@ -111,9 +111,13 @@ export function activeJarProfilesForFamily(uiFamily: string | null | undefined):
  * "eris" is its own brand so it can never fall into a Miron tier ladder, a
  * Miron pallet, a Chiron flat-set rule or the standard invoice freight.
  *
- * The calculator family ("premium-jars") only decides which Jar picker lists
- * them. No supplier item number was provided, so none is stored; `key` is the
- * stable internal identifier.
+ * NO FAMILY. Eris has no owner-approved classification ("Premium Jars" was
+ * never one), so a cost-only profile carries no uiFamily. It is listed in
+ * every Jar picker of the Cost Calculator under its own brand group
+ * (COST_ONLY_JAR_PICKER_GROUP) — display / navigation only. Nothing about a
+ * family (margin curve, market target, minimum, policy) attaches to it, and no
+ * price is ever produced for it. No supplier item number was provided, so none
+ * is stored; `key` is the stable internal identifier.
  * ------------------------------------------------------------------ */
 
 export type CostOnlyJarBrand = "eris";
@@ -125,16 +129,20 @@ export type CostOnlyJarProfile = {
   key: string;
   /** The canonical product name. */
   label: string;
-  /** Which calculator Jar picker lists it. */
-  uiFamily: "premium-jars";
   /** Never a storefront / Shopify / quotable product. */
   notForSale: true;
 };
 
 export const COST_ONLY_JAR_PROFILES: CostOnlyJarProfile[] = [
-  { brand: "eris", size: "eris_60ml", key: "eris/eris_60ml", label: "Eris 60ml Jar", uiFamily: "premium-jars", notForSale: true },
-  { brand: "eris", size: "eris_120ml", key: "eris/eris_120ml", label: "Eris 120ml Jar", uiFamily: "premium-jars", notForSale: true },
+  { brand: "eris", size: "eris_60ml", key: "eris/eris_60ml", label: "Eris 60ml Jar", notForSale: true },
+  { brand: "eris", size: "eris_120ml", key: "eris/eris_120ml", label: "Eris 120ml Jar", notForSale: true },
 ];
+
+/** The brand group the Cost Calculator Jar pickers list the cost-only jars under. Display only. */
+export const COST_ONLY_JAR_PICKER_GROUP = "ERIS";
+export const COST_ONLY_JAR_PICKER_GROUP_LABEL = "ERIS — cost data pending";
+/** The calculator Jar pickers. A cost-only jar is listed in each; it belongs to none. */
+export const COST_ONLY_JAR_PICKER_FAMILIES = ["standard-jars", "premium-jars"] as const;
 
 export const COST_ONLY_JAR_KEYS = COST_ONLY_JAR_PROFILES.map((p) => p.key);
 

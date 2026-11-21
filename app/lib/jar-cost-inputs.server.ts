@@ -93,7 +93,7 @@ import {
   type JarLabelSelection,
   type JarSizeKey,
 } from "./jar-label-geometry";
-import { COST_ONLY_JAR_PROFILES, type CostOnlyJarProfile } from "./jar-active-scope";
+import { COST_ONLY_JAR_PICKER_FAMILIES, COST_ONLY_JAR_PICKER_GROUP, COST_ONLY_JAR_PROFILES, type CostOnlyJarProfile } from "./jar-active-scope";
 export { JAR_LABEL_GEOMETRY, type JarGeometryOverride, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey };
 
 /**
@@ -214,7 +214,7 @@ export const JAR_APPLICATION_SOURCE =
 
 export type JarApplicationResolution =
   | { ok: true; secondsPerJar: number; costPerFinishedUnit: number; detail: string }
-  | { ok: false; reason: "MISSING_APPLICATION_STANDARD"; message: string };
+  | { ok: false; reason: "MISSING_APPLICATION_STANDARD"; message: string; /** 2026-11-20: the jar has NO timing at all (never timed in the shop). */ timingNeverRecorded?: true };
 
 /**
  * Application labor for ONE finished jar.
@@ -228,10 +228,12 @@ export function resolveJarApplication(sizeInput: JarSizeKey | ErisJarSizeKey, se
   const size = sizeInput as JarSizeKey;
   const owner = Object.prototype.hasOwnProperty.call(JAR_APPLICATION_SECONDS_BY_SIZE, size) ? JAR_APPLICATION_SECONDS_BY_SIZE[size] : undefined;
   if (!owner) {
+    const pendingNote = jarApplicationTimingPendingNote(sizeInput);
     return {
       ok: false,
       reason: "MISSING_APPLICATION_STANDARD",
-      message: jarApplicationTimingPendingNote(sizeInput) ?? `No owner application timing exists for a ${size} jar.`,
+      message: pendingNote ?? `No owner application timing exists for a ${size} jar.`,
+      ...(pendingNote ? { timingNeverRecorded: true } : {}),
     };
   }
 
@@ -745,6 +747,8 @@ export const JAR_APPLICATION_TIMING_NOT_RECORDED: Record<ErisJarSizeKey, string>
 
 export function jarApplicationTimingPendingNote(size: string | null | undefined): string | null {
   const key = String(size ?? "");
+  // A recorded timing always wins: pending only while the frozen table has no entry.
+  if (Object.prototype.hasOwnProperty.call(JAR_APPLICATION_SECONDS_BY_SIZE, key)) return null;
   return Object.prototype.hasOwnProperty.call(JAR_APPLICATION_TIMING_NOT_RECORDED, key) ? JAR_APPLICATION_TIMING_NOT_RECORDED[key as ErisJarSizeKey] : null;
 }
 
@@ -759,6 +763,8 @@ export const JAR_PACKOUT_PENDING: Record<ErisJarSizeKey, string> = {
 
 export function jarPackoutPendingNote(size: string | null | undefined): string | null {
   const key = String(size ?? "");
+  // A recorded box quantity always wins: pending only while JAR_UNITS_PER_BOX has no entry.
+  if (Object.prototype.hasOwnProperty.call(JAR_UNITS_PER_BOX, key)) return null;
   return Object.prototype.hasOwnProperty.call(JAR_PACKOUT_PENDING, key) ? JAR_PACKOUT_PENDING[key as ErisJarSizeKey] : null;
 }
 
@@ -768,6 +774,10 @@ export function jarPackoutPendingNote(size: string | null | undefined): string |
  * is missing; `plannedBlankQuantity` / `baseBlankCost` are filled in only when
  * a finished quantity is supplied and are a PARTIAL figure, never a total.
  */
+export type CostOnlyInputStatus = "PENDING" | "PROVIDED";
+/** The state shown for a valid product whose costing inputs are incomplete. */
+export const COST_DATA_PARTIAL_LABEL = "COST DATA PARTIAL";
+
 export type CostOnlyJarSummary = {
   productKey: string;
   productName: string;
@@ -776,13 +786,24 @@ export type CostOnlyJarSummary = {
   supplierQuantity: number;
   supplierTotal: number;
   lowerSupplierTiers: typeof ERIS_LOWER_SUPPLIER_TIERS;
-  inboundFreight: { perUnit: number | null; status: "PENDING"; label: string; note: string };
+  inboundFreight: { perUnit: number | null; status: CostOnlyInputStatus; label: string; note: string };
   landedUnitCost: number | null;
-  landedUnitCostStatus: "PENDING";
-  labelGeometry: { status: "PENDING"; label: string; note: string };
-  applicationTiming: { status: "PENDING"; label: string; note: string };
-  outboundPackout: { status: "PENDING"; label: string; note: string };
+  landedUnitCostStatus: CostOnlyInputStatus;
+  labelGeometry: { status: CostOnlyInputStatus; label: string; note: string };
+  applicationTiming: { status: CostOnlyInputStatus; label: string; note: string };
+  outboundPackout: { status: CostOnlyInputStatus; label: string; note: string };
   notForSale: true;
+  /**
+   * 2026-11-20: a VALID product with INCOMPLETE costing inputs — not an error.
+   * COST_DATA_PARTIAL while anything is pending. Display state only: the engine
+   * status stays DRAFT_ONLY so nothing downstream treats the job as costed.
+   */
+  status: "COST_DATA_PARTIAL" | "COST_DATA_COMPLETE";
+  statusLabel: string;
+  /** What IS known, in display order. */
+  known: Array<{ label: string; value: string }>;
+  /** What is NOT provided yet, in display order. Never a zero. */
+  pending: Array<{ label: string; value: string }>;
   finishedQuantity: number | null;
   /** Finished quantity + the existing 1% planned jar overage (productionQtyFor). */
   plannedBlankQuantity: number | null;
@@ -797,7 +818,36 @@ export function costOnlyJarSummary(profile: CostOnlyJarProfile, finishedQuantity
   const freight = jarFreightPerUnit(profile.brand, profile.size);
   const finished = finishedQuantity != null && finishedQuantity > 0 ? Math.floor(finishedQuantity) : null;
   const planned = finished != null ? productionQtyFor(finished) : null;
+  // Each input is pending exactly while its table has no entry — never by brand name.
+  const freightStatus: CostOnlyInputStatus = freight.perUnit == null ? "PENDING" : "PROVIDED";
+  const geometryNote = jarGeometryPendingNote(profile.size);
+  const geometryStatus: CostOnlyInputStatus = Object.prototype.hasOwnProperty.call(JAR_LABEL_GEOMETRY, profile.size) ? "PROVIDED" : "PENDING";
+  const timingStatus: CostOnlyInputStatus = Object.prototype.hasOwnProperty.call(JAR_APPLICATION_SECONDS_BY_SIZE, profile.size) ? "PROVIDED" : "PENDING";
+  const packoutStatus: CostOnlyInputStatus = Object.prototype.hasOwnProperty.call(JAR_UNITS_PER_BOX, profile.size) ? "PROVIDED" : "PENDING";
+  const dollars = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const count = (n: number) => n.toLocaleString("en-US");
+  const baseBlankCost = planned != null ? centsRound(planned * basis.supplierUnitCost) : null;
+  const known: CostOnlyJarSummary["known"] = [
+    { label: "Supplier cost", value: `${dollars(basis.supplierUnitCost)} ea (before inbound freight — not a landed cost)` },
+    { label: "Supplier tier", value: `${count(basis.supplierQuantity)} (${count(basis.supplierQuantity)} × ${dollars(basis.supplierUnitCost)} = ${dollars(basis.supplierTotal)}) — lower supplier tiers ${basis.lowerSupplierTiers}` },
+  ];
+  if (finished != null && planned != null && baseBlankCost != null) {
+    known.push({ label: "Planned blank quantity", value: `${count(planned)} for ${count(finished)} finished jars (${JAR_PLANNED_OVERAGE_PCT}% planned overage)` });
+    known.push({ label: "Base blank cost", value: `${dollars(baseBlankCost)} (${count(planned)} × ${dollars(basis.supplierUnitCost)}, before inbound freight — not a job total)` });
+  }
+  const pending: CostOnlyJarSummary["pending"] = [];
+  if (freightStatus === "PENDING") {
+    pending.push({ label: "Inbound freight", value: "PENDING" });
+    pending.push({ label: "Landed unit cost", value: "PENDING" });
+  }
+  if (geometryStatus === "PENDING") pending.push({ label: "Label geometry", value: "PENDING" });
+  if (timingStatus === "PENDING") pending.push({ label: "Application timing", value: JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL });
+  if (packoutStatus === "PENDING") pending.push({ label: "Outbound packout", value: "PENDING" });
   return {
+    status: pending.length ? "COST_DATA_PARTIAL" : "COST_DATA_COMPLETE",
+    statusLabel: pending.length ? COST_DATA_PARTIAL_LABEL : "COST DATA COMPLETE",
+    known,
+    pending,
     productKey: profile.key,
     productName: profile.label,
     costLabel: basis.label,
@@ -805,18 +855,18 @@ export function costOnlyJarSummary(profile: CostOnlyJarProfile, finishedQuantity
     supplierQuantity: basis.supplierQuantity,
     supplierTotal: basis.supplierTotal,
     lowerSupplierTiers: basis.lowerSupplierTiers,
-    inboundFreight: { perUnit: freight.perUnit, status: "PENDING", label: ERIS_FREIGHT_PENDING_LABEL, note: freight.source },
+    inboundFreight: { perUnit: freight.perUnit, status: freightStatus, label: ERIS_FREIGHT_PENDING_LABEL, note: freight.source },
     // Never the supplier unit cost: with no freight there is no landed cost.
     landedUnitCost: freight.perUnit == null ? null : centsRound(basis.supplierUnitCost + freight.perUnit),
-    landedUnitCostStatus: "PENDING",
-    labelGeometry: { status: "PENDING", label: JAR_GEOMETRY_PENDING_LABEL, note: jarGeometryPendingNote(profile.size) ?? JAR_GEOMETRY_PENDING_LABEL },
-    applicationTiming: { status: "PENDING", label: JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL, note: jarApplicationTimingPendingNote(profile.size) ?? JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL },
-    outboundPackout: { status: "PENDING", label: JAR_PACKOUT_PENDING_LABEL, note: jarPackoutPendingNote(profile.size) ?? JAR_PACKOUT_PENDING_LABEL },
+    landedUnitCostStatus: freightStatus,
+    labelGeometry: { status: geometryStatus, label: JAR_GEOMETRY_PENDING_LABEL, note: geometryNote ?? (geometryStatus === "PENDING" ? JAR_GEOMETRY_PENDING_LABEL : "Label geometry provided.") },
+    applicationTiming: { status: timingStatus, label: JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL, note: jarApplicationTimingPendingNote(profile.size) ?? JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL },
+    outboundPackout: { status: packoutStatus, label: JAR_PACKOUT_PENDING_LABEL, note: jarPackoutPendingNote(profile.size) ?? JAR_PACKOUT_PENDING_LABEL },
     notForSale: true,
     finishedQuantity: finished,
     plannedBlankQuantity: planned,
     overagePct: JAR_PLANNED_OVERAGE_PCT,
-    baseBlankCost: planned != null ? centsRound(planned * basis.supplierUnitCost) : null,
+    baseBlankCost,
   };
 }
 
@@ -829,13 +879,16 @@ export const COST_ONLY_JAR_OPTION_PREFIX = "costonly:jar:";
  * is needed, so nothing is written to the database and the legacy engine never
  * sees an Eris price.
  */
-export function costOnlyJarCalculatorOptions(uiFamily: string | null | undefined): Array<{ value: string; group: "ERIS"; label: string; jarProfile: string; jarVariant: null; costOnly: CostOnlyJarSummary }> {
-  return COST_ONLY_JAR_PROFILES.filter((p) => p.uiFamily === uiFamily).flatMap((p) => {
+export function costOnlyJarCalculatorOptions(uiFamily: string | null | undefined): Array<{ value: string; group: string; label: string; jarProfile: string; jarVariant: null; costOnly: CostOnlyJarSummary }> {
+  // Listed in EVERY Jar picker under the brand group; the family is navigation
+  // only and classifies nothing (no margin curve, market target or minimum).
+  if (!(COST_ONLY_JAR_PICKER_FAMILIES as readonly string[]).includes(String(uiFamily || ""))) return [];
+  return COST_ONLY_JAR_PROFILES.flatMap((p) => {
     const summary = costOnlyJarSummary(p);
     if (!summary) return [];
     return [{
       value: `${COST_ONLY_JAR_OPTION_PREFIX}${p.key}`,
-      group: "ERIS" as const,
+      group: COST_ONLY_JAR_PICKER_GROUP,
       label: `${p.label} — $${summary.supplierUnitCost.toFixed(2)} supplier unit cost at the ${summary.supplierQuantity.toLocaleString("en-US")} supplier tier (owner-provided, before inbound freight) — FREIGHT PENDING · landed cost PENDING`,
       jarProfile: p.key,
       jarVariant: null,

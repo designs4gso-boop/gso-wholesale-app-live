@@ -143,7 +143,9 @@ describe("1-2. both Eris jars exist in the Cost Calculator", () => {
     expect(costOnlyJarProfile("eris", "50ml")).toBeNull();
   });
 
-  it("both appear in the calculator's Jar picker (Premium Jars), selectable, with base cost, the 2,500 tier and PENDING freight / landed cost", () => {
+  // 2026-11-20 (cleanup): "Premium Jars" was a placeholder, not an owner classification. The Eris jars are now listed
+  // under their own ERIS brand group in EVERY Jar picker and belong to no family (see eris-calculator-cleanup-2026-11-20).
+  it("both appear in the calculator's Jar pickers under the ERIS brand group, selectable, with base cost, the 2,500 tier and PENDING freight / landed cost", () => {
     const options = costOnlyJarCalculatorOptions("premium-jars");
     expect(options.map((o) => o.jarProfile)).toEqual(["eris/eris_60ml", "eris/eris_120ml"]);
     expect(options.map((o) => o.value)).toEqual([`${COST_ONLY_JAR_OPTION_PREFIX}eris/eris_60ml`, `${COST_ONLY_JAR_OPTION_PREFIX}eris/eris_120ml`]);
@@ -155,7 +157,7 @@ describe("1-2. both Eris jars exist in the Cost Calculator", () => {
       expect(option.costOnly.inboundFreight.perUnit).toBeNull();
       expect(option.costOnly.notForSale).toBe(true);
     }
-    expect(costOnlyJarCalculatorOptions("standard-jars")).toEqual([]);
+    expect(costOnlyJarCalculatorOptions("standard-jars")).toEqual(options);
     expect(costOnlyJarCalculatorOptions("sticker-bags")).toEqual([]);
   });
 });
@@ -310,13 +312,13 @@ describe("9. landed cost stays PENDING while freight is missing", () => {
   });
 
   it("the exact blockers of an Eris 60ml job (500 jars, side + lid)", () => {
+    // 2026-11-20 (cleanup): exactly four blockers, one per missing input. The generic ink INVALID_AREA and
+    // operator-attention / machine-recovery MISSING_NESTING_MODEL messages are no longer emitted for a jar
+    // with no label geometry — there is ONE geometry blocker instead.
     expect(job("eris/eris_60ml", 500).blockers).toEqual([
-      "STANDARD_PRODUCTION_DIMENSIONS_NOT_CONFIRMED: LABEL GEOMETRY PENDING OWNER MEASUREMENT — Eris 60ml Jar: no label sizes (side label, lid label or band) have been provided by the owner, so label media, ink, print time and cutting cannot be measured. No dimension is assumed or borrowed from another jar.",
-      "MISSING_APPLICATION_STANDARD: PENDING REAL SHOP TIMING VALIDATION — no label application time has been recorded for the Eris 60ml Jar. Application labor cannot be costed until it is timed in the shop; no other jar's seconds are used.",
-      "PACKOUT_NOT_MODELED: OUTBOUND BOX QUANTITY PENDING — the number of Eris 60ml Jars per outbound box has not been provided, so packout (boxes, labor and consumables) cannot be costed. No other jar's box quantity is used.",
-      "Ink: INVALID_AREA: This calibration is measured on \"inkable_artwork\" area; no usable inkable_artwork sqft was supplied.",
-      "Operator attention labor: Cannot derive operator attention without machine occupancy — MISSING_NESTING_MODEL: ripLayoutSqft is required and no nesting model produced one.",
-      "Machine recovery: MISSING_NESTING_MODEL: ripLayoutSqft is required and no nesting model produced one.",
+      "APPLICATION_TIMING_PENDING: PENDING REAL SHOP TIMING VALIDATION — no label application time has been recorded for the Eris 60ml Jar. Application labor cannot be costed until it is timed in the shop; no other jar's seconds are used.",
+      "Label media — LABEL GEOMETRY PENDING (owner measurement): LABEL_GEOMETRY_PENDING: LABEL GEOMETRY PENDING OWNER MEASUREMENT — Eris 60ml Jar: no label sizes (side label, lid label or band) have been provided by the owner, so label media, ink, print time and cutting cannot be measured. No dimension is assumed or borrowed from another jar.",
+      "PACKOUT PENDING — OUTBOUND PACKOUT NOT PROVIDED: OUTBOUND_PACKOUT_PENDING: OUTBOUND BOX QUANTITY PENDING — the number of Eris 60ml Jars per outbound box has not been provided, so packout (boxes, labor and consumables) cannot be costed. No other jar's box quantity is used.",
       "Inbound freight: MISSING_FREIGHT_BASIS: FREIGHT PENDING — ERIS INBOUND FREIGHT NOT PROVIDED BY OWNER — Eris 60ml Jar: the owner has not provided a shipping / inbound freight cost for Eris, and no other jar's freight is used in its place. It is NOT $0 and no allowance is assumed; landed unit cost is PENDING.",
     ]);
   });
@@ -335,10 +337,15 @@ describe("9. landed cost stays PENDING while freight is missing", () => {
     }
   });
 
-  it("selected under the wrong calculator family it is refused, not costed as something else", () => {
-    const result = job("eris/eris_60ml", 500, { pfamily: "standard-jars" });
-    expect(result.status).toBe("DRAFT_ONLY");
-    expect(result.blockers.join("\n")).toContain("Eris 60ml Jar is costed under \"premium-jars\", not \"standard-jars\"");
+  // 2026-11-20 (cleanup): Eris has NO family classification, so the Jar picker it was chosen from changes nothing.
+  it("the Jar picker family it was chosen from changes nothing — and no family ever costs it", () => {
+    const premium = job("eris/eris_60ml", 500);
+    const standard = job("eris/eris_60ml", 500, { pfamily: "standard-jars" });
+    expect(standard.status).toBe("DRAFT_ONLY");
+    expect(standard.unitCost).toBeNull();
+    expect(standard.blockers).toEqual(premium.blockers);
+    expect(standard.trueCost).toEqual(premium.trueCost);
+    expect(standard.blockers.join("\n")).not.toMatch(/premium-jars|standard-jars/);
   });
 });
 
@@ -436,8 +443,10 @@ describe("11. no application timing is fabricated (owner freeze 2026-11-19)", ()
       const result = job(`eris/${size}`, 500, { pjartamper: "1" });
       expect(lineOf(result, "application").amount).toBe(0);
       expect(result.diagnostics.applicationBreakdown ?? null).toBeNull();
-      expect(result.reasons).toContain("MISSING_APPLICATION_STANDARD");
-      expect(result.blockers.some((b) => b.startsWith("MISSING_APPLICATION_STANDARD: PENDING REAL SHOP TIMING VALIDATION"))).toBe(true);
+      // 2026-11-20 (cleanup): a jar that was never timed has its own code, so it is grouped as "Application timing: PENDING ..."
+      expect(result.reasons).toContain("APPLICATION_TIMING_PENDING");
+      expect(result.blockers.some((b) => b.startsWith("APPLICATION_TIMING_PENDING: PENDING REAL SHOP TIMING VALIDATION"))).toBe(true);
+      expect(lineOf(result, "application").pending).toBe("PENDING REAL SHOP TIMING VALIDATION");
     }
   });
 
@@ -480,7 +489,7 @@ describe("label geometry and outbound packout are PENDING, never borrowed", () =
       expect(result.diagnostics.cutPathIn).toBeNull();
       expect(result.diagnostics.productSpec).toBeNull();
       expect(lineOf(result, "print_media").amount).toBe(0);
-      expect(result.reasons).toContain("STANDARD_PRODUCTION_DIMENSIONS_NOT_CONFIRMED");
+      expect(result.reasons).toContain("LABEL_GEOMETRY_PENDING"); // 2026-11-20 (cleanup): its own code
     }
   });
 
@@ -491,8 +500,10 @@ describe("label geometry and outbound packout are PENDING, never borrowed", () =
       expect(JAR_PACKOUT_PENDING[size].replace(/Eris (60|120)ml/g, "")).not.toMatch(/\d/); // no box quantity of any kind
       const result = job(`eris/${size}`, 500);
       expect(lineOf(result, "packout").amount).toBe(0);
-      expect(lineOf(result, "packout").label).toBe("Packout — 0 box(es) @ 0/box");
-      expect(result.reasons).toContain("PACKOUT_NOT_MODELED");
+      // 2026-11-20 (cleanup): never "0 box(es) @ 0/box" — the line itself says packout is pending
+      expect(lineOf(result, "packout").label).toBe("PACKOUT PENDING — OUTBOUND PACKOUT NOT PROVIDED");
+      expect(lineOf(result, "packout").pending).toBe("PACKOUT PENDING — OUTBOUND PACKOUT NOT PROVIDED");
+      expect(result.reasons).toContain("OUTBOUND_PACKOUT_PENDING");
     }
   });
 });
@@ -753,13 +764,12 @@ describe("15. one Eris table — the cost resolver and the Cost Calculator read 
     expect(route).not.toMatch(/\b2\.28\b/);
     expect(route).not.toMatch(/\b3\.22\b/);
     expect(route).not.toMatch(/Eris (60|120)ml/);
-    // the picker lists them, and the result panel shows base cost / tier / PENDING freight / PENDING landed cost
-    expect(route).toContain("<optgroup label=\"ERIS — cost only, not for sale\">");
-    expect(route).toContain("d.costOnlyJar.costLabel");
-    expect(route).toContain("Known supplier tier:");
-    expect(route).toContain("Inbound freight: <b>PENDING</b> (not $0)");
-    expect(route).toContain("Landed unit cost: <b>PENDING</b>");
-    expect(route).toContain("NOT FOR SALE · no price is suggested");
+    // 2026-11-20 (cleanup): the picker lists them under the brand group, and the Known / Pending panel is the shared
+    // CostOnlyJarPanel component fed by the server summary (rendered in eris-calculator-cleanup-2026-11-20).
+    expect(route).toContain("<optgroup label={COST_ONLY_JAR_PICKER_GROUP_LABEL}>");
+    expect(route).toContain("<CostOnlyJarPanel summary={costOnlyJar}");
+    expect(route).toContain("<CostOnlyJarPanel summary={jarCostOnly}");
+    expect(src("app/components/CostOnlyJarPanel.tsx")).not.toMatch(/\b2\.28\b|\b3\.22\b/);
   });
 
   it("the canonical assembler costs Eris through the shared resolver functions, not its own numbers", () => {
