@@ -43,7 +43,7 @@ import { attachPoundBagBlank, type BagBlankAuthority } from "../lib/pound-bag-bl
 import { POUND_BAG_DISPLAY_LADDER, POUND_BAG_MARGIN_RULE, POUND_BAG_PRICE_LADDER_SOURCE, poundBagMarginPctForQuantity, poundBagPolicyValues } from "../lib/pound-bag-pricing";
 import { GSO_CUTLINE_OFFSET_IN, deriveGsoLabelCutlineFromArtboard, formatGsoCutline } from "../lib/gso-cutline";
 import { resolveActiveJarProfile, resolveActiveJarVariant } from "../lib/jar-active-scope";
-import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE } from "../lib/jar-cost-inputs.server";
+import { MIRON_SET_COST, MIRON_SET_COST_PROVENANCE, costOnlyJarCalculatorOptions } from "../lib/jar-cost-inputs.server";
 // 2026-10-05 fixed-product spec layer (client-safe): standard jar dimensions are RESOLVED, never typed.
 import { JAR_LABEL_GEOMETRY, formatJarCutline, formatJarGeometry, type JarSizeKey } from "../lib/jar-label-geometry";
 import { isPoundBag14x16Name } from "../lib/bag-artboard-geometry";
@@ -1678,7 +1678,11 @@ export async function loader({ request }: { request: Request }) {
         // never has to re-guess which jar a DB row is.
         jarProfile: resolveActiveJarProfile(entry.item.name)?.key ?? null,
         jarVariant: resolveActiveJarVariant(entry.item.name),
-      })).concat(canonicalBagOptions.map((option) => ({ value: option.value, group: null, label: option.label, jarProfile: null, jarVariant: null }))),
+      })).concat(canonicalBagOptions.map((option) => ({ value: option.value, group: null, label: option.label, jarProfile: null, jarVariant: null })))
+        // 2026-11-20: the COST-CALCULATOR-ONLY jars (Eris). Code-defined from the one
+        // Eris cost table (jar-cost-inputs.server.ts ERIS_JAR_SUPPLIER_COST) — no Vendor Cost Book
+        // row, no legacy-engine price, not for sale. Freight / landed cost stay PENDING.
+        .concat(costOnlyJarCalculatorOptions(canonicalUiFamily(pFamily)) as any[]),
       lidOptions: classified.filter((entry: any) =>
         entry.klass === "miron_top"
         && (Number(entry.item.unitCost) > 0 || (entry.item.tiers || []).length > 0)
@@ -3729,6 +3733,9 @@ function ProductDrivenForm() {
 
   const chironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "CHIRON");
   const mironOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "MIRON");
+  // 2026-11-20: cost-calculator-only jars (Eris) — supplier cost only, never a sellable product.
+  const erisOptions = (pm?.blankOptions || []).filter((option: any) => option.group === "ERIS");
+  const jarCostOnly = jars ? (jarBlankOption?.costOnly ?? null) : null;
 
   /* ---- 2026-10-19 OWNER UX: family choice + pre-calculation check -------
    * The selector shows Stock Bags as its own family; the form still posts the
@@ -3883,6 +3890,7 @@ function ProductDrivenForm() {
             {isPremium ? (<>
               {chironOptions.length ? <optgroup label="CHIRON">{chironOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
               {mironOptions.length ? <optgroup label="MIRON">{mironOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
+              {erisOptions.length ? <optgroup label="ERIS — cost only, not for sale">{erisOptions.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup> : null}
             </>) : (pm.blankOptions || []).map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
             <option value="none">No Blank Item (Advanced)</option>
             <option value="custom">Custom Item (Advanced — enter below)</option>
@@ -3991,12 +3999,23 @@ function ProductDrivenForm() {
               {jarSpec.sharedSizeKeyNote ? <div style={{ color: "#78350f" }}>{jarSpec.sharedSizeKeyNote}</div> : null}
               <div style={{ color: confirmed ? "#166534" : "#92400e" }}>{jarPieceRows.length} printed label piece(s) per jar · {jarSpec.routing}</div>
             </>) : (<>
+              {jarCostOnly ? (<>
+                <b style={{ color: "#991b1b" }}>{jarCostOnly.productName} — COST ONLY, NOT FOR SALE · landed cost PENDING</b>
+                <div>{jarCostOnly.costLabel}: <b>${jarCostOnly.supplierUnitCost.toFixed(2)}</b> each (before inbound freight — not a landed cost)</div>
+                <div>Known supplier tier: <b>{jarCostOnly.supplierQuantity.toLocaleString("en-US")}</b> ({jarCostOnly.supplierQuantity.toLocaleString("en-US")} × ${jarCostOnly.supplierUnitCost.toFixed(2)} = ${jarCostOnly.supplierTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) · lower supplier tiers: <b>{jarCostOnly.lowerSupplierTiers}</b></div>
+                <div>Inbound freight: <b>PENDING</b> (not $0) · Landed unit cost: <b>PENDING</b></div>
+                <div style={{ color: "#7f1d1d" }}>{jarCostOnly.inboundFreight.note}</div>
+                <div style={{ color: "#7f1d1d" }}>{jarCostOnly.labelGeometry.note}</div>
+                <div style={{ color: "#7f1d1d" }}>{jarCostOnly.applicationTiming.note}</div>
+                <div style={{ color: "#7f1d1d" }}>{jarCostOnly.outboundPackout.note}</div>
+              </>) : (<>
               <b style={{ color: "#991b1b" }}>STANDARD PRODUCTION DIMENSIONS NOT CONFIRMED</b>
               <div style={{ color: "#7f1d1d" }}>
                 {jarBlankOption
                   ? "This product has no costing geometry, so it cannot be quoted. Owner must supply confirmed dimensions (docs/GSO_PRODUCT_SPEC_OWNER_DECISIONS.md)."
                   : "Select an exact jar product above to load its standard label dimensions."}
               </div>
+              </>)}
             </>)}
           </div>
             );
@@ -4637,6 +4656,23 @@ function CanonicalTrueCost() {
               </tr>
             </tbody>
           </table>
+        </div>
+      ) : null}
+      {/* ---- 2026-11-20: cost-calculator-only jar (Eris) — supplier cost basis shown, everything not provided is PENDING ---- */}
+      {d.costOnlyJar ? (
+        <div style={{ border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 10, padding: "8px 10px", fontSize: 12, color: "#78350f" }}>
+          <div><b>{d.costOnlyJar.productName} — INCOMPLETE COST · NOT FOR SALE · no price is suggested</b></div>
+          <div>{d.costOnlyJar.costLabel}: <b>${d.costOnlyJar.supplierUnitCost.toFixed(2)}</b> each (before inbound freight — not a landed cost)</div>
+          <div>Known supplier tier: <b>{d.costOnlyJar.supplierQuantity.toLocaleString("en-US")}</b> ({d.costOnlyJar.supplierQuantity.toLocaleString("en-US")} × ${d.costOnlyJar.supplierUnitCost.toFixed(2)} = ${d.costOnlyJar.supplierTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) · lower supplier tiers: <b>{d.costOnlyJar.lowerSupplierTiers}</b></div>
+          {d.costOnlyJar.plannedBlankQuantity != null && d.costOnlyJar.baseBlankCost != null ? (
+            <div>Blank jars for this job: {(d.costOnlyJar.finishedQuantity ?? 0).toLocaleString("en-US")} finished + {d.costOnlyJar.overagePct}% planned overage = <b>{d.costOnlyJar.plannedBlankQuantity.toLocaleString("en-US")}</b> × ${d.costOnlyJar.supplierUnitCost.toFixed(2)} = <b>${d.costOnlyJar.baseBlankCost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b> base blank cost only (before inbound freight — not a job total)</div>
+          ) : null}
+          <div>Inbound freight: <b>PENDING</b> (not $0)</div>
+          <div>Landed unit cost: <b>PENDING</b></div>
+          <div style={{ color: "#92400e", marginTop: 4 }}>{d.costOnlyJar.inboundFreight.note}</div>
+          <div style={{ color: "#92400e" }}>{d.costOnlyJar.labelGeometry.note}</div>
+          <div style={{ color: "#92400e" }}>{d.costOnlyJar.applicationTiming.note}</div>
+          <div style={{ color: "#92400e" }}>{d.costOnlyJar.outboundPackout.note}</div>
         </div>
       ) : null}
       {/* ---- 2026-11-17: freight is the only missing input — a known subtotal, never called a landed cost ---- */}

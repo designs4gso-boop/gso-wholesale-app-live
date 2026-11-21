@@ -162,7 +162,38 @@ export type CanonicalLandedCost = {
   freightNote: string;
 };
 
+/**
+ * 2026-11-20 — a COST-CALCULATOR-ONLY jar (Eris 60ml / 120ml). Everything the
+ * owner provided (one supplier unit cost at one supplier tier) plus the explicit
+ * PENDING state of everything that was not. `landedUnitCost` is null while
+ * inbound freight is missing; `baseBlankCost` is a PARTIAL figure (planned blank
+ * quantity x supplier unit cost), never a job total. Built server-side by
+ * jar-cost-inputs.server.ts costOnlyJarSummary.
+ */
+export type CanonicalCostOnlyJar = {
+  productKey: string;
+  productName: string;
+  costLabel: string;
+  supplierUnitCost: number;
+  supplierQuantity: number;
+  supplierTotal: number;
+  lowerSupplierTiers: string;
+  inboundFreight: { perUnit: number | null; status: "PENDING"; label: string; note: string };
+  landedUnitCost: number | null;
+  landedUnitCostStatus: "PENDING";
+  labelGeometry: { status: "PENDING"; label: string; note: string };
+  applicationTiming: { status: "PENDING"; label: string; note: string };
+  outboundPackout: { status: "PENDING"; label: string; note: string };
+  notForSale: true;
+  finishedQuantity: number | null;
+  plannedBlankQuantity: number | null;
+  overagePct: number;
+  baseBlankCost: number | null;
+};
+
 export type CanonicalDiagnostics = {
+  /** Present only for a cost-calculator-only jar (Eris): supplier cost basis + what is still pending. */
+  costOnlyJar?: CanonicalCostOnlyJar;
   /** Supplier components of the blank set, when the set is component-priced. */
   blankComponents?: CanonicalBlankComponent[];
   /** Present only when inbound freight is the single thing keeping the job from a landed cost. */

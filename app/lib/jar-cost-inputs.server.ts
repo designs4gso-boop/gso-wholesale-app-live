@@ -84,12 +84,16 @@ export function productionQtyFor(customerFinishedQty: number, overagePct = JAR_P
  * this server module. Re-exported here so every existing import keeps
  * resolving to the same single authority. */
 import {
+  JAR_GEOMETRY_PENDING_LABEL,
   JAR_LABEL_GEOMETRY,
+  jarGeometryPendingNote,
   type JarGeometryOverride,
+  type JarGeometryPendingSizeKey,
   type JarLabelGeometry,
   type JarLabelSelection,
   type JarSizeKey,
 } from "./jar-label-geometry";
+import { COST_ONLY_JAR_PROFILES, type CostOnlyJarProfile } from "./jar-active-scope";
 export { JAR_LABEL_GEOMETRY, type JarGeometryOverride, type JarLabelGeometry, type JarLabelSelection, type JarSizeKey };
 
 /**
@@ -218,13 +222,16 @@ export type JarApplicationResolution =
  * Applies to CUSTOMER FINISHED QTY only — never to the overage quantity — and
  * charges once per label actually applied.
  */
-export function resolveJarApplication(size: JarSizeKey, selection: JarLabelSelection): JarApplicationResolution {
-  const owner = JAR_APPLICATION_SECONDS_BY_SIZE[size];
+export function resolveJarApplication(sizeInput: JarSizeKey | ErisJarSizeKey, selection: JarLabelSelection): JarApplicationResolution {
+  // A size with no entry in the frozen timing table (Eris) has NO timing: it
+  // blocks here and never reaches another size's seconds.
+  const size = sizeInput as JarSizeKey;
+  const owner = Object.prototype.hasOwnProperty.call(JAR_APPLICATION_SECONDS_BY_SIZE, size) ? JAR_APPLICATION_SECONDS_BY_SIZE[size] : undefined;
   if (!owner) {
     return {
       ok: false,
       reason: "MISSING_APPLICATION_STANDARD",
-      message: `No owner application timing exists for a ${size} jar.`,
+      message: jarApplicationTimingPendingNote(sizeInput) ?? `No owner application timing exists for a ${size} jar.`,
     };
   }
 
@@ -400,7 +407,7 @@ export const DERIVED_STANDARD_PALLET_CAPACITY: Partial<Record<JarSizeKey, number
   "4oz": 3600,
 };
 
-export type JarBrand = "miron" | "chiron" | "standard";
+export type JarBrand = "miron" | "chiron" | "standard" | "eris";
 
 /** The words the calculator shows when inbound freight cannot be costed yet. */
 export const JAR_FREIGHT_PENDING_LABEL = "FREIGHT PENDING SUPPLIER PACK DATA";
@@ -423,7 +430,20 @@ export const JAR_FREIGHT_PENDING: Partial<Record<JarSizeKey, string>> = {
  * Freight per unit for a jar family. Applied to PRODUCTION quantity by the
  * engine — never charged twice through a separate overage line.
  */
-export function jarFreightPerUnit(brand: JarBrand, size: JarSizeKey): JarFreight {
+export function jarFreightPerUnit(brand: JarBrand, sizeInput: JarSizeKey | ErisJarSizeKey): JarFreight {
+  if (brand === "eris") {
+    // 2026-11-20: Eris has NO approved inbound freight. This branch returns
+    // before any Miron pallet, invoice-derived or other allowance can be read,
+    // for every size — unknown stays unknown (null), never $0, never borrowed.
+    return {
+      perUnit: null,
+      basis: "MISSING_FREIGHT_BASIS",
+      provisional: true,
+      source: erisJarFreightPendingNote(sizeInput) ?? `${ERIS_FREIGHT_PENDING_LABEL} — no inbound freight exists for Eris ${sizeInput}. It is NOT $0 and no allowance is assumed; landed unit cost is PENDING.`,
+    };
+  }
+  // An Eris size under any other brand has no entry in the tables below, so it resolves MISSING_FREIGHT_BASIS.
+  const size = sizeInput as JarSizeKey;
   if (brand === "miron") {
     const capacity = MIRON_PALLET_CAPACITY[size];
     const pending = JAR_FREIGHT_PENDING[size];
@@ -607,8 +627,222 @@ export const STANDARD_SET_COST: Partial<Record<JarSizeKey, Record<StandardJarVar
 export type BlankCostComponent = { role: "jar" | "lid"; name: string; sku: string; description: string | null; unitCost: number; piecesPerPack: number | null };
 
 export type BlankCostResolution =
-  | { ok: true; unitCost: number; tierMinQty: number | null; source: string; components?: BlankCostComponent[] }
+  | { ok: true; unitCost: number; tierMinQty: number | null; source: string; components?: BlankCostComponent[]; supplierBasis?: JarSupplierCostBasis }
   | { ok: false; reason: "MISSING_COST"; message: string };
+
+/* ------------------------------------------------------------------ *
+ * ERIS 60ml / 120ml — COST CALCULATOR ONLY (owner-provided, 2026-11-20)
+ *
+ * Everything the owner supplied is in ERIS_JAR_SUPPLIER_COST:
+ *   Eris 60ml Jar   supplier quantity 2,500   $2.28 each   (2,500 x $2.28 = $5,700)
+ *   Eris 120ml Jar  supplier quantity 2,500   $3.22 each   (2,500 x $3.22 = $8,050)
+ * Both are BEFORE shipping / inbound freight.
+ *
+ * What is deliberately NOT here, because it was not provided:
+ *   - any other supplier tier (50 / 128 / 250 / 256 / 500 / 1,000 ...). There
+ *     is no ladder array: one known tier, lower tiers NOT PROVIDED.
+ *   - a jar / lid split. The number is ONE supplier unit cost; nothing here
+ *     says a lid is included or excluded, and no lid cost is added.
+ *   - inbound freight (ERIS_JAR_FREIGHT_PENDING) — so there is no landed cost.
+ *   - label geometry (jar-label-geometry.ts JAR_GEOMETRY_PENDING).
+ *   - application seconds (JAR_APPLICATION_TIMING_NOT_RECORDED). The owner
+ *     froze application timings on 2026-11-19; Eris gets none until it is
+ *     timed in the shop. Eris is NOT a key of JAR_APPLICATION_SECONDS_BY_SIZE.
+ *   - outbound units per box (JAR_PACKOUT_PENDING). Not a key of JAR_UNITS_PER_BOX.
+ *
+ * HOW A SMALLER JOB QUANTITY RESOLVES. The resolver already supports a single
+ * cost basis with no ladder (Chiron, standard: tierMinQty null), so an Eris
+ * job of any quantity is costed from the one known basis — the 2,500-quantity
+ * supplier unit cost — and says so. That is NOT a claim about what the
+ * supplier charges for a smaller purchase: that price is unknown.
+ *
+ * NOT FOR SALE: no storefront size, price ladder, configurator product or MOQ.
+ * ------------------------------------------------------------------ */
+
+export type ErisJarSizeKey = JarGeometryPendingSizeKey;
+
+/** The words that go with every Eris cost figure. */
+export const ERIS_SUPPLIER_COST_LABEL = "ERIS JAR SUPPLIER UNIT COST PROVIDED BY OWNER";
+/** What the calculator says about every supplier tier other than the one provided. */
+export const ERIS_LOWER_SUPPLIER_TIERS = "NOT PROVIDED";
+
+export type ErisJarSupplierCost = {
+  /** Canonical product name. */
+  name: string;
+  /** Owner-provided supplier unit cost, BEFORE inbound freight. Not a landed cost. */
+  supplierUnitCost: number;
+  /** The ONLY supplier quantity tier the owner provided. */
+  supplierQuantity: number;
+};
+
+/** THE one Eris cost table — read by the cost resolver and by the Cost Calculator. */
+export const ERIS_JAR_SUPPLIER_COST: Record<ErisJarSizeKey, ErisJarSupplierCost> = {
+  eris_60ml: { name: "Eris 60ml Jar", supplierUnitCost: 2.28, supplierQuantity: 2500 },
+  eris_120ml: { name: "Eris 120ml Jar", supplierUnitCost: 3.22, supplierQuantity: 2500 },
+};
+
+export const ERIS_JAR_SUPPLIER_COST_RECORD =
+  "Owner-provided 2026-11-20: Eris supplier unit cost at supplier quantity 2,500, before shipping / inbound freight";
+
+function erisJarSupplierCost(size: string | null | undefined): ErisJarSupplierCost | null {
+  const key = String(size ?? "");
+  return Object.prototype.hasOwnProperty.call(ERIS_JAR_SUPPLIER_COST, key) ? ERIS_JAR_SUPPLIER_COST[key as ErisJarSizeKey] : null;
+}
+
+/** The supplier cost basis a blank resolution was made from, when it is a single owner-provided tier. */
+export type JarSupplierCostBasis = {
+  label: string;
+  productName: string;
+  supplierUnitCost: number;
+  /** The one supplier quantity tier that is known. */
+  supplierQuantity: number;
+  /** supplierQuantity x supplierUnitCost, to the cent. */
+  supplierTotal: number;
+  lowerSupplierTiers: typeof ERIS_LOWER_SUPPLIER_TIERS;
+  /** Always true: the unit cost excludes inbound freight and is never a landed cost. */
+  beforeInboundFreight: true;
+};
+
+export function erisJarSupplierCostBasis(size: string | null | undefined): JarSupplierCostBasis | null {
+  const cost = erisJarSupplierCost(size);
+  if (!cost) return null;
+  return {
+    label: ERIS_SUPPLIER_COST_LABEL,
+    productName: cost.name,
+    supplierUnitCost: cost.supplierUnitCost,
+    supplierQuantity: cost.supplierQuantity,
+    supplierTotal: centsRound(cost.supplierQuantity * cost.supplierUnitCost),
+    lowerSupplierTiers: ERIS_LOWER_SUPPLIER_TIERS,
+    beforeInboundFreight: true,
+  };
+}
+
+/** The words the calculator shows for Eris inbound freight. */
+export const ERIS_FREIGHT_PENDING_LABEL = "FREIGHT PENDING — ERIS INBOUND FREIGHT NOT PROVIDED BY OWNER";
+
+export const ERIS_JAR_FREIGHT_PENDING: Record<ErisJarSizeKey, string> = {
+  eris_60ml: `${ERIS_FREIGHT_PENDING_LABEL} — Eris 60ml Jar: the owner has not provided a shipping / inbound freight cost for Eris, and no other jar's freight is used in its place. It is NOT $0 and no allowance is assumed; landed unit cost is PENDING.`,
+  eris_120ml: `${ERIS_FREIGHT_PENDING_LABEL} — Eris 120ml Jar: the owner has not provided a shipping / inbound freight cost for Eris, and no other jar's freight is used in its place. It is NOT $0 and no allowance is assumed; landed unit cost is PENDING.`,
+};
+
+function erisJarFreightPendingNote(size: string | null | undefined): string | null {
+  const key = String(size ?? "");
+  return Object.prototype.hasOwnProperty.call(ERIS_JAR_FREIGHT_PENDING, key) ? ERIS_JAR_FREIGHT_PENDING[key as ErisJarSizeKey] : null;
+}
+
+/** The words the calculator shows for a jar whose label application has never been timed. */
+export const JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL = "PENDING REAL SHOP TIMING VALIDATION";
+
+/**
+ * Jars with NO application timing at all (owner freeze 2026-11-19: no timing is
+ * created, copied or changed until measured shop times arrive). These sizes are
+ * NOT keys of JAR_APPLICATION_SECONDS_BY_SIZE, so resolveJarApplication blocks.
+ */
+export const JAR_APPLICATION_TIMING_NOT_RECORDED: Record<ErisJarSizeKey, string> = {
+  eris_60ml: `${JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL} — no label application time has been recorded for the Eris 60ml Jar. Application labor cannot be costed until it is timed in the shop; no other jar's seconds are used.`,
+  eris_120ml: `${JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL} — no label application time has been recorded for the Eris 120ml Jar. Application labor cannot be costed until it is timed in the shop; no other jar's seconds are used.`,
+};
+
+export function jarApplicationTimingPendingNote(size: string | null | undefined): string | null {
+  const key = String(size ?? "");
+  return Object.prototype.hasOwnProperty.call(JAR_APPLICATION_TIMING_NOT_RECORDED, key) ? JAR_APPLICATION_TIMING_NOT_RECORDED[key as ErisJarSizeKey] : null;
+}
+
+/** The words the calculator shows for a jar with no outbound units-per-box. */
+export const JAR_PACKOUT_PENDING_LABEL = "OUTBOUND BOX QUANTITY PENDING";
+
+/** Jars with NO outbound box density. These sizes are NOT keys of JAR_UNITS_PER_BOX. */
+export const JAR_PACKOUT_PENDING: Record<ErisJarSizeKey, string> = {
+  eris_60ml: `${JAR_PACKOUT_PENDING_LABEL} — the number of Eris 60ml Jars per outbound box has not been provided, so packout (boxes, labor and consumables) cannot be costed. No other jar's box quantity is used.`,
+  eris_120ml: `${JAR_PACKOUT_PENDING_LABEL} — the number of Eris 120ml Jars per outbound box has not been provided, so packout (boxes, labor and consumables) cannot be costed. No other jar's box quantity is used.`,
+};
+
+export function jarPackoutPendingNote(size: string | null | undefined): string | null {
+  const key = String(size ?? "");
+  return Object.prototype.hasOwnProperty.call(JAR_PACKOUT_PENDING, key) ? JAR_PACKOUT_PENDING[key as ErisJarSizeKey] : null;
+}
+
+/**
+ * Everything the Cost Calculator shows for one cost-only jar, built from the
+ * tables above and nothing else. `landedUnitCost` is null while inbound freight
+ * is missing; `plannedBlankQuantity` / `baseBlankCost` are filled in only when
+ * a finished quantity is supplied and are a PARTIAL figure, never a total.
+ */
+export type CostOnlyJarSummary = {
+  productKey: string;
+  productName: string;
+  costLabel: string;
+  supplierUnitCost: number;
+  supplierQuantity: number;
+  supplierTotal: number;
+  lowerSupplierTiers: typeof ERIS_LOWER_SUPPLIER_TIERS;
+  inboundFreight: { perUnit: number | null; status: "PENDING"; label: string; note: string };
+  landedUnitCost: number | null;
+  landedUnitCostStatus: "PENDING";
+  labelGeometry: { status: "PENDING"; label: string; note: string };
+  applicationTiming: { status: "PENDING"; label: string; note: string };
+  outboundPackout: { status: "PENDING"; label: string; note: string };
+  notForSale: true;
+  finishedQuantity: number | null;
+  /** Finished quantity + the existing 1% planned jar overage (productionQtyFor). */
+  plannedBlankQuantity: number | null;
+  overagePct: number;
+  /** plannedBlankQuantity x supplierUnitCost — base blank cost only, before inbound freight. */
+  baseBlankCost: number | null;
+};
+
+export function costOnlyJarSummary(profile: CostOnlyJarProfile, finishedQuantity?: number | null): CostOnlyJarSummary | null {
+  const basis = erisJarSupplierCostBasis(profile.size);
+  if (!basis) return null;
+  const freight = jarFreightPerUnit(profile.brand, profile.size);
+  const finished = finishedQuantity != null && finishedQuantity > 0 ? Math.floor(finishedQuantity) : null;
+  const planned = finished != null ? productionQtyFor(finished) : null;
+  return {
+    productKey: profile.key,
+    productName: profile.label,
+    costLabel: basis.label,
+    supplierUnitCost: basis.supplierUnitCost,
+    supplierQuantity: basis.supplierQuantity,
+    supplierTotal: basis.supplierTotal,
+    lowerSupplierTiers: basis.lowerSupplierTiers,
+    inboundFreight: { perUnit: freight.perUnit, status: "PENDING", label: ERIS_FREIGHT_PENDING_LABEL, note: freight.source },
+    // Never the supplier unit cost: with no freight there is no landed cost.
+    landedUnitCost: freight.perUnit == null ? null : centsRound(basis.supplierUnitCost + freight.perUnit),
+    landedUnitCostStatus: "PENDING",
+    labelGeometry: { status: "PENDING", label: JAR_GEOMETRY_PENDING_LABEL, note: jarGeometryPendingNote(profile.size) ?? JAR_GEOMETRY_PENDING_LABEL },
+    applicationTiming: { status: "PENDING", label: JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL, note: jarApplicationTimingPendingNote(profile.size) ?? JAR_APPLICATION_TIMING_VALIDATION_PENDING_LABEL },
+    outboundPackout: { status: "PENDING", label: JAR_PACKOUT_PENDING_LABEL, note: jarPackoutPendingNote(profile.size) ?? JAR_PACKOUT_PENDING_LABEL },
+    notForSale: true,
+    finishedQuantity: finished,
+    plannedBlankQuantity: planned,
+    overagePct: JAR_PLANNED_OVERAGE_PCT,
+    baseBlankCost: planned != null ? centsRound(planned * basis.supplierUnitCost) : null,
+  };
+}
+
+/** Prefix of the Cost Calculator product-picker value for a cost-only jar (never a Vendor Cost Book id). */
+export const COST_ONLY_JAR_OPTION_PREFIX = "costonly:jar:";
+
+/**
+ * The Cost Calculator Jar-picker options for the cost-only jars of one family.
+ * Code-defined (like the "type:bag-" options): no VendorProduct row exists or
+ * is needed, so nothing is written to the database and the legacy engine never
+ * sees an Eris price.
+ */
+export function costOnlyJarCalculatorOptions(uiFamily: string | null | undefined): Array<{ value: string; group: "ERIS"; label: string; jarProfile: string; jarVariant: null; costOnly: CostOnlyJarSummary }> {
+  return COST_ONLY_JAR_PROFILES.filter((p) => p.uiFamily === uiFamily).flatMap((p) => {
+    const summary = costOnlyJarSummary(p);
+    if (!summary) return [];
+    return [{
+      value: `${COST_ONLY_JAR_OPTION_PREFIX}${p.key}`,
+      group: "ERIS" as const,
+      label: `${p.label} — $${summary.supplierUnitCost.toFixed(2)} supplier unit cost at the ${summary.supplierQuantity.toLocaleString("en-US")} supplier tier (owner-provided, before inbound freight) — FREIGHT PENDING · landed cost PENDING`,
+      jarProfile: p.key,
+      jarVariant: null,
+      costOnly: summary,
+    }];
+  });
+}
 
 /**
  * Complete-set blank cost. Never $0, never a fallback SKU, never inferred.
@@ -616,11 +850,29 @@ export type BlankCostResolution =
  */
 export function resolveJarBlankCost(input: {
   brand: JarBrand;
-  size: JarSizeKey;
+  size: JarSizeKey | ErisJarSizeKey;
   quantity: number;
   variant?: StandardJarVariant;
 }): BlankCostResolution {
-  const { brand, size, quantity } = input;
+  const { brand, quantity } = input;
+
+  if (brand === "eris") {
+    // 2026-11-20: ONE owner-provided supplier unit cost at ONE supplier tier
+    // (2,500). No ladder, no jar / lid split, no other brand's table. Returns
+    // before the Miron / Chiron / standard branches for every size.
+    const basis = erisJarSupplierCostBasis(input.size);
+    if (!basis) return { ok: false, reason: "MISSING_COST", message: `No owner-provided Eris supplier cost for ${input.size}. A blank cost must never be inferred.` };
+    const money = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return {
+      ok: true,
+      unitCost: basis.supplierUnitCost,
+      tierMinQty: null,
+      supplierBasis: basis,
+      source: `${ERIS_SUPPLIER_COST_LABEL}: ${basis.productName} $${basis.supplierUnitCost.toFixed(2)} each — the owner-provided ${basis.supplierQuantity.toLocaleString("en-US")}-quantity supplier cost (${basis.supplierQuantity.toLocaleString("en-US")} x $${basis.supplierUnitCost.toFixed(2)} = $${money(basis.supplierTotal)}), BEFORE inbound freight. Lower supplier tiers: ${ERIS_LOWER_SUPPLIER_TIERS} — this job quantity is costed from the ${basis.supplierQuantity.toLocaleString("en-US")}-quantity supplier cost basis; the supplier price for any other purchase quantity is unknown. Not a landed cost. ${ERIS_JAR_SUPPLIER_COST_RECORD}.`,
+    };
+  }
+  // An Eris size under any other brand has no entry in the tables below, so it resolves MISSING_COST.
+  const size = input.size as JarSizeKey;
 
   if (brand === "miron") {
     const ladder = MIRON_SET_COST[size];

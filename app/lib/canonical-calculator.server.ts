@@ -87,6 +87,8 @@ import {
   jarFreightPerUnit,
   estimatedSupplierPacks,
   JAR_FREIGHT_PENDING_LABEL,
+  costOnlyJarSummary,
+  jarPackoutPendingNote,
   jarNestingAreas,
   jarPhysicalRuns,
   jarSetupCost,
@@ -102,8 +104,8 @@ import {
   JAR_APPLICATION_SECONDS_BY_SIZE,
   JAR_APPLICATION_SOURCE,
 } from "./jar-cost-inputs.server";
-import { activeJarProfile } from "./jar-active-scope";
-import { JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, validateJarGeometryOverride } from "./jar-label-geometry";
+import { activeJarProfile, costOnlyJarProfile } from "./jar-active-scope";
+import { JAR_LABEL_GEOMETRY_SOURCE, jarCutlineFor, jarGeometryPendingNote, validateJarGeometryOverride } from "./jar-label-geometry";
 import { BAG_ARTBOARD_SOURCE, bagLabelGeometryFor, poundBagFlagPosted } from "./bag-artboard-geometry";
 import { PRODUCT_SPEC_VERSION, getProductProductionSpec } from "./product-production-spec";
 import { CANONICAL_INK_RATES } from "./ink-rates-shared";
@@ -930,11 +932,23 @@ export function assembleCanonicalJob(
       blockers.push(`${CANONICAL_REASONS.familyUnsupported}: no jar profile was supplied for this job.`);
     } else {
       const active = activeJarProfile(cfg.brand, cfg.size);
+      // 2026-11-20: a cost-calculator-only jar (Eris) is not in the active
+      // scope and has no label geometry. It is handled by its own branch below
+      // (supplier cost + explicit PENDING blockers) instead of being refused as
+      // an unknown jar.
+      const costOnly = costOnlyJarProfile(cfg.brand, cfg.size);
       // A size the geometry tables do not contain cannot be measured at all,
       // so the adapter is never called with it — it would throw rather than
       // fail closed, and a crashed loader is not a refusal.
       const geometryKnown = Object.prototype.hasOwnProperty.call(JAR_LABEL_GEOMETRY, cfg.size);
-      if (!active) {
+      if (costOnly) {
+        if (costOnly.uiFamily !== input.family) {
+          reasons.push(CANONICAL_REASONS.familyUnsupported);
+          blockers.push(
+            `${CANONICAL_REASONS.familyUnsupported}: ${costOnly.label} is costed under "${costOnly.uiFamily}", not "${input.family}".`,
+          );
+        }
+      } else if (!active) {
         reasons.push(CANONICAL_REASONS.familyUnsupported);
         blockers.push(
           `${CANONICAL_REASONS.familyUnsupported}: "${cfg.brand} ${cfg.size}" is not a jar GSO currently offers, so it has no verified cost. Choose an active jar, or have the owner add this combination to the active scope with its supplier cost.`,
@@ -970,12 +984,73 @@ export function assembleCanonicalJob(
           `${CANONICAL_REASONS.noPrintedComponent}: no jar label was selected, so there is nothing to print. Choose at least one side, lid or tamper label.`,
         );
       }
-      if (!geometryKnown) {
+      if (!geometryKnown && !costOnly) {
         reasons.push(CANONICAL_REASONS.familyUnsupported);
         blockers.push(
           `${CANONICAL_REASONS.familyUnsupported}: "${cfg.size || "(no jar selected)"}" is not a jar size this system has geometry for, so nothing about it can be measured.`,
         );
       }
+    }
+
+    /* ---- 2026-11-20 COST-CALCULATOR-ONLY JAR (Eris 60ml / 120ml) ----
+     * The owner provided ONE thing: a supplier unit cost at the 2,500 supplier
+     * tier, before inbound freight. So this branch costs exactly one line —
+     * the blank, at the planned (1% overage) quantity — and BLOCKS on
+     * everything that was not provided: inbound freight, label geometry,
+     * application timing and outbound box quantity. Nothing is borrowed from
+     * another jar, the job is DRAFT_ONLY, no unit cost is published and no
+     * price can be derived from it. Guarded on the size having NO geometry, so
+     * the measured-jar branch below can never also run for it. */
+    const costOnlyJar = cfg && !Object.prototype.hasOwnProperty.call(JAR_LABEL_GEOMETRY, cfg.size)
+      ? costOnlyJarProfile(cfg.brand, cfg.size)
+      : null;
+    if (cfg && costOnlyJar) {
+      const selection: JarLabelSelection = {
+        side: Boolean(cfg.selection?.side),
+        lid: Boolean(cfg.selection?.lid),
+        tamper: Boolean(cfg.selection?.tamper),
+      };
+      const summary = costOnlyJarSummary(costOnlyJar, finished);
+
+      // ---- blank: the owner-provided supplier unit cost, once per planned jar ----
+      const blankResolution = resolveJarBlankCost({ brand: cfg.brand, size: costOnlyJar.size, quantity: production });
+      blank = blankResolution.ok
+        ? { ok: true, unitCost: blankResolution.unitCost, label: `${costOnlyJar.label} — supplier unit cost, before inbound freight`, source: blankResolution.source }
+        : { ok: false, reason: blankResolution.reason, message: blankResolution.message };
+
+      // ---- label geometry: none provided, so nothing printed can be measured ----
+      const geometryNote = jarGeometryPendingNote(costOnlyJar.size) ?? `${costOnlyJar.label}: no label geometry exists.`;
+      reasons.push(CANONICAL_REASONS.standardDimensionsNotConfirmed);
+      blockers.push(`${CANONICAL_REASONS.standardDimensionsNotConfirmed}: ${geometryNote}`);
+      areas = { ...areas, ripLayoutBasis: geometryNote };
+      const { media: jarMedia, blocker: jarMediaBlocker } = resolveSelectedLabelMedia(cfg, "jar");
+      if (jarMediaBlocker) blockers.push(jarMediaBlocker);
+      materialName = jarMedia ? `${jarMedia.label} (jar label media)` : "Jar label media — not selected / not calculator-ready";
+      materialCostPerSqft = jarMedia ? jarMedia.costPerSqft : null;
+      materialSource = jarMedia ? `No label area can be measured — ${geometryNote}` : "No calculator-ready jar label media selected.";
+
+      // ---- application: no timing exists for this jar (owner freeze 2026-11-19) ----
+      const jarApplication = resolveJarApplication(costOnlyJar.size, selection);
+      if (jarApplication.ok) {
+        applicationCost = { costPerFinishedUnit: jarApplication.costPerFinishedUnit, note: jarApplication.detail };
+      } else {
+        applicationCost = { costPerFinishedUnit: 0, note: jarApplication.message };
+        reasons.push(CANONICAL_REASONS.applicationStandardRequired);
+        blockers.push(`${CANONICAL_REASONS.applicationStandardRequired}: ${jarApplication.message}`);
+      }
+
+      // ---- packout: no outbound box quantity was provided ----
+      const packoutNote = jarPackoutPendingNote(costOnlyJar.size) ?? `${costOnlyJar.label}: no outbound box quantity exists.`;
+      jarPackout = { boxes: 0, unitsPerBox: 0, cost: 0 };
+      reasons.push(CANONICAL_REASONS.packoutNotModeled);
+      blockers.push(`${CANONICAL_REASONS.packoutNotModeled}: ${packoutNote}`);
+
+      // ---- inbound freight: not provided, so perUnit is null and the freight line blocks ----
+      const jarFreight = jarFreightPerUnit(cfg.brand, costOnlyJar.size);
+      jarFreightInput = { perUnit: jarFreight.perUnit, basis: jarFreight.basis, provisional: jarFreight.provisional, source: jarFreight.source };
+
+      if (summary) diagnostics.costOnlyJar = summary;
+      diagnostics.physicalItems = finished;
     }
 
     if (cfg && Object.prototype.hasOwnProperty.call(JAR_LABEL_GEOMETRY, cfg.size)) {

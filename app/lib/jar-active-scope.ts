@@ -28,6 +28,8 @@
 // Client-safe: the calculator form filters its selector with the same list the
 // server scopes with, so the two cannot disagree.
 
+import type { JarGeometryPendingSizeKey } from "./jar-label-geometry";
+
 export const JAR_ACTIVE_SCOPE_VERSION = "17D.7E-jar-active-scope";
 
 export type ActiveJarBrand = "miron" | "chiron" | "standard";
@@ -93,6 +95,68 @@ export function activeJarProfile(brand: string | null | undefined, size: string 
 
 export function activeJarProfilesForFamily(uiFamily: string | null | undefined): ActiveJarProfile[] {
   return ACTIVE_JAR_PROFILES.filter((p) => p.uiFamily === uiFamily);
+}
+
+/* ------------------------------------------------------------------ *
+ * 2026-11-20 — COST-CALCULATOR-ONLY jars (Eris 60ml / Eris 120ml)
+ *
+ * NOT part of ACTIVE_JAR_PROFILES, on purpose. The active scope is "what GSO
+ * offers and can fully cost"; the owner asked only for the two Eris jars to be
+ * selectable in the Cost Calculator with their supplier unit cost. They are
+ * NOT FOR SALE: no storefront size, no price ladder, no configurator product,
+ * no MOQ rule, no quote-ready recipe. Keeping them in their own list means
+ * every consumer of the active scope (storefront, quote readiness, product
+ * specs, price ladders) keeps ignoring them without having to know about them.
+ *
+ * "eris" is its own brand so it can never fall into a Miron tier ladder, a
+ * Miron pallet, a Chiron flat-set rule or the standard invoice freight.
+ *
+ * The calculator family ("premium-jars") only decides which Jar picker lists
+ * them. No supplier item number was provided, so none is stored; `key` is the
+ * stable internal identifier.
+ * ------------------------------------------------------------------ */
+
+export type CostOnlyJarBrand = "eris";
+
+export type CostOnlyJarProfile = {
+  brand: CostOnlyJarBrand;
+  size: JarGeometryPendingSizeKey;
+  /** Stable identifier for a brand+size pair. */
+  key: string;
+  /** The canonical product name. */
+  label: string;
+  /** Which calculator Jar picker lists it. */
+  uiFamily: "premium-jars";
+  /** Never a storefront / Shopify / quotable product. */
+  notForSale: true;
+};
+
+export const COST_ONLY_JAR_PROFILES: CostOnlyJarProfile[] = [
+  { brand: "eris", size: "eris_60ml", key: "eris/eris_60ml", label: "Eris 60ml Jar", uiFamily: "premium-jars", notForSale: true },
+  { brand: "eris", size: "eris_120ml", key: "eris/eris_120ml", label: "Eris 120ml Jar", uiFamily: "premium-jars", notForSale: true },
+];
+
+export const COST_ONLY_JAR_KEYS = COST_ONLY_JAR_PROFILES.map((p) => p.key);
+
+export function costOnlyJarProfile(brand: string | null | undefined, size: string | null | undefined): CostOnlyJarProfile | null {
+  return COST_ONLY_JAR_PROFILES.find((p) => p.key === `${brand}/${size}`) ?? null;
+}
+
+export function costOnlyJarProfileByKey(key: string | null | undefined): CostOnlyJarProfile | null {
+  return COST_ONLY_JAR_PROFILES.find((p) => p.key === String(key || "")) ?? null;
+}
+
+/** "60ml" / "120ml" identify an Eris jar ONLY together with the word "Eris". */
+const COST_ONLY_NAME_PATTERNS: Array<{ size: JarGeometryPendingSizeKey; test: RegExp }> = [
+  { size: "eris_60ml", test: /\beris\b.*\b60\s*ml|\b60\s*ml.*\beris\b/i },
+  { size: "eris_120ml", test: /\beris\b.*\b120\s*ml|\b120\s*ml.*\beris\b/i },
+];
+
+/** Identify the cost-only jar a product name represents ("Eris 60ml Jar"), or null. */
+export function resolveCostOnlyJarProfile(recordName: string | null | undefined): CostOnlyJarProfile | null {
+  const name = String(recordName || "");
+  const size = COST_ONLY_NAME_PATTERNS.find((p) => p.test.test(name))?.size ?? null;
+  return size ? costOnlyJarProfile("eris", size) : null;
 }
 
 /* ------------------------------------------------------------------ *

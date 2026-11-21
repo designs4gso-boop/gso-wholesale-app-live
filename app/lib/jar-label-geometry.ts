@@ -94,6 +94,32 @@ export const JAR_LABEL_GEOMETRY: Record<JarSizeKey, JarLabelGeometry> = {
   ceres_100ml: jarArtGeometryFromCutMm(MIRON_CERES_LABEL_CUT_MM.ceres_100ml),
 };
 
+/* ------------------------------------------------------------------ *
+ * 2026-11-20 — jars with NO label geometry at all (Eris 60ml / 120ml).
+ *
+ * The owner supplied a supplier unit cost for the two Eris jars and nothing
+ * else: no side label, lid label or band size, no circumference, no label
+ * count. They are therefore deliberately NOT keys of JAR_LABEL_GEOMETRY (and
+ * not a JarSizeKey): there is no number to store, and a placeholder would be
+ * an invented dimension. Every cost path that needs a measurement blocks on
+ * the note below instead. Add the size to JAR_LABEL_GEOMETRY only when the
+ * owner supplies measured label sizes.
+ * ------------------------------------------------------------------ */
+export type JarGeometryPendingSizeKey = "eris_60ml" | "eris_120ml";
+
+export const JAR_GEOMETRY_PENDING_LABEL = "LABEL GEOMETRY PENDING OWNER MEASUREMENT";
+
+export const JAR_GEOMETRY_PENDING: Record<JarGeometryPendingSizeKey, string> = {
+  eris_60ml: `${JAR_GEOMETRY_PENDING_LABEL} — Eris 60ml Jar: no label sizes (side label, lid label or band) have been provided by the owner, so label media, ink, print time and cutting cannot be measured. No dimension is assumed or borrowed from another jar.`,
+  eris_120ml: `${JAR_GEOMETRY_PENDING_LABEL} — Eris 120ml Jar: no label sizes (side label, lid label or band) have been provided by the owner, so label media, ink, print time and cutting cannot be measured. No dimension is assumed or borrowed from another jar.`,
+};
+
+/** The pending-measurement note for a size with no label geometry, or null for every other size. */
+export function jarGeometryPendingNote(size: string | null | undefined): string | null {
+  const key = String(size ?? "");
+  return Object.prototype.hasOwnProperty.call(JAR_GEOMETRY_PENDING, key) ? JAR_GEOMETRY_PENDING[key as JarGeometryPendingSizeKey] : null;
+}
+
 /** CUTLINE geometry — derived from the label / art size, never stored over it. */
 export type JarCutlineGeometry = {
   side: { cutWidthIn: number; cutHeightIn: number } | null;
@@ -174,6 +200,8 @@ export const JAR_GEOMETRY_OWNER_RECORD = "Owner confirmation 2026-11-11: label /
 
 /** Authority for ONE size: owner-confirmed sizes are OWNER_CONFIRMED; the rest stay pending. */
 export function jarGeometryAuthorityFor(size: string | null | undefined): { authorityStatus: SpecAuthorityStatus; ownerConfirmationRequired: boolean; ownerRecord: string | null } {
+  // 2026-11-20: a size with NO geometry (Eris) is UNSUPPORTED — it is not "costing geometry pending confirmation".
+  if (jarGeometryPendingNote(size)) return { authorityStatus: "UNSUPPORTED", ownerConfirmationRequired: true, ownerRecord: null };
   const confirmed = Boolean(size && JAR_OWNER_CONFIRMED_GEOMETRY[size as JarSizeKey]);
   return confirmed
     ? { authorityStatus: "OWNER_CONFIRMED", ownerConfirmationRequired: false, ownerRecord: JAR_GEOMETRY_OWNER_RECORD }
